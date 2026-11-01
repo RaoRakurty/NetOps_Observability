@@ -1,0 +1,328 @@
+# Per-tenant telemetry streams and device identity — plan of record (2026-11-01)
+
+Tracker 371 and 370. Status: **DESIGN — principle decided by the owner 2026-11-01: the truest
+multitenancy, built the hard way (§2). Lab channel set-up to confirm (§8).**
+NMS-first contract: `NMS_FIRST_PLAN_2026-10-24.md`. Engine stages per
+`src/correlation/CLAUDE.md`.
+
+## 1. What is wrong today, measured on the lab (vManage 20.6.1)
+
+**Tenant is decided by matching the sender against one global identity map.**
+The vector router looks the sender address up in `device_tenant.csv`, one file
+for all tenants, built from every tenant's devices (`buildEnrichmentRows`,
+`telemetry_enrichment.go`). An address claimed by two tenants is dropped
+(#20 Phase 1, 2026-06-03), and the read side claims untagged rows by device
+name/address (`visibleDeviceKeys`/`visibleDeviceAddrs`, `tenancy.go`). Every
+tenant sends to the same syslog / trap / flow listener, and ingest tokens are
+per lane, not per tenant. Consequences:
+
+1. Overlapping address space between tenants — normal in the real world — cannot
+   be attributed: the packet carries nothing that names the tenant.
+2. A dropped identity lands untagged (platform-owned): both tenants silently lose
+   that telemetry.
+3. The read-side claim lets a tenant read untagged rows whose sender name/address
+   collides with one of its own devices (tracker 370: RETAIL reads the Provider's
+   13,348 syslog lines on the lab).
+4. Controller-only devices are excluded from the map altogether
+   (`d.Source == devmon.SourceController`), so an NMS-only tenant's traps, flows
+   and syslog are never its own (tracker 371).
+
+**Inside one tenant, telemetry does not bind to the controller's device.** A
+controller-managed edge is known by its overlay system-IP (`cEDGE-40` →
+10.255.255.40). It sends syslog, traps and IPFIX from the address its
+configuration names — on the lab a loopback in service VPN 200:
+
+| Device | Configured source (`/dataservice/device/config`) | Collector |
+|---|---|---|
+| cEDGE-40 (IOS-XE SD-WAN) | `logging source-interface loopback200 vrf 200`; `snmp-server host 192.168.172.1 vrf 200` | 192.168.172.1 |
+| vEdge-20 (Viptela OS) | `logging … source-interface loopback200`; `trap target vpn 200 192.168.172.1 162 … source-interface loopback200` | 192.168.172.1 |
+| all edges (cflowd policy `/template/policy/definition/cflowd/{id}`) | `collectors[{vpn 200, 192.168.172.1:2055, sourceInterface loopback200}]` | 192.168.172.1:2055 |
+
+`/dataservice/device/interface?deviceId=<system-ip>` resolves `loopback200` per
+device (cEDGE-40 → 192.168.222.107). Internal VPNs 65528/65530 reuse the same
+addresses on different devices and are never identity. Viptela vEdges stamp the
+system-IP into the IPFIX Observation Domain ID (vEdge-20 → 184549140 =
+10.255.255.20); IOS-XE sends 512. Further gaps: the entity resolver exports the
+controller device's system-IP as its management address; trap attribution only
+matches SNMP collector targets; **syslog-ng forwards without the sender address**
+(every syslog doc's `source_ip` is syslog-ng's own container, 172.18.0.12); SNMP
+rows carry no chassis serial.
+
+## 2. The principle (owner, 2026-11-01)
+
+> In true multitenancy the tenant is decided by the stream the data arrives on.
+> Same device, same hostname, same IP, same chassis serial in two tenants does
+> not matter — the data arrives in two tenants' streams.
+
+So:
+
+- **Tenant = channel.** Every telemetry channel belongs to exactly one owner and
+  is stamped with that owner where it enters ingest — never derived from what the
+  data claims about itself.
+- **Identity is resolved only inside a tenant.** `(tenant, sender) → that
+  tenant's device`. Nothing is ever compared across tenants; overlap between
+  tenants is irrelevant by construction.
+- **The same physical device in two tenants is two devices with two streams.**
+  Each tenant's copy is independent and complete; each tenant's view shows the
+  device once and its telemetry once. Storage holds one copy per tenant on
+  purpose.
+- **A tenant reads only rows stamped with its own tenant.** The untagged
+  read-side claim goes away (closes tracker 370 by removal, not by an
+  ambiguity rule).
+- **The shared listener is the Provider's channel.** What arrives on the default
+  ports belongs to the platform realm — the rule #112 already applies to untagged
+  data.
+
+## 3. Channels — how a tenant's stream reaches Correlix (real-world architecture)
+
+Owner direction (2026-11-01): per-tenant interfaces or IPs do not scale. In the
+real world customer telemetry crosses from on-prem to Correlix over **TLS**; the
+TLS session identifies the tenant; after termination it is forwarded (NAT) to the
+same internal collectors for every tenant.
+
+```
+ customer site (any network)                          Correlix (cloud or appliance)
+ ┌──────────────────────────────┐                    ┌───────────────────────────────────────┐
+ │ devices ──UDP syslog/trap/───▶ Correlix Edge      │  mTLS   │ Ingest Gateway (one IP/hostname)│
+ │          IPFIX (local)       │ Collector ─────────┼────────▶│  client cert → tenant           │
+ │ TLS-capable devices ─────────┼── syslog RFC 5425 ─┼────────▶│  stamps tenant into the envelope│
+ │ controller (vManage …) ◀─────┼── API poll / webhook (integration credential = tenant)       │
+ └──────────────────────────────┘                    │  → NAT to the shared internal collectors│
+                                                     │    (Vector / goflow2 / trap receiver)   │
+                                                     └───────────────────────────────────────┘
+```
+
+| Channel | Tenant comes from | Carries | Fits |
+|---|---|---|---|
+| **G1 Edge Collector → Ingest Gateway** (primary) | the collector's client certificate, issued per tenant (and per site) by Correlix's internal CA, revocable | syslog, SNMP traps, NetFlow/IPFIX/sFlow — received as UDP on-prem, buffered on disk, forwarded over mTLS | every customer and vendor; overlapping address space (identity is never the device address); NAT; firewalls (one outbound TLS port); zero trust (authenticated channel, not UDP source) |
+| **G2 device-direct TLS syslog** | client certificate presented by the device (RFC 5425), or SNI hostname + certificate | syslog only | TLS-capable devices without an on-prem collector |
+| **G3 controller integration** | the integration's credential (already per tenant) | controller API data, alarm webhook (tracker 358a) | NMS-first customers |
+| **G0 shared listener** (default ports, appliance installs) | — | the Provider's own stream only; nothing is attributed to a tenant by address, name or serial (owner: truest multitenancy) | single-company appliances, the platform's own devices |
+
+How the gateway works:
+- One endpoint (one IP, one hostname; per-tenant hostnames optional as SNI
+  aliases) terminates TLS. The client certificate's subject (an internal-CA SPIFFE
+  style id, e.g. `spiffe://correlix/tenant/<id>/collector/<site>`) is the ONLY
+  source of the tenant. A certificate is bound to one tenant; revoking it closes
+  the channel.
+- After termination the gateway forwards to the shared internal collectors with
+  the tenant (and collector id) attached as envelope metadata, so every record is
+  stamped before any parsing — the router never infers a tenant again.
+- Per-tenant rate limits and quotas at the gateway (one tenant cannot starve
+  another); per-collector last-seen, rates and drops are exported (a silent
+  collector is a page-tier condition, like a silent NMS integration).
+- The Edge Collector is a small packaged forwarder (Vector-based): UDP syslog /
+  trap / flow listeners, disk buffer for WAN outages, compression, its own health
+  heartbeat; enrolled with a one-time token that yields its certificate.
+
+The lab models this exactly: RETAIL's site gets an Edge Collector at its own
+address (a container on the lab segment, e.g. 192.168.172.5 — the customer's
+address, not a Correlix interface); the edges add it as a second syslog / trap /
+cflowd destination; it forwards over mTLS to the gateway on the Correlix host.
+The edges' existing destination (192.168.172.1, default ports) stays the
+Provider's G0 stream.
+
+## 4. Inside a tenant: binding telemetry to the right device
+
+Per tenant, a device-identity resolver maps a sender to one of **that tenant's**
+devices, so a trap from 192.168.222.107 lands on RETAIL's `cEDGE-40` — the same
+entity as the controller's alarms and BFD evidence.
+
+| Tier | Alias source |
+|---|---|
+| A | configured logging / trap / cflowd source-interface resolved via the device's interface list, per protocol (controller data) |
+| B | in-band: IPFIX ODID == system-IP (Viptela); syslog HOSTNAME == device name; authenticated trap (community / v3 HMAC) |
+| C | non-internal interface addresses: management, service VPNs, system-IP (exclude VPN ≥ 65528, link-local, VIPs) |
+| D | NAT public IP — composite only |
+| E | tenant-declared alias (UI) |
+| F | the tenant's own SNMP-discovered twin (same-tenant merge on serial / system-IP / tier-A address) |
+
+Within a tenant, an alias matching two devices resolves the tenant but not the
+entity (abstain), and is surfaced to the tenant's admin. Across tenants nothing
+is compared.
+
+Consumers, all generated from the per-tenant resolver: the router's
+`(channel, sender) → device` lookup (replaces the global `device_tenant.csv`
+for tenant attribution), `entity_resolver.json` (tenant-scoped aliases: engine
+stage [1] binds trap/syslog/flow to the controller device id), the NMS inventory
+join (`BuildInventoryIndex`), and the trap receiver (controller devices become
+resolvable, M4 gate kept).
+
+**RCA outcome:** an NMS-only tenant's WAN/tunnel incident carries the edge's own
+linkDown traps, syslog and flow collapse, grounded at rank 1 to the controller
+alarm entity (stage [4]); device-direct witnesses are independent of
+`via_controller`, so CONFIRMED is reachable under the existing verdict gate
+(stage [7]).
+
+## 5. The lab under this model
+
+The lab keeps the same eight edges in two owners on purpose:
+
+- **Provider** — SNMP discovery + the edges' current destinations
+  (192.168.172.1, default ports) = the Provider's channel (C0).
+- **RETAIL-WALMART** — vManage + a **second destination on each edge** to
+  RETAIL's channel (C1: e.g. syslog 1514, traps 1162, cflowd 2056 on
+  192.168.172.1), set once in the vManage templates / cflowd policy.
+
+Each tenant then sees the eight edges once and their telemetry once.
+
+## 5a. Lab acceptance — what the lab proves (owner, 2026-11-01)
+
+The lab runs the same eight edges in two tenants for two reasons, and each is a
+measured check, run by a parity harness (lab tooling, excluded from the customer
+bundle) on every lab deploy:
+
+**Goal 1 — the NMS integration shows the same data as SNMP.** RETAIL's view
+(vManage) is compared field by field with the Provider's view (SNMP) of the same
+physical edge, paired by the lab's known mapping (system-IP ↔ loopback200):
+
+| Dimension | Check | Tolerance |
+|---|---|---|
+| inventory | same 8 devices; name, model, OS version, chassis serial, site, role | exact (serial once the SNMP read is fixed) |
+| reachability / state | up/down agrees per device | within one poll interval of each source |
+| interfaces | same interfaces, admin/oper state, addresses | exact for state; names normalised per vendor |
+| counters / health | interface in/out rate, errors, CPU, memory | within a stated % over the same window (vManage stats are 10-min buckets, 30–60 min late — compare settled windows) |
+| overlay | tunnels / BFD sessions per device (controller) vs SNMP SD-WAN MIB facts | same set, same up/down |
+| events | vManage alarms vs SNMP traps for the same incident (e.g. an interface or tunnel down) | same incident, both sides, within minutes |
+| telemetry | syslog / trap / flow counts per device per hour in each tenant's own stream | equal once RETAIL's channel receives the same feed |
+| RCA | a controlled fault (shut one edge's transport) produces the same root cause in both tenants | same root-cause device + seam |
+
+A gap is a defect in the connector or the SNMP path — filed per dimension, not
+averaged away.
+
+**Goal 2 — multitenancy works the way it is supposed to.**
+
+| Check | Expected |
+|---|---|
+| Provider views (devices, alerts, logs, flows, topology, search, Iris) | only the SNMP records and the Provider's stream — never a RETAIL row |
+| RETAIL views | only the controller records and RETAIL's stream — never a Provider row |
+| the same name / IP / serial in both | two independent devices; neither view lists the other's, nothing is merged or dropped |
+| counts | each view shows each device once and each telemetry record once |
+| actions | disabling, deleting or editing in one tenant changes nothing in the other |
+| access | a RETAIL user, `as_tenant`/`X-Acting-Tenant` into Provider, and a direct id lookup of a Provider object → nothing / 404 |
+| All-tenants (platform owner) | both, each row labelled with its tenant |
+
+## 6. Multi-vendor
+
+Channels are vendor-neutral (every device that can send syslog/traps/flows can
+send them to a port/VIP). Per-tenant alias sources per connector: vmanage
+(lab-verified, §1) · catalyst_center (`managementIpAddress`, interface list,
+config — uncaptured) · meraki (`lanIp`; NetFlow source = highest VLAN LAN IP in
+the VPN) · versa (LEF arrives via an Analytics relay — payload identity) · ndfc /
+prime / catalyst_9800 (`ipAddress`) · Juniper, Nokia, Arista, SONiC, generic (SNMP
+ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable).
+
+## 7. Phases (one PR each; ★ = high-risk: full gate + pgintegration + §3a test)
+
+- **PA** parity + isolation harness (§5a) — runs today for the dimensions that exist (inventory, state, interfaces, alerts, isolation of devices/alerts/logs) and grows with each phase; its results gate "vManage integration complete".
+- **P0** fixtures: the §1 controller captures for a vEdge and a cEdge.
+- **P0.5** syslog keeps its sender address (syslog-ng carries `${SOURCEIP}`;
+  Vector maps it; VRL harness; install-boot).
+- **P1★** channel model + Ingest Gateway: `telemetry_channels` / collector
+  enrolment (tenant, site, certificate, status) in PG with FORCE-RLS; internal-CA
+  issuance + revocation; TLS-terminating gateway that maps the client certificate
+  to the tenant and forwards to the shared collectors with the tenant in the
+  envelope; §3a isolation test (a collector certificate of tenant A can never
+  write as tenant B; a revoked one writes nothing).
+- **P2★** Correlix Edge Collector (Vector-based package): UDP syslog/trap/flow in,
+  disk buffer, mTLS out, enrolment token → certificate, heartbeat; the router
+  stamps the tenant from the envelope; promtool rule for a silent or erroring
+  collector; install-boot leg; lab: RETAIL's collector container at its own
+  address.
+- **P3★** tenant reads only its own: remove the untagged read-side claim
+  (`oslog.TenantFilter`, `flows.go`, secapi, parsercov, AI tools) and the global
+  address→tenant attribution (`device_tenant.csv` as a tenant source) entirely.
+  Cross-org tests per store, including two tenants with identical device names,
+  addresses and serials whose streams never mix. Existing untagged data stays
+  the Provider's.
+- **P4** per-tenant identity resolver + vManage alias collection (tier A/B/C
+  parsing, VPN-655xx exclusion, SNMP serial read fixed) feeding the router's
+  device binding, entity_resolver, inventory join, trap receiver.
+- **P5** in-band flow identity: `observation_domain_id` on `netops.flows`,
+  composite lookup within the tenant.
+- **P6** engine stage [1] canonicalization behind a byte-identical-when-OFF flag,
+  `ENGINE_SEMVER` bump, replay.
+- **P7** UI: channels (per tenant: endpoints to configure on devices, last seen,
+  rates), device Identities tab, unattributed senders on the Provider channel.
+- **P8** G3 vManage webhook (358a) · **P9** G2 device-direct TLS syslog · **P10+** other
+  connectors' alias sources (T8–T11).
+
+## 7a. Source equivalence — the same evidence whichever source a customer uses
+
+Owner requirement (2026-11-01): some customers send SNMP, others an integration;
+we must gather the same evidence either way, because correlation is the product.
+Measured (researcher report 2026-11-01, load-bearing claims re-verified in the
+main session):
+
+- **Controller faults reach the engine under a kind nothing consumes.** vManage
+  maps BGP (and every unclassified alarm) to `controller_alarm`
+  (`nms/vmanage.go` `vmanageNormType`); Catalyst Center interface-down, NDFC
+  link-down likewise. `controller_alarm` appears in the engine only as an entity
+  mapping (`controller_events.py`), in no template and not in `EMITTED_KINDS`.
+  Templates key on canonical kinds (`link_state_change`, `bgp_adjacency_change`,
+  `if_metric_anomaly` …) — so an NMS-only tenant's link/BGP/IGP incidents cannot
+  even be ranked.
+- **Controller metrics never reach the engine:** `Routed.MetricLines` go only to
+  VictoriaMetrics (`nms/scheduler.go`), so an NMS-only tenant has no interface,
+  resource or session metric episodes.
+- **The reverse gaps:** SNMP reads SD-WAN BFD state but emits no tunnel signal and
+  no tunnel↔endpoint topology; SNMP "device unreachable" exists only as an alert,
+  not as engine evidence; gNMI-only customers get nothing in the engine (lane
+  dormant, tracker 213); the change-induced template needs a controller policy
+  change, so an SNMP-only customer cannot match it.
+- **Turning on both sources is not safe yet:** independence is computed on
+  observer strings (`verdicts.py`), so a device's own trap plus the controller
+  relaying the same device's alarm would count as two independent witnesses (the
+  same alarm twice — owner D1 rejects it). The same over-count exists today between
+  syslog (observer = hostname) and SNMP/traps (observer = device id).
+
+**Design:** one canonical evidence vocabulary (`telemetry-catalog/evidence.yaml`,
+baked into Go and Python with a drift test); every record carries provenance
+(`origin_device`, `relay`, `freshness_class`, `source_adapter`) in attrs; every
+adapter (SNMP, gNMI, traps, syslog, flows, each connector) resolves identity
+inside its tenant, emits canonical kinds and declares its evidence capabilities
+(extending `nms/capability.go`, fidelity none/doc_claimed/lab_validated/
+live_validated); a build-failing matrix test and a per-source-profile
+confirmability ratchet (SNMP+push, gNMI-only, each connector alone,
+SNMP+connector) measure equivalence by RCA value. Engine stage [7] gains a
+downgrade-only origin-observer rule: two witnesses with the same
+`origin_device` are never an independent pair, whatever the relay.
+
+## 7b. One programme — order of work
+
+Ordered by RCA value and dependency (E = evidence, P = channels/identity;
+★ = high-risk: full gate, pgintegration where storage is touched, §3a test):
+
+| # | Phase | Why now |
+|---|---|---|
+| 1 | **E0** evidence registry + capability declarations for every adapter + generated matrix + per-profile confirmability report | records today's truth; the scorecard every later phase moves |
+| 2 | **E1★** origin-observer provenance + downgrade-only independence rule (stage [7], flag, `ENGINE_SEMVER`) | must precede E2, or SNMP+controller tenants get same-alarm confirmations |
+| 3 | **E2★** controller canonical kinds — link / BGP / IGP / restart / config; Meraki uplink-down no longer "device unreachable"; state→kind table for interface, BGP, tunnel | the biggest NMS-only gap; data already collected |
+| 4 | **P0.5** syslog keeps its sender address | small, unblocks per-device syslog |
+| 5 | **P1★** channel model + Ingest Gateway (mTLS, certificate → tenant) | true multitenancy |
+| 6 | **P2★** Edge Collector + lab RETAIL collector | RETAIL's own stream; enables telemetry parity |
+| 7 | **E3★** realtime controller metrics → the engine under canonical names (`relay=via_controller`), bucketed stats stay context only | NMS-only metric episodes |
+| 8 | **P3★** tenant reads only its own stamped data (closes 370) | |
+| 9 | **P4** per-tenant identity resolver (system-IP ↔ configured sources, serials) | binds traps/syslog/flows to the controller device |
+| 10 | **E4** SNMP parity: BFD → tunnel kinds with the canonical tunnel id, tunnel topology, poller reachability as evidence | SNMP-only customers' overlay incidents |
+| 11 | **E5** config-change unification (`config_change`, actor device/controller) | change-induced RCA for every source |
+| 12 | **E6★** controller adjacency facts (Catalyst Center, Meraki, NDFC) | physical topology without SNMP |
+| 13 | **P5–P7** in-band flow identity, engine canonicalization, UI | |
+| 14 | **E7** parity harness in CI (within a tenant, recorded fixtures) + the lab harness (`scripts/lab/source_parity.py`) on every deploy | proves equivalence continuously |
+| 15 | **E8+** per-connector rollouts (T8–T11), webhooks for 5–10-min pollers | |
+
+Owner decision carried into T2: may controller-relayed device state (BFD, BGP)
+count as `control_plane` for a template's required modalities? Recommendation:
+no until T2's fan-in rule ships — rank improves at once, verdicts stay honest.
+
+## 8. Decided / open
+
+- **Decided (owner, 2026-11-01):** the truest multitenancy, even where a use case
+  is unusual. A tenant receives telemetry only through its own channel; the shared
+  listener is the Provider's; nothing on it is attributed to a tenant by address,
+  name or serial — not even during transition.
+- **Decided (owner, 2026-11-01):** channels are TLS-authenticated (gateway + edge
+  collector), not per-tenant interfaces or IPs.
+- **Open:** RETAIL's second destination on the lab edges (vManage templates +
+  cflowd policy) pointing at RETAIL's Edge Collector — the owner sets it, or Claude
+  does with explicit approval, after P2 is deployed.
