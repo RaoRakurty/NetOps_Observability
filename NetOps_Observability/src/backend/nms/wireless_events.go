@@ -34,7 +34,7 @@ var wirelessStateKinds = map[string]bool{"ap_join": true, "radio_oper": true}
 // WirelessStateChangeEvents converts wireless state transitions into
 // normalized controller events. Non-wireless kinds pass through untouched
 // (returned slice contains only the synthesized wireless events). Pure.
-func WirelessStateChangeEvents(tenant, integrationID, sourceSystem string, changes []StateChange) []ControllerEvent {
+func WirelessStateChangeEvents(spec ConnectorSpec, tenant, integrationID string, changes []StateChange) []ControllerEvent {
 	var out []ControllerEvent
 	for _, ch := range changes {
 		if !wirelessStateKinds[ch.Record.StateKind] {
@@ -45,8 +45,8 @@ func WirelessStateChangeEvents(tenant, integrationID, sourceSystem string, chang
 			continue
 		}
 		ev := ControllerEvent{
-			TenantID: tenant, IntegrationID: integrationID, SourceSystem: sourceSystem,
-			Vendor: "cisco", Product: "Catalyst 9800",
+			TenantID: tenant, IntegrationID: integrationID, SourceSystem: spec.SourceSystem,
+			Vendor: spec.Maker, Product: spec.Product,
 			// Deterministic id: one event per (entity, transition, time) even
 			// if the cycle re-runs.
 			EventID:             fmt.Sprintf("%s|%s|%s->%s|%d", ch.Record.EntityKey, ch.Record.StateKind, ch.From, ch.To, ch.Record.LastSeen.UnixMilli()),
