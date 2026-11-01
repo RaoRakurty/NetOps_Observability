@@ -1074,6 +1074,39 @@ groups:
   - name: noc-self-health
     interval: 30s
     rules:
+      # NMS connector health (NMS-first T1). One warning per integration that
+      # is not delivering: three failed cycles in a row, or polling suspended
+      # by its circuit breaker. A WARNING, not a page: a single integration
+      # down is often a credential or a maintenance window, and the page for
+      # "the NMS lane went silent" is NMSIngestSilent (rules-scale-slo.yaml,
+      # page condition 2) — this one also covers an integration that has
+      # NEVER delivered, which deliberately does not page. Series are the
+      # api's own scrape (nms/health.go); labels carry only tenant_id,
+      # integration_id and vendor, never operator-typed text.
+      - alert: NMSIntegrationDown
+        expr: |
+          (netops_nms_consecutive_failures{job="netops-api"} >= 3)
+          or
+          (netops_nms_circuit_open{job="netops-api"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+          tier: warning
+        annotations:
+          summary: "NMS integration {{ $labels.integration_id }} ({{ $labels.vendor }}, tenant {{ $labels.tenant_id }}) is not delivering: 3+ failed poll cycles in a row or its circuit breaker is open"
+          description: >-
+            The poll runtime has not completed a delivering cycle for this
+            integration for at least three cycles, or has suspended polling it
+            (circuit open after repeated unreachable / timeout / 5xx / auth
+            failures; one login probe follows each cooldown). Read the
+            integration's run history in the NMS page (per-stream status) and
+            netops_nms_poll_runs_total by result. auth_failed means the
+            controller refused the credential: fix it and press Poll now,
+            which probes immediately instead of waiting out the cooldown. This
+            is a warning; if the integration had delivered before and stays
+            silent past its budget, NMSIngestSilent pages.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
       - alert: CollectorDown
         expr: collector_up == 0
         for: 2m

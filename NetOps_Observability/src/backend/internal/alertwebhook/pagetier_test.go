@@ -110,6 +110,7 @@ func TestPageRuleNamesAreTheFourApprovedConditions(t *testing.T) {
 		"CorrConsumerNotRunning":   "1. an engine consumer is not consuming",
 		"CorrConsumerRestartLoop":  "1. an engine consumer is not consuming",
 		"IngestPipelineSilent":     "2. ingest silent when it should not be",
+		"NMSIngestSilent":          "2. ingest silent when it should not be",
 		"ClickHouseWritesRejected": "3. storage refusing writes",
 		"AlertDeliveryBroken":      "4. the alerting heartbeat missing",
 	}

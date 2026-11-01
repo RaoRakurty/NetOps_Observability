@@ -1,0 +1,318 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the NMS connector-health rules (NMS-first T1, owner
+# decision D4, 2026-10-24):
+#   NMSIngestSilent     rules-scale-slo.yaml  engine-liveness  tier: page
+#                       — page condition (2) "ingest silent when it should
+#                       not be", seen from the NMS lane. Still FOUR page
+#                       conditions: this is a second vantage on (2), exactly
+#                       like the router lanes are on (1).
+#   NMSIntegrationDown  rules.yaml            noc-self-health  tier: warning
+#
+# The series are the api's OWN scrape (job="netops-api", nms/health.go), never
+# the /api/v1/import push — so an api that dies makes them go ABSENT (stale)
+# instead of freezing at a healthy-looking value.
+#
+# Acceptance, as in the sibling files: each rule FIRES on the real failure
+# shape and stays SILENT on every look-alike that would get it muted:
+#   * an NMS-only install (no collector_* series at all) pages — that is the
+#     F8 gap: IngestPipelineSilent is guarded on SNMP collectors and could
+#     never see it;
+#   * two silent integrations are ONE page whose value says how many;
+#   * an integration that has NEVER delivered (bad password on day one) warns
+#     and does not page — there was never ingest to go silent (owner default,
+#     to confirm);
+#   * a healthy integration is silent;
+#   * the api itself going away is not this page (the series go absent;
+#     ScrapeTargetDown and the watchdog own a dead api);
+#   * a 30-minute poll interval gets its 3-interval budget, not the 15m floor;
+#   * IngestPipelineSilent's own contract is unchanged.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) NMS-ONLY INSTALL, ONE INTEGRATION GOES SILENT -> exactly one page.
+  #    Delivering every minute until 10m, then the last success freezes at
+  #    600s. Budget = max(3 × 120s, 900s) = 900s, so the condition is true
+  #    from 26m and the page fires after `for: 5m`.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0+60x10 600x50"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x60"
+    alert_rule_test:
+      # Still inside the budget: nothing.
+      - eval_time: 20m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+      # Over budget but still pending (`for: 5m`).
+      - eval_time: 28m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: NMSIngestSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "NMS ingest is SILENT: 1 controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m)"
+              description: "Each counted integration polled its controller successfully at least once and has delivered nothing since its budget of max(3 x its poll interval, 15m). Where the NMS is a tenant's ONLY source, that tenant's correlation input has stopped: no new controller events reach netops.controller_events and the incident list is empty because nothing arrives, not because the network is quiet. IngestPipelineSilent cannot see this - NMS traffic never crosses vector-aggregator and that rule is guarded on SNMP collectors. Find WHICH integrations with: (time() - netops_nms_last_success_timestamp_seconds) > clamp_min(3 * netops_nms_poll_interval_seconds, 900) and on(tenant_id, integration_id) netops_nms_ever_succeeded == 1, then read netops_nms_poll_runs_total by result (auth_failed, unreachable, timeout, circuit_open) for the cause."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+      # The SNMP-guarded funnel rule stays silent on an NMS-only install: there
+      # are no collector_* or vector series to read.
+      - eval_time: 35m
+        alertname: IngestPipelineSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) TWO SILENT INTEGRATIONS (two tenants, SAME integration id) + one
+  #    healthy -> ONE page, value 2. One fault class must not ring the phone
+  #    once per integration.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0+60x10 600x50"
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-1",vendor="meraki"}'
+        values: "0+60x10 600x50"
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-2",vendor="vmanage"}'
+        values: "0+60x60"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-1",vendor="meraki"}'
+        values: "300x60"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-2",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-1",vendor="meraki"}'
+        values: "1x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_bank",integration_id="nmsi-2",vendor="vmanage"}'
+        values: "1x60"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: NMSIngestSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "NMS ingest is SILENT: 2 controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m)"
+              description: "Each counted integration polled its controller successfully at least once and has delivered nothing since its budget of max(3 x its poll interval, 15m). Where the NMS is a tenant's ONLY source, that tenant's correlation input has stopped: no new controller events reach netops.controller_events and the incident list is empty because nothing arrives, not because the network is quiet. IngestPipelineSilent cannot see this - NMS traffic never crosses vector-aggregator and that rule is guarded on SNMP collectors. Find WHICH integrations with: (time() - netops_nms_last_success_timestamp_seconds) > clamp_min(3 * netops_nms_poll_interval_seconds, 900) and on(tenant_id, integration_id) netops_nms_ever_succeeded == 1, then read netops_nms_poll_runs_total by result (auth_failed, unreachable, timeout, circuit_open) for the cause."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # ==========================================================================
+  # 3) NEVER SUCCEEDED (a wrong password on day one): no page — there was
+  #    never ingest to go silent — but the warning fires on the failure run.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0x60"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0x60"
+      - series: 'netops_nms_consecutive_failures{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0+1x60"
+      - series: 'netops_nms_circuit_open{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: NMSIntegrationDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: "api:8080"
+              tenant_id: t_retail
+              integration_id: nmsi-9
+              vendor: vmanage
+            exp_annotations:
+              summary: "NMS integration nmsi-9 (vmanage, tenant t_retail) is not delivering: 3+ failed poll cycles in a row or its circuit breaker is open"
+              description: "The poll runtime has not completed a delivering cycle for this integration for at least three cycles, or has suspended polling it (circuit open after repeated unreachable / timeout / 5xx / auth failures; one login probe follows each cooldown). Read the integration's run history in the NMS page (per-stream status) and netops_nms_poll_runs_total by result. auth_failed means the controller refused the credential: fix it and press Poll now, which probes immediately instead of waiting out the cooldown. This is a warning; if the integration had delivered before and stays silent past its budget, NMSIngestSilent pages."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 3a) CIRCUIT OPEN alone (consecutive count reset by a restart) still warns.
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_consecutive_failures{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0x20"
+      - series: 'netops_nms_circuit_open{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NMSIntegrationDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              job: netops-api
+              instance: "api:8080"
+              tenant_id: t_retail
+              integration_id: nmsi-9
+              vendor: vmanage
+            exp_annotations:
+              summary: "NMS integration nmsi-9 (vmanage, tenant t_retail) is not delivering: 3+ failed poll cycles in a row or its circuit breaker is open"
+              description: "The poll runtime has not completed a delivering cycle for this integration for at least three cycles, or has suspended polling it (circuit open after repeated unreachable / timeout / 5xx / auth failures; one login probe follows each cooldown). Read the integration's run history in the NMS page (per-stream status) and netops_nms_poll_runs_total by result. auth_failed means the controller refused the credential: fix it and press Poll now, which probes immediately instead of waiting out the cooldown. This is a warning; if the integration had delivered before and stays silent past its budget, NMSIngestSilent pages."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 3b) Two failures in a row is a blip, not a down integration.
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_consecutive_failures{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "2x20"
+      - series: 'netops_nms_circuit_open{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-9",vendor="vmanage"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NMSIntegrationDown
+        exp_alerts: []
+
+  # ==========================================================================
+  # 4) HEALTHY -> silence on both rules.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0+60x60"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x60"
+      - series: 'netops_nms_consecutive_failures{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0x60"
+      - series: 'netops_nms_circuit_open{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: NMSIntegrationDown
+        exp_alerts: []
+
+  # ==========================================================================
+  # 5) THE API GOES AWAY -> its series go stale (absent), never frozen: no
+  #    NMS page. A dead api is ScrapeTargetDown's and the watchdog's.
+  #    The same frozen value that pages in test 1 is here followed by no
+  #    samples at all from 16m.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0+60x10 600x5"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x15"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x15"
+      - series: 'up{job="netops-api",instance="api:8080"}'
+        values: "1x15 0x45"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+
+  # 5a) Not an NMS install at all (no netops_nms_* series): silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="netops-api",instance="api:8080"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+
+  # 5b) A series from some OTHER job carrying the same name is ignored: the
+  #     rule reads only the api's own scrape.
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="import",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "600x60"
+      - series: 'netops_nms_poll_interval_seconds{job="import",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x60"
+      - series: 'netops_nms_ever_succeeded{job="import",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 6) A 30-MINUTE POLL INTERVAL GETS ITS 3-INTERVAL BUDGET (90m), not the
+  #    15m floor. Last success frozen at 10m (600s): the condition becomes
+  #    true only past 100m, firing at 106m+.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-slow",vendor="prime"}'
+        values: "0+60x10 600x120"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-slow",vendor="prime"}'
+        values: "1800x130"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-slow",vendor="prime"}'
+        values: "1x130"
+    alert_rule_test:
+      # 85 minutes of silence: well past the 15m floor, inside the budget.
+      - eval_time: 95m
+        alertname: NMSIngestSilent
+        exp_alerts: []
+      - eval_time: 110m
+        alertname: NMSIngestSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "NMS ingest is SILENT: 1 controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m)"
+              description: "Each counted integration polled its controller successfully at least once and has delivered nothing since its budget of max(3 x its poll interval, 15m). Where the NMS is a tenant's ONLY source, that tenant's correlation input has stopped: no new controller events reach netops.controller_events and the incident list is empty because nothing arrives, not because the network is quiet. IngestPipelineSilent cannot see this - NMS traffic never crosses vector-aggregator and that rule is guarded on SNMP collectors. Find WHICH integrations with: (time() - netops_nms_last_success_timestamp_seconds) > clamp_min(3 * netops_nms_poll_interval_seconds, 900) and on(tenant_id, integration_id) netops_nms_ever_succeeded == 1, then read netops_nms_poll_runs_total by result (auth_failed, unreachable, timeout, circuit_open) for the cause."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # ==========================================================================
+  # 7) IngestPipelineSilent IS UNAFFECTED: an SNMP install whose funnel goes
+  #    silent still pages on IngestPipelineSilent exactly as before, while a
+  #    healthy NMS integration beside it adds no NMS page.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_kind="sink",component_id="kafka_syslog",instance="vector-aggregator:9598"}'
+        values: "5000x40"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "4x40"
+      - series: 'netops_nms_last_success_timestamp_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "0+60x40"
+      - series: 'netops_nms_poll_interval_seconds{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "120x40"
+      - series: 'netops_nms_ever_succeeded{job="netops-api",instance="api:8080",tenant_id="t_retail",integration_id="nmsi-1",vendor="vmanage"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IngestPipelineSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "Ingest funnel is SILENT: vector-aggregator emitted zero events in 15m while the collectors can still reach devices — telemetry is being produced and is not arriving"
+              description: "Every non-flow lane (syslog, SNMP traps, collector metrics, probes, docker applogs) crosses vector-aggregator on its way to the bus, so this is total ingest loss for those lanes, not a degradation. The guard clause means this is NOT an idle lab: at least one collector target is reachable, so data exists to carry. Check the aggregator's container first (it may be up and wedged rather than down), then its kafka sinks — a broker that refuses the aggregator's produce ACL looks exactly like this and is the 2026-08-16 fault seen from the producer side."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+      - eval_time: 30m
+        alertname: NMSIngestSilent
+        exp_alerts: []

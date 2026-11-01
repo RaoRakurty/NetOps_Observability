@@ -138,11 +138,11 @@ const (
 	tierResolved = "resolved"
 )
 
-// FOUR PAGE CONDITIONS, NINE RULES — and that is not a contradiction.
+// FOUR PAGE CONDITIONS, TEN RULES — and that is not a contradiction.
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
 // conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
-// NINE, because one condition is implemented by several per-engine/per-lane
+// TEN, because one condition is implemented by several per-engine/per-lane
 // rules whose first response differs — the rules are the same condition seen
 // from a different vantage point, not extra conditions:
 //
@@ -153,7 +153,12 @@ const (
 //	      RouterConsumerLagGrowing     netops-router-* lanes, so a new lane is covered
 //	      CorrConsumerNotRunning     the engine's OWN corr_consumer_running gauge
 //	      CorrConsumerRestartLoop    a supervision loop that never stays up
-//	(2) ingest silent when it should not be    — 1 rule: IngestPipelineSilent
+//	(2) ingest silent when it should not be    — 2 rules
+//	      IngestPipelineSilent       the vector-aggregator funnel (SNMP-guarded)
+//	      NMSIngestSilent            the NMS controller lane (owner D4,
+//	                                   2026-10-24): an integration that has
+//	                                   delivered before went silent past
+//	                                   max(3 x interval, 15m)
 //	(3) storage refusing writes                — 1 rule: ClickHouseWritesRejected
 //	(4) the alerting heartbeat missing         — 1 rule: AlertDeliveryBroken
 //
@@ -162,7 +167,7 @@ const (
 // `tier: page` rule at all. Both claims are pinned mechanically by
 // TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
 // fails the build rather than rotting the next time a rule is added.
-const pageRuleCount = 9
+const pageRuleCount = 10
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.
