@@ -19,20 +19,26 @@ type ExpoRetry struct {
 	Base     time.Duration // first backoff (e.g. 500ms)
 	Max      time.Duration // cap per delay (e.g. 30s)
 	MaxTries int           // total attempts before giving up (e.g. 5)
+	// MaxTransportTries, when > 0, is a tighter attempt bound for transport
+	// failures (no HTTP answer at all: refused, unroutable, timed out). A
+	// controller that answers 503 is alive and worth waiting for; one that
+	// does not answer at all is usually down, and five attempts of up to 30 s
+	// each turned a dead controller into minutes of a poll worker (§9).
+	MaxTransportTries int
 	// Jitter returns a fraction in [0,1) added to the backoff; injected for
 	// determinism in tests. Nil → no jitter.
 	Jitter func() float64
 }
 
-// DefaultRetry returns a sane policy: 500ms base, 30s cap, 5 tries, and REAL
-// jitter — every production caller gets it.
+// DefaultRetry returns a sane policy: 500ms base, 30s cap, 5 tries (3 for a
+// transport failure), and REAL jitter — every production caller gets it.
 //
 // The hook existed and was unit-tested but was never wired, so every connector
 // that failed during one upstream outage retried on an identical schedule and
 // hit the recovering controller as a synchronized herd (§9). Tests that need a
 // deterministic delay override Jitter (or build ExpoRetry directly).
 func DefaultRetry() ExpoRetry {
-	return ExpoRetry{Base: 500 * time.Millisecond, Max: 30 * time.Second, MaxTries: 5, Jitter: randJitter}
+	return ExpoRetry{Base: 500 * time.Millisecond, Max: 30 * time.Second, MaxTries: 5, MaxTransportTries: 3, Jitter: randJitter}
 }
 
 // randJitter spreads a delay uniformly over [delay, 2*delay). Not
@@ -49,6 +55,9 @@ func randJitter() float64 { return rand.Float64() }
 // by re-auth, not retry).
 func (e ExpoRetry) Next(attempt, status int, retryAfter time.Duration) (time.Duration, bool) {
 	if attempt >= e.MaxTries {
+		return 0, false
+	}
+	if status == 0 && e.MaxTransportTries > 0 && attempt >= e.MaxTransportTries {
 		return 0, false
 	}
 	retriable := status == 0 || status == http.StatusTooManyRequests || status >= 500

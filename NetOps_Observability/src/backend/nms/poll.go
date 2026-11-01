@@ -88,7 +88,7 @@ func fetch(ctx context.Context, in PollInput, path string) ([]byte, error) {
 		return nil, ErrUnauthorized // runtime re-authenticates
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("poll %s: status %d", in.Stream, resp.StatusCode)
+		return nil, &HTTPStatusError{Op: "poll " + in.Stream, Code: resp.StatusCode}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }

@@ -71,7 +71,7 @@ func (CatalystAuth) Authenticate(ctx context.Context, base string, creds Credent
 	}
 	defer drainClose(resp)
 	if resp.StatusCode != http.StatusOK {
-		return Session{}, fmt.Errorf("catalyst auth: status %d", resp.StatusCode)
+		return Session{}, &HTTPStatusError{Op: "catalyst auth", Code: resp.StatusCode}
 	}
 	var body struct {
 		Token string `json:"Token"`
@@ -138,7 +138,7 @@ func (VManageAuth) jwtLogin(ctx context.Context, base string, creds Credentials,
 	}
 	defer drainClose(resp)
 	if resp.StatusCode != http.StatusOK {
-		return Session{}, resp.StatusCode, fmt.Errorf("vmanage auth: status %d", resp.StatusCode)
+		return Session{}, resp.StatusCode, &HTTPStatusError{Op: "vmanage auth", Code: resp.StatusCode}
 	}
 	var body struct {
 		Token string `json:"token"`
@@ -170,7 +170,7 @@ func (VManageAuth) sessionLogin(ctx context.Context, base string, creds Credenti
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // discard: a read error leaves body empty; the session-cookie check below still decides
 	drainClose(resp)
 	if resp.StatusCode != http.StatusOK {
-		return Session{}, fmt.Errorf("vmanage session login: status %d", resp.StatusCode)
+		return Session{}, &HTTPStatusError{Op: "vmanage session login", Code: resp.StatusCode}
 	}
 	// A rejected login answers 200 with the HTML login page instead of a session.
 	if strings.Contains(strings.ToLower(string(body)), "<html") {
@@ -231,7 +231,7 @@ func (NDFCAuth) Authenticate(ctx context.Context, base string, creds Credentials
 	}
 	defer drainClose(resp)
 	if resp.StatusCode != http.StatusOK {
-		return Session{}, fmt.Errorf("ndfc auth: status %d", resp.StatusCode)
+		return Session{}, &HTTPStatusError{Op: "ndfc auth", Code: resp.StatusCode}
 	}
 	var body struct {
 		JWTToken string `json:"jwttoken"`
@@ -289,7 +289,7 @@ func (a VersaAuth) Authenticate(ctx context.Context, base string, creds Credenti
 		}
 		defer drainClose(resp)
 		if resp.StatusCode != http.StatusOK {
-			return Session{}, fmt.Errorf("versa oauth: status %d", resp.StatusCode)
+			return Session{}, &HTTPStatusError{Op: "versa oauth", Code: resp.StatusCode}
 		}
 		var body struct {
 			AccessToken string `json:"access_token"`
