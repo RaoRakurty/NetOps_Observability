@@ -26,9 +26,23 @@ set -eu
 
 CSV="${CX_ENRICHMENT_CSV:-/etc/vector/enrichment/device_tenant.csv}"
 POLL="${CX_ENRICHMENT_POLL_SECONDS:-15}"
+# The binary is overridable ONLY so tests can run this wrapper against a stub;
+# the images ship vector at exactly this path.
+VECTOR_BIN="${CX_VECTOR_BIN:-/usr/local/bin/vector}"
+HERE="$(dirname "$0")"
 
-/usr/local/bin/vector "$@" &
+"$VECTOR_BIN" "$@" &
 VECTOR_PID=$!
+
+# Kafka lane self-heal (2026-10-30 incident, see cx-lane-watch.sh): a kafka
+# source can stay JOINED to its consumer group while delivering nothing, and
+# nothing in-process recovers it. Opt-in per tier — the router sets
+# CX_LANE_WATCH=1 (it owns every kafka source); the aggregator has none.
+WATCH_PID=""
+if [ "${CX_LANE_WATCH:-0}" = "1" ]; then
+    /bin/sh "$HERE/cx-lane-watch.sh" --watch "$VECTOR_PID" &
+    WATCH_PID=$!
+fi
 
 # We are PID 1 — forward lifecycle signals to vector. `|| true` is safe here
 # ONLY because the failure mode is "vector already exited", which the `wait`
@@ -84,7 +98,44 @@ last="$(hash_of "$CSV" || true)"
 set +e
 wait "$VECTOR_PID"
 vector_status=$?
+# A trapped signal (docker stop → TERM, forwarded above) makes `wait` return
+# 128+n IMMEDIATELY, while vector is still draining. Exiting then would end
+# PID 1 and the kernel would kill vector mid-drain — so keep waiting until
+# vector itself has exited, and report ITS status.
+while kill -0 "$VECTOR_PID" 2>/dev/null; do
+    wait "$VECTOR_PID"
+    vector_status=$?
+done
+# Was this exit the lane watcher's doing? It exits 75 right after signalling
+# vector, so by now it has normally finished; if it is still running (vector
+# died for another reason) stop it — its status is then 143, not 75.
+watch_status=""
+if [ -n "$WATCH_PID" ]; then
+    if kill -0 "$WATCH_PID" 2>/dev/null; then
+        # Safe to ignore: the only failure is "already exited", which the
+        # `wait` below reports through its status.
+        kill -TERM "$WATCH_PID" 2>/dev/null || true
+    fi
+    wait "$WATCH_PID"
+    watch_status=$?
+fi
 set -e
+
+if [ "$watch_status" = "75" ]; then
+    # §10: a self-heal restart must never look like a clean exit. 75
+    # (EX_TEMPFAIL) is the container's exit code, the restart policy brings
+    # it back, and this line is the reason the restart push carries.
+    echo "cx-enrichment-reload: vector stopped by cx-lane-watch — a kafka" \
+         "lane was joined but not consuming (see the LANE WEDGED line above);" \
+         "exiting 75 so the container restarts and the consumer rejoins" \
+         "(vector status was ${vector_status})" >&2
+    exit 75
+fi
+if [ -n "$watch_status" ] && [ "$watch_status" != "143" ] && [ "$watch_status" != "0" ]; then
+    echo "cx-enrichment-reload: cx-lane-watch had exited with status" \
+         "${watch_status} (64 = invalid config) — lane self-heal was NOT" \
+         "running" >&2
+fi
 
 case "$vector_status" in
     0)

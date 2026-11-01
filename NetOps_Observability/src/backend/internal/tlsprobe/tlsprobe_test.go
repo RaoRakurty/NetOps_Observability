@@ -221,3 +221,133 @@ func TestPeerMetricsOutput(t *testing.T) {
 		t.Fatal("failed probe leaked an expiry gauge")
 	}
 }
+
+// serveMTLSOnce accepts one connection on a server that REQUIRES a client
+// certificate chaining to clientCA, and reports the server-side handshake
+// outcome — the thing vector's syslog_in counts as an error when it fails.
+func serveMTLSOnce(t *testing.T, server tls.Certificate, clientCA *x509.Certificate) (net.Listener, <-chan error) {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if clientCA != nil {
+		pool.AddCert(clientCA)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		tc := tls.Server(conn, &tls.Config{
+			Certificates: []tls.Certificate{server},
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    pool,
+			MinVersion:   tls.VersionTLS12,
+		})
+		done <- tc.Handshake()
+		_ = tc.Close()
+	}()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln, done
+}
+
+func TestProbePresentsClientSVIDWhenConfigured(t *testing.T) {
+	// 2026-10-31: the probe with NO client cert made vector's syslog_in log
+	// "peer did not return a certificate" and bump component_errors every
+	// sweep — VectorComponentErrors fired permanently. With the api's SVID
+	// offered, the SERVER-side handshake must SUCCEED, and the served cert
+	// must still be captured.
+	notAfter := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	client := selfSigned(t, time.Now().Add(24*time.Hour))
+	clientLeaf, err := x509.ParseCertificate(client.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, serverErr := serveMTLSOnce(t, selfSigned(t, notAfter), clientLeaf)
+
+	var calls int
+	p := newProberForTest()
+	WithClientCertificate(func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		calls++
+		return &client, nil
+	})(p)
+	res := p.probe(context.Background(), peerEndpoint{Name: "syslog", Addr: ln.Addr().String()})
+	if !res.ok || !res.notAfter.Equal(notAfter) {
+		t.Fatalf("served cert not captured: %+v", res)
+	}
+	if calls != 1 {
+		t.Fatalf("client-cert getter called %d times, want 1 (consulted per dial)", calls)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("server-side handshake failed with the SVID presented: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server handshake never completed")
+	}
+}
+
+func TestProbeWithoutSVIDStillRefusedButCaptures(t *testing.T) {
+	// The unchanged default: no getter → no client cert → the server refuses,
+	// and the probe STILL reports the served cert (the original design).
+	notAfter := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	ln, serverErr := serveMTLSOnce(t, selfSigned(t, notAfter), nil)
+	p := newProberForTest()
+	WithClientCertificate(nil)(p) // nil getter is ignored
+	if p.clientCert != nil {
+		t.Fatal("a nil getter must leave the probe presenting nothing")
+	}
+	res := p.probe(context.Background(), peerEndpoint{Name: "syslog", Addr: ln.Addr().String()})
+	if !res.ok || !res.notAfter.Equal(notAfter) {
+		t.Fatalf("served cert not captured: %+v", res)
+	}
+	select {
+	case err := <-serverErr:
+		if err == nil {
+			t.Fatal("server accepted a handshake with no client certificate")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server handshake never completed")
+	}
+}
+
+func TestProbeSVIDGetterFailureDegradesLoudly(t *testing.T) {
+	// The api's own identity being unavailable must never cost the datum:
+	// present nothing (crypto/tls needs a non-nil cert), capture anyway, and
+	// say so through warnf.
+	notAfter := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	ln, _ := serveMTLSOnce(t, selfSigned(t, notAfter), nil)
+	var warned []string
+	p := newProberForTest()
+	p.warnf = func(msg string, _ map[string]any) { warned = append(warned, msg) }
+	WithClientCertificate(func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		return nil, io.ErrUnexpectedEOF
+	})(p)
+	res := p.probe(context.Background(), peerEndpoint{Name: "syslog", Addr: ln.Addr().String()})
+	if !res.ok || !res.notAfter.Equal(notAfter) {
+		t.Fatalf("served cert not captured after a getter failure: %+v", res)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "client SVID unavailable") {
+		t.Fatalf("getter failure was not reported: %v", warned)
+	}
+}
+
+func TestNewAppliesOptions(t *testing.T) {
+	get := func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &tls.Certificate{}, nil }
+	p, err := New("", nil, WithClientCertificate(get))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.clientCert == nil {
+		t.Fatal("New dropped the client-certificate option")
+	}
+	p2, err := New("", nil)
+	if err != nil || p2.clientCert != nil {
+		t.Fatalf("default prober must present no client certificate (err=%v)", err)
+	}
+}

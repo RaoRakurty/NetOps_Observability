@@ -112,6 +112,13 @@ sources:
 
   kafka_applogs:
     type: kafka
+    # Lane self-heal (2026-10-30): per-partition consumer lag, read by
+    # cx-lane-watch.sh from this tier's own exporter. Lag > 0 with nothing
+    # received and no sink back-pressure = a joined-but-not-consuming lane;
+    # the watcher restarts vector. Every kafka SOURCE on this tier carries
+    # this block (tests/test_router_lane_watch.py pins it): a lane without
+    # it reports no lag and can never be healed.
+    metrics: { topic_lag_metric: true }
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -191,6 +198,7 @@ sources:
   # netops.flows) and the correlation consumer are unchanged.
   kafka_flows_raw:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     tls:
       enabled: ${KAFKA_TLS_ENABLED:-false}
       ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
@@ -208,6 +216,7 @@ sources:
 
   kafka_syslog:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -229,6 +238,7 @@ sources:
 
   kafka_flows:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -250,6 +260,7 @@ sources:
 
   kafka_snmptrap:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -275,6 +286,7 @@ sources:
   # they are searchable as RAW logs, not only as correlation signals.
   kafka_cloudlogs:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -303,6 +315,7 @@ sources:
   # independently to ground Exposure Stories — neither consumer blocks the other.
   kafka_security:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -329,6 +342,7 @@ sources:
   # itself drop it.
   kafka_deadletter:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -356,6 +370,7 @@ sources:
   # OpenSearch index.
   kafka_experience:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
@@ -381,6 +396,7 @@ sources:
   # row policy) — cost is not a log, so no OpenSearch index.
   kafka_cloudcosts:
     type: kafka
+    metrics: { topic_lag_metric: true }   # lane self-heal — see kafka_applogs
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
     # interpolation so the boolean lands as a boolean. Plaintext default; the
     # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
