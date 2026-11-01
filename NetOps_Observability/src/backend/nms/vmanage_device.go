@@ -108,6 +108,7 @@ func vmanageBFDTransform(tenant, integrationID string, raw []byte) (Batch, error
 			DeviceID: r.VDevice, SiteID: string(r.SiteID), Time: vmTime(r.LastUpd),
 			// BFD's `color` is the FAR end's colour (both ends mirror it).
 			TunnelID: CanonicalTunnelID(r.VDevice, r.LocalCol, r.PeerIP, r.Color), PeerID: r.PeerIP,
+			LocalColor: strings.ToLower(r.LocalCol), RemoteColor: strings.ToLower(r.Color),
 			Data: map[string]any{"device_name": r.VHost, "peer_system_ip": r.PeerIP,
 				"local_color": r.LocalCol, "remote_color": r.Color, "proto": r.Proto, "transitions": float64(r.Transits)},
 		})
@@ -134,6 +135,7 @@ func vmanageControlTransform(tenant, integrationID string, raw []byte) (Batch, e
 			EntityKey: key, StateKind: "control_conn", CurrentState: vmUpDown(r.State),
 			DeviceID: r.VDevice, SiteID: string(r.SiteID), Time: vmTime(r.LastUpd),
 			TunnelID: CanonicalTunnelID(r.VDevice, r.LocalCol, r.PeerIP, r.RemoteCol), PeerID: r.PeerIP,
+			LocalColor: strings.ToLower(r.LocalCol), RemoteColor: strings.ToLower(r.RemoteCol),
 			Data: map[string]any{"device_name": r.VHost, "peer_system_ip": r.PeerIP, "peer_type": r.PeerType,
 				"local_color": r.LocalCol, "remote_color": r.RemoteCol, "protocol": r.Protocol},
 		})

@@ -10,9 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"netops/backend/internal/owner"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -215,12 +215,15 @@ func (s *Store) Delete(id string) error {
 }
 
 // randID returns a 16-byte hex identifier (stdlib crypto/rand).
-// sameTenant mirrors the integrator's tenancy filter (duplicated).
+// sameTenant mirrors the integrator's saved-object tenancy rule (rbac ResSaved):
+// cross sees all; a scoped caller sees its own objects, and the Provider scope
+// ("global") also the platform's untagged "" ones (owner.ScopeReads — tracker
+// 365; directional, an unbound "" caller never reaches "global").
 func sameTenant(resourceTenant, tenant string, cross bool) bool {
 	if cross {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(tenant))
+	return owner.ScopeReads(tenant, resourceTenant)
 }
 
 func randID() string {

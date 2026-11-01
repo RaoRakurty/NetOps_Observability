@@ -441,13 +441,12 @@ check_clickhouse_health() {  # tel_stale_min
   rc=$?
   detail=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)
   if [ "$rc" -ne 0 ]; then
-    if printf '%s' "$out" |
-         grep -qiE 'OCI runtime|exec failed|procReady|unable to start container process'; then
+    if grep -qiE 'OCI runtime|exec failed|procReady|unable to start container process' <<<"$out"; then
       # The VANTAGE is broken, not ClickHouse. Never assert a database outage
       # from a transport failure — that conflation is the whole reason this
       # function exists.
       problems+=("CONTAINER_RUNTIME_EXEC_FAILURE: docker exec into '$CH_PROBE_FROM' failed, so ClickHouse could not be probed. This says NOTHING about the database. Check pid cgroup capacity on that container. Detail: ${detail:-no output}")
-    elif printf '%s' "$out" | grep -qiE 'SSL|TLS|certificate|verify'; then
+    elif grep -qiE 'SSL|TLS|certificate|verify' <<<"$out"; then
       problems+=("CLICKHOUSE_TLS_FAILURE: TLS handshake/verification to $CH_PROBE_URL failed: ${detail:-no output}")
     else
       problems+=("CLICKHOUSE_UNREACHABLE: $CH_PROBE_URL/ping failed from '$CH_PROBE_FROM' (curl rc=$rc): ${detail:-no output}")
@@ -502,7 +501,7 @@ check_clickhouse_health() {  # tel_stale_min
   # A healthy reply is ONE integer (negative only under clock skew). Anything
   # else — even with HTTP 200 — is not an age; never arithmetic on it.
   age=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr -d '[:space:]')
-  if ! printf '%s' "$age" | grep -qE '^-?[0-9]{1,12}$'; then
+  if ! grep -qE '^-?[0-9]{1,12}$' <<<"$age"; then
     problems+=("CLICKHOUSE_QUERY_FAILURE: corr_signals freshness query returned a non-numeric body (HTTP 200): ${detail:-no output}")
     return 0
   fi
@@ -590,7 +589,7 @@ if [ "${#oom_events[@]}" -gt 0 ]; then
   # rebuild got a fire emoji and the word OOM — and a real OOM would have been
   # indistinguishable from it (2026-08-04: 18 nginx restarts from config
   # iteration were reported as OOM). Only claim OOM when we detected OOM.
-  if printf '%s\n' "${oom_events[@]}" | grep -q "OOM-KILLED"; then
+  if grep -q "OOM-KILLED" < <(printf '%s\n' "${oom_events[@]}"); then
     push "🔥 NetOps container OOM-KILLED on $(hostname)" "fire" "high" \
       "$(printf '%s\n' "${oom_events[@]}")"
   else
@@ -1011,7 +1010,7 @@ if [ -n "$os_cid" ]; then
       # the TCP connect succeeded and the peer answered with a cert we rejected.
       # curl distinguishes the two sub-causes in its own text; so do we, rather
       # than asserting a SAN mismatch when the CA is what is actually wrong.
-      if printf '%s' "$out" | grep -qiE 'subject name|host ?name'; then
+      if grep -qiE 'subject name|host ?name' <<<"$out"; then
         os_diag_class="TLS_HOSTNAME"
         os_diag_detail="the certificate is trusted but its names do not cover the probe host '$os_probe_host'. This stack issues OpenSearch the SAN set 'DNS:opensearch' + a SPIFFE URI and NOTHING else — no localhost — so any other host name fails hostname verification. Point OS_PROBE_URL at 'opensearch' or add the name to the SAN. Do NOT add -k: that converts a real MITM or a misissued cert into a silent pass."
       else
@@ -1024,7 +1023,7 @@ if [ -n "$os_cid" ]; then
       os_diag_class="AUTH"
       os_diag_detail="the certificate verified and the node answered, so this is authentication/authorization, NOT TLS. Check OS_API_PASSWORD / OS_AGGREGATOR_PASSWORD in $CH_ENV_FILE and the svc_api / svc_aggregator roles."
     elif { [ "$os_diag_rc" = 7 ] || [ "$os_diag_http" = "000" ]; } &&
-         ! printf '%s' "$out" | grep -qiE 'ssl|tls|certificate'; then
+         ! grep -qiE 'ssl|tls|certificate' <<<"$out"; then
       os_diag_class="UNREACHABLE"
       os_diag_detail="nothing accepted a connection at $OS_PROBE_URL from inside the opensearch container, and curl reported no TLS error — the node is down, still starting, or bound elsewhere. Not TLS, not auth. curl said: $out"
     else
@@ -1163,7 +1162,7 @@ if [ -n "$os_cid" ]; then
         #
         # Bounded (os_fetch carries max-time=8) and, when it cannot be read,
         # the message says "reason unavailable" — never implies there is none.
-        if printf '%s' "$snap_json" | grep -q '"PARTIAL"'; then
+        if grep -q '"PARTIAL"' <<<"$snap_json"; then
           # Newest PARTIAL snapshot by end_epoch. `_cat` returns a flat JSON
           # array; split it into one line per entry (no jq in this container's
           # world, and the caller runs on the host) and pick the latest.
@@ -1499,7 +1498,7 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
       # malformed reply as "members > 0" — i.e. as healthy. That is exactly the
       # swallow-and-look-fine defect this whole probe exists to undo (§16.1).
       eng_corr_i=${eng_corr%%.*}
-      if ! printf '%s' "$eng_corr_i" | grep -qE '^-?[0-9]+$'; then
+      if ! grep -qE '^-?[0-9]+$' <<<"$eng_corr_i"; then
         problems+=("engine-consuming probe SKIPPED: correlation member count is not a number (got '${eng_corr}') — treating as UNKNOWN, not as healthy")
       elif [ "$eng_corr_i" -le 0 ]; then
         eng_query 'sum%28kafka_consumergroup_lag_sum%7Bconsumergroup%3D%22netops-correlation%22%7D%29'
@@ -1557,7 +1556,7 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
       else
         eng_hb_age_i=${eng_hb_age%%.*}
         eng_hb_max="${ALERT_HEARTBEAT_MAX_SEC:-900}"
-        if ! printf '%s' "$eng_hb_age_i" | grep -qE '^-?[0-9]+$'; then
+        if ! grep -qE '^-?[0-9]+$' <<<"$eng_hb_age_i"; then
           problems+=("alert-delivery probe SKIPPED: heartbeat age is not a number (got '${eng_hb_age}') — treating as UNKNOWN, not as healthy")
         elif [ "$eng_hb_age_i" -gt "$eng_hb_max" ]; then
           problems+=("ALERT_DELIVERY_BROKEN: no alert has reached the platform for $(( eng_hb_age_i / 60 ))m (limit $(( eng_hb_max / 60 ))m) — vmalert is evaluating into a void and every 'quiet' alert is unproven. Runbook: docs/runbooks/engine-not-consuming.md")
@@ -1589,7 +1588,7 @@ if [ "${CLIENT_CERT_CHECK:-1}" = "1" ] && [ -n "${eng_cid:-}" ]; then
   elif [ -n "$eng_val" ]; then
     cc_left=${eng_val%%.*}
     cc_min="${CLIENT_CERT_MIN_SEC:-43200}"
-    if ! printf '%s' "$cc_left" | grep -qE '^-?[0-9]+$'; then
+    if ! grep -qE '^-?[0-9]+$' <<<"$cc_left"; then
       problems+=("client-certificate expiry probe SKIPPED: value is not a number (got '${eng_val}') — treating as UNKNOWN, not as healthy")
     elif [ "$cc_left" -lt "$cc_min" ]; then
       problems+=("CLIENT_CERT_EXPIRING: an mTLS caller presents a client certificate with $(( cc_left / 3600 ))h left (limit $(( cc_min / 3600 ))h) — it loaded its SVID at start; see netops_tls_client_cert_expiry_seconds for which one, then run scripts/rotate-tls-services.sh or restart it")
@@ -1666,7 +1665,7 @@ if [ "${SNAPSHOT_RESTORABLE_CHECK:-1}" = "1" ]; then
       # value errors, and suppressing that error would report a malformed reply
       # as healthy — the §16.1 swallow this whole section exists to prevent.
       snap_restorable_i=${snap_restorable%%.*}
-      if ! printf '%s' "$snap_restorable_i" | grep -qE '^-?[0-9]+$'; then
+      if ! grep -qE '^-?[0-9]+$' <<<"$snap_restorable_i"; then
         problems+=("snapshot-restorability probe SKIPPED: the restorable gauge is not a number (got '${snap_restorable}') — treating as UNKNOWN, not as healthy")
       elif [ "$snap_restorable_i" -le 0 ]; then
         # Keep the first 160 characters (what problem_key hashes) free of
@@ -1738,7 +1737,7 @@ deb_num=""
 deb_num_err=""
 deb_to_int() {  # $1 = raw VM sample value -> deb_num (integer) | deb_num_err
   deb_num=""; deb_num_err=""
-  if ! printf '%s' "$1" | grep -qE '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$'; then
+  if ! grep -qE '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$' <<<"$1"; then
     deb_num_err="not a number (got '$1')"
     return 1
   fi
@@ -1754,7 +1753,7 @@ deb_to_int() {  # $1 = raw VM sample value -> deb_num (integer) | deb_num_err
       ;;
     *) deb_num=${1%%.*} ;;
   esac
-  if ! printf '%s' "$deb_num" | grep -qE '^-?[0-9]+$'; then
+  if ! grep -qE '^-?[0-9]+$' <<<"$deb_num"; then
     deb_num_err="not normalisable to a whole number (got '$1' -> '$deb_num')"
     deb_num=""
     return 1
@@ -1768,7 +1767,7 @@ if [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ]; then
     # ALREADY a critical from the service loop, and a second push for one fault
     # is noise. What must not happen is silence about the probe not running.
     problems+=("debug-level probe SKIPPED: no running victoria container in project '$PROJECT' — nothing checked this minute whether a module was left at debug")
-  elif ! printf '%s' "${DEBUG_LEVEL_STUCK_GRACE_SEC:-300}" | grep -qE '^[0-9]+$'; then
+  elif ! grep -qE '^[0-9]+$' <<<"${DEBUG_LEVEL_STUCK_GRACE_SEC:-300}"; then
     problems+=("debug-level probe SKIPPED: DEBUG_LEVEL_STUCK_GRACE_SEC is not a whole number of seconds (got '${DEBUG_LEVEL_STUCK_GRACE_SEC:-}') — the window comparison cannot run, and a probe that cannot run is UNKNOWN, not healthy")
   else
     deb_grace="${DEBUG_LEVEL_STUCK_GRACE_SEC:-300}"
