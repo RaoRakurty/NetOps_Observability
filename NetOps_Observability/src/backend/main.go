@@ -191,7 +191,8 @@ const version = "0.1.0-scaffold"
 type server struct {
 	startedAt     time.Time
 	discovery     *discovery.DiscoveryAggregator
-	devStore      *discovery.DevStore // manual-device + tombstone store; Close() flushes hit recency at shutdown (ultra 9)
+	devStore      *discovery.DevStore   // manual-device + tombstone store; Close() flushes hit recency at shutdown (ultra 9)
+	snmpScan      *discovery.SNMPSource // the SNMP subnet scanner; its scan memory persists (tracker 366)
 	collectors    *collectors.Pool
 	alerts        *alerts.Engine
 	alertEpisodes *alertEpisodeStore
@@ -855,7 +856,18 @@ func newServer() *server {
 	// SNMP credential store is created below; capture a pointer the subnet
 	// sweep and the target builder resolve profiles against (set after init).
 	var snmpCredsRef *snmpcred.Store
-	d.Register(newSNMPSourceFromStore(discoveryCfg, func() *snmpcred.Store { return snmpCredsRef }, d.Devices))
+	snmpScan := newSNMPSourceFromStore(discoveryCfg, func() *snmpcred.Store { return snmpCredsRef }, d.Devices)
+	// Tracker 366: the scanner's memory of what it has found survives a
+	// restart, so a device that is down at boot is still inventory (same id,
+	// same tenant row, same topology node). Restored here — before
+	// discovery.Start ingests it through the normal admission path and before
+	// the tenant-enrichment and topology exports start. A read failure leaves
+	// the source "not ready" with writes refused (Restore).
+	if err := restoreSNMPScanMemory(snmpScan); err != nil {
+		logError("discovery", "SNMP scan memory not restored — devices that are down stay out of the inventory until they answer, and the enrichment exports keep their previous files until a sweep completes",
+			map[string]any{"error": err.Error()})
+	}
+	d.Register(snmpScan)
 	// NetBox source-of-truth: registered always with a LIVE config getter (UI-set
 	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
 	// honors runtime changes from Automation → Source of Truth without a restart.
@@ -1221,6 +1233,7 @@ func newServer() *server {
 		workers:          &workerGroup{},
 		discovery:        d,
 		devStore:         devStore,
+		snmpScan:         snmpScan,
 		collectors:       pool,
 		alerts:           engine,
 		userRules:        userRules,
@@ -2373,6 +2386,38 @@ func newDeviceStore(path string) *discovery.DevStore {
 		return discovery.NewDevStore(path, platformPrefixKV{}, logError)
 	}
 	return discovery.NewDevStore(path, platformKV{}, logError)
+}
+
+// discoveredDevicesPath is where the file backend keeps the SNMP scan memory.
+func discoveredDevicesPath() string {
+	if p := strings.TrimSpace(os.Getenv("DISCOVERED_DEVICES_STORE_PATH")); p != "" {
+		return p
+	}
+	return "/data/discovered_devices.json"
+}
+
+// newFoundStore picks the SNMP scan-memory backend the way the device store
+// does: the RLS-scoped discovered_devices table under STORE_BACKEND=postgres,
+// else one record per device on the platform kv's per-record capability. A
+// blob-only backend gets no store and the scanner keeps the pre-366
+// in-memory behaviour (said once, here).
+func newFoundStore() discovery.FoundStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return discovery.NewPGFoundStore(ps.DB())
+	}
+	if _, ok := platformdb.ActivePrefix(); ok {
+		return discovery.NewFileFoundStore(discoveredDevicesPath(), platformPrefixKV{})
+	}
+	logWarn("discovery", "the store backend has no per-record capability — the SNMP scan memory is not persisted", nil)
+	return nil
+}
+
+// restoreSNMPScanMemory attaches the scan-memory store and loads it under a
+// bounded boot deadline (§9: all IO has a timeout).
+func restoreSNMPScanMemory(src *discovery.SNMPSource) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return src.Restore(ctx, newFoundStore())
 }
 
 // newSavedStore selects the saved-objects backend: RLS-scoped pg under
@@ -4773,6 +4818,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.discovery != nil {
 		s.discovery.WriteOSVersionMetrics(w)
 	}
+	// SNMP scan memory (tracker 366): failed writes, whether it was restored,
+	// and how many remembered devices are stale. Nil-safe.
+	s.snmpScan.WriteMetrics(w)
 	// LICENCE-BEGIN — emitted on every deployment including Community, so
 	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
 	// series. A vanished series must mean a scrape failure, not a state change.
