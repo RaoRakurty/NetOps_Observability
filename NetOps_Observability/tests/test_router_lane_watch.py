@@ -67,12 +67,12 @@ def _src(cid, received=None, lags=(), partition="0"):
 
 def _buf(sink, events, cap=500):
     return [
-        f'vector_buffer_events{{buffer_type="memory",component_id="{sink}",'
-        f'component_kind="sink",component_type="elasticsearch",host="h",stage="0"}} '
-        f'{events} 1793458190359',
-        f'vector_buffer_max_event_size{{buffer_type="memory",component_id="{sink}",'
-        f'component_kind="sink",component_type="elasticsearch",host="h",stage="0"}} '
-        f'{cap} 1793458190359',
+        (f'vector_buffer_events{{buffer_type="memory",component_id="{sink}",'
+         f'component_kind="sink",component_type="elasticsearch",host="h",stage="0"}} '
+         f'{events} 1793458190359'),
+        (f'vector_buffer_max_event_size{{buffer_type="memory",component_id="{sink}",'
+         f'component_kind="sink",component_type="elasticsearch",host="h",stage="0"}} '
+         f'{cap} 1793458190359'),
     ]
 
 
@@ -84,11 +84,11 @@ def _exporter(*groups):
     # Unrelated series the parser must ignore (a transform with the same name
     # family, a sink counter, an internal gauge without component_id).
     lines += [
-        'vector_component_received_events_total{component_id="applogs_tagged",'
-        'component_kind="transform",component_type="remap",host="h"} 5 1',
-        'vector_kafka_consumer_lag{component_id="kafka_flows_keyed",'
-        'component_kind="sink",component_type="kafka",host="h",partition_id="0",'
-        'topic_id="t"} 999 1',
+        ('vector_component_received_events_total{component_id="applogs_tagged",'
+         'component_kind="transform",component_type="remap",host="h"} 5 1'),
+        ('vector_kafka_consumer_lag{component_id="kafka_flows_keyed",'
+         'component_kind="sink",component_type="kafka",host="h",partition_id="0",'
+         'topic_id="t"} 999 1'),
         "vector_uptime_seconds 123 1",
     ]
     return "\n".join(lines) + "\n"
@@ -261,7 +261,7 @@ def test_invalid_config_refuses_loudly(shell, bb_path, var, val):
 class _Exporter(http.server.BaseHTTPRequestHandler):
     body = b""
 
-    def do_GET(self):  # noqa: N802 — http.server API
+    def do_GET(self):  # http.server API name
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(self.body)))
