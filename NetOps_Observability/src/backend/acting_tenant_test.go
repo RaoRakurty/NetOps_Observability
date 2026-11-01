@@ -59,10 +59,18 @@ func TestWithActingTenant(t *testing.T) {
 	if c := req("acme"); c.ActingTenant != acme.ID {
 		t.Errorf("owner→acme: ActingTenant=%q, want %s", c.ActingTenant, acme.ID)
 	}
-	// "global" means the default Global (cross-tenant) view — NOT a narrowing.
-	if c := req("global"); c.ActingTenant != "" {
-		t.Errorf("owner→global: ActingTenant=%q, want empty (Global = cross-tenant)", c.ActingTenant)
+	// "global" is the Provider tenant: a real, NON-cross narrowing to the
+	// platform's own rows (tracker 365) — it used to mean cross-tenant, which
+	// is how an operator deleted another tenant's integration from "Provider".
+	if c := req("global"); c.ActingTenant != TenantGlobal {
+		t.Errorf("owner→global: ActingTenant=%q, want %q (Provider narrows)", c.ActingTenant, TenantGlobal)
+	} else if tn, cross := principalTenant(c); cross || tn != TenantGlobal {
+		t.Errorf("owner→global: principalTenant = (%q,%v), want (global,false)", tn, cross)
 	}
+	if c := req(" Global "); c.ActingTenant != TenantGlobal {
+		t.Errorf("owner→' Global ': ActingTenant=%q, want %q (trimmed, case-insensitive)", c.ActingTenant, TenantGlobal)
+	}
+	// Only "" and "all" are the All-tenants (cross) view.
 	if c := req("all"); c.ActingTenant != "" {
 		t.Errorf("owner→all: ActingTenant=%q, want empty", c.ActingTenant)
 	}
@@ -79,5 +87,17 @@ func TestWithActingTenant(t *testing.T) {
 	r.Header.Set("X-Acting-Tenant", "acme")
 	if c := s.withActingTenant(r, tenantAdmin); c.ActingTenant != "" {
 		t.Errorf("non-owner override: ActingTenant=%q, want empty (refused)", c.ActingTenant)
+	}
+	// A non-owner naming "global" (Provider) with no binding reaching it is
+	// ignored — it stays in its own tenant, never widens into the platform's.
+	r = httptest.NewRequest("GET", "/api/logs", nil)
+	r.Header.Set("X-Acting-Tenant", TenantGlobal)
+	if c := s.withActingTenant(r, tenantAdmin); c.ActingTenant != "" || c.Tenant != "acme" {
+		t.Errorf("non-owner→global: (ActingTenant=%q, Tenant=%q), want (\"\", acme)", c.ActingTenant, c.Tenant)
+	}
+	// No tenant registry: every override is ignored (fail closed), including global.
+	bare := &server{}
+	if c := bare.withActingTenant(r, owner); c.ActingTenant != "" {
+		t.Errorf("no registry: ActingTenant=%q, want empty", c.ActingTenant)
 	}
 }

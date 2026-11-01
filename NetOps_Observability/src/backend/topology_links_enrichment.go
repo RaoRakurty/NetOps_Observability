@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/ctloverlay"
+	"netops/backend/nms"
 )
 
 // topology_links_enrichment.go — exports the L2/L3 device adjacency (LLDP/CDP/BGP-LS
@@ -32,7 +34,7 @@ type topologyLinkExport struct {
 	B        string `json:"b"`               // neighbour device id
 	AIf      string `json:"a_if,omitempty"`  // local interface
 	BIf      string `json:"b_if,omitempty"`  // neighbour interface
-	Proto    string `json:"proto,omitempty"` // lldp | cdp | bgp_ls
+	Proto    string `json:"proto,omitempty"` // lldp | cdp | bgp_ls | sdwan_bfd (controller tunnel ↔ endpoint)
 }
 
 func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
@@ -78,6 +80,15 @@ func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
 				TenantID: tenantBy[a], A: a, B: b, AIf: l.LocalPort, BIf: l.RemPort, Proto: l.Proto,
 			})
 		}
+		// NMS-first T4c: controller tunnels ground to their edge devices. An
+		// unread session store skips this write and keeps the previous file —
+		// dropping the tunnel rows would collapse grounding mid-incident.
+		ctl, cerr := s.controllerLinks(ctx)
+		if cerr != nil {
+			log.Printf("topology-links-enrichment: controller tunnels unread, keeping the previous file: %v", cerr)
+			return
+		}
+		out = append(out, ctl...)
 		data, err := json.Marshal(out)
 		if err != nil {
 			log.Printf("topology-links-enrichment: marshal: %v", err)
@@ -87,7 +98,7 @@ func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
 			log.Printf("topology-links-enrichment: write: %v", err)
 			return
 		}
-		log.Printf("topology-links-enrichment: exported %d adjacency link(s)", len(out))
+		log.Printf("topology-links-enrichment: exported %d adjacency link(s) (%d controller tunnel)", len(out), len(ctl))
 	}
 	go func() {
 		write()
@@ -102,4 +113,33 @@ func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// controllerLinks wires ctloverlay.Links to the running NMS framework
+// (NMS-first T4c).
+func (s *server) controllerLinks(ctx context.Context) ([]topologyLinkExport, error) {
+	if s.nms == nil {
+		return nil, nil
+	}
+	var res ctloverlay.KeyResolver
+	if s.nmsResolver != nil {
+		res = s.nmsResolver
+	}
+	reg := s.nms.Registry()
+	spec := func(vendor string) (nms.ConnectorSpec, bool) {
+		c, ok := reg.Get(vendor)
+		if !ok {
+			return nms.ConnectorSpec{}, false
+		}
+		return c.Spec(), true
+	}
+	links, err := ctloverlay.Links(ctx, s.nms.Store(), spec, res, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]topologyLinkExport, 0, len(links))
+	for _, l := range links {
+		out = append(out, topologyLinkExport{TenantID: l.TenantID, A: l.A, B: l.B, Proto: l.Proto})
+	}
+	return out, nil
 }

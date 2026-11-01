@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/ctloverlay"
 	"netops/backend/models"
 	"netops/backend/topology"
 )
@@ -503,8 +504,17 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 			view.Nodes = append(view.Nodes, n)
 		}
 	}
-	// SD-WAN edges the overlay knows nothing about.
-	missing := 0
+	// SD-WAN edges the overlay knows nothing about, split by what COULD report
+	// their tunnels (NMS-first, owner 2026-10-24): an edge an SD-WAN manager
+	// integration manages gets its tunnels from that integration; an edge
+	// known only over SNMP gets them only if it answers the SD-WAN MIB.
+	managed := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		if d.Labels["controller_integration"] != "" {
+			managed[d.ID] = true
+		}
+	}
+	missingManaged, missingSNMP := 0, 0
 	for _, f := range facts {
 		if !visible[f.ID] {
 			continue
@@ -513,14 +523,31 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 		if rr.WANFlavor != topology.WANFlavorSDWAN || (rr.Role != topology.DevRoleWANEdge && rr.Role != topology.DevRoleDCWANEdge) {
 			continue
 		}
-		if snap == nil || (!snap.facts[f.ID] && !appended[f.ID]) {
-			missing++
+		if snap != nil && (snap.facts[f.ID] || appended[f.ID]) {
+			continue
+		}
+		if managed[f.ID] {
+			missingManaged++
+		} else {
+			missingSNMP++
 		}
 	}
-	if missing > 0 {
-		view.Degraded = append(view.Degraded, fmt.Sprintf(
-			"%d SD-WAN edge(s) are shown without their tunnels: Correlix could not yet match them to the tunnels their peers report. Check that the edge answers SNMP for its interface addresses (and, on IOS XE SD-WAN, release 17.6.1a or later for the SD-WAN tables)", missing))
+	view.Degraded = append(view.Degraded, missingTunnelNotes(missingManaged, missingSNMP)...)
+}
+
+// missingTunnelNotes words the "edges without tunnels" notes for an operator:
+// what is missing, why, and the one thing that fixes it.
+func missingTunnelNotes(managed, snmpOnly int) []string {
+	var out []string
+	if managed > 0 {
+		out = append(out, fmt.Sprintf(
+			"%d SD-WAN edge(s) have no tunnels drawn yet: their SD-WAN manager integration has not reported their BFD sessions in the last %d minutes. Check the integration's status on the Integrations page", managed, int(ctloverlay.Window.Minutes())))
 	}
+	if snmpOnly > 0 {
+		out = append(out, fmt.Sprintf(
+			"%d SD-WAN edge(s) are monitored over SNMP only, and SNMP does not show their tunnels (IOS XE before 17.6.1a has no SD-WAN tables, or the SNMP view hides them). Add an SD-WAN manager integration (for example Catalyst SD-WAN Manager) for these edges to see their tunnels", snmpOnly))
+	}
+	return out
 }
 
 // wanFacts carries the WAN-edge flavor inputs toDeviceFacts injects

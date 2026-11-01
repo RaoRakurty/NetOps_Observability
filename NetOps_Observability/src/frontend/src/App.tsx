@@ -392,7 +392,7 @@ export default function App() {
                 a platform admin opens ONE tenant at a time rather than reading
                 ten tenants' telemetry merged into one table. Tenant users and
                 already-scoped admins pass straight through. */}
-            <TenantGate sectionId={resourceRoute ? "resource" : section.id} sectionLabel={resourceRoute ? "this resource" : section.label}>
+            <TenantGate sectionId={resourceRoute ? "resource" : section.id} sectionLabel={resourceRoute ? "this resource" : section.label} leafId={resourceRoute ? undefined : leaf?.id}>
               {/* Single Suspense boundary for the route-level code-split pages
                   (nav.tsx wraps every leaf in React.lazy). Same affordance as
                   the app-boot loading state above. */}

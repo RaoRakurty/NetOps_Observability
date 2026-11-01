@@ -37,10 +37,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vector_harness import VectorTestRun, run_vector_test  # tracker 350
 
 ROOT = Path(__file__).resolve().parent.parent
 AGG_DIR = ROOT / "deployment" / "docker" / "vector"
@@ -85,19 +89,22 @@ def _docker_available() -> bool:
         return False
 
 
-def _vector_test(configs: list[str], mounts: list[tuple[Path, str]]) -> subprocess.CompletedProcess:
+def _vector_test(label: str, configs: list[str],
+                 mounts: list[tuple[Path, str]]) -> VectorTestRun:
     cmd = ["docker", "run", "--rm", "--entrypoint", "vector"]
     for kv in ENV_STUBS:
         cmd += ["-e", kv]
     for src, dst in mounts:
         cmd += ["-v", f"{src}:{dst}:ro"]
     cmd += [VECTOR_IMAGE, "test", *configs]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=900, check=False)
+    # run_vector_test retries ONCE, loudly, and only for the upstream Vector 0.40
+    # buffer race (tests/vector_harness.py has the proof and the bounds).
+    return run_vector_test(cmd, label=label, timeout=900)
 
 
-def _assert_suite_passed(proc: subprocess.CompletedProcess, expected: int) -> None:
-    out = proc.stdout + proc.stderr
-    assert proc.returncode == 0, f"vector test failed:\n{out}"
+def _assert_suite_passed(run: VectorTestRun, expected: int) -> None:
+    out = run.output
+    assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
     passed = out.count("... passed")
     assert passed == expected, f"expected {expected} cases to run, saw {passed}:\n{out}"
     assert "failed" not in out.lower(), out
@@ -257,6 +264,7 @@ def test_the_aggregator_suite_runs_against_the_shipped_config():
     if not _docker_available():
         pytest.skip(_SKIP)
     proc = _vector_test(
+        "aggregator parse-trace",
         ["/etc/vector/vector.yaml", "/etc/vector/tests/parse-trace.yaml"],
         [(AGG_DIR / "vector.yaml", "/etc/vector/vector.yaml"),
          (AGG_DIR / "tests", "/etc/vector/tests"),
@@ -268,6 +276,7 @@ def test_the_router_suite_runs_against_the_shipped_config():
     if not _docker_available():
         pytest.skip(_SKIP)
     proc = _vector_test(
+        "router parse-trace",
         ["/etc/vector/vector.yaml", "/etc/vector/processors/processors.yaml",
          "/etc/vector/tests/parse-trace.yaml"],
         [(ROUTER_DIR / "vector.yaml", "/etc/vector/vector.yaml"),
