@@ -73,20 +73,31 @@ func TestBuildExportSearchBody_TenantScoping(t *testing.T) {
 		t.Errorf("search_after tiebreaker _id missing from sort: %s", js)
 	}
 
-	// Scoped tenant with visible devices: bool/should over host/hostname/source_ip.
-	scoped := logexport.Spec{DeviceKeys: []string{"router-01"}, DeviceAddrs: []string{"10.0.0.1"}}
+	// Scoped tenant with visible devices: its own rows, plus untagged rows its
+	// devices emitted — by host/hostname/source_ip and the flows exporter.
+	scoped := logexport.Spec{Tenant: "acme", DeviceKeys: []string{"router-01"}, DeviceAddrs: []string{"10.0.0.1"}}
 	js = mustJSON(t, logexport.BuildSearchBody(scoped, t0, t1, 1000, nil))
-	for _, frag := range []string{"minimum_should_match", "host", "hostname", "source_ip", "router-01", "10.0.0.1"} {
+	for _, frag := range []string{"minimum_should_match", `"tenant_id":"acme"`, "host", "hostname", "source_ip", "sampler_address", "router-01", "10.0.0.1"} {
 		if !strings.Contains(js, frag) {
 			t.Errorf("scoped export missing %q: %s", frag, js)
 		}
 	}
 
-	// Scoped tenant with NO visible devices: match_none (empty namespace).
-	empty := logexport.Spec{Cross: false}
+	// Scoped tenant with NO visible devices: its untagged branch is match_none.
+	empty := logexport.Spec{Tenant: "acme"}
 	js = mustJSON(t, logexport.BuildSearchBody(empty, t0, t1, 1000, nil))
 	if !strings.Contains(js, "match_none") {
 		t.Errorf("empty visible set must produce match_none: %s", js)
+	}
+
+	// An UNBOUND non-cross spec (no tenant) exports nothing, whatever device
+	// identities it carries — it is never widened into the platform's
+	// untagged rows. exportSpecFor always stamps the principal's tenant, so
+	// only a malformed or tampered queued spec reaches this.
+	unbound := logexport.Spec{DeviceKeys: []string{"router-01"}, DeviceAddrs: []string{"10.0.0.1"}}
+	js = mustJSON(t, logexport.BuildSearchBody(unbound, t0, t1, 1000, nil))
+	if !strings.Contains(js, "match_none") || strings.Contains(js, "router-01") {
+		t.Errorf("an unbound export must read nothing: %s", js)
 	}
 
 	// search_after is included only when provided.
