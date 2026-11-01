@@ -66,6 +66,10 @@ export type Device = {
   software_version?: string;
   /** The location configured ON the device (SNMP sysLocation); "" when unset. */
   configured_location?: string;
+  /** The chassis serial as the DEVICE reported it (or an operator entered it). */
+  serial_number?: string;
+  /** How serial_number was learned: "snmp" | "ssh" | "gnmi" | "manual" ("" = manual). */
+  serial_source?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */

@@ -154,12 +154,66 @@ test("routes inside a VPC are visible, not buried under the group box", async ({
       // A hit on the group node means the shade box is on top of the line.
       if (hit?.closest(".react-flow__node-groupNode")) occluded++;
     }
-    return { total: paths.length, checked, occluded };
+    return {
+      total: paths.length, checked, occluded,
+      edges: document.querySelectorAll(".react-flow__edge").length,
+      nodes: document.querySelectorAll(".react-flow__node").length,
+    };
   });
 
-  expect(probe.total, "route edges rendered").toBeGreaterThan(10);
+  // The counts in the message are there so a red run says WHAT it saw (no edge
+  // elements at all vs edges without paths vs a short node set), not just "0".
+  expect(probe.total, `route edges rendered (edge elements ${probe.edges}, nodes ${probe.nodes})`).toBeGreaterThan(10);
   expect(probe.checked, "edges with real geometry").toBeGreaterThan(0);
   expect(probe.occluded, "edges hidden under their own group box").toBe(0);
+});
+
+// The test above failed in CI on roughly one first attempt in five (2026-10-18 →
+// 10-25, and on BOTH attempts of PR #94) with "route edges rendered: 0" while every
+// node was on screen. Root cause: the canvas re-derived its node array (zoom-level
+// bucket, hover spotlight, selection, the cloud half landing) as FRESH objects with
+// no `measured` field, and React Flow treats a node without `measured` as
+// re-initialised — it drops the node's handle bounds, and an edge whose endpoint
+// has no handle bounds is not drawn. Every re-derive therefore blanked EVERY route
+// until a ResizeObserver pass re-measured the nodes (~150 ms here); on a slow
+// runner a re-derive that coincides with that pass leaves the handles unmeasured
+// for good. So this samples every frame: once the routes are drawn, re-deriving
+// the canvas — fitting, crossing a zoom level, hovering a node — must never take
+// them all away, not even for one frame.
+test("routes stay drawn while the canvas re-derives (zoom level, hover)", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __edges: { armed: boolean; min: number; frames: number } };
+    w.__edges = { armed: false, min: Infinity, frames: 0 };
+    const tick = (): void => {
+      if (w.__edges.armed) {
+        w.__edges.frames++;
+        w.__edges.min = Math.min(w.__edges.min, document.querySelectorAll(".react-flow__edge-path").length);
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await openCanvas(page);
+  await page.getByLabel("Network domain").selectOption("cloud");
+  await expect(page.getByTestId(`rf__node-${A_SUBNET}`)).toBeVisible();
+  // Arm once the cloud routes are first drawn; from here on nothing the operator
+  // does should make them all disappear.
+  await expect.poll(() => page.locator(".react-flow__edge-path").count()).toBeGreaterThan(10);
+  await page.evaluate(() => { (window as unknown as { __edges: { armed: boolean } }).__edges.armed = true; });
+
+  await viewportSettled(page); // the fit + zoom-level re-derive happen in here
+  await page.getByTestId(`rf__node-${AN_IGW}`).hover(); // hover spotlight re-derives
+  await page.waitForTimeout(400);
+  await page.mouse.move(2, 2); // and un-hover re-derives again
+  await page.waitForTimeout(400);
+
+  const seen = await page.evaluate(() => {
+    const e = (window as unknown as { __edges: { min: number; frames: number } }).__edges;
+    return { min: e.min, frames: e.frames, now: document.querySelectorAll(".react-flow__edge-path").length };
+  });
+  expect(seen.frames, "frames sampled").toBeGreaterThan(10);
+  expect(seen.now, "route edges rendered at the end").toBeGreaterThan(10);
+  expect(seen.min, "fewest route edges drawn in any frame after they first appeared").toBeGreaterThan(0);
 });
 
 // "Topology canvas should be 100." Two different things have to be true for that,

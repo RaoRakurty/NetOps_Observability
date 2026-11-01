@@ -13,6 +13,7 @@ import DevicePcapPanel from "./capture/DevicePcapPanel";
 import VrfInterfaces from "./device/VrfInterfaces";
 import ControllerOverview, { controllerOf, controllerOnly } from "./device/ControllerOverview";
 import { vrfTerm } from "../lib/vendorTerms";
+import { deviceSerial } from "./device/serial";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
 // breadcrumb + identity header + a KPI strip, then tabs (Overview · Interfaces ·
@@ -39,6 +40,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
   const d = device;
   const sel = labelSelector({ device: d.id });
   const seen = new Date(d.last_seen).getTime();
+  const serial = deviceSerial(d);
   // The SAME status the inventory list shows (owner report 2026-10-10: the
   // popup used its own last_seen threshold and disagreed with the list).
   const h = deviceHealth(d, false);
@@ -72,6 +74,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
             <span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.address}</span>
             {d.vendor && <><span>·</span><span style={{ textTransform: "capitalize" }}>{d.vendor}</span></>}
             {d.software_version && <><span>·</span><span style={{ fontFamily: "var(--font-mono)" }}>{d.software_version}</span></>}
+            {serial && <><span>·</span><span title={serial.from}>Serial <span style={{ fontFamily: "var(--font-mono)" }}>{serial.serial}</span></span></>}
             <span>·</span><span title="When discovery last listed this device (not whether it answers)">last discovered {seen ? fmtDateTime(seen) : "—"}</span>
           </div>
         </div>
