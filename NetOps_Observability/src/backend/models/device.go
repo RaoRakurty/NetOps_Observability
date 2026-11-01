@@ -102,6 +102,13 @@ type Device struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	Source           string            `json:"source"`
 	LastSeen         time.Time         `json:"last_seen"`
+	// DiscoveryStale — the discovery source that reports this device has not
+	// heard from it for several completed sweeps (internal/discovery
+	// snmp_source.go: three missed sweeps). The device stays in the inventory
+	// with its id and tenant — it is evidence, not garbage — until it answers
+	// again or has been stale long enough to prune. Stamped by the source; a
+	// merged record is stale only if every record merged into it is.
+	DiscoveryStale bool `json:"discovery_stale,omitempty"`
 
 	// Monitored — Correlix collects telemetry from this device: it is in the
 	// inventory, has a management address, and is within the licence ceiling

@@ -9,6 +9,7 @@ package ticketing
 
 import (
 	"context"
+	"netops/backend/internal/owner"
 	"strings"
 	"time"
 
@@ -106,13 +107,7 @@ func ResolvePolicyState(ctx context.Context, store Store, tenant, system string,
 // real (non-global) tenant id passes through unchanged (lowercased/trimmed —
 // the app layer is already case-insensitive on tenant keys), so isolation is
 // intact: it never collapses two distinct real tenant ids.
-func CanonicalCorrTenant(t string) string {
-	t = strings.ToLower(strings.TrimSpace(t))
-	if t == "" {
-		return "global"
-	}
-	return t
-}
+func CanonicalCorrTenant(t string) string { return owner.Of(t) }
 
 // SweepAction is the pure outcome of evaluating one object: enqueue nothing, a
 // create, or an update — with the assembled payload for the latter two. A

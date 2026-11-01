@@ -84,6 +84,9 @@ type DiscoveryAggregator struct {
 	// lives beside the cache rather than on the row because it is scheduling
 	// state, not something an operator should read off a device.
 	osProbeAt map[string]time.Time
+	// warm is the set of sources whose inventory is complete: restored at
+	// Start or polled successfully since (Ready).
+	warm map[string]bool
 }
 
 type sourceStats struct {
@@ -101,6 +104,7 @@ func NewDiscoveryAggregator() *DiscoveryAggregator {
 		firstSeen: make(map[string]time.Time),
 
 		osProbeAt: make(map[string]time.Time),
+		warm:      make(map[string]bool),
 	}
 }
 
@@ -118,6 +122,7 @@ func (a *DiscoveryAggregator) Start(ctx context.Context) {
 	sources := make([]DiscoverySource, len(a.sources))
 	copy(sources, a.sources)
 	a.mu.RUnlock()
+	a.restoreSources(sources)
 	for _, src := range sources {
 		go a.pollLoop(ctx, src)
 	}
@@ -133,6 +138,38 @@ func (a *DiscoveryAggregator) Start(ctx context.Context) {
 	// learns its software version", which is exactly the kind of hidden
 	// coupling that leaves a fleet unassessed with no visible reason.
 	go a.osVersionLoop(ctx)
+}
+
+// restoreSources runs first in Start, before any poll loop (tracker 366): a
+// source that remembers its devices hands them to the inventory through the
+// normal admission path — tombstones, precedence and the first-seen ledger
+// apply unchanged — and nothing is pruned. Its first real poll then
+// reconciles.
+func (a *DiscoveryAggregator) restoreSources(sources []DiscoverySource) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, src := range sources {
+		r, ok := src.(Restorer)
+		if !ok {
+			continue
+		}
+		devs, restored := r.Restored()
+		if !restored {
+			continue
+		}
+		a.ingestLocked(src, devs, false)
+		a.warm[src.Name()] = true
+	}
+}
+
+// RestoreForTest runs Start's restore step without launching any loop — test
+// support for proving what the inventory holds before the first poll.
+func (a *DiscoveryAggregator) RestoreForTest() {
+	a.mu.RLock()
+	sources := make([]DiscoverySource, len(a.sources))
+	copy(sources, a.sources)
+	a.mu.RUnlock()
+	a.restoreSources(sources)
 }
 
 // vendorLoop periodically fills in the vendor of any inventory device that
@@ -289,6 +326,48 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		return
 	}
 	a.stats[src.Name()] = stat
+	a.ingestLocked(src, devices, true)
+	// A successful poll is a full answer from the source: from here its
+	// inventory is what it reported, not what a restart left (Ready).
+	a.warm[src.Name()] = true
+}
+
+// Restorer is the optional capability of a source that remembers its devices
+// across a restart (tracker 366: the SNMP scanner's FoundStore). Restored
+// returns that memory and whether it was actually read — false when there is
+// no store or the store could not be read, which is NOT "the source has no
+// devices".
+type Restorer interface {
+	Restored() ([]models.Device, bool)
+}
+
+// Ready reports whether the inventory the named source contributes can be
+// trusted as complete: its memory was restored at Start, or one of its polls
+// has completed since. A consumer that PUBLISHES the inventory onward (the
+// tenant-enrichment CSV, the persisted topology) must not publish a source's
+// devices as absent before then — at boot, "not yet polled" would otherwise
+// read as "gone" (tracker 366). A source that is not registered has nothing
+// to wait for and is ready.
+func (a *DiscoveryAggregator) Ready(source string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.warm[source] {
+		return true
+	}
+	for _, s := range a.sources {
+		if s.Name() == source {
+			return false
+		}
+	}
+	return true
+}
+
+// ingestLocked is the ADMISSION PATH every source-reported device goes
+// through — tombstones, source precedence, the first-seen ledger. prune=true
+// is a poll: the source is an authoritative lister, so its cache entries
+// become exactly what it reported. prune=false is a restore at Start: it adds
+// what the source remembers and removes nothing. Caller holds a.mu.
+func (a *DiscoveryAggregator) ingestLocked(src DiscoverySource, devices []models.Device, prune bool) {
 	// Each registered source is an authoritative lister of its own devices, so
 	// its cache contents must equal what it reported THIS poll. Track the ids it
 	// returned, then drop any stale entry it still owns but no longer reports —
@@ -333,7 +412,13 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 			ledgerChanged = true
 		}
 		// MONITORING-END
-		d.LastSeen = time.Now().UTC()
+		// A device its source reports as STALE keeps the source's own
+		// last-seen (when it last answered): stamping "now" on a device that
+		// has not answered for several sweeps would tell every reader it is
+		// alive. Every other record is seen now, as before.
+		if !d.DiscoveryStale || d.LastSeen.IsZero() {
+			d.LastSeen = time.Now().UTC()
+		}
 		if d.Vendor == "" {
 			if v, ok := a.detected[d.ID]; ok {
 				d.Vendor = v
@@ -341,13 +426,15 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		}
 		a.cache[d.ID] = d
 	}
-	for id, d := range a.cache {
-		if d.Source == src.Name() && !seen[id] {
-			delete(a.cache, id)
-			// The device left the inventory: its licence slot frees and, if it
-			// returns, it joins the back of the line as a new arrival.
-			if a.forgetSeenLocked(id) {
-				ledgerChanged = true
+	if prune {
+		for id, d := range a.cache {
+			if d.Source == src.Name() && !seen[id] {
+				delete(a.cache, id)
+				// The device left the inventory: its licence slot frees and, if it
+				// returns, it joins the back of the line as a new arrival.
+				if a.forgetSeenLocked(id) {
+					ledgerChanged = true
+				}
 			}
 		}
 	}
@@ -626,6 +713,9 @@ func mergeDevices(x, y models.Device) models.Device {
 	if other.LastSeen.After(base.LastSeen) {
 		base.LastSeen = other.LastSeen
 	}
+	// Stale only if EVERY merged record is: one source still hearing from the
+	// device is enough to call it alive (tracker 366).
+	base.DiscoveryStale = base.DiscoveryStale && other.DiscoveryStale
 	// COPY-ON-WRITE: base/other are struct copies, but their Labels field still
 	// points at the LIVE map in the discovery cache. dedupeDevices runs under a
 	// read lock and Devices() callers keep the returned maps past the lock, so an
