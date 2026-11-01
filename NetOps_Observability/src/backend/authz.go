@@ -60,11 +60,6 @@ func principalFrom(c jwtClaims) Principal {
 	return Principal{Subject: c.Sub, Role: c.Role, Tenant: tenant, Cross: cross}
 }
 
-// can is the boolean convenience for non-HTTP call sites (hub, jobs).
-func (s *server) can(c jwtClaims, a Action, r Resource) bool {
-	return rbac.Authorize(principalFrom(c), a, r).Allow
-}
-
 // authorize is the HTTP convenience: it resolves the caller, evaluates the
 // policy, and writes the standard response on denial — 404 (not 403) for a
 // cross-tenant resource so existence isn't leaked, 403 for a platform-only

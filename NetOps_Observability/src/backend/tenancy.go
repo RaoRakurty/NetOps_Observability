@@ -5,6 +5,7 @@ package backend
 
 import (
 	"net/http"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/saved"
 	"sort"
 	"strings"
@@ -59,18 +60,22 @@ func (s *server) tenantSuspended(c jwtClaims) bool {
 //
 // The platform owner may narrow their view with the tenant switcher (carried as a
 // validated, server-set ActingTenant — see withActingTenant): selecting a specific
-// tenant drops them to that tenant's scope (cross=false), and selecting "Global"
-// scopes them to the global/infra namespace only. The override can only NARROW —
+// tenant drops them to that tenant's scope (cross=false), and selecting "Provider"
+// (the Global tenant, id "global") scopes them to the platform's OWN data only —
+// ("global", false), where "" and "global" are one owner (internal/owner).
+// No override ("" or "all") is the "All tenants" view. The override can only NARROW —
 // it is honored solely for the platform owner, so no other principal can use it to
 // widen their reach. Every tenant-scoped read funnels through here, so one override
 // scopes the whole app (logs, flows, metrics, findings, devices) at once.
 func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 	if isPlatformOwner(c) {
-		// Global view (no override) is CROSS-TENANT: the platform owner sees
-		// everything — every tenant PLUS untagged/platform-owned resources (their
-		// own devices). Selecting a specific tenant narrows to just that tenant.
-		// There is deliberately no "global-tenant-only" scope: "Global" == platform
-		// == cross-tenant, which is the user's mental model and shows their devices.
+		// No override is the "All tenants" view, CROSS-TENANT: the platform owner
+		// sees everything — every tenant PLUS untagged/platform-owned resources,
+		// each row labelled with its tenant in the SPA. Selecting a specific
+		// tenant narrows to just that tenant; selecting Provider (ActingTenant
+		// "global") narrows to the platform's own rows (tracker 365 — Provider
+		// once meant cross-tenant, and an operator deleted another tenant's
+		// integration from what looked like their own list).
 		if act := strings.ToLower(strings.TrimSpace(c.ActingTenant)); act != "" {
 			return act, false
 		}
@@ -100,27 +105,35 @@ func (s *server) principalOrg(c jwtClaims) string {
 	return OrgGlobal
 }
 
-// actingAll is the switcher sentinel for the default Global (cross-tenant) view.
+// actingAll is the switcher sentinel for the default "All tenants" (cross-tenant)
+// view. "global" is NOT a synonym for it: "global" is the Provider tenant, and
+// selecting it narrows (tracker 365).
 const actingAll = "all"
 
 // withActingTenant applies an optional "view as tenant" override from the request
 // (X-Acting-Tenant header, or ?as_tenant= query param) onto the claims. Zero
 // trust: the override can only ever NARROW, never widen —
-//   - the platform owner may select any real, non-global tenant (its default view
-//     is cross-tenant Global; selecting narrows to that tenant);
+//   - the platform owner may select any real tenant, INCLUDING the Global
+//     (Provider) tenant "global". Its default view is cross-tenant "All
+//     tenants"; selecting narrows to that tenant, and selecting Provider narrows
+//     to the platform's own rows ("" and "global" are one owner — internal/owner);
 //   - PBAC Phase B: a NON-owner principal may select any tenant it REACHES via its
 //     bindings (reachesTenant) — the multi-tenant/MSP/SRE switcher. A single-tenant
 //     user only reaches its own tenant, so this is behaviour-preserving for them.
+//     "global" is resolved like any other tenant: honoured only if reached.
 //
-// "", "all", "global" mean the default view (no narrowing). An unknown/unreachable
+// Only "" and "all" mean the default view (no narrowing). An unknown/unreachable
 // target is ignored. The result feeds principalTenant.
 func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 	v := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Acting-Tenant")))
 	if v == "" {
 		v = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("as_tenant")))
 	}
-	if v == "" || v == actingAll || v == TenantGlobal {
+	if v == "" || v == actingAll {
 		return c
+	}
+	if s.tenants == nil {
+		return c // no registry to resolve against: fail closed (ignored)
 	}
 	// `v` is UNTRUSTED (id or slug from a header/query). Resolve it to the
 	// canonical opaque tenant id; the override is keyed on the id, never the slug.
@@ -818,25 +831,30 @@ func (s *server) resolveSiteForScope(v tenantVisibility, slug string) (Site, sit
 // and carry no `device` label, but they DO have an owner, and their summary
 // carries that tenant's target hostname, site and app. Treating "no device" as
 // "everybody's" handed one tenant's target names to every other tenant.
-func alertVisibleTenantOnly(a models.Alert, tenant string, cross bool, ids map[string]bool) bool {
+//
+// alertOwner is the DEVICE-LESS alert's resolved owner (alertVisibility.ownerOf —
+// s.alertOwner, the same derivation the episode store records); it is ignored
+// for a device alert, which is decided by the visible device set.
+func alertVisibleTenantOnly(a models.Alert, alertOwner, tenant string, cross bool, ids map[string]bool) bool {
 	if cross {
 		return true
 	}
 	if a.DeviceID != "" {
 		return ids[a.DeviceID]
 	}
-	owner := alertOwnerLabel(a)
-	if owner == "" {
+	if alertOwner == "" {
 		// Platform-owned — a stack-level alert (collectors, the correlation
 		// engine, the ingest pipeline, the host). It is the PROVIDER's
 		// operational state and names its internals (container addresses,
 		// mount points); "nothing owns it" means the platform owns it, so it is
 		// platform-only, never every tenant's. Default-closed (§3a): only the
-		// cross-tenant path above sees it. (P1, 2026-10-18: a tenant was shown
-		// the platform's collector and pipeline alerts.)
-		return false
+		// cross-tenant path above and the Provider scope itself see it (P1,
+		// 2026-10-18: a tenant was shown the platform's collector and pipeline
+		// alerts; tracker 365: Provider is the platform's own, non-cross scope).
+		// Exactly the Provider scope — an unbound "" caller is not the platform.
+		return strings.EqualFold(strings.TrimSpace(tenant), owner.Platform)
 	}
-	return sameTenantStrict(owner, tenant)
+	return owner.ScopeReads(tenant, alertOwner)
 }
 
 // alertVisibility is the alert-visibility decision RESOLVED for one principal:
@@ -863,8 +881,24 @@ type alertVisibility struct {
 	// what it fired on.
 	hiddenDevices map[string]bool
 	// hiddenTenants is the same restriction in its tenant_id form, for the
-	// DEVICE-LESS alerts that carry an owner label instead (alertOwnerLabel).
+	// DEVICE-LESS alerts that have an owner instead (ownerOf).
 	hiddenTenants []string
+
+	// owner resolves a device-less alert's owning tenant: s.alertOwner, the ONE
+	// derivation alertTenant (episodes, incidents) also uses, so a connector
+	// alert is owned and shown by the same rule. Nil (a value built without a
+	// server) falls back to alertOwnerLabel, under which every server-backed
+	// owner — the NMS integration snapshot — is "" (platform-only), the
+	// default-closed direction.
+	owner func(models.Alert) string
+}
+
+// ownerOf is the resolved owner of a DEVICE-LESS alert ("" = platform-owned).
+func (v alertVisibility) ownerOf(a models.Alert) string {
+	if v.owner != nil {
+		return v.owner(a)
+	}
+	return alertOwnerLabel(a)
 }
 
 // alertVisibilityFor resolves the rule ONCE for a principal. Both restriction
@@ -886,7 +920,7 @@ func (s *server) alertVisibilityFor(c jwtClaims) alertVisibility {
 // it must be filtered by the same object the HTTP surfaces filter by, not by a
 // hand-written copy of the rule that would drift away from it.
 func (s *server) alertVisibilityForScope(tenant string, cross bool, ids map[string]bool, restricted []string) alertVisibility {
-	v := alertVisibility{tenant: tenant, cross: cross, ids: ids}
+	v := alertVisibility{tenant: tenant, cross: cross, ids: ids, owner: s.alertOwner}
 
 	rt := s.telemetryRestrictionFor(tenant, cross, restricted)
 	v.deny = rt.deny
@@ -923,14 +957,21 @@ func (v alertVisibility) visible(a models.Alert) bool {
 	if a.DeviceID != "" && v.hiddenDevices[a.DeviceID] {
 		return false
 	}
-	if owner := alertOwnerLabel(a); owner != "" {
+	// The owner is resolved once, and only for a device-less alert: a device
+	// alert is decided by the device set (and hiddenDevices above), exactly as
+	// before, with no per-row discovery lookup on the list path.
+	owner := ""
+	if a.DeviceID == "" {
+		owner = v.ownerOf(a)
+	}
+	if owner != "" {
 		for _, x := range v.hiddenTenants {
 			if strings.EqualFold(strings.TrimSpace(x), owner) {
 				return false
 			}
 		}
 	}
-	return alertVisibleTenantOnly(a, v.tenant, v.cross, v.ids)
+	return alertVisibleTenantOnly(a, owner, v.tenant, v.cross, v.ids)
 }
 
 // alertVisibleTo applies the resolved rule to a principal's claims. Used by the

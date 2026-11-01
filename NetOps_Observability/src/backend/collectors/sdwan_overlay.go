@@ -61,6 +61,10 @@ const (
 )
 
 // OverlayDeviceFacts is one device's SD-WAN overlay view.
+// OverlaySourceController marks overlay facts projected from an NMS
+// integration (controller BFD sessions) rather than walked over SNMP.
+const OverlaySourceController = "controller"
+
 type OverlayDeviceFacts struct {
 	DeviceID    string        `json:"device_id"`
 	MIB         string        `json:"mib"`        // viptela | cisco-sdwan
@@ -77,6 +81,10 @@ type OverlayDeviceFacts struct {
 	// on the lab 2026-10-10: a vEdge answered its site-id column with the
 	// vBond hostname and left system-ip empty).
 	LocalTLOCAddrs []string `json:"local_tloc_addrs,omitempty"`
+	// Source says where the facts came from: "" (SNMP walk, the original
+	// producer) or OverlaySourceController (an NMS integration's stored BFD
+	// sessions, built by the api — never published to the facts channel).
+	Source string `json:"source,omitempty"`
 	// SessionsRead is how many BFD session rows the last detail walk folded.
 	SessionsRead int `json:"sessions_read"`
 	// Truncated: a walk hit its row cap — peers beyond it are UNKNOWN, not down.

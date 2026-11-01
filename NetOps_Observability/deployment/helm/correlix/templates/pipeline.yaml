@@ -146,6 +146,9 @@ spec:
             - {name: INGEST_USER, value: "netops-ingest"}
             - name: INGEST_TOKEN
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN}}
+            # Lane self-heal (cx-lane-watch.sh): exit 75 + restart when a kafka
+            # source is joined with lag > 0 but delivers nothing.
+            - {name: CX_LANE_WATCH, value: "1"}
           ports:
             - {name: api, containerPort: 8686}
             - {name: metrics, containerPort: 9598}
