@@ -1,0 +1,4 @@
+{
+  "_comment": "The owner spelling shared by Go (internal/owner.Of) and the correlation engine (main.canon_tenant). Both suites read this file; a divergence fails whichever side drifted. Inputs are already trimmed and lower-case: Go also normalises case and whitespace, which Python receives pre-normalised.",
+  "cases": [["", "global"], ["global", "global"], ["t_90892feb", "t_90892feb"], ["t-rca-canary", "t-rca-canary"], ["acme", "acme"]]
+}

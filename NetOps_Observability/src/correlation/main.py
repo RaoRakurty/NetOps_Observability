@@ -477,9 +477,14 @@ def _tenant_registry() -> dict[str, str]:
 
     This file is the ONLY authority on which tenant owns a piece of telemetry.
     It is produced by the platform from its own inventory, one row per distinct
-    device NAME and per distinct management ADDRESS, and an identity that maps
-    to more than one tenant is OMITTED by the exporter (fail-safe) — so a hit
-    here is unambiguous by construction.
+    inventory device ID, device NAME and management ADDRESS — every identity a
+    lane may carry for a known device (trap/metric `device` is the inventory id,
+    e.g. the SNMP scan id "vedge-20-1e95f00f"; syslog `hostname` is the name;
+    flow `sampler_address` / trap `host` is the address). An identity that maps
+    to more than one tenant is OMITTED by the exporter (fail-safe). The loader
+    re-asserts that here: an identity listed under two different tenants is
+    dropped, never last-row-wins — so a hit is unambiguous even if the file was
+    not written by the exporter.
 
     Cheap: re-reads the CSV only when its mtime changes."""
     global _tenant_map, _tenant_mtime, _tenant_stat_at
@@ -505,13 +510,27 @@ def _tenant_registry() -> dict[str, str]:
     if mt != _tenant_mtime:
         _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
         fresh: dict[str, str] = {}
+        conflicted: set[str] = set()
         try:
             with open(TENANT_ENRICHMENT_FILE, newline="") as f:
                 reader = csv.reader(f)
                 next(reader, None)  # header: identity,tenant_id
                 for row in reader:
                     if len(row) >= 2 and row[0]:
-                        fresh[row[0]] = row[1]
+                        ident, tid = row[0], row[1]
+                        prev = fresh.get(ident)
+                        if prev is not None and canon_tenant(prev) != canon_tenant(tid):
+                            conflicted.add(ident)  # §3a: two owners → neither
+                        fresh.setdefault(ident, tid)
+            for ident in conflicted:
+                del fresh[ident]
+            if conflicted:
+                # Not silent: the exporter guarantees uniqueness, so this means
+                # the file was written by something else. Count only — the
+                # identities themselves stay out of the log.
+                log.warning("tenant enrichment file lists %d identities under more "
+                            "than one tenant — dropped as ambiguous (registry miss)",
+                            len(conflicted))
             _tenant_map = fresh
         except OSError as exc:
             # An unreadable map means every signal falls back to untagged

@@ -98,6 +98,19 @@ func (s *server) reconcileTopologyOnce(ctx context.Context) {
 		logError("topology", "adjacency evidence unread — the persisted edges are carried forward unaged, and this cycle observed no adjacency",
 			map[string]any{"error": obsErr.Error(), "carried_edges": len(prev.Edges)})
 	}
+	if !s.discovery.Ready("snmp") {
+		// The same refusal for the NODE half, while the SNMP inventory is not
+		// complete (tracker 366): at boot, before the scan memory is restored
+		// or a sweep has finished, a scanned device that is not in the registry
+		// YET is not evidence that it left. Ageing the nodes on that would mark
+		// exactly the devices an outage is about stale, and an edge to them
+		// would point at a node that is going away. The previous nodes are
+		// carried forward unaged; the next cycle after the inventory completes
+		// reconciles them normally.
+		merged.Nodes = prev.Nodes
+		logWarn("topology", "SNMP inventory not complete yet — the persisted nodes are carried forward unaged this cycle",
+			map[string]any{"carried_nodes": len(prev.Nodes)})
+	}
 	if err := s.topology.ReplaceAll(ctx, merged); err != nil {
 		logError("topology", "reconcile replace", map[string]any{"error": err.Error()})
 	}

@@ -49,6 +49,14 @@ regexes = [
   # sentinels and a recorded compose error naming a bundle image tag.
   '''Sentinel-(DB|JWT|KCID|Admin)-[0-9a-z]+''',
   '''2026\.09\.15-ge8ebc980''',
+  # ── reviewed 2026-10-25 (NMS-first T0) ──
+  # vManage's own BFD-session row key, `vdevice-dataKey`, in the recorded lab
+  # payloads under src/backend/nms/fixtures/vmanage/bfd_sessions_*.json:
+  # "<system-ip>-<colour>-<system-ip>-<colour>-<proto>". generic-api-key reads
+  # the field NAME ("…Key") plus a long value as a credential. It is a session
+  # identifier built from two system-ips and two colours, nothing secret, and
+  # this shape cannot match a real token.
+  '''(?:\d{1,3}\.){3}\d{1,3}-[a-z0-9-]{1,48}-(?:\d{1,3}\.){3}\d{1,3}-[a-z0-9-]{1,48}-(?:ipsec|dtls|tls|gre)''',
 ]
 # Test fixtures that DELIBERATELY look like secrets — reviewed 2026-09-04:
 #   ErrorBoundary.test.tsx: a synthetic error string carrying a fake token/api_key

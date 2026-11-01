@@ -19,7 +19,10 @@ import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
 import { operatorError } from "../lib/errors";
+import { deviceSerial } from "./device/serial";
 import { featureOffTip } from "../components/FeatureOffNotice";
+import { useTenantView } from "../components/useTenantView";
+import { tenantColumn } from "../components/tenantColumn";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -84,6 +87,10 @@ export default function Devices() {
   // Per-device "Back up now" state: device id → "running" | error text.
   const [backupState, setBackupState] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  // Tracker 365: in the "All tenants" view rows from several tenants share
+  // this list, so each one says whose it is (a Tenant column). In Provider or a
+  // tenant's own scope every row is that scope's, and the column is hidden.
+  const tenantView = useTenantView();
   // Separate from `error`: the inventory loaded, but the alert correlation that
   // feeds "degraded" did not — so "Up" cannot be read as "healthy".
   const [alertsErr, setAlertsErr] = useState<string | null>(null);
@@ -307,6 +314,7 @@ export default function Devices() {
             onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.name || d.id}</span></a>
         ),
       },
+      ...(tenantView.allTenants ? [tenantColumn<Device>((d) => d.tenant_id, tenantView.names)] : []),
       {
         key: "address", header: "IP", width: 128,
         text: (d) => d.address,
@@ -331,6 +339,16 @@ export default function Devices() {
         render: (d) => d.software_version
           ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
           : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
+      },
+      {
+        key: "serial", header: "Serial", width: 140, sortable: true,
+        text: (d) => deviceSerial(d)?.serial ?? "", sortValue: (d) => deviceSerial(d)?.serial || "~",
+        render: (d) => {
+          const sv = deviceSerial(d);
+          return sv
+            ? <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
+            : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title="The device has not reported a serial number yet">—</span>;
+        },
       },
       {
         key: "location", header: "Site", width: "14%", sortable: true,
@@ -396,7 +414,7 @@ export default function Devices() {
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
     });
     return cols;
-  }, [health, locs, siteOptions, editableSites, siteName, drift, configOn, sshEnabled, backupState]);
+  }, [health, locs, siteOptions, editableSites, siteName, drift, configOn, sshEnabled, backupState, tenantView.allTenants, tenantView.names]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
