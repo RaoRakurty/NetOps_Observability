@@ -169,6 +169,10 @@ type telemetryRestriction struct {
 	addrs []string // device address    (flow src_addr/dst_addr)
 	ids   []string // device id         (metric `device` label)
 	names []string // device name       (metric hostname/source labels)
+	// tenants are the restricted tenant ids themselves (metric tenant_id
+	// label): a controller series of an unresolved device carries no
+	// inventory id to exclude it by.
+	tenants []string
 }
 
 // restrictedTelemetry resolves the device-keyed operator-visibility restriction
@@ -220,6 +224,7 @@ func (s *server) telemetryRestrictionFor(tenant string, cross bool, restricted [
 		rset[id] = true
 	}
 	var out telemetryRestriction
+	out.tenants = normalizedTenants(restricted)
 	seenKey, seenAddr := map[string]bool{}, map[string]bool{}
 	for _, d := range s.discovery.Devices() {
 		if !rset[deviceTenant(d)] {

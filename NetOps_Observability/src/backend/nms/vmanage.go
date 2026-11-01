@@ -60,6 +60,20 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 			EvidenceRole:        roleForEventType(net),
 			CorrelationHints:    map[string]string{"component": a.Component, "system_ip": a.SystemIP},
 		}
+		if !a.Active {
+			// A cleared alarm is a RECOVERY, not a fault: before 2026-10-25 it
+			// was emitted under the fault kind with the vendor's original
+			// severity, so a cleared Critical arrived as crit evidence. It now
+			// takes the engine's clear convention and its own dedupe identity
+			// (vManage may reuse the alarm uuid when the alarm clears).
+			e.NormalizedEventType += "_clear"
+			e.Severity = "info"
+			e.EvidenceRole = RoleSupporting
+			e.CorrelationHints["transition"] = "recovery"
+			if e.EventID != "" {
+				e.EventID += ":clear"
+			}
+		}
 		e.DedupeKey = DedupeKey(e)
 		b.Events = append(b.Events, e)
 

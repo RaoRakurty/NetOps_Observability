@@ -1,0 +1,44 @@
+{
+ "data": [
+  {
+   "vdevice-name": "10.255.255.51",
+   "vdevice-host-name": "vEdge-51",
+   "vdevice-dataKey": "10.255.255.51-mpls-10.255.255.20-mpls-ipsec",
+   "system-ip": "10.255.255.20",
+   "site-id": 20,
+   "state": "up",
+   "local-color": "mpls",
+   "color": "mpls",
+   "src-ip": "192.1.2.1",
+   "dst-ip": "192.1.5.1",
+   "src-port": 12346,
+   "dst-port": 12346,
+   "proto": "ipsec",
+   "transitions": 0,
+   "lastupdated": 1792894771249,
+   "uptime": "0:01:02:11",
+   "tx-interval": 1000,
+   "detect-multiplier": "7"
+  },
+  {
+   "vdevice-name": "10.255.255.51",
+   "vdevice-host-name": "vEdge-51",
+   "vdevice-dataKey": "10.255.255.51-biz-internet-10.255.255.20-biz-internet-ipsec",
+   "system-ip": "10.255.255.20",
+   "site-id": 20,
+   "state": "up",
+   "local-color": "biz-internet",
+   "color": "biz-internet",
+   "src-ip": "200.50.1.51",
+   "dst-ip": "200.20.2.20",
+   "src-port": 12346,
+   "dst-port": 12346,
+   "proto": "ipsec",
+   "transitions": 0,
+   "lastupdated": 1792894771249,
+   "uptime": "0:01:02:13",
+   "tx-interval": 1000,
+   "detect-multiplier": "7"
+  }
+ ]
+}
