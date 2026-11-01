@@ -127,6 +127,11 @@ type ConfigStore interface {
 	// States returns the tracked controller-state rows for one integration
 	// (tenant-scoped read — the UI's state table).
 	States(ctx context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error)
+	// OverlaySessions returns ONE tenant's BFD sessions that carry a tunnel
+	// identity and were seen at or after since, newest first, at most limit
+	// rows; truncated reports that more existed. Tenant-scoped only: there is
+	// no cross-tenant overlay read (the topology is drawn per tenant).
+	OverlaySessions(ctx context.Context, tenant string, since time.Time, limit int) (recs []StateRecord, truncated bool, err error)
 	Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error)
 	// DeviceStore: controller-sourced inventory (device_store.go).
 	DeviceStore
@@ -313,6 +318,33 @@ func (m *memStore) UpsertStates(_ context.Context, tenant, integrationID string,
 		m.states[tenant+"\x00"+integrationID+"\x00"+r.EntityKey+"\x00"+r.StateKind] = r
 	}
 	return nil
+}
+
+func (m *memStore) OverlaySessions(_ context.Context, tenant string, since time.Time, limit int) ([]StateRecord, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []StateRecord
+	for k, r := range m.states {
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) < 3 || parts[0] != tenant || r.StateKind != "bfd" || r.TunnelID == "" || r.LastSeen.Before(since) {
+			continue
+		}
+		r.IntegrationID = parts[1]
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastSeen.Equal(out[j].LastSeen) {
+			return out[i].LastSeen.After(out[j].LastSeen)
+		}
+		return out[i].IntegrationID+out[i].EntityKey < out[j].IntegrationID+out[j].EntityKey
+	})
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
 func (m *memStore) States(_ context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error) {
@@ -648,18 +680,25 @@ func (s *pgStore) UpsertStates(ctx context.Context, tenant, integrationID string
 	if len(recs) == 0 {
 		return nil
 	}
-	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+	// TENANT-SCOPED (was the cross-tenant '*' reader until 2026-10-25, which
+	// skipped the RLS WITH CHECK): a row filed under another tenant is refused
+	// by the database, not merely avoided by the caller.
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		for _, r := range recs {
 			if _, err := tx.Exec(ctx, `
 INSERT INTO controller_state_current
-   (tenant_id, integration_id, entity_key, state_kind, current_state, previous_state, first_seen, last_seen, flap_count, device_id, site_id, data)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'{}')
+   (tenant_id, integration_id, entity_key, state_kind, current_state, previous_state, first_seen, last_seen, flap_count, device_id, site_id, data,
+    tunnel_id, peer_id, local_color, remote_color)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'{}',$12,$13,$14,$15)
  ON CONFLICT (tenant_id, integration_id, entity_key, state_kind) DO UPDATE SET
    current_state=EXCLUDED.current_state, previous_state=EXCLUDED.previous_state,
    last_seen=EXCLUDED.last_seen, flap_count=EXCLUDED.flap_count,
-   device_id=EXCLUDED.device_id, site_id=EXCLUDED.site_id`,
+   device_id=EXCLUDED.device_id, site_id=EXCLUDED.site_id,
+   tunnel_id=EXCLUDED.tunnel_id, peer_id=EXCLUDED.peer_id,
+   local_color=EXCLUDED.local_color, remote_color=EXCLUDED.remote_color`,
 				tenant, integrationID, r.EntityKey, r.StateKind, r.CurrentState, r.PreviousState,
-				r.FirstSeen, r.LastSeen, r.FlapCount, r.DeviceID, r.SiteID); err != nil {
+				r.FirstSeen, r.LastSeen, r.FlapCount, r.DeviceID, r.SiteID,
+				r.TunnelID, r.PeerID, r.LocalColor, r.RemoteColor); err != nil {
 				return err
 			}
 		}
@@ -689,6 +728,47 @@ func (s *pgStore) States(ctx context.Context, tenant string, cross bool, integra
 		return rows.Err()
 	})
 	return out, err
+}
+
+// overlaySessionsMax bounds one tenant's overlay read whatever the caller asks.
+const overlaySessionsMax = 20000
+
+func (s *pgStore) OverlaySessions(ctx context.Context, tenant string, since time.Time, limit int) ([]StateRecord, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	if limit > overlaySessionsMax {
+		limit = overlaySessionsMax
+	}
+	var out []StateRecord
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT integration_id, entity_key, state_kind, current_state, previous_state,
+			first_seen, last_seen, flap_count, device_id, site_id, tunnel_id, peer_id, local_color, remote_color
+			FROM controller_state_current
+			WHERE tenant_id=$1 AND state_kind='bfd' AND tunnel_id<>'' AND last_seen >= $2
+			ORDER BY last_seen DESC, integration_id, entity_key LIMIT $3`, tenant, since, limit+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r StateRecord
+			if err := rows.Scan(&r.IntegrationID, &r.EntityKey, &r.StateKind, &r.CurrentState, &r.PreviousState,
+				&r.FirstSeen, &r.LastSeen, &r.FlapCount, &r.DeviceID, &r.SiteID,
+				&r.TunnelID, &r.PeerID, &r.LocalColor, &r.RemoteColor); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
 func (s *pgStore) Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error) {

@@ -189,6 +189,9 @@ func stampMonitoring(d models.Device, v devmon.Verdict) models.Device {
 func clearMonitoring(d models.Device) models.Device {
 	d.Monitored, d.MonitorState, d.MonitorReason, d.MonitorLimit, d.MonitorMethods = false, "", "", 0, nil
 	d.Reachability, d.SoftwareVersion, d.ConfiguredLocation = "", "", ""
+	// DiscoveryStale is stamped by a discovery source (tracker 366); an
+	// operator-written record never carries one, whatever the body said.
+	d.DiscoveryStale = false
 	return d
 }
 

@@ -236,10 +236,8 @@ func TestPageTierPushesOneHighPriorityPushToTheHostRoute(t *testing.T) {
 		t.Errorf("body must carry the label context and the description, got %q", p.Body)
 	}
 	r.push.quiet(t)
+	waitForMetric(t, r.mx, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 1`)
 	txt := metricsText(r.mx)
-	if !strings.Contains(txt, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 1`) {
-		t.Errorf("the page push was not counted:\n%s", txt)
-	}
 	if !strings.Contains(txt, "netops_alert_webhook_host_route_enabled 1") {
 		t.Error("the host route gauge must read 1 when the route is wired")
 	}
@@ -308,9 +306,9 @@ func TestResolvedPushesAtLowPriority(t *testing.T) {
 	if _, resolved := r.disp.counts(); resolved != 1 {
 		t.Error("the product dispatcher must still receive the resolution")
 	}
-	if !strings.Contains(metricsText(r.mx), `netops_alert_webhook_pushed_total{route="host_monitoring",tier="resolved"} 1`) {
-		t.Error("the resolved push was not counted under its tier")
-	}
+	// The fake signals INSIDE Push; the worker counts only after Push returns,
+	// so reading the counter straight after await raced it (CI -race, PR #81).
+	waitForMetric(t, r.mx, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="resolved"} 1`)
 }
 
 // ── the heartbeat ───────────────────────────────────────────────────────────
@@ -622,14 +620,11 @@ func TestVmalertResolveReachesThePhoneAsAnAllClear(t *testing.T) {
 		t.Errorf("the all-clear must say so on the lock screen: %q", clear.Title)
 	}
 	r.push.quiet(t)
-	txt := metricsText(r.mx)
 	for _, want := range []string{
 		`netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 1`,
 		`netops_alert_webhook_pushed_total{route="host_monitoring",tier="resolved"} 1`,
 	} {
-		if !strings.Contains(txt, want) {
-			t.Errorf("missing %s in:\n%s", want, txt)
-		}
+		waitForMetric(t, r.mx, want)
 	}
 }
 
