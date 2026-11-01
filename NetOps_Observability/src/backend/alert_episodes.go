@@ -85,34 +85,72 @@ func newAlertEpisodeStore(path string) *alerts.EpisodeStore {
 // is a TARGET rather than a device (dem_* series carry no `device` label).
 const experienceRulePrefix = "Experience"
 
-// alertTenant derives the owning tenant of an alert from its device. Device-less
-// (stack-level) alerts and alerts on unknown devices are platform-owned ("").
-//
-// ONE narrow exception (S17): the Digital Experience rules. Their subject is a
-// synthetic TARGET, not a device, so there is no device to follow — and their
-// `tenant` label is not attacker-influenced telemetry but a value OUR OWN
-// prober writes from the catalogue row it was handed. Following it for these
-// rules is what makes an experience page tenant-scoped instead of platform-
-// owned; the general "never the alert's labels" rule still stands for every
-// other rule, which is why this is keyed on the rule name and not on the
-// presence of a label.
+// nmsRulePrefix marks the NMS connector-health rules (NMSIntegrationDown,
+// NMSIngestSilent, …). Their subject is an INTEGRATION — a tenant's connection
+// to its own controller — not a device, so they carry no `device` label.
+const nmsRulePrefix = "NMS"
+
+// alertTenant is the owning tenant of an alert, as the episode store and the
+// incident bridge record it. It is s.alertOwner — the SAME derivation the alert
+// visibility chokepoint (alertVisibility) applies — so an episode can never be
+// owned by one tenant while its alert is shown to another, or hidden from it.
 func (s *server) alertTenant(a models.Alert) string {
-	if a.DeviceID == "" {
-		return alertOwnerLabel(a)
+	return s.alertOwner(a)
+}
+
+// alertOwner is the ONE owner derivation for an alert. "" means platform-owned
+// (platform-only, §3a default-closed).
+//
+//   - device set → the device's tenant from discovery; an unknown device owns
+//     nothing (as before).
+//   - Experience* rules (S17) → alertOwnerLabel: their `tenant` label is written
+//     by OUR prober from the catalogue row.
+//   - NMS* rules (F2) → the (tenant_id, integration_id) label PAIR, believed ONLY
+//     when that exact pair is an enabled integration in the NMS runtime's last
+//     ListEnabled snapshot. A label alone is never an owner: a forged tenant_id,
+//     an id enabled only in another tenant, a disabled or deleted integration,
+//     or NMS switched off all resolve to "" (platform-only). Integration ids are
+//     unique only per tenant, so the id is never matched without its tenant.
+//   - everything else device-less → "" (the platform's own stack alerts).
+//
+// Both label exceptions are keyed on the RULE NAME, never on the mere presence
+// of a label: the general rule "an alert's labels are telemetry, not an owner"
+// still stands for every other rule.
+func (s *server) alertOwner(a models.Alert) string {
+	if a.DeviceID != "" {
+		if d, ok := s.discovery.Get(a.DeviceID); ok {
+			return deviceTenant(d)
+		}
+		return ""
 	}
-	if d, ok := s.discovery.Get(a.DeviceID); ok {
-		return deviceTenant(d)
+	if strings.HasPrefix(a.Rule, nmsRulePrefix) {
+		return s.nmsAlertOwner(a)
 	}
-	return ""
+	return alertOwnerLabel(a)
+}
+
+// nmsAlertOwner resolves a device-less NMS connector alert to the tenant that
+// owns the integration it names, or "" when the pair is not a live, enabled
+// integration of that tenant. No store call: the snapshot is in memory.
+func (s *server) nmsAlertOwner(a models.Alert) string {
+	if s.nms == nil {
+		return ""
+	}
+	tenant := strings.ToLower(strings.TrimSpace(a.Labels["tenant_id"]))
+	id := strings.TrimSpace(a.Labels["integration_id"])
+	if tenant == "" || id == "" || !s.nms.IsEnabled(tenant, id) {
+		return ""
+	}
+	return tenant
 }
 
 // alertOwnerLabel is the S17 exception on its own, with no server behind it: the
-// owning tenant of a DEVICE-LESS alert, or "" when nothing owns it.
+// owning tenant of a DEVICE-LESS Experience alert, or "" when nothing owns it.
 //
-// It is a free function because the ALERT VISIBILITY rule needs it in places
-// that hold no *server (the report scheduler builds its own filter from a
-// tenant name). One derivation, used by everything, is the point — a second
-// copy is a second thing that can silently be wrong.
+// It is one branch of s.alertOwner, and it is also the fallback of an
+// alertVisibility built without a server (alertVisibility.ownerOf): there, every
+// owner that needs server state — the NMS integration snapshot — resolves to ""
+// (platform-only), which is the default-closed direction.
 func alertOwnerLabel(a models.Alert) string {
 	if a.DeviceID != "" || !strings.HasPrefix(a.Rule, experienceRulePrefix) {
 		return ""

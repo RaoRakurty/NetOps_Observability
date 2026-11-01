@@ -5,6 +5,7 @@ package backend
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,6 +34,18 @@ import (
 // backendTr is the shared hardened transport, set once at startup by
 // initBackendTransport. nil = no internal TLS configured → default client.
 var backendTr *http.Transport
+
+// backendClientCertificate returns the client-SVID hook the backend transport
+// presents (the CertReloader's, so rotation is picked up per handshake), or
+// nil when no client SVID is configured or it has not been minted yet. Call
+// AFTER the post-CA initBackendTransport — the tls peer prober uses it to
+// complete, rather than be refused by, the mTLS handshakes it probes.
+func backendClientCertificate() func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	if backendTr == nil || backendTr.TLSClientConfig == nil {
+		return nil
+	}
+	return backendTr.TLSClientConfig.GetClientCertificate
+}
 
 // initBackendTransport builds the internal-backend transport from env. Fail
 // closed: a configured-but-unloadable bundle/cert is a fatal startup error

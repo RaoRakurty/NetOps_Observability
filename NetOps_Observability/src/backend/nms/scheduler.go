@@ -135,6 +135,16 @@ type Runtime struct {
 	breakers map[string]*Breaker    // tenant\x00id → circuit breaker
 	inFlight map[string]bool        // tenant\x00id → a cycle is running now
 	tickN    int                    // dispatch counter (rotates the tenant order)
+
+	// enabled is the (tenant, integration id) set of the last SUCCESSFUL
+	// ListEnabled, refreshed every tick. It answers "is this pair a real,
+	// enabled integration of this tenant?" for the alert-ownership rule
+	// (backend alertOwner) without a store round-trip per alert. Keyed by the
+	// PAIR because integration ids are unique only per tenant (PK
+	// (tenant_id, integration_id)) — an id alone names nothing. Its own lock so
+	// the alert path never waits behind poll bookkeeping.
+	enabledMu sync.RWMutex
+	enabled   map[string]struct{}
 }
 
 // newPollTransport builds a controller transport with bounded connect and
@@ -322,7 +332,7 @@ func (rt *Runtime) tickOnce(ctx context.Context) {
 // dispatch lists the enabled integrations, prunes state for the ones that
 // left, and offers every due, idle integration to send — tenants interleaved.
 func (rt *Runtime) dispatch(ctx context.Context, send func(Integration) bool) {
-	ints, err := rt.store.ListEnabled(ctx)
+	ints, err := rt.RefreshEnabled(ctx)
 	if err != nil {
 		applog.Error("nms", "list enabled integrations", map[string]any{"error": err.Error()})
 		return
@@ -473,6 +483,59 @@ func (rt *Runtime) seedLastSuccess(ctx context.Context, ic Integration) time.Tim
 		return time.Time{}
 	}
 	return h.LastSuccess
+}
+
+// RefreshEnabled lists every enabled integration and replaces the in-memory
+// (tenant, id) snapshot IsEnabled answers from. On a store error the previous
+// snapshot is KEPT (and the error returned): the pairs in it were genuinely
+// enabled for those tenants when last read, so a transient store failure must
+// not flip every connector alert to platform-only, and it can never widen —
+// a pair only enters the set from the store itself.
+func (rt *Runtime) RefreshEnabled(ctx context.Context) ([]Integration, error) {
+	ints, err := rt.store.ListEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	next := make(map[string]struct{}, len(ints))
+	for _, ic := range ints {
+		t, id := enabledKeyParts(ic.Tenant, ic.ID)
+		if t == "" || id == "" {
+			continue // an unowned row owns nothing
+		}
+		next[Key(t, id)] = struct{}{}
+	}
+	rt.enabledMu.Lock()
+	rt.enabled = next
+	rt.enabledMu.Unlock()
+	return ints, nil
+}
+
+// IsEnabled reports whether (tenant, integrationID) was an enabled integration
+// in the last ListEnabled snapshot. Both halves are required: an empty tenant
+// or id is never enabled. Before the first refresh the set is empty, so the
+// answer is false (default-closed).
+func (rt *Runtime) IsEnabled(tenant, integrationID string) bool {
+	t, id := enabledKeyParts(tenant, integrationID)
+	if t == "" || id == "" {
+		return false
+	}
+	rt.enabledMu.RLock()
+	defer rt.enabledMu.RUnlock()
+	_, ok := rt.enabled[Key(t, id)]
+	return ok
+}
+
+// enabledKeyParts normalises the snapshot key: tenant ids compare
+// case-insensitively everywhere in the platform (rbac.SameTenantStrict), an
+// integration id is an opaque, case-sensitive identifier. A NUL in either half
+// could forge a different Key, so it is rejected outright.
+func enabledKeyParts(tenant, id string) (string, string) {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	i := strings.TrimSpace(id)
+	if strings.ContainsRune(t, 0) || strings.ContainsRune(i, 0) {
+		return "", ""
+	}
+	return t, i
 }
 
 // due reports whether an integration's poll interval has elapsed (and marks it

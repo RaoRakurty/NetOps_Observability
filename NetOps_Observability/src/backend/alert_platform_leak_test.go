@@ -29,17 +29,17 @@ func TestPlatformStackAlertsNeverReachATenant(t *testing.T) {
 	ids := map[string]bool{"edge-retail": true}
 
 	for _, a := range stack {
-		if alertVisibleTenantOnly(a, "t_retail", false, ids) {
+		if alertVisibleTenantOnly(a, alertOwnerLabel(a), "t_retail", false, ids) {
 			t.Errorf("PLATFORM LEAK: tenant was shown platform alert %s %v", a.Rule, a.Labels)
 		}
-		if !alertVisibleTenantOnly(a, "", true, nil) {
+		if !alertVisibleTenantOnly(a, alertOwnerLabel(a), "", true, nil) {
 			t.Errorf("the platform view lost its own alert %s", a.Rule)
 		}
 	}
-	if !alertVisibleTenantOnly(own, "t_retail", false, ids) {
+	if !alertVisibleTenantOnly(own, "", "t_retail", false, ids) {
 		t.Error("a tenant lost sight of its own device's alert — the fix must not blank the tenant")
 	}
-	if alertVisibleTenantOnly(other, "t_retail", false, ids) {
+	if alertVisibleTenantOnly(other, "", "t_retail", false, ids) {
 		t.Error("TENANT LEAK: another tenant's device alert was shown")
 	}
 

@@ -714,6 +714,11 @@ services:
       SEALING_API_URL: ${SEALING_API_URL:-http://api:8080}
       INGEST_USER: ${INGEST_USER:-netops-ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # Lane self-heal (2026-10-30, ./vector/cx-lane-watch.sh): restart vector
+      # when a kafka source stays joined with lag > 0 but delivers nothing and
+      # no sink is back-pressured. The container exits 75 and restarts; the
+      # lane resumes from its last committed offset.
+      CX_LANE_WATCH: "1"
     volumes:
       - ./vector-router:/etc/vector/conf:ro
       # F-10: the shared enrichment-reload wrapper lives in ./vector — mounted
