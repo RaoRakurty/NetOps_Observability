@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:9ea21f75-bb2c-560d-8a13-4bab7abfe961",
+  "serialNumber": "urn:uuid:5dcfbf01-2431-52ab-bc17-599378b9244f",
   "version": 1,
   "metadata": {
     "timestamp": "2026-10-24T19:43:36+00:00",
@@ -17188,10 +17188,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/follow-redirects@1.16.1",
+      "bom-ref": "pkg:npm/follow-redirects@1.16.2",
       "name": "follow-redirects",
-      "version": "1.16.1",
-      "purl": "pkg:npm/follow-redirects@1.16.1",
+      "version": "1.16.2",
+      "purl": "pkg:npm/follow-redirects@1.16.2",
       "scope": "required",
       "properties": [
         {
@@ -17213,7 +17213,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "14dbc51b3a0c2d6984e988fdb296ffce377bca23421e2016f7f4e0f425eb43cc2ebb7d87b6524ec163b5d4e25a7e5e457d8dc3c53750d2f8f8db353592fbf98e"
+          "content": "fe454fd94f33e7de886b483016bc3221ea3be2d6b9695992794d457c050c0267043f910fef3c9d99a83748b88deb835a44a79fde5c6cabb8bf83b96d2500c6a3"
         }
       ]
     },
@@ -20436,10 +20436,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/joi@17.13.8",
+      "bom-ref": "pkg:npm/joi@17.13.9",
       "name": "joi",
-      "version": "17.13.8",
-      "purl": "pkg:npm/joi@17.13.8",
+      "version": "17.13.9",
+      "purl": "pkg:npm/joi@17.13.9",
       "scope": "required",
       "properties": [
         {
@@ -20461,7 +20461,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "88f28e1a6891c358f17ff24e3f0c6609c51000e745df9f667736223f60c9f93317d182b6ce32b70fecd839a1a3a6e996c4e145fe5db15568d154ae5b1922dd13"
+          "content": "9651424f6ad5b5fc20042688ab1b638a6fa21eaae0b2ce0e3621926228861fd8e78d6abdd29a5245f7ea9aa2afc296bc5be61f20bc9057a5f219c7a05d7d93e2"
         }
       ]
     },

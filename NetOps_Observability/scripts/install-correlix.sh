@@ -482,7 +482,7 @@ report_busy_ingest_ports() { # "proto:port" lines
     var="${entry#*:}"; [ "$var" = "$entry" ] && var=""
     entry="${entry%%:*}"
     port="${entry%%/*}"; proto="${entry##*/}"
-    if printf '%s\n' "$listening" | grep -qx "$proto:$port"; then
+    if grep -qx "$proto:$port" <<<"$listening"; then
       # `move` is built with an `if`, not `$([ -n "$var" ] && printf ...)`: an
       # assignment takes the status of its LAST command substitution, so the
       # entries with no mover variable (514/tcp, 514/udp) made this assignment
@@ -889,9 +889,9 @@ verify_release_signature() {
   # human chatter on stderr is discarded because the verdict below is acted on
   # and reported in our own words (gpg's wording varies across versions).
   status=$(gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null) || rc=$?
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$status" | grep -q '^\[GNUPG:\] GOODSIG '; then
+  if [ "$rc" -eq 0 ] && grep -q '^\[GNUPG:\] GOODSIG ' <<<"$status"; then
     ok "release signature verified (SHA256SUMS.asc)"
-  elif printf '%s\n' "$status" | grep -q '^\[GNUPG:\] NO_PUBKEY '; then
+  elif grep -q '^\[GNUPG:\] NO_PUBKEY ' <<<"$status"; then
     warn "release signature present but the Correlix release PUBLIC KEY is not in your keyring — signature NOT verified (checksums OK)."
     warn "To verify: obtain the Correlix release public key from your Correlix contact"
     warn "(its fingerprint is recorded in MANIFEST as 'signing-key'), then:"

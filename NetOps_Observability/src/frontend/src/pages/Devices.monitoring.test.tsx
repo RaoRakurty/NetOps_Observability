@@ -31,9 +31,11 @@ const mockApi = vi.hoisted(() => ({
   deleteDevice: vi.fn(),
   setDeviceSite: vi.fn(),
   clearDeviceSite: vi.fn(),
+  // useTenantView (tracker 365): a single-tenant caller — no Tenant column.
+  myScopes: vi.fn().mockResolvedValue({ scopes: [], all_tenants: false }),
 }));
 
-vi.mock("../services/api", () => ({ api: mockApi }));
+vi.mock("../services/api", () => ({ api: mockApi, getActiveScope: () => "" }));
 vi.mock("../components/Icon", () => ({ default: () => <span /> }));
 
 import Devices, { overLimitSentence, monitoringLabel } from "./Devices";

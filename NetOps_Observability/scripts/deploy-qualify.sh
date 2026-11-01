@@ -543,7 +543,7 @@ kafka_missing_topics() {
     return 1
   fi
   for topic in "${CANONICAL_TOPICS[@]}"; do
-    printf '%s\n' "$out" | grep -qx -- "$topic" || missing="$missing $topic"
+    grep -qx -- "$topic" <<<"$out" || missing="$missing $topic"
   done
   printf '%s' "${missing# }"
   return 0
@@ -637,7 +637,7 @@ kafka_acl_applied() {
   # with no router grant is a partial matrix, and a partial matrix is an
   # auth-dead bus (the 2026-08-16 incident).
   [ "$count" -ge "$KAFKA_ACL_FLOOR" ] || return 2
-  printf '%s\n' "$out" | grep -q 'vector-router' || return 2
+  grep -q 'vector-router' <<<"$out" || return 2
   return 0
 }
 
@@ -885,7 +885,7 @@ else
       for b3_marker in "retention policy applied" \
                        "quarantine retention applied" \
                        "coverage check"; do
-        printf '%s\n' "$b3_log" | grep -qF "ism: $b3_marker" ||
+        grep -qF "ism: $b3_marker" <<<"$b3_log" ||
           b3_missing="$b3_missing '$b3_marker'"
       done
       b3_bad="$(printf '%s\n' "$b3_log" | grep -E 'ism: (WARNING|ERROR|REFUSING)' || true)"
@@ -1021,7 +1021,7 @@ vm_labels() {  # $1 = PromQL, $2 = label name -> one distinct label value per li
     sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" | sort -u
 }
 
-is_num() { printf '%s' "$1" | grep -qE '^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$'; }
+is_num() { grep -qE '^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$' <<<"$1"; }
 num_ge() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 >= b + 0) }'; }
 # shellcheck disable=SC2329  # called from probe_vector, which shellcheck cannot see is invoked
 num_gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 >  b + 0) }'; }
