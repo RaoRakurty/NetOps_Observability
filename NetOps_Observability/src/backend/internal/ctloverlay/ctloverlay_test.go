@@ -6,6 +6,7 @@ package ctloverlay
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,5 +207,73 @@ func TestTunnelEnds(t *testing.T) {
 		if _, _, ok := TunnelEnds(c[0], c[1]); ok {
 			t.Errorf("TunnelEnds%v accepted", c)
 		}
+	}
+}
+
+func vmSpec(vendor string) (nms.ConnectorSpec, bool) {
+	s, ok := nms.Specs()[vendor]
+	return s, ok
+}
+
+// The exported rows must be exactly the engine's PATH entity id for the tunnel
+// (what controller_events.py builds from the event) and the endpoint ids the
+// event stream carries — otherwise the adjacency rung never matches.
+func TestControllerTunnelLinksMatchTheEngineEntity(t *testing.T) {
+	res := tenantResolver{"t_w": {"10.0.0.20": "ctl-a", "10.0.0.51": "ctl-b"}, "global": {"10.0.0.20": "ctl-p"}}
+	ic := nms.Integration{ID: "nmsi-1", Tenant: "t_w", Vendor: "vmanage", BaseURL: "https://200.250.250.1"}
+	plat := nms.Integration{ID: "nmsi-2", Tenant: "global", Vendor: "vmanage", BaseURL: "https://other.example.net"}
+	rec := bfdRec("10.0.0.20", "mpls", "10.0.0.51", "mpls", "down", time.Minute)
+	rec.IntegrationID = "nmsi-1"
+	mirror := bfdRec("10.0.0.51", "mpls", "10.0.0.20", "mpls", "down", time.Minute)
+	mirror.IntegrationID = "nmsi-1"
+	half := bfdRec("10.0.0.20", "lte", "10.0.0.99", "lte", "up", time.Minute) // far end unknown
+	half.IntegrationID = "nmsi-1"
+	prec := bfdRec("10.0.0.20", "mpls", "10.0.0.30", "mpls", "up", time.Minute)
+	prec.IntegrationID = "nmsi-2"
+	st := fakeSessions{ints: []nms.Integration{ic, plat}, recs: map[string][]nms.StateRecord{
+		"t_w": {rec, mirror, half}, "global": {prec}}}
+	rows, err := Links(context.Background(), st, vmSpec, res, t4now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci, _, err := nms.ControllerInstanceID(nms.Specs()["vmanage"], ic.BaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := rec.TunnelID + "@" + ci
+	want := map[string]bool{"t_w|" + node + "|ctl-a": true, "t_w|" + node + "|ctl-b": true,
+		"t_w|" + half.TunnelID + "@" + ci + "|ctl-a": true}
+	got := map[string]bool{}
+	for _, r := range rows {
+		if r.TenantID == "" {
+			t.Fatalf("a controller row with tenant \"\" would ground in EVERY tenant: %+v", r)
+		}
+		if r.Proto != "sdwan_bfd" || !strings.Contains(r.A, "@ci-") {
+			t.Fatalf("not a tunnel↔endpoint row: %+v", r)
+		}
+		if strings.HasPrefix(r.A, "ctl-") {
+			t.Fatalf("device↔device rows weld a mesh and must not be exported: %+v", r)
+		}
+		got[r.TenantID+"|"+r.A+"|"+r.B] = true
+	}
+	for k := range want {
+		if !got[k] {
+			t.Fatalf("missing row %s in %v", k, got)
+		}
+	}
+	// the two mirrored halves produce ONE tunnel node, each endpoint once
+	if len(got) != 4 {
+		t.Fatalf("want 3 tenant rows + 1 platform row, got %d: %v", len(got), got)
+	}
+	pci, _, _ := nms.ControllerInstanceID(nms.Specs()["vmanage"], plat.BaseURL)
+	if !got["global|"+prec.TunnelID+"@"+pci+"|ctl-p"] {
+		t.Fatalf("a platform integration's rows are owned by \"global\": %v", got)
+	}
+}
+
+func TestControllerTunnelLinksStoreErrorIsReturned(t *testing.T) {
+	st := fakeSessions{ints: []nms.Integration{{ID: "i", Tenant: "t_w", Vendor: "vmanage", BaseURL: "https://x"}}, err: errors.New("pg down")}
+	if _, err := Links(context.Background(), st, vmSpec, tenantResolver{}, t4now); err == nil {
+		t.Fatal("a store error must reach the writer, which then keeps the previous file")
 	}
 }
