@@ -91,8 +91,11 @@ type ControllerState struct {
 	// Empty for every non-path kind.
 	TunnelID string
 	PeerID   string
-	Time     time.Time
-	Data     map[string]any
+	// LocalColor / RemoteColor are the two ends' transport colours (PATH kinds).
+	LocalColor  string
+	RemoteColor string
+	Time        time.Time
+	Data        map[string]any
 }
 
 // ControllerEvent is a discrete alarm/audit/change/incident (§3.3). Field set
