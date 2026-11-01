@@ -134,14 +134,9 @@ sources:
     title: "Cisco Catalyst SD-WAN Manager (vManage)"
     computed_from: connector
     gaps:
-      link_state: {status: normalization_pending, detail: "interface alarms land as controller_alarm (an orphan kind); interface oper state is collected (interfaces stream) but reaches VictoriaMetrics only", ref: "design §7b E2/E3"}
       interface_health: {status: normalization_pending, detail: "interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified", ref: "design §7b E3"}
-      bgp_session: {status: normalization_pending, detail: "BGP state transitions and alarms are typed controller_alarm (nms/vmanage.go vmanageNormType, nms/sdwan_state_events.go) — no template consumes it", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "OSPF alarms fall through to controller_alarm", ref: "design §7b E2"}
-      device_restart: {status: normalization_pending, detail: "reboot alarms fall through to controller_alarm (lead)", ref: "design §7b E2"}
       device_resource: {status: normalization_pending, detail: "system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm", ref: "design §7b E3"}
       l2_control: {status: unverified, detail: "VRRP / STP state on cEdge via vManage not assessed"}
-      physical_layer: {status: normalization_pending, detail: "the hardware stream's hardware_health transitions are typed controller_alarm", ref: "design §7b E2"}
       flow_volume: {status: unavailable, detail: "cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated"}
 
   - id: catalyst_center

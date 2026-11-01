@@ -110,14 +110,32 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 		et := vmTime(int64(r.EntryTime))
 		det := vmDetails(r.Details)
 		normType, stateKind := vmanageNormType(r.EventName, r.Component, r.EventName)
+		severity := vmEventSeverity(r.Severity)
+		recovery := false
+		// Canonical kind from the event name (vmanage_kinds.go); direction from
+		// the event's own new-state detail, never from polling.
+		if k, rec, ok := vmanageEventKind(r.EventName, det); ok {
+			normType, stateKind, recovery = k.Kind, k.StateKind, rec
+			if !recovery && k.StateKey != "" {
+				severity = "high" // a session / link going down — the trap rules' severity
+			}
+		}
 		e := ControllerEvent{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
 			Vendor: "cisco", Product: "Catalyst SD-WAN Manager",
 			EventID: r.ID, EventTime: et, IngestTime: time.Now().UTC(),
-			EventType: r.EventName, NormalizedEventType: normType, Severity: vmEventSeverity(r.Severity),
+			EventType: r.EventName, NormalizedEventType: normType, Severity: severity,
 			Category: strings.ToLower(r.Component), DeviceID: r.SystemIP, DeviceName: r.HostName,
-			Message: r.EventName + " " + strings.TrimSpace(r.Details), EvidenceRole: roleForEventType(normType),
+			InterfaceName: firstNonEmpty(det["if-name"], det["interface"]),
+			PeerID:        firstNonEmpty(det["peer"], det["neighbor"]),
+			Message:       r.EventName + " " + strings.TrimSpace(r.Details), EvidenceRole: roleForEventType(normType),
 			CorrelationHints: map[string]string{"component": r.Component, "system_ip": r.SystemIP},
+		}
+		if recovery {
+			e.NormalizedEventType += "_clear"
+			e.Severity = "info"
+			e.EvidenceRole = RoleSupporting
+			e.CorrelationHints["transition"] = "recovery"
 		}
 		e.DedupeKey = DedupeKey(e)
 		b.Events = append(b.Events, e)
@@ -127,7 +145,7 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 			b.States = append(b.States, ControllerState{
 				TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
 				EntityKey: r.SystemIP + "|bgp|" + det["peer"], StateKind: "bgp",
-				CurrentState: vmBGPState(det["bgp-new-state"]), DeviceID: r.SystemIP, Time: et,
+				CurrentState: vmBGPState(det["bgp-new-state"]), DeviceID: r.SystemIP, PeerID: det["peer"], Time: et,
 				Data: map[string]any{"device_name": r.HostName, "peer": det["peer"], "bgp_state": det["bgp-new-state"]},
 			})
 		}

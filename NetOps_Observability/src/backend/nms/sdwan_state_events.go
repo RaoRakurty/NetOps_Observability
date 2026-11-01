@@ -17,11 +17,14 @@ import (
 // consumer already binds (src/correlation/controller_events.py).
 
 var sdwanStateEventType = map[string]string{
-	"bfd":             "controller_bfd_down",
-	"control_conn":    "controller_control_connection_loss",
-	"omp":             "controller_control_connection_loss",
-	"reachability":    "controller_device_unreachable",
-	"bgp":             "controller_alarm",
+	"bfd":          "controller_bfd_down",
+	"control_conn": "controller_control_connection_loss",
+	"omp":          "controller_control_connection_loss",
+	"reachability": "controller_device_unreachable",
+	// "bgp" emits NO transition event: every BGP change already arrives as its
+	// own vendor event (bgp-peer-state-change / BGP_Router_*), now typed
+	// bgp_adjacency_change with the peer (vmanage_kinds.go). A second, derived
+	// event per poll would be the same change twice.
 	"device_health":   "controller_alarm",
 	"hardware_health": "controller_alarm",
 }

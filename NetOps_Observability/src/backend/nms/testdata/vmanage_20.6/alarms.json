@@ -1,0 +1,560 @@
+{
+ "data": [
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515245677,
+   "eventname": "rulename",
+   "id": "8D7WlaEBnpPPzZIM0Np5",
+   "message": "BFD sessions for the site came up",
+   "rule_name_display": "BFD_Site_Up",
+   "rulename": "site_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "site_up",
+   "uuid": "b8f4329f-a0a3-483c-9390-ed2ac50c583c",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "OMP",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515244992,
+   "eventname": "rulename",
+   "id": "7z7WlaEBnpPPzZIMzdrM",
+   "message": "OMP sessions for the site came up",
+   "rule_name_display": "OMP_Site_Up",
+   "rulename": "site_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "site_up",
+   "uuid": "22e74b2c-4ce3-49e7-bc96-21d645e60804",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515243576,
+   "eventname": "rulename",
+   "id": "7j7WlaEBnpPPzZIMyNpE",
+   "message": "Control connections for the site came up",
+   "rule_name_display": "Control_Site_Up",
+   "rulename": "site_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "site_up",
+   "uuid": "854ae0a1-9f5b-4d2d-8b2c-3fb021c73011",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515243060,
+   "eventname": "rulename",
+   "id": "7T7WlaEBnpPPzZIMxtpB",
+   "message": "BFD sessions for the node came up",
+   "rule_name_display": "BFD_Node_Up",
+   "rulename": "node_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "node_up",
+   "uuid": "14f3e758-4729-4ef4-a85a-b7bcf623d02a",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "OMP",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515242426,
+   "eventname": "rulename",
+   "id": "7D7WlaEBnpPPzZIMw9rG",
+   "message": "OMP sessions for the node came up",
+   "rule_name_display": "OMP_Node_Up",
+   "rulename": "node_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "node_up",
+   "uuid": "949189a6-120a-41ea-ba5e-ca0a93552c7f",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515241889,
+   "eventname": "rulename",
+   "id": "6z7WlaEBnpPPzZIMwdq9",
+   "message": "Control connections for the node came up",
+   "rule_name_display": "Control_Node_Up",
+   "rulename": "node_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "node_up",
+   "uuid": "0fcc66da-7e24-42d5-b5ce-1da88a858dce",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515224956,
+   "eventname": "rulename",
+   "id": "6D7WlaEBnpPPzZIMf9qE",
+   "message": "BFD sessions for the tloc came up",
+   "rule_name_display": "BFD_TLOC_Up",
+   "rulename": "tloc_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_up",
+   "uuid": "3549df6d-b78c-41a9-99de-29d4cf43fca4",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "biz-internet",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515224100,
+   "eventname": "rulename",
+   "id": "5j7WlaEBnpPPzZIMfNot",
+   "message": "BFD sessions for the tloc came up",
+   "rule_name_display": "BFD_TLOC_Up",
+   "rulename": "tloc_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_up",
+   "uuid": "0622afb9-0784-4df5-ae12-e709e17d82fc",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "mpls",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515223125,
+   "eventname": "rulename",
+   "id": "5T7WlaEBnpPPzZIMeNpg",
+   "message": "Control connections for the tloc came up",
+   "rule_name_display": "Control_TLOC_Up",
+   "rulename": "tloc_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_up",
+   "uuid": "e42de11f-560b-4faf-9f94-e100d1b33d22",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "mpls",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515220760,
+   "eventname": "rulename",
+   "id": "zj7WlaEBnpPPzZIMb9on",
+   "message": "Control connections for the tloc came up",
+   "rule_name_display": "Control_TLOC_Up",
+   "rulename": "tloc_up",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_up",
+   "uuid": "8cc5565f-af6d-4571-96f3-17ff41980b65",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "biz-internet",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "OMP",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515070260,
+   "eventname": "rulename",
+   "id": "Xz7UlaEBnpPPzZIMI49C",
+   "message": "All OMP sessions for the site are down",
+   "rule_name_display": "OMP_Site_Down",
+   "rulename": "site_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "site_down",
+   "uuid": "d90d413d-8c1c-4340-adab-f8bbf5c4c175",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "OMP",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515069603,
+   "eventname": "rulename",
+   "id": "Xj7UlaEBnpPPzZIMII-v",
+   "message": "All OMP sessions for the node are down",
+   "rule_name_display": "OMP_Node_Down",
+   "rulename": "node_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "node_down",
+   "uuid": "16d67381-fea4-446f-9a9d-7cee9313acb0",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515038819,
+   "eventname": "rulename",
+   "id": "XD7TlaEBnpPPzZIMqI-H",
+   "message": "All BFD sessions for the site are down",
+   "rule_name_display": "BFD_Site_Down",
+   "rulename": "site_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "site_down",
+   "uuid": "fd0bba27-bbaa-47be-a157-223aab234d3b",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515038311,
+   "eventname": "rulename",
+   "id": "Wz7TlaEBnpPPzZIMpo93",
+   "message": "All Control connections for the site are down",
+   "rule_name_display": "Control_Site_Down",
+   "rulename": "site_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "site_down",
+   "uuid": "06a2ce63-af8c-4563-b939-6063e40963f3",
+   "values": [
+    {
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515037698,
+   "eventname": "rulename",
+   "id": "Wj7TlaEBnpPPzZIMpI8M",
+   "message": "All BFD sessions for the node are down",
+   "rule_name_display": "BFD_Node_Down",
+   "rulename": "node_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "node_down",
+   "uuid": "968bbffa-7c87-4a57-9ecc-95cc9bee0dfb",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515035770,
+   "eventname": "rulename",
+   "id": "WD7TlaEBnpPPzZIMnI-d",
+   "message": "All Control connections for the node are down",
+   "rule_name_display": "Control_Node_Down",
+   "rulename": "node_down",
+   "severity": "Critical",
+   "severity_number": 1,
+   "site_id": "20",
+   "type": "node_down",
+   "uuid": "655b3d53-a2e1-4cd5-91d5-dc9a22d1eb3a",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515018970,
+   "eventname": "rulename",
+   "id": "VT7TlaEBnpPPzZIMWo_p",
+   "message": "All BFD sessions for the tloc are down",
+   "rule_name_display": "BFD_TLOC_Down",
+   "rulename": "tloc_down",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_down",
+   "uuid": "496736de-2534-41ca-a828-351bc5d61e09",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "biz-internet",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "BFD",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515017510,
+   "eventname": "rulename",
+   "id": "VD7TlaEBnpPPzZIMVY8y",
+   "message": "All BFD sessions for the tloc are down",
+   "rule_name_display": "BFD_TLOC_Down",
+   "rulename": "tloc_down",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_down",
+   "uuid": "a771ffc5-39be-4aab-9c4c-a8363a613565",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "mpls",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515016223,
+   "eventname": "rulename",
+   "id": "Uz7TlaEBnpPPzZIMUI8q",
+   "message": "All Control connections for the tloc are down",
+   "rule_name_display": "Control_TLOC_Down",
+   "rulename": "tloc_down",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_down",
+   "uuid": "5f0a5801-e65b-49f1-96aa-76491e7091a1",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "mpls",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  },
+  {
+   "acknowledged": false,
+   "active": false,
+   "component": "Control",
+   "devices": [
+    {
+     "system-ip": "10.255.255.20"
+    }
+   ],
+   "entry_time": 1793515014262,
+   "eventname": "rulename",
+   "id": "Uj7TlaEBnpPPzZIMSI-R",
+   "message": "All Control connections for the tloc are down",
+   "rule_name_display": "Control_TLOC_Down",
+   "rulename": "tloc_down",
+   "severity": "Medium",
+   "severity_number": 3,
+   "site_id": "20",
+   "type": "tloc_down",
+   "uuid": "63bd8e87-1794-4b7f-85b7-6889519042fd",
+   "values": [
+    {
+     "system-ip": "10.255.255.20",
+     "color": "biz-internet",
+     "host-name": "vEdge-20",
+     "site-id": "20"
+    }
+   ]
+  }
+ ]
+}

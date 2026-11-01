@@ -345,6 +345,17 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   vManage alarm, arrive as `<kind>_clear` at info. They bind to the fault's entity and
   build_nodes skips them. Before T0 they were fault-kind evidence that kept a recovered
   tunnel's node alive.
+- **Canonical kinds from controllers (E2a, 2026-11-01).** vManage alarms (keyed on the
+  release's `rule_name_display`, all 99 rules of 20.6 mapped or explicitly unclassified —
+  nms/vmanage_kinds.go) and device events now arrive as the kinds the templates use:
+  `link_state_change` (bound `<device>:<ifname>`, INTERFACE), `bgp_adjacency_change` /
+  `ospf_adjacency_change` (`<device>:<peer>`), `device_restart`, `transceiver_unsupported`,
+  plus the existing BFD / control-connection kinds; `*_Up` rules and recovered states are
+  `<kind>_clear`. Until then every BGP / OSPF / interface / reboot alarm was
+  `controller_alarm`, a kind no template consumes. Still management_plane (a relayed
+  observation names the hypothesis; it does not confirm alone). Real 20.6 alarms carry the
+  device in `devices[].system-ip`; before E2a the connector read a top-level field and every
+  alarm reached the engine with no device (testdata/vmanage_20.6, recorded on the lab).
 - `controller_instance` (`ci-<hash>`, basis `host`) rides in attrs: context for T2's
   witness rule. The observer and the verdict are unchanged.
 - **Controller topology (T4b/T4c, 2026-10-25).** The api draws the SD-WAN overlay from
