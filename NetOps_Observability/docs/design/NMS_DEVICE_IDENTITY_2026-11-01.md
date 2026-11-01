@@ -247,6 +247,74 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
 - **P8** G3 vManage webhook (358a) · **P9** G2 device-direct TLS syslog · **P10+** other
   connectors' alias sources (T8–T11).
 
+## 7a. Source equivalence — the same evidence whichever source a customer uses
+
+Owner requirement (2026-11-01): some customers send SNMP, others an integration;
+we must gather the same evidence either way, because correlation is the product.
+Measured (researcher report 2026-11-01, load-bearing claims re-verified in the
+main session):
+
+- **Controller faults reach the engine under a kind nothing consumes.** vManage
+  maps BGP (and every unclassified alarm) to `controller_alarm`
+  (`nms/vmanage.go` `vmanageNormType`); Catalyst Center interface-down, NDFC
+  link-down likewise. `controller_alarm` appears in the engine only as an entity
+  mapping (`controller_events.py`), in no template and not in `EMITTED_KINDS`.
+  Templates key on canonical kinds (`link_state_change`, `bgp_adjacency_change`,
+  `if_metric_anomaly` …) — so an NMS-only tenant's link/BGP/IGP incidents cannot
+  even be ranked.
+- **Controller metrics never reach the engine:** `Routed.MetricLines` go only to
+  VictoriaMetrics (`nms/scheduler.go`), so an NMS-only tenant has no interface,
+  resource or session metric episodes.
+- **The reverse gaps:** SNMP reads SD-WAN BFD state but emits no tunnel signal and
+  no tunnel↔endpoint topology; SNMP "device unreachable" exists only as an alert,
+  not as engine evidence; gNMI-only customers get nothing in the engine (lane
+  dormant, tracker 213); the change-induced template needs a controller policy
+  change, so an SNMP-only customer cannot match it.
+- **Turning on both sources is not safe yet:** independence is computed on
+  observer strings (`verdicts.py`), so a device's own trap plus the controller
+  relaying the same device's alarm would count as two independent witnesses (the
+  same alarm twice — owner D1 rejects it). The same over-count exists today between
+  syslog (observer = hostname) and SNMP/traps (observer = device id).
+
+**Design:** one canonical evidence vocabulary (`telemetry-catalog/evidence.yaml`,
+baked into Go and Python with a drift test); every record carries provenance
+(`origin_device`, `relay`, `freshness_class`, `source_adapter`) in attrs; every
+adapter (SNMP, gNMI, traps, syslog, flows, each connector) resolves identity
+inside its tenant, emits canonical kinds and declares its evidence capabilities
+(extending `nms/capability.go`, fidelity none/doc_claimed/lab_validated/
+live_validated); a build-failing matrix test and a per-source-profile
+confirmability ratchet (SNMP+push, gNMI-only, each connector alone,
+SNMP+connector) measure equivalence by RCA value. Engine stage [7] gains a
+downgrade-only origin-observer rule: two witnesses with the same
+`origin_device` are never an independent pair, whatever the relay.
+
+## 7b. One programme — order of work
+
+Ordered by RCA value and dependency (E = evidence, P = channels/identity;
+★ = high-risk: full gate, pgintegration where storage is touched, §3a test):
+
+| # | Phase | Why now |
+|---|---|---|
+| 1 | **E0** evidence registry + capability declarations for every adapter + generated matrix + per-profile confirmability report | records today's truth; the scorecard every later phase moves |
+| 2 | **E1★** origin-observer provenance + downgrade-only independence rule (stage [7], flag, `ENGINE_SEMVER`) | must precede E2, or SNMP+controller tenants get same-alarm confirmations |
+| 3 | **E2★** controller canonical kinds — link / BGP / IGP / restart / config; Meraki uplink-down no longer "device unreachable"; state→kind table for interface, BGP, tunnel | the biggest NMS-only gap; data already collected |
+| 4 | **P0.5** syslog keeps its sender address | small, unblocks per-device syslog |
+| 5 | **P1★** channel model + Ingest Gateway (mTLS, certificate → tenant) | true multitenancy |
+| 6 | **P2★** Edge Collector + lab RETAIL collector | RETAIL's own stream; enables telemetry parity |
+| 7 | **E3★** realtime controller metrics → the engine under canonical names (`relay=via_controller`), bucketed stats stay context only | NMS-only metric episodes |
+| 8 | **P3★** tenant reads only its own stamped data (closes 370) | |
+| 9 | **P4** per-tenant identity resolver (system-IP ↔ configured sources, serials) | binds traps/syslog/flows to the controller device |
+| 10 | **E4** SNMP parity: BFD → tunnel kinds with the canonical tunnel id, tunnel topology, poller reachability as evidence | SNMP-only customers' overlay incidents |
+| 11 | **E5** config-change unification (`config_change`, actor device/controller) | change-induced RCA for every source |
+| 12 | **E6★** controller adjacency facts (Catalyst Center, Meraki, NDFC) | physical topology without SNMP |
+| 13 | **P5–P7** in-band flow identity, engine canonicalization, UI | |
+| 14 | **E7** parity harness in CI (within a tenant, recorded fixtures) + the lab harness (`scripts/lab/source_parity.py`) on every deploy | proves equivalence continuously |
+| 15 | **E8+** per-connector rollouts (T8–T11), webhooks for 5–10-min pollers | |
+
+Owner decision carried into T2: may controller-relayed device state (BFD, BGP)
+count as `control_plane` for a template's required modalities? Recommendation:
+no until T2's fan-in rule ships — rank improves at once, verdicts stay honest.
+
 ## 8. Decided / open
 
 - **Decided (owner, 2026-11-01):** the truest multitenancy, even where a use case
