@@ -52,7 +52,7 @@ func (s *server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (j
 		return claims, false
 	}
 	// Platform-wide capability is an IDENTITY question — is the caller the platform
-	// owner? Use isPlatformOwner, NOT principalTenant/can(): the latter honor the
+	// owner? Use isPlatformOwner, NOT principalTenant/Authorize(): those honor the
 	// "view as tenant" override and would falsely deny the owner while scoped into
 	// a tenant (which broke the bundled NetBox config + platform admin pages).
 	if !isPlatformOwner(claims) {
