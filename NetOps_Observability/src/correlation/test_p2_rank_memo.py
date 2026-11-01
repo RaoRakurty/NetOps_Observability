@@ -338,23 +338,36 @@ def test_T1d_the_witness_projection_is_exactly_Witness_equality():
     the dataclasses themselves, so a NEW field on either goes red here."""
     from signals import ProbeFate
     from verdicts import Witness, witness_of
+    # `origin` (E1) is projected only under CORR_ORIGIN_OBSERVER; with the flag
+    # off witness_of leaves it "" on every Witness, so it cannot split two
+    # equal projections. The implication is checked in BOTH states below.
     covered = {"observer_id", "modality", "authority", "probe_authority",
-               "probe_scope", "support_only", "fate"}
+               "probe_scope", "support_only", "fate", "origin"}
     assert {f.name for f in dc_fields(Witness)} == covered, \
         "Witness gained a field — extend _witness_projection"
     assert {f.name for f in dc_fields(ProbeFate)} == {
         "agent_host", "source_egress", "seam_id", "target", "schedule_id"}, \
         "ProbeFate gained a field — extend _witness_projection"
-    # ...and the implication itself, over the random corpus.
-    seen: dict[tuple, Witness] = {}
-    for s in range(200):
-        for x in random_evidence(random.Random(9000 + s)):
-            proj = signal_projection(x)[-1]
-            w = witness_of(x)
-            if proj in seen:
-                assert seen[proj] == w, "equal projections, different Witnesses"
-            seen[proj] = w
-    assert len(seen) > 20, "the corpus never varied the witness"
+    # ...and the implication itself, over the random corpus — with the E1 flag
+    # off and on (on, every signal also carries an origin, so the projection's
+    # appended field is exercised).
+    from signals import ORIGIN_DEVICE_ATTR, set_origin_observer
+    for flag in (False, True):
+        set_origin_observer(flag)
+        try:
+            seen: dict[tuple, Witness] = {}
+            for s in range(200):
+                for i, x in enumerate(random_evidence(random.Random(9000 + s))):
+                    if flag:
+                        x = dc_replace(x, attrs={**x.attrs, ORIGIN_DEVICE_ATTR: f"dev{(s + i) % 3}"})
+                    proj = signal_projection(x)[-1]
+                    w = witness_of(x)
+                    if proj in seen:
+                        assert seen[proj] == w, "equal projections, different Witnesses"
+                    seen[proj] = w
+            assert len(seen) > 20, "the corpus never varied the witness"
+        finally:
+            set_origin_observer(False)
 
 
 # ═══ T2 — SOUNDNESS: every key field must move the key ═══════════════════════

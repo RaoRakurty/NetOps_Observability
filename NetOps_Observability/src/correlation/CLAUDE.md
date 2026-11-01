@@ -70,8 +70,8 @@ VictoriaMetrics only (`collectors/metric_events.go:75-108`).
   2026-10-25 the id row was missing and those traps were quarantined. An identity
   claimed by two tenants is left out by the writer and dropped by the reader
   (`_tenant_registry`).
-  **[lead] The controller lane does NOT call `verified_tenant`; it trusts the tenant in
-  the payload** (M:12796-12814).
+  The controller lane calls `verified_tenant` too (since 2026-10-24, unanchored: a
+  claim the registry contradicts is quarantined; `handle_controller_event`).
 
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).
@@ -215,6 +215,17 @@ After rank:
 
 **Independent** = different observer AND different authority AND no shared fate (agent
 host / egress / seam+target+schedule) (V:105-115).
+- **E1 origin observer (flag `CORR_ORIGIN_OBSERVER`, default OFF, 2026-11-01):** two
+  witnesses whose `attrs["origin_device"]` is the same device are never independent —
+  one box's own state seen through two lanes (its trap + the controller relaying it;
+  its syslog by hostname + its SNMP episode by id) is one observation. Downgrade-only.
+  `buffer_signal` stamps the origin (metric/trap/syslog/flow observer, or the device a
+  controller event reports about) canonicalised through the TENANT's resolver
+  (`EntityResolver.canonical_device`: id, name or address → id; ambiguous → kept
+  verbatim), so the archive and replay carry it. `Witness.origin` is "" with the flag
+  off and the rank_memo projection appends it only under the flag, so OFF is
+  byte-identical (test_origin_observer_e1.py). Plan:
+  docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md §7a/§7b.
 
 **Trusted:**
 - non-probe evidence: yes;
@@ -348,6 +359,7 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.
-- Observer ids are lane-local strings (SNMP device id M:12451, syslog hostname
+- Observer ids are lane-local strings (SNMP device id, syslog hostname
   producers.py:1388). If they differ for one box, the gate over-counts it as two
-  independent witnesses [lead].
+  independent witnesses — proven by test_origin_observer_e1.py; closed by the E1
+  origin-observer rule when `CORR_ORIGIN_OBSERVER` is on (§5).

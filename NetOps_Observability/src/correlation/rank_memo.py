@@ -45,6 +45,7 @@ Per-signal inputs `rank` reads (transitively):
 | `attrs["corroborates_kinds"]` | `scoring.py:93`, `scoring.py:485` | only for `kind == active_verification_result` |
 | `attrs["refutes_kinds"]` | `scoring.py:236` | only for `kind == active_verification_healthy` |
 | `attrs["fidelity"]`, `attrs["rule_id"]` | `scoring.py` A7 cap (`fidelity_weighting_enabled()`) | ONLY when `CORR_FIDELITY_WEIGHTING` is on — see `signal_projection` |
+| `attrs["origin_device"]` (via `Witness.origin`) | `verdicts.Witness.independent_of` (E1) | ONLY when `CORR_ORIGIN_OBSERVER` is on — see `_witness_projection` |
 | `verdicts.witness_of(sig)` | `verdicts.py:242` inside `coverage`, reached from `assess` (`scoring.py:270`) | THE whole verdict-gate projection — see below |
 
 `witness_of` (`verdicts.py:147-192`) is itself the exact reader of everything
@@ -347,6 +348,7 @@ from signals import (
     Signal,
     fidelity_of,
     fidelity_weighting_enabled,
+    origin_observer_enabled,
     probe_authority_of,
 )
 from verdicts import (
@@ -925,7 +927,11 @@ def _witness_projection(w: Witness) -> tuple:
         (() if fate is None else
          (fate.agent_host, fate.source_egress, fate.seam_id,
           fate.target, fate.schedule_id)),
-    )
+    ) + ((w.origin,) if origin_observer_enabled() else ())
+    # E1: with the origin-observer rule on, `coverage` also reads Witness.origin
+    # (two witnesses of one device are not independent), so the key must carry
+    # it. APPENDED only under the flag: with it off the projection is the tuple
+    # it always was, byte for byte.
 
 
 def signal_projection(sig: Signal) -> tuple:

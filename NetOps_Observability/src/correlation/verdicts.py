@@ -55,6 +55,8 @@ from signals import (
     ProbeFate,
     ProbeScope,
     Signal,
+    origin_device_of,
+    origin_observer_enabled,
 )
 
 
@@ -88,6 +90,10 @@ class Witness:
     fate: ProbeFate | None = None                  # measurement fate fingerprint (any modality)
     probe_scope: ProbeScope | None = None          # UI projection
     support_only: bool = False                     # may support, never anchor confirm
+    # E1 origin observer: the canonical device whose own state this witness
+    # reports. "" unless CORR_ORIGIN_OBSERVER is on and the lane stamped one —
+    # so with the flag off every Witness compares and hashes exactly as before.
+    origin: str = ""
 
     @property
     def trusted(self) -> bool:
@@ -103,12 +109,17 @@ class Witness:
         return self.probe_authority in CONFIRM_AUTHORITIES
 
     def independent_of(self, other: Witness) -> bool:
-        """Mutual independence: different observer, no shared measurement
-        authority, and no shared FATE — same agent host, NAT/public egress, or
+        """Mutual independence: different observer, different origin device (E1,
+        when on), no shared measurement authority, and no shared FATE — same agent host, NAT/public egress, or
         (seam+target+schedule). Fate is checked ACROSS modalities, so a probe and
         a device-telemetry collector on the same host are NOT independent; one
         host failure would correlate both, so they cannot co-confirm."""
         if self.observer_id == other.observer_id:
+            return False
+        # E1: one device's own state, seen through two lanes (its trap and the
+        # controller relaying it; its syslog and its SNMP episode), is one
+        # observation. Downgrade-only — it can only remove an independent pair.
+        if self.origin and self.origin == other.origin:
             return False
         if self.authority is not None and self.authority == other.authority:
             return False
@@ -192,6 +203,7 @@ def witness_of(sig: Signal) -> Witness:
         fate=fate,
         probe_scope=probe_scope,
         support_only=support_only,
+        origin=origin_device_of(sig) if origin_observer_enabled() else "",
     )
 
 
