@@ -3986,7 +3986,10 @@ func (s *server) handleHealthDetail(w http.ResponseWriter, r *http.Request) {
 		"version": version,
 		"uptime":  time.Since(s.startedAt).String(),
 	}
-	if s.can(claims, ActionView, Resource{Type: ResInfraStack}) {
+	// An IDENTITY question (is this the platform owner?), not a view-scope one —
+	// like requireCrossTenant: the owner keeps the stack aggregates while scoped
+	// to Provider or a tenant (tracker 365 made Provider a non-cross scope).
+	if isPlatformOwner(claims) {
 		out["discovery"] = s.discovery.Health()
 		out["collectors"] = s.collectors.Health()
 		out["alerts"] = s.alerts.Health()
