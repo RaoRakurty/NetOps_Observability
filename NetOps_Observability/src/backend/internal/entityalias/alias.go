@@ -149,10 +149,16 @@ func (s *Store) List(tenant string, cross bool) []Alias {
 // ErrNotFound.
 func (s *Store) Delete(tenant string, cross bool, entityType, alias string) error {
 	key := entityType + "|" + catalog.NormalizeAlias(alias)
-	if !s.C.Delete(tenant, cross, key) {
+	// NEVER a cross-tenant delete. An alias key is a NATURAL key
+	// ("device|core sw"): several tenants may each hold one. The Collection's
+	// cross fallback deletes the first row with that key under ANY tenant —
+	// so a Global-view DELETE removed an arbitrary tenant's alias (found
+	// 2026-10-19, tracker 356). Deletes are scoped to the caller's own owner;
+	// a platform admin removing a tenant's alias scopes into that tenant.
+	if !s.C.Delete(tenant, false, key) {
 		return ErrNotFound
 	}
-	s.changed(tenant, cross)
+	s.changed(tenant, false)
 	return nil
 }
 
