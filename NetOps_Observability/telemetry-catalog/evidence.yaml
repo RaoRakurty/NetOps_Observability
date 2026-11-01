@@ -1,0 +1,314 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Source equivalence — what correlation needs, and why a source does NOT supply it.
+#
+# Read by source_equivalence.py, which COMPUTES what each source supplies from
+# code (events.yaml rules, the SNMP metric allowlist, the connectors' Go
+# normalizers). This file only declares what cannot be computed:
+#
+#   evidence_types  which engine kinds count as which evidence (the engine's own
+#                   vocabulary; every kind must be one the engine knows)
+#   sources         per source, the evidence types it does NOT supply and why:
+#                     status: normalization_pending  collected, not mapped to an engine kind
+#                             collection_pending     the source can supply it; we do not collect it
+#                             dormant                built, switched off
+#                             unavailable            the source cannot supply it
+#                             unverified             not yet established either way
+#                   A declared gap that the code has since closed fails the build
+#                   (delete it); an undeclared gap fails the build (declare it).
+#   orphan_kinds    kinds a source emits that the engine has never heard of
+#   registry_drift  kinds a source supplies that the engine's coverage registry
+#                   (src/correlation/coverage.py) still calls pending
+#   profiles        customer source mixes the scorecard is computed for
+#
+# Plan of record: docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md §7a/§7b (E0).
+
+evidence_types:
+  - {id: link_state, title: "Interface / link up-down", rca: high,
+     engine_kinds: [link_state_change, if_metric_anomaly]}
+  - {id: interface_health, title: "Interface counters, errors, utilisation", rca: high,
+     engine_kinds: [if_metric_anomaly, if_errors, if_util_high, if_discards]}
+  - {id: bgp_session, title: "BGP session state", rca: high,
+     engine_kinds: [bgp_adjacency_change, bgp_state_anomaly, bgp_peer_flap, bgp_route_churn]}
+  - {id: igp_adjacency, title: "IGP adjacency (OSPF / IS-IS)", rca: high,
+     engine_kinds: [ospf_adjacency_change, isis_adjacency_change, routing_adjacency_change, igp_state_anomaly]}
+  - {id: overlay_tunnel, title: "SD-WAN / IPsec overlay tunnel, BFD session", rca: high,
+     engine_kinds: [controller_bfd_down, controller_tunnel_state, tunnel_down, tunnel_flap, tunnel_degraded]}
+  - {id: control_connection, title: "SD-WAN control connection / OMP", rca: high,
+     engine_kinds: [controller_control_connection_loss]}
+  - {id: device_reachability, title: "Device reachability", rca: high,
+     engine_kinds: [controller_device_unreachable]}
+  - {id: device_restart, title: "Device restart / reload", rca: medium,
+     engine_kinds: [device_restart]}
+  - {id: device_resource, title: "CPU / memory / temperature", rca: medium,
+     engine_kinds: [device_resource_anomaly]}
+  - {id: config_change, title: "Configuration / policy change", rca: high,
+     engine_kinds: [device_config_change, controller_policy_change, config_change]}
+  - {id: l2_control, title: "L2 / fabric control plane (STP, FHRP, MAC, LLDP, VTEP)", rca: medium,
+     engine_kinds: [stp_topology_change, fhrp_state_change, mac_flap, evpn_mac_move, lldp_neighbor_change, vtep_state_change]}
+  - {id: physical_layer, title: "Optics / physical layer", rca: medium,
+     engine_kinds: [dom_rx_power_low, dom_temperature_high, dom_lane_bias_anomaly, link_down_no_light,
+                    link_flap_on_insert, pcs_local_fault, pcs_remote_fault, pcs_deskew_fault,
+                    fec_corrected_rate_high, prefec_ber_rising, transceiver_unsupported]}
+  - {id: flow_volume, title: "Traffic flow volume", rca: medium,
+     engine_kinds: [flow_volume_anomaly]}
+
+sources:
+  # ── device-direct: polled ──────────────────────────────────────────────────
+  - id: snmp_poll
+    title: "SNMP polling (RCA metric allowlist → CUSUM episodes)"
+    computed_from: snmp_metric_allowlist
+    gaps:
+      overlay_tunnel: {status: normalization_pending, detail: "collectors/sdwan_overlay.go reads SD-WAN BFD session state (VIPTELA / CISCO-SDWAN MIBs) for topology, but emits no tunnel signal; tunnel_down is NORMALIZATION_PENDING in coverage.py", ref: "design §7b E4"}
+      control_connection: {status: unverified, detail: "whether the SD-WAN MIBs' control-connection tables are read by sdwan_overlay.go is not established", ref: "design §7b E4"}
+      device_reachability: {status: normalization_pending, detail: "poller reachability exists only as a vmalert alert (src/config/rules.yaml), never as engine evidence", ref: "design §7b E4"}
+      device_restart: {status: normalization_pending, detail: "sysUpTime is polled; no restart transition is put on the correlation bus (lead)", ref: "design §7b E4"}
+      config_change: {status: collection_pending, detail: "config-change counters are pollable (e.g. CISCO-CONFIG-MAN-MIB ccmHistoryRunningLastChanged, vendor equivalents) and not collected; traps carry it today", ref: "design §7b E5"}
+      l2_control: {status: collection_pending, detail: "BRIDGE-MIB / LLDP-MIB are polled for topology only; no state-change signal", ref: "design §7b E4"}
+      physical_layer: {status: collection_pending, detail: "ENTITY-SENSOR / DOM MIB optics producers land in tracker #94 P3", ref: "#94"}
+      flow_volume: {status: unavailable, detail: "polling sees interface counters, not flows"}
+
+  - id: gnmi
+    title: "gNMI / OpenConfig streaming"
+    computed_from: none
+    gaps:
+      link_state: {status: dormant, detail: "gnmic correlation lane is built and fixture-proven but off in every shipped profile", ref: "tracker 213"}
+      interface_health: {status: dormant, detail: "gnmic correlation lane is off in every shipped profile", ref: "tracker 213"}
+      bgp_session: {status: dormant, detail: "gnmic correlation lane is off in every shipped profile", ref: "tracker 213"}
+      igp_adjacency: {status: dormant, detail: "gnmic correlation lane is off in every shipped profile", ref: "tracker 213"}
+      device_resource: {status: dormant, detail: "gnmic correlation lane is off in every shipped profile", ref: "tracker 213"}
+      overlay_tunnel: {status: collection_pending, detail: "vendor SD-WAN / IPsec YANG state not subscribed"}
+      control_connection: {status: unverified, detail: "vendor SD-WAN control-connection YANG not assessed"}
+      device_reachability: {status: collection_pending, detail: "subscription loss could be emitted as reachability evidence; it is not"}
+      device_restart: {status: collection_pending, detail: "OpenConfig system boot-time not subscribed"}
+      config_change: {status: collection_pending, detail: "commit / config-change notifications not subscribed"}
+      l2_control: {status: collection_pending, detail: "OpenConfig LLDP / STP / network-instance state not subscribed"}
+      physical_layer: {status: collection_pending, detail: "OpenConfig platform transceiver state lands in #94 P3", ref: "#94"}
+      flow_volume: {status: unavailable, detail: "telemetry streaming is not flow export"}
+
+  # ── device-direct: pushed ──────────────────────────────────────────────────
+  - id: syslog
+    title: "Syslog (events.yaml runtime rules)"
+    computed_from: syslog_rules
+    gaps:
+      interface_health: {status: unavailable, detail: "syslog carries state messages, not counters"}
+      overlay_tunnel: {status: collection_pending, detail: "SD-WAN edges log BFD / tunnel state changes; no events.yaml rule maps them", ref: "design §7b E4"}
+      control_connection: {status: collection_pending, detail: "SD-WAN edges log control-connection state changes; no rule maps them", ref: "design §7b E4"}
+      device_reachability: {status: unavailable, detail: "a device cannot log its own unreachability"}
+      device_restart: {status: collection_pending, detail: "restart / reload messages exist (e.g. %SYS-5-RESTART); restart is mapped from traps only"}
+      device_resource: {status: collection_pending, detail: "CPU / memory threshold messages exist; no rule maps them"}
+      flow_volume: {status: unavailable, detail: "syslog is not flow export"}
+
+  - id: trap
+    title: "SNMP traps (events.yaml runtime rules)"
+    computed_from: trap_rules
+    gaps:
+      interface_health: {status: unavailable, detail: "traps carry state transitions, not counters"}
+      overlay_tunnel: {status: collection_pending, detail: "VIPTELA / CISCO-SDWAN MIBs define BFD state traps; no rule maps them", ref: "design §7b E4"}
+      control_connection: {status: collection_pending, detail: "SD-WAN control-connection traps exist; no rule maps them", ref: "design §7b E4"}
+      device_reachability: {status: unavailable, detail: "a device cannot trap its own unreachability"}
+      device_resource: {status: collection_pending, detail: "vendor CPU / memory threshold traps (e.g. CISCO-PROCESS-MIB) not mapped"}
+      physical_layer: {status: collection_pending, detail: "transceiver / sensor threshold traps are vendor-specific and not mapped", ref: "#94"}
+      flow_volume: {status: unavailable, detail: "traps are not flow export"}
+
+  - id: flow
+    title: "NetFlow / IPFIX / sFlow (flows lane)"
+    computed_from: flow_lane
+    gaps:
+      link_state: {status: unavailable, detail: "flow records carry traffic, not device state"}
+      interface_health: {status: unavailable, detail: "flow records carry traffic, not interface counters"}
+      bgp_session: {status: unavailable, detail: "flow records carry traffic, not session state"}
+      igp_adjacency: {status: unavailable, detail: "flow records carry traffic, not adjacency state"}
+      overlay_tunnel: {status: unavailable, detail: "flow records carry traffic, not tunnel state"}
+      control_connection: {status: unavailable, detail: "flow records carry traffic, not control state"}
+      device_reachability: {status: unavailable, detail: "flow records carry traffic, not reachability"}
+      device_restart: {status: unavailable, detail: "flow records carry traffic, not device events"}
+      device_resource: {status: unavailable, detail: "flow records carry traffic, not device resources"}
+      config_change: {status: unavailable, detail: "flow records carry traffic, not configuration"}
+      l2_control: {status: unavailable, detail: "flow records carry traffic, not L2 control state"}
+      physical_layer: {status: unavailable, detail: "flow records carry traffic, not optics"}
+
+  # ── controller integrations ────────────────────────────────────────────────
+  - id: vmanage
+    title: "Cisco Catalyst SD-WAN Manager (vManage)"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "interface alarms land as controller_alarm (an orphan kind); interface oper state is collected (interfaces stream) but reaches VictoriaMetrics only", ref: "design §7b E2/E3"}
+      interface_health: {status: normalization_pending, detail: "interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified", ref: "design §7b E3"}
+      bgp_session: {status: normalization_pending, detail: "BGP state transitions and alarms are typed controller_alarm (nms/vmanage.go vmanageNormType, nms/sdwan_state_events.go) — no template consumes it", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "OSPF alarms fall through to controller_alarm", ref: "design §7b E2"}
+      device_restart: {status: normalization_pending, detail: "reboot alarms fall through to controller_alarm (lead)", ref: "design §7b E2"}
+      device_resource: {status: normalization_pending, detail: "system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm", ref: "design §7b E3"}
+      l2_control: {status: unverified, detail: "VRRP / STP state on cEdge via vManage not assessed"}
+      physical_layer: {status: normalization_pending, detail: "the hardware stream's hardware_health transitions are typed controller_alarm", ref: "design §7b E2"}
+      flow_volume: {status: unavailable, detail: "cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated"}
+
+  - id: catalyst_center
+    title: "Cisco Catalyst Center (DNA Center)"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "interface-down issues are typed controller_alarm (nms/catalyst.go)", ref: "design §7b E2"}
+      interface_health: {status: collection_pending, detail: "interface statistics API not collected"}
+      bgp_session: {status: normalization_pending, detail: "BGP issues are typed controller_alarm", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "OSPF / EIGRP issues are typed controller_alarm", ref: "design §7b E2"}
+      overlay_tunnel: {status: unverified, detail: "SD-Access fabric tunnel state not assessed"}
+      control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
+      device_restart: {status: unverified, detail: "reload issues not assessed"}
+      device_resource: {status: collection_pending, detail: "assurance device-health (CPU / memory) not collected"}
+      l2_control: {status: unverified, detail: "L2 issues not assessed"}
+      physical_layer: {status: unverified, detail: "optics / environment issues not assessed"}
+      flow_volume: {status: unavailable, detail: "the controller does not export flows"}
+
+  - id: meraki
+    title: "Cisco Meraki Dashboard"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "uplink / port-down alerts are mapped to controller_device_unreachable (nms/meraki.go merakiNormType) — a link loss is misclassified as a device fault", ref: "design §7b E2"}
+      interface_health: {status: collection_pending, detail: "uplink loss / latency and port statistics APIs not collected"}
+      bgp_session: {status: unverified, detail: "MX BGP state not assessed"}
+      igp_adjacency: {status: unverified, detail: "MX OSPF state not assessed"}
+      overlay_tunnel: {status: collection_pending, detail: "AutoVPN peer status API not collected"}
+      control_connection: {status: unavailable, detail: "cloud-managed; no SD-WAN control connection concept"}
+      device_restart: {status: unverified, detail: "reboot events not assessed"}
+      device_resource: {status: unavailable, detail: "the Dashboard does not expose device CPU / memory"}
+      l2_control: {status: unverified, detail: "STP / port events not assessed"}
+      physical_layer: {status: unverified, detail: "SFP / power events not assessed"}
+      flow_volume: {status: unavailable, detail: "NetFlow is exported by the MX directly, not by the Dashboard"}
+
+  - id: ndfc
+    title: "Cisco Nexus Dashboard Fabric Controller"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "link-down events are typed controller_alarm (nms/ndfc.go)", ref: "design §7b E2"}
+      interface_health: {status: collection_pending, detail: "interface statistics not collected"}
+      bgp_session: {status: normalization_pending, detail: "BGP events are typed controller_alarm", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "IGP events are typed controller_alarm", ref: "design §7b E2"}
+      overlay_tunnel: {status: unverified, detail: "VXLAN / VTEP state via NDFC not assessed"}
+      control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
+      device_reachability: {status: unverified, detail: "switch reachability events not assessed"}
+      device_restart: {status: unverified, detail: "reload events not assessed"}
+      device_resource: {status: unverified, detail: "resource events not assessed"}
+      l2_control: {status: unverified, detail: "L2 events not assessed"}
+      physical_layer: {status: unverified, detail: "optics events not assessed"}
+      flow_volume: {status: unavailable, detail: "the controller does not export flows"}
+
+  - id: prime
+    title: "Cisco Prime Infrastructure"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "link alarms are typed controller_alarm (nms/prime.go)", ref: "design §7b E2"}
+      interface_health: {status: unverified, detail: "interface statistics API not assessed"}
+      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      overlay_tunnel: {status: unavailable, detail: "not an overlay controller"}
+      control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
+      device_restart: {status: unverified, detail: "reload alarms not assessed"}
+      device_resource: {status: unverified, detail: "resource alarms not assessed"}
+      l2_control: {status: unverified, detail: "L2 alarms not assessed"}
+      physical_layer: {status: unverified, detail: "optics alarms not assessed"}
+      flow_volume: {status: unavailable, detail: "the controller does not export flows"}
+
+  - id: versa_director
+    title: "Versa Director"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "interface alarms are typed controller_alarm (nms/versa.go)", ref: "design §7b E2"}
+      interface_health: {status: collection_pending, detail: "interface statistics not collected; LEF statistics go to Versa Analytics"}
+      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      control_connection: {status: unverified, detail: "controller-connection alarms not assessed"}
+      device_reachability: {status: normalization_pending, detail: "appliance-down alarms fall through to controller_alarm", ref: "design §7b E2"}
+      device_restart: {status: unverified, detail: "reboot alarms not assessed"}
+      device_resource: {status: normalization_pending, detail: "appliance health is typed controller_health_score (an orphan kind)", ref: "design §7b E2"}
+      l2_control: {status: unavailable, detail: "not reported by the Director"}
+      physical_layer: {status: unverified, detail: "hardware alarms not assessed"}
+      flow_volume: {status: unavailable, detail: "flows are exported as LEF to Versa Analytics, not by the Director"}
+
+  - id: versa_concerto
+    title: "Versa Concerto"
+    computed_from: connector
+    gaps:
+      link_state: {status: normalization_pending, detail: "interface alarms are typed controller_alarm (nms/versa.go)", ref: "design §7b E2"}
+      interface_health: {status: collection_pending, detail: "interface statistics not collected"}
+      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
+      control_connection: {status: unverified, detail: "controller-connection alarms not assessed"}
+      device_reachability: {status: normalization_pending, detail: "appliance-down alarms fall through to controller_alarm", ref: "design §7b E2"}
+      device_restart: {status: unverified, detail: "reboot alarms not assessed"}
+      device_resource: {status: normalization_pending, detail: "appliance health is typed controller_health_score (an orphan kind)", ref: "design §7b E2"}
+      l2_control: {status: unavailable, detail: "not reported by Concerto"}
+      physical_layer: {status: unverified, detail: "hardware alarms not assessed"}
+      flow_volume: {status: unavailable, detail: "flows go to Versa Analytics, not Concerto"}
+
+  - id: catalyst_9800
+    title: "Cisco Catalyst 9800 WLC (wireless)"
+    computed_from: connector
+    gaps:
+      link_state: {status: unverified, detail: "wireless evidence is its own family (wireless_* kinds); wired link state via the WLC not assessed"}
+      interface_health: {status: unverified, detail: "wired port statistics via the WLC not assessed"}
+      bgp_session: {status: unavailable, detail: "a WLC reports no routing sessions"}
+      igp_adjacency: {status: unavailable, detail: "a WLC reports no routing adjacencies"}
+      overlay_tunnel: {status: unavailable, detail: "CAPWAP is out of this matrix's overlay scope"}
+      control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
+      device_reachability: {status: unverified, detail: "AP / WLC reachability is carried as wireless_* kinds, outside this row"}
+      device_restart: {status: unverified, detail: "AP / WLC reload events not assessed"}
+      device_resource: {status: unverified, detail: "WLC CPU / memory not assessed"}
+      config_change: {status: unverified, detail: "WLC configuration-change events not assessed"}
+      l2_control: {status: unavailable, detail: "not reported by the WLC"}
+      physical_layer: {status: unavailable, detail: "not reported by the WLC"}
+      flow_volume: {status: unavailable, detail: "the WLC integration does not export flows"}
+
+  - id: generic
+    title: "Generic webhook / API connector"
+    computed_from: connector
+    gaps:
+      link_state: {status: unverified, detail: "generic passes the sender's normalized type through; supply is per deployment"}
+      interface_health: {status: unverified, detail: "per deployment"}
+      bgp_session: {status: unverified, detail: "per deployment"}
+      igp_adjacency: {status: unverified, detail: "per deployment"}
+      overlay_tunnel: {status: unverified, detail: "per deployment"}
+      control_connection: {status: unverified, detail: "per deployment"}
+      device_reachability: {status: unverified, detail: "per deployment"}
+      device_restart: {status: unverified, detail: "per deployment"}
+      device_resource: {status: unverified, detail: "per deployment"}
+      config_change: {status: unverified, detail: "per deployment"}
+      l2_control: {status: unverified, detail: "per deployment"}
+      physical_layer: {status: unverified, detail: "per deployment"}
+      flow_volume: {status: unverified, detail: "per deployment"}
+
+orphan_kinds:
+  controller_alarm:
+    reason: "the catch-all type for every controller alarm the connector does not classify — including BGP, OSPF, interface, reboot, device- and hardware-health; no template, producer registry or modality table names it"
+    fix: "E2: canonical kinds per state/alarm class (link / BGP / IGP / restart / config); controller_alarm only for truly unclassified alarms, registered as intentionally blind"
+  controller_health_score:
+    reason: "Versa appliance health; the engine has no such kind"
+    fix: "E2: map to a canonical resource / health kind, or register as context-only"
+  hi_ber_indication:
+    reason: "emitted by the syslog.port.hi_ber_indication rule, but the physical-layer template generator keeps only the FIRST supporting kind, so the second (hi_ber_indication on pcs-lane-deskew-failure) is dropped and no registry knows it"
+    fix: "register the kind and keep every supporting kind as an optional clause (catalog _spdc_template)"
+
+registry_drift:
+  dom_lane_bias_anomaly: {fix: "move from COLLECTION_PENDING (coverage.py, #94 group) to emitted: the syslog port rules produce it"}
+  dom_rx_power_low: {fix: "same — produced by a syslog port rule"}
+  dom_temperature_high: {fix: "same — produced by a syslog port rule"}
+  fec_corrected_rate_high: {fix: "same — produced by a syslog port rule"}
+  link_down_no_light: {fix: "same — produced by a syslog port rule"}
+  link_flap_on_insert: {fix: "same — produced by a syslog port rule"}
+  pcs_deskew_fault: {fix: "same — produced by a syslog port rule"}
+  pcs_local_fault: {fix: "same — produced by a syslog port rule"}
+  pcs_remote_fault: {fix: "same — produced by a syslog port rule"}
+  prefec_ber_rising: {fix: "same — produced by a syslog port rule"}
+  transceiver_unsupported: {fix: "same — produced by a syslog port rule"}
+
+profiles:
+  snmp_push: {title: "SNMP + syslog / traps / flows", sources: [snmp_poll, syslog, trap, flow]}
+  gnmi_push: {title: "gNMI + syslog / traps / flows", sources: [gnmi, syslog, trap, flow]}
+  vmanage_only: {title: "vManage only", sources: [vmanage]}
+  vmanage_push: {title: "vManage + device push (edge collector)", sources: [vmanage, syslog, trap, flow]}
+  catalyst_center_only: {title: "Catalyst Center only", sources: [catalyst_center]}
+  meraki_only: {title: "Meraki only", sources: [meraki]}
+  ndfc_only: {title: "NDFC only", sources: [ndfc]}
+  prime_only: {title: "Prime only", sources: [prime]}
+  versa_only: {title: "Versa Director only", sources: [versa_director]}
+  everything: {title: "SNMP + push + vManage", sources: [snmp_poll, syslog, trap, flow, vmanage]}
