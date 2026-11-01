@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from signals import (
+    ORIGIN_DEVICE_ATTR,
     EntityType,
     ModalityClass,
     Observer,
@@ -30,6 +31,7 @@ from signals import (
     Source,
     cap_label,
     cap_text,
+    origin_observer_enabled,
 )
 
 # Normalized controller event_type → the entity axis it scopes. Anything not
@@ -211,6 +213,10 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
             # Context for the verdict's independence rule (NMS-first plan T2);
             # it does not change the observer, so verdicts are unchanged today.
             "controller_instance": cap_label(instance, where="controller", field_name="controller_instance"),
+            # E1 (CORR_ORIGIN_OBSERVER): the device whose own state the controller
+            # relays — canonicalised at the window entry. Absent with the flag off.
+            **({ORIGIN_DEVICE_ATTR: cap_label(device, where="controller", field_name="origin_device")}
+               if device and origin_observer_enabled() else {}),
             **({"correlation_hints": _bounded_hints(ev["correlation_hints"])}
                if ev.get("correlation_hints") else {}),
         },

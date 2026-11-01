@@ -454,6 +454,46 @@ def set_fidelity_weighting(enabled: bool) -> None:
     _FIDELITY_WEIGHTING = bool(enabled)
 
 
+# ── Origin observer (source equivalence E1) ──────────────────────────────────
+# The SAME device's state, seen through two lanes, is one observation — not two
+# independent witnesses. A device's own linkDown trap (observer = the device)
+# and the controller relaying that device's interface alarm (observer = the
+# controller) describe one box; so do the device's syslog (observer = its
+# hostname) and its SNMP episode (observer = its inventory id). The verdict
+# gate's independence test compared observer STRINGS, so each pair counted as
+# two independent witnesses and could confirm on one device's word.
+#
+# `attrs["origin_device"]` names the device whose own state a signal reports,
+# canonicalised to the tenant's inventory id at the live window entry
+# (main.buffer_signal), so it rides in the archive and replay reads it back.
+# With the flag ON, two witnesses sharing an origin are never independent
+# (verdicts.Witness.independent_of) — a DOWNGRADE-ONLY rule: it removes
+# independent pairs, never adds one. Default OFF: no attrs key is stamped and
+# not one byte of any object moves (INVARIANTS §10/§10a).
+ORIGIN_DEVICE_ATTR = "origin_device"
+
+_ORIGIN_OBSERVER: bool = os.environ.get(
+    "CORR_ORIGIN_OBSERVER", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def origin_observer_enabled() -> bool:
+    """Is the E1 origin-observer rule ON? Default OFF."""
+    return _ORIGIN_OBSERVER
+
+
+def set_origin_observer(enabled: bool) -> None:
+    """Test hook: toggle the flag in-process. Production reads the env var."""
+    global _ORIGIN_OBSERVER
+    _ORIGIN_OBSERVER = bool(enabled)
+
+
+def origin_device_of(sig: Signal) -> str:
+    """The canonical device a signal's own state belongs to, or "" when the lane
+    stamped none. Lower-cased and trimmed so two lanes' spellings compare."""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    return str(attrs.get(ORIGIN_DEVICE_ATTR, "") or "").strip().lower()
+
+
 # ── Observer kind (evidence-accounting Phase B) ──────────────────────────────
 # An ADDITIVE ingest hint stamped on every new signal so the accounting layer can
 # say how many logical vantages vs control-plane sources vs collectors an incident

@@ -186,6 +186,7 @@ from series_budget import derive_max_series
 from signals import (
     EVIDENCE_CLASSES,
     EVIDENCE_TOPICS,
+    ORIGIN_DEVICE_ATTR,
     DeadLetter,
     EntityType,
     ModalityClass,
@@ -201,6 +202,7 @@ from signals import (
     derive_probe_authority,
     derive_probe_scope,
     evidence_signal_from_event,
+    origin_observer_enabled,
 )
 from synthetic_normalize import synthetic_app_signal
 from tls_ident import PeerIdentityMiddleware
@@ -1919,6 +1921,40 @@ def discovery_paths_for(tenant: str, view: PathGraphView,
         return ()
 
 
+# E1 origin observer: the lanes whose observer reports a device's OWN state. A
+# probe is absent on purpose — it measures a target, not its agent, and agent
+# co-location is already the fate rule's business (verdicts.Witness.fate).
+_ORIGIN_SOURCES = frozenset({Source.METRIC, Source.TRAP, Source.SYSLOG, Source.FLOW, Source.CONTROLLER})
+
+
+def _stamp_origin_device(sig: Signal) -> Signal:
+    """Stamp attrs["origin_device"]: the tenant's canonical inventory id for the
+    device whose own state the signal reports (CORR_ORIGIN_OBSERVER).
+
+    The device token is the lane's observer (an SNMP/trap device id, a syslog
+    hostname, a flow exporter address) or, for a controller event, the device
+    the controller reports about (stamped by controller_events). It is resolved
+    through the TENANT's resolver — id, name or address → id — so the same box
+    named two ways by two lanes compares equal; an unknown or ambiguous token is
+    kept verbatim (it can then only match itself, never a guessed device).
+    Stamped here, before the window, so the archive and therefore replay carry
+    it. A new attrs dict is built: attrs is mutable and must not be shared."""
+    if sig.source not in _ORIGIN_SOURCES:
+        return sig
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    token = str(attrs.get(ORIGIN_DEVICE_ATTR) or "").strip()
+    if not token:
+        if sig.source is Source.CONTROLLER:
+            return sig  # no reported device: a site/tunnel-only event has no origin
+        token = sig.observer.observer_id.strip()
+    if not token:
+        return sig
+    canonical = (cached_entity_resolver_for(sig.tenant_id).canonical_device(token) or token)[:256]
+    if attrs.get(ORIGIN_DEVICE_ATTR) == canonical:
+        return sig
+    return dc_replace(sig, attrs={**attrs, ORIGIN_DEVICE_ATTR: canonical})
+
+
 def buffer_signal(sig: Signal) -> None:
     # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
     # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
@@ -1945,6 +1981,10 @@ def buffer_signal(sig: Signal) -> None:
     # of pre-fix objects stays bit-perfect (#101 contract).
     if sig.tenant_id != canon_tenant(sig.tenant_id):
         sig = dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id))
+    # E1 (flag CORR_ORIGIN_OBSERVER, default OFF): after the tenant is canonical,
+    # because the device is resolved through that tenant's inventory only.
+    if origin_observer_enabled():
+        sig = _stamp_origin_device(sig)
     # H14: bound the DEVICE-supplied event timestamp at the same chokepoint.
     # _prune_buffer pops from the LEFT of this arrival-ordered deque while
     # ts < horizon — so ONE far-future head signal (a device clock years ahead)
@@ -15037,6 +15077,11 @@ def _metrics_text(health: dict | None = None) -> str:
         # counter) is only readable together — a 0 counter means nothing until
         # you know whether the rule was in force.
         *fidelity_weighting_metric_lines(),
+        # E1 origin-observer rule (flag CORR_ORIGIN_OBSERVER): declared either
+        # way, so a verdict change can be read against whether the rule was on.
+        "# HELP corr_origin_observer_enabled 1 when two witnesses of one device are never independent (CORR_ORIGIN_OBSERVER).",
+        "# TYPE corr_origin_observer_enabled gauge",
+        f"corr_origin_observer_enabled {1 if origin_observer_enabled() else 0}",
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",

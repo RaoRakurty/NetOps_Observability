@@ -19,7 +19,7 @@ ambiguity resolves to None, same as unknown.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _unique_map(pairs: Iterable[tuple]) -> dict:
@@ -45,10 +45,24 @@ class EntityResolver:
     ip_to_device: Mapping[str, str]              # mgmt + interface IP → device
     ip_to_iface: Mapping[str, str]               # interface IP → "device:ifName"
     ifindex_to_name: Mapping[tuple, str]         # (device, ifIndex) → ifName
+    # device id / device name (lower-cased) → device id. Lets a lane that names
+    # a device by hostname (syslog) reach the same canonical id as a lane that
+    # names it by inventory id (SNMP, traps). Conflicting names drop out.
+    name_to_device: Mapping[str, str] = field(default_factory=dict)
 
     def device_for_ip(self, ip: str | None) -> str | None:
         """The device that owns this IP (mgmt or interface), or None."""
         return self.ip_to_device.get(ip) if ip else None
+
+    def canonical_device(self, token: str | None) -> str | None:
+        """The canonical device id a lane's device token denotes — the token may
+        be the inventory id, the device name (case-insensitive) or one of its
+        addresses — or None when the tenant's inventory does not know it, or
+        knows it ambiguously. Pure; never guesses."""
+        t = (token or "").strip()
+        if not t:
+            return None
+        return self.name_to_device.get(t.lower()) or self.ip_to_device.get(t)
 
     def iface_for_ip(self, ip: str | None) -> str | None:
         """'device:ifName' for an interface IP, or None (mgmt-only IPs have no iface)."""
@@ -72,10 +86,16 @@ class EntityResolver:
         """Build a resolver from already tenant-filtered row lists (the loader passes
         a tenant's rows ∪ global). Pure; conflicting mappings drop to unresolvable."""
         ip_dev_pairs: list[tuple] = []
+        name_pairs: list[tuple] = []
         for d in devices:
             dev = d.get("device") or ""
             if d.get("mgmt_ip"):
                 ip_dev_pairs.append((d["mgmt_ip"], dev))
+            if dev:
+                name_pairs.append((dev.lower(), dev))
+                name = str(d.get("name") or "").strip()
+                if name:
+                    name_pairs.append((name.lower(), dev))
         iface_pairs: list[tuple] = []
         for r in interface_ips:
             dev, ip, name = r.get("device") or "", r.get("ip") or "", r.get("ifname") or ""
@@ -92,6 +112,7 @@ class EntityResolver:
             ip_to_device=_unique_map(ip_dev_pairs),
             ip_to_iface=_unique_map(iface_pairs),
             ifindex_to_name=_unique_map(ifidx_pairs),
+            name_to_device=_unique_map(name_pairs),
         )
 
     def coverage(self) -> dict:
