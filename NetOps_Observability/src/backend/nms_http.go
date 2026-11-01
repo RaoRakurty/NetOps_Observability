@@ -278,9 +278,15 @@ func (s *server) nmsIntegrationPollNow(w http.ResponseWriter, r *http.Request, i
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	rec := s.nms.PollIntegration(ctx, c)
+	// The cycle is detached from the request: a controller cycle can outlast
+	// the proxy's 60 s read timeout (the lab vManage takes ~61 s with the
+	// per-device streams on), and a client that gave up must not cancel the
+	// sink writes and the run record of data already collected — that threw
+	// away a whole cycle and left the integration reading "never polled".
+	// The cycle stays bounded exactly like a scheduled one: pollClaimed caps
+	// the poll at the integration's deadline, the sinks at sinkTimeout and the
+	// record at recordTimeout.
+	rec := s.nms.PollIntegration(context.WithoutCancel(r.Context()), c)
 	if rec.Status == nms.RunStatusBusy {
 		// One integration never polls twice at once: the scheduler (or
 		// another operator) is mid-cycle. Nothing was run or recorded.
