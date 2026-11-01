@@ -67,6 +67,7 @@ import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel"
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayoutsMatching } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
+import { carryMeasured } from "./carryMeasured";
 import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
 
 type AnyNodeData = RFNodeData | RFGroupData;
@@ -728,7 +729,11 @@ function CanvasInner({
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<RFEdgeData>>([]);
 
   useEffect(() => {
-    setRfNodes(derived.nodes);
+    // Carry React Flow's measurement onto the re-derived nodes: a node object
+    // without `measured` makes React Flow drop its handle bounds, and every edge
+    // touching it goes undrawn until it is re-measured — sometimes never
+    // (carryMeasured.ts has the full story; cloudDomain e2e pins it).
+    setRfNodes((prev) => carryMeasured(derived.nodes, prev));
     setRfEdges(derived.edges);
   }, [derived, setRfNodes, setRfEdges]);
 
