@@ -546,6 +546,64 @@ groups:
           runbook: "docs/runbooks/engine-not-consuming.md"
 
       # ------------------------------------------------------------------
+      # PAGE 2, SECOND VANTAGE: NMS INGEST SILENT (NMS-first T1, owner
+      # decision D4 2026-10-24 — "connector down pages as an INSTANCE of the
+      # existing ingest-silent condition"; still FOUR page conditions).
+      #
+      # IngestPipelineSilent above cannot see an NMS-only install: controller
+      # data never crosses vector-aggregator (the api's poll runtime produces
+      # straight to netops.controller_events and pushes to VictoriaMetrics),
+      # and its guard reads SNMP collectors that an NMS-only install does not
+      # have (plan F8). Its guard stays exactly as it is.
+      #
+      # THE EXPECTED-ACTIVITY GUARD here is `ever_succeeded == 1`: the
+      # integration has delivered before (seeded from connector_health across
+      # api restarts), so silence is a CHANGE, not an install that was never
+      # configured right. A never-succeeded integration only warns
+      # (NMSIntegrationDown in rules.yaml) — owner default, to confirm.
+      #
+      # BUDGET = max(3 × the integration's own poll interval, 15m): a 2-minute
+      # vManage poll pages after ~15m of silence, a 30-minute Prime poll after
+      # 90m — never on one slow cycle.
+      #
+      # ONE PAGE, NOT ONE PER INTEGRATION: count() aggregates, the value says
+      # how many. The series are the api's own scrape (job="netops-api",
+      # nms/health.go), never the /api/v1/import push, so a dead api makes them
+      # go absent and this rule silent — a dead api is ScrapeTargetDown's and
+      # the watchdog's page, not a second one here.
+      # ------------------------------------------------------------------
+      - alert: NMSIngestSilent
+        expr: |
+          count(
+            (
+              (time() - netops_nms_last_success_timestamp_seconds{job="netops-api"})
+                > clamp_min(3 * netops_nms_poll_interval_seconds{job="netops-api"}, 900)
+            )
+            and on(tenant_id, integration_id)
+            (netops_nms_ever_succeeded{job="netops-api"} == 1)
+          ) > 0
+        for: 5m
+        labels: { severity: critical, layer: ingest, tier: page }
+        annotations:
+          summary: "NMS ingest is SILENT: {{ $value }} controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m)"
+          description: >-
+            Each counted integration polled its controller successfully at
+            least once and has delivered nothing since its budget of max(3 x
+            its poll interval, 15m). Where the NMS is a tenant's ONLY source,
+            that tenant's correlation input has stopped: no new controller
+            events reach netops.controller_events and the incident list is
+            empty because nothing arrives, not because the network is quiet.
+            IngestPipelineSilent cannot see this - NMS traffic never crosses
+            vector-aggregator and that rule is guarded on SNMP collectors.
+            Find WHICH integrations with: (time() -
+            netops_nms_last_success_timestamp_seconds) > clamp_min(3 *
+            netops_nms_poll_interval_seconds, 900) and on(tenant_id,
+            integration_id) netops_nms_ever_succeeded == 1, then read
+            netops_nms_poll_runs_total by result (auth_failed, unreachable,
+            timeout, circuit_open) for the cause.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
       # PAGE 3: STORAGE REFUSING WRITES — the ClickHouse half.
       #
       # The OpenSearch half is already covered and stays where it is:

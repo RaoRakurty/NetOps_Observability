@@ -6,8 +6,9 @@ list, which reads as "a quiet network".
 
 **Alerts that route here:** `CorrelationConsumerDead`, `CorrelationLagGrowing`,
 `CorrConsumerNotRunning`, `CorrConsumerRestartLoop`, `RouterConsumerDead`,
-`RouterConsumerLagGrowing`, `IngestPipelineSilent`, `ClickHouseWritesRejected`,
-`AlertDeliveryBroken`, `CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
+`RouterConsumerLagGrowing`, `IngestPipelineSilent`, `NMSIngestSilent`,
+`NMSIntegrationDown`, `ClickHouseWritesRejected`, `AlertDeliveryBroken`,
+`CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
 
 ---
 
@@ -294,6 +295,44 @@ docker compose logs --tail=50 vmalert | grep -i notifier
 To deliberately turn delivery off, set
 `VMALERT_NOTIFIER_FLAG=-notifier.blackhole` — that is the supported opt-out and
 it makes `AlertDeliveryBroken` silent rather than lying.
+
+### 3.6 NMS lane silent (`NMSIngestSilent` page, `NMSIntegrationDown` warning)
+
+NMS controller data never crosses vector-aggregator: the api's poll runtime
+produces straight to `netops.controller_events` and pushes controller metrics
+to VictoriaMetrics. So `IngestPipelineSilent` (guarded on SNMP collectors)
+cannot see an NMS-only tenant going dark — `NMSIngestSilent` is the same page
+condition (2, "ingest silent") seen from the NMS lane (owner decision D4,
+2026-10-24). It counts integrations that **have delivered before** and have
+delivered nothing for `max(3 × poll interval, 15m)`; one page, the value is
+how many. An integration that has never delivered only raises the
+`NMSIntegrationDown` warning.
+
+```bash
+# WHICH integrations (VictoriaMetrics / vmui):
+(time() - netops_nms_last_success_timestamp_seconds{job="netops-api"})
+  > clamp_min(3 * netops_nms_poll_interval_seconds{job="netops-api"}, 900)
+  and on(tenant_id, integration_id) netops_nms_ever_succeeded{job="netops-api"} == 1
+
+# WHY — the per-stream result of their recent cycles:
+sum by (tenant_id, integration_id, stream, result) (
+  increase(netops_nms_poll_runs_total{job="netops-api",result!="ok"}[30m]))
+netops_nms_circuit_open{job="netops-api"} == 1
+increase(netops_nms_sink_failures_total{job="netops-api"}[30m]) > 0
+```
+
+| Result dominating | Meaning | First response |
+|---|---|---|
+| `auth_failed` | The controller refused the credential (rotated password, locked or expired service account). The breaker opened to stop locking the account further | Fix the credential in the integration, then **Poll now** — it probes at once instead of waiting out the cooldown |
+| `unreachable` | No TCP/DNS path from the api to the controller | Routing / firewall / controller down; check from the api container |
+| `timeout` | Connected but no answer inside the cycle deadline (`min(interval, NMS_POLL_DEADLINE)`) | Controller overloaded or hung; streams after it show `skipped_deadline` |
+| `circuit_open` | Polling is suspended after 3 tripping cycles; one login probe follows each cooldown (≤ 30 min) | Fix the underlying class above; Poll now forces the probe |
+| `ok` but the page holds | Data arrives but a correlation lane refused it | `netops_nms_sink_failures_total{lane="events"}` / `{lane="metrics"}` — the bus or VictoriaMetrics, see 3.3 |
+
+The run history (per-stream status, migration 0064) is on the integration's
+page in the UI. If the api itself is down these series go **absent**, not
+frozen, and this page stays quiet — `ScrapeTargetDown` and the watchdog own a
+dead api.
 
 ---
 
