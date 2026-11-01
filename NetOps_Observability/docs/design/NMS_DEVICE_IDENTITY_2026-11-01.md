@@ -73,20 +73,54 @@ So:
   ports belongs to the platform realm — the rule #112 already applies to untagged
   data.
 
-## 3. Channels — how a tenant's stream is delivered
+## 3. Channels — how a tenant's stream reaches Correlix (real-world architecture)
 
-| Option | What makes it the tenant's | Fits |
-|---|---|---|
-| **C1 per-tenant listener** (ports or VIP/hostname) | the destination the device sends to; the listener stamps the tenant | any device; the controller template sets destination + port (vManage: logging server, trap target and cflowd collector each take a port) |
-| **C2 customer-site collector** | mutually-authenticated TLS with a per-tenant credential; the collector receives locally and forwards | overlap, NAT, firewalls, zero trust — authenticated channel, not UDP source (industry pattern: Kentik kproxy, LogicMonitor / ScienceLogic collectors) |
-| **C3 per-tenant tunnel / VRF termination** | the address the traffic arrives on | MSP fabrics, SD-WAN service-VPN collectors |
-| **C4 controller push** | the integration's credential (already per tenant) | vManage alarm webhook (tracker 358a), streaming exports |
-| **C0 shared listener** (default ports) | — | the Provider's own stream, and nothing else: no address-based attribution to a tenant, no onboarding bridge (owner: "truest multitenancy") |
+Owner direction (2026-11-01): per-tenant interfaces or IPs do not scale. In the
+real world customer telemetry crosses from on-prem to Correlix over **TLS**; the
+TLS session identifies the tenant; after termination it is forwarded (NAT) to the
+same internal collectors for every tenant.
 
-Zero-trust note: a UDP source address is routing, not authentication. C1/C3
-stamp the tenant from the destination, so a stranger who learns a tenant's port
-can inject into that tenant's stream (not read it); per-listener source-prefix
-allowlists bound that, and C2 removes it.
+```
+ customer site (any network)                          Correlix (cloud or appliance)
+ ┌──────────────────────────────┐                    ┌───────────────────────────────────────┐
+ │ devices ──UDP syslog/trap/───▶ Correlix Edge      │  mTLS   │ Ingest Gateway (one IP/hostname)│
+ │          IPFIX (local)       │ Collector ─────────┼────────▶│  client cert → tenant           │
+ │ TLS-capable devices ─────────┼── syslog RFC 5425 ─┼────────▶│  stamps tenant into the envelope│
+ │ controller (vManage …) ◀─────┼── API poll / webhook (integration credential = tenant)       │
+ └──────────────────────────────┘                    │  → NAT to the shared internal collectors│
+                                                     │    (Vector / goflow2 / trap receiver)   │
+                                                     └───────────────────────────────────────┘
+```
+
+| Channel | Tenant comes from | Carries | Fits |
+|---|---|---|---|
+| **G1 Edge Collector → Ingest Gateway** (primary) | the collector's client certificate, issued per tenant (and per site) by Correlix's internal CA, revocable | syslog, SNMP traps, NetFlow/IPFIX/sFlow — received as UDP on-prem, buffered on disk, forwarded over mTLS | every customer and vendor; overlapping address space (identity is never the device address); NAT; firewalls (one outbound TLS port); zero trust (authenticated channel, not UDP source) |
+| **G2 device-direct TLS syslog** | client certificate presented by the device (RFC 5425), or SNI hostname + certificate | syslog only | TLS-capable devices without an on-prem collector |
+| **G3 controller integration** | the integration's credential (already per tenant) | controller API data, alarm webhook (tracker 358a) | NMS-first customers |
+| **G0 shared listener** (default ports, appliance installs) | — | the Provider's own stream only; nothing is attributed to a tenant by address, name or serial (owner: truest multitenancy) | single-company appliances, the platform's own devices |
+
+How the gateway works:
+- One endpoint (one IP, one hostname; per-tenant hostnames optional as SNI
+  aliases) terminates TLS. The client certificate's subject (an internal-CA SPIFFE
+  style id, e.g. `spiffe://correlix/tenant/<id>/collector/<site>`) is the ONLY
+  source of the tenant. A certificate is bound to one tenant; revoking it closes
+  the channel.
+- After termination the gateway forwards to the shared internal collectors with
+  the tenant (and collector id) attached as envelope metadata, so every record is
+  stamped before any parsing — the router never infers a tenant again.
+- Per-tenant rate limits and quotas at the gateway (one tenant cannot starve
+  another); per-collector last-seen, rates and drops are exported (a silent
+  collector is a page-tier condition, like a silent NMS integration).
+- The Edge Collector is a small packaged forwarder (Vector-based): UDP syslog /
+  trap / flow listeners, disk buffer for WAN outages, compression, its own health
+  heartbeat; enrolled with a one-time token that yields its certificate.
+
+The lab models this exactly: RETAIL's site gets an Edge Collector at its own
+address (a container on the lab segment, e.g. 192.168.172.5 — the customer's
+address, not a Correlix interface); the edges add it as a second syslog / trap /
+cflowd destination; it forwards over mTLS to the gateway on the Correlix host.
+The edges' existing destination (192.168.172.1, default ports) stays the
+Provider's G0 stream.
 
 ## 4. Inside a tenant: binding telemetry to the right device
 
@@ -184,12 +218,17 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
 - **P0** fixtures: the §1 controller captures for a vEdge and a cEdge.
 - **P0.5** syslog keeps its sender address (syslog-ng carries `${SOURCEIP}`;
   Vector maps it; VRL harness; install-boot).
-- **P1★** channel model: `telemetry_channels` (owner, protocol, port/VIP,
-  allowed source prefixes) in PG with FORCE-RLS; admin API + §3a isolation test;
-  the router stamps `tenant_id` from the channel; default channel = Provider.
-- **P2★** C1 listeners: Vector/syslog-ng/goflow2/trap receiver listen on the
-  channel ports, carry the channel id, router stamps the owner; Kafka keyed by
-  tenant; install-boot leg; promtool rule for an unknown or silent channel.
+- **P1★** channel model + Ingest Gateway: `telemetry_channels` / collector
+  enrolment (tenant, site, certificate, status) in PG with FORCE-RLS; internal-CA
+  issuance + revocation; TLS-terminating gateway that maps the client certificate
+  to the tenant and forwards to the shared collectors with the tenant in the
+  envelope; §3a isolation test (a collector certificate of tenant A can never
+  write as tenant B; a revoked one writes nothing).
+- **P2★** Correlix Edge Collector (Vector-based package): UDP syslog/trap/flow in,
+  disk buffer, mTLS out, enrolment token → certificate, heartbeat; the router
+  stamps the tenant from the envelope; promtool rule for a silent or erroring
+  collector; install-boot leg; lab: RETAIL's collector container at its own
+  address.
 - **P3★** tenant reads only its own: remove the untagged read-side claim
   (`oslog.TenantFilter`, `flows.go`, secapi, parsercov, AI tools) and the global
   address→tenant attribution (`device_tenant.csv` as a tenant source) entirely.
@@ -205,7 +244,7 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
   `ENGINE_SEMVER` bump, replay.
 - **P7** UI: channels (per tenant: endpoints to configure on devices, last seen,
   rates), device Identities tab, unattributed senders on the Provider channel.
-- **P8** C4 vManage webhook (358a) · **P9** C2 site collector · **P10+** other
+- **P8** G3 vManage webhook (358a) · **P9** G2 device-direct TLS syslog · **P10+** other
   connectors' alias sources (T8–T11).
 
 ## 8. Decided / open
@@ -214,5 +253,8 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
   is unusual. A tenant receives telemetry only through its own channel; the shared
   listener is the Provider's; nothing on it is attributed to a tenant by address,
   name or serial — not even during transition.
+- **Decided (owner, 2026-11-01):** channels are TLS-authenticated (gateway + edge
+  collector), not per-tenant interfaces or IPs.
 - **Open:** RETAIL's second destination on the lab edges (vManage templates +
-  cflowd policy) — the owner sets it, or Claude does with explicit approval.
+  cflowd policy) pointing at RETAIL's Edge Collector — the owner sets it, or Claude
+  does with explicit approval, after P2 is deployed.
