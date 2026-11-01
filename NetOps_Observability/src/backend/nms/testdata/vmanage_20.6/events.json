@@ -1,0 +1,125 @@
+{
+ "data": [
+  {
+   "component": "VPN",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=active; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "device_type": "vedge",
+   "entry_time": 1793564003000,
+   "eventname": "bgp-peer-state-change",
+   "host_name": "cEDGE-81",
+   "id": "NEe-mKEBnpPPzZIMzBJV",
+   "severity_level": "major",
+   "system_ip": "10.255.255.81"
+  },
+  {
+   "component": "VPN",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=idle; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "device_type": "vedge",
+   "entry_time": 1793563990000,
+   "eventname": "bgp-peer-state-change",
+   "host_name": "cEDGE-81",
+   "id": "M0e-mKEBnpPPzZIMmRJ9",
+   "severity_level": "major",
+   "system_ip": "10.255.255.81"
+  },
+  {
+   "component": "System",
+   "details": "host-name=vEdge-100; warning=System cpu usage back to normal level; cpu-user-percentage=4.26; cpu-system-percentage=24.47; cpu-idle-percentage=71.28",
+   "device_type": "vedge",
+   "entry_time": 1793563978000,
+   "eventname": "cpu-usage",
+   "host_name": "vEdge-100",
+   "id": "MUe-mKEBnpPPzZIMahIe",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.100"
+  },
+  {
+   "component": "System",
+   "details": "host-name=vEdge-51; warning=System cpu usage back to normal level; cpu-user-percentage=5.08; cpu-system-percentage=8.12; cpu-idle-percentage=86.80",
+   "device_type": "vedge",
+   "entry_time": 1793563978000,
+   "eventname": "cpu-usage",
+   "host_name": "vEdge-51",
+   "id": "Mke-mKEBnpPPzZIMaxL5",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.51"
+  },
+  {
+   "component": "VPN",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=active; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "device_type": "vedge",
+   "entry_time": 1793563960000,
+   "eventname": "bgp-peer-state-change",
+   "host_name": "cEDGE-81",
+   "id": "Lke-mKEBnpPPzZIMJBJi",
+   "severity_level": "major",
+   "system_ip": "10.255.255.81"
+  },
+  {
+   "component": "VPN",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=idle; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "device_type": "vedge",
+   "entry_time": 1793563951000,
+   "eventname": "bgp-peer-state-change",
+   "host_name": "cEDGE-81",
+   "id": "K0e-mKEBnpPPzZIMARJ4",
+   "severity_level": "major",
+   "system_ip": "10.255.255.81"
+  },
+  {
+   "component": "System",
+   "details": "host-name=vManage; user-name=admin; user-id=27783",
+   "device_type": "vmanage",
+   "entry_time": 1793543579000,
+   "eventname": "system-login-change",
+   "host_name": "vManage",
+   "id": "xEOHl6EBnpPPzZIMKGZI",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.1"
+  },
+  {
+   "component": "System",
+   "details": "host-name=vManage; user-name=admin; user-id=27783",
+   "device_type": "vmanage",
+   "entry_time": 1793543579000,
+   "eventname": "system-logout-change",
+   "host_name": "vManage",
+   "id": "xUOHl6EBnpPPzZIMKWYJ",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.1"
+  },
+  {
+   "component": "Control",
+   "details": "host-name=vEdge-52; personality=vedge; color=mpls",
+   "device_type": "vedge",
+   "entry_time": 1793542200000,
+   "eventname": "tunnel-ipsec-rekey",
+   "host_name": "vEdge-52",
+   "id": "70Nyl6EBnpPPzZIMHSQZ",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.52"
+  },
+  {
+   "component": "Control",
+   "details": "host-name=vEdge-52; personality=vedge; color=biz-internet",
+   "device_type": "vedge",
+   "entry_time": 1793542200000,
+   "eventname": "tunnel-ipsec-rekey",
+   "host_name": "vEdge-52",
+   "id": "FENyl6EBnpPPzZIMHikg",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.52"
+  },
+  {
+   "component": "System",
+   "details": "host-name=vEdge-20; user-name=admin; user-id=17",
+   "device_type": "vedge",
+   "entry_time": 1793533210000,
+   "eventname": "system-logout-change",
+   "host_name": "vEdge-20",
+   "id": "O0HolqEBnpPPzZIM7uB2",
+   "severity_level": "minor",
+   "system_ip": "10.255.255.20"
+  }
+ ]
+}

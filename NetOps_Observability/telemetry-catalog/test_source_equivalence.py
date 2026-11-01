@@ -67,8 +67,8 @@ def test_every_cell_is_native_or_a_reasoned_gap(model: dict, analysis: dict) -> 
 # 2. guarded ----------------------------------------------------------------------
 
 def test_an_undeclared_gap_is_refused(model: dict) -> None:
-    m = _broken(model, lambda m: _source(m, "vmanage")["gaps"].pop("bgp_session"))
-    with pytest.raises(S.EquivalenceError, match=r"vmanage × bgp_session: not supplied and not declared"):
+    m = _broken(model, lambda m: _source(m, "vmanage")["gaps"].pop("interface_health"))
+    with pytest.raises(S.EquivalenceError, match=r"vmanage × interface_health: not supplied and not declared"):
         S.analyse(m)
 
 
@@ -138,6 +138,12 @@ def test_the_go_kind_parser_still_reads_the_normalizers() -> None:
         assert k in vm, f"vManage normalizer parse lost {k} — the regex no longer matches the Go source"
     # The SD-WAN state table's KEYS are states, never kinds.
     assert "device_health" not in vm
+    # E2a: the canonical kind table (nms/vmanage_kinds.go) is read too, and a
+    # `StateKind:` value is never mistaken for a kind.
+    for k in ("bgp_adjacency_change", "link_state_change", "ospf_adjacency_change", "device_restart"):
+        assert k in vm, f"vManage kind table parse lost {k}"
+    for state in ("bgp", "ospf", "interface", "control_conn", "omp", "bfd"):
+        assert state not in vm, f"state name {state!r} parsed as a kind"
 
 
 def test_runtime_rule_supply_excludes_grammar_only_rows() -> None:

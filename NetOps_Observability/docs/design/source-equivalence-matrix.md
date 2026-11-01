@@ -19,7 +19,7 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 |---|---|---|---|
 | SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 |
 | gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 |
-| vManage only | vmanage | 4/13 | 4 |
+| vManage only | vmanage | 9/13 | 7 |
 | vManage + device push (edge collector) | vmanage, syslog, trap, flow | 11/13 | 18 |
 | Catalyst Center only | catalyst_center | 2/13 | 3 |
 | Meraki only | meraki | 2/13 | 3 |
@@ -32,18 +32,18 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 
 | Evidence | snmp_poll | gnmi | syslog | trap | flow | vmanage | catalyst_center | meraki | ndfc | prime | versa_director | versa_concerto | catalyst_9800 | generic |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **link_state** | ✅ | 💤 | ✅ | ✅ | — | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | ❓ | ❓ |
+| **link_state** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | ❓ | ❓ |
 | **interface_health** | ✅ | 💤 | — | — | — | 🟠 | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
-| **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | 🟠 | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
-| **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | 🟠 | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
+| **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
+| **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
 | **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ⬜ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ | ✅ | — | ❓ |
 | **control_connection** | ❓ | ❓ | ⬜ | ⬜ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
 | **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ | ✅ | ❓ | ✅ | 🟠 | 🟠 | ❓ | ❓ |
-| **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | 🟠 | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ |
+| **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ |
 | **device_resource** | ✅ | 💤 | ⬜ | ⬜ | — | 🟠 | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
 | **config_change** | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓ | ❓ |
 | **l2_control** | ⬜ | ⬜ | ✅ | ✅ | — | ❓ | ❓ | ❓ | ❓ | ❓ | — | — | — | ❓ |
-| **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | 🟠 | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | — | ❓ |
+| **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | — | ❓ |
 | **flow_volume** | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | ❓ |
 
 ## Orphan kinds — collected, then thrown away
@@ -73,7 +73,7 @@ engine's own coverage report under-states what it receives.
 | `pcs_local_fault` | syslog | same — produced by a syslog port rule |
 | `pcs_remote_fault` | syslog | same — produced by a syslog port rule |
 | `prefec_ber_rising` | syslog | same — produced by a syslog port rule |
-| `transceiver_unsupported` | syslog | same — produced by a syslog port rule |
+| `transceiver_unsupported` | syslog, vmanage | same — produced by a syslog port rule |
 
 ## Gaps by source
 
@@ -151,16 +151,11 @@ Supplies: flow_volume (flow_volume_anomaly).
 
 ### vmanage — Cisco Catalyst SD-WAN Manager (vManage)
 
-Supplies: overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (ospf_adjacency_change); overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: interface alarms land as controller_alarm (an orphan kind); interface oper state is collected (interfaces stream) but reaches VictoriaMetrics only (design §7b E2/E3)
 - **interface_health** 🟠 normalization_pending: interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified (design §7b E3)
-- **bgp_session** 🟠 normalization_pending: BGP state transitions and alarms are typed controller_alarm (nms/vmanage.go vmanageNormType, nms/sdwan_state_events.go) — no template consumes it (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: OSPF alarms fall through to controller_alarm (design §7b E2)
-- **device_restart** 🟠 normalization_pending: reboot alarms fall through to controller_alarm (lead) (design §7b E2)
 - **device_resource** 🟠 normalization_pending: system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm (design §7b E3)
 - **l2_control** ❓ unverified: VRRP / STP state on cEdge via vManage not assessed
-- **physical_layer** 🟠 normalization_pending: the hardware stream's hardware_health transitions are typed controller_alarm (design §7b E2)
 - **flow_volume** — unavailable: cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated
 
 ### catalyst_center — Cisco Catalyst Center (DNA Center)

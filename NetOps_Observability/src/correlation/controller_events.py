@@ -46,6 +46,16 @@ _ENTITY_BY_KIND = {
     "controller_alarm": EntityType.DEVICE,
     "controller_topology_context": EntityType.DEVICE,
     "controller_inventory_context": EntityType.DEVICE,
+    # ── canonical kinds a controller relays (source-equivalence E2a). Bound to
+    # the SAME entity shapes the device's own traps / syslog produce
+    # (events.yaml), so a relayed observation lands on the same node kind the
+    # templates expect: an interface is "<device>:<ifname>", a routing session
+    # "<device>:<peer>" (both shaped in controller_event_to_signal).
+    "link_state_change": EntityType.INTERFACE,
+    "bgp_adjacency_change": EntityType.DEVICE,
+    "ospf_adjacency_change": EntityType.DEVICE,
+    "device_restart": EntityType.DEVICE,
+    "transceiver_unsupported": EntityType.DEVICE,
     # ── wireless (#128 Phase 3): device_id carries the CANONICAL wireless
     # entity id (ap-<id> / ap-<id>:radioN / wlc-<id>:<member>) stamped by the
     # Go synthesis (nms/wireless_events.go), so binding is direct and the
@@ -63,6 +73,9 @@ _ENTITY_BY_KIND = {
     "wireless_radar_event": EntityType.RADIO,
     "wireless_retry_rate_high": EntityType.RADIO,
 }
+
+# Routing-session kinds bind to "<device>:<peer>" when the peer is known.
+_SESSION_KINDS = frozenset({"bgp_adjacency_change", "ospf_adjacency_change"})
 
 _SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT,
              # Vendor words a connector may leak past the Go canonicaliser
@@ -161,6 +174,15 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
         entity_id = tunnel or device
     elif entity_type == EntityType.SITE:
         entity_id = site or device
+    elif entity_type == EntityType.INTERFACE:
+        # "<device>:<ifname>" like the trap/syslog link rules; an alarm that
+        # names no interface still binds to its device, as a device entity.
+        if device and iface:
+            entity_id = f"{device}:{iface}"
+        else:
+            entity_type, entity_id = EntityType.DEVICE, device or site
+    elif kind.removesuffix("_clear") in _SESSION_KINDS and device and peer:
+        entity_id = f"{device}:{peer}"  # one routing session, like the trap rules
     else:
         entity_id = device or site
     if not entity_id:

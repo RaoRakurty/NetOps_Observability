@@ -70,7 +70,7 @@ ENGINE_DIR = os.path.join(ROOT, "src", "correlation")
 GAP_STATUSES = ("normalization_pending", "collection_pending", "dormant", "unavailable", "unverified")
 #: The connector file(s) whose normalizer decides each registered vendor's kinds.
 CONNECTOR_FILES: dict[str, tuple[str, ...]] = {
-    "vmanage": ("vmanage.go", "sdwan_state_events.go"),
+    "vmanage": ("vmanage.go", "sdwan_state_events.go", "vmanage_kinds.go"),
     "catalyst_center": ("catalyst.go",),
     "meraki": ("meraki.go",),
     "ndfc": ("ndfc.go",),
@@ -82,6 +82,9 @@ CONNECTOR_FILES: dict[str, tuple[str, ...]] = {
 }
 _MAP_VALUE_KIND = re.compile(r':\s*"((?:controller|wireless|device)_[a-z_]+)"')
 _RETURN_KIND = re.compile(r'return\s+"((?:controller|wireless|device)_[a-z_]+)"')
+# A connector's canonical kind TABLE (e.g. nms/vmanage_kinds.go, E2a): entries
+# written down("kind", …) / up("kind", …) or Kind: "kind".
+_TABLE_KIND = re.compile(r'(?:\b(?:down|up)\(|(?<![A-Za-z])Kind:\s*)"([a-z][a-z_]+)"')
 _REGISTRY_RE = re.compile(r'\breg\("([a-z0-9_]+)"')
 
 
@@ -151,7 +154,12 @@ def connector_kinds(vendor: str) -> frozenset[str]:
             src = fh.read()
         # sdwan_state_events.go is a state → kind MAP: its keys are state names
         # ("device_health"), only its values are kinds.
-        pattern = _MAP_VALUE_KIND if name == "sdwan_state_events.go" else _RETURN_KIND
+        if name == "sdwan_state_events.go":
+            pattern = _MAP_VALUE_KIND
+        elif name.endswith("_kinds.go"):
+            pattern = _TABLE_KIND
+        else:
+            pattern = _RETURN_KIND
         kinds.update(pattern.findall(src))
     return frozenset(kinds)
 

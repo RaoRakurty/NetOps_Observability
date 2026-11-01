@@ -33,6 +33,10 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 			SiteID    string           `json:"site_id"`
 			Active    bool             `json:"active"`
 			Values    []map[string]any `json:"values"`
+			// The device a real alarm concerns: 20.6 sends it here
+			// (devices[].system-ip), not in a top-level system_ip — recorded
+			// in testdata/vmanage_20.6/alarms.json. Read both.
+			Devices []map[string]any `json:"devices"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -40,7 +44,24 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 	}
 	var b Batch
 	for _, a := range resp.Data {
+		// Canonical kind from the stable rule key (vmanage_kinds.go); the
+		// substring guess remains only for a rule the table does not know.
 		net, stateKind := vmanageNormType(a.Type, a.Component, a.EventName)
+		recovery := !a.Active
+		if k, ok := vmanageAlarmKind(a.RuleDisp); ok {
+			net, stateKind = k.Kind, k.StateKind
+			if k.Recovery {
+				recovery = true
+			}
+			if net == "link_state_change" {
+				if st := strings.ToLower(vmValue(a.Values, "new-state", "if-oper-status", "if-admin-status")); st == "up" {
+					recovery = true
+				}
+			}
+		}
+		systemIP := firstNonEmpty(a.SystemIP, vmValue(a.Devices, "system-ip"))
+		hostName := firstNonEmpty(a.HostName, vmValue(a.Values, "host-name"))
+		siteID := firstNonEmpty(a.SiteID, vmValue(a.Values, "site-id"))
 		et := msToTime(a.EntryTime)
 		e := ControllerEvent{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
@@ -52,15 +73,17 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 			NormalizedEventType: net,
 			Severity:            normSeverity(a.Severity),
 			Category:            strings.ToLower(a.Component),
-			DeviceID:            a.SystemIP,
-			DeviceName:          a.HostName,
-			SiteID:              a.SiteID,
+			DeviceID:            systemIP,
+			DeviceName:          hostName,
+			SiteID:              siteID,
+			InterfaceName:       vmValue(a.Values, "if-name", "ifname", "interface-name", "interface"),
+			PeerID:              vmValue(a.Values, "peer", "peer-addr", "neighbor", "neighbor-address"),
 			Message:             firstNonEmpty(a.RuleDisp, a.EventName),
 			RawPayload:          mustJSON(a),
 			EvidenceRole:        roleForEventType(net),
-			CorrelationHints:    map[string]string{"component": a.Component, "system_ip": a.SystemIP},
+			CorrelationHints:    map[string]string{"component": a.Component, "system_ip": systemIP, "rule": a.RuleDisp},
 		}
-		if !a.Active {
+		if recovery {
 			// A cleared alarm is a RECOVERY, not a fault: before 2026-10-25 it
 			// was emitted under the fault kind with the vendor's original
 			// severity, so a cleared Critical arrived as crit evidence. It now
@@ -80,13 +103,13 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 		// The same alarm is also a STATE fact when it's up/down-shaped.
 		if stateKind != "" {
 			cur := "down"
-			if !a.Active { // an inactive/cleared alarm means the state recovered
+			if recovery { // a cleared alarm, an *_Up rule or an interface back up
 				cur = "up"
 			}
 			b.States = append(b.States, ControllerState{
 				TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
-				EntityKey: firstNonEmpty(a.SystemIP, a.HostName), StateKind: stateKind,
-				CurrentState: cur, DeviceID: a.SystemIP, SiteID: a.SiteID, Time: et,
+				EntityKey: firstNonEmpty(systemIP, hostName), StateKind: stateKind,
+				CurrentState: cur, DeviceID: systemIP, SiteID: siteID, Time: et,
 				Data: map[string]any{"component": a.Component},
 			})
 		}
