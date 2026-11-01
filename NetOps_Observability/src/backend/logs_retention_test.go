@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/discovery"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -235,5 +236,116 @@ func TestLogsSearchFlowsSamplingDisclosed(t *testing.T) {
 	}
 	if _, ok := m["sampling"]; ok {
 		t.Errorf("syslog search response must NOT carry a sampling key — that store is exact")
+	}
+}
+
+// containsClause reports whether want appears anywhere in the decoded body.
+func containsClause(v, want any) bool {
+	if reflect.DeepEqual(v, want) {
+		return true
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for _, c := range x {
+			if containsClause(c, want) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range x {
+			if containsClause(c, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestLogsSearchProviderScopeReadsPlatformTelemetry pins the 2026-11-01
+// regression end to end through the handler. Tracker 365 made "Provider" a real
+// scope (the owner acting as tenant "global"); from then on log search applied
+// the tenant filter to it, and that filter tied untagged documents to a device
+// only by host/hostname/source_ip — fields a flow never carries — so the
+// Provider's log search showed no flow and no unknown-sender trap. The Provider
+// must read its own indices plus the untagged ones, filtered by the Provider
+// rule (untagged = platform-owned, internal/owner), for every log signal.
+func TestLogsSearchProviderScopeReadsPlatformTelemetry(t *testing.T) {
+	provider := superA()
+	provider.ActingTenant = "global"
+	// Written out literally, NOT computed with oslog.TenantFilter: an
+	// expectation derived from the code under test agrees with any regression
+	// (the first version of this test did, and passed with the Provider branch
+	// deleted). Own stamped rows OR untagged — with no device condition.
+	var providerFilter any
+	if err := json.Unmarshal([]byte(`{"bool":{"minimum_should_match":1,"should":[
+		{"term":{"tenant_id":"global"}},
+		{"bool":{"minimum_should_match":1,"should":[
+			{"term":{"tenant_id":""}},
+			{"bool":{"must_not":[{"exists":{"field":"tenant_id"}}]}}]}}]}}`), &providerFilter); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, sig := range []string{"flows", "snmptrap", "syslog", ""} {
+		t.Run("signal="+sig, func(t *testing.T) {
+			paths, bodies := fakeOS(t, `{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+			s := logsTestServer(t)
+			w := httptest.NewRecorder()
+			s.handleLogsSearch(w, req(http.MethodPost, "/api/logs/search",
+				`{"query":"*","signal":"`+sig+`"}`, provider))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+			}
+			if len(*paths) != 1 {
+				t.Fatalf("want 1 OpenSearch request, got %d", len(*paths))
+			}
+			p := (*paths)[0]
+			if !strings.Contains(p, "-global-*") || !strings.Contains(p, "-untagged-*") {
+				t.Errorf("Provider must read its own and the untagged indices, got %q", p)
+			}
+			if strings.Contains(p, "acme") || strings.Contains(p, "globex") {
+				t.Errorf("TENANT LEAK: Provider search names a tenant's index: %q", p)
+			}
+			var body any
+			if err := json.Unmarshal([]byte((*bodies)[0]), &body); err != nil {
+				t.Fatalf("decode OpenSearch body: %v", err)
+			}
+			if !containsClause(body, providerFilter) {
+				t.Errorf("Provider search does not apply the Provider tenant filter:\n%s", (*bodies)[0])
+			}
+		})
+	}
+}
+
+// TestLogsSearchTenantScopeIsNotProvider: a tenant never receives the Provider
+// rule (untagged = its own) — only its own rows plus untagged rows its devices
+// emitted.
+func TestLogsSearchTenantScopeIsNotProvider(t *testing.T) {
+	_, bodies := fakeOS(t, `{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+	s := logsTestServer(t)
+	w := httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodPost, "/api/logs/search", `{"query":"*","signal":"flows"}`, acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", w.Code, w.Body.String())
+	}
+	var body any
+	if err := json.Unmarshal([]byte((*bodies)[0]), &body); err != nil {
+		t.Fatal(err)
+	}
+	untaggedIsMine := map[string]any{"bool": map[string]any{"minimum_should_match": float64(1), "should": []any{
+		map[string]any{"term": map[string]any{"tenant_id": "global"}},
+		map[string]any{"bool": map[string]any{"minimum_should_match": float64(1), "should": []any{
+			map[string]any{"term": map[string]any{"tenant_id": ""}},
+			map[string]any{"bool": map[string]any{"must_not": []any{map[string]any{"exists": map[string]any{"field": "tenant_id"}}}}},
+		}}},
+	}}}
+	if containsClause(body, untaggedIsMine) {
+		t.Fatalf("a tenant received the Provider's untagged-is-mine rule:\n%s", (*bodies)[0])
+	}
+	// acme's exporter address reaches the ip-mapped flows field; globex's never.
+	if !strings.Contains((*bodies)[0], `"sampler_address":["10.1.0.1"]`) {
+		t.Errorf("acme's flows search does not tie untagged flows to acme's exporter:\n%s", (*bodies)[0])
+	}
+	if strings.Contains((*bodies)[0], "10.2.0.1") {
+		t.Errorf("TENANT LEAK: globex's device address in acme's query:\n%s", (*bodies)[0])
 	}
 }

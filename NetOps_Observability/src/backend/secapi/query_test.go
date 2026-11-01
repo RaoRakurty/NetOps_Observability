@@ -59,7 +59,7 @@ func mustJSON(t *testing.T, v any) string {
 
 // pinnedTenantScope is the isolation clause every pinned body below opens with.
 // It is spelled out once so a diff shows the WHOLE clause when it changes.
-const pinnedTenantScope = `{"bool":{"minimum_should_match":1,"should":[{"term":{"tenant_id":"acme"}},{"bool":{"must":[{"bool":{"minimum_should_match":1,"should":[{"term":{"tenant_id":""}},{"bool":{"must_not":[{"exists":{"field":"tenant_id"}}]}}]}},{"bool":{"minimum_should_match":1,"should":[{"terms":{"host":["rtr-1"]}},{"terms":{"hostname":["rtr-1"]}},{"terms":{"source_ip":["10.0.0.1"]}}]}}]}}]}}`
+const pinnedTenantScope = `{"bool":{"minimum_should_match":1,"should":[{"term":{"tenant_id":"acme"}},{"bool":{"must":[{"bool":{"minimum_should_match":1,"should":[{"term":{"tenant_id":""}},{"bool":{"must_not":[{"exists":{"field":"tenant_id"}}]}}]}},{"bool":{"minimum_should_match":1,"should":[{"terms":{"host":["rtr-1"]}},{"terms":{"hostname":["rtr-1"]}},{"terms":{"source_ip":["10.0.0.1"]}},{"terms":{"sampler_address":["10.0.0.1"]}}]}}]}}]}}`
 
 const pinnedRange = `{"range":{"ts":{"format":"strict_date_optional_time","gte":"2026-08-01T00:00:00Z","lte":"2026-09-01T00:00:00Z"}}}`
 

@@ -12,10 +12,13 @@ package oslog
 
 import (
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/owner"
 )
 
 // SecFindingsIndexBase is the security-findings index family. It is exported so
@@ -141,6 +144,17 @@ func TenantIndexPattern(signal, tenant string, cross bool) string {
 	return base + "-" + IndexTenantSeg(tenant) + "-*," + base + "-untagged-*"
 }
 
+// scopedLogFamilies are the log index families a tenant-scoped caller reads:
+// device telemetry (syslog, SNMP traps, flows) and tagged cloud logs. App and
+// platform logs are platform-owner only and security findings have their own
+// gated door (secapi). Every family here must satisfy the device-identity
+// contract (see deviceIdentityFields); ScopedLogFamilies is what that contract
+// test iterates, so adding a family here enrols it automatically.
+var scopedLogFamilies = []string{"netops-syslog", "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
+
+// ScopedLogFamilies returns a copy of the tenant-readable log families.
+func ScopedLogFamilies() []string { return append([]string(nil), scopedLogFamilies...) }
+
 // TenantCatPattern is the _cat/indices pattern a caller may enumerate: all
 // netops-* for the platform owner; only the caller's own + untagged indices
 // (across signals) for a scoped tenant, so index names/counts don't leak.
@@ -153,57 +167,172 @@ func TenantCatPattern(tenant string, cross bool) string {
 	// tenant doesn't even enumerate their index names. Device telemetry signals
 	// (syslog, snmp traps, flows) plus tagged cloud logs are tenant-visible
 	// (own + untagged-from-own-devices).
-	bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
-	parts := make([]string, 0, len(bases)*2)
-	for _, b := range bases {
+	parts := make([]string, 0, len(scopedLogFamilies)*2)
+	for _, b := range scopedLogFamilies {
 		parts = append(parts, b+"-"+seg+"-*", b+"-untagged-*")
 	}
 	return strings.Join(parts, ",")
 }
 
+// IdentityKind says what values a device-identity field holds, and therefore
+// which of a caller's device identities may be sent to it.
+type IdentityKind int
+
+const (
+	// IdentityKey holds a device key: the inventory id, the hostname or, for
+	// producers that write the sender there, its address. Mapped `keyword`.
+	IdentityKey IdentityKind = iota
+	// IdentityAddr holds the sender's address as text. Mapped `keyword`.
+	IdentityAddr
+	// IdentityIP holds the sender's address mapped as an OpenSearch `ip`. A
+	// terms query that carries a value which does not parse as an address makes
+	// the WHOLE search fail, so only parseable addresses are ever sent to it.
+	IdentityIP
+)
+
+// DeviceIdentityField is a document field that names the device which emitted
+// the document. It is how an untagged document is tied to a tenant's device.
+type DeviceIdentityField struct {
+	Name string
+	Kind IdentityKind
+}
+
+// deviceIdentityFields is the ONE registry of the fields TenantFilter matches an
+// untagged document's emitting device on. Every log family a scoped caller can
+// read must map at least one of them, with the type its Kind requires — the
+// contract test over deployment/docker/opensearch/index-templates.json enforces
+// that, so a new family (or a family whose producer names its sender in a new
+// field) fails the build instead of going silently empty for every tenant scope.
+// That is exactly what happened to flows: the family maps only
+// `sampler_address`, none of the fields matched here, so a tenant-scoped flows
+// search could never match a single untagged document (found 2026-11-01).
+var deviceIdentityFields = []DeviceIdentityField{
+	{Name: "host", Kind: IdentityKey},
+	{Name: "hostname", Kind: IdentityKey},
+	{Name: "source_ip", Kind: IdentityAddr},
+	{Name: "sampler_address", Kind: IdentityIP}, // flows: the exporter (goflow2)
+}
+
+// DeviceIdentityFields returns a copy of the registry.
+func DeviceIdentityFields() []DeviceIdentityField {
+	return append([]DeviceIdentityField(nil), deviceIdentityFields...)
+}
+
+// IsProviderScope reports whether a NON-cross scope is the Provider — the
+// platform's own realm. It is exactly the platform owner spelling "global"
+// (internal/owner.Platform). The unbound scope "" is deliberately NOT the
+// Provider: owner.Of folds "" into the platform for ROW owners, but a caller
+// whose scope did not resolve is a missing tenant, and widening it would turn
+// a missing tenant into access (the same direction owner.ScopeReads takes).
+func IsProviderScope(tenant string) bool {
+	return normTenantSeg(tenant) == owner.Platform
+}
+
 // TenantFilter builds the OpenSearch query clause enforcing per-tenant isolation
-// for a scoped caller (#20 Phase 3), mirroring chTenantScope's ClickHouse policy:
-// a doc is visible iff its tenant_id == the caller's tenant, OR it is untagged
-// (tenant_id "" / missing) AND was emitted by one of the caller's devices
-// (host/hostname/source_ip). Returns nil for the platform owner (cross) — no
-// restriction. It is defense in depth UNDER TenantIndexPattern (which already
-// excludes other tenants' indices at the storage layer).
+// for a non-cross caller (#20 Phase 3). It returns nil for the platform owner's
+// cross-tenant view: no restriction. It is defense in depth UNDER
+// TenantIndexPattern, which already keeps other tenants' indices out of the
+// pattern at the storage layer.
+//
+// Ownership follows the ONE owner rule (internal/owner), the same rule devices,
+// alerts and integrations apply:
+//
+//   - a document stamped tenant_id=T belongs to T;
+//   - an UNTAGGED document (tenant_id "" or missing) belongs to the platform.
+//     Ingest leaves a document untagged when its sender is a platform-owned
+//     device (tenant_registry=hit, owner "") or no known device at all
+//     (tenant_registry=miss); a tenant's device is stamped with its tenant.
+//
+// So the Provider scope reads its own stamped documents AND every untagged one
+// (tracker 365 made Provider a real scope; until then it bypassed this filter
+// entirely, and once it stopped bypassing it every flow and every
+// unknown-sender trap vanished from the Provider's log search — 2026-11-01).
+//
+// A tenant scope reads its own stamped documents, plus untagged documents whose
+// emitting device — named by one of the device-identity fields — is one of the
+// tenant's devices. That branch covers a tenant device whose documents were
+// written before ingest learned its owner.
 func TenantFilter(tenant string, cross bool, deviceKeys, deviceAddrs []string) map[string]any {
 	if cross {
 		return nil
 	}
-	var dev []any
-	if len(deviceKeys) > 0 {
-		dev = append(dev,
-			map[string]any{"terms": map[string]any{"host": deviceKeys}},
-			map[string]any{"terms": map[string]any{"hostname": deviceKeys}},
-		)
+	if normTenantSeg(tenant) == "" {
+		// An unbound, non-cross caller reads nothing — the ClickHouse twin of
+		// this rule is chScopeRule's "__none__". Without it the own-tenant
+		// branch would be `term tenant_id: ""` and hand a caller whose tenant
+		// did not resolve every untagged (platform) document.
+		return map[string]any{"match_none": map[string]any{}}
 	}
-	if len(deviceAddrs) > 0 {
-		dev = append(dev, map[string]any{"terms": map[string]any{"source_ip": deviceAddrs}})
+	own := map[string]any{"term": map[string]any{"tenant_id": normTenantSeg(tenant)}}
+	if IsProviderScope(tenant) {
+		return shouldOne(own, untaggedClause())
 	}
-	if len(dev) == 0 {
-		dev = append(dev, map[string]any{"match_none": map[string]any{}})
+	return shouldOne(own, map[string]any{"bool": map[string]any{"must": []any{
+		untaggedClause(),
+		shouldOne(deviceIdentityClauses(deviceKeys, deviceAddrs)...),
+	}}})
+}
+
+// untaggedClause matches a document that carries no tenant: tenant_id "" or
+// absent.
+func untaggedClause() map[string]any {
+	return shouldOne(
+		map[string]any{"term": map[string]any{"tenant_id": ""}},
+		map[string]any{"bool": map[string]any{"must_not": []any{
+			map[string]any{"exists": map[string]any{"field": "tenant_id"}},
+		}}},
+	)
+}
+
+// deviceIdentityClauses is one terms clause per registry field that has values
+// of its kind to match. With none it is match_none, so a tenant without devices
+// claims no untagged document.
+func deviceIdentityClauses(keys, addrs []string) []any {
+	ips := parseableAddrs(addrs)
+	var out []any
+	for _, f := range deviceIdentityFields {
+		var vals []string
+		switch f.Kind {
+		case IdentityKey:
+			vals = keys
+		case IdentityAddr:
+			vals = addrs
+		case IdentityIP:
+			vals = ips
+		}
+		if len(vals) > 0 {
+			out = append(out, map[string]any{"terms": map[string]any{f.Name: vals}})
+		}
 	}
-	untagged := map[string]any{"bool": map[string]any{
-		"should": []any{
-			map[string]any{"term": map[string]any{"tenant_id": ""}},
-			map[string]any{"bool": map[string]any{"must_not": []any{
-				map[string]any{"exists": map[string]any{"field": "tenant_id"}},
-			}}},
-		},
-		"minimum_should_match": 1,
-	}}
-	return map[string]any{"bool": map[string]any{
-		"should": []any{
-			map[string]any{"term": map[string]any{"tenant_id": normTenantSeg(tenant)}},
-			map[string]any{"bool": map[string]any{"must": []any{
-				untagged,
-				map[string]any{"bool": map[string]any{"should": dev, "minimum_should_match": 1}},
-			}}},
-		},
-		"minimum_should_match": 1,
-	}}
+	if len(out) == 0 {
+		return []any{map[string]any{"match_none": map[string]any{}}}
+	}
+	return out
+}
+
+// parseableAddrs keeps the values an `ip` field accepts: a bare IPv4/IPv6
+// address, canonicalized. A zone (fe80::1%eth0), a host name or a CIDR is
+// dropped rather than sent, because one unparseable value fails the search.
+func parseableAddrs(addrs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range addrs {
+		ip, err := netip.ParseAddr(strings.TrimSpace(a))
+		if err != nil || ip.Zone() != "" {
+			continue
+		}
+		c := ip.Unmap().String()
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// shouldOne is a bool clause that matches when at least one branch does.
+func shouldOne(branches ...any) map[string]any {
+	return map[string]any{"bool": map[string]any{"should": branches, "minimum_should_match": 1}}
 }
 
 func QueryOrAll(q string) string {
