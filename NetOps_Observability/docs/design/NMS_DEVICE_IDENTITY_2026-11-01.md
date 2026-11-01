@@ -132,6 +132,42 @@ The lab keeps the same eight edges in two owners on purpose:
 
 Each tenant then sees the eight edges once and their telemetry once.
 
+## 5a. Lab acceptance — what the lab proves (owner, 2026-11-01)
+
+The lab runs the same eight edges in two tenants for two reasons, and each is a
+measured check, run by a parity harness (lab tooling, excluded from the customer
+bundle) on every lab deploy:
+
+**Goal 1 — the NMS integration shows the same data as SNMP.** RETAIL's view
+(vManage) is compared field by field with the Provider's view (SNMP) of the same
+physical edge, paired by the lab's known mapping (system-IP ↔ loopback200):
+
+| Dimension | Check | Tolerance |
+|---|---|---|
+| inventory | same 8 devices; name, model, OS version, chassis serial, site, role | exact (serial once the SNMP read is fixed) |
+| reachability / state | up/down agrees per device | within one poll interval of each source |
+| interfaces | same interfaces, admin/oper state, addresses | exact for state; names normalised per vendor |
+| counters / health | interface in/out rate, errors, CPU, memory | within a stated % over the same window (vManage stats are 10-min buckets, 30–60 min late — compare settled windows) |
+| overlay | tunnels / BFD sessions per device (controller) vs SNMP SD-WAN MIB facts | same set, same up/down |
+| events | vManage alarms vs SNMP traps for the same incident (e.g. an interface or tunnel down) | same incident, both sides, within minutes |
+| telemetry | syslog / trap / flow counts per device per hour in each tenant's own stream | equal once RETAIL's channel receives the same feed |
+| RCA | a controlled fault (shut one edge's transport) produces the same root cause in both tenants | same root-cause device + seam |
+
+A gap is a defect in the connector or the SNMP path — filed per dimension, not
+averaged away.
+
+**Goal 2 — multitenancy works the way it is supposed to.**
+
+| Check | Expected |
+|---|---|
+| Provider views (devices, alerts, logs, flows, topology, search, Iris) | only the SNMP records and the Provider's stream — never a RETAIL row |
+| RETAIL views | only the controller records and RETAIL's stream — never a Provider row |
+| the same name / IP / serial in both | two independent devices; neither view lists the other's, nothing is merged or dropped |
+| counts | each view shows each device once and each telemetry record once |
+| actions | disabling, deleting or editing in one tenant changes nothing in the other |
+| access | a RETAIL user, `as_tenant`/`X-Acting-Tenant` into Provider, and a direct id lookup of a Provider object → nothing / 404 |
+| All-tenants (platform owner) | both, each row labelled with its tenant |
+
 ## 6. Multi-vendor
 
 Channels are vendor-neutral (every device that can send syslog/traps/flows can
@@ -144,6 +180,7 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
 
 ## 7. Phases (one PR each; ★ = high-risk: full gate + pgintegration + §3a test)
 
+- **PA** parity + isolation harness (§5a) — runs today for the dimensions that exist (inventory, state, interfaces, alerts, isolation of devices/alerts/logs) and grows with each phase; its results gate "vManage integration complete".
 - **P0** fixtures: the §1 controller captures for a vEdge and a cEdge.
 - **P0.5** syslog keeps its sender address (syslog-ng carries `${SOURCEIP}`;
   Vector maps it; VRL harness; install-boot).
