@@ -41,7 +41,8 @@ def test_interface_kind_without_an_interface_binds_to_the_device() -> None:
 
 
 @pytest.mark.parametrize("kind", ["bgp_adjacency_change", "bgp_adjacency_change_clear",
-                                  "ospf_adjacency_change", "ospf_adjacency_change_clear"])
+                                  "ospf_adjacency_change", "ospf_adjacency_change_clear",
+                                  "isis_adjacency_change", "routing_adjacency_change"])
 def test_session_kind_binds_to_device_and_peer(kind: str) -> None:
     sig = controller_event_to_signal(ev(kind, peer_id="192.168.200.34"), NOW)
     assert sig is not None

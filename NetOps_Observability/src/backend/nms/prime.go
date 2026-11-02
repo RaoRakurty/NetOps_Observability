@@ -56,6 +56,9 @@ func (PrimeTransformer) Transform(tenant, integrationID string, raw []byte) (Bat
 			EvidenceRole:        roleForEventType(net),
 			CorrelationHints:    map[string]string{"device_ip": a.DeviceIP},
 		}
+		// E2b: an alarm whose text reports the state came back is a recovery
+		// (<kind>_clear at info), never fault evidence.
+		applyRecovery(&e, e.EventType+" "+e.Message)
 		e.DedupeKey = DedupeKey(e)
 		b.Events = append(b.Events, e)
 
@@ -113,11 +116,19 @@ func parsePrime(raw []byte) ([]primeAlarm, error) {
 func primeNormType(eventType, category string) (string, string) {
 	t := strings.ToLower(eventType + " " + category)
 	switch {
+	case routingOrLifecycleKind(t) != "":
+		// E2b: routing adjacencies, restarts and optics before the generic rules
+		// below ("down", "change"), which used to swallow them.
+		k, st, _ := classifyAlarmText(t)
+		return k, st
 	case strings.Contains(t, "unreach") || strings.Contains(t, "reachab"):
 		return "controller_device_unreachable", "reachability"
 	case strings.Contains(t, "config") || strings.Contains(t, "change"):
 		return "controller_policy_change", ""
 	default:
+		if k, st, ok := classifyAlarmText(t); ok {
+			return k, st
+		}
 		return "controller_alarm", ""
 	}
 }
