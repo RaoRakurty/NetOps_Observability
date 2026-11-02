@@ -271,7 +271,7 @@ def test_every_declared_vendor_has_a_fixture_that_reaches_the_rule():
         assert vendors <= declared, f"{rid}: fixtures exercise undeclared {vendors - declared}"
         assert vendors, rid
     assert {"cisco", "arista", "juniper"} <= seen["syslog.config.change"]
-    assert {"cisco", "juniper", "standard", "nokia"} <= seen["trap.config.change"]
+    assert {"cisco", "juniper", "nokia"} <= seen["trap.config.change"]
 
 
 def test_the_near_misses_are_not_claimed_as_config_changes():

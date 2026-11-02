@@ -1,0 +1,36 @@
+{
+ "data": [
+  {
+   "logid": "ea7be68a-388f-4496-9c99-45c245f9502d",
+   "entry_time": 1793648987517,
+   "statcycletime": 1793648987517,
+   "logmodule": "user",
+   "logfeature": "user",
+   "loguser": "admin",
+   "logusersrcip": "192.168.172.1",
+   "logmessage": "Authentication succeeded for admin, source IP: 192.168.172.1",
+   "logdeviceid": "10.255.255.1",
+   "auditdetails": [
+    "Authentication succeeded for admin, source IP: 192.168.172.1"
+   ],
+   "tenant": "default",
+   "id": "C1XPnaEBnpPPzZIMjWuA"
+  },
+  {
+   "logid": "7e4c3b72-f7b6-4dc1-ba1c-c085af23349e",
+   "entry_time": 1793648222614,
+   "statcycletime": 1793648222614,
+   "logmodule": "user",
+   "logfeature": "user",
+   "loguser": "admin",
+   "logusersrcip": "192.168.172.1",
+   "logmessage": "Invalidated session due to server session idle time out for User: admin",
+   "logdeviceid": "10.255.255.1",
+   "auditdetails": [
+    "Invalidated session due to server session idle time out for User: admin"
+   ],
+   "tenant": "default",
+   "id": "rVXDnaEBnpPPzZIM4R2c"
+  }
+ ]
+}

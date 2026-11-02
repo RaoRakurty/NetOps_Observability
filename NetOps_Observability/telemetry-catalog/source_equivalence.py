@@ -188,8 +188,12 @@ def rule_kinds(source: str) -> frozenset[str]:
     _, rows = B.load()
     # `lane: catalog` rows are grammar-only — kept OUT of the runtime parser
     # table on purpose (events.yaml), so they supply nothing at runtime.
+    # `shadow: true` rows match and are counted but never emit a signal, so
+    # they supply nothing to the engine either (E5a: syslog.config.change
+    # ships shadow, tracker 220, and used to score as supplied).
     return frozenset(r["kind"] for r in rows
-                     if r.get("source") == source and not r.get("generic") and r.get("lane") != "catalog")
+                     if r.get("source") == source and not r.get("generic") and r.get("lane") != "catalog"
+                     and not r.get("shadow"))
 
 
 def poll_kinds() -> frozenset[str]:

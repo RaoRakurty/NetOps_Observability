@@ -439,7 +439,15 @@ RULES_HASH_A9B = "a0be9de50a0657bc8a8a029305b23909cf5a09d72179f294b96cec889426ea
 #: untouched by construction. `test_link_status_enrichment_218.py` is the proof
 #: of both halves.
 RULES_HASH_218 = "34cce98ee1a4ee8fb1d6d990930400506f993e61be19b4e30a23c886419a2039"
-RULES_HASH_A3 = RULES_HASH_218
+#:
+#: E5b (config-change precision) narrows `trap.config.change`: ENTITY-MIB
+#: `entConfigChange` and Nokia `tmnxHwConfigChange` are INVENTORY changes, not
+#: configuration changes, so they fall back to the generic `device_alarm`, and
+#: Nokia's three TIMETRA-SYSTEM-MIB config traps are named by their index OIDs.
+#: The one corpus entry this moves (`entConfigChange`) replays byte-for-byte to
+#: the output A9 recorded before A9b typed it, so its baseline skip is gone.
+RULES_HASH_E5B = "9c24e4aaec5f5cab0cfb16250a5de8877edd5a31ba2d2d0cf64007f8cdf48e26"
+RULES_HASH_A3 = RULES_HASH_E5B
 
 
 def _guard_patterns(node) -> list[str]:

@@ -103,7 +103,9 @@ SEVERITY_HINT = {
     # device being reconfigured AT ALL. They are `warning`, not higher: a
     # change is not itself a fault — it is context that must be REACHABLE.
     # The parser types them further as `device_config_change`
-    # (telemetry-catalog/events.yaml, rule `trap.config.change`).
+    # (telemetry-catalog/events.yaml, rule `trap.config.change`) — all except
+    # `entConfigChange`, which is an INVENTORY change (module / PSU / SFP added
+    # or removed) and stays a generic `device_alarm` (E5b).
     "entConfigChange": "warning",              # was notice — below the floor
     "ciscoConfigManEvent": "warning",          # was notice — below the floor
     "ccmCLIRunningConfigChanged": "warning",

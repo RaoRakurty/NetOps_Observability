@@ -4,6 +4,8 @@
 package nms
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +80,35 @@ func TestVManageAuditLog(t *testing.T) {
 	}
 	if c.DedupeKey == "" || c.DedupeKey == f.DedupeKey {
 		t.Fatal("dedupe keys")
+	}
+}
+
+// E5b: the recorded 20.6 audit log. Logins and session timeouts change
+// nothing, so they never become change evidence; and the payload's own
+// `tenant` ("default" — vManage's tenancy, not ours) is never read: anything
+// the transform emits carries the integration's tenant (§3a).
+func TestVManageAuditLogRecorded206(t *testing.T) {
+	raw, err := os.ReadFile("testdata/vmanage_20.6/auditlog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := VManageAutoTransformer{}.TransformStream("t_retail", "i1", "audit", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Events) != 0 {
+		t.Fatalf("a login and a session timeout are not changes: %+v", b.Events)
+	}
+	// The same shape, made a change: still the integration's tenant.
+	changed := strings.Replace(string(raw), `"logmodule": "user"`, `"logmodule": "template"`, 1)
+	b, err = VManageAutoTransformer{}.TransformStream("t_retail", "i1", "audit", []byte(changed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Events) != 1 {
+		t.Fatalf("want the one change, got %d: %+v", len(b.Events), b.Events)
+	}
+	if e := b.Events[0]; e.TenantID != "t_retail" || e.NormalizedEventType != "controller_policy_change" || e.DeviceID != "10.255.255.1" {
+		t.Fatalf("change %+v — tenant must be the integration's, never the payload's", e)
 	}
 }
