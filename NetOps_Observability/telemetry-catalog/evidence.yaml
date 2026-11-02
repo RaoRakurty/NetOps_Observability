@@ -133,6 +133,7 @@ sources:
   - id: vmanage
     title: "Cisco Catalyst SD-WAN Manager (vManage)"
     computed_from: connector
+    fidelity: lab_validated   # recorded 20.6.1 payloads, nms/testdata/vmanage_20.6 (E2a)
     gaps:
       interface_health: {status: normalization_pending, detail: "interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified", ref: "design §7b E3"}
       device_resource: {status: normalization_pending, detail: "system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm", ref: "design §7b E3"}
@@ -142,98 +143,74 @@ sources:
   - id: catalyst_center
     title: "Cisco Catalyst Center (DNA Center)"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "interface-down issues are typed controller_alarm (nms/catalyst.go)", ref: "design §7b E2"}
       interface_health: {status: collection_pending, detail: "interface statistics API not collected"}
-      bgp_session: {status: normalization_pending, detail: "BGP issues are typed controller_alarm", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "OSPF / EIGRP issues are typed controller_alarm", ref: "design §7b E2"}
       overlay_tunnel: {status: unverified, detail: "SD-Access fabric tunnel state not assessed"}
       control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
-      device_restart: {status: unverified, detail: "reload issues not assessed"}
       device_resource: {status: collection_pending, detail: "assurance device-health (CPU / memory) not collected"}
       l2_control: {status: unverified, detail: "L2 issues not assessed"}
-      physical_layer: {status: unverified, detail: "optics / environment issues not assessed"}
       flow_volume: {status: unavailable, detail: "the controller does not export flows"}
 
   - id: meraki
     title: "Cisco Meraki Dashboard"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "uplink / port-down alerts are mapped to controller_device_unreachable (nms/meraki.go merakiNormType) — a link loss is misclassified as a device fault", ref: "design §7b E2"}
       interface_health: {status: collection_pending, detail: "uplink loss / latency and port statistics APIs not collected"}
-      bgp_session: {status: unverified, detail: "MX BGP state not assessed"}
-      igp_adjacency: {status: unverified, detail: "MX OSPF state not assessed"}
       overlay_tunnel: {status: collection_pending, detail: "AutoVPN peer status API not collected"}
       control_connection: {status: unavailable, detail: "cloud-managed; no SD-WAN control connection concept"}
-      device_restart: {status: unverified, detail: "reboot events not assessed"}
       device_resource: {status: unavailable, detail: "the Dashboard does not expose device CPU / memory"}
       l2_control: {status: unverified, detail: "STP / port events not assessed"}
-      physical_layer: {status: unverified, detail: "SFP / power events not assessed"}
       flow_volume: {status: unavailable, detail: "NetFlow is exported by the MX directly, not by the Dashboard"}
 
   - id: ndfc
     title: "Cisco Nexus Dashboard Fabric Controller"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "link-down events are typed controller_alarm (nms/ndfc.go)", ref: "design §7b E2"}
       interface_health: {status: collection_pending, detail: "interface statistics not collected"}
-      bgp_session: {status: normalization_pending, detail: "BGP events are typed controller_alarm", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "IGP events are typed controller_alarm", ref: "design §7b E2"}
       overlay_tunnel: {status: unverified, detail: "VXLAN / VTEP state via NDFC not assessed"}
       control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
       device_reachability: {status: unverified, detail: "switch reachability events not assessed"}
-      device_restart: {status: unverified, detail: "reload events not assessed"}
       device_resource: {status: unverified, detail: "resource events not assessed"}
       l2_control: {status: unverified, detail: "L2 events not assessed"}
-      physical_layer: {status: unverified, detail: "optics events not assessed"}
       flow_volume: {status: unavailable, detail: "the controller does not export flows"}
 
   - id: prime
     title: "Cisco Prime Infrastructure"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "link alarms are typed controller_alarm (nms/prime.go)", ref: "design §7b E2"}
       interface_health: {status: unverified, detail: "interface statistics API not assessed"}
-      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
       overlay_tunnel: {status: unavailable, detail: "not an overlay controller"}
       control_connection: {status: unavailable, detail: "not an SD-WAN controller"}
-      device_restart: {status: unverified, detail: "reload alarms not assessed"}
       device_resource: {status: unverified, detail: "resource alarms not assessed"}
       l2_control: {status: unverified, detail: "L2 alarms not assessed"}
-      physical_layer: {status: unverified, detail: "optics alarms not assessed"}
       flow_volume: {status: unavailable, detail: "the controller does not export flows"}
 
   - id: versa_director
     title: "Versa Director"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "interface alarms are typed controller_alarm (nms/versa.go)", ref: "design §7b E2"}
       interface_health: {status: collection_pending, detail: "interface statistics not collected; LEF statistics go to Versa Analytics"}
-      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
       control_connection: {status: unverified, detail: "controller-connection alarms not assessed"}
       device_reachability: {status: normalization_pending, detail: "appliance-down alarms fall through to controller_alarm", ref: "design §7b E2"}
-      device_restart: {status: unverified, detail: "reboot alarms not assessed"}
       device_resource: {status: normalization_pending, detail: "appliance health is typed controller_health_score (an orphan kind)", ref: "design §7b E2"}
       l2_control: {status: unavailable, detail: "not reported by the Director"}
-      physical_layer: {status: unverified, detail: "hardware alarms not assessed"}
       flow_volume: {status: unavailable, detail: "flows are exported as LEF to Versa Analytics, not by the Director"}
 
   - id: versa_concerto
     title: "Versa Concerto"
     computed_from: connector
+    fidelity: doc_claimed   # no recorded payload yet (E2b)
     gaps:
-      link_state: {status: normalization_pending, detail: "interface alarms are typed controller_alarm (nms/versa.go)", ref: "design §7b E2"}
       interface_health: {status: collection_pending, detail: "interface statistics not collected"}
-      bgp_session: {status: normalization_pending, detail: "BGP alarms are typed controller_alarm", ref: "design §7b E2"}
-      igp_adjacency: {status: normalization_pending, detail: "IGP alarms are typed controller_alarm", ref: "design §7b E2"}
       control_connection: {status: unverified, detail: "controller-connection alarms not assessed"}
       device_reachability: {status: normalization_pending, detail: "appliance-down alarms fall through to controller_alarm", ref: "design §7b E2"}
-      device_restart: {status: unverified, detail: "reboot alarms not assessed"}
       device_resource: {status: normalization_pending, detail: "appliance health is typed controller_health_score (an orphan kind)", ref: "design §7b E2"}
       l2_control: {status: unavailable, detail: "not reported by Concerto"}
-      physical_layer: {status: unverified, detail: "hardware alarms not assessed"}
       flow_volume: {status: unavailable, detail: "flows go to Versa Analytics, not Concerto"}
 
   - id: catalyst_9800

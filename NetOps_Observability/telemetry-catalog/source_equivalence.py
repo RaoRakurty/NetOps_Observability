@@ -71,12 +71,12 @@ GAP_STATUSES = ("normalization_pending", "collection_pending", "dormant", "unava
 #: The connector file(s) whose normalizer decides each registered vendor's kinds.
 CONNECTOR_FILES: dict[str, tuple[str, ...]] = {
     "vmanage": ("vmanage.go", "sdwan_state_events.go", "vmanage_kinds.go"),
-    "catalyst_center": ("catalyst.go",),
-    "meraki": ("meraki.go",),
-    "ndfc": ("ndfc.go",),
-    "prime": ("prime.go",),
-    "versa_director": ("versa.go",),
-    "versa_concerto": ("versa.go",),
+    "catalyst_center": ("catalyst.go", "canonical_alarm_kinds.go"),
+    "meraki": ("meraki.go", "canonical_alarm_kinds.go"),
+    "ndfc": ("ndfc.go", "canonical_alarm_kinds.go"),
+    "prime": ("prime.go", "canonical_alarm_kinds.go"),
+    "versa_director": ("versa.go", "canonical_alarm_kinds.go"),
+    "versa_concerto": ("versa.go", "canonical_alarm_kinds.go"),
     "catalyst_9800": ("catalyst9800.go",),
     "generic": ("generic.go",),
 }
@@ -307,8 +307,16 @@ def analyse(model: dict) -> dict:
 
 # ---- render ------------------------------------------------------------------
 
-_MARK = {"native": "✅", "normalization_pending": "🟠", "collection_pending": "⬜", "dormant": "💤",
+_MARK = {"native": "✅", "native_doc": "✅ᵈ", "normalization_pending": "🟠", "collection_pending": "⬜", "dormant": "💤",
          "unavailable": "—", "unverified": "❓", "native_declared": "✅*"}
+
+
+def _cell_mark(source: dict, status: str) -> str:
+    """A native cell of a doc_claimed source is marked apart: the mapping is
+    computed from code, but no recorded payload has proven it yet."""
+    if status == "native" and source.get("fidelity") == "doc_claimed":
+        return _MARK["native_doc"]
+    return _MARK[status]
 
 
 def render(model: dict, a: dict) -> str:
@@ -326,24 +334,27 @@ def render(model: dict, a: dict) -> str:
         "other cell is a declared gap with its reason.",
         "",
         "✅ supplied · 🟠 collected, not normalised to an engine kind · ⬜ collectable, not collected ·",
-        "💤 built, dormant · — the source cannot supply it · ❓ unverified · ✅* declared (not computable)",
+        "💤 built, dormant · — the source cannot supply it · ❓ unverified · ✅* declared (not computable) ·",
+        "✅ᵈ supplied by a doc_claimed mapping (computed from code, not yet proven by a recorded payload)",
         "",
         "## Scorecard per customer profile",
         "",
         (f"Matchable = enabled RCA templates whose every mandatory clause the profile can satisfy "
          f"(of {a['templates']} enabled)."),
         "",
-        "| Profile | Sources | Evidence types supplied | Matchable templates |",
-        "|---|---|---|---|",
+        "| Profile | Sources | Evidence types supplied | Matchable templates | Fidelity |",
+        "|---|---|---|---|---|",
     ]
     total = len([e for e in evs if not e.get("declared_only")])
     for p in a["profiles"].values():
+        fid = sorted({next(x.get("fidelity", "lab_validated") for x in srcs if x["id"] == sid)
+                      for sid in p["sources"]})
         out.append(f"| {p['title']} | {', '.join(p['sources'])} | {len(p['evidence'])}/{total} | "
-                   f"{len(p['matchable'])} |")
+                   f"{len(p['matchable'])} | {' + '.join(fid)} |")
     out += ["", "## Matrix", "", "| Evidence | " + " | ".join(s["id"] for s in srcs) + " |",
             "|---|" + "---|" * len(srcs)]
     for e in evs:
-        row = [f"**{e['id']}**"] + [_MARK[a["cells"][s["id"]][e["id"]]["status"]] for s in srcs]
+        row = [f"**{e['id']}**"] + [_cell_mark(s, a["cells"][s["id"]][e["id"]]["status"]) for s in srcs]
         out.append("| " + " | ".join(row) + " |")
     out += ["", "## Orphan kinds — collected, then thrown away", "",
             "A connector emits these; the engine has no such kind, so no template can use them.", "",

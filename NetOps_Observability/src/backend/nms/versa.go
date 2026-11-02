@@ -63,6 +63,9 @@ func (VersaDirectorTransformer) Transform(tenant, integrationID string, raw []by
 				"sla_violation": boolStr(a.SLAViolation),
 			},
 		}
+		// E2b: an alarm whose text reports the state came back is a recovery
+		// (<kind>_clear at info), never fault evidence.
+		applyRecovery(&e, e.EventType+" "+e.Message)
 		e.DedupeKey = DedupeKey(e)
 		b.Events = append(b.Events, e)
 
@@ -87,9 +90,11 @@ func versaNormType(typ string) (string, string) {
 		return "controller_health_score", ""
 	case strings.Contains(t, "policy"):
 		return "controller_policy_change", ""
-	case strings.Contains(t, "path"):
-		return "controller_alarm", ""
 	default:
+		// E2b: BGP / OSPF / interface / reboot alarms take their canonical kind.
+		if k, st, ok := classifyAlarmText(t); ok {
+			return k, st
+		}
 		return "controller_alarm", ""
 	}
 }
