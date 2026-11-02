@@ -73,6 +73,9 @@ So:
   ports belongs to the platform realm — the rule #112 already applies to untagged
   data.
 
+> **2026-11-02:** §3 and phases P1/P2 are superseded by `COLLECTOR_TIER_2026-11-02.md`
+> (owner-approved collector tier + Ingest Gateway; tracker 372, starts after Iris).
+
 ## 3. Channels — how a tenant's stream reaches Correlix (real-world architecture)
 
 Owner direction (2026-11-01): per-tenant interfaces or IPs do not scale. In the
