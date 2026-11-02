@@ -77,6 +77,15 @@ type metricMeta struct {
 // gate). Add families here deliberately as the correlation catalog grows; do not
 // widen it to the full counter set. gNMI-owned families (e.g. device_mem_percent
 // on Nokia SRL, BGP per-AFI) arrive via the gnmic lane in Phase 2, not here.
+// RCAMetricFamily reports the RCA signal family and unit of a canonical metric
+// name on the SNMP allowlist (ok=false for any other name). Read-only: it lets
+// another producer of canonical samples (an NMS connector, nms/
+// vmanage_realtime.go) pin its families to this allowlist so the two never drift.
+func RCAMetricFamily(name string) (family, unit string, ok bool) {
+	m, ok := rcaMetricFamilies[name]
+	return m.family, m.unit, ok
+}
+
 var rcaMetricFamilies = map[string]metricMeta{
 	// Interface state + counters + errors + discards (IF-MIB).
 	"device_if_oper_status":  {"interface", "state"},

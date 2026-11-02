@@ -75,14 +75,20 @@ func Specs() map[string]ConnectorSpec {
 			PreferredAuth: AuthToken, // JWT+refresh (≥20.18); session fallback
 			Poll:          true,
 			Streams: []string{"alarms", "events", "audit", "inventory", "approute", "interfaces", "qos", "system",
-				"counters", "hardware", "certs", "control_connections", "bfd", "tunnels"},
+				"counters", "hardware", "certs", "control_connections", "bfd", "tunnels",
+				"interface_realtime", "system_realtime"},
 			// Fleet-wide first: one aggregation call covers the fabric. The
 			// per-device real-time streams cost a call per device; bfd/control
 			// stay on for their up/down state, tunnels is opt-in (approute
 			// carries the same tunnels' quality and throughput).
+			// E3 adds the real-time interface / system streams to the defaults:
+			// they are what gives a controller-only device live interface state
+			// and the canonical device_* series the engine and device page read.
 			DefaultStreams: []string{"alarms", "events", "audit", "inventory", "approute", "interfaces", "qos", "system",
-				"counters", "hardware", "certs", "control_connections", "bfd"},
+				"counters", "hardware", "certs", "control_connections", "bfd", "interface_realtime", "system_realtime"},
 			SupersededDefaults: [][]string{
+				{"alarms", "events", "audit", "inventory", "approute", "interfaces", "qos", "system",
+					"counters", "hardware", "certs", "control_connections", "bfd"},
 				{"alarms", "events", "tunnels", "control_connections", "bfd", "inventory"},
 				{"alarms", "events", "inventory", "approute", "interfaces", "system", "counters", "certs", "control_connections", "bfd"},
 			},

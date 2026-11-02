@@ -94,6 +94,10 @@ type Sinks struct {
 	// ProduceEvents publishes controller events to the bus keyed per tenant
 	// (per-tenant ordering) and returns the count produced.
 	ProduceEvents func(ctx context.Context, tenant string, events []ControllerEvent) (int64, error)
+	// EmitMetricEvents forwards canonical device_* samples to the correlation
+	// engine's metric lane, stamped with the integration's tenant (E3). Nil =
+	// not wired: skipped, the samples still reach VictoriaMetrics.
+	EmitMetricEvents func(ctx context.Context, tenant string, metrics []ControllerMetric) error
 }
 
 // rateBucket is an integration's persistent limiter and the rate it was
@@ -966,6 +970,12 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 		if err := rt.sinks.EmitMetrics(ctx, routed.MetricLines); err != nil {
 			applog.Warn("nms", "metric sink", map[string]any{"integration": ic.ID, "error": err.Error()})
 			rep.fail(LaneMetrics, err)
+		}
+	}
+	if len(routed.Canonical) > 0 && rt.sinks.EmitMetricEvents != nil {
+		if err := rt.sinks.EmitMetricEvents(ctx, ic.Tenant, routed.Canonical); err != nil {
+			applog.Warn("nms", "metric event sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+			rep.fail(LaneMetricEvents, err)
 		}
 	}
 	// #128 Phase 3: wireless state transitions (ap_join/radio_oper) synthesize

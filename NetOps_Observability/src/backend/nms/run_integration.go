@@ -167,6 +167,7 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			}
 			routed := pipe.Route(batch)
 			res.Routed.MetricLines = append(res.Routed.MetricLines, routed.MetricLines...)
+			res.Routed.Canonical = append(res.Routed.Canonical, routed.Canonical...)
 			res.Routed.Events = append(res.Routed.Events, routed.Events...)
 			res.Routed.States = append(res.Routed.States, routed.States...)
 			res.Routed.StateChanges = append(res.Routed.StateChanges, routed.StateChanges...)

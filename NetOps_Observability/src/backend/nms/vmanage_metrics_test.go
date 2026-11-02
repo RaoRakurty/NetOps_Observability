@@ -383,7 +383,8 @@ func TestVManageDefaultStreamsAreAllServed(t *testing.T) {
 	for _, p := range []string{"/dataservice/alarms", "/dataservice/event", "/dataservice/device/counters",
 		"/dataservice/system/device/vedges", "/dataservice/system/device/controllers",
 		"/dataservice/device/control/connections", "/dataservice/device/bfd/sessions", "/dataservice/device/tunnel/statistics",
-		"/dataservice/auditlog", "/dataservice/device/hardwarehealth/detail"} {
+		"/dataservice/auditlog", "/dataservice/device/hardwarehealth/detail",
+		"/dataservice/device/interface", "/dataservice/device/system/status"} {
 		f.body[p] = `{"data":[]}`
 	}
 	f.body["/dataservice/device"] = inv

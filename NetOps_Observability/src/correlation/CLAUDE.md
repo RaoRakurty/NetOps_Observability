@@ -356,6 +356,18 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   observation names the hypothesis; it does not confirm alone). Real 20.6 alarms carry the
   device in `devices[].system-ip`; before E2a the connector read a top-level field and every
   alarm reached the engine with no device (testdata/vmanage_20.6, recorded on the lab).
+- **Controller metrics on the metric lane (E3, 2026-11-02).** vManage's real-time
+  per-device interface and system APIs (nms/vmanage_realtime.go; streams
+  `interface_realtime`, `system_realtime`, defaults) emit the SNMP canonical families
+  (`device_if_oper_status` … `device_cpu_percent`, `device_mem_percent`, IF-MIB values,
+  cumulative counters, Mbps) labelled `device` + `ifName`. They go to VictoriaMetrics AND,
+  via the bus bridge, to `netops.metrics` with the integration's `tenant_id` and
+  `collection_path: via_controller` (nms_scheduler.go nmsEmitMetricEvents) — the
+  aggregator's metrics HTTP lane resets tenant_id from the registry, where a
+  controller-only device has no row. The metric lane is not registry-anchored, so the
+  claim stands; via_controller puts the episode in the controller authority bucket.
+  The aggregation streams (`interfaces`, `system`: 10-min buckets, 30–60 min late)
+  remain context only.
 - `controller_instance` (`ci-<hash>`, basis `host`) rides in attrs: context for T2's
   witness rule. The observer and the verdict are unchanged.
 - **Controller topology (T4b/T4c, 2026-10-25).** The api draws the SD-WAN overlay from

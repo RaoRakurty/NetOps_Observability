@@ -25,8 +25,9 @@ type nmsRuntime = nms.Runtime
 // FEATURE_NMS_INTEGRATIONS=true (main.go gates construction).
 func newNMSRuntime(store nms.ConfigStore) *nmsRuntime {
 	rt := nms.NewRuntime(store, nms.Sinks{
-		EmitMetrics:   nmsEmitMetrics,
-		ProduceEvents: nmsProduceEvents,
+		EmitMetrics:      nmsEmitMetrics,
+		ProduceEvents:    nmsProduceEvents,
+		EmitMetricEvents: nmsEmitMetricEvents,
 	}, durationOr("NMS_BACKFILL", nms.DefaultBackfill))
 	// Worker pool + per-integration deadline (NMS-first T1): NMS_POLL_WORKERS
 	// is clamped to [1,16] (default 4); NMS_POLL_DEADLINE caps one cycle
@@ -47,6 +48,57 @@ func nmsProduceEvents(ctx context.Context, tenant string, events []nms.Controlle
 		return 0, err
 	}
 	return int64(len(recs)), nil
+}
+
+// controllerMetricEvent is the engine's MetricEvent contract
+// (collectors.MetricEvent, src/correlation handle_metric) plus the tenant the
+// integration belongs to. SNMP events carry no tenant — the aggregator's
+// metrics lane derives it from the device registry — but a controller-only
+// device is in no registry, so the integration's tenant is stamped here and
+// the record travels the bus bridge (like controller events) instead of the
+// metrics HTTP lane, which resets tenant_id. The metric lane is not
+// registry-anchored, so the engine accepts the claim unless the registry
+// contradicts it.
+type controllerMetricEvent struct {
+	collectors.MetricEvent
+	TenantID string `json:"tenant_id"`
+}
+
+// nmsEmitMetricEvents forwards a connector's canonical device_* samples to the
+// correlation engine's metric lane (source-equivalence E3), keyed by tenant.
+// collection_path via_controller puts them in the controller authority bucket
+// (verdicts.py), so a relayed counter never pairs with the controller's other
+// evidence as an independent witness.
+func nmsEmitMetricEvents(ctx context.Context, tenant string, metrics []nms.ControllerMetric) error {
+	recs := make([]proxyRecord, 0, len(metrics))
+	for _, m := range metrics {
+		family, ok := nms.CanonicalDeviceMetricFamily(m.Name)
+		dev := strings.TrimSpace(m.Tags["device"])
+		if !ok || dev == "" || m.Time.IsZero() {
+			continue
+		}
+		recs = append(recs, proxyRecord{Key: tenant, Value: controllerMetricEvent{
+			MetricEvent: collectors.MetricEvent{
+				ObserverType:   "controller",
+				ModalityClass:  "device_telemetry",
+				CollectionPath: "via_controller",
+				Device:         dev,
+				Vendor:         m.SourceSystem,
+				IfName:         m.Tags["ifName"],
+				SignalFamily:   family,
+				Metric:         m.Name,
+				Value:          m.Value,
+				Unit:           m.Unit,
+				TS:             m.Time.UTC().Format(time.RFC3339Nano),
+			},
+			TenantID: tenant,
+		}})
+	}
+	if len(recs) == 0 {
+		return nil
+	}
+	_, err := produceJSON(ctx, nms.TopicMetrics, recs)
+	return err
 }
 
 // nmsEmitMetrics pushes Prometheus exposition lines to VictoriaMetrics
