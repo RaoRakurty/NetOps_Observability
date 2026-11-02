@@ -61,21 +61,36 @@ func (MerakiTransformer) Transform(tenant, integrationID string, raw []byte) (Ba
 	if e.EventTime.IsZero() {
 		e.EventTime = parseTime(a.SentAt)
 	}
+	applyRecovery(&e, a.AlertTypeID+" "+a.AlertType)
 	e.DedupeKey = DedupeKey(e)
 	return Batch{Events: []ControllerEvent{e}}, nil
 }
 
 // merakiNormType maps Meraki alertTypeId to a normalized kind.
+//
+// E2b: an uplink / WAN / port loss is a LINK fault, not a device fault. It was
+// mapped to controller_device_unreachable, which steered the ranking toward a
+// dead device when one circuit had dropped; only a device that went down or is
+// unreachable as a whole is reachability evidence now.
 func merakiNormType(typeID, typeText string) string {
 	t := strings.ToLower(typeID + " " + typeText)
 	switch {
-	case strings.Contains(t, "wan") && (strings.Contains(t, "down") || strings.Contains(t, "lost")):
-		return "controller_device_unreachable"
-	case strings.Contains(t, "down") || strings.Contains(t, "unreachable") || strings.Contains(t, "went down"):
+	case strings.Contains(t, "uplink") || strings.Contains(t, "wan") || strings.Contains(t, "port") ||
+		strings.Contains(t, "cellular") || strings.Contains(t, "connectivity changed"):
+		return "link_state_change"
+	case routingOrLifecycleKind(t) != "":
+		// E2b: routing adjacencies, restarts and optics before the generic
+		// "down" rule below, which used to make them a dead device.
+		return routingOrLifecycleKind(t)
+	case strings.Contains(t, "down") || strings.Contains(t, "unreachable") || strings.Contains(t, "went down") ||
+		strings.Contains(t, "offline") || strings.Contains(t, "came online") || strings.Contains(t, "back online"):
 		return "controller_device_unreachable"
 	case strings.Contains(t, "config") || strings.Contains(t, "settings changed"):
 		return "controller_policy_change"
 	default:
+		if k, _, ok := classifyAlarmText(t); ok {
+			return k
+		}
 		return "controller_alarm"
 	}
 }

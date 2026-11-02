@@ -61,6 +61,9 @@ func (CatalystTransformer) Transform(tenant, integrationID string, raw []byte) (
 			EvidenceRole:        roleForEventType(net),
 			CorrelationHints:    map[string]string{"entity_type": iss.EntityType, "entity": iss.Entity},
 		}
+		// E2b: an alarm whose text reports the state came back is a recovery
+		// (<kind>_clear at info), never fault evidence.
+		applyRecovery(&e, e.EventType+" "+e.Message)
 		e.DedupeKey = DedupeKey(e)
 		b.Events = append(b.Events, e)
 
@@ -86,12 +89,22 @@ func catalystNormType(category, name, entityType string) (string, string) {
 	t := strings.ToLower(category + " " + name + " " + entityType)
 	switch {
 	case strings.Contains(t, "interface") && strings.Contains(t, "down"):
-		return "controller_alarm", "intf_oper"
+		// E2b: canonical link state (was controller_alarm, which no template reads).
+		return "link_state_change", "intf_oper"
+	case routingOrLifecycleKind(t) != "":
+		// E2b: a BGP / OSPF / IS-IS peer, a reload or an optic named on a DEVICE
+		// entity is not the device being unreachable — classify it before the
+		// generic "down on a device" rule below, which used to swallow it.
+		k, st, _ := classifyAlarmText(t)
+		return k, st
 	case strings.Contains(t, "reachab") || strings.Contains(t, "unreachable") || strings.Contains(t, "down") && strings.Contains(t, "device"):
 		return "controller_device_unreachable", "reachability"
 	case strings.Contains(t, "onboarding") || strings.Contains(t, "config") || strings.Contains(t, "provision"):
 		return "controller_policy_change", ""
 	default:
+		if k, st, ok := classifyAlarmText(t); ok {
+			return k, st
+		}
 		return "controller_alarm", ""
 	}
 }

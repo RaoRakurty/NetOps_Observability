@@ -167,3 +167,15 @@ def test_no_profile_loses_matchable_templates(analysis: dict) -> None:
     assert set(baseline) == set(now), "profiles changed — re-run with --write-baseline and justify it"
     dropped = {p: (baseline[p], now[p]) for p in now if now[p] < baseline[p]}
     assert not dropped, f"profile(s) lost matchable templates (baseline, now): {dropped}"
+
+
+def test_doc_claimed_supply_is_marked_apart(model: dict, analysis: dict) -> None:
+    """A mapping computed from code but never proven by a recorded payload must
+    not read the same as a lab-validated one."""
+    doc = S.render(model, analysis)
+    meraki = next(s for s in model["sources"] if s["id"] == "meraki")
+    assert meraki.get("fidelity") == "doc_claimed"
+    assert analysis["cells"]["meraki"]["link_state"]["status"] == "native"
+    assert "✅ᵈ" in doc and "doc_claimed" in doc
+    vmanage = next(s for s in model["sources"] if s["id"] == "vmanage")
+    assert vmanage.get("fidelity") == "lab_validated"

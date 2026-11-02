@@ -54,6 +54,8 @@ _ENTITY_BY_KIND = {
     "link_state_change": EntityType.INTERFACE,
     "bgp_adjacency_change": EntityType.DEVICE,
     "ospf_adjacency_change": EntityType.DEVICE,
+    "isis_adjacency_change": EntityType.DEVICE,      # E2b (other connectors)
+    "routing_adjacency_change": EntityType.DEVICE,   # E2b (EIGRP / generic routing peer)
     "device_restart": EntityType.DEVICE,
     "transceiver_unsupported": EntityType.DEVICE,
     # ── wireless (#128 Phase 3): device_id carries the CANONICAL wireless
@@ -75,7 +77,8 @@ _ENTITY_BY_KIND = {
 }
 
 # Routing-session kinds bind to "<device>:<peer>" when the peer is known.
-_SESSION_KINDS = frozenset({"bgp_adjacency_change", "ospf_adjacency_change"})
+_SESSION_KINDS = frozenset({"bgp_adjacency_change", "ospf_adjacency_change",
+                            "isis_adjacency_change", "routing_adjacency_change"})
 
 _SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT,
              # Vendor words a connector may leak past the Go canonicaliser

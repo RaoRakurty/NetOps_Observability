@@ -35,7 +35,10 @@ func TestMerakiTransformer(t *testing.T) {
 	if e.EventID != "1234567890" || e.DeviceID != "Q234-ABCD-5678" || e.SiteID != "N_24329156" {
 		t.Fatalf("field mapping wrong: %+v", e)
 	}
-	if e.NormalizedEventType != "controller_device_unreachable" { // "WAN 1 connectivity lost"
+	// "WAN 1 connectivity lost" is ONE uplink dropping — a link fault. It used to
+	// be asserted as controller_device_unreachable, which steered the ranking to
+	// a dead device (E2b, source-equivalence plan §7a).
+	if e.NormalizedEventType != "link_state_change" {
 		t.Fatalf("norm type: %s", e.NormalizedEventType)
 	}
 	if e.Severity != "crit" {

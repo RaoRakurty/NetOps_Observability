@@ -9,41 +9,42 @@ COMPUTED from code: the source emits a kind the engine consumes for that evidenc
 other cell is a declared gap with its reason.
 
 ✅ supplied · 🟠 collected, not normalised to an engine kind · ⬜ collectable, not collected ·
-💤 built, dormant · — the source cannot supply it · ❓ unverified · ✅* declared (not computable)
+💤 built, dormant · — the source cannot supply it · ❓ unverified · ✅* declared (not computable) ·
+✅ᵈ supplied by a doc_claimed mapping (computed from code, not yet proven by a recorded payload)
 
 ## Scorecard per customer profile
 
 Matchable = enabled RCA templates whose every mandatory clause the profile can satisfy (of 103 enabled).
 
-| Profile | Sources | Evidence types supplied | Matchable templates |
-|---|---|---|---|
-| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 |
-| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 |
-| vManage only | vmanage | 9/13 | 7 |
-| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 11/13 | 18 |
-| Catalyst Center only | catalyst_center | 2/13 | 3 |
-| Meraki only | meraki | 2/13 | 3 |
-| NDFC only | ndfc | 1/13 | 1 |
-| Prime only | prime | 2/13 | 3 |
-| Versa Director only | versa_director | 2/13 | 2 |
-| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 19 |
+| Profile | Sources | Evidence types supplied | Matchable templates | Fidelity |
+|---|---|---|---|---|
+| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 | lab_validated |
+| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 | lab_validated |
+| vManage only | vmanage | 9/13 | 7 | lab_validated |
+| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 11/13 | 18 | lab_validated |
+| Catalyst Center only | catalyst_center | 7/13 | 7 | doc_claimed |
+| Meraki only | meraki | 7/13 | 7 | doc_claimed |
+| NDFC only | ndfc | 6/13 | 5 | doc_claimed |
+| Prime only | prime | 7/13 | 7 | doc_claimed |
+| Versa Director only | versa_director | 7/13 | 6 | doc_claimed |
+| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 19 | lab_validated |
 
 ## Matrix
 
 | Evidence | snmp_poll | gnmi | syslog | trap | flow | vmanage | catalyst_center | meraki | ndfc | prime | versa_director | versa_concerto | catalyst_9800 | generic |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **link_state** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | ❓ | ❓ |
+| **link_state** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **interface_health** | ✅ | 💤 | — | — | — | 🟠 | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
-| **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
-| **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | 🟠 | ❓ | 🟠 | 🟠 | 🟠 | 🟠 | — | ❓ |
-| **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ⬜ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ | ✅ | — | ❓ |
+| **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
+| **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
+| **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ⬜ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **control_connection** | ❓ | ❓ | ⬜ | ⬜ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
-| **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ | ✅ | ❓ | ✅ | 🟠 | 🟠 | ❓ | ❓ |
-| **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ |
+| **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ᵈ | ✅ᵈ | ❓ | ✅ᵈ | 🟠 | 🟠 | ❓ | ❓ |
+| **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **device_resource** | ✅ | 💤 | ⬜ | ⬜ | — | 🟠 | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
-| **config_change** | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓ | ❓ |
+| **config_change** | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **l2_control** | ⬜ | ⬜ | ✅ | ✅ | — | ❓ | ❓ | ❓ | ❓ | ❓ | — | — | — | ❓ |
-| **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | — | ❓ |
+| **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **flow_volume** | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | ❓ |
 
 ## Orphan kinds — collected, then thrown away
@@ -73,7 +74,7 @@ engine's own coverage report under-states what it receives.
 | `pcs_local_fault` | syslog | same — produced by a syslog port rule |
 | `pcs_remote_fault` | syslog | same — produced by a syslog port rule |
 | `prefec_ber_rising` | syslog | same — produced by a syslog port rule |
-| `transceiver_unsupported` | syslog, vmanage | same — produced by a syslog port rule |
+| `transceiver_unsupported` | catalyst_center, meraki, ndfc, prime, syslog, versa_concerto, versa_director, vmanage | same — produced by a syslog port rule |
 
 ## Gaps by source
 
@@ -160,99 +161,69 @@ Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); ig
 
 ### catalyst_center — Cisco Catalyst Center (DNA Center)
 
-Supplies: device_reachability (controller_device_unreachable); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); device_reachability (controller_device_unreachable); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: interface-down issues are typed controller_alarm (nms/catalyst.go) (design §7b E2)
 - **interface_health** ⬜ collection_pending: interface statistics API not collected
-- **bgp_session** 🟠 normalization_pending: BGP issues are typed controller_alarm (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: OSPF / EIGRP issues are typed controller_alarm (design §7b E2)
 - **overlay_tunnel** ❓ unverified: SD-Access fabric tunnel state not assessed
 - **control_connection** — unavailable: not an SD-WAN controller
-- **device_restart** ❓ unverified: reload issues not assessed
 - **device_resource** ⬜ collection_pending: assurance device-health (CPU / memory) not collected
 - **l2_control** ❓ unverified: L2 issues not assessed
-- **physical_layer** ❓ unverified: optics / environment issues not assessed
 - **flow_volume** — unavailable: the controller does not export flows
 
 ### meraki — Cisco Meraki Dashboard
 
-Supplies: device_reachability (controller_device_unreachable); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); device_reachability (controller_device_unreachable); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: uplink / port-down alerts are mapped to controller_device_unreachable (nms/meraki.go merakiNormType) — a link loss is misclassified as a device fault (design §7b E2)
 - **interface_health** ⬜ collection_pending: uplink loss / latency and port statistics APIs not collected
-- **bgp_session** ❓ unverified: MX BGP state not assessed
-- **igp_adjacency** ❓ unverified: MX OSPF state not assessed
 - **overlay_tunnel** ⬜ collection_pending: AutoVPN peer status API not collected
 - **control_connection** — unavailable: cloud-managed; no SD-WAN control connection concept
-- **device_restart** ❓ unverified: reboot events not assessed
 - **device_resource** — unavailable: the Dashboard does not expose device CPU / memory
 - **l2_control** ❓ unverified: STP / port events not assessed
-- **physical_layer** ❓ unverified: SFP / power events not assessed
 - **flow_volume** — unavailable: NetFlow is exported by the MX directly, not by the Dashboard
 
 ### ndfc — Cisco Nexus Dashboard Fabric Controller
 
-Supplies: config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: link-down events are typed controller_alarm (nms/ndfc.go) (design §7b E2)
 - **interface_health** ⬜ collection_pending: interface statistics not collected
-- **bgp_session** 🟠 normalization_pending: BGP events are typed controller_alarm (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: IGP events are typed controller_alarm (design §7b E2)
 - **overlay_tunnel** ❓ unverified: VXLAN / VTEP state via NDFC not assessed
 - **control_connection** — unavailable: not an SD-WAN controller
 - **device_reachability** ❓ unverified: switch reachability events not assessed
-- **device_restart** ❓ unverified: reload events not assessed
 - **device_resource** ❓ unverified: resource events not assessed
 - **l2_control** ❓ unverified: L2 events not assessed
-- **physical_layer** ❓ unverified: optics events not assessed
 - **flow_volume** — unavailable: the controller does not export flows
 
 ### prime — Cisco Prime Infrastructure
 
-Supplies: device_reachability (controller_device_unreachable); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); device_reachability (controller_device_unreachable); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: link alarms are typed controller_alarm (nms/prime.go) (design §7b E2)
 - **interface_health** ❓ unverified: interface statistics API not assessed
-- **bgp_session** 🟠 normalization_pending: BGP alarms are typed controller_alarm (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: IGP alarms are typed controller_alarm (design §7b E2)
 - **overlay_tunnel** — unavailable: not an overlay controller
 - **control_connection** — unavailable: not an SD-WAN controller
-- **device_restart** ❓ unverified: reload alarms not assessed
 - **device_resource** ❓ unverified: resource alarms not assessed
 - **l2_control** ❓ unverified: L2 alarms not assessed
-- **physical_layer** ❓ unverified: optics alarms not assessed
 - **flow_volume** — unavailable: the controller does not export flows
 
 ### versa_director — Versa Director
 
-Supplies: overlay_tunnel (controller_tunnel_state); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); overlay_tunnel (controller_tunnel_state); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: interface alarms are typed controller_alarm (nms/versa.go) (design §7b E2)
 - **interface_health** ⬜ collection_pending: interface statistics not collected; LEF statistics go to Versa Analytics
-- **bgp_session** 🟠 normalization_pending: BGP alarms are typed controller_alarm (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: IGP alarms are typed controller_alarm (design §7b E2)
 - **control_connection** ❓ unverified: controller-connection alarms not assessed
 - **device_reachability** 🟠 normalization_pending: appliance-down alarms fall through to controller_alarm (design §7b E2)
-- **device_restart** ❓ unverified: reboot alarms not assessed
 - **device_resource** 🟠 normalization_pending: appliance health is typed controller_health_score (an orphan kind) (design §7b E2)
 - **l2_control** — unavailable: not reported by the Director
-- **physical_layer** ❓ unverified: hardware alarms not assessed
 - **flow_volume** — unavailable: flows are exported as LEF to Versa Analytics, not by the Director
 
 ### versa_concerto — Versa Concerto
 
-Supplies: overlay_tunnel (controller_tunnel_state); config_change (controller_policy_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); overlay_tunnel (controller_tunnel_state); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **link_state** 🟠 normalization_pending: interface alarms are typed controller_alarm (nms/versa.go) (design §7b E2)
 - **interface_health** ⬜ collection_pending: interface statistics not collected
-- **bgp_session** 🟠 normalization_pending: BGP alarms are typed controller_alarm (design §7b E2)
-- **igp_adjacency** 🟠 normalization_pending: IGP alarms are typed controller_alarm (design §7b E2)
 - **control_connection** ❓ unverified: controller-connection alarms not assessed
 - **device_reachability** 🟠 normalization_pending: appliance-down alarms fall through to controller_alarm (design §7b E2)
-- **device_restart** ❓ unverified: reboot alarms not assessed
 - **device_resource** 🟠 normalization_pending: appliance health is typed controller_health_score (an orphan kind) (design §7b E2)
 - **l2_control** — unavailable: not reported by Concerto
-- **physical_layer** ❓ unverified: hardware alarms not assessed
 - **flow_volume** — unavailable: flows go to Versa Analytics, not Concerto
 
 ### catalyst_9800 — Cisco Catalyst 9800 WLC (wireless)
