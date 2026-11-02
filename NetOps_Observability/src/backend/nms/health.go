@@ -75,11 +75,14 @@ const (
 	LaneStates   = "states"
 	LaneDevices  = "devices"
 	LaneWireless = "wireless"
+	// LaneMetricEvents is the correlation engine's metric lane (netops.metrics):
+	// canonical device_* samples a connector supplies (E3).
+	LaneMetricEvents = "metric_events"
 )
 
 // SinkLanes is the closed lane set, in exposition order.
 func SinkLanes() []string {
-	return []string{LaneMetrics, LaneEvents, LaneStates, LaneDevices, LaneWireless}
+	return []string{LaneMetrics, LaneEvents, LaneStates, LaneDevices, LaneWireless, LaneMetricEvents}
 }
 
 // streamLabelUnknown stands in for a saved stream name the connector does not

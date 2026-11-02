@@ -20,8 +20,8 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 |---|---|---|---|---|
 | SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 | lab_validated |
 | gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 | lab_validated |
-| vManage only | vmanage | 9/13 | 7 | lab_validated |
-| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 11/13 | 18 | lab_validated |
+| vManage only | vmanage | 11/13 | 8 | lab_validated |
+| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 19 | lab_validated |
 | Catalyst Center only | catalyst_center | 7/13 | 7 | doc_claimed |
 | Meraki only | meraki | 7/13 | 7 | doc_claimed |
 | NDFC only | ndfc | 6/13 | 5 | doc_claimed |
@@ -34,14 +34,14 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 | Evidence | snmp_poll | gnmi | syslog | trap | flow | vmanage | catalyst_center | meraki | ndfc | prime | versa_director | versa_concerto | catalyst_9800 | generic |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **link_state** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
-| **interface_health** | ✅ | 💤 | — | — | — | 🟠 | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
+| **interface_health** | ✅ | 💤 | — | — | — | ✅ | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
 | **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ⬜ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **control_connection** | ❓ | ❓ | ⬜ | ⬜ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
 | **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ᵈ | ✅ᵈ | ❓ | ✅ᵈ | 🟠 | 🟠 | ❓ | ❓ |
 | **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
-| **device_resource** | ✅ | 💤 | ⬜ | ⬜ | — | 🟠 | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
+| **device_resource** | ✅ | 💤 | ⬜ | ⬜ | — | ✅ | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
 | **config_change** | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **l2_control** | ⬜ | ⬜ | ✅ | ✅ | — | ❓ | ❓ | ❓ | ❓ | ❓ | — | — | — | ❓ |
 | **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
@@ -152,10 +152,8 @@ Supplies: flow_volume (flow_volume_anomaly).
 
 ### vmanage — Cisco Catalyst SD-WAN Manager (vManage)
 
-Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (ospf_adjacency_change); overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); device_restart (device_restart); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
+Supplies: link_state (if_metric_anomaly, link_state_change); interface_health (if_metric_anomaly); bgp_session (bgp_adjacency_change); igp_adjacency (ospf_adjacency_change); overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); device_restart (device_restart); device_resource (device_resource_anomaly); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
-- **interface_health** 🟠 normalization_pending: interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified (design §7b E3)
-- **device_resource** 🟠 normalization_pending: system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm (design §7b E3)
 - **l2_control** ❓ unverified: VRRP / STP state on cEdge via vManage not assessed
 - **flow_volume** — unavailable: cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated
 

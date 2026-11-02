@@ -146,6 +146,26 @@ def registered_connectors() -> list[str]:
         return sorted(set(_REGISTRY_RE.findall(fh.read())))
 
 
+#: A connector's canonical METRIC table (E3): device_* family names it emits,
+#: which the engine's episode detector turns into *_anomaly kinds exactly as it
+#: does SNMP samples (coverage_matrix.EPISODE_KIND).
+CONNECTOR_METRIC_FILES: dict[str, tuple[str, ...]] = {
+    "vmanage": ("vmanage_realtime.go",),
+}
+_CANONICAL_METRIC = re.compile(r'"(device_[a-z_]+)":\s*"([a-z_]+)"')
+
+
+def connector_metric_kinds(vendor: str) -> frozenset[str]:
+    """Episode kinds a connector supplies through canonical device_* samples."""
+    kinds: set[str] = set()
+    for name in CONNECTOR_METRIC_FILES.get(vendor, ()):
+        with open(os.path.join(NMS_DIR, name), encoding="utf-8") as fh:
+            for metric, family in _CANONICAL_METRIC.findall(fh.read()):
+                if CM.METRIC_BUCKET.get(metric) == family and family in CM.EPISODE_KIND:
+                    kinds.add(CM.EPISODE_KIND[family])
+    return frozenset(kinds)
+
+
 def connector_kinds(vendor: str) -> frozenset[str]:
     """Kind literals the vendor's normalizer can return (its emitted vocabulary)."""
     kinds: set[str] = set()
@@ -187,7 +207,7 @@ def raw_supply(source: dict) -> frozenset[str]:
     if how == "flow_lane":
         return frozenset({"flow_volume_anomaly"})
     if how == "connector":
-        return connector_kinds(source["id"])
+        return connector_kinds(source["id"]) | connector_metric_kinds(source["id"])
     if how == "none":
         return frozenset()
     raise EquivalenceError(f"source {source['id']}: unknown computed_from {how!r}")

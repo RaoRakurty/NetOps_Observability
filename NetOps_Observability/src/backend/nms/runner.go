@@ -89,7 +89,11 @@ func (d *RetryDoer) Do(req *http.Request) (*http.Response, error) {
 
 // Routed is the class-routed output of the Pipeline for one poll/webhook batch.
 type Routed struct {
-	MetricLines  []string            // exposition lines for VictoriaMetrics
+	MetricLines []string // exposition lines for VictoriaMetrics
+	// Canonical holds the canonical device_* samples (vmanage_realtime.go),
+	// AFTER device keys were resolved to inventory ids — the correlation
+	// engine's metric lane reads these (Sinks.EmitMetricEvents).
+	Canonical    []ControllerMetric
 	Events       []ControllerEvent   // deduped, ready for netops.controller_events
 	States       []StateRecord       // EVERY state applied this batch (first sightings + refreshes) — persist these
 	StateChanges []StateChange       // the subset that TRANSITIONED — emit these as change-events
@@ -128,6 +132,9 @@ func (p *Pipeline) Route(b Batch) Routed {
 	for _, m := range b.Metrics {
 		if line := MetricLine(m); line != "" {
 			out.MetricLines = append(out.MetricLines, line)
+		}
+		if _, ok := CanonicalDeviceMetricFamily(m.Name); ok {
+			out.Canonical = append(out.Canonical, m)
 		}
 	}
 	for _, s := range b.States {

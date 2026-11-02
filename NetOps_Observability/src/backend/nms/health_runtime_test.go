@@ -640,6 +640,7 @@ netops_nms_sink_failures_total{tenant_id="t1",integration_id="i1",vendor="vmanag
 netops_nms_sink_failures_total{tenant_id="t1",integration_id="i1",vendor="vmanage",lane="states"} 0
 netops_nms_sink_failures_total{tenant_id="t1",integration_id="i1",vendor="vmanage",lane="devices"} 0
 netops_nms_sink_failures_total{tenant_id="t1",integration_id="i1",vendor="vmanage",lane="wireless"} 0
+netops_nms_sink_failures_total{tenant_id="t1",integration_id="i1",vendor="vmanage",lane="metric_events"} 0
 # HELP netops_nms_integrations_enabled Enabled NMS integrations, by vendor.
 # TYPE netops_nms_integrations_enabled gauge
 netops_nms_integrations_enabled{vendor="generic"} 0

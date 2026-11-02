@@ -50,6 +50,10 @@ func (t VManageAutoTransformer) TransformStream(tenant, integrationID, stream st
 		return vmanageControlTransform(tenant, integrationID, raw)
 	case "tunnels":
 		return vmanageTunnelStatsTransform(tenant, integrationID, raw)
+	case "interface_realtime":
+		return vmanageInterfaceRealtimeTransform(tenant, integrationID, raw)
+	case "system_realtime":
+		return vmanageSystemRealtimeTransform(tenant, integrationID, raw)
 	}
 	return t.Transform(tenant, integrationID, raw)
 }

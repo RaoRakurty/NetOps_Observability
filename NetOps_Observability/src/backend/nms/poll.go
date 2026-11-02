@@ -150,6 +150,10 @@ var vmanagePerDevice = map[string]string{
 	"tunnels":             "/dataservice/device/tunnel/statistics",
 	"control_connections": "/dataservice/device/control/connections",
 	"bfd":                 "/dataservice/device/bfd/sessions",
+	// E3: real-time interface and system state → canonical device_* metrics
+	// (vmanage_realtime.go). Lab-verified live on 20.6.1 (not the /synced cache).
+	"interface_realtime": "/dataservice/device/interface",
+	"system_realtime":    "/dataservice/device/system/status",
 }
 
 // vmanageMaxDevicesPerCycle bounds one stream's fan-out per poll; a larger

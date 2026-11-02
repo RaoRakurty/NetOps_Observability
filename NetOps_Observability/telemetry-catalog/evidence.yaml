@@ -135,8 +135,6 @@ sources:
     computed_from: connector
     fidelity: lab_validated   # recorded 20.6.1 payloads, nms/testdata/vmanage_20.6 (E2a)
     gaps:
-      interface_health: {status: normalization_pending, detail: "interface statistics go to VictoriaMetrics only — 10-min buckets, 30–60 min late (tracker 357); the realtime /dataservice/device/interface endpoint is lab-verified", ref: "design §7b E3"}
-      device_resource: {status: normalization_pending, detail: "system statistics go to VictoriaMetrics only (bucketed); device_health transitions are typed controller_alarm", ref: "design §7b E3"}
       l2_control: {status: unverified, detail: "VRRP / STP state on cEdge via vManage not assessed"}
       flow_volume: {status: unavailable, detail: "cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated"}
 

@@ -12,6 +12,10 @@ const (
 	// TopicControllerEvents carries normalized controller_event records (§3.3)
 	// to the correlation service (raw landing + → corr_signals).
 	TopicControllerEvents = "netops.controller_events"
+	// TopicMetrics is the correlation engine's metric lane (canonical
+	// MetricEvents, src/correlation handle_metric). A connector's canonical
+	// device_* samples join it (E3).
+	TopicMetrics = "netops.metrics"
 	// TopicEvents is the optional normalized cross-source event topic (state
 	// transitions can also be emitted here).
 	TopicEvents = "netops.events"

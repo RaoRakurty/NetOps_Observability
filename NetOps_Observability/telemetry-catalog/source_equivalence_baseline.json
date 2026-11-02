@@ -7,6 +7,6 @@
   "prime_only": 7,
   "snmp_push": 15,
   "versa_only": 6,
-  "vmanage_only": 7,
-  "vmanage_push": 18
+  "vmanage_only": 8,
+  "vmanage_push": 19
 }
