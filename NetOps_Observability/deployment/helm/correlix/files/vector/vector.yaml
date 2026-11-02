@@ -459,9 +459,26 @@ transforms:
         }
       }
 
-  syslog_normalized:
+  # The device's network address (tracker 371, P0.5). syslog_in receives every
+  # message over syslog-ng's TCP relay, so the source_ip it records is
+  # syslog-ng's own container (every syslog document said 172.18.0.12).
+  # syslog-ng stamps the real sender into the RFC 5424 origin element
+  # (syslog-ng/core.conf r_sender_address), decoded here as .origin.ip. It is
+  # restored only when it parses as an address; otherwise source_ip stays as
+  # received — never fabricated. Its own transform so tests/test_syslog_sender.py
+  # runs this exact program in isolation.
+  syslog_sender:
     type: remap
     inputs: [syslog_in]
+    source: |
+      sender = string(.origin.ip) ?? ""
+      if is_ipv4(sender) || is_ipv6(sender) {
+        .source_ip = sender
+      }
+
+  syslog_normalized:
+    type: remap
+    inputs: [syslog_sender]
     source: |
       .signal   = "syslog"
       .hostname = string(.hostname) ?? "unknown"
