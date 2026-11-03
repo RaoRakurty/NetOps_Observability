@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for IngestSenderAddressMasked (rules.yaml, ingest-integrity,
+# tier warning; tracker 373). The counter is vector-router's
+# netops_ingest_source_masked_events{topic} (no `_total`: Vector's exporter
+# appends none). Acceptance:
+#   * sustained masking on a lane FIRES, per topic;
+#   * a short burst — the milliseconds between docker-proxy starting and
+#     Docker's conntrack flush — stays SILENT;
+#   * a lane whose counter is flat stays SILENT.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) A chatty device keeps arriving masked: one masked trap every minute for
+  #    30 minutes. increase[5m] > 0 from the first minutes; fires after for: 10m.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_source_masked_events{job="vector-router",topic="netops.snmptrap"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IngestSenderAddressMasked
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: IngestSenderAddressMasked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+              topic: netops.snmptrap
+            exp_annotations:
+              summary: "netops.snmptrap: devices' sender addresses are being lost to the Docker bridge gateway — their events cannot be attributed to a device or tenant"
+              description: "Some senders on netops.snmptrap reach the receiver re-sourced from the bridge gateway (stale UDP conntrack after a container restart, or IPv6 senders). Their telemetry stays searchable but never correlates. Clear the stale UDP conntrack entries for the published telemetry ports."
+              runbook: "docs/runbooks/ingest-sender-address-masked.md"
+
+  # 2) A recreate burst: 3 packets masked in one minute, then nothing. The
+  #    5-minute window drains long before for: 10m elapses — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_source_masked_events{job="vector-router",topic="netops.syslog"}'
+        values: "0 0 3 3x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: IngestSenderAddressMasked
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: IngestSenderAddressMasked
+        exp_alerts: []
+
+  # 3) A healthy lane: the counter exists and never moves — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_source_masked_events{job="vector-router",topic="netops.flows"}'
+        values: "7x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IngestSenderAddressMasked
+        exp_alerts: []

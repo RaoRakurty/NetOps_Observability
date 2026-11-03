@@ -74,6 +74,12 @@ type TrapEvent struct {
 	VarbindsDropped int  `json:"varbinds_dropped,omitempty"` // varbinds beyond the cap
 	Truncated       bool `json:"truncated,omitempty"`        // any cap applied to this trap
 
+	// SourceMasked: the datagram arrived from the Docker bridge gateway, not
+	// from the device (tracker 373, masked_source.go) — Host is NOT the sender,
+	// so attribution from it is impossible. Counted downstream
+	// (netops_ingest_source_masked_events) and alerted, never silent.
+	SourceMasked bool `json:"source_masked,omitempty"`
+
 	// NormalizedEvent envelope (#32) — vendor-agnostic structure every trap emits,
 	// so Events/Correlation read parsed fields instead of re-decoding raw OIDs.
 	// Design: docs/design/research/telemetry-normalization-architecture.md §3.
@@ -961,16 +967,23 @@ type trapReceiver struct {
 	targets TargetFunc
 	events  chan *TrapEvent
 
+	// masks recognises a sender re-sourced from the Docker bridge gateway
+	// (tracker 373); the zero value detects nothing.
+	masks maskedSourceDetector
+
 	mu       sync.RWMutex
 	status   Status
 	received uint64
 	decoded  uint64
+	masked   uint64
 }
 
 // NewTrapReceiver builds the SNMP trap receiver. Listens on SNMP_TRAP_LISTEN
-// (default :1162 — an unprivileged port; compose maps host 162→1162 so the
-// distroless nonroot API needn't bind a privileged port). Decoded traps are
-// POSTed to SNMP_TRAP_SINK_URL (the Vector aggregator's HTTP source).
+// (default :1162; compose sets the published port itself — host port ==
+// container port, tracker 373). Decoded traps are POSTed to
+// SNMP_TRAP_SINK_URL (the Vector aggregator's HTTP source). With
+// CX_MASKED_SOURCE_DETECT=docker-bridge a trap re-sourced from the bridge
+// gateway is stamped source_masked.
 func NewTrapReceiver(targets TargetFunc) Collector {
 	addr := os.Getenv("SNMP_TRAP_LISTEN")
 	if addr == "" {
@@ -980,12 +993,14 @@ func NewTrapReceiver(targets TargetFunc) Collector {
 	if sink == "" {
 		sink = "http://vector-aggregator:8688/"
 	}
+	masks, note := newMaskedSourceDetector(os.Getenv("CX_MASKED_SOURCE_DETECT"), readProcNetRoute)
 	return &trapReceiver{
 		addr:    addr,
 		sinkURL: sink,
 		targets: targets,
+		masks:   masks,
 		events:  make(chan *TrapEvent, 1024),
-		status:  Status{Name: "snmptrap", Kind: "trap", Healthy: true},
+		status:  Status{Name: "snmptrap", Kind: "trap", Healthy: true, LastError: note},
 	}
 }
 
@@ -1163,17 +1178,38 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 			r.mu.Unlock()
 			continue
 		}
-		r.mu.Lock()
-		r.decoded++
-		r.status.LastTick = time.Now().UTC()
-		r.status.LastError = ""
-		r.mu.Unlock()
+		r.recordDecoded(ev, srcIP)
 
 		select {
 		case r.events <- ev:
 		default: // bounded queue — drop under flood (backpressure, §9)
 		}
 	}
+}
+
+// recordDecoded accounts one decoded trap: stamps source_masked when the
+// sender is the bridge gateway (tracker 373) and keeps the collector's
+// LastError naming the loss while masked traps keep arriving.
+func (r *trapReceiver) recordDecoded(ev *TrapEvent, srcIP string) {
+	masked := r.masks.masked(srcIP)
+	ev.SourceMasked = masked
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.decoded++
+	r.status.LastTick = time.Now().UTC()
+	r.status.LastError = ""
+	if masked {
+		r.masked++
+		r.status.LastError = maskedTrapError(r.masked)
+	}
+}
+
+// maskedTrapError is the operator-facing reason shown on the collector while
+// masked traps keep arriving: what happened and the one-line remedy.
+func maskedTrapError(n uint64) string {
+	return fmt.Sprintf("%d trap(s) arrived from the Docker bridge gateway instead of the device "+
+		"(sender address lost — device and tenant cannot be attributed). Publish the trap port "+
+		"host==container and clear stale UDP conntrack: docs/runbooks/ingest-sender-address-masked.md", n)
 }
 
 func (r *trapReceiver) forwardLoop(ctx context.Context) {

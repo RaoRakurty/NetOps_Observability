@@ -31,6 +31,35 @@ POLL="${CX_ENRICHMENT_POLL_SECONDS:-15}"
 VECTOR_BIN="${CX_VECTOR_BIN:-/usr/local/bin/vector}"
 HERE="$(dirname "$0")"
 
+# Tracker 373: derive the Docker bridge gateway so the VRL can stamp a sender
+# that docker-proxy re-sourced from it (source_masked). Only under
+# CX_MASKED_SOURCE_DETECT=docker-bridge (compose sets it): on host networking
+# or Kubernetes the default gateway is a real router. The routing table path is
+# overridable ONLY for tests. Either outcome is said on stderr, never silent.
+bridge_gateway() {
+    # /proc/net/route prints the gateway as little-endian hex: 010012AC is
+    # 172.18.0.1. The first default route (Destination 00000000) with a
+    # non-zero gateway wins.
+    hexgw="$(awk 'NR > 1 && $2 == "00000000" && $3 != "00000000" { print $3; exit }' "$1")" || return 1
+    case "$hexgw" in
+        [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+        *) return 1 ;;
+    esac
+    printf '%d.%d.%d.%d\n' \
+        "0x$(printf '%s' "$hexgw" | cut -c7-8)" "0x$(printf '%s' "$hexgw" | cut -c5-6)" \
+        "0x$(printf '%s' "$hexgw" | cut -c3-4)" "0x$(printf '%s' "$hexgw" | cut -c1-2)"
+}
+if [ "${CX_MASKED_SOURCE_DETECT:-}" = "docker-bridge" ]; then
+    ROUTES="${CX_ROUTE_TABLE:-/proc/net/route}"
+    if gw="$(bridge_gateway "$ROUTES")" && [ -n "$gw" ]; then
+        CX_BRIDGE_GATEWAY="$gw"
+        export CX_BRIDGE_GATEWAY
+        echo "cx-enrichment-reload: masked-source detection on (bridge gateway ${gw})" >&2
+    else
+        echo "cx-enrichment-reload: masked-source detection OFF — no default gateway readable in ${ROUTES}" >&2
+    fi
+fi
+
 "$VECTOR_BIN" "$@" &
 VECTOR_PID=$!
 
