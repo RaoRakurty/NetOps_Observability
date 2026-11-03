@@ -447,7 +447,14 @@ RULES_HASH_218 = "34cce98ee1a4ee8fb1d6d990930400506f993e61be19b4e30a23c886419a20
 #: The one corpus entry this moves (`entConfigChange`) replays byte-for-byte to
 #: the output A9 recorded before A9b typed it, so its baseline skip is gone.
 RULES_HASH_E5B = "9c24e4aaec5f5cab0cfb16250a5de8877edd5a31ba2d2d0cf64007f8cdf48e26"
-RULES_HASH_A3 = RULES_HASH_E5B
+#:
+#: BGP peer index (2026-11-03): the two BGP trap rules take the session's peer
+#: from the bgpPeerTable INDEX when the agent sends no bgpPeerRemoteAddr (the
+#: original RFC 4273 notifications carry only bgpPeerLastError.<peer> /
+#: bgpPeerState.<peer>; IOS-XE, recorded on the lab). Additive for every corpus
+#: entry: none carries an index-only BGP varbind, so all replay byte-for-byte.
+RULES_HASH_BGP_PEER_INDEX = "f3626ce02562f8d68191b2c7eeef9e2c90b54475c9b9d0bebe708fed843288a5"
+RULES_HASH_A3 = RULES_HASH_BGP_PEER_INDEX
 
 
 def _guard_patterns(node) -> list[str]:
