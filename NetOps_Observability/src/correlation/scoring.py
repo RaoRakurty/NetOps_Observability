@@ -38,10 +38,12 @@ from functools import lru_cache
 
 from catalog import Catalog, Clause, Template
 from signals import (
+    CONFIG_CHANGE_KIND_SET,
     EntityType,
     ModalityClass,
     ProbeAuthority,
     Signal,
+    config_change_family_enabled,
     fidelity_weighting_enabled,
     probe_authority_of,
     unvalidated_rule_ids,
@@ -286,11 +288,17 @@ def score_template(
 
     bonus = 0.0
     supporting_hit = False
+    # E5c: with the config-change family in force, a change matched by an
+    # OPTIONAL clause is context — satisfied and supporting, never a witness at
+    # the verdict gate (downgrade-only: it can remove a confirming plane, never
+    # add one). OFF: the set is empty and nothing below moves.
+    context_only = CONFIG_CHANGE_KIND_SET if config_change_family_enabled() else frozenset()
     for clause in optional:
         hits = _satisfying(clause, evidence)
         if hits:
             satisfied.append(clause.kind)
-            matched_signals.extend(hits)
+            if not (context_only and clause.kinds() <= context_only):
+                matched_signals.extend(hits)
             supporting_hit = True
             bonus = min(OPTIONAL_BONUS_CAP, bonus + OPTIONAL_BONUS_PER_CLAUSE)
 

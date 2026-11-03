@@ -33,7 +33,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from signals import EntityType, ModalityClass
+from signals import (
+    CONFIG_CHANGE_KINDS,
+    EntityType,
+    ModalityClass,
+    config_change_family_enabled,
+)
 
 CATALOG_SCHEMA_VERSION = 1
 
@@ -3740,7 +3745,72 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
 BUILTIN_TEMPLATES.extend(EXPOSURE_STORY_TEMPLATES)
 
 
+# ── E5c: the config-change family (flag CORR_CONFIG_CHANGE_FAMILY) ─────────────
+#
+# signals.py says why. This is the catalog half: a PURE rewrite of the raw
+# template dicts, applied by builtin_catalog() only while the family is in
+# force, so the OFF catalog — and its `catalog_version` — is the same object it
+# always was, and ON gets its own version (rank_memo keys stay apart).
+
+CHANGE_INDUCED_TEMPLATE_ID = "sig.ent.wan-edge.controller-change-induced"
+
+#: The fault a change-induced incident needs, from ANY source: the template's
+#: original optional list plus the controller and SNMP-episode equivalents.
+#: (routing_adjacency_change is deliberately absent: coverage.INTENTIONAL_BLIND
+#: declares it consumed by no signature.)
+CHANGE_INDUCED_FAULT_KINDS = (
+    "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|"
+    "if_util_high|device_resource_anomaly|controller_bfd_down|controller_tunnel_state|"
+    "controller_control_connection_loss|ospf_adjacency_change|isis_adjacency_change|"
+    "if_metric_anomaly|bgp_state_anomaly|igp_state_anomaly"
+)
+
+
+def _is_change_context(clause: dict) -> bool:
+    return clause.get("kind") == "device_config_change" and bool(clause.get("optional"))
+
+
+def apply_config_change_family(raw: list[dict]) -> list[dict]:
+    """E5c: the network change-induced signatures accept a configuration change
+    from ANY observer, and a change-induced incident REQUIRES a fault.
+
+    (a) change-induced: `[change family (device), fault (required)]` — a change
+        with no fault is routine work, not an incident (it scores half
+        coverage, where today a lone controller push scores 1.0).
+    (b) every optional "what changed?" clause (`device_config_change`: the
+        adjacency flaps, the hardening-drift story) widens to the family.
+        Optional stays optional, and scoring keeps those hits out of the
+        verdict gate, so a controller's MANAGEMENT-plane audit record can raise
+        coverage on a BGP flap but never be its second confirming plane.
+    Pure: returns new dicts, never mutates `raw`."""
+    out: list[dict] = []
+    for t in raw:
+        tid = t.get("id")
+        if tid == CHANGE_INDUCED_TEMPLATE_ID:
+            t = dict(t)
+            t["title"] = "Change-induced incident (configuration change then fault)"
+            t["requires"] = [
+                {"kind": CONFIG_CHANGE_KINDS, "entity_type": "device"},
+                {"kind": CHANGE_INDUCED_FAULT_KINDS},
+            ]
+            t["operator_phrase"] = (
+                "A configuration change on this device preceded this fault — "
+                "probable change-induced incident")
+        elif any(_is_change_context(c) for c in t.get("requires", ())):
+            t = dict(t)
+            t["requires"] = [
+                {**c, "kind": CONFIG_CHANGE_KINDS} if _is_change_context(c) else c
+                for c in t["requires"]
+            ]
+        out.append(t)
+    return out
+
+
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here
-    are a build break, not a runtime surprise (guarded by test)."""
+    are a build break, not a runtime surprise (guarded by test). With the E5c
+    config-change family in force the network change signatures are rewritten
+    by apply_config_change_family first."""
+    if config_change_family_enabled():
+        return load_catalog(apply_config_change_family(BUILTIN_TEMPLATES))
     return load_catalog(BUILTIN_TEMPLATES)
