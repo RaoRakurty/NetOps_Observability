@@ -696,7 +696,7 @@ services:
   goflow2:
     command:
       - "-listen"
-      - "netflow://:2055,sflow://:6343,netflow://:4739"
+      - "netflow://:${NETFLOW_PORT:-2055},sflow://:${SFLOW_PORT:-6343},netflow://:${IPFIX_PORT:-4739}"
       - "-format"
       - "json"
       - "-transport"

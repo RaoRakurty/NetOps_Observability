@@ -117,7 +117,7 @@ Ports are host ports; each is overridable in `.env`. Source
 | NetFlow v5/v9 | UDP | `NETFLOW_PORT` (**2055**) | devices → host |
 | IPFIX | UDP | `IPFIX_PORT` (**4739**) | devices → host |
 | sFlow | UDP | `SFLOW_PORT` (**6343**) | devices → host |
-| SNMP traps | UDP | `SNMP_TRAP_PORT` (**162** → container 1162) | devices → host |
+| SNMP traps | UDP | `SNMP_TRAP_PORT` (**162**, same port in the container) | devices → host |
 | SNMP polling | UDP 161 | — | **host → devices** |
 | UI / API | TCP | `BASE_PORT` (**8000**) | operators → host |
 
@@ -278,7 +278,7 @@ usually looking at exactly that.
 
 #### Lane 2 — SNMP traps, then SNMP polling
 
-**Traps** to host UDP **162** (`SNMP_TRAP_PORT`, mapped to 1162 in-container).
+**Traps** to host UDP **162** (`SNMP_TRAP_PORT`, same port in-container).
 Verify:
 
 ```bash
