@@ -162,6 +162,16 @@
       "owner_decision": "none needed",
       "posture": "Separate container, unmodified upstream image. Our vector.yaml/VRL are configuration under MPL §1.10/§3.3 Larger Work, not modifications.",
       "status": "ACCEPTED"
+    },
+    "cisco-bgp4-mib": {
+      "decided": "fetch-at-build-time",
+      "evidence": "src/backend/collectors/mibs/gen_index.py FETCH_PINS: CISCO-BGP4-MIB and CISCO-SMI (Cisco copyright, no redistribution grant) plus their IETF imports BGP4-MIB, INET-ADDRESS-MIB, SNMP-FRAMEWORK-MIB, pinned by https URL and sha256 into the gitignored vendored/.fetched/ cache for the net-snmp pass; never committed. Before 2026-11-03 these modules were already fetched UNPINNED at build time from the same mirror by pysmi (DEFAULT_MIBS), which failed to compile CISCO-BGP4-MIB; the pin adds a checksum and changes no distribution. Only the generated, checked-in index/oididx.json (OID→name/type/enum facts) ships. Documented in vendored/SOURCES.md; test_gen_index.py pins the table.",
+      "license": "LicenseRef-Cisco-MIB-NoGrant",
+      "obligation": "none — Correlix does not redistribute these files in any form",
+      "owner_decision": "Same posture as arista-mibs (owner DECIDED 2026-09-04: fetch at build time, do not redistribute); no new distribution — flagged to the owner 2026-11-03.",
+      "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
+      "rationale": "CISCO-BGP4-MIB decodes IOS-XE's BGP session notifications (cbgp*), which carry IPv6/VRF peers the RFC 4273 MIB cannot; the index needs its OIDs, not its text.",
+      "status": "DECIDED"
     }
   },
   "go": {

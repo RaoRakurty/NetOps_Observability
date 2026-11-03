@@ -2129,6 +2129,30 @@ groups:
         annotations:
           summary: "The tenant-attribution counter is gone — enrichment-miss alerting is BLIND (check vector-router's tenant_attribution_metric transform)"
 
+      - alert: IngestSenderAddressMasked
+        # Tracker 373. A device's syslog / trap / flow arrived re-sourced from
+        # the Docker bridge gateway (stamped source_masked by the trap
+        # receiver, the aggregator's syslog_sender and the router's
+        # flows_decoded): the sender address is lost, so device and tenant
+        # attribution are impossible and the event can never correlate. The
+        # gateway can never be a real device, so there are no false positives.
+        # Cause: a stale UDP conntrack entry that survived a container
+        # recreate (Docker ≥ 29.5.0 clears only entries on the CONTAINER port,
+        # moby#53384), or an IPv6 sender relayed to the IPv4 network.
+        #
+        # SUSTAINED only: a handful of packets can be re-sourced in the
+        # milliseconds between docker-proxy starting and Docker's flush even
+        # with host port == container port. A device still masked ten minutes
+        # later is the incident. Same naming caveat as above: Vector's exporter
+        # adds no `_total`.
+        expr: sum by (topic) (increase(netops_ingest_source_masked_events[5m])) > 0
+        for: 10m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "{{ $labels.topic }}: devices' sender addresses are being lost to the Docker bridge gateway — their events cannot be attributed to a device or tenant"
+          description: "Some senders on {{ $labels.topic }} reach the receiver re-sourced from the bridge gateway (stale UDP conntrack after a container restart, or IPv6 senders). Their telemetry stays searchable but never correlates. Clear the stale UDP conntrack entries for the published telemetry ports."
+          runbook: "docs/runbooks/ingest-sender-address-masked.md"
+
       - alert: VectorQuarantineSealFailures
         # F-11 (INV-F11-06): the quarantine seal stage is fail-closed by
         # design — a runtime seal failure ABORTS the event (drop_on_abort, no

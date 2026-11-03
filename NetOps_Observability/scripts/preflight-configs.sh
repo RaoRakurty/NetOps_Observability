@@ -252,7 +252,9 @@ check_syslogng(){
       continue
     fi
     # --entrypoint: the balabit image's entrypoint IS syslog-ng, so we pass only args.
-    out="$(docker run --rm --entrypoint syslog-ng \
+    # SYSLOG_PORT: core.conf's second listener reads it from the environment
+    # (compose and the helm pod set it); unset, the config does not parse.
+    out="$(docker run --rm --entrypoint syslog-ng -e SYSLOG_PORT=5514 \
         -v "$D/syslog-ng:/etc/syslog-ng/conf.d:ro" \
         -v "$stub/ca.pem:/tls/ca.pem:ro" \
         -v "$stub:/tls/svid:ro" \

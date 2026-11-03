@@ -220,6 +220,11 @@ spec:
             # added capability and this is it.
 {{ include "correlix.containerSecurity" (dict "netBind" true) | indent 12 }}
           args: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng.conf"]
+          # core.conf's second listener reads its port from the environment
+          # (compose publishes it host==container, tracker 373). Unset, the
+          # config does not parse; here it is simply unexposed.
+          env:
+            - {name: SYSLOG_PORT, value: "5514"}
           ports:
             - {name: syslog-udp, containerPort: 514, protocol: UDP}
             - {name: syslog-tcp, containerPort: 514, protocol: TCP}

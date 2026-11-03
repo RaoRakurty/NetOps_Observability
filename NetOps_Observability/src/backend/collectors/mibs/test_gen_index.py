@@ -303,7 +303,13 @@ def test_a_non_https_pin_is_refused_before_any_request(fetch_env):
 
 def test_the_real_pins_are_well_formed_and_https():
     """Guards the checked-in table itself, not a fixture."""
-    assert set(gen.FETCH_PINS) == {"ARISTA-SMI-MIB", "ARISTA-BRIDGE-EXT-MIB"}, (
+    # 2026-11-03: CISCO-BGP4-MIB + CISCO-SMI are FETCHED, never vendored — the
+    # same posture the owner approved for Arista (licence audit 2026-09-03).
+    # They were already fetched unpinned from the same mirror by pysmi; the pin
+    # only adds a checksum. BGP4-MIB / INET-ADDRESS-MIB / SNMP-FRAMEWORK-MIB are
+    # IETF Code Components (redistributable), pinned rather than vendored.
+    assert set(gen.FETCH_PINS) == {"ARISTA-SMI-MIB", "ARISTA-BRIDGE-EXT-MIB", "CISCO-BGP4-MIB", "CISCO-SMI",
+                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"}, (
         "the fetch table is the licence boundary — adding to it is a licence "
         "decision, so it is pinned here deliberately")
     for mod, pin in gen.FETCH_PINS.items():

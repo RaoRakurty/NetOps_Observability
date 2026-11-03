@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-03-bgp-peer-index'
+PARSER_REV = '2026-11-03-cbgp-decoded'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -959,6 +959,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': 'bgp_adjacency_change',
      'vendors': ['any'],
      'guard': {'all': [{'contains': ['etype', 'bgp']},
+                       {'not': {'contains': ['oid', '1.3.6.1.4.1.9.9.187.']}},
                        {'any': [{'contains': ['etype', 'backward']},
                                 {'contains': ['etype', 'transition']},
                                 {'contains': ['etype', 'established']},
@@ -1298,5 +1299,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = 'f3626ce02562f8d68191b2c7eeef9e2c90b54475c9b9d0bebe708fed843288a5'
+BAKED_RULES_HASH = 'e10dccf5309615886d4b9bcc826ccbfb01df2f1ca13551524c8b7d1f5bb536a2'
 RULES_HASH: str = rules_hash(RULES)

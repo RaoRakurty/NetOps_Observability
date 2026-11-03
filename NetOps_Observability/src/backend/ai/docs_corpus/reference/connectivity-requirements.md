@@ -24,7 +24,7 @@ Every row below is a port the compose stack publishes on the host. Docker binds 
 | 514 | TCP | syslog-ng | Syslog over TCP, same listener. | Not configurable |
 | 5514 | UDP | syslog-ng | Syslog. This is the shipped default port. | `SYSLOG_PORT`, default 5514 |
 | 5514 | TCP | syslog-ng | Syslog over TCP. | `SYSLOG_PORT`, default 5514 |
-| 162 | UDP | api | SNMP traps. The host mapping is published whether or not the receiver is enabled. | `SNMP_TRAP_PORT`, default 162, mapped to `SNMP_TRAP_LISTEN` `:1162` inside the container |
+| 162 | UDP | api | SNMP traps. The host mapping is published whether or not the receiver is enabled. | `SNMP_TRAP_PORT`, default 162, the same port inside the container |
 | 2055 | UDP | goflow2 | NetFlow v5 and v9. | `NETFLOW_PORT`, default 2055 |
 | 4739 | UDP | goflow2 | IPFIX. | `IPFIX_PORT`, default 4739 |
 | 6343 | UDP | goflow2 | sFlow. | `SFLOW_PORT`, default 6343 |

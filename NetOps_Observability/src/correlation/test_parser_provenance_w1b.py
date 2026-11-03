@@ -454,7 +454,13 @@ RULES_HASH_E5B = "9c24e4aaec5f5cab0cfb16250a5de8877edd5a31ba2d2d0cf64007f8cdf48e
 #: bgpPeerState.<peer>; IOS-XE, recorded on the lab). Additive for every corpus
 #: entry: none carries an index-only BGP varbind, so all replay byte-for-byte.
 RULES_HASH_BGP_PEER_INDEX = "f3626ce02562f8d68191b2c7eeef9e2c90b54475c9b9d0bebe708fed843288a5"
-RULES_HASH_A3 = RULES_HASH_BGP_PEER_INDEX
+#:
+#: CISCO-BGP4-MIB decoded (2026-11-03): the event_type BGP rule excludes the
+#: cbgp subtree until one-signal-per-transition identity exists (IOS-XE sends
+#: up to six traps per transition). One synthetic, pre-decoded corpus entry
+#: moves (it declares the baseline skip); production never decoded the name.
+RULES_HASH_CBGP_DECODED = "e10dccf5309615886d4b9bcc826ccbfb01df2f1ca13551524c8b7d1f5bb536a2"
+RULES_HASH_A3 = RULES_HASH_CBGP_DECODED
 
 
 def _guard_patterns(node) -> list[str]:

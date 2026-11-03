@@ -390,6 +390,10 @@ services:
     # config @includes them — so the repo dir mounts alongside as conf.d/ and -f
     # names the file inside it.
     command: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng.conf"]
+    environment:
+      # The lab port syslog-ng listens on IN the container — the same number
+      # the host publishes (tracker 373: host port == container port).
+      SYSLOG_PORT: ${SYSLOG_PORT:-5514}
     volumes:
       - ./syslog-ng:/etc/syslog-ng/conf.d:ro
       # F-48: persistent disk-buffer spool for d_vector. Without this the output
@@ -400,10 +404,18 @@ services:
     ports:
       # Published on 5514 (non-privileged, the documented lab port) AND the
       # standard syslog 514, so devices configured with the default `logging
-      # host <nms> 514` reach the collector without per-device reconfig. Both
-      # host ports map to the same container :514.
-      - "${SYSLOG_PORT:-5514}:514/udp"
-      - "${SYSLOG_PORT:-5514}:514/tcp"
+      # host <nms> 514` reach the collector without per-device reconfig.
+      #
+      # HOST PORT == CONTAINER PORT, ALWAYS (tracker 373). Docker clears stale
+      # UDP conntrack for a published port when it (re)creates the mapping, but
+      # since Engine 29.5.0 it matches on the CONTAINER port (moby#53384). A
+      # 5514->514 mapping therefore keeps a stale entry alive for any sender
+      # that logs more often than every 30 s, and that sender's packets reach
+      # the collector re-sourced from the bridge gateway: device and tenant
+      # attribution lost. syslog-ng listens on SYSLOG_PORT as well (core.conf);
+      # tests/test_compose_udp_port_parity.py keeps every UDP publish equal.
+      - "${SYSLOG_PORT:-5514}:${SYSLOG_PORT:-5514}/udp"
+      - "${SYSLOG_PORT:-5514}:${SYSLOG_PORT:-5514}/tcp"
       - "514:514/udp"
       - "514:514/tcp"
     # G3 (2026-09-02): SOCKET-LEVEL health, replacing the image's baked-in
@@ -557,7 +569,9 @@ services:
     # pins cramjam for exactly this codec — see #67 build ⑥).
     command:
       - "-listen"
-      - "netflow://:2055,sflow://:6343,netflow://:4739"
+      # Listen on the PUBLISHED ports so host port == container port (tracker
+      # 373 — see the syslog-ng ports comment).
+      - "netflow://:${NETFLOW_PORT:-2055},sflow://:${SFLOW_PORT:-6343},netflow://:${IPFIX_PORT:-4739}"
       - "-format"
       - "json"
       - "-transport"
@@ -583,9 +597,9 @@ services:
     volumes:
       - ./goflow2:/etc/goflow2:ro
     ports:
-      - "${NETFLOW_PORT:-2055}:2055/udp"
-      - "${IPFIX_PORT:-4739}:4739/udp"
-      - "${SFLOW_PORT:-6343}:6343/udp"
+      - "${NETFLOW_PORT:-2055}:${NETFLOW_PORT:-2055}/udp"
+      - "${IPFIX_PORT:-4739}:${IPFIX_PORT:-4739}/udp"
+      - "${SFLOW_PORT:-6343}:${SFLOW_PORT:-6343}/udp"
     networks: [netops]
     restart: *restart
 
@@ -622,6 +636,11 @@ services:
     entrypoint: ["/bin/sh", "/etc/vector/conf/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml"]
     environment:
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
       # default keeps preflight fresh-loads working without a full env).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
@@ -704,6 +723,11 @@ services:
     entrypoint: ["/bin/sh", "/etc/vector/shared/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml", "--config", "/etc/vector/processors/processors.yaml", "--watch-config"]
     environment:
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
       # ClickHouse credentials are interpolated into vector.yaml at startup.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
@@ -1579,6 +1603,10 @@ services:
     # sockets stay impossible here — that's the prober sidecar's job.
     sysctls:
       net.ipv4.ping_group_range: "0 2147483647"
+      # The SNMP trap receiver binds the published port (162 by default) in
+      # this netns without root or CAP_NET_BIND_SERVICE (tracker 373). Docker
+      # sets this per container already; it is stated so it cannot drift.
+      net.ipv4.ip_unprivileged_port_start: "0"
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
@@ -1753,7 +1781,7 @@ services:
       # the absence of a target here is what makes that a property of the
       # deployment rather than a convention someone could drift away from.
       DEBUG_SYSLOG_TARGET: ${DEBUG_SYSLOG_TARGET:-syslog-ng:514}
-      DEBUG_TRAP_TARGET: ${DEBUG_TRAP_TARGET:-127.0.0.1:1162}
+      DEBUG_TRAP_TARGET: ${DEBUG_TRAP_TARGET:-127.0.0.1:${SNMP_TRAP_PORT:-162}}
       DEBUG_FLOW_TARGET: ${DEBUG_FLOW_TARGET:-goflow2:2055}
       # DEBUG-ROUTES-END
       # #20: export the device→tenant map (under the api's /data volume) so the
@@ -1925,11 +1953,19 @@ services:
       PROBE_EVENT_SINK_URL: ${PROBE_EVENT_SINK_URL:-http://vector-aggregator:8689/}
       PROBER_ID: api
       # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
-      # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
-      # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
+      # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the SAME
+      # port in-container as on the host (tracker 373: host port == container
+      # port, or a chatty sender's traps arrive from the bridge gateway after a
+      # recreate — see the syslog-ng ports comment); binding <1024 without root
+      # is the `ip_unprivileged_port_start` sysctl below.
       # Decoded traps are POSTed to the Vector aggregator's HTTP source.
       FEATURE_SNMP_TRAPS: ${FEATURE_SNMP_TRAPS:-false}
-      SNMP_TRAP_LISTEN: ${SNMP_TRAP_LISTEN:-:1162}
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
+      SNMP_TRAP_LISTEN: ":${SNMP_TRAP_PORT:-162}"
       SNMP_TRAP_SINK_URL: ${SNMP_TRAP_SINK_URL:-http://vector-aggregator:8688/}
       # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,
       # but only drive incident state when this is true (#43 P2b). Default off.
@@ -2341,12 +2377,12 @@ services:
       # private and size it deliberately (PCAP_KEEP x 25 MiB x devices worst
       # case).
       - ../../data/pcap:/data/pcap
-    # SNMP traps arrive on host UDP 162 and forward to the in-container
-    # receiver on 1162 (unprivileged). Active only when FEATURE_SNMP_TRAPS=true;
-    # the mapping is harmless otherwise (nothing binds 1162 inside). Override the
-    # host port with SNMP_TRAP_PORT if 162 is taken.
+    # SNMP traps arrive on host UDP 162 and reach the in-container receiver on
+    # the SAME port (tracker 373). Active only when FEATURE_SNMP_TRAPS=true;
+    # the mapping is harmless otherwise (nothing binds it inside). Override
+    # both sides with SNMP_TRAP_PORT if 162 is taken.
     ports:
-      - "${SNMP_TRAP_PORT:-162}:1162/udp"
+      - "${SNMP_TRAP_PORT:-162}:${SNMP_TRAP_PORT:-162}/udp"
       # BMP sessions arrive on host TCP 11019 (the IANA `bmp` port) and forward
       # to the in-container receiver. Active only when FEATURE_BMP=true; the
       # mapping is harmless otherwise (nothing binds 11019 inside). Override the
