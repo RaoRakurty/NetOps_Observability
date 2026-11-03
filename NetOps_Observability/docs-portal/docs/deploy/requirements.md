@@ -61,7 +61,7 @@ These are the ports the shipped compose file publishes on the host.
 | 443 | TCP | Web console over TLS | Only when TLS is enabled. See [Enable TLS and mTLS](/deploy/enable-tls). |
 | 514 | UDP and TCP | Syslog from devices | Always published, so a device configured with `logging host <nms> 514` reaches the collector without reconfiguration. |
 | 5514 | UDP and TCP | Syslog, alternate port | `SYSLOG_PORT`, default `5514`. Both host ports reach the same container port. |
-| 162 | UDP | SNMP traps | Mapped to the unprivileged container port 1162. `SNMP_TRAP_PORT` changes the host side. |
+| 162 | UDP | SNMP traps | Same port inside the container (host port = container port, so a container restart never leaves a device's traps arriving from the wrong address). `SNMP_TRAP_PORT` changes both sides. |
 | 2055 | UDP | NetFlow v5 and v9 | Always published. |
 | 4739 | UDP | IPFIX | Always published. |
 | 6343 | UDP | sFlow | Always published. |
