@@ -73,7 +73,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-09-06-218"
+parser_rev: "2026-11-02-e5b"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -1815,10 +1815,18 @@ rules:
   # same seed is what finally admits the hardware/environment traps, which have
   # no typed kind to be promoted to (see the coverage matrix).
   #
-  # ANTI-FABRICATION: the four OIDs are the ones the vendored index resolves
-  # (CISCO-CONFIG-MAN-MIB ×2, JUNIPER-CFGMGMT-MIB, ENTITY-MIB). Nokia's
-  # TIMETRA-SYSTEM-MIB config traps have no NOTIFICATION-TYPE OID in the index,
-  # so they are matched on the MIB-DECODED `event_type` (#32) instead.
+  # ANTI-FABRICATION: every OID named here resolves in the vendored index
+  # (CISCO-CONFIG-MAN-MIB ×2, JUNIPER-CFGMGMT-MIB, TIMETRA-SYSTEM-MIB ×3). The
+  # MIB-decoded `event_type` arm (#32) catches a config-change notification
+  # whose module is not vendored.
+  #
+  # NOT A CONFIG CHANGE (E5b): ENTITY-MIB `entConfigChange` fires when
+  # entLastChangeTime moves — the physical/logical INVENTORY table changed (a
+  # module, PSU or SFP inserted or removed) — and Nokia `tmnxHwConfigChange`
+  # is the chassis hardware equivalent. Neither is a change of configuration.
+  # Both fall to the generic `device_alarm` net (their severity seed keeps them
+  # above the floor), so an optics swap can never be ranked as the change that
+  # caused an outage.
   - rule_id: trap.config.change
     lane: trap
     source: trap
@@ -1826,7 +1834,7 @@ rules:
     entity_type: device
     family: null
     fidelity_status: doc_claimed
-    vendors: [standard, cisco, juniper, nokia]
+    vendors: [cisco, juniper, nokia]
     severity: info
     guard:
       any:
@@ -1835,17 +1843,23 @@ rules:
             - ['1.3.6.1.4.1.9.9.43.2.0.1',    # ciscoConfigManEvent
                '1.3.6.1.4.1.9.9.43.2.0.2',    # ccmCLIRunningConfigChanged
                '1.3.6.1.4.1.2636.4.5.0.1',    # jnxCmCfgChange
-               '1.3.6.1.2.1.47.2.0.1']        # entConfigChange
+               '1.3.6.1.4.1.6527.3.1.3.1.0.8',  # tmnxConfigModify
+               '1.3.6.1.4.1.6527.3.1.3.1.0.9',  # tmnxConfigCreate
+               '1.3.6.1.4.1.6527.3.1.3.1.0.10'] # tmnxConfigDelete
         - equals_any:
             - name
             - [ciscoConfigManEvent, ccmCLIRunningConfigChanged,
-               jnxCmCfgChange, entConfigChange]
+               jnxCmCfgChange, tmnxConfigModify, tmnxConfigCreate,
+               tmnxConfigDelete]
         # The MIB-decoded envelope, for a config-change notification whose
-        # module is not vendored (Nokia tmnxConfigModify/Create/Delete today).
-        # BOTH halves are required on purpose: `ospfIfConfigError` and
-        # `tmnxPeConfigurationError` contain "config" and are FAULTS, not
-        # changes — they must stay generic alarms.
+        # module is not vendored. BOTH halves are required on purpose:
+        # `ospfIfConfigError` and `tmnxPeConfigurationError` contain "config"
+        # and are FAULTS, not changes — they must stay generic alarms. The
+        # inventory notifications (`ent_config_change`, `tmnx_hw_config_change`)
+        # are refused by name: they satisfy both halves and are not changes.
         - all:
+            - {not: {contains: [etype, ent_config_change]}}
+            - {not: {contains: [etype, hw_config]}}
             - any:
                 - {contains: [etype, config]}
                 - {contains: [etype, cfg]}

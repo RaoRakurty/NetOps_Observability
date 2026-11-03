@@ -123,7 +123,10 @@ func primeNormType(eventType, category string) (string, string) {
 		return k, st
 	case strings.Contains(t, "unreach") || strings.Contains(t, "reachab"):
 		return "controller_device_unreachable", "reachability"
-	case strings.Contains(t, "config") || strings.Contains(t, "change"):
+	case strings.Contains(t, "config"):
+		// E5b: a configuration word, not any "change" — "interface state
+		// change" is a link event and must not be ranked as the change that
+		// caused an outage.
 		return "controller_policy_change", ""
 	default:
 		if k, st, ok := classifyAlarmText(t); ok {

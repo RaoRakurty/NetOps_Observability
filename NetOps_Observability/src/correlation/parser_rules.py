@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-09-06-218'
+PARSER_REV = '2026-11-02-e5b'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -1198,12 +1198,25 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'entity_type': 'device',
      'family': None,
      'fidelity_status': 'doc_claimed',
-     'vendors': ['standard', 'cisco', 'juniper', 'nokia'],
+     'vendors': ['cisco', 'juniper', 'nokia'],
      'severity': 'info',
      'guard': {'any': [{'equals_any': ['oid',
-                                       ['1.3.6.1.4.1.9.9.43.2.0.1', '1.3.6.1.4.1.9.9.43.2.0.2', '1.3.6.1.4.1.2636.4.5.0.1', '1.3.6.1.2.1.47.2.0.1']]},
-                       {'equals_any': ['name', ['ciscoConfigManEvent', 'ccmCLIRunningConfigChanged', 'jnxCmCfgChange', 'entConfigChange']]},
-                       {'all': [{'any': [{'contains': ['etype', 'config']}, {'contains': ['etype', 'cfg']}]},
+                                       ['1.3.6.1.4.1.9.9.43.2.0.1',
+                                        '1.3.6.1.4.1.9.9.43.2.0.2',
+                                        '1.3.6.1.4.1.2636.4.5.0.1',
+                                        '1.3.6.1.4.1.6527.3.1.3.1.0.8',
+                                        '1.3.6.1.4.1.6527.3.1.3.1.0.9',
+                                        '1.3.6.1.4.1.6527.3.1.3.1.0.10']]},
+                       {'equals_any': ['name',
+                                       ['ciscoConfigManEvent',
+                                        'ccmCLIRunningConfigChanged',
+                                        'jnxCmCfgChange',
+                                        'tmnxConfigModify',
+                                        'tmnxConfigCreate',
+                                        'tmnxConfigDelete']]},
+                       {'all': [{'not': {'contains': ['etype', 'ent_config_change']}},
+                                {'not': {'contains': ['etype', 'hw_config']}},
+                                {'any': [{'contains': ['etype', 'config']}, {'contains': ['etype', 'cfg']}]},
                                 {'any': [{'contains': ['etype', 'change']},
                                          {'contains': ['etype', 'commit']},
                                          {'contains': ['etype', 'modif']},
@@ -1281,5 +1294,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '34cce98ee1a4ee8fb1d6d990930400506f993e61be19b4e30a23c886419a2039'
+BAKED_RULES_HASH = '9c24e4aaec5f5cab0cfb16250a5de8877edd5a31ba2d2d0cf64007f8cdf48e26'
 RULES_HASH: str = rules_hash(RULES)

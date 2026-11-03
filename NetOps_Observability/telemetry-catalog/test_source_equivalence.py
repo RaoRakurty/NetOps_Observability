@@ -156,6 +156,29 @@ def test_runtime_rule_supply_excludes_grammar_only_rows() -> None:
 
 # 4. current ----------------------------------------------------------------------
 
+def test_shadow_rows_supply_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A shadow row matches and is counted, but never emits a signal, so it must
+    # not score as supply. syslog.config.change ships shadow (tracker 220) and
+    # used to show syslog as supplying config_change.
+    rows = [
+        {"source": "syslog", "kind": "device_config_change", "shadow": True},
+        {"source": "syslog", "kind": "link_state_change"},
+    ]
+    monkeypatch.setattr(S.B, "load", lambda: (None, rows))
+    assert S.rule_kinds("syslog") == frozenset({"link_state_change"})
+
+
+def test_syslog_config_change_is_declared_dormant(model: dict, analysis: dict) -> None:
+    syslog = next(src for src in model["sources"] if src["id"] == "syslog")
+    assert syslog["gaps"]["config_change"]["status"] == "dormant"
+    assert "device_config_change" not in S.rule_kinds("syslog")
+
+
+def test_single_source_device_profiles_are_scored(analysis: dict) -> None:
+    for name in ("snmp_only", "syslog_only"):
+        assert name in analysis["profiles"], f"profile {name} must be on the scorecard"
+
+
 def test_matrix_doc_is_current(model: dict, analysis: dict) -> None:
     with open(S.TARGET, encoding="utf-8") as fh:
         assert fh.read() == S.render(model, analysis), \

@@ -5,7 +5,9 @@
   "meraki_only": 7,
   "ndfc_only": 5,
   "prime_only": 7,
+  "snmp_only": 7,
   "snmp_push": 15,
+  "syslog_only": 14,
   "versa_only": 6,
   "vmanage_only": 8,
   "vmanage_push": 19

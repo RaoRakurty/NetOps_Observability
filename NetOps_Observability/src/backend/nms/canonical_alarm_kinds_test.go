@@ -131,6 +131,17 @@ func TestEveryConnectorUsesTheCanonicalFallback(t *testing.T) {
 	if k, _ := catalystNormType("config", "provisioning", "device"); k != "controller_policy_change" {
 		t.Errorf("Catalyst Center config → %s", k)
 	}
+	// E5b: "change" alone is not a configuration change. A link state change is
+	// a link event; a change with nothing classifiable stays controller_alarm.
+	if k, _ := primeNormType("interface state change", "interface"); k != "link_state_change" {
+		t.Errorf("Prime interface state change → %s, want link_state_change (was policy change)", k)
+	}
+	if k, _ := primeNormType("threshold change", "system"); k != "controller_alarm" {
+		t.Errorf("Prime threshold change → %s, want controller_alarm (was policy change)", k)
+	}
+	if k, _ := primeNormType("configuration archive changed", "configuration"); k != "controller_policy_change" {
+		t.Errorf("Prime configuration change → %s, want controller_policy_change", k)
+	}
 	// Unclassifiable stays controller_alarm.
 	if k, _ := primeNormType("cpu high", "system"); k != "controller_alarm" {
 		t.Errorf("Prime CPU → %s, want controller_alarm", k)

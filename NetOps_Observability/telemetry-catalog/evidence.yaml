@@ -98,6 +98,7 @@ sources:
       device_reachability: {status: unavailable, detail: "a device cannot log its own unreachability"}
       device_restart: {status: collection_pending, detail: "restart / reload messages exist (e.g. %SYS-5-RESTART); restart is mapped from traps only"}
       device_resource: {status: collection_pending, detail: "CPU / memory threshold messages exist; no rule maps them"}
+      config_change: {status: dormant, detail: "syslog.config.change (CONFIG_I / UI_COMMIT) ships shadow: counted, never emitted, until a V2 capacity profile exists", ref: "tracker 220"}
       flow_volume: {status: unavailable, detail: "syslog is not flow export"}
 
   - id: trap
@@ -274,6 +275,8 @@ registry_drift:
 profiles:
   snmp_push: {title: "SNMP + syslog / traps / flows", sources: [snmp_poll, syslog, trap, flow]}
   gnmi_push: {title: "gNMI + syslog / traps / flows", sources: [gnmi, syslog, trap, flow]}
+  snmp_only: {title: "SNMP polling + traps only", sources: [snmp_poll, trap]}
+  syslog_only: {title: "Syslog only", sources: [syslog]}
   vmanage_only: {title: "vManage only", sources: [vmanage]}
   vmanage_push: {title: "vManage + device push (edge collector)", sources: [vmanage, syslog, trap, flow]}
   catalyst_center_only: {title: "Catalyst Center only", sources: [catalyst_center]}

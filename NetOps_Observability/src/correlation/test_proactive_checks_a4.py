@@ -485,8 +485,10 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # deliberate parser change since" — it is re-pinned only by the change that
     # moves it, never by an A4 edit. 2026-09-06-218: the linkDown/linkUp
     # ifAdminStatus/ifOperStatus enrichment (tracker 218), which adds no syslog
-    # grammar and cannot reclassify a V1 noise line.
-    assert parser_rules.PARSER_REV == "2026-09-06-218", (
+    # grammar and cannot reclassify a V1 noise line. 2026-11-02-e5b: the trap
+    # config-change rule stops typing inventory traps as changes — TRAP lane
+    # only, and V1 injects syslog only, so again no V1 line can move.
+    assert parser_rules.PARSER_REV == "2026-11-02-e5b", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

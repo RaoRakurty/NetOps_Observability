@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-09-06-218`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-02-e5b`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -33,7 +33,7 @@ engine treats them as such. Fidelity is the catalog's ladder
 |---|---|---|---|---|---|
 | **`bgp_adjacency_change`** | `syslog.bgp.adjacency_change`, `syslog.bgp.notification` | `trap.bgp.adjacency_change`, `trap.bgp.adjacency_change.event_type` | `bgp_state_anomaly` | `any`, `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: code |
 | `bgp_route_churn` | `syslog.bgp.route_churn` | — | — | `cisco`, `juniper` | syslog: doc_claimed |
-| `device_config_change` | — | `trap.config.change` | — | `cisco`, `juniper`, `nokia`, `standard` | trap: doc_claimed |
+| `device_config_change` | — | `trap.config.change` | — | `cisco`, `juniper`, `nokia` | trap: doc_claimed |
 | `device_restart` | — | `trap.device.restart`, `trap.device.restart.event_type` | — | `any`, `standard` | trap: code |
 | `dom_lane_bias_anomaly` | `syslog.port.dom_lane_bias_anomaly` | — | — | `generic` | syslog: code |
 | `dom_rx_power_low` | `syslog.port.dom_rx_power_low` | — | — | `generic` | syslog: code |
