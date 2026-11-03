@@ -59,9 +59,10 @@ KNOWN_DIVERGENCES = {
         "registry, so the record's device is '' and the producer emits nothing — tracker 371 "
         "(and 373: after a recreate the sender became the bridge gateway)"),
     "cisco_bgp4_mib_unclassified": (
-        "CISCO-BGP4-MIB (1.3.6.1.4.1.9.9.187) is not in the vendored index: the cbgp* "
-        "notifications arrive enterpriseSpecific and emit nothing, and the idle→active "
-        "transition arrives only there — tracker 374"),
+        "CISCO-BGP4-MIB decodes since 2026-11-03 but is deliberately not typed yet: IOS-XE sends "
+        "up to six traps per transition with both families on, so the cbgp* notifications (the only "
+        "carrier of the idle→active transition) need one-signal-per-transition identity before a "
+        "rule may emit them — tracker 374"),
 }
 
 
