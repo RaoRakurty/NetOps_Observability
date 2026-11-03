@@ -161,7 +161,7 @@ the two agree (`bake_rules.py --check`, plus `test_bake_rules.py` here and
 **Extraction specs** — `{const: v}` `{field: F}` `{var: n}` `{lane: n}`
 `{ev: [k1, k2]}` (raw event keys, first truthy) `{re: [[F, pat, group, flags], …]}`
 (first alternative) `{findall: [F, pat, flags]}` `{nth: [listvar, i]}`
-`{vb: [oid…]}` / `{vbname: [substr…]}` (SNMP varbinds)
+`{vb: [oid…]}` / `{vbname: [substr…]}` / `{vbindex: [column oid…]}` (SNMP varbinds; `vbindex` = the table index)
 `{pick: {find: […], reject: […]}}` `{alt: [spec, …]}` `{bool: guard}`
 `{case: [{when: guard, value: template}]}` `{template: "…"}` `{severity_num: true}`
 `{scan: {target, target_order, order, field, default, target_scope,

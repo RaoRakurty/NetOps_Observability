@@ -58,10 +58,6 @@ KNOWN_DIVERGENCES = {
         "the trap's sender (cEDGE-81's VPN-200 interface 192.168.200.33) is in no address "
         "registry, so the record's device is '' and the producer emits nothing — tracker 371 "
         "(and 373: after a recreate the sender became the bridge gateway)"),
-    "trap_bgp_peer_from_index": (
-        "RFC 4273 traps carry the peer only in the varbind OID index "
-        "(bgpPeerState.192.168.200.34); trap.bgp.adjacency_change reads bgpPeerRemoteAddr, so "
-        "the trap binds the device and the controller device:peer — two nodes, tracker 374"),
     "cisco_bgp4_mib_unclassified": (
         "CISCO-BGP4-MIB (1.3.6.1.4.1.9.9.187) is not in the vendored index: the cbgp* "
         "notifications arrive enterpriseSpecific and emit nothing, and the idle→active "

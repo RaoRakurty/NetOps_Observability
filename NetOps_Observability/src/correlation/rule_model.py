@@ -687,6 +687,26 @@ def _compile_extract_core(spec: Any) -> Extractor:
                         return str(vb.get("value") or "")
             return ""
         return _vb
+    if op == "vbindex":
+        # The TABLE INDEX of the first varbind under one of these column OIDs —
+        # the OID suffix after `column.`. Where a notification names its row
+        # only in the index (RFC 4273 bgpBackwardTransition carries
+        # bgpPeerState.<peer-ip>, not bgpPeerRemoteAddr), this is the row's
+        # identity. Raw text: validate it with a `re` before using it as an id.
+        prefixes = tuple(str(p) + "." for p in arg)
+        def _vbindex(c: Ctx) -> str:
+            ev = c.base["ev"]
+            if "varbinds" not in ev:
+                return ""
+            for vb in ev["varbinds"] or ():
+                if not isinstance(vb, dict):
+                    continue
+                oid = str(vb.get("oid") or "")
+                for pre in prefixes:
+                    if oid.startswith(pre) and len(oid) > len(pre):
+                        return oid[len(pre):]
+            return ""
+        return _vbindex
     if op == "vbname":
         # First varbind whose MIB-RESOLVED name contains one of these substrings
         # — how a vendor's peer/interface column is found without hardcoding its

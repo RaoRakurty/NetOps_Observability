@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-02-e5b'
+PARSER_REV = '2026-11-03-bgp-peer-index'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -936,7 +936,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': 'bgp_adjacency_change',
      'vendors': ['standard'],
      'guard': {'equals_any': ['oid', ['1.3.6.1.2.1.15.7.2', '1.3.6.1.2.1.15.7.1', '1.3.6.1.2.1.0.2', '1.3.6.1.2.1.0.1']]},
-     'extract': {'peer': {'vb': ['1.3.6.1.2.1.15.3.1.7']},
+     'extract': {'peer_index': {'vbindex': ['1.3.6.1.2.1.15.3.1.2', '1.3.6.1.2.1.15.3.1.14']},
+                 'peer': {'alt': [{'vb': ['1.3.6.1.2.1.15.3.1.7']}, {'re': [['$peer_index', '^(\\d{1,3}(?:\\.\\d{1,3}){3})$', 1, '']]}]},
                  'established': {'bool': {'equals_any': ['oid', ['1.3.6.1.2.1.15.7.1', '1.3.6.1.2.1.0.1']]}},
                  'state': {'case': [{'when': {'var_true': 'established'}, 'value': 'up'}, {'when': {'always': True}, 'value': 'down'}]}},
      'emit': {'kind': 'bgp_adjacency_change',
@@ -966,7 +967,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                 {'contains': ['etype', 'state']}]}]},
      'extract': {'established': {'bool': {'contains': ['etype', 'establish']}},
                  'state': {'case': [{'when': {'var_true': 'established'}, 'value': 'up'}, {'when': {'always': True}, 'value': 'down'}]},
-                 'peer': {'alt': [{'vb': ['1.3.6.1.2.1.15.3.1.7']}, {'vbname': ['peerremoteaddr', 'peeraddr', 'remoteaddr', 'peer']}]}},
+                 'peer_index': {'vbindex': ['1.3.6.1.2.1.15.3.1.2', '1.3.6.1.2.1.15.3.1.14']},
+                 'peer': {'alt': [{'vb': ['1.3.6.1.2.1.15.3.1.7']},
+                                  {'re': [['$peer_index', '^(\\d{1,3}(?:\\.\\d{1,3}){3})$', 1, '']]},
+                                  {'vbname': ['peerremoteaddr', 'peeraddr', 'remoteaddr', 'peer']}]}},
      'emit': {'kind': 'bgp_adjacency_change',
               'metric': 'bgp_adjacency',
               'modality': 'control_plane',
@@ -1294,5 +1298,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '9c24e4aaec5f5cab0cfb16250a5de8877edd5a31ba2d2d0cf64007f8cdf48e26'
+BAKED_RULES_HASH = 'f3626ce02562f8d68191b2c7eeef9e2c90b54475c9b9d0bebe708fed843288a5'
 RULES_HASH: str = rules_hash(RULES)
