@@ -226,6 +226,16 @@ host / egress / seam+target+schedule) (V:105-115).
   off and the rank_memo projection appends it only under the flag, so OFF is
   byte-identical (test_origin_observer_e1.py). Plan:
   docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md §7a/§7b.
+- **E5c config-change family (flag `CORR_CONFIG_CHANGE_FAMILY`, default OFF, REQUIRES
+  E1, 2026-11-02):** a change reaches the engine as `device_config_change` (the box),
+  `controller_policy_change` (a controller) or `config_change`. ON: stage [6]
+  `builtin_catalog()` applies `catalog.apply_config_change_family` — change-induced
+  requires `[any change kind (device), a fault from any source]` (a lone push is half
+  coverage, no longer 1.0), and every optional `device_config_change` clause widens to
+  the family; stage [7] `score_template` keeps a family hit from an OPTIONAL clause out
+  of `assess` (context, never a confirming plane). Requested without E1 it stays off
+  and logs an error; gauge `corr_config_change_family_enabled`. OFF catalog version is
+  unchanged (test_config_change_family_e5.py).
 
 **Trusted:**
 - non-probe evidence: yes;

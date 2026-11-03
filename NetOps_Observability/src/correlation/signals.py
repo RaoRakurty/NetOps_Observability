@@ -487,6 +487,48 @@ def set_origin_observer(enabled: bool) -> None:
     _ORIGIN_OBSERVER = bool(enabled)
 
 
+# ── E5c: the config-change family (flag CORR_CONFIG_CHANGE_FAMILY) ─────────────
+#
+# A configuration change reaches the engine as one of three kinds, named by who
+# observed it: `device_config_change` (the box says so: syslog CONFIG_I /
+# UI_COMMIT, CONFIG-MAN / CFGMGMT / TIMETRA traps), `controller_policy_change`
+# (a controller pushed or relayed it: vManage audit, Catalyst Center, Meraki,
+# NDFC, Prime, Versa) and `config_change` (the broader family, incl. the SSH
+# verification claim). With the flag ON the network change-induced signatures
+# accept ANY of them (catalog.apply_config_change_family), so an SNMP-only, a
+# syslog-only and a controller-only estate all reach change-induced RCA, and a
+# change hit in an OPTIONAL clause stays context: it raises coverage, never
+# enters the verdict gate (scoring.score_template).
+#
+# REQUIRES E1. The same change seen twice — the controller's audit record and
+# the device's own CONFIG_I — must never be two independent witnesses; only the
+# origin-observer rule guarantees that. ON without E1 is refused: the family
+# stays OFF and the engine logs it (main.py startup). Default OFF: not one byte
+# of any object moves.
+CONFIG_CHANGE_KINDS = "device_config_change|controller_policy_change|config_change"
+CONFIG_CHANGE_KIND_SET: frozenset[str] = frozenset(CONFIG_CHANGE_KINDS.split("|"))
+
+_CONFIG_CHANGE_FAMILY: bool = os.environ.get(
+    "CORR_CONFIG_CHANGE_FAMILY", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def config_change_family_requested() -> bool:
+    """Was the E5c family asked for (env), whether or not it can be honoured?"""
+    return _CONFIG_CHANGE_FAMILY
+
+
+def config_change_family_enabled() -> bool:
+    """Is the E5c config-change family IN FORCE? Requires the E1 origin-observer
+    rule; requested without it, the family stays off (fail closed)."""
+    return _CONFIG_CHANGE_FAMILY and _ORIGIN_OBSERVER
+
+
+def set_config_change_family(enabled: bool) -> None:
+    """Test hook: toggle the flag in-process. Production reads the env var."""
+    global _CONFIG_CHANGE_FAMILY
+    _CONFIG_CHANGE_FAMILY = bool(enabled)
+
+
 def origin_device_of(sig: Signal) -> str:
     """The canonical device a signal's own state belongs to, or "" when the lane
     stamped none. Lower-cased and trimmed so two lanes' spellings compare."""

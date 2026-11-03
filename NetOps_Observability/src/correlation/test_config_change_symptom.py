@@ -531,5 +531,7 @@ def test_a_config_change_joins_an_object_a_real_fault_opened():
     assert KIND in kinds, "the config change did not reach the object at all"
     hyps = [h for snap in snaps for h in snap.ranking.hypotheses
             if h.template_id == "sig.ent.wan-edge.bgp-peer-flap"]
-    assert hyps and KIND in set(hyps[0].satisfied), (
+    # A clause is named by its kind string; under the E5c family the clause is
+    # `device_config_change|controller_policy_change|config_change`.
+    assert hyps and any(KIND in c.split("|") for c in hyps[0].satisfied), (
         "the optional clause matched no signal on an object that carries one")

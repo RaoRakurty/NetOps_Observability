@@ -199,6 +199,8 @@ from signals import (
     Signal,
     Source,
     VantageType,
+    config_change_family_enabled,
+    config_change_family_requested,
     derive_probe_authority,
     derive_probe_scope,
     evidence_signal_from_event,
@@ -1375,6 +1377,12 @@ PROBE_PATHS_FILE = os.environ.get("PROBE_PATHS_ENRICH_FILE", "/data/enrichment/p
 ROUTING_DIRECTION_FILE = os.environ.get("ROUTING_DIRECTION_FILE", "/data/enrichment/routing_direction.json")
 
 ENGINE_CFG = EngineConfig()
+# E5c: the config-change family needs the E1 origin-observer rule (the same
+# change seen by a controller and by the device must never be two witnesses).
+# Requested without it, the family stays OFF — say so loudly, never silently.
+if config_change_family_requested() and not config_change_family_enabled():
+    log.error("CORR_CONFIG_CHANGE_FAMILY is set but CORR_ORIGIN_OBSERVER is off: "
+              "the config-change family stays OFF (it requires the E1 rule)")
 CATALOG = builtin_catalog()
 
 # Evidence window: every canonical Signal written to the spine also lands here
@@ -15082,6 +15090,11 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_origin_observer_enabled 1 when two witnesses of one device are never independent (CORR_ORIGIN_OBSERVER).",
         "# TYPE corr_origin_observer_enabled gauge",
         f"corr_origin_observer_enabled {1 if origin_observer_enabled() else 0}",
+        # E5c config-change family (flag CORR_CONFIG_CHANGE_FAMILY): 1 only when
+        # in force — requested without E1 reads 0 (fail closed, logged at start).
+        "# HELP corr_config_change_family_enabled 1 when any config-change kind satisfies the change signatures (CORR_CONFIG_CHANGE_FAMILY, requires E1).",
+        "# TYPE corr_config_change_family_enabled gauge",
+        f"corr_config_change_family_enabled {1 if config_change_family_enabled() else 0}",
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
