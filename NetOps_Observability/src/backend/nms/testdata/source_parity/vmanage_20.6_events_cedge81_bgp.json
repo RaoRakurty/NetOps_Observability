@@ -1,0 +1,64 @@
+{
+ "data": [
+  {
+   "system_ip": "10.255.255.81",
+   "vmanage_system_ip": "10.255.255.81",
+   "tenant": "default",
+   "device_type": "vedge",
+   "entry_time": 1793552407000,
+   "statcycletime": 1793552407000,
+   "eventname": "bgp-peer-state-change",
+   "component": "VPN",
+   "severity_level": "major",
+   "host_name": "cEDGE-81",
+   "event": "{\"bgp-peer-state-change\":{\"xmlns\":\"http://cisco.com/ns/yang/Cisco-IOS-XE-ios-events-oper\",\"vrf-name\":200,\"bgp-new-state\":\"idle\",\"peer\":\"192.168.200.34\",\"local-routerid\":\"192.1.6.2\",\"host-name\":\"cEDGE-81\",\"vpn-id\":200,\"peer-routerid\":\"0.0.0.0\",\"severity-level\":\"major\",\"local-address\":\"0.0.0.0\"}}",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=idle; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "id": "hUQNmKEBnpPPzZIM2u5o"
+  },
+  {
+   "system_ip": "10.255.255.81",
+   "vmanage_system_ip": "10.255.255.81",
+   "tenant": "default",
+   "device_type": "vedge",
+   "entry_time": 1793552421000,
+   "statcycletime": 1793552421000,
+   "eventname": "bgp-peer-state-change",
+   "component": "VPN",
+   "severity_level": "major",
+   "host_name": "cEDGE-81",
+   "event": "{\"bgp-peer-state-change\":{\"xmlns\":\"http://cisco.com/ns/yang/Cisco-IOS-XE-ios-events-oper\",\"vrf-name\":200,\"bgp-new-state\":\"active\",\"peer\":\"192.168.200.34\",\"local-routerid\":\"192.1.6.2\",\"host-name\":\"cEDGE-81\",\"vpn-id\":200,\"peer-routerid\":\"0.0.0.0\",\"severity-level\":\"major\",\"local-address\":\"0.0.0.0\"}}",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=active; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "id": "i0QOmKEBnpPPzZIMEe4a"
+  },
+  {
+   "system_ip": "10.255.255.81",
+   "vmanage_system_ip": "10.255.255.81",
+   "tenant": "default",
+   "device_type": "vedge",
+   "entry_time": 1793552451000,
+   "statcycletime": 1793552451000,
+   "eventname": "bgp-peer-state-change",
+   "component": "VPN",
+   "severity_level": "major",
+   "host_name": "cEDGE-81",
+   "event": "{\"bgp-peer-state-change\":{\"xmlns\":\"http://cisco.com/ns/yang/Cisco-IOS-XE-ios-events-oper\",\"vrf-name\":200,\"bgp-new-state\":\"idle\",\"peer\":\"192.168.200.34\",\"local-routerid\":\"192.1.6.2\",\"host-name\":\"cEDGE-81\",\"vpn-id\":200,\"peer-routerid\":\"0.0.0.0\",\"severity-level\":\"major\",\"local-address\":\"0.0.0.0\"}}",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=idle; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "id": "nEQOmKEBnpPPzZIMhu5I"
+  },
+  {
+   "system_ip": "10.255.255.81",
+   "vmanage_system_ip": "10.255.255.81",
+   "tenant": "default",
+   "device_type": "vedge",
+   "entry_time": 1793552463000,
+   "statcycletime": 1793552463000,
+   "eventname": "bgp-peer-state-change",
+   "component": "VPN",
+   "severity_level": "major",
+   "host_name": "cEDGE-81",
+   "event": "{\"bgp-peer-state-change\":{\"xmlns\":\"http://cisco.com/ns/yang/Cisco-IOS-XE-ios-events-oper\",\"vrf-name\":200,\"bgp-new-state\":\"active\",\"peer\":\"192.168.200.34\",\"local-routerid\":\"192.1.6.2\",\"host-name\":\"cEDGE-81\",\"vpn-id\":200,\"peer-routerid\":\"0.0.0.0\",\"severity-level\":\"major\",\"local-address\":\"0.0.0.0\"}}",
+   "details": "host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=active; local-address=0.0.0.0; local-routerid=192.1.6.2; peer-routerid=0.0.0.0; vpn-id=200",
+   "id": "n0QOmKEBnpPPzZIMte4c"
+  }
+ ]
+}
