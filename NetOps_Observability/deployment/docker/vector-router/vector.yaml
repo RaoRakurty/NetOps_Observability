@@ -947,6 +947,14 @@ transforms:
       claimed_tenant = to_string(.tenant_id) ?? ""
       tenant_resolved = ""
       sampler = to_string(.sampler_address) ?? ""
+      # Tracker 373: goflow2 sets sampler_address from the UDP source for
+      # NetFlow/IPFIX, so a flow re-sourced from the Docker bridge gateway
+      # names the gateway, not the exporter — stamped, counted, alerted (see
+      # the aggregator's syslog_sender). Unset gateway: nothing is stamped.
+      bridge_gateway = get_env_var("CX_BRIDGE_GATEWAY") ?? ""
+      if bridge_gateway != "" && sampler == bridge_gateway {
+        .source_masked = true
+      }
       # F-11: registry-MISS discriminator (see the aggregator's syslog note):
       # hit-with-"" = KNOWN platform exporter (stays untagged, load-bearing);
       # miss = unknown exporter, quarantined by the generated stage when
@@ -1399,6 +1407,30 @@ transforms:
           # away from the lane it actually describes).
           topic: "{{ topic }}"
 
+  # Tracker 373: events whose sender address was lost to the Docker bridge
+  # gateway (stamped source_masked by the trap receiver, the aggregator's
+  # syslog_sender and flows_decoded). Counted per topic only — no device or
+  # tenant label, so the series carries nothing tenant-scoped. Feeds the
+  # IngestSenderAddressMasked alert (rules.yaml). Exported on :9598 like the
+  # attribution counter above.
+  source_masked_events:
+    type: filter
+    inputs:
+      - syslog_tagged
+      - snmptrap_tagged
+      - flows_decoded
+    condition: .source_masked == true
+
+  source_masked_metric:
+    type: log_to_metric
+    inputs: [source_masked_events]
+    metrics:
+      - type: counter
+        field: source_masked
+        name: netops_ingest_source_masked_events
+        tags:
+          topic: "{{ topic }}"
+
   # F-18: the DLQ lane bypasses the log_lane anchor, so it gets its own
   # coordinate stamp. Deliberately UNCONDITIONAL here (unlike the anchor's
   # exists-guard on cx_event_id): a dead-letter record may CARRY the original
@@ -1423,7 +1455,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

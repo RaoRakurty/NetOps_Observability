@@ -636,6 +636,11 @@ services:
     entrypoint: ["/bin/sh", "/etc/vector/conf/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml"]
     environment:
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
       # default keeps preflight fresh-loads working without a full env).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
@@ -718,6 +723,11 @@ services:
     entrypoint: ["/bin/sh", "/etc/vector/shared/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml", "--config", "/etc/vector/processors/processors.yaml", "--watch-config"]
     environment:
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
       # ClickHouse credentials are interpolated into vector.yaml at startup.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
@@ -1950,6 +1960,11 @@ services:
       # is the `ip_unprivileged_port_start` sysctl below.
       # Decoded traps are POSTed to the Vector aggregator's HTTP source.
       FEATURE_SNMP_TRAPS: ${FEATURE_SNMP_TRAPS:-false}
+      # Tracker 373: stamp a sender docker-proxy re-sourced from the bridge
+      # gateway (source_masked → netops_ingest_source_masked_events →
+      # IngestSenderAddressMasked). docker-bridge is THIS deployment's shape;
+      # on host networking the gateway would be a real router.
+      CX_MASKED_SOURCE_DETECT: docker-bridge
       SNMP_TRAP_LISTEN: ":${SNMP_TRAP_PORT:-162}"
       SNMP_TRAP_SINK_URL: ${SNMP_TRAP_SINK_URL:-http://vector-aggregator:8688/}
       # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,

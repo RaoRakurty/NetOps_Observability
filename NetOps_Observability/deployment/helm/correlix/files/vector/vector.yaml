@@ -475,6 +475,17 @@ transforms:
       if is_ipv4(sender) || is_ipv6(sender) {
         .source_ip = sender
       }
+      # Tracker 373: a sender equal to the Docker bridge gateway is NOT the
+      # device — docker-proxy re-sourced it (stale conntrack after a recreate,
+      # or an IPv6 sender relayed to the IPv4 network). The gateway can never
+      # be a real device. Stamped, counted by the router
+      # (netops_ingest_source_masked_events) and alerted. CX_BRIDGE_GATEWAY is
+      # derived by cx-enrichment-reload.sh only under
+      # CX_MASKED_SOURCE_DETECT=docker-bridge; unset, nothing is stamped.
+      gateway = get_env_var("CX_BRIDGE_GATEWAY") ?? ""
+      if gateway != "" && sender == gateway {
+        .source_masked = true
+      }
 
   syslog_normalized:
     type: remap

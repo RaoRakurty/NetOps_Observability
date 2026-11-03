@@ -32,6 +32,15 @@ spec:
   {{- if .loadBalancerIP }}
   loadBalancerIP: {{ .loadBalancerIP | quote }}
   {{- end }}
+  {{- if and .preserveSource (has (.type | default "ClusterIP") (list "LoadBalancer" "NodePort")) }}
+  {{- /* Tracker 373. A device's syslog / NetFlow is attributed by its SOURCE
+         address. With the default policy (Cluster) kube-proxy SNATs every
+         external packet to a node IP, so every sender looks like the node:
+         device and tenant attribution are lost for good. Local keeps the
+         client address (traffic goes only to nodes running a receiver pod;
+         the LB health-checks that). */}}
+  externalTrafficPolicy: Local
+  {{- end }}
   selector:
 {{ include "correlix.selectorLabels" (dict "root" .root "component" .component) | indent 4 }}
   ports:
@@ -96,11 +105,11 @@ spec:
 ---
 {{- end }}
 {{- if .Values.syslogNg.enabled }}
-{{ include "correlix.svc" (dict "root" $ "name" "syslog-ng" "component" "syslog-ng" "type" .Values.syslogNg.service.type "loadBalancerIP" .Values.syslogNg.service.loadBalancerIP "ports" (list (dict "name" "syslog-udp" "port" 514 "targetPort" 514 "protocol" "UDP") (dict "name" "syslog-tcp" "port" 514 "targetPort" 514 "protocol" "TCP"))) }}
+{{ include "correlix.svc" (dict "root" $ "name" "syslog-ng" "component" "syslog-ng" "type" .Values.syslogNg.service.type "preserveSource" true "loadBalancerIP" .Values.syslogNg.service.loadBalancerIP "ports" (list (dict "name" "syslog-udp" "port" 514 "targetPort" 514 "protocol" "UDP") (dict "name" "syslog-tcp" "port" 514 "targetPort" 514 "protocol" "TCP"))) }}
 ---
 {{- end }}
 {{- if .Values.goflow2.enabled }}
-{{ include "correlix.svc" (dict "root" $ "name" "goflow2" "component" "goflow2" "type" .Values.goflow2.service.type "loadBalancerIP" .Values.goflow2.service.loadBalancerIP "ports" (list (dict "name" "netflow" "port" 2055 "targetPort" 2055 "protocol" "UDP") (dict "name" "ipfix" "port" 4739 "targetPort" 4739 "protocol" "UDP") (dict "name" "sflow" "port" 6343 "targetPort" 6343 "protocol" "UDP"))) }}
+{{ include "correlix.svc" (dict "root" $ "name" "goflow2" "component" "goflow2" "type" .Values.goflow2.service.type "preserveSource" true "loadBalancerIP" .Values.goflow2.service.loadBalancerIP "ports" (list (dict "name" "netflow" "port" 2055 "targetPort" 2055 "protocol" "UDP") (dict "name" "ipfix" "port" 4739 "targetPort" 4739 "protocol" "UDP") (dict "name" "sflow" "port" 6343 "targetPort" 6343 "protocol" "UDP"))) }}
 ---
 {{- end }}
 {{- if .Values.kafkaExporter.enabled }}
