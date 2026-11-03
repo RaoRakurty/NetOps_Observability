@@ -76,6 +76,24 @@ directory:
 Both sums are those of the files that used to be vendored here, so the fetch is
 a relocation, not a content change.
 
+### CISCO-BGP4-MIB and its imports (2026-11-03)
+
+`CISCO-BGP4-MIB` and `CISCO-SMI` carry *"Copyright (c) ... Cisco Systems, Inc."*
+with no redistribution grant, so they follow the Arista posture: fetched, never
+vendored. They were already fetched at build time (unpinned, by pysmi) — pysmi
+could not compile `CISCO-BGP4-MIB` because it imports the SMIv1 `BGP4-MIB`, so the
+module contributed no nodes; the net-snmp pass compiles it from these pinned
+files. The three IETF modules it imports are pinned the same way rather than
+vendored.
+
+| Module | URL(s), tried in order | sha256 |
+|--------|------------------------|--------|
+| `CISCO-BGP4-MIB` | https://mibs.pysnmp.com/asn1/CISCO-BGP4-MIB · https://raw.githubusercontent.com/librenms/librenms/master/mibs/cisco/CISCO-BGP4-MIB | `522ba3a3fa0b27be2bfe8902c4f8d74c77d610796b1fee1b5b8f40acbe3cb7a1` |
+| `CISCO-SMI` | https://mibs.pysnmp.com/asn1/CISCO-SMI · https://raw.githubusercontent.com/librenms/librenms/master/mibs/cisco/CISCO-SMI | `3ea80f8160af50ba77e7309b7f95b4b6edb3ddc57dbe67eb0ee18ae1b56fd332` |
+| `BGP4-MIB` (RFC 4273) | https://mibs.pysnmp.com/asn1/BGP4-MIB | `4dc18e17081988b15fad393bc68b36533a3edf4c8e66c0060d054f6ff6b3909b` |
+| `INET-ADDRESS-MIB` (RFC 4001) | https://mibs.pysnmp.com/asn1/INET-ADDRESS-MIB | `59563805ec90609c31a1c512aa627fe58a95dfc6eeed53de12622a1493da27d1` |
+| `SNMP-FRAMEWORK-MIB` (RFC 3411) | https://mibs.pysnmp.com/asn1/SNMP-FRAMEWORK-MIB | `bcf1faf35bb6dd9cbc06afb7eaf69e03d7da03893ee14df68ceb9424e23287bc` |
+
 **Fail closed.** The mirror is untrusted (CLAUDE.md §3): every byte, freshly
 downloaded *or already cached*, is checked against the pinned sha256 before the
 parser sees it. A missing/short pin, a moved upstream, or an edited cache file is

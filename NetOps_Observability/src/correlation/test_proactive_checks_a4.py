@@ -490,7 +490,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # only, and V1 injects syslog only, so again no V1 line can move.
     # 2026-11-03-bgp-peer-index: the BGP trap rules read the peer from the
     # bgpPeerTable index — TRAP lane only, same reasoning.
-    assert parser_rules.PARSER_REV == "2026-11-03-bgp-peer-index", (
+    # 2026-11-03-cbgp-decoded: the event_type BGP rule excludes CISCO-BGP4-MIB
+    # — TRAP lane only, same reasoning.
+    assert parser_rules.PARSER_REV == "2026-11-03-cbgp-decoded", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

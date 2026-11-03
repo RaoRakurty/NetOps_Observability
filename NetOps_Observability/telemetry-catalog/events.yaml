@@ -73,7 +73,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-03-bgp-peer-index"
+parser_rev: "2026-11-03-cbgp-decoded"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -1444,6 +1444,15 @@ rules:
     guard:
       all:
         - {contains: [etype, bgp]}
+        # NOT CISCO-BGP4-MIB (yet). Its notifications now DECODE (the MIB
+        # reaches the index since 2026-11-03), so their event_type would match
+        # this guard — but IOS-XE sends up to SIX traps per transition with both
+        # families on (RFC 4273 + cbgp + cbgpPeer2, recorded on the lab), the
+        # RFC pair is already classified above, and the cbgp varbinds would
+        # feed the `vbname: peer` scan a non-peer value. Classifying them needs
+        # one-signal-per-transition identity first (tracker 374); until then
+        # they stay searchable, named alarms — behaviour unchanged.
+        - {not: {contains: [oid, '1.3.6.1.4.1.9.9.187.']}}
         - any:
             - {contains: [etype, backward]}
             - {contains: [etype, transition]}

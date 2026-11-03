@@ -93,6 +93,11 @@ SEVERITY_HINT = {
     # ── IETF core ────────────────────────────────────────────────────────────
     "linkDown": "warning", "authenticationFailure": "warning",
     "bgpBackwardTransition": "warning", "ospfNbrStateChange": "warning",
+    # CISCO-BGP4-MIB deliberately carries NO hint (2026-11-03): decoded, its
+    # notifications are named and searchable, but a `warning` seed would lift
+    # each of the up-to-five cbgp traps IOS-XE sends per transition over the
+    # alarm floor as a generic device_alarm. They get a typed rule with
+    # one-signal-per-transition identity instead (tracker 374).
     "ospfIfStateChange": "warning", "coldStart": "info", "warmStart": "info",
     "linkUp": "info", "bgpEstablished": "info",
 
@@ -183,6 +188,10 @@ ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.2.1.2.2.1.8": ("ifOperStatus", "column"),
     "1.3.6.1.6.3.1.1.5.3": ("linkDown", "notification"),
     "1.3.6.1.2.1.1.5.0": ("sysName", "scalar"),
+    # CISCO-BGP4-MIB reaches the index (it silently did not until 2026-11-03).
+    "1.3.6.1.4.1.9.9.187.0.1": ("cbgpFsmStateChange", "notification"),
+    "1.3.6.1.4.1.9.9.187.0.8": ("cbgpPeer2BackwardTransition", "notification"),
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.3": ("cbgpPeer2State", "column"),
 }
 
 
@@ -197,9 +206,19 @@ def mibdump(mibs: list[str], outdir: str) -> None:
             cmd += ["--mib-source", s]
         cmd.append(mib)
         try:
-            subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=180)
+            r = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=180)
         except subprocess.TimeoutExpired:
             print(f"gen_index: timeout compiling {mib} — skipped", file=sys.stderr)
+            continue
+        # NEVER silent (scripts/CLAUDE.md §16.1): a module pysmi failed or
+        # ignored contributes nothing, and CISCO-BGP4-MIB sat in DEFAULT_MIBS
+        # with zero nodes for months because this line said nothing. Name it;
+        # the net-snmp pass may still cover it (NETSNMP_ROOTS).
+        out = (r.stdout or "") + (r.stderr or "")
+        for label in ("Failed MIBs:", "Ignored MIBs:"):
+            line = next((ln for ln in out.splitlines() if ln.startswith(label)), "")
+            if mib in [m.strip().split(" (")[0] for m in line[len(label):].split(",")]:
+                print(f"gen_index: pysmi {label[:-6].lower()} {mib} — no pysmi nodes from it", file=sys.stderr)
 
 
 def flatten(outdir: str) -> dict[str, dict]:
@@ -250,6 +269,12 @@ VENDORED = os.path.join(HERE, "vendored")
 NETSNMP_ROOTS = (
     "1.3.6.1.2.1.17",         # dot1dBridge / dot1q / p-bridge (FDB/MAC tables)
     "1.3.6.1.4.1.30065.3.2",  # ARISTA-BRIDGE-EXT-MIB (MAC-move tracking)
+    # CISCO-BGP4-MIB. pysmi drops the whole module: it IMPORTS BGP4-MIB, whose
+    # SMIv1 RFC-1212 grammar pysmi cannot parse, so the module was listed in
+    # DEFAULT_MIBS yet contributed ZERO nodes — every cbgp* trap (IOS-XE's BGP
+    # session transitions, incl. the only carrier of recoveries) arrived as an
+    # undecoded enterpriseSpecific (recorded on the lab, 2026-11-01; E7).
+    "1.3.6.1.4.1.9.9.187",
 )
 _TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
 
@@ -281,6 +306,38 @@ FETCH_PINS: dict[str, dict] = {
     "ARISTA-BRIDGE-EXT-MIB": {
         "sha256": "9cb0cc8b5cd2cb26179d2eb1e0a7eb1d5e74e099b8459668fc039b9fa355c8ff",
         "urls": ("https://mibs.pysnmp.com/asn1/ARISTA-BRIDGE-EXT-MIB",),
+    },
+    # CISCO-BGP4-MIB for the net-snmp pass (see NETSNMP_ROOTS), with every
+    # module it imports that the vendored tree lacks. The two Cisco modules
+    # carry "Copyright (c) ... Cisco Systems, Inc." with no redistribution grant,
+    # so — exactly like Arista — they are fetched, never vendored. The three
+    # IETF modules are pinned the same way rather than vendored, which would
+    # need the RFC-text provenance SOURCES.md records for every vendored file.
+    "CISCO-BGP4-MIB": {
+        "sha256": "522ba3a3fa0b27be2bfe8902c4f8d74c77d610796b1fee1b5b8f40acbe3cb7a1",
+        "urls": (
+            "https://mibs.pysnmp.com/asn1/CISCO-BGP4-MIB",
+            "https://raw.githubusercontent.com/librenms/librenms/master/mibs/cisco/CISCO-BGP4-MIB",
+        ),
+    },
+    "CISCO-SMI": {
+        "sha256": "3ea80f8160af50ba77e7309b7f95b4b6edb3ddc57dbe67eb0ee18ae1b56fd332",
+        "urls": (
+            "https://mibs.pysnmp.com/asn1/CISCO-SMI",
+            "https://raw.githubusercontent.com/librenms/librenms/master/mibs/cisco/CISCO-SMI",
+        ),
+    },
+    "BGP4-MIB": {
+        "sha256": "4dc18e17081988b15fad393bc68b36533a3edf4c8e66c0060d054f6ff6b3909b",
+        "urls": ("https://mibs.pysnmp.com/asn1/BGP4-MIB",),
+    },
+    "INET-ADDRESS-MIB": {
+        "sha256": "59563805ec90609c31a1c512aa627fe58a95dfc6eeed53de12622a1493da27d1",
+        "urls": ("https://mibs.pysnmp.com/asn1/INET-ADDRESS-MIB",),
+    },
+    "SNMP-FRAMEWORK-MIB": {
+        "sha256": "bcf1faf35bb6dd9cbc06afb7eaf69e03d7da03893ee14df68ceb9424e23287bc",
+        "urls": ("https://mibs.pysnmp.com/asn1/SNMP-FRAMEWORK-MIB",),
     },
 }
 

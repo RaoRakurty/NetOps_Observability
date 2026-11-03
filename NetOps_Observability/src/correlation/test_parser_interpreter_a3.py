@@ -385,6 +385,11 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         # corpus entries stay IN the parity run, which is what proves a shadow
         # row cannot change what the parser emits.
         "trap.config.change",
+        # CISCO-BGP4-MIB decoded (2026-11-03): a decoded cbgp* trap is held OUT
+        # of the event_type BGP rule until one-signal-per-transition identity
+        # exists (tracker 374), so the one synthetic, pre-decoded corpus entry
+        # now lands on the generic alarm net where the frozen code typed it.
+        "trap.generic.device_alarm",
     }
     fired = set()
     for entry in golden:
