@@ -578,3 +578,21 @@ def test_values_schema_is_valid_json_and_constrains_the_dangerous_settings():
         == ["postgres", "file", "memory"]
     assert schema["definitions"]["resources"]["required"] == ["requests", "limits"]
     assert schema["properties"]["secrets"]["required"] == ["existingSecret"]
+
+
+@needs_helm
+@pytest.mark.parametrize("svc_type", ["LoadBalancer", "NodePort", "ClusterIP"])
+def test_external_udp_receivers_keep_the_sender_address(svc_type):
+    """Tracker 373: syslog and flows are attributed by their SOURCE address.
+    Exposed outside the cluster with the default externalTrafficPolicy
+    (Cluster), kube-proxy SNATs every sender to a node IP and device / tenant
+    attribution is lost for good — so an exposed receiver Service is Local."""
+    docs = _docs(_render("--set", f"syslogNg.service.type={svc_type}",
+                         "--set", f"goflow2.service.type={svc_type}"))
+    svcs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Service"}
+    for name in ("syslog-ng", "goflow2"):
+        policy = svcs[name]["spec"].get("externalTrafficPolicy")
+        if svc_type == "ClusterIP":
+            assert policy is None, f"{name}: externalTrafficPolicy is invalid on a ClusterIP Service"
+        else:
+            assert policy == "Local", f"{name} ({svc_type}): sender addresses would be SNATed to the node"
