@@ -133,11 +133,10 @@ jobs:
         # (pg-integration) needed a live service to even reach the compile.
         # Vetting the tag here makes tagged build rot fail the cheap lane.
         run: go vet -tags=pgintegration ./...
-      - name: go test
-        # Also runs every Fuzz* target against its SEED corpus deterministically
-        # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
-        # parsers' regression coverage is here — no flaky live fuzzing needed.
-        run: go test -timeout 20m ./...
+      # The plain `go test` runs in its own parallel job (`test-plain`, below):
+      # `-race` executes EVERY test the plain run does (no first-party test is
+      # excluded under the race build tag), so serialising both here only made
+      # this required job ~10 min longer without gating anything extra.
       - name: go test -race
         # The data-race detector needs cgo (gcc is present on ubuntu-latest).
         # The main package suite runs ~6m plain; the race detector multiplies
@@ -152,6 +151,29 @@ jobs:
       # per-PR gate — its worker-coordination times out flakily on 2-core runners
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
       # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
+
+  test-plain:
+    # The non-race run, in PARALLEL with `test` (which runs the same tests under
+    # -race). Kept because a plain run is the configuration customers build, and
+    # its timing differs from the race build's; mapped into ci-gate, so a red
+    # here still fails the workflow.
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
+    name: go test (plain, parallel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: go test
+        # Also runs every Fuzz* target against its SEED corpus deterministically
+        # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
+        # parsers' regression coverage is here — no flaky live fuzzing needed.
+        run: go test -timeout 20m ./...
 
   offline-build:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
@@ -415,7 +437,7 @@ jobs:
   ci-gate:
     name: ci-gate (backend-ci)
     if: always()
-    needs: [plan, test, offline-build, pg-integration, vuln, security-lint, full-lint, iris-gates]
+    needs: [plan, test, test-plain, offline-build, pg-integration, vuln, security-lint, full-lint, iris-gates]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -423,4 +445,4 @@ jobs:
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
-          jobs: test=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
+          jobs: test=backend test-plain=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
