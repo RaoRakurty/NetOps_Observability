@@ -58,7 +58,14 @@ DEFAULT_MIBS = [
     "CISCO-ENTITY-FRU-CONTROL-MIB", "CISCO-SYSLOG-MIB", "CISCO-BGP4-MIB",
     "CISCO-OSPF-MIB", "OLD-CISCO-INTERFACES-MIB", "CISCO-MEMORY-POOL-MIB",
     # Juniper (enterprise 2636) — Junos.
-    "JUNIPER-SMI", "JUNIPER-MIB", "JUNIPER-CHASSIS-DEFINES-MIB",
+    # JUNIPER-CHASSIS-DEFINES-MIB is deliberately NOT here (tracker 377): it is
+    # 2.8k product/slot IDENTITY OIDs (jnxProductName*, jnxSlot*), no
+    # notification and no column, so it can decode no trap — the receiver names
+    # varbinds by their OID, never by an OID-valued payload. pysmi also fails on
+    # it (duplicate symbol jnxSlotMX2010 in Juniper's own file), and net-snmp
+    # would print its identities as OBJECT-TYPE, i.e. 2.8k mislabelled
+    # `scalar` nodes. Listing it only ever produced a silent failure.
+    "JUNIPER-SMI", "JUNIPER-MIB",
     "JUNIPER-IF-MIB", "BGP4-V2-MIB-JUNIPER", "JUNIPER-CFGMGMT-MIB",
     # Nokia SR OS (enterprise 6527) — TiMetra.
     "TIMETRA-GLOBAL-MIB", "TIMETRA-CHASSIS-MIB", "TIMETRA-BGP-MIB",
@@ -100,6 +107,11 @@ SEVERITY_HINT = {
     # one-signal-per-transition identity instead (tracker 374).
     "ospfIfStateChange": "warning", "coldStart": "info", "warmStart": "info",
     "linkUp": "info", "bgpEstablished": "info",
+    # TIMETRA-BGP-MIB (tracker 377): Nokia sends these for IPv6 peers ONLY (IPv4
+    # uses the RFC 4273 pair), so there is no multi-family duplication to guard
+    # against — the same fault/recovery split as bgpBackwardTransition/
+    # bgpEstablished. They are typed by `trap.bgp.nokia_ng`.
+    "tBgpNgBackwardTransition": "warning", "tBgpNgEstablished": "info",
 
     # ── CONFIG CHANGE (A9 follow-up) ─────────────────────────────────────────
     # "What changed?" is the first question of every real RCA, and a config
@@ -192,6 +204,12 @@ ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.4.1.9.9.187.0.1": ("cbgpFsmStateChange", "notification"),
     "1.3.6.1.4.1.9.9.187.0.8": ("cbgpPeer2BackwardTransition", "notification"),
     "1.3.6.1.4.1.9.9.187.1.2.5.1.3": ("cbgpPeer2State", "column"),
+    # tracker 377: four modules pysmi silently dropped (they import SMIv1
+    # RFC-1212 somewhere in their chain) now reach the index via net-snmp.
+    "1.0.8802.1.1.2.0.0.1": ("lldpRemTablesChange", "notification"),
+    "1.3.6.1.4.1.9.2.2.1.1.20": ("locIfReason", "column"),
+    "1.3.6.1.4.1.6527.3.1.3.14.0.8": ("tBgpNgBackwardTransition", "notification"),
+    "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59": ("tBgpPeerNgConnState", "column"),
 }
 
 
@@ -275,8 +293,19 @@ NETSNMP_ROOTS = (
     # session transitions, incl. the only carrier of recoveries) arrived as an
     # undecoded enterpriseSpecific (recorded on the lab, 2026-11-01; E7).
     "1.3.6.1.4.1.9.9.187",
+    # tracker 377 — the same silent drop, the same cure. Each module (or a module
+    # in its import chain) imports SMIv1 RFC-1212, which pysmi cannot parse, so
+    # pysmi reported it IGNORED and it contributed nothing:
+    "1.0.8802.1.1.2",            # LLDP-MIB (lldpRemTablesChange = neighbour churn)
+    "1.3.6.1.2.1.134",           # RSTP-MIB (RFC 4318 objects)
+    "1.3.6.1.4.1.9.2.2",         # OLD-CISCO-INTERFACES-MIB (locIfReason in linkDown)
+    "1.3.6.1.4.1.6527.3.1.2.14",  # TIMETRA-BGP-MIB objects (tBgpPeerNg* varbinds)
+    "1.3.6.1.4.1.6527.3.1.3.14",  # TIMETRA-BGP-MIB notifications (IPv6 sessions)
 )
 _TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
+#: `snmptranslate -Td` block header: `MODULE-NAME::nodeName` alone on a line.
+_TD_HEAD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*::([A-Za-z][A-Za-z0-9-]*)$")
+NETSNMP_BATCH = 200  # OIDs per snmptranslate call (one full -M parse each)
 
 # ── FETCHED (not redistributed) vendor MIBs ──────────────────────────────────
 # Arista's enterprise MIBs carry "Copyright (c) 2008 Arista Networks, Inc. All
@@ -338,6 +367,102 @@ FETCH_PINS: dict[str, dict] = {
     "SNMP-FRAMEWORK-MIB": {
         "sha256": "bcf1faf35bb6dd9cbc06afb7eaf69e03d7da03893ee14df68ceb9424e23287bc",
         "urls": ("https://mibs.pysnmp.com/asn1/SNMP-FRAMEWORK-MIB",),
+    },
+    # tracker 377 (owner 2026-11-07: extend the fetch posture to Nokia and
+    # Juniper). LLDP-MIB, RSTP-MIB, OLD-CISCO-INTERFACES-MIB and TIMETRA-BGP-MIB
+    # plus every module in their import chains the vendored tree lacks. All are
+    # pinned to ONE LibreNMS COMMIT (not `master`), so the URL is immutable and
+    # TIMETRA-BGP-MIB comes from the same Nokia release as the TIMETRA modules it
+    # imports. Nokia (TIMETRA-*) and Cisco text carries no redistribution grant:
+    # fetched, never vendored — the Arista posture. IEEE/IETF/IANA modules are
+    # pinned the same way rather than vendored (SOURCES.md).
+    "ATM-TC-MIB": {
+        "sha256": "279a938f6d73bba203fb36e47cd702c02e3e54dc2f55608c960c4476ce6c5f82",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/ATM-TC-MIB",),
+    },
+    "HCNUM-TC": {
+        "sha256": "c8d21522e37294169277cab9a9e6e0dae85ce2a106af3e64429ece8f35b6835c",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/HCNUM-TC",),
+    },
+    "IANA-ADDRESS-FAMILY-NUMBERS-MIB": {
+        "sha256": "2c253fe33eb9266849c36f7aae39b059a910e98832026991f8fdf68260c08568",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IANA-ADDRESS-FAMILY-NUMBERS-MIB",),
+    },
+    "IANA-RTPROTO-MIB": {
+        "sha256": "8848bde6c0141fa6b63a16bc78b6484a15b66b55c80d1c76f8c3cff453b98b87",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IANA-RTPROTO-MIB",),
+    },
+    "IEEE8021-PAE-MIB": {
+        "sha256": "cf94698475c0208a95c1697f502c17e0751c04f57f6640d739a8fcea32dd7c3f",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IEEE8021-PAE-MIB",),
+    },
+    "IP-FORWARD-MIB": {
+        "sha256": "6b55a19e712c0012cd2ac9813c5cddb10c93fdfa01e2e87c2c2fe14c41bd2a04",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IP-FORWARD-MIB",),
+    },
+    "IP-MIB": {
+        "sha256": "6a6ec284b2de6f21a4d090927dba474a131c777d1c0b5a80a57fe21a7dd4a3d3",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IP-MIB",),
+    },
+    "LLDP-MIB": {
+        "sha256": "f0dac7bac08b6d632d2f2363aba8acf106ee7cf83c15f14823489390c31d6769",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/LLDP-MIB",),
+    },
+    "OLD-CISCO-INTERFACES-MIB": {
+        "sha256": "67bef549d12ee67d01c648346283badb38f49884ac48f83047f746947a7b4342",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/cisco/OLD-CISCO-INTERFACES-MIB",),
+    },
+    "RFC-1215": {
+        "sha256": "dbd38e3a42cb0b391e9dafa606a5ee11ff2dcdd4c6781cb42ae1cd6185bcc4e2",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/RFC-1215",),
+    },
+    "RSTP-MIB": {
+        "sha256": "235203e6c465bad9bee34b6c5ad34d5e61a83e37ca0162a694417c2c87bb8409",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/RSTP-MIB",),
+    },
+    "SNMPv2-MIB": {
+        "sha256": "b4f8ef130f580b86d2b6bc890564e46100785f589431df76954e878a7b166e11",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/SNMPv2-MIB",),
+    },
+    "TIMETRA-BGP-MIB": {
+        "sha256": "b91f895f0ff3a9a4e597fe912900fc1f69ee72f993d522b39ccb4501ef85a023",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-BGP-MIB",),
+    },
+    "TIMETRA-CHASSIS-MIB": {
+        "sha256": "891e287f4d379d65e498dcc476b8e6afa04c9f82856cb78f1b586a833bbb00b1",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-CHASSIS-MIB",),
+    },
+    "TIMETRA-FILTER-MIB": {
+        "sha256": "44fce8b1f8e80fb03764ec9566af5dc5067edcacbcff9734a672d5feb281c4bc",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-FILTER-MIB",),
+    },
+    "TIMETRA-GLOBAL-MIB": {
+        "sha256": "a3a18503892c9bc6c77a1a4969ac43b9f20f76e6d1dd2d6bcf9d4228a7bd7169",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-GLOBAL-MIB",),
+    },
+    "TIMETRA-PORT-MIB": {
+        "sha256": "0a3368d31d7ee6f95a9c8540be77ff820518c549fb59d9eceb1620a982acc331",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-PORT-MIB",),
+    },
+    "TIMETRA-QOS-MIB": {
+        "sha256": "6091dc29d35807b252cc6ff85d06f5412423ee61eda047d1f3b9e91b1c46ae35",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-QOS-MIB",),
+    },
+    "TIMETRA-SAP-MIB": {
+        "sha256": "9e3c006ae30563a22a2ce4e40ffee811e90bd6fa83022a58d49d9e8cb1eea9ac",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-SAP-MIB",),
+    },
+    "TIMETRA-SERV-MIB": {
+        "sha256": "01fee2cf5adeced4137bd921807b3f7c157c645114fc2abf1b584f61754b2edf",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-SERV-MIB",),
+    },
+    "TIMETRA-TC-MIB": {
+        "sha256": "e970f2099fffec00d08b71eca070f11eba4edd8c84123846eaddb5f99314e45a",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-TC-MIB",),
+    },
+    "TIMETRA-VRTR-MIB": {
+        "sha256": "72729fdd64382e64b255e2c2f64ae9e3167428755c231df1fa01ef763318b424",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-VRTR-MIB",),
     },
 }
 
@@ -455,13 +580,35 @@ def netsnmp_nodes() -> dict:
     by_oid = {m.group(1): m.group(2) for m in _TZ_RE.finditer(tz)}  # name→oid
     name_of = {v: k for k, v in by_oid.items()}                      # oid→name
     out: dict[str, dict] = {}
-    for name, oid in by_oid.items():
-        if not any(oid == r or oid.startswith(r + ".") for r in NETSNMP_ROOTS):
-            continue
+    wanted = [(name, oid) for name, oid in by_oid.items()
+              if any(oid == r or oid.startswith(r + ".") for r in NETSNMP_ROOTS)]
+    # BATCHED (tracker 377): every snmptranslate call re-parses the WHOLE -M tree
+    # (~12 MB once the TIMETRA chain is fetched), so one call per node took ~2 s
+    # x ~1,000 nodes and blew the run's budget. `-Td` takes many OIDs; each
+    # block it prints starts with a `MODULE::name` header, which keys the block
+    # back to its OID by NAME (never by position, so a node net-snmp declines
+    # cannot shift every later block onto the wrong OID).
+    td_of: dict[str, str] = {}
+    for i in range(0, len(wanted), NETSNMP_BATCH):
+        chunk = wanted[i:i + NETSNMP_BATCH]
         try:
-            td = subprocess.run([exe, "-M", mpath, "-m", "ALL", "-Td", oid],
-                                capture_output=True, text=True, timeout=30).stdout
-        except Exception:
+            text = subprocess.run([exe, "-M", mpath, "-m", "ALL", "-Td", *[o for _, o in chunk]],
+                                  capture_output=True, text=True, timeout=300).stdout
+        except Exception as exc:
+            print(f"gen_index: net-snmp batch {i // NETSNMP_BATCH} failed ({exc}) — its "
+                  f"{len(chunk)} node(s) keep their floor entries", file=sys.stderr)
+            continue
+        cur = None
+        for line in text.splitlines():
+            m = _TD_HEAD_RE.match(line)
+            if m:
+                cur = m.group(1)
+                td_of[cur] = ""
+            elif cur is not None:
+                td_of[cur] += line + "\n"
+    for name, oid in wanted:
+        td = td_of.get(name)
+        if td is None:
             continue
         if "NOTIFICATION-TYPE" in td:
             kind = "notification"
