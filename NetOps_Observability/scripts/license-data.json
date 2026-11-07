@@ -172,6 +172,16 @@
       "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
       "rationale": "CISCO-BGP4-MIB decodes IOS-XE's BGP session notifications (cbgp*), which carry IPv6/VRF peers the RFC 4273 MIB cannot; the index needs its OIDs, not its text.",
       "status": "DECIDED"
+    },
+    "tracker-377-mibs": {
+      "decided": "fetch-at-build-time",
+      "evidence": "src/backend/collectors/mibs/gen_index.py FETCH_PINS: LLDP-MIB (IEEE), RSTP-MIB (IETF), OLD-CISCO-INTERFACES-MIB (Cisco, no redistribution grant), TIMETRA-BGP-MIB and its Nokia import chain (TIMETRA-*, Nokia copyright, no redistribution grant) plus IETF/IANA/IEEE imports, 22 modules pinned by https URL at ONE LibreNMS commit (a7de98cf…) and sha256 into the gitignored vendored/.fetched/ cache for the net-snmp pass; never committed. LLDP/RSTP/OLD-CISCO-INTERFACES/TIMETRA-BGP were already fetched UNPINNED at build time by pysmi (DEFAULT_MIBS) and silently ignored; the pin adds a checksum and changes no distribution. Only the generated, checked-in index/oididx.json (OID→name/type/enum facts) ships. Documented in vendored/SOURCES.md; test_gen_index.py pins the table.",
+      "license": "LicenseRef-Vendor-MIB-NoGrant",
+      "obligation": "none — Correlix does not redistribute these files in any form",
+      "owner_decision": "DECIDED 2026-11-07 (owner): extend the fetch-at-build-time posture (arista-mibs, 2026-09-04) to Nokia and Juniper MIBs.",
+      "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
+      "rationale": "These modules decode Nokia IPv6 BGP session traps (tBgpNg*), LLDP neighbour churn and Cisco's link-down reason (locIfReason); the index needs their OIDs, not their text.",
+      "status": "DECIDED"
     }
   },
   "go": {

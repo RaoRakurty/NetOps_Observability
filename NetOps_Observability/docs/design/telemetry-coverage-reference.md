@@ -205,9 +205,9 @@ the bare integer. Every A9 state grammar classifies **both** spellings; a rule
 that read only the label would silently produce `unknown` on half the fleet.
 
 **MIBs NOT in the vendored index today** (so their OIDs are deliberately absent
-from every guard): LLDP-MIB, VRRP-MIB, CISCO-HSRP-MIB, CISCO-STP-EXTENSIONS-MIB, CISCO-MAC-NOTIFICATION-MIB. (CISCO-BGP4-MIB was on
+from every guard): VRRP-MIB, CISCO-HSRP-MIB, CISCO-STP-EXTENSIONS-MIB, CISCO-MAC-NOTIFICATION-MIB. (CISCO-BGP4-MIB was on
 this list until 2026-11-03; it now decodes and its session transitions are typed
-by `trap.bgp.cisco_bgp4`, tracker 376.)
+by `trap.bgp.cisco_bgp4`, tracker 376; LLDP-MIB, RSTP-MIB, OLD-CISCO-INTERFACES-MIB and TIMETRA-BGP-MIB reach it since 2026-11-07, tracker 377.)
 
 ### E.3 Two findings outside the parser — both CLOSED by A9b (2026-09-02)
 

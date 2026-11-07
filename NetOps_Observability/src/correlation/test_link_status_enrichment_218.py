@@ -397,7 +397,8 @@ def test_no_other_rule_drops_an_attr():
     # it" meaning, not a judgement call.
     assert declaring == {"trap.link.state_change",
                          "trap.link.state_change.event_type",
-                         "trap.bgp.cisco_bgp4"}
+                         "trap.bgp.cisco_bgp4",
+                         "trap.bgp.nokia_ng"}   # 377: bgp_instance when the index has it
 
 
 def test_omit_empty_cannot_name_a_key_the_rule_does_not_emit():

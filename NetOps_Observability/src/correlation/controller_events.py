@@ -18,7 +18,7 @@ path covers Meraki / vManage / Catalyst / NDFC / Versa / Prime alike.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from signals import (
     ORIGIN_DEVICE_ATTR,
@@ -33,6 +33,7 @@ from signals import (
     cap_text,
     origin_observer_enabled,
 )
+from timenorm import parse_any_timestamp
 
 # Normalized controller event_type → the entity axis it scopes. Anything not
 # listed scopes to the device.
@@ -90,21 +91,31 @@ _SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH
              "low": Severity.INFO}
 
 
+#: Controller events whose `event_time` was present but unparseable, so the
+#: ingest time was used instead (exported on /healthz). P6-A, 2026-11-07.
+TS_FALLBACKS = 0
+
+
 def _parse_ts(raw: object, fallback: datetime) -> datetime:
-    if isinstance(raw, (int, float)) and raw > 0:
-        # epoch millis or seconds
-        v = float(raw)
-        if v > 1e12:
-            v /= 1000.0
-        return datetime.fromtimestamp(v, tz=timezone.utc)
-    if isinstance(raw, str) and raw:
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ"):
-            try:
-                dt = datetime.strptime(raw, fmt)  # noqa: DTZ007 — the "Z" format parses naive; made aware on the next line
-                return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-    return fallback
+    """The controller's event time, or `fallback` (ingest time) — never a guess.
+
+    P6-A (2026-11-07): the old strptime ladder took at most 6 fractional digits,
+    so Go's RFC3339Nano times (7–9 digits — nms/model.go EventTime) SILENTLY fell
+    back to ingest time, and a numeric µs/ns epoch RAISED (year out of range),
+    quarantining the event. The ingest lane's own parser (timenorm — RFC3339 with
+    any fraction or offset, epoch s/ms/µs/ns by magnitude) is the one truth now;
+    a present-but-unparseable value is counted, not silent.
+    """
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return fallback
+    if isinstance(raw, (int, float)) and raw <= 0:
+        return fallback
+    parsed = parse_any_timestamp(raw, reference=fallback)
+    if parsed is None:
+        global TS_FALLBACKS
+        TS_FALLBACKS += 1
+        return fallback
+    return parsed[0]
 
 
 def _bounded_hints(hints: object) -> object:

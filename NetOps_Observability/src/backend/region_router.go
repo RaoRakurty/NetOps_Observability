@@ -27,6 +27,7 @@ package backend
 
 import (
 	"net/http"
+	"netops/backend/internal/logredact"
 	"os"
 	"sort"
 	"strings"
@@ -54,6 +55,19 @@ func localDataPlane(region string) DataPlane {
 		VictoriaMetrics: envOr("VICTORIA_URL", "http://victoriametrics:8428"),
 		Kafka:           envOr("BROKER_URLS", "kafka:9092"),
 	}
+}
+
+// displayDataPlane is a data plane fit to SHOW (tracker 367): the endpoints
+// keep scheme/host/port/path but never the credential some deployments carry
+// as URL userinfo (VICTORIA_URL=https://svc-api:<pw>@vmauth…, or a
+// REGION_DATAPLANE_* override). The display boundary, not the resolver, does
+// this — dataPlaneFor's values stay usable for a connection.
+func displayDataPlane(dp DataPlane) DataPlane {
+	dp.ClickHouse = logredact.URL(dp.ClickHouse)
+	dp.OpenSearch = logredact.URL(dp.OpenSearch)
+	dp.VictoriaMetrics = logredact.URL(dp.VictoriaMetrics)
+	dp.Kafka = logredact.String(dp.Kafka)
+	return dp
 }
 
 // dataPlaneEnvKey maps a region id to its override env var, e.g.
@@ -143,7 +157,7 @@ func (s *server) handleRegionTopology(w http.ResponseWriter, r *http.Request) {
 	regions := make([]RegionTopology, 0)
 	for _, r := range RegionList() {
 		regions = append(regions, RegionTopology{
-			ID: r.ID, Label: r.Label, DataPlane: dataPlaneFor(r.ID),
+			ID: r.ID, Label: r.Label, DataPlane: displayDataPlane(dataPlaneFor(r.ID)),
 			Tenants: tenantsBy[r.ID], Orgs: len(orgRegions[r.ID]),
 		})
 	}

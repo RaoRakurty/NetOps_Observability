@@ -308,8 +308,12 @@ def test_the_real_pins_are_well_formed_and_https():
     # They were already fetched unpinned from the same mirror by pysmi; the pin
     # only adds a checksum. BGP4-MIB / INET-ADDRESS-MIB / SNMP-FRAMEWORK-MIB are
     # IETF Code Components (redistributable), pinned rather than vendored.
+    # 2026-11-07 (tracker 377, owner: extend the posture to Nokia and Juniper):
+    # LLDP-MIB, RSTP-MIB, OLD-CISCO-INTERFACES-MIB, TIMETRA-BGP-MIB and their
+    # import chains, all pinned to one LibreNMS commit.
+    tracker_377 = {"ATM-TC-MIB", "HCNUM-TC", "IANA-ADDRESS-FAMILY-NUMBERS-MIB", "IANA-RTPROTO-MIB", "IEEE8021-PAE-MIB", "IP-FORWARD-MIB", "IP-MIB", "LLDP-MIB", "OLD-CISCO-INTERFACES-MIB", "RFC-1215", "RSTP-MIB", "SNMPv2-MIB", "TIMETRA-BGP-MIB", "TIMETRA-CHASSIS-MIB", "TIMETRA-FILTER-MIB", "TIMETRA-GLOBAL-MIB", "TIMETRA-PORT-MIB", "TIMETRA-QOS-MIB", "TIMETRA-SAP-MIB", "TIMETRA-SERV-MIB", "TIMETRA-TC-MIB", "TIMETRA-VRTR-MIB"}
     assert set(gen.FETCH_PINS) == {"ARISTA-SMI-MIB", "ARISTA-BRIDGE-EXT-MIB", "CISCO-BGP4-MIB", "CISCO-SMI",
-                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"}, (
+                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"} | tracker_377, (
         "the fetch table is the licence boundary — adding to it is a licence "
         "decision, so it is pinned here deliberately")
     for mod, pin in gen.FETCH_PINS.items():

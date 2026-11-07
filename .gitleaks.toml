@@ -7,6 +7,10 @@ useDefault = true
 description = "Test fixtures and the public dev fallback secret — not real credentials"
 regexTarget = "match"
 regexes = [
+  # tracker 367: the fabricated PEM body in the log-redaction test corpus
+  # (src/contracts/log_redaction_corpus.json) — the redactor must be tested
+  # against a key-shaped block; "MIIEs3cr3tvalue" is not a key.
+  '''MIIEs3cr3tvalue''',
   # Dummy credential convention used in *_test.go (e.g. auth-secret-123,
   # priv-secret-456) — fabricated values, never real keys.
   '''(auth|priv)-secret-\d+''',

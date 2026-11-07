@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/logredact"
 	"os"
 	"strconv"
 	"strings"
@@ -126,7 +127,10 @@ func (g *gnmiCollector) vmScalar(ctx context.Context, query string) (int, error)
 	// without this check a 500 from the metric store decoded to an empty result
 	// and was published as "no gNMI sources are streaming".
 	if resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("victoria %d for %s", resp.StatusCode, endpoint)
+		// tracker 367: the endpoint is built from VICTORIA_URL, which may carry
+		// the vmauth credential as userinfo; this error is stored in LastError
+		// and served by /api/collectors.
+		return 0, fmt.Errorf("victoria %d for %s", resp.StatusCode, logredact.URL(endpoint))
 	}
 
 	var out struct {

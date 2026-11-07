@@ -20,6 +20,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 import main
+from counter_rate import CounterRates
 from episodes import EpisodeEvent
 from signals import EntityType
 
@@ -139,6 +140,9 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
         # reset counters
         main.METRICS_RECEIVED = main.METRICS_ACCEPTED = main.METRICS_DROPPED = 0
         main.DEVICE_TELEMETRY_SIGNALS = 0
+        # tracker 379: a fresh counter-rate table per test — cumulative series
+        # are seeded per (tenant, entity, metric, source).
+        main.COUNTER_RATES = CounterRates()
         # Force a deterministic episode onset regardless of CUSUM internals.
         self._orig_observe = main.DETECTOR.observe
         main.DETECTOR.observe = self._fake_observe
@@ -155,10 +159,14 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_valid_interface_event_creates_device_telemetry_signal(self):
-        await main.handle_metric(iface_event())
+        # tracker 379: device_if_in_errors is a CUMULATIVE counter — the first
+        # sample seeds the series, the second is scored as a per-second rate.
+        now = datetime.now(timezone.utc)
+        await main.handle_metric(iface_event(value=5, ts=(now - timedelta(seconds=60)).isoformat()))
+        await main.handle_metric(iface_event(value=125, ts=now.isoformat()))
         await main.SIGNAL_BATCH.flush()  # drain the batched write path
-        self.assertEqual(main.METRICS_RECEIVED, 1)
-        self.assertEqual(main.METRICS_ACCEPTED, 1)
+        self.assertEqual(main.METRICS_RECEIVED, 2)
+        self.assertEqual(main.METRICS_ACCEPTED, 2)
         self.assertEqual(main.METRICS_DROPPED, 0)
         self.assertEqual(main.DEVICE_TELEMETRY_SIGNALS, 1)
         sig_rows = [r for r in self.ch.rows if r["_table"] == "netops.corr_signals"]
@@ -172,6 +180,7 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["entity_id"], "leaf1:Ethernet1")
         self.assertEqual(row["observer_id"], "leaf1")
         self.assertEqual(row["metric_name"], "device_if_in_errors")
+        self.assertEqual(float(row["value"]), 2.0)   # (125 - 5) / 60 s
 
     async def test_bgp_event_carries_peer_identity(self):
         await main.handle_metric(

@@ -142,8 +142,8 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
-    # tracker 376 (`trap.bgp.cisco_bgp4`).
-    assert len(P.RULES) == 41
+    # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`).
+    assert len(P.RULES) == 42
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -394,6 +394,8 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         # tracker 376: CISCO-BGP4-MIB session transitions, typed by a rule the
         # frozen code never had.
         "trap.bgp.cisco_bgp4",
+        # tracker 377: Nokia TIMETRA-BGP-MIB IPv6 session transitions.
+        "trap.bgp.nokia_ng",
     }
     fired = set()
     for entry in golden:

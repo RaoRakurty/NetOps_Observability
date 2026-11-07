@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/logredact"
 	"os"
 	"regexp"
 	"strconv"
@@ -402,7 +403,9 @@ var urlUserinfo = regexp.MustCompile(`://[^/@\s]+@`)
 
 // redactUserinfo removes any URL credential from text bound for a log or a
 // stored error (§8: no secrets in logs).
-func redactUserinfo(s string) string { return urlUserinfo.ReplaceAllString(s, "://<redacted>@") }
+func redactUserinfo(s string) string {
+	return logredact.String(urlUserinfo.ReplaceAllString(s, "://<redacted>@"))
+}
 
 func notePushFailure(reason string) {
 	reason = redactUserinfo(reason) // every failure text passes here: one choke point
