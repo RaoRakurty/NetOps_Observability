@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-03-cbgp-decoded`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-07-cbgp-transitions`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -31,7 +31,7 @@ engine treats them as such. Fidelity is the catalog's ladder
 
 | Symptom (Signal kind) | syslog | trap | metric episode | vendors | fidelity |
 |---|---|---|---|---|---|
-| **`bgp_adjacency_change`** | `syslog.bgp.adjacency_change`, `syslog.bgp.notification` | `trap.bgp.adjacency_change`, `trap.bgp.adjacency_change.event_type` | `bgp_state_anomaly` | `any`, `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: code |
+| **`bgp_adjacency_change`** | `syslog.bgp.adjacency_change`, `syslog.bgp.notification` | `trap.bgp.adjacency_change`, `trap.bgp.adjacency_change.event_type`, `trap.bgp.cisco_bgp4` | `bgp_state_anomaly` | `any`, `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: code |
 | `bgp_route_churn` | `syslog.bgp.route_churn` | — | — | `cisco`, `juniper` | syslog: doc_claimed |
 | `device_config_change` | — | `trap.config.change` | — | `cisco`, `juniper`, `nokia` | trap: doc_claimed |
 | `device_restart` | — | `trap.device.restart`, `trap.device.restart.event_type` | — | `any`, `standard` | trap: code |
@@ -129,7 +129,7 @@ Every symptom below has a real trap. Each is left as a generic
 |---|---|---|---|
 | lldp_neighbor_change | LLDP-MIB lldpRemTablesChange | no | The trap carries only INSERT/DELETE/DROP **counters** for the remote table — no port and no neighbour — so it cannot produce the interface entity or the up/down state the syslog kind's vocabulary requires. (LLDP-MIB is also not in the vendored MIB index today, so the OID would not even resolve to a name.) |
 | mac_flap / evpn_mac_move | CISCO-MAC-NOTIFICATION-MIB cmnMacChangedNotification, ARISTA-BRIDGE-EXT-MIB aristaBridgeExtMacMove | no | The MAC and VLAN live in the FDB varbind's **OID index**, not its value, and the receiver renders a MAC as `AA:BB:…` while the syslog lane grounds on the Cisco dotted `aabb.ccdd.eeff`. A MAC is a GLOBAL grounding token (tracker 168), so emitting one in a second notation would split one moving MAC into two correlation objects — strictly worse than the generic alarm, which already carries the decoded vlan/mac in `fields` + `message_key`. |
-| bgp_route_churn | CISCO-BGP4-MIB cbgpPeer2PrefixThresholdExceeded | no | CISCO-BGP4-MIB compiles no notifications into the vendored index, so there is no OID here that could be checked against a real definition, and per-prefix churn has no trap form at all (it is BMP/BGP-UPDATE data). The BGP `.event_type` twin already types any MIB-decoded vendor BGP transition. |
+| bgp_route_churn | CISCO-BGP4-MIB cbgpPeer2PrefixThresholdExceeded | no | cbgpPeer2PrefixThresholdExceeded decodes (CISCO-BGP4-MIB reaches the index since 2026-11-03) but reports a configured prefix LIMIT being crossed, not route churn — per-prefix churn has no trap form at all (it is BMP/BGP-UPDATE data). The MIB's session transitions are typed by `trap.bgp.cisco_bgp4` (tracker 376). |
 | vtep_state_change | — none | n/a | VXLAN/EVPN has no IETF notification MIB; NX-OS reports VTEP/NVE liveness on syslog only. Nothing to promote. |
 | transceiver / DOM / FEC / PCS (12 port kinds) | ENTITY-SENSOR-MIB entSensorThresholdNotification, ARISTA-ENTITY-SENSOR-MIB aristaEntSensorAlarm | no | A sensor-threshold trap says *a sensor crossed a threshold*; it does not say pre-FEC BER, lane bias, deskew or LOS. Mapping one onto a specific optics kind would be a guess presented as evidence. They stay generic alarms and the DOM metric lane carries the real signal. |
 | hardware / environment (fan, PSU, FRU, over-temperature) | CISCO-ENTITY-FRU-CONTROL-MIB cefc* · CISCO-ENVMON-MIB ciscoEnvMon* · ENTITY-STATE-MIB entStateOperDisabled · JUNIPER-MIB jnxFanFailure / jnxPowerSupplyFailure · TIMETRA-CHASSIS-MIB tmnxEq* | yes — index-verified | There is no syslog-typed kind for environmental health to pair with, so promoting these would mean inventing kinds. They belong as generic `device_alarm`s — and since **A9b they actually ARE ones**: every one of these notifications carried NO severity hint, defaulted to `notice` and therefore sat below `ALARM_SEVERITY_FLOOR`, so a failed power supply or an over-temperature chassis reached the engine as nothing at all. `gen_index.py SEVERITY_HINT` now seeds the FAULTS at `warning` and their recovery twins (`jnxFanOK`, `cefcFRUInserted`, `entStateOperEnabled`) at `info` — the same split `linkDown`/`linkUp` has always had. Typing them further would still be a guess: a sensor trap says a threshold moved, not which optic or which lane. |

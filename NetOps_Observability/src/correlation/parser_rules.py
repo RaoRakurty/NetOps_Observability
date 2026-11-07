@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-03-cbgp-decoded'
+PARSER_REV = '2026-11-07-cbgp-transitions'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -951,6 +951,54 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'markers': [],
      'generic': False,
      'shadow': False},
+    {'rule_id': 'trap.bgp.cisco_bgp4',
+     'lane': 'trap',
+     'source': 'trap',
+     'kind': 'bgp_adjacency_change',
+     'entity_type': 'device',
+     'family': 'bgp_adjacency_change',
+     'vendors': ['cisco'],
+     'guard': {'all': [{'equals_any': ['oid',
+                                       ['1.3.6.1.4.1.9.9.187.0.1',
+                                        '1.3.6.1.4.1.9.9.187.0.2',
+                                        '1.3.6.1.4.1.9.9.187.0.5',
+                                        '1.3.6.1.4.1.9.9.187.0.6',
+                                        '1.3.6.1.4.1.9.9.187.0.7',
+                                        '1.3.6.1.4.1.9.9.187.0.8']]},
+                       {'any': [{'var_true': 'established'}, {'var_true': 'backward'}]}]},
+     'extract': {'peer_index': {'vbindex': ['1.3.6.1.4.1.9.9.187.1.2.5.1.3',
+                                            '1.3.6.1.4.1.9.9.187.1.2.5.1.17',
+                                            '1.3.6.1.4.1.9.9.187.1.2.5.1.29',
+                                            '1.3.6.1.2.1.15.3.1.2',
+                                            '1.3.6.1.2.1.15.3.1.14',
+                                            '1.3.6.1.4.1.9.9.187.1.2.1.1.8']},
+                 'peer': {'inetaddr': '$peer_index'},
+                 'to_raw': {'alt': [{'vb': ['1.3.6.1.4.1.9.9.187.1.2.5.1.3']}, {'vb': ['1.3.6.1.2.1.15.3.1.2']}]},
+                 'from_raw': {'alt': [{'vb': ['1.3.6.1.4.1.9.9.187.1.2.5.1.29']}, {'vb': ['1.3.6.1.4.1.9.9.187.1.2.1.1.8']}]},
+                 'fsm_to': {'re': [['$to_raw', '^\\D*([1-6])\\)?\\s*$', 1, '']]},
+                 'fsm_from': {'re': [['$from_raw', '^\\D*([0-6])\\)?\\s*$', 1, '']]},
+                 'move': {'template': '{fsm_from|?}>{fsm_to|?}'},
+                 'established': {'bool': {'any': [{'eq': ['oid', '1.3.6.1.4.1.9.9.187.0.5']}, {'eq': ['$fsm_to', '6']}]}},
+                 'backward': {'bool': {'any': [{'equals_any': ['oid', ['1.3.6.1.4.1.9.9.187.0.2', '1.3.6.1.4.1.9.9.187.0.6', '1.3.6.1.4.1.9.9.187.0.8']]},
+                                               {'re': ['$move', '^(?:6>[1-5]|5>[1-4]|4>[1-3]|3>[12]|2>1)$']}]}},
+                 'state': {'case': [{'when': {'var_true': 'established'}, 'value': 'up'}, {'when': {'always': True}, 'value': 'down'}]}},
+     'emit': {'kind': 'bgp_adjacency_change',
+              'metric': 'bgp_adjacency',
+              'modality': 'control_plane',
+              'entity': {'when': {'truthy': '$peer'}, 'type': 'device', 'id': '{device}:{peer}', 'else': {'type': 'device', 'id': '{device}'}},
+              'severity': {'case': [{'when': {'var_true': 'established'}, 'value': 'warn'}], 'default': 'high'},
+              'native_id': '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}',
+              'tokens': [{'t': '{device}'}, {'t': '{peer}'}],
+              'attrs': {'peer': {'var': 'peer'},
+                        'state': {'var': 'state'},
+                        'fsm_from': {'var': 'fsm_from'},
+                        'fsm_to': {'var': 'fsm_to'},
+                        'trap_oid': {'var': 'oid'},
+                        'authenticated': {'var': 'authed'}},
+              'omit_empty': ['fsm_from', 'fsm_to']},
+     'markers': [],
+     'generic': False,
+     'shadow': False},
     {'rule_id': 'trap.bgp.adjacency_change.event_type',
      'lane': 'trap',
      'source': 'trap',
@@ -1299,5 +1347,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = 'e10dccf5309615886d4b9bcc826ccbfb01df2f1ca13551524c8b7d1f5bb536a2'
+BAKED_RULES_HASH = '3a1a5257f4ef396de0d5ca68e001deb101d711283755eeeb062a172d52481f0e'
 RULES_HASH: str = rules_hash(RULES)

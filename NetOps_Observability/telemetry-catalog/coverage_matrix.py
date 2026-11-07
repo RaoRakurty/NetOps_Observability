@@ -120,11 +120,11 @@ KEEP_AS_ALARM: tuple[tuple[str, str, str, str], ...] = (
         "bgp_route_churn",
         "CISCO-BGP4-MIB cbgpPeer2PrefixThresholdExceeded",
         "no",
-        ("CISCO-BGP4-MIB compiles no notifications into the vendored index, so "
-         "there is no OID here that could be checked against a real definition, "
-         "and per-prefix churn has no trap form at all (it is BMP/BGP-UPDATE "
-         "data). The BGP `.event_type` twin already types any MIB-decoded "
-         "vendor BGP transition."),
+        ("cbgpPeer2PrefixThresholdExceeded decodes (CISCO-BGP4-MIB reaches the "
+         "index since 2026-11-03) but reports a configured prefix LIMIT being "
+         "crossed, not route churn — per-prefix churn has no trap form at all "
+         "(it is BMP/BGP-UPDATE data). The MIB's session transitions are typed "
+         "by `trap.bgp.cisco_bgp4` (tracker 376)."),
     ),
     (
         "vtep_state_change",

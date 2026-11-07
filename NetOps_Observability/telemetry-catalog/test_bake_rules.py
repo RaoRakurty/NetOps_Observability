@@ -46,8 +46,9 @@ def test_the_catalog_loads_and_validates(loaded):
 def test_the_lanes_are_the_declared_ones(rows):
     assert {r["lane"] for r in rows} <= set(B.LANES)
     runtime = [r for r in rows if r["lane"] in B.RUNTIME_LANES]
-    # 38 through A9 · 40 since A9b (`syslog.config.change`, `trap.config.change`).
-    assert len(runtime) == 40, (
+    # 38 through A9 · 40 since A9b (`syslog.config.change`, `trap.config.change`)
+    # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`).
+    assert len(runtime) == 41, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 
@@ -219,8 +220,11 @@ def test_the_two_link_rows_are_the_only_ones_that_drop_an_attr(rows):
     """A narrow, deliberate exception stays narrow. If `omit_empty` spreads, an
     absent key stops meaning "the device did not report it"."""
     declaring = {r["rule_id"] for r in rows if (r.get("emit") or {}).get("omit_empty")}
+    # tracker 376: cbgp FSM states are optional varbinds — the same "the device
+    # did not send it" meaning.
     assert declaring == {"trap.link.state_change",
-                         "trap.link.state_change.event_type"}
+                         "trap.link.state_change.event_type",
+                         "trap.bgp.cisco_bgp4"}
 
 
 def test_a_pattern_src_must_be_a_live_node_of_its_own_guard(loaded):

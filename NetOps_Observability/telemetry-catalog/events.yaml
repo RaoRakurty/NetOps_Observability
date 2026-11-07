@@ -73,7 +73,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-03-cbgp-decoded"
+parser_rev: "2026-11-07-cbgp-transitions"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -141,6 +141,7 @@ parser_rev: "2026-11-03-cbgp-decoded"
 #                  {findall: [FIELD, pat, flags]}  {nth: [listvar, i]}
 #                  {vb: [oid...]} {vbname: [substr...]}      SNMP varbinds
 #                  {vbindex: [column oid...]}    a varbind's table index (OID suffix)
+#                  {inetaddr: FIELD}             an InetAddress index → canonical IP text, else ''
 #                  {pick: {find: [pat, flags], reject: [pat, flags]}}
 #                  {alt: [spec, ...]}            first non-empty
 #                  {bool: guard}  {case: [{when: guard, value: template}]}
@@ -1431,6 +1432,96 @@ rules:
         trap_oid: {var: oid}
         authenticated: {var: authed}
 
+  # CISCO-BGP4-MIB (tracker 376). IOS-XE sends up to SIX notifications for one
+  # session transition when both families are enabled (RFC 4273 + cbgp* +
+  # cbgpPeer2*, recorded on the lab 2026-11-01); the trap lane's transition
+  # collapse (trap_collapse.py) folds them into ONE signal. This rule exists for
+  # what the RFC pair cannot say: cbgpPeer2* is the only carrier of IPv6 (and,
+  # on IOS-XE, non-default-VRF) sessions, and a device with only the Cisco
+  # family enabled must give the engine the same evidence as one with RFC 4273.
+  #
+  # It emits EXACTLY the RFC pair's vocabulary, so the two families are
+  # equivalent evidence: entering established → up; a backward transition
+  # (a backward-transition notification, or an FSM change to a LOWER state —
+  # RFC 4273's definition of backward) → down. A FORWARD move that does not
+  # reach established (idle → connect → active retry churn of a session that is
+  # already down) is not a transition the RFC family reports either: it stays a
+  # searchable named alarm, exactly as before this rule.
+  # Prefix-threshold notifications (.0.3/.0.4/.0.9/.0.10) are not adjacency.
+  - rule_id: trap.bgp.cisco_bgp4
+    lane: trap
+    source: trap
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [cisco]
+    guard:
+      all:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.9.9.187.0.1', '1.3.6.1.4.1.9.9.187.0.2',
+               '1.3.6.1.4.1.9.9.187.0.5', '1.3.6.1.4.1.9.9.187.0.6',
+               '1.3.6.1.4.1.9.9.187.0.7', '1.3.6.1.4.1.9.9.187.0.8']
+        - any:
+            - {var_true: established}
+            - {var_true: backward}
+    extract:
+      # WHICH SESSION: the table index. cbgpPeer2* rows are indexed by
+      # InetAddress (bare octets on IOS-XE, or RFC 4001 type.len.octets);
+      # cbgpFsmStateChange / cbgpBackwardTransition carry the RFC bgpPeerTable
+      # columns, indexed by the IPv4 address.
+      peer_index:
+        vbindex: ['1.3.6.1.4.1.9.9.187.1.2.5.1.3',    # cbgpPeer2State
+                  '1.3.6.1.4.1.9.9.187.1.2.5.1.17',   # cbgpPeer2LastError
+                  '1.3.6.1.4.1.9.9.187.1.2.5.1.29',   # cbgpPeer2PrevState
+                  '1.3.6.1.2.1.15.3.1.2',             # bgpPeerState
+                  '1.3.6.1.2.1.15.3.1.14',            # bgpPeerLastError
+                  '1.3.6.1.4.1.9.9.187.1.2.1.1.8']    # cbgpPeerPrevState
+      peer: {inetaddr: '$peer_index'}
+      # The FSM states as numbers. A decoded enum reads "idle(1)", a raw one "1".
+      to_raw: {alt: [{vb: ['1.3.6.1.4.1.9.9.187.1.2.5.1.3']}, {vb: ['1.3.6.1.2.1.15.3.1.2']}]}
+      from_raw: {alt: [{vb: ['1.3.6.1.4.1.9.9.187.1.2.5.1.29']}, {vb: ['1.3.6.1.4.1.9.9.187.1.2.1.1.8']}]}
+      fsm_to: {re: [['$to_raw', '^\D*([1-6])\)?\s*$', 1, '']]}
+      fsm_from: {re: [['$from_raw', '^\D*([0-6])\)?\s*$', 1, '']]}
+      move: {template: '{fsm_from|?}>{fsm_to|?}'}
+      established:
+        bool:
+          any:
+            - {eq: [oid, '1.3.6.1.4.1.9.9.187.0.5']}   # cbgpPeer2EstablishedNotification
+            - {eq: ['$fsm_to', '6']}
+      backward:
+        bool:
+          any:
+            # cbgpBackwardTransition, cbgpPeer2BackwardTransNotification,
+            # cbgpPeer2BackwardTransition
+            - {equals_any: [oid, ['1.3.6.1.4.1.9.9.187.0.2', '1.3.6.1.4.1.9.9.187.0.6',
+                                  '1.3.6.1.4.1.9.9.187.0.8']]}
+            - {re: ['$move', '^(?:6>[1-5]|5>[1-4]|4>[1-3]|3>[12]|2>1)$']}
+      state:
+        case:
+          - {when: {var_true: established}, value: up}
+          - {when: {always: true}, value: down}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity:
+        when: {truthy: '$peer'}
+        type: device
+        id: '{device}:{peer}'
+        else: {type: device, id: '{device}'}
+      severity: {case: [{when: {var_true: established}, value: warn}], default: high}
+      native_id: '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        fsm_from: {var: fsm_from}
+        fsm_to: {var: fsm_to}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: [fsm_from, fsm_to]
+
   # Vendor BGP/link/restart traps the standard-OID checks miss (e.g. Arista
   # arista_bgp4_v2_backward_transition), classified off the normalized
   # event_type (#32 envelope) — vendor-agnostic, same Signal shapes.
@@ -1444,14 +1535,10 @@ rules:
     guard:
       all:
         - {contains: [etype, bgp]}
-        # NOT CISCO-BGP4-MIB (yet). Its notifications now DECODE (the MIB
-        # reaches the index since 2026-11-03), so their event_type would match
-        # this guard — but IOS-XE sends up to SIX traps per transition with both
-        # families on (RFC 4273 + cbgp + cbgpPeer2, recorded on the lab), the
-        # RFC pair is already classified above, and the cbgp varbinds would
-        # feed the `vbname: peer` scan a non-peer value. Classifying them needs
-        # one-signal-per-transition identity first (tracker 374); until then
-        # they stay searchable, named alarms — behaviour unchanged.
+        # NOT CISCO-BGP4-MIB: `trap.bgp.cisco_bgp4` above owns it, and what it
+        # deliberately declines (forward retry churn, prefix thresholds) must
+        # not be picked up here — the cbgp varbinds would also feed the
+        # `vbname: peer` scan a non-peer value.
         - {not: {contains: [oid, '1.3.6.1.4.1.9.9.187.']}}
         - any:
             - {contains: [etype, backward]}

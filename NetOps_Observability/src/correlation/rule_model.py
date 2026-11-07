@@ -45,6 +45,7 @@ DESIGN CONSTRAINTS (all of them load-bearing):
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -248,6 +249,34 @@ Extractor = Callable[[Ctx], Any]
 
 
 # ── guards ───────────────────────────────────────────────────────────────────
+
+
+def inet_index_text(raw: str) -> str:
+    """An SNMP InetAddress index (`vbindex` text) → canonical address, else "".
+
+    Forms: `a.b.c.d` and 16 bare octets (agents that drop the type/length
+    prefix — IOS-XE's cbgpPeer2 index, recorded on the lab), `1.4.<4 octets>`
+    and `2.16.<16 octets>` (RFC 4001 InetAddressType + length-prefixed
+    InetAddress). Zoned types (ipv4z/ipv6z) and anything else → "".
+    """
+    parts = raw.split(".") if raw else []
+    if not parts or len(parts) > 18:
+        return ""
+    nums: list[int] = []
+    for p in parts:
+        if not p.isdigit() or len(p) > 3:
+            return ""
+        n = int(p)
+        if n > 255:
+            return ""
+        nums.append(n)
+    if len(nums) in (4, 16):
+        octets = nums
+    elif len(nums) == 6 and nums[0] == 1 and nums[1] == 4 or len(nums) == 18 and nums[0] == 2 and nums[1] == 16:
+        octets = nums[2:]
+    else:
+        return ""
+    return str(ipaddress.ip_address(bytes(octets)))
 
 
 def _one_key(node: Any, what: str) -> tuple[str, Any]:
@@ -707,6 +736,15 @@ def _compile_extract_core(spec: Any) -> Extractor:
                         return oid[len(pre):]
             return ""
         return _vbindex
+    if op == "inetaddr":
+        # An SNMP InetAddress TABLE INDEX (a `vbindex`) → canonical address
+        # text, or "" when it is not one. Accepts the bare 4 / 16 octets some
+        # agents send and the RFC 4001 `<type>.<len>.<octets>` form (1.4 = ipv4,
+        # 2.16 = ipv6); the result is what `ipaddress` prints, so an IPv6 peer
+        # gets ONE spelling ("2001:db8::1") whichever form the agent used. The
+        # validation is the point: raw index text never becomes an entity id.
+        read = _reader(str(arg))
+        return lambda c: inet_index_text(read(c))
     if op == "vbname":
         # First varbind whose MIB-RESOLVED name contains one of these substrings
         # — how a vendor's peer/interface column is found without hardcoding its
@@ -1145,10 +1183,14 @@ def install_fidelity(table: Mapping[str, str]) -> None:
 
 
 def _reads_vars(node: Any) -> bool:
-    """Does this spec tree reference a `$var` anywhere?"""
+    """Does this spec tree read an extracted var anywhere — a `$var` operand,
+    or a `var_true: name` leaf (which names its var WITHOUT the `$`, and was
+    missed here until the first guard to use one, trap.bgp.cisco_bgp4)?"""
     if isinstance(node, str):
         return node.startswith("$")
     if isinstance(node, Mapping):
+        if "var_true" in node:
+            return True
         return any(_reads_vars(v) for v in node.values())
     if isinstance(node, (list, tuple)):
         return any(_reads_vars(v) for v in node)

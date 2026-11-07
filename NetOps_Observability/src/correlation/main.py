@@ -208,6 +208,7 @@ from signals import (
 )
 from synthetic_normalize import synthetic_app_signal
 from tls_ident import PeerIdentityMiddleware
+from trap_collapse import TransitionCollapser
 from verdicts import VerdictTier
 from verification_producer import verification_signal_from_event
 from wireless_onboarding import (
@@ -862,6 +863,9 @@ TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
 TRAPS_NORMALIZED = 0           # classified into a control_plane signal
 TRAPS_RECANON = 0              # C8: re-attributed to a device via the C7.1 EntityResolver
 TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
+# tracker 376: one BGP session transition reported by several trap families
+# (RFC 4273 + CISCO-BGP4-MIB cbgp* + cbgpPeer2*, up to six traps) is ONE signal.
+TRAP_TRANSITIONS = TransitionCollapser()
 CLOUD_RECEIVED = 0             # consumed from netops.cloud (#81 P3G ingestion lane)
 CLOUD_SIGNALS = 0             # source=cloud signals written to corr_signals + buffered
 CLOUD_DROPPED = 0             # dropped: no tenant (default-closed) / malformed (dead-letter)
@@ -12847,6 +12851,11 @@ async def handle_snmptrap(ev: dict) -> None:
     if sig is None:
         TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
         return
+    if sig.kind == "bgp_adjacency_change" and not TRAP_TRANSITIONS.admit(
+            tenant, sig.entity_id, str(sig.attrs.get("state") or ""), sig.ts):
+        # Another family's report of a transition already emitted (counted as
+        # traps_collapsed). The raw trap stays searchable in OpenSearch.
+        return
     await batch_signal(sig.to_ch_row())  # batched: lane=snmptrap
     TRAPS_NORMALIZED += 1
     buffer_signal(sig)
@@ -15725,6 +15734,8 @@ def _health_payload() -> dict:
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
             "traps_dropped": TRAPS_DROPPED,
+            # tracker 376: duplicate family reports of one BGP transition.
+            "traps_collapsed": TRAP_TRANSITIONS.collapsed,
             "flows_received": FLOWS_RECEIVED,
             "flows_dropped": FLOWS_DROPPED,
             "passive_flow_signals": PASSIVE_FLOW_SIGNALS,
