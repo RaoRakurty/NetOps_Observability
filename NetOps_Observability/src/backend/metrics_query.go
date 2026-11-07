@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/logredact"
 	"regexp"
 	"strings"
 	"time"
@@ -286,7 +287,11 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 	base := envOr("METRICS_URL", "http://victoria:8428")
 	u, err := url.Parse(base + path)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		// tracker 367: url.Parse's error quotes the whole URL — userinfo
+		// included — and this endpoint is reachable by tenant users. The
+		// caller gets a generic message; the operator log gets the redacted one.
+		logWarn("metrics", "METRICS_URL is not a valid URL", map[string]any{"error": logredact.String(err.Error())})
+		writeError(w, http.StatusInternalServerError, errors.New("metrics backend URL is misconfigured"))
 		return
 	}
 	// Forward only the query params this endpoint expects.

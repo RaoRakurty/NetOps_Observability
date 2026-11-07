@@ -10,6 +10,7 @@ package applog
 import (
 	"encoding/json"
 	"io"
+	"netops/backend/internal/logredact"
 	"os"
 	"strings"
 	"sync"
@@ -104,6 +105,11 @@ func New(w io.Writer) *Logger { return &Logger{w: w} }
 // is the historical behavior some emitters rely on (e.g. stamping their own
 // "component" detail).
 func (l *Logger) Log(level, component, msg string, fields map[string]any) {
+	// tracker 367: the backstop. Credentials are masked before the line is
+	// written AND before the observer (the pipedebug ring) sees it.
+	// Copy-on-write: the caller's map is never mutated.
+	msg = logredact.String(msg)
+	fields = logredact.Fields(fields)
 	event := map[string]any{
 		"ts":        time.Now().UTC().Format(time.RFC3339Nano),
 		"level":     level,

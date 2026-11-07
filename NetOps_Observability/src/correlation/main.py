@@ -80,6 +80,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 import diagnostics
+import log_redact
 import signals
 from aggregation import AGG_EVICT_REASONS, AggPlane, DeltaClass
 from app_producers import app_identity_from_event
@@ -575,6 +576,8 @@ logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+# tracker 367: the credential backstop on every root/uvicorn handler (§8).
+log_redact.install()
 log = logging.getLogger("correlation")
 
 

@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/logredact"
 	"path/filepath"
 
 	"netops/backend/ai"
@@ -2658,6 +2659,10 @@ func domainImportCollections(db *platformdb.DB) []platformdb.Collection {
 // Run is the backend entrypoint: cmd/api/main.go calls it. It owns flag/env
 // resolution, wiring and the serve loop — /cmd stays logic-free (§2).
 func Run() {
+	// tracker 367: every stdlib `log` line (212 call sites, and slog's default
+	// handler, which writes through it) passes the credential backstop. First,
+	// so the prober below is covered too.
+	log.SetOutput(logredact.NewWriter(os.Stderr))
 	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
 	// measurement collectors (STAMP / traceroute) — the single component that
 	// needs CAP_NET_RAW. No HTTP API, no DB, no auth surface. It shares the

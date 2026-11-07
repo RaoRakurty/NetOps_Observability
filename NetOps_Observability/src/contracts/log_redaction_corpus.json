@@ -1,0 +1,39 @@
+{
+  "_doc": "tracker 367 — the ONE corpus both log redactors are tested against: Go src/backend/internal/logredact and Python src/correlation/log_redact.py. `cases`: exact input → output. `negatives`: must pass through unchanged. `secrets`: values that must never survive String()/redact() of any case input.",
+  "secrets": ["Sup3rS3cretPw", "ghp_ABCDEF1234567890xyz", "eyJhbGciOiJIUzI1NiJ9.e30.sig123", "tok-77QQ88zz", "s3cr3tvalue"],
+  "cases": [
+    {"in": "POST https://svc-api:Sup3rS3cretPw@vmauth:8427/api/v1/import failed",
+     "out": "POST https://svc-api:***@vmauth:8427/api/v1/import failed"},
+    {"in": "clone https://ghp_ABCDEF1234567890xyz@github.com/x/y",
+     "out": "clone https://***@github.com/x/y"},
+    {"in": "victoria 401 for http://user:Sup3rS3cretPw@victoria:8428/api/v1/query?q=up",
+     "out": "victoria 401 for http://user:***@victoria:8428/api/v1/query?q=up"},
+    {"in": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig123",
+     "out": "Authorization: Bearer ***"},
+    {"in": "header authorization=Basic c3ZjLWFwaTpTdXAzclMzY3JldFB3",
+     "out": "header authorization=Basic ***"},
+    {"in": "sent bearer eyJhbGciOiJIUzI1NiJ9.e30.sig123 upstream",
+     "out": "sent bearer *** upstream"},
+    {"in": "config password=Sup3rS3cretPw host=db",
+     "out": "config password=*** host=db"},
+    {"in": "db_token: tok-77QQ88zz retry",
+     "out": "db_token: *** retry"},
+    {"in": "{\"user\":\"svc\",\"password\":\"Sup3rS3cretPw\",\"port\":5432}",
+     "out": "{\"user\":\"svc\",\"password\":\"***\",\"port\":5432}"},
+    {"in": "{\"client_secret\": \"s3cr3tvalue\"}",
+     "out": "{\"client_secret\": \"***\"}"},
+    {"in": "key -----BEGIN RSA PRIVATE KEY-----\nMIIEs3cr3tvalue\n-----END RSA PRIVATE KEY----- loaded",
+     "out": "key -----BEGIN RSA PRIVATE KEY----- *** -----END RSA PRIVATE KEY----- loaded"},
+    {"in": "api_key=s3cr3tvalue&x=1",
+     "out": "api_key=***&x=1"}
+  ],
+  "negatives": [
+    "llm request max_tokens=4096 tokens=812",
+    "connect ssh://router1/ ok",
+    "mail rao@example.com bounced",
+    "GET https://vmauth:8427/api/v1/query 200",
+    "BGP peer 10.0.0.5 established",
+    "token bucket refilled",
+    "password policy updated"
+  ]
+}
