@@ -73,7 +73,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-07-cbgp-transitions"
+parser_rev: "2026-11-07-nokia-bgp-ng"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -1522,6 +1522,59 @@ rules:
         authenticated: {var: authed}
       omit_empty: [fsm_from, fsm_to]
 
+  # Nokia SR OS TIMETRA-BGP-MIB (tracker 377). tBgpNgEstablished /
+  # tBgpNgBackwardTransition are sent for IPv6 peers ONLY (IPv4 sessions use the
+  # RFC 4273 pair above), so they are the only carrier of a Nokia IPv6 BGP
+  # session — and once the MIB decodes, the event_type rule below would have
+  # matched them and taken `tBgpPeerNgLastError`'s VALUE as the peer (its name
+  # contains "peer"). Same vocabulary as RFC 4273: established → up, backward →
+  # down. WHICH SESSION: the tBgpPeerNg row index is
+  # <tBgpInstanceIndex>.<InetAddressType>.<len>.<octets>; the instance (the
+  # routing instance / VRF) is stripped and kept as an attr, the address is
+  # canonicalised by `inetaddr`.
+  - rule_id: trap.bgp.nokia_ng
+    lane: trap
+    source: trap
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [nokia]
+    guard:
+      equals_any:
+        - oid
+        - ['1.3.6.1.4.1.6527.3.1.3.14.0.7', '1.3.6.1.4.1.6527.3.1.3.14.0.8']
+    extract:
+      peer_index:
+        vbindex: ['1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59',    # tBgpPeerNgConnState
+                  '1.3.6.1.4.1.6527.3.1.2.14.4.10.1.11']   # tBgpPeerNgLastError
+      bgp_instance: {re: [['$peer_index', '^(\d+)\.\d+\.\d+\.', 1, '']]}
+      peer_addr: {re: [['$peer_index', '^\d+\.(\d+\.\d+\.[\d.]+)$', 1, '']]}
+      peer: {inetaddr: '$peer_addr'}
+      established: {bool: {eq: [oid, '1.3.6.1.4.1.6527.3.1.3.14.0.7']}}
+      state:
+        case:
+          - {when: {var_true: established}, value: up}
+          - {when: {always: true}, value: down}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity:
+        when: {truthy: '$peer'}
+        type: device
+        id: '{device}:{peer}'
+        else: {type: device, id: '{device}'}
+      severity: {case: [{when: {var_true: established}, value: warn}], default: high}
+      native_id: '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        bgp_instance: {var: bgp_instance}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: [bgp_instance]
+
   # Vendor BGP/link/restart traps the standard-OID checks miss (e.g. Arista
   # arista_bgp4_v2_backward_transition), classified off the normalized
   # event_type (#32 envelope) — vendor-agnostic, same Signal shapes.
@@ -1540,6 +1593,9 @@ rules:
         # not be picked up here — the cbgp varbinds would also feed the
         # `vbname: peer` scan a non-peer value.
         - {not: {contains: [oid, '1.3.6.1.4.1.9.9.187.']}}
+        # NOT Nokia TIMETRA-BGP-MIB either: `trap.bgp.nokia_ng` owns its session
+        # notifications, and its tBgpPeerNg* varbind names contain "peer".
+        - {not: {contains: [oid, '1.3.6.1.4.1.6527.3.1.3.14.']}}
         - any:
             - {contains: [etype, backward]}
             - {contains: [etype, transition]}

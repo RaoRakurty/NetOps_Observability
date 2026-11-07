@@ -164,6 +164,10 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
                    "value": "idle(1)"},
                   {"oid": "1.3.6.1.4.1.9.9.187.1.2.5.1.29.10.0.0.7", "name": "cbgpPeer2PrevState",
                    "value": "established(6)"}])),
+    "trap.bgp.nokia_ng": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.6527.3.1.3.14.0.8", trap_name="tBgpNgBackwardTransition",
+        varbinds=[{"oid": "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59.1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.9",
+                   "name": "tBgpPeerNgConnState", "value": "idle(1)"}])),
     "trap.link.state_change.event_type": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.9.9.41.2.0.1", trap_name="vendorTrap",
         event_type="if_link_down",
@@ -472,7 +476,13 @@ RULES_HASH_CBGP_DECODED = "e10dccf5309615886d4b9bcc826ccbfb01df2f1ca13551524c8b7
 #: rule DSL gains `inetaddr`. Additive: every earlier corpus entry replays
 #: byte-for-byte; seven new entries record the new rule's outputs.
 RULES_HASH_CBGP_TRANSITIONS = "3a1a5257f4ef396de0d5ca68e001deb101d711283755eeeb062a172d52481f0e"
-RULES_HASH_A3 = RULES_HASH_CBGP_TRANSITIONS
+#:
+#: Nokia TIMETRA-BGP-MIB (2026-11-07, tracker 377): `trap.bgp.nokia_ng` types the
+#: IPv6-only tBgpNg* session transitions, and the event_type BGP rule excludes
+#: the Nokia notification subtree. Additive: every earlier corpus entry replays
+#: byte-for-byte; new entries record the new rule's outputs.
+RULES_HASH_NOKIA_NG = "236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f72038d2d"
+RULES_HASH_A3 = RULES_HASH_NOKIA_NG
 
 
 def _guard_patterns(node) -> list[str]:

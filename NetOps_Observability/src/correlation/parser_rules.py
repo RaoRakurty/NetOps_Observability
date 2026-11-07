@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-07-cbgp-transitions'
+PARSER_REV = '2026-11-07-nokia-bgp-ng'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -999,6 +999,36 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'markers': [],
      'generic': False,
      'shadow': False},
+    {'rule_id': 'trap.bgp.nokia_ng',
+     'lane': 'trap',
+     'source': 'trap',
+     'kind': 'bgp_adjacency_change',
+     'entity_type': 'device',
+     'family': 'bgp_adjacency_change',
+     'vendors': ['nokia'],
+     'guard': {'equals_any': ['oid', ['1.3.6.1.4.1.6527.3.1.3.14.0.7', '1.3.6.1.4.1.6527.3.1.3.14.0.8']]},
+     'extract': {'peer_index': {'vbindex': ['1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59', '1.3.6.1.4.1.6527.3.1.2.14.4.10.1.11']},
+                 'bgp_instance': {'re': [['$peer_index', '^(\\d+)\\.\\d+\\.\\d+\\.', 1, '']]},
+                 'peer_addr': {'re': [['$peer_index', '^\\d+\\.(\\d+\\.\\d+\\.[\\d.]+)$', 1, '']]},
+                 'peer': {'inetaddr': '$peer_addr'},
+                 'established': {'bool': {'eq': ['oid', '1.3.6.1.4.1.6527.3.1.3.14.0.7']}},
+                 'state': {'case': [{'when': {'var_true': 'established'}, 'value': 'up'}, {'when': {'always': True}, 'value': 'down'}]}},
+     'emit': {'kind': 'bgp_adjacency_change',
+              'metric': 'bgp_adjacency',
+              'modality': 'control_plane',
+              'entity': {'when': {'truthy': '$peer'}, 'type': 'device', 'id': '{device}:{peer}', 'else': {'type': 'device', 'id': '{device}'}},
+              'severity': {'case': [{'when': {'var_true': 'established'}, 'value': 'warn'}], 'default': 'high'},
+              'native_id': '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}',
+              'tokens': [{'t': '{device}'}, {'t': '{peer}'}],
+              'attrs': {'peer': {'var': 'peer'},
+                        'state': {'var': 'state'},
+                        'bgp_instance': {'var': 'bgp_instance'},
+                        'trap_oid': {'var': 'oid'},
+                        'authenticated': {'var': 'authed'}},
+              'omit_empty': ['bgp_instance']},
+     'markers': [],
+     'generic': False,
+     'shadow': False},
     {'rule_id': 'trap.bgp.adjacency_change.event_type',
      'lane': 'trap',
      'source': 'trap',
@@ -1008,6 +1038,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'vendors': ['any'],
      'guard': {'all': [{'contains': ['etype', 'bgp']},
                        {'not': {'contains': ['oid', '1.3.6.1.4.1.9.9.187.']}},
+                       {'not': {'contains': ['oid', '1.3.6.1.4.1.6527.3.1.3.14.']}},
                        {'any': [{'contains': ['etype', 'backward']},
                                 {'contains': ['etype', 'transition']},
                                 {'contains': ['etype', 'established']},
@@ -1347,5 +1378,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '3a1a5257f4ef396de0d5ca68e001deb101d711283755eeeb062a172d52481f0e'
+BAKED_RULES_HASH = '236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f72038d2d'
 RULES_HASH: str = rules_hash(RULES)
