@@ -244,7 +244,8 @@ ipAddrTable, tenant declarations, config-source parsing; Junos ODID configurable
 - **P5** in-band flow identity: `observation_domain_id` on `netops.flows`,
   composite lookup within the tenant.
 - **P6** engine stage [1] canonicalization behind a byte-identical-when-OFF flag,
-  `ENGINE_SEMVER` bump, replay.
+  `ENGINE_SEMVER` bump, replay. One metric series per device across sources
+  (owner, 2026-11-07 — requirements in §8).
 - **P7** UI: channels (per tenant: endpoints to configure on devices, last seen,
   rates), device Identities tab, unattributed senders on the Provider channel.
 - **P8** G3 vManage webhook (358a) · **P9** G2 device-direct TLS syslog · **P10+** other
@@ -326,6 +327,28 @@ no until T2's fan-in rule ships — rank improves at once, verdicts stay honest.
   name or serial — not even during transition.
 - **Decided (owner, 2026-11-01):** channels are TLS-authenticated (gateway + edge
   collector), not per-tenant interfaces or IPs.
+- **Decided (owner, 2026-11-07, tracker 375):** when a tenant has BOTH SNMP and
+  a controller for a device, the engine keeps **one metric series, no
+  duplication** — the CUSUM series key stays `(tenant, entity_id, metric)`
+  (`episodes.py` `observe`), with no source in it. What P6 must therefore build
+  (derived from the decision, not further owner words):
+  1. *Same scale before they meet.* Both lanes feed the series under the
+     canonical metric name AND unit/semantics (rate vs counter, % vs ratio,
+     bucketed vs instantaneous — E3's realtime streams only; bucketed controller
+     stats stay context). A sample whose semantics differ is not admitted, or the
+     interleave itself trips CUSUM.
+  2. *One sample per interval.* Two sources reporting the same interval must not
+     weigh twice: keep one sample per (series, sampling bucket) — first arrival
+     wins, the other is counted, not dropped silently.
+  3. *Honest observer.* The episode records which source(s) fed it rather than
+     "whichever sample tripped it"; and one series is ONE witness — E1's
+     origin-observer rule already forbids it corroborating itself, and P6 must
+     keep it that way.
+- **Decided (owner, 2026-11-07, tracker 375 remainder):** `Null0` / `VoIP-Null0`
+  are KEPT in both lanes (a Null0 surge can be the only sign of blackholing);
+  the controller-internal VPN ≥ 65528 interfaces are DROPPED. The controller
+  realtime lane already drops them (`nms/vmanage_realtime.go`); IF-MIB carries
+  no VPN id, so no SNMP-side drop is added without a captured ifName pattern.
 - **Open:** RETAIL's second destination on the lab edges (vManage templates +
   cflowd policy) pointing at RETAIL's Edge Collector — the owner sets it, or Claude
   does with explicit approval, after P2 is deployed.
