@@ -79,6 +79,7 @@ from aiokafka.partitioner import murmur2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import controller_events as controller_events_mod
 import diagnostics
 import signals
 from aggregation import AGG_EVICT_REASONS, AggPlane, DeltaClass
@@ -15734,6 +15735,8 @@ def _health_payload() -> dict:
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
             "traps_dropped": TRAPS_DROPPED,
+            # P6-A: controller event_time present but unparseable → ingest time used.
+            "controller_events_ts_fallback": controller_events_mod.TS_FALLBACKS,
             # tracker 376: duplicate family reports of one BGP transition.
             "traps_collapsed": TRAP_TRANSITIONS.collapsed,
             "flows_received": FLOWS_RECEIVED,
