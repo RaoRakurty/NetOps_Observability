@@ -492,7 +492,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # bgpPeerTable index — TRAP lane only, same reasoning.
     # 2026-11-03-cbgp-decoded: the event_type BGP rule excludes CISCO-BGP4-MIB
     # — TRAP lane only, same reasoning.
-    assert parser_rules.PARSER_REV == "2026-11-03-cbgp-decoded", (
+    # 2026-11-07-cbgp-transitions: trap.bgp.cisco_bgp4 types the CISCO-BGP4-MIB
+    # session transitions (tracker 376) — TRAP lane only, same reasoning.
+    assert parser_rules.PARSER_REV == "2026-11-07-cbgp-transitions", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

@@ -392,8 +392,12 @@ def test_no_other_rule_drops_an_attr():
     "somebody decided this one was boring"."""
     declaring = {r.rule_id for r in P.RULES
                  if r.emit is not None and r.emit.omit_empty}
+    # tracker 376: cbgp FSM states are optional varbinds (a backward-transition
+    # notification carries no prev state) — the same "the device did not send
+    # it" meaning, not a judgement call.
     assert declaring == {"trap.link.state_change",
-                         "trap.link.state_change.event_type"}
+                         "trap.link.state_change.event_type",
+                         "trap.bgp.cisco_bgp4"}
 
 
 def test_omit_empty_cannot_name_a_key_the_rule_does_not_emit():

@@ -1333,14 +1333,14 @@ def _run(
 ) -> Signal | None:
     """Walk a lane's rules in order; first non-shadow match emits.
 
-    The extraction table is bound on the MATCH, not per rule: no guard in the
-    table reads an extracted var today (`guard_reads_vars` says so, per rule, at
-    import), so binding it fifteen times per line would be pure interpreter tax
-    on the ingest hot path. A rule that ever does read one gets the table bound
-    before its guard runs, and re-bound on the match — correct either way.
+    The extraction table is bound on the MATCH, not per rule: almost no guard
+    reads an extracted var (`guard_reads_vars` says which, per rule, at import),
+    so binding it fifteen times per line would be pure interpreter tax on the
+    ingest hot path. A rule that does read one (trap.bgp.cisco_bgp4) gets the
+    table bound before its guard runs, and re-bound on the match.
     """
     for guard, reads_vars, rule, em in rules:
-        if reads_vars:                            # pragma: no cover - none today
+        if reads_vars:
             ctx.enter(rule.extract)
         if not guard(ctx):
             continue

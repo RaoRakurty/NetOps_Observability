@@ -158,6 +158,12 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
         event_type="arista_bgp4_v2_backward_transition",
         varbinds=[{"oid": "1.3.6.1.4.1.30065.9.1", "name": "srlPeerAddr",
                    "value": "10.0.0.9"}])),
+    "trap.bgp.cisco_bgp4": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.187.0.8", trap_name="cbgpPeer2BackwardTransition",
+        varbinds=[{"oid": "1.3.6.1.4.1.9.9.187.1.2.5.1.3.10.0.0.7", "name": "cbgpPeer2State",
+                   "value": "idle(1)"},
+                  {"oid": "1.3.6.1.4.1.9.9.187.1.2.5.1.29.10.0.0.7", "name": "cbgpPeer2PrevState",
+                   "value": "established(6)"}])),
     "trap.link.state_change.event_type": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.9.9.41.2.0.1", trap_name="vendorTrap",
         event_type="if_link_down",
@@ -460,7 +466,13 @@ RULES_HASH_BGP_PEER_INDEX = "f3626ce02562f8d68191b2c7eeef9e2c90b54475c9b9d0bebe7
 #: up to six traps per transition). One synthetic, pre-decoded corpus entry
 #: moves (it declares the baseline skip); production never decoded the name.
 RULES_HASH_CBGP_DECODED = "e10dccf5309615886d4b9bcc826ccbfb01df2f1ca13551524c8b7d1f5bb536a2"
-RULES_HASH_A3 = RULES_HASH_CBGP_DECODED
+#:
+#: CISCO-BGP4-MIB transitions (2026-11-07, tracker 376): `trap.bgp.cisco_bgp4`
+#: types cbgp*/cbgpPeer2* session transitions in the RFC vocabulary, and the
+#: rule DSL gains `inetaddr`. Additive: every earlier corpus entry replays
+#: byte-for-byte; seven new entries record the new rule's outputs.
+RULES_HASH_CBGP_TRANSITIONS = "3a1a5257f4ef396de0d5ca68e001deb101d711283755eeeb062a172d52481f0e"
+RULES_HASH_A3 = RULES_HASH_CBGP_TRANSITIONS
 
 
 def _guard_patterns(node) -> list[str]:

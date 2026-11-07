@@ -38,6 +38,7 @@ from controller_events import controller_event_to_signal
 from engine import build_nodes
 from entity_resolver import EntityResolver
 from signals import ORIGIN_DEVICE_ATTR, ModalityClass, set_origin_observer
+from trap_collapse import TransitionCollapser
 from verdicts import VerdictTier, assess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,11 +59,6 @@ KNOWN_DIVERGENCES = {
         "the trap's sender (cEDGE-81's VPN-200 interface 192.168.200.33) is in no address "
         "registry, so the record's device is '' and the producer emits nothing — tracker 371 "
         "(and 373: after a recreate the sender became the bridge gateway)"),
-    "cisco_bgp4_mib_unclassified": (
-        "CISCO-BGP4-MIB decodes since 2026-11-03 but is deliberately not typed yet: IOS-XE sends "
-        "up to six traps per transition with both families on, so the cbgp* notifications (the only "
-        "carrier of the idle→active transition) need one-signal-per-transition identity before a "
-        "rule may emit them — tracker 374"),
 }
 
 
@@ -107,10 +103,32 @@ def observed_divergences() -> set[str]:
     trap_sig = P.trap_control_signal(joined(first_rfc_trap()), TENANT, INGEST)
     if trap_sig is not None and trap_sig.entity_id != ctl.entity_id:
         seen.add("trap_bgp_peer_from_index")
-    if any(P.trap_control_signal(joined(t), TENANT, INGEST) is None
-           for t in traps() if t["trap_oid"].startswith(CISCO_BGP4)):
-        seen.add("cisco_bgp4_mib_unclassified")
+    # tracker 376: every CISCO-BGP4-MIB report of the transition the RFC trap
+    # reports (same sysUpTime second) must be the SAME evidence — and the trap
+    # lane must fold all the families into ONE signal.
+    if trap_sig is not None:
+        rfc_up = uptime_cs(first_rfc_trap())
+        same = [t for t in traps() if t["trap_oid"].startswith(CISCO_BGP4)
+                and abs(uptime_cs(t) - rfc_up) <= 100]
+        family = [P.trap_control_signal(joined(t), TENANT, INGEST) for t in same]
+        want = (trap_sig.entity_id, trap_sig.attrs.get("state"))
+        if not same or any(s is None or (s.entity_id, s.attrs.get("state")) != want
+                           for s in family):
+            seen.add("cisco_bgp4_mib_unclassified")
+        col = TransitionCollapser()
+        kept = [s for s in [trap_sig, *family] if s is not None
+                and col.admit(TENANT, s.entity_id, str(s.attrs.get("state") or ""), s.ts)]
+        if len(kept) != 1:
+            seen.add("trap_families_multiply_one_transition")
     return seen
+
+
+def uptime_cs(trap: dict) -> int:
+    """The trap's sysUpTime.0 (centiseconds) — one transition shares it across families."""
+    for vb in trap["varbinds"]:
+        if vb["oid"] == "1.3.6.1.2.1.1.3.0":
+            return int(vb["value"])
+    raise AssertionError("recorded trap without sysUpTime")
 
 
 # ── the fixtures are what they claim to be ───────────────────────────────────

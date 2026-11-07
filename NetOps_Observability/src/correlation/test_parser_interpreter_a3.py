@@ -141,8 +141,9 @@ def test_the_catalog_only_rows_never_reach_the_runtime(catalog):
 def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
-    # `syslog.config.change` ships SHADOW — see events.yaml for why).
-    assert len(P.RULES) == 40
+    # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
+    # tracker 376 (`trap.bgp.cisco_bgp4`).
+    assert len(P.RULES) == 41
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -390,6 +391,9 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         # exists (tracker 374), so the one synthetic, pre-decoded corpus entry
         # now lands on the generic alarm net where the frozen code typed it.
         "trap.generic.device_alarm",
+        # tracker 376: CISCO-BGP4-MIB session transitions, typed by a rule the
+        # frozen code never had.
+        "trap.bgp.cisco_bgp4",
     }
     fired = set()
     for entry in golden:
