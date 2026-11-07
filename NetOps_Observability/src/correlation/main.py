@@ -79,6 +79,7 @@ from aiokafka.partitioner import murmur2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import controller_events as controller_events_mod
 import diagnostics
 import log_redact
 import signals
@@ -15758,6 +15759,8 @@ def _health_payload() -> dict:
             "metrics_counter_rated": COUNTER_RATES.counts["rate"],
             "metrics_counter_reset": COUNTER_RATES.counts["reset"],
             "metrics_counter_stale": COUNTER_RATES.counts["stale"],
+            # P6-A: controller event_time present but unparseable → ingest time used.
+            "controller_events_ts_fallback": controller_events_mod.TS_FALLBACKS,
             # tracker 376: duplicate family reports of one BGP transition.
             "traps_collapsed": TRAP_TRANSITIONS.collapsed,
             "flows_received": FLOWS_RECEIVED,

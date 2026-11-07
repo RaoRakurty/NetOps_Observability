@@ -271,3 +271,34 @@ def test_identical_tunnels_in_two_tenants_never_share_an_object():
         pass  # a mixed-tenant window is refused outright (engine.py single-tenant rule)
     else:
         raise AssertionError("a window mixing two tenants' tunnels must be refused")
+
+
+# ── P6-A (2026-11-07): event_time parsing ────────────────────────────────────
+
+def test_event_time_keeps_nanosecond_and_any_fraction_rfc3339() -> None:
+    import controller_events as C
+    fb = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    want = datetime(2026, 11, 1, 17, 0, 9, 575123, tzinfo=timezone.utc)
+    for raw in ("2026-11-01T17:00:09.575123456Z", "2026-11-01T17:00:09.5751234+00:00",
+                "2026-11-01T19:00:09.575123+02:00"):
+        assert C._parse_ts(raw, fb) == want, raw
+
+
+def test_event_time_numeric_epochs_by_magnitude_never_raise() -> None:
+    import controller_events as C
+    fb = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for raw in (1793480409, 1793480409.575, 1793480409575, 1793480409575123, 1793480409575123456):
+        got = C._parse_ts(raw, fb)
+        assert got.date().isoformat() == "2026-10-31" and got.hour == 21, (raw, got)
+
+
+def test_event_time_unparseable_falls_back_and_is_counted() -> None:
+    import controller_events as C
+    fb = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    before = C.TS_FALLBACKS
+    assert C._parse_ts("not-a-time", fb) == fb
+    assert C.TS_FALLBACKS == before + 1
+    # absent / non-positive / bool are not "present but bad" — fallback, not counted
+    for raw in (None, "", 0, -5, True):
+        assert C._parse_ts(raw, fb) == fb
+    assert C.TS_FALLBACKS == before + 1
