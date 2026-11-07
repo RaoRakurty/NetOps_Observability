@@ -41,11 +41,11 @@ distributed and carries no notice obligation.
 | `github.com/jackc/pgservicefile` | v0.0.0-20240606120523-5a60cdf6a761 | MIT | statically linked into the Go binaries; must be permissive |
 | `github.com/jackc/pgx/v5` | v5.9.2 | MIT | statically linked into the Go binaries; must be permissive |
 | `github.com/jackc/puddle/v2` | v2.2.2 | MIT | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/crypto` | v0.57.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/net` | v0.60.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/sync` | v0.23.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/sys` | v0.48.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
-| `golang.org/x/text` | v0.42.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/crypto` | v0.58.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/net` | v0.62.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/sync` | v0.24.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/sys` | v0.49.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
+| `golang.org/x/text` | v0.43.0 | BSD-3-Clause | statically linked into the Go binaries; must be permissive |
 
 ## api image (netops-api, netops-prober) runtime base
 
