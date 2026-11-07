@@ -98,6 +98,7 @@ from cloud_log_parsers import (
 )
 from cloud_producers import cloud_signal_from_event
 from controller_events import controller_event_to_signal
+from counter_rate import CUMULATIVE_METRICS, CounterRates
 from directed_topology import DirectedTopology
 from engine import (
     _SEV_RANK,
@@ -853,6 +854,12 @@ METRICS_DROPPED = 0            # rejected — the SUM of the three causes below
 METRICS_DROPPED_NO_VALUE = 0     # no metric name / no numeric value
 METRICS_DROPPED_NO_IDENTITY = 0  # no canonical entity (device/if/peer missing)
 METRICS_DROPPED_STALE_TS = 0     # event timestamp outside the skew/age window
+# tracker 379: cumulative counters (octets/errors/discards/fcs/BGP transitions)
+# become per-second rates per (tenant, entity, metric, source) BEFORE the episode
+# detector — fed raw, a steady counter opened an episode that never cleared.
+# CORR_COUNTER_RATES=0 is the kill switch (restores the raw feed).
+COUNTER_RATES_ENABLED = os.environ.get("CORR_COUNTER_RATES", "1").strip().lower() not in ("0", "false", "no", "off")
+COUNTER_RATES = CounterRates()
 # The syslog lane is TOPICS[0] and the source of link_down / BGP-state / optics
 # evidence — the highest-value RCA evidence class — and had NO intake counter at
 # all, so a broken Vector syslog route was indistinguishable from a quiet night.
@@ -12517,6 +12524,15 @@ async def handle_metric(ev: dict) -> None:
     collection_path = str(ev.get("collection_path") or "snmp_poll")
     METRICS_ACCEPTED += 1
 
+    # tracker 379 (stage [2]): a running total is not a level. Score the RATE;
+    # the first sample of a series, a reset/wrap, and a non-advancing clock are
+    # counted (COUNTER_RATES.counts → /healthz) and not scored.
+    if COUNTER_RATES_ENABLED and metric in CUMULATIVE_METRICS:
+        _outcome, rate = COUNTER_RATES.observe((tenant, entity_id, metric, collection_path), value, event_ts)
+        if rate is None:
+            return
+        value = rate
+
     # Engine v2 stage [1]+[2]: every sample feeds the episode detector (CUSUM
     # needs the full stream, not just crossings) — the canonical corr_signals path.
     await feed_episode_detector(
@@ -15734,6 +15750,11 @@ def _health_payload() -> dict:
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
             "traps_dropped": TRAPS_DROPPED,
+            # tracker 379: cumulative counters → rates before the episode detector.
+            "metrics_counter_seeded": COUNTER_RATES.counts["seed"],
+            "metrics_counter_rated": COUNTER_RATES.counts["rate"],
+            "metrics_counter_reset": COUNTER_RATES.counts["reset"],
+            "metrics_counter_stale": COUNTER_RATES.counts["stale"],
             # tracker 376: duplicate family reports of one BGP transition.
             "traps_collapsed": TRAP_TRANSITIONS.collapsed,
             "flows_received": FLOWS_RECEIVED,
