@@ -6,6 +6,7 @@ package applog
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -185,5 +186,37 @@ func TestObserverIsNotOnTheWriterLock(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("logging deadlocked — the observer is running under the writer lock")
+	}
+}
+
+// tracker 367: a seeded credential never reaches the written line nor the
+// observer, in the message, a field, a nested map or an error.
+func TestLogRedactsCredentialsBeforeWritingAndObserving(t *testing.T) {
+	var buf bytes.Buffer
+	var seen []string
+	restore := SetObserver(func(level, component, msg string, fields map[string]any) {
+		b, _ := json.Marshal(fields)
+		seen = append(seen, msg+string(b))
+	})
+	defer restore()
+	in := map[string]any{
+		"url":    "https://svc-api:Sup3rS3cretPw@vmauth:8427",
+		"token":  "tok-77QQ88zz",
+		"nested": map[string]any{"password": "s3cr3tvalue"},
+		"err":    errors.New("dial https://u:Sup3rS3cretPw@h: refused"),
+		"count":  3,
+	}
+	New(&buf).Log("warn", "test", "push to https://svc-api:Sup3rS3cretPw@vmauth failed", in)
+	all := buf.String() + strings.Join(seen, "\n")
+	for _, sec := range []string{"Sup3rS3cretPw", "tok-77QQ88zz", "s3cr3tvalue"} {
+		if strings.Contains(all, sec) {
+			t.Fatalf("secret %q leaked:\n%s", sec, all)
+		}
+	}
+	if in["token"] != "tok-77QQ88zz" {
+		t.Error("Log mutated the caller's fields")
+	}
+	if !strings.Contains(buf.String(), `"count":3`) {
+		t.Errorf("non-secret field lost: %s", buf.String())
 	}
 }

@@ -27,6 +27,7 @@ import ssl
 
 import uvicorn
 
+import log_redact
 from tls_ident import IdentityH11Protocol
 
 
@@ -42,6 +43,8 @@ def main() -> None:
         ssl_cert_reqs=ssl.CERT_REQUIRED,
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
     )
+    # tracker 367: uvicorn configures its loggers in Config(); wrap them after.
+    log_redact.install()
     uvicorn.Server(config).run()
 
 
