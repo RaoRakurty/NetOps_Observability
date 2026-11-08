@@ -331,7 +331,7 @@ reclaim() {
 
 # SAFE_ROOTS: the only trees these helpers may empty. Anything else — an empty
 # variable, a path outside them, a symlink escape — is refused, loudly.
-# shellcheck disable=SC2329  # called from empty_dir_via_docker (itself run via reclaim "$@")
+# shellcheck disable=SC2317,SC2329  # called from empty_dir_via_docker (itself run via reclaim "$@")
 lab_safe_path() {  # $1 = absolute path; succeeds only inside a safe root
   local p="$1" real
   [ -n "$p" ] && [ -d "$p" ] || return 1
@@ -345,7 +345,7 @@ lab_safe_path() {  # $1 = absolute path; succeeds only inside a safe root
 # Empty a directory whose files a container may have created as root, through
 # a throwaway container (the installer's own pattern) — the user cannot unlink
 # root-owned files, and this script deliberately runs without sudo.
-# shellcheck disable=SC2329  # invoked indirectly: reclaim "$label" "$path" empty_dir_via_docker "$d"
+# shellcheck disable=SC2317,SC2329  # invoked indirectly: reclaim "$label" "$path" empty_dir_via_docker "$d"
 empty_dir_via_docker() {  # $1 = directory (must pass lab_safe_path)
   local d="$1"
   if ! lab_safe_path "$d"; then

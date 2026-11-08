@@ -16,7 +16,7 @@ SCRIPT = (ROOT / "scripts" / "host-hygiene.sh").read_text(encoding="utf-8")
 
 
 def _functions() -> str:
-    start = SCRIPT.index("# shellcheck disable=SC2329  # called from empty_dir_via_docker")
+    start = SCRIPT.index("# shellcheck disable=SC2317,SC2329  # called from empty_dir_via_docker")
     end = SCRIPT.index("lab_dev_leftovers() {")
     return SCRIPT[start:end]
 
