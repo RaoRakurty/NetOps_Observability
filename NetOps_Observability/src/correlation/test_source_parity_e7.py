@@ -14,10 +14,29 @@ BGP session to 192.168.200.34 in VPN 200 goes idle, then active.
     `bgpBackwardTransition` and the CISCO-BGP4-MIB `cbgp*` notifications —
     fixtures/source_parity/traps_cedge81_bgp_20261101.jsonl (community and
     storage-side enrichment dropped; otherwise as received).
+  * device path, syslog: everything cEDGE-81 logged from 16:59:00Z to
+    17:01:30Z — fixtures/source_parity/syslog_cedge81_20261101.jsonl, ten
+    lines with consecutive sequence numbers, read from the lab OpenSearch
+    (tenant enrichment and Kafka/storage metadata dropped; otherwise as
+    indexed). The box logs under its management address, 192.168.222.106,
+    not its hostname. None of the ten is about the session (all are netconf
+    logins). Likely why: the session never reached Established (every
+    controller report has peer-routerid 0.0.0.0) and IOS-XE logs
+    %BGP-5-ADJCHANGE only on entering or leaving Established; no device's
+    syslog in the retained days (2026-10-25..11-07) holds one. So
+    syslog contributes NOTHING to this event, which the harness pins; the
+    syslog binding divergences (tracker 374 D1 host-level BGP, D2 hostname
+    entity) need a recorded syslog transition and are NOT covered here.
   * controller path: vManage `bgp-peer-state-change` events for the same
     seconds, through the production Go transform + runtime with the lab's
     inventory join — the golden ../backend/nms/testdata/source_parity/
-    (nms/source_parity_golden_test.go keeps it current).
+    (nms/source_parity_golden_test.go keeps it current). A second golden
+    joins the same events against an inventory that also owns the peer's
+    address, which is where nms/identity.go rewrites the peer (D5).
+
+Not covered: D1/D2 (above), D3 recoveries (tracker 380; the controller lane
+here relays no recovery), D4 interface spellings (no recorded interface
+event), D6 severity (tracker 381; not compared).
 
 KNOWN_DIVERGENCES is a ratchet: every divergence the harness observes must be
 declared with its owner, and a declared one that no longer reproduces fails
@@ -44,11 +63,16 @@ from verdicts import VerdictTier, assess
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN = os.path.join(HERE, "..", "backend", "nms", "testdata", "source_parity",
                       "vmanage_20.6.controller_events.json")
+GOLDEN_PEER = os.path.join(HERE, "..", "backend", "nms", "testdata", "source_parity",
+                           "vmanage_20.6.controller_events_peer_in_inventory.json")
 TRAPS = os.path.join(HERE, "fixtures", "source_parity", "traps_cedge81_bgp_20261101.jsonl")
+SYSLOG = os.path.join(HERE, "fixtures", "source_parity", "syslog_cedge81_20261101.jsonl")
 
 TENANT = "t_lab"
 DEVICE = "cedge-81-11060ae2"       # the lab's inventory id for cEDGE-81
 PEER = "192.168.200.34"
+PEER_INVENTORY_ID = "pe-vpn200-parity"  # the peer's inventory id in GOLDEN_PEER only
+CEDGE81_MGMT = "192.168.222.106"   # cEDGE-81's inventory address = its syslog hostname
 RFC_BACKWARD = "1.3.6.1.2.1.15.7.2"
 CISCO_BGP4 = "1.3.6.1.4.1.9.9.187.0."
 INGEST = datetime(2026, 11, 1, 17, 5, tzinfo=timezone.utc)  # after every recorded event
@@ -59,6 +83,12 @@ KNOWN_DIVERGENCES = {
         "the trap's sender (cEDGE-81's VPN-200 interface 192.168.200.33) is in no address "
         "registry, so the record's device is '' and the producer emits nothing — tracker 371 "
         "(and 373: after a recreate the sender became the bridge gateway)"),
+    "controller_peer_is_inventory_id": (
+        "D5 (tracker 374): once the peer's address is in inventory, nms/identity.go rewrites "
+        "the controller's PeerID to the peer's inventory id (the IP survives only in "
+        "correlation_hints.controller_peer_id) while the router's own trap keeps the IP — "
+        "one session, two nodes. P6 PR-E canonicalisation, "
+        "docs/design/P6_CANONICALISATION_PLAN_2026-11-07.md"),
 }
 
 
@@ -68,13 +98,18 @@ def _restore():
     set_origin_observer(False)
 
 
-def controller_events() -> list[dict]:
-    with open(GOLDEN, encoding="utf-8") as fh:
+def controller_events(golden: str = GOLDEN) -> list[dict]:
+    with open(golden, encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def traps() -> list[dict]:
     with open(TRAPS, encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+def syslog_lines() -> list[dict]:
+    with open(SYSLOG, encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
 
 
@@ -120,6 +155,11 @@ def observed_divergences() -> set[str]:
                 and col.admit(TENANT, s.entity_id, str(s.attrs.get("state") or ""), s.ts)]
         if len(kept) != 1:
             seen.add("trap_families_multiply_one_transition")
+    # D5: the same recorded controller events, joined against an inventory that
+    # owns the peer's address. One session must stay one node with the trap's.
+    ctl_peer = controller_event_to_signal(controller_events(GOLDEN_PEER)[0], INGEST)
+    if trap_sig is not None and ctl_peer.entity_id != trap_sig.entity_id:
+        seen.add("controller_peer_is_inventory_id")
     return seen
 
 
@@ -140,6 +180,43 @@ def test_both_sides_record_the_same_transition() -> None:
     assert any(PEER in vb["oid"] for vb in rfc["varbinds"]), "the trap must name the same peer"
     skew = abs((ts(rfc["timestamp"]) - ts(evs[0]["event_time"])).total_seconds())
     assert skew <= MAX_SKEW_S, f"{skew}s apart — not the same transition"
+
+
+def _without_peer_join(ev: dict) -> dict:
+    hints = {k: v for k, v in ev["correlation_hints"].items() if k != "controller_peer_id"}
+    return {**ev, "peer_id": None, "correlation_hints": hints}
+
+
+def test_the_peer_in_inventory_golden_is_the_same_recorded_events() -> None:
+    """GOLDEN_PEER differs from GOLDEN only by the peer join (D5's precondition)."""
+    base, peer = controller_events(), controller_events(GOLDEN_PEER)
+    assert len(peer) == len(base)
+    for b, p in zip(base, peer):
+        assert p["peer_id"] == PEER_INVENTORY_ID
+        assert p["correlation_hints"].get("controller_peer_id") == b["peer_id"] == PEER
+        assert _without_peer_join(p) == _without_peer_join(b)
+
+
+def test_the_syslog_fixture_is_everything_cedge81_logged_across_the_transition() -> None:
+    lines = syslog_lines()
+    assert lines and all(e["hostname"] == CEDGE81_MGMT for e in lines)
+    times = [ts(e["timestamp"]) for e in lines]
+    ctl = [ts(e["event_time"]) for e in controller_events()]
+    assert times == sorted(times) and times[0] < min(ctl) and times[-1] > max(ctl), \
+        "the recorded syslog must bracket every controller report of the transition"
+    seq = [int(e["meta"]["sequenceId"]) for e in lines]
+    assert seq == list(range(seq[0], seq[0] + len(seq))), \
+        "consecutive sequence numbers: no line from the box is missing in between"
+
+
+def test_the_device_syslog_lane_carries_no_evidence_for_the_transition() -> None:
+    """The recorded event's syslog promotes nothing through either syslog
+    producer. If this fails, a line now becomes evidence: compare its binding
+    with the trap/controller session id in observed_divergences (D1/D2) and
+    declare what differs."""
+    for ev in syslog_lines():
+        assert P.syslog_control_signal(dict(ev), TENANT, INGEST) is None, ev["message"]
+        assert P.port_event_signal(dict(ev), TENANT, INGEST) is None, ev["message"]
 
 
 # ── the ratchet ──────────────────────────────────────────────────────────────
