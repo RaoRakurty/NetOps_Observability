@@ -25,11 +25,13 @@ Run:  python3 -m pytest tests/test_secret_rotation.py -v
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
@@ -37,6 +39,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import secret_rotation as sr          # noqa: E402
 import install                        # noqa: E402
+import overlap_rotation as orot       # noqa: E402
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -612,3 +615,494 @@ def test_normalize_database_url_strips_verify_full_for_phase_a(tmp_path):
     txt = env.read_text()
     assert "FOO=1" in txt and "BAR=2" in txt
     assert "netops_app:pw@postgres:5432/netops" in dsn
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OVERLAP — zero-downtime vmauth rotation (`install.py --rotate-secret`,
+# tracker 367 layer 3, scripts/overlap_rotation.py).
+#
+# The fake below is a small vmauth + client simulation driven ONLY through the
+# argv/stdin the real Stack builds, so the tests exercise the real command
+# construction (and can prove no credential ever reaches argv):
+#   * vmauth loads the REAL rendered data/secrets/vmauth/vmauth/auth.yml on
+#     SIGHUP (`docker compose kill -s HUP vmauth`), refuses a config with two
+#     identical credentials (as v1.101.0 does), resets per-user counters on
+#     every load and exports them with the `cred` label — all as verified on
+#     the pinned image;
+#   * each running client sends one request per fake-clock tick: re-reading
+#     clients (api, prober, vmalert) read their client file every time,
+#     restart-only clients (grafana, gnmic, vector) only on `compose restart`;
+#   * every refused client request is counted, so "zero downtime" is an
+#     assertion (no client ever saw a 401), not a hope.
+# ═════════════════════════════════════════════════════════════════════════════
+
+ALL_SERVICES = {"vmauth", "api", "prober", "vmalert", "grafana", "gnmic", "vector-aggregator"}
+
+
+class FakeClock:
+    def __init__(self, stack: FakeVmauthStack | None = None) -> None:
+        self.t = 1000.0
+        self.stack = stack
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, dt: float) -> None:
+        self.t += dt
+        if self.stack is not None:
+            self.stack.tick()
+
+
+class FakeVmauthStack:
+    def __init__(self, root: Path, *, running=ALL_SERVICES, reload_breaks=False,
+                 refuse_current=False, keep_accepting=False, stuck=(),
+                 restart_fails=()) -> None:
+        self.root = root
+        self.running = set(running)
+        self.reload_breaks = reload_breaks       # vmauth rejects the next config
+        self.refuse_current = refuse_current     # the cred=current block never authenticates
+        self.keep_accepting = keep_accepting     # vmauth ignores the block removal
+        self.stuck = set(stuck)                  # aliases whose client never moves
+        self.restart_fails = set(restart_fails)
+        self.calls: list[tuple[list[str], str]] = []
+        self.users: dict[str, tuple[str, str, str]] = {}
+        self.ghosts: set[tuple[str, str]] = set()
+        self._ghost_name = "(ghost)"
+        self.counts: dict[str, int] = {}
+        self.reload_ok = 1
+        self.unauthorized: list[str] = []        # aliases of refused CLIENT requests
+        self.hups = 0
+        self.restarts: list[str] = []
+        self._load(initial=True)
+        self.cached = {i.alias: self._client_file(i) for i in orot.IDENTITIES}
+
+    # -- vmauth ---------------------------------------------------------------
+    def _auth_yml(self) -> Path:
+        return self.root / "data" / "secrets" / "vmauth" / "vmauth" / "auth.yml"
+
+    def _load(self, initial: bool = False) -> None:
+        if self.reload_breaks and not initial:
+            self.reload_ok = 0
+            return
+        users = yaml.safe_load(self._auth_yml().read_text())["users"]
+        tokens = [(u["username"], u["password"]) for u in users]
+        if len(set(tokens)) != len(tokens):      # vmauth: duplicate auth token
+            self.reload_ok = 0
+            return
+        loaded = {u["name"]: (u["username"], u["password"], u["metric_labels"]["cred"])
+                  for u in users}
+        if self.keep_accepting and not initial:
+            # A (hypothetically) broken vmauth: drops the block from its
+            # metrics but still authenticates the removed credential.
+            self.ghosts |= {(u, p) for n, (u, p, _) in self.users.items() if n not in loaded}
+        self.users = loaded
+        self.counts = {n: 0 for n in self.users}   # vmauth recreates per-user metrics
+        self.counts[self._ghost_name] = 0
+        self.reload_ok = 1
+
+    def _authenticate(self, username: str, password: str) -> str | None:
+        for name, (u, p, cred) in self.users.items():
+            if u == username and p == password:
+                if self.refuse_current and cred == "current" and f"{name}-previous" in self.users:
+                    return None
+                return name
+        for (u, p) in self.ghosts:
+            if u == username and p == password:
+                return self._ghost_name
+        return None
+
+    def _exposition(self) -> str:
+        lines = [f"vmauth_config_last_reload_successful {self.reload_ok}",
+                 "vmauth_config_last_reload_total 99"]
+        for name, (_, _, cred) in sorted(self.users.items()):  # ghosts stay hidden
+            lines.append(f'vmauth_user_requests_total{{cred="{cred}",username="{name}"}} '
+                         f"{self.counts[name]}")
+        return "\n".join(lines) + "\n"
+
+    # -- clients ----------------------------------------------------------------
+    def _client_file(self, ident) -> str:
+        return (self.root / "data" / "secrets" / "vmauth" / ident.alias / "password").read_text()
+
+    def tick(self) -> None:
+        for i in orot.IDENTITIES:
+            if not set(i.services) & self.running:
+                continue
+            if i.alias in self.stuck:
+                pw = self.cached[i.alias]
+            elif i.rereads:
+                pw = self._client_file(i)
+            else:
+                pw = self.cached[i.alias]
+            name = self._authenticate(i.username, pw)
+            if name is None:
+                self.unauthorized.append(i.alias)
+            else:
+                self.counts[name] += 1
+
+    # -- the runner interface the real Stack uses ------------------------------
+    def run(self, argv: list[str], stdin: str = "", timeout: int = 60) -> sr.ExecResult:
+        assert timeout and timeout > 0, "every call must be bounded"
+        self.calls.append((list(argv), stdin))
+        if argv[:3] == ["docker", "compose", "ps"]:
+            return sr.ExecResult(0, "0123456789ab\n" if argv[-1] in self.running else "")
+        if argv[:3] == ["docker", "compose", "kill"]:
+            assert argv[3:] == ["-s", "HUP", "vmauth"], argv
+            self.hups += 1
+            # Clients keep talking between the render and the reload: a client
+            # handed the new value BEFORE vmauth holds it would 401 right here.
+            self.tick()
+            self._load()
+            return sr.ExecResult(0)
+        if argv[:3] == ["docker", "compose", "restart"]:
+            svc = argv[-1]
+            if svc in self.restart_fails:
+                return sr.ExecResult(1, "", "Error response from daemon: boom")
+            self.restarts.append(svc)
+            for i in orot.IDENTITIES:
+                if svc in i.services and i.alias not in self.stuck:
+                    self.cached[i.alias] = self._client_file(i)
+            return sr.ExecResult(0)
+        if argv[:2] == ["docker", "run"]:
+            assert argv[-2:] == ["-K", "-"] and "--pull=never" in argv, argv
+            cfg = dict(re.findall(r'^([a-z-]+) = "(.*)"$', stdin, re.MULTILINE))
+            url = cfg["url"]
+            if url.endswith("/metrics"):
+                return sr.ExecResult(0, self._exposition() + "\n200")
+            user, _, pw = cfg.get("user", ":").partition(":")
+            name = self._authenticate(user, pw)
+            if name is None:
+                return sr.ExecResult(0, "Unauthorized\n401")
+            self.counts[name] += 1
+            return sr.ExecResult(0, "\n204" if cfg.get("request") == "POST" else '{"status":"success"}\n200')
+        raise AssertionError(f"unexpected command: {argv}")
+
+
+@pytest.fixture
+def ovl(tmp_path, monkeypatch):
+    """A started install with rendered credential files, a fake stack, the
+    install lock marked held, and a fake clock wired to the fake's clients."""
+    env_path = make_install(tmp_path)
+    root = env_path.parent.parent.parent
+    install.render_service_secrets(root, parse_env(env_path))
+    monkeypatch.setattr(install, "_LOCK", {"held": object()})
+
+    def make(**kw):
+        stack = FakeVmauthStack(root, **kw)
+        clock = FakeClock(stack)
+        return stack, clock
+
+    def rotate(spec, stack, clock, dry_run=False):
+        return install.rotate_overlap_secrets(root, env_path.parent, env_path, spec,
+                                              dry_run=dry_run, runner=stack,
+                                              clock=clock.now, sleep=clock.sleep)
+
+    class Ctx:
+        pass
+    c = Ctx()
+    c.root, c.env_path, c.make, c.rotate = root, env_path, make, rotate
+    return c
+
+
+def _assert_no_secret_in_argv(stack: FakeVmauthStack, values) -> None:
+    vals = [v for v in values if v]
+    assert vals
+    for argv, _ in stack.calls:
+        joined = " ".join(argv)
+        for v in vals:
+            assert v not in joined, "a credential reached a process argv"
+
+
+def _secrets_snapshot(root: Path) -> dict[Path, bytes]:
+    base = root / "data" / "secrets"
+    return {p: p.read_bytes() for p in base.rglob("*") if p.is_file()}
+
+
+# ── policy ───────────────────────────────────────────────────────────────────
+
+def test_the_six_vmauth_credentials_are_overlap_and_nothing_else_is():
+    assert sr.overlap_names() == sorted(i.env_key for i in orot.IDENTITIES)
+    assert len(sr.overlap_names()) == 6
+    for name in ("OS_API_PASSWORD", "OS_BOOTSTRAP_PASSWORD", "OS_ROUTER_PASSWORD"):
+        assert sr.POLICY[name].cls == sr.FREE, f"{name}: OpenSearch holds one hash per user"
+
+
+def test_overlap_still_rotates_on_the_one_shot_paths(tmp_path):
+    """--reset-env / --rotate-app-secrets keep rotating the vmauth credentials
+    (classified rotatable, no store reconcile) — OVERLAP adds a path, removes none."""
+    v = {x.name: x for x in sr.classify(tmp_path, names=sr.overlap_names())}
+    assert all(x.rotatable and not x.reconcile for x in v.values())
+
+
+def test_identity_table_matches_vmauth_yml_and_compose_mounts():
+    users = {u["username"]: u["password"]
+             for u in yaml.safe_load((ROOT / "src/config/vmauth.yml").read_text())["users"]}
+    tls = (ROOT / "deployment/docker/compose.tls.yml").read_text()
+    rendered = {s.env_key: s.rel for s in install.SERVICE_SECRETS}
+    for i in orot.IDENTITIES:
+        assert users[i.username] == "%{" + i.env_key + "}", i.alias
+        assert rendered[i.env_key] == f"vmauth/{i.alias}", "every identity has a client file"
+        mount = f"../../data/secrets/vmauth/{i.alias}:/run/secrets/vmauth/{i.alias}:ro"
+        assert mount in tls, f"{i.alias}: client file not mounted"
+        for svc in i.services:
+            m = re.search(rf"\n  {re.escape(svc)}:\n(.*?)(?=\n  [a-z][a-z0-9-]*:\n|\Z)", tls, re.DOTALL)
+            assert m and mount in m.group(1), f"{svc} does not mount {mount}"
+
+
+def test_curl_image_is_the_one_the_stack_already_ships():
+    compose = (ROOT / "deployment/docker/docker-compose.yml").read_text()
+    assert f"image: {orot.CURL_IMAGE}@sha256:" in compose
+
+
+@pytest.mark.parametrize("spec, aliases, unknown", [
+    ("vmauth-all", [i.alias for i in orot.IDENTITIES], []),
+    ("vmauth-api,vmauth-grafana", ["api", "grafana"], []),
+    ("VMAUTH_GNMIC_PASSWORD, vmauth-gnmic", ["gnmic"], []),
+    ("vmauth-api,DB_PASSWORD,nope", ["api"], ["DB_PASSWORD", "nope"]),
+])
+def test_parse_names(spec, aliases, unknown):
+    got, bad = orot.parse_names(spec)
+    assert [i.alias for i in got] == aliases and bad == unknown
+
+
+def test_edit_env_inserts_previous_beside_its_key_and_removes_cleanly():
+    text = "# keep me\nA=1\nVMAUTH_API_PASSWORD=old\nZ=9\n"
+    mid = orot.edit_env(text, {"VMAUTH_API_PASSWORD": "new", "VMAUTH_API_PASSWORD_PREVIOUS": "old"})
+    assert mid == "# keep me\nA=1\nVMAUTH_API_PASSWORD=new\nVMAUTH_API_PASSWORD_PREVIOUS=old\nZ=9\n"
+    assert orot.edit_env(mid, {}, ["VMAUTH_API_PASSWORD_PREVIOUS"]) == \
+        "# keep me\nA=1\nVMAUTH_API_PASSWORD=new\nZ=9\n"
+
+
+def test_duration_parsing():
+    assert orot.duration_s("30s", 9) == 30 and orot.duration_s("1m30s", 9) == 90
+    assert orot.duration_s("", 9) == 9 and orot.duration_s("soon", 9) == 9
+
+
+# ── the state machine ────────────────────────────────────────────────────────
+
+def test_happy_path_all_six_with_zero_client_401s(ovl, capsys):
+    stack, clock = ovl.make()
+    old = parse_env(ovl.env_path)
+    code = ovl.rotate("vmauth-all", stack, clock)
+    out = capsys.readouterr()
+    assert code == orot.OK, out.err
+    new = parse_env(ovl.env_path)
+    for i in orot.IDENTITIES:
+        assert new[i.env_key] != old[i.env_key], i.alias
+        assert i.env_key + "_PREVIOUS" not in new, "state cleared on completion"
+        assert (ovl.root / f"data/secrets/vmauth/{i.alias}/password").read_text() == new[i.env_key]
+    # vmauth ends with exactly one block per identity, holding the new values
+    assert {n: p for n, (_, p, _) in stack.users.items()} == \
+        {i.username: new[i.env_key] for i in orot.IDENTITIES}
+    assert stack.unauthorized == [], "a client saw a 401 — the rotation was not zero-downtime"
+    assert sorted(stack.restarts) == ["gnmic", "grafana", "vector-aggregator"]
+    assert stack.hups == 2, "one reload into the overlap, one out of it"
+    assert new["SLACK_WEBHOOK_URL"] == "https://hooks.example/T000/B000/keepme"
+    # the old credentials are proven revoked: the last probe of each got 401
+    for k in install.generate_secrets():
+        for v in (old.get(k), new.get(k)):
+            if v and len(v) >= 8:
+                assert v not in out.out and v not in out.err, f"{k} reached the log"
+    _assert_no_secret_in_argv(stack, [old[i.env_key] for i in orot.IDENTITIES]
+                              + [new[i.env_key] for i in orot.IDENTITIES])
+    assert "rotation audit" in out.out and "drain:" in out.out
+
+
+def test_single_identity_touches_only_that_identity(ovl):
+    stack, clock = ovl.make()
+    old = parse_env(ovl.env_path)
+    assert ovl.rotate("vmauth-api", stack, clock) == orot.OK
+    new = parse_env(ovl.env_path)
+    changed = sorted(k for k in old if old[k] != new.get(k))
+    assert changed == ["VMAUTH_API_PASSWORD"]
+    assert stack.restarts == [], "the api re-reads its file — no restart"
+    assert stack.unauthorized == []
+
+
+def test_reload_failure_rolls_back_and_touches_no_client(ovl, capsys):
+    stack, clock = ovl.make(reload_breaks=True)
+    before_env = ovl.env_path.read_text()
+    before_files = _secrets_snapshot(ovl.root)
+    code = ovl.rotate("vmauth-gnmic", stack, clock)
+    assert code == orot.FAILED
+    err = capsys.readouterr().err
+    assert "rejected the new config" in err and "rolled back" in err.lower()
+    assert parse_env(ovl.env_path) == install._parse_env_text(before_env)
+    assert _secrets_snapshot(ovl.root) == before_files, "auth.yml back to single-block, clients untouched"
+    assert stack.restarts == [] and stack.unauthorized == []
+
+
+def test_new_credential_proof_failure_rolls_back(ovl, capsys):
+    stack, clock = ovl.make(refuse_current=True)
+    old = parse_env(ovl.env_path)
+    before_clients = (ovl.root / "data/secrets/vmauth/vector/password").read_bytes()
+    code = ovl.rotate("vmauth-vector", stack, clock)
+    assert code == orot.FAILED
+    assert "NEW credential of vmauth-vector is refused" in capsys.readouterr().err
+    now = parse_env(ovl.env_path)
+    assert now["VMAUTH_VECTOR_PASSWORD"] == old["VMAUTH_VECTOR_PASSWORD"]
+    assert "VMAUTH_VECTOR_PASSWORD_PREVIOUS" not in now
+    assert (ovl.root / "data/secrets/vmauth/vector/password").read_bytes() == before_clients
+    assert [n for n in stack.users if n.endswith("-previous")] == [], "vmauth back to one block"
+    assert stack.restarts == []
+
+
+def test_drain_timeout_stops_with_both_credentials_valid(ovl, capsys):
+    stack, clock = ovl.make(stuck={"gnmic"})
+    old = parse_env(ovl.env_path)
+    code = ovl.rotate("vmauth-gnmic", stack, clock)
+    assert code == orot.INCOMPLETE_SAFE
+    err = capsys.readouterr().err
+    assert "svc-gnmic" in err and "BOTH credentials remain valid" in err
+    now = parse_env(ovl.env_path)
+    assert now["VMAUTH_GNMIC_PASSWORD_PREVIOUS"] == old["VMAUTH_GNMIC_PASSWORD"], "state kept for resume"
+    names = {n: p for n, (_, p, _) in stack.users.items()}
+    assert names["svc-gnmic-previous"] == old["VMAUTH_GNMIC_PASSWORD"]
+    assert names["svc-gnmic"] == now["VMAUTH_GNMIC_PASSWORD"]
+    assert stack.unauthorized == [], "the stuck client kept working throughout"
+    assert clock.t - 1000.0 >= orot.DRAIN_TIMEOUT_S
+
+
+def test_resume_from_previous_completes_without_reminting(ovl):
+    stack, clock = ovl.make(stuck={"gnmic"})
+    assert ovl.rotate("vmauth-gnmic", stack, clock) == orot.INCOMPLETE_SAFE
+    mid = parse_env(ovl.env_path)
+    # the operator fixes the client (it now reads the new file on restart)
+    stack.stuck.clear()
+    assert ovl.rotate("vmauth-gnmic", stack, clock) == orot.OK
+    end = parse_env(ovl.env_path)
+    assert end["VMAUTH_GNMIC_PASSWORD"] == mid["VMAUTH_GNMIC_PASSWORD"], "resume must not re-mint"
+    assert "VMAUTH_GNMIC_PASSWORD_PREVIOUS" not in end
+    assert "svc-gnmic-previous" not in stack.users
+    assert stack.unauthorized == []
+
+
+def test_resume_after_a_crash_right_after_the_env_write(ovl):
+    """.env is written before any effect: a crash there leaves <KEY>_PREVIOUS
+    and an untouched stack, and the next run completes it."""
+    env = parse_env(ovl.env_path)
+    text = orot.edit_env(ovl.env_path.read_text(), {
+        "VMAUTH_PROBER_PASSWORD": "fresh-prober-value-0123456789",
+        "VMAUTH_PROBER_PASSWORD_PREVIOUS": env["VMAUTH_PROBER_PASSWORD"]})
+    ovl.env_path.write_text(text)
+    stack, clock = ovl.make()
+    assert ovl.rotate("vmauth-prober", stack, clock) == orot.OK
+    end = parse_env(ovl.env_path)
+    assert end["VMAUTH_PROBER_PASSWORD"] == "fresh-prober-value-0123456789"
+    assert "VMAUTH_PROBER_PASSWORD_PREVIOUS" not in end
+    assert stack.unauthorized == []
+
+
+def test_another_identity_in_progress_is_refused(ovl, capsys):
+    env = parse_env(ovl.env_path)
+    ovl.env_path.write_text(orot.edit_env(ovl.env_path.read_text(), {
+        "VMAUTH_API_PASSWORD": "x" * 24, "VMAUTH_API_PASSWORD_PREVIOUS": env["VMAUTH_API_PASSWORD"]}))
+    before = ovl.env_path.read_text()
+    stack, clock = ovl.make()
+    assert ovl.rotate("vmauth-grafana", stack, clock) == orot.REFUSED
+    assert "vmauth-api is still in progress" in capsys.readouterr().err
+    assert ovl.env_path.read_text() == before
+
+
+def test_finalize_refuses_to_commit_when_the_old_credential_still_works(ovl, capsys):
+    stack, clock = ovl.make(keep_accepting=True)
+    code = ovl.rotate("vmauth-api", stack, clock)
+    assert code == orot.INCOMPLETE_SAFE
+    assert "still gets HTTP" in capsys.readouterr().err
+    assert "VMAUTH_API_PASSWORD_PREVIOUS" in parse_env(ovl.env_path), "not committed"
+
+
+def test_restart_failure_stops_safe(ovl, capsys):
+    stack, clock = ovl.make(restart_fails={"grafana"})
+    assert ovl.rotate("vmauth-grafana", stack, clock) == orot.INCOMPLETE_SAFE
+    assert "restarting grafana failed" in capsys.readouterr().err
+    assert "VMAUTH_GRAFANA_PASSWORD_PREVIOUS" in parse_env(ovl.env_path)
+    assert stack.unauthorized == []
+
+
+def test_a_stopped_restart_only_client_is_not_restarted(ovl):
+    stack, clock = ovl.make(running=ALL_SERVICES - {"grafana"})
+    assert ovl.rotate("vmauth-grafana", stack, clock) == orot.OK
+    assert stack.restarts == []
+
+
+def test_dry_run_changes_nothing(ovl, capsys):
+    stack, clock = ovl.make()
+    env_before = ovl.env_path.read_text()
+    files_before = _secrets_snapshot(ovl.root)
+    assert ovl.rotate("vmauth-all", stack, clock, dry_run=True) == orot.OK
+    out = capsys.readouterr().out
+    assert "plan:" in out and "dry run" in out
+    assert ovl.env_path.read_text() == env_before
+    assert _secrets_snapshot(ovl.root) == files_before
+    assert not (ovl.env_path.parent / ".env.snapshot").exists()
+    mutating = [a for a, _ in stack.calls if a[:3] in (["docker", "compose", "kill"],
+                                                       ["docker", "compose", "restart"])]
+    assert mutating == [] and stack.hups == 0
+
+
+def test_preflight_refuses_when_vmauth_is_down(ovl, capsys):
+    stack, clock = ovl.make(running=ALL_SERVICES - {"vmauth"})
+    before = ovl.env_path.read_text()
+    assert ovl.rotate("vmauth-api", stack, clock) == orot.REFUSED
+    assert "vmauth is not running" in capsys.readouterr().err
+    assert ovl.env_path.read_text() == before
+
+
+def test_preflight_refuses_when_env_and_vmauth_already_disagree(ovl, capsys):
+    stack, clock = ovl.make()
+    ovl.env_path.write_text(orot.edit_env(ovl.env_path.read_text(),
+                                          {"VMAUTH_API_PASSWORD": "drifted-value-0123456789"}))
+    before = ovl.env_path.read_text()
+    assert ovl.rotate("vmauth-api", stack, clock) == orot.REFUSED
+    assert "already disagree" in capsys.readouterr().err
+    assert ovl.env_path.read_text() == before
+
+
+def test_non_overlap_names_are_refused_with_the_right_pointer(ovl, capsys):
+    stack, clock = ovl.make()
+    assert ovl.rotate("DB_PASSWORD", stack, clock) == orot.REFUSED
+    assert "--rotate-app-secrets" in capsys.readouterr().err
+    assert stack.calls == []
+
+
+def test_rotation_requires_the_install_lock(ovl, monkeypatch, capsys):
+    monkeypatch.setattr(install, "_LOCK", {"held": None})
+    stack, clock = ovl.make()
+    with pytest.raises(SystemExit):
+        ovl.rotate("vmauth-api", stack, clock)
+    assert stack.calls == []
+
+
+def test_lock_contention_refuses_the_real_script_with_exit_3(tmp_path):
+    """A concurrent install/update holds deployment/docker/.install.lock: the
+    real script refuses (exit 3) before reading a byte of .env."""
+    import fcntl
+    import shutil
+    (tmp_path / "scripts").mkdir()
+    for f in ("install.py", "secret_rotation.py", "overlap_rotation.py"):
+        shutil.copy2(SCRIPTS / f, tmp_path / "scripts" / f)
+    compose_dir = tmp_path / "deployment" / "docker"
+    compose_dir.mkdir(parents=True)
+    env = compose_dir / ".env"
+    env.write_text("VMAUTH_API_PASSWORD=" + "a" * 24 + "\n")
+    lock = compose_dir / ".install.lock"
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    os.pwrite(fd, b"pid=4242\ncmd=install.py\nstarted_utc=2026-11-08T00:00:00Z\n", 0)
+    try:
+        r = subprocess.run([sys.executable, str(tmp_path / "scripts" / "install.py"),
+                            "--rotate-secret", "vmauth-api", "--dry-run"],
+                           capture_output=True, text=True, timeout=60, check=False,
+                           env={k: v for k, v in os.environ.items()
+                                if k != install.INSTALL_LOCK_FD_ENV})
+    finally:
+        os.close(fd)
+    assert r.returncode == 3, r.stderr
+    assert "pid 4242" in r.stderr
+    assert env.read_text() == "VMAUTH_API_PASSWORD=" + "a" * 24 + "\n"
+
+
+def test_dry_run_flag_requires_rotate_secret(tmp_path):
+    r = subprocess.run([sys.executable, str(SCRIPTS / "install.py"), "--dry-run"],
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2 and "only meaningful with --rotate-secret" in r.stderr

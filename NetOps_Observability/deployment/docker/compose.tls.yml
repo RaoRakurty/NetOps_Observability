@@ -354,15 +354,21 @@ services:
       # see. vmalert v1.101.0 supports -{datasource,remoteWrite,remoteRead}
       # .basicAuth.{username,passwordFile} (verified against the pinned image's
       # -help).
+      # Tracker 367 layer 3: the vmauth password now comes from the rendered
+      # data/secrets/vmauth/vmalert/password (DIRECTORY mount below), not a
+      # compose `environment:` secret — vmalert re-reads a passwordFile on use
+      # (<=1 s cache, verified on v1.101.0 by swapping the file under a running
+      # vmalert), so `install.py --rotate-secret vmauth-vmalert` reaches it with
+      # no recreate. An env-sourced secret was frozen at container create.
       - "-datasource.url=https://vmauth:8427"
       - "-remoteWrite.url=https://vmauth:8427"
       - "-remoteRead.url=https://vmauth:8427"
       - "-datasource.basicAuth.username=svc-vmalert"
-      - "-datasource.basicAuth.passwordFile=/run/secrets/vmauth_vmalert_password"
+      - "-datasource.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password"
       - "-remoteWrite.basicAuth.username=svc-vmalert"
-      - "-remoteWrite.basicAuth.passwordFile=/run/secrets/vmauth_vmalert_password"
+      - "-remoteWrite.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password"
       - "-remoteRead.basicAuth.username=svc-vmalert"
-      - "-remoteRead.basicAuth.passwordFile=/run/secrets/vmauth_vmalert_password"
+      - "-remoteRead.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password"
       - "-datasource.tlsCAFile=/tls/ca.pem"
       - "-remoteWrite.tlsCAFile=/tls/ca.pem"
       - "-remoteRead.tlsCAFile=/tls/ca.pem"
@@ -404,9 +410,11 @@ services:
     # both are named here so the TLS variant is readable on its own.
     secrets:
       - vmalert_notifier_password
-      - vmauth_vmalert_password
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      # F-51 DIRECTORY mount: a rotation's atomic rename is a new inode
+      # vmalert sees (tracker 367).
+      - ../../data/secrets/vmauth/vmalert:/run/secrets/vmauth/vmalert:ro
       # The client SVID vmalert presents to the api's mTLS listener. Same
       # mount shape as vector-router's sealing hop (:/tls/svid:ro).
       - ../../data/tls/services/vmalert:/tls/svid:ro
@@ -873,16 +881,3 @@ services:
         condition: service_completed_successfully
     volumes:
       - ../../data/tls/services/gotenberg-staged:/tls:ro
-
-# =========================================================================
-# SECRETS — TLS variant additions (D-16, 2026-09-03)
-# =========================================================================
-#
-# vmalert_notifier_password is declared in the base file; this adds the vmauth
-# credential the TLS variant needs for its datasource/remoteWrite/remoteRead
-# hops. Same rationale as the base block: a value handed to a container as a
-# flag or an env var is readable with `docker inspect`, a compose
-# `environment:`-sourced secret is not.
-secrets:
-  vmauth_vmalert_password:
-    environment: VMAUTH_VMALERT_PASSWORD

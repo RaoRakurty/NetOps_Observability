@@ -65,6 +65,8 @@ Every secret `install.py` generates carries a rotation class in
 | `KEYCLOAK_ADMIN_PASSWORD` | seeded | **Refused** once Postgres is initialized **and** the `sso` profile is active. Rotate in the Keycloak console. |
 | `NETBOX_SUPERUSER_PASSWORD` | seeded | **Refused** once the NetBox DB exists — NetBox never updates an existing superuser from the environment. |
 | `NETBOX_TOKEN` | seeded | **Refused** once the NetBox DB exists — a new value would make the API present a token NetBox rejects. Mint a replacement in NetBox and paste it in. |
+| `VMAUTH_API_PASSWORD`, `VMAUTH_PROBER_PASSWORD`, `VMAUTH_VMALERT_PASSWORD`, `VMAUTH_GRAFANA_PASSWORD`, `VMAUTH_GNMIC_PASSWORD`, `VMAUTH_VECTOR_PASSWORD` | overlap | `--rotate-app-secrets` swaps them in one step (a short 401 window until vmauth and every client have the new value). **Prefer `--rotate-secret`** (§9): vmauth accepts old and new while the clients move, so no request is refused. |
+| `OS_*_PASSWORD` | free | Re-applied by the `opensearch-init` bootstrap on the next start. **Not** overlap-capable: OpenSearch's internal user store holds one password hash per user (§9). |
 | `KAFKA_CLUSTER_ID` | immutable | Never rotated in place. Requires `--rotate-kafka-cluster-id`, which moves `data/kafka` aside first (see §5). |
 
 **On an install that has never started, every one of these is freely
@@ -211,3 +213,81 @@ If a secret leaked (a `.env` in a screenshot, a token in a paste, the historical
 2. Work through §6 for the seeded ones by hand.
 3. `KAFKA_CLUSTER_ID` is not a credential — it does not need rotating.
 4. Recreate the stack (§7) and confirm sign-in works before closing the incident.
+5. For a leaked vmauth credential, use §9 instead of step 1: it revokes the old
+   password only after vmauth's counters prove no client still presents it, and
+   it drops no telemetry while it runs.
+
+---
+
+## 9. Zero-downtime rotation of the vmauth credentials
+
+The six `VMAUTH_*_PASSWORD` values are the per-service credentials every client
+presents to vmauth, the authenticating front of VictoriaMetrics. A one-step swap
+refuses some requests: vmauth and each client pick up the new value at different
+times. For the write-only lanes (gnmic, vector, prober) a refused request is
+telemetry that is lost for good. `--rotate-secret` avoids that by making vmauth
+accept the old **and** the new password until every client has moved.
+
+```bash
+cd /path/to/NetOps_Observability
+
+# See what it would do. Runs the checks, prints the plan, changes nothing.
+python3 scripts/install.py --rotate-secret vmauth-all --dry-run
+
+# One identity, several, or all six:
+python3 scripts/install.py --rotate-secret vmauth-gnmic
+python3 scripts/install.py --rotate-secret vmauth-api,vmauth-grafana
+python3 scripts/install.py --rotate-secret vmauth-all
+```
+
+Names: `vmauth-api`, `vmauth-prober`, `vmauth-vmalert`, `vmauth-grafana`,
+`vmauth-gnmic`, `vmauth-vector`, or `vmauth-all`. The stack must be running on
+a TLS install (vmauth runs only there). The command holds the installer lock, so
+it cannot run at the same time as an install or an update.
+
+### What it does, step by step
+
+| Step | What happens | How it is proven |
+|---|---|---|
+| 1. Check | vmauth is running and its last config reload succeeded; `.env` is complete; the current password of each identity works. | Any failure: exit 2, nothing changed. |
+| 2. Mint | A new password goes into `.env`. The old one is kept beside it as `VMAUTH_<ID>_PASSWORD_PREVIOUS`. | `.env` is written before any other change, so an interrupted run is always picked up from here. |
+| 3. Overlap | `auth.yml` gets two entries for the user: the new password (`cred="current"`) and the old one (`<user>-previous`, `cred="previous"`). vmauth reloads it (SIGHUP). | vmauth's metrics show both entries and a successful reload. Both passwords are then tried and must work. If this fails on a new rotation, `.env` and `auth.yml` go back to the old password; no client has been touched. |
+| 4. Move the clients | The client password files under `data/secrets` are replaced. The api, prober and vmalert read the new file within a second. grafana, gnmic and vector read theirs only at start, so those that are running are restarted (`docker compose restart`). | Each restarted service must be running again. |
+| 5. Drain | The tool watches `vmauth_user_requests_total{cred="previous"}`. | It must stay flat for 3 times the slowest client interval (180 s for `vmauth-all`). |
+| 6. Revoke | `auth.yml` goes back to one entry per user and vmauth reloads it. | The `-previous` entry is gone from the metrics, the old password gets **401**, the new one works. Only then is `VMAUTH_<ID>_PASSWORD_PREVIOUS` removed from `.env`. |
+| 7. Audit | A summary: names, steps, restarts, drain time, request counts. | No password is ever printed or passed on a command line. |
+
+### Exit codes
+
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | Done. Only the new passwords work. | Nothing. |
+| 2 | Refused before changing anything (vmauth down, last reload failed, `.env` and vmauth already disagree, another rotation still open, unknown name). | Read the message, fix it, run again. |
+| 4 | Stopped **with both passwords valid**. Nothing is broken. Usually a client still sends the old password after 10 minutes, or a restart failed. | Find the client named in the message, fix or restart it, then run the **same command again**. It resumes, it does not mint a new password. |
+| 1 | A step failed. On a new rotation that failed at step 3 everything was rolled back. | Read the message; `docker compose logs vmauth`. Running the command again resumes if `.env` still holds a `_PREVIOUS` value. |
+
+### If a rotation is left half-done
+
+While `VMAUTH_<ID>_PASSWORD_PREVIOUS` is in `.env`, every render of
+`data/secrets` (install, `update.sh`, `deploy.sh`) keeps both passwords valid.
+That is safe, but the old password, which you wanted gone, still works. After
+one hour the warning alert **CredentialRotationIncomplete** fires (vmalert,
+`rules-scale-slo.yaml`). Check `rate(vmauth_user_requests_total{cred="previous"}[5m])`:
+
+* above zero: a client still uses the old password. Fix that client.
+* zero: the run was interrupted. Nobody uses the old password, but it still
+  works.
+
+In both cases run `python3 scripts/install.py --rotate-secret <name>` again.
+
+Do not edit `_PREVIOUS` lines by hand. To abandon a rotation that never got past
+step 3, restore `.env` from `.env.snapshot`.
+
+### Why the OpenSearch credentials cannot do this
+
+OpenSearch stores one password hash per internal user, and the bootstrap
+rewrites the whole user list each time. A user cannot accept two passwords. An
+overlap would need a second user per service and every client switching its
+user name, and the api reads its user name from the container environment, so
+that would mean a recreate anyway. The `OS_*` passwords stay on the one-step
+path (§2).

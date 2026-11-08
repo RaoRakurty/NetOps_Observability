@@ -29,6 +29,7 @@ docs/runbooks/secret-rotation.md.
 Usage:
     python3 install.py [--port 8000] [--no-start] [--reset-env]
     python3 install.py --rotate-app-secrets       # rotate what is safe to rotate
+    python3 install.py --rotate-secret vmauth-all [--dry-run]   # zero downtime
     python3 install.py --reset-env --rotate-kafka-cluster-id   # destructive
 """
 
@@ -1908,6 +1909,12 @@ class ComposeRunner:
             return sr.ExecResult(126, "", f"{type(e).__name__}: {e}")
         return sr.ExecResult(r.returncode, r.stdout, r.stderr)
 
+    def run(self, argv: list[str], stdin: str = "", timeout: int = 60):
+        """A bounded docker/compose call with no shell (the overlap rotation's
+        one process boundary — scripts/overlap_rotation.py builds the argv and
+        keeps every credential on stdin)."""
+        return self._run(argv, stdin, timeout)
+
     def exec(self, service: str, argv: list[str], stdin: str = "",
              timeout: int = 60):
         return self._run(["docker", "compose", "exec", "-T", service, *argv],
@@ -2097,6 +2104,59 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     # before any consumer is recreated, or the rotation never reaches them.
     render_service_secrets(root, _parse_env(env_path))
     return rotated, len(failures)
+
+
+def _overlap_module():
+    """Import scripts/overlap_rotation.py the same way secret_rotation is."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import overlap_rotation as orot
+    return orot
+
+
+def rotate_overlap_secrets(root: Path, compose_dir: Path, env_path: Path, spec: str, *,
+                           dry_run: bool, runner=None, clock=time.monotonic,
+                           sleep=time.sleep) -> int:
+    """`--rotate-secret`: zero-downtime rotation of vmauth credentials
+    (tracker 367 layer 3; the state machine is scripts/overlap_rotation.py).
+
+    Must run under the single-writer install lock: the state lives in .env
+    and a concurrent install/update re-rendering data/secrets mid-rotation
+    would race it. Returns the exit code (0 ok, 1 failed, 2 refused —
+    nothing changed, 4 stopped with BOTH credentials valid). Prints names,
+    phases and counts; never a value."""
+    if _LOCK["held"] is None:
+        fail("--rotate-secret must hold the install lock (internal error)")
+    if not env_path.exists():
+        refuse(f"no .env at {env_path} — nothing to rotate. Run a full install first.")
+    orot = _overlap_module()
+    if not dry_run:
+        # Never rotate into a truncated .env (heals from the snapshot or
+        # refuses naming the missing keys) — a dry run reports, never heals.
+        validate_env_complete(env_path)
+
+    def _write(text: str, what: str) -> None:
+        write_env_text(env_path, text, what=what)
+
+    def _render(env: Mapping[str, str], vmauth_only: bool) -> None:
+        render_service_secrets(root, env, vmauth_only=vmauth_only)
+
+    log = {"ok": ok, "info": info, "warn": warn}
+    io = orot.Io(read_env=env_path.read_text, write_env=_write, render=_render,
+                 log=lambda level, msg: log.get(level, info)(msg),
+                 mint=lambda: generate_urlsafe_password(24))
+    outcome, audit = orot.rotate(
+        spec, runner=runner if runner is not None else ComposeRunner(compose_dir),
+        io=io, ca_path=root / orot.CA_REL, dry_run=dry_run, clock=clock, sleep=sleep)
+    if audit:
+        print()
+        info("rotation audit (names and counts only — no credential is ever printed):")
+        for line in audit:
+            info(f"  {line}")
+    if outcome.code == orot.OK:
+        ok(outcome.message)
+    else:
+        print(f"[fail ] {outcome.message}", file=sys.stderr)
+    return outcome.code
 
 
 # ---- data dirs --------------------------------------------------------------
@@ -2562,12 +2622,17 @@ SERVICE_SECRETS: tuple[ServiceSecret, ...] = (
     ServiceSecret("vmauth/grafana",       "VMAUTH_GRAFANA_PASSWORD", "grafana", True),
     ServiceSecret("vmauth/vector",        "VMAUTH_VECTOR_PASSWORD",  "root",    True),
     ServiceSecret("vmauth/gnmic",         "VMAUTH_GNMIC_PASSWORD",   "root",    True),
+    # vmalert runs as root (the pinned image sets no USER) and re-reads its
+    # -*.basicAuth.passwordFile on use (<=1 s cache, verified on v1.101.0), so
+    # a mounted DIRECTORY lets a rotation reach it with no recreate — the
+    # compose `environment:` secret it used before was fixed at container
+    # create (tracker 367 layer 3).
+    ServiceSecret("vmauth/vmalert",       "VMAUTH_VMALERT_PASSWORD", "root",    True),
     ServiceSecret("opensearch/api",       "OS_API_PASSWORD",         "api",     False),
     ServiceSecret("opensearch/bootstrap", "OS_BOOTSTRAP_PASSWORD",   "curl",    False),
 )
 
-# Every key vmauth.yml may reference. vmalert keeps its compose `secrets:`
-# file (passwordFile flags) on the client side; vmauth still needs its value.
+# Every key vmauth.yml may reference (each also has a client file above).
 VMAUTH_TEMPLATE_KEYS = frozenset({
     "VMAUTH_API_PASSWORD", "VMAUTH_GNMIC_PASSWORD", "VMAUTH_VECTOR_PASSWORD",
     "VMAUTH_VMALERT_PASSWORD", "VMAUTH_GRAFANA_PASSWORD", "VMAUTH_PROBER_PASSWORD",
@@ -2649,12 +2714,93 @@ def _validate_secret(key: str, value: str | None, *, vmauth: bool) -> str:
     return value
 
 
+# Tracker 367 layer 3 (zero-downtime rotation): while `--rotate-secret`
+# overlaps an identity, .env holds <KEY>_PREVIOUS beside <KEY>, and the
+# rendered auth.yml carries a SECOND block for the same username with the
+# previous password (vmauth v1.101.0 accepts one username with several
+# passwords as separate users; verified on the pinned image). The suffix is
+# the whole state machine's marker — see scripts/overlap_rotation.py.
+PREVIOUS_SUFFIX = "_PREVIOUS"
+_VMAUTH_USER_HEADER = re.compile(r'^  - username: "([A-Za-z0-9._-]+)"$')
+_VMAUTH_PASSWORD_LINE = re.compile(r'^    password: "%\{([A-Za-z0-9_]+)\}"$')
+
+
+def _vmauth_previous_block(block: list[str], user: str, prev_value: str) -> list[str]:
+    """The previous-credential twin of one user block: same username and
+    routes, the previous password, name `<user>-previous` and metric label
+    cred="previous" (so the drain proof and the CredentialRotationIncomplete
+    rule can tell the two apart)."""
+    name_line = f'    name: "{user}"'
+    cred_line = '      cred: "current"'
+    if name_line not in block or cred_line not in block:
+        fail(f"src/config/vmauth.yml: the {user} block must carry "
+             f'name: "{user}" and metric_labels cred: "current" — the '
+             f"rotation overlap derives its previous-credential block from them")
+    out = ["  # ROTATION IN PROGRESS (install.py --rotate-secret): the previous",
+           "  # credential, accepted until every client is proven to have moved off it."]
+    for line in block:
+        if _VMAUTH_PASSWORD_LINE.match(line):
+            out.append(f"    password: {json.dumps(prev_value)}")
+        elif line == name_line:
+            out.append(f'    name: "{user}-previous"')
+        elif line == cred_line:
+            out.append('      cred: "previous"')
+        else:
+            out.append(line)
+    return out
+
+
+def _vmauth_with_overlap(template: str, env: Mapping[str, str]) -> str:
+    """Insert a previous-credential block after every user block whose key has
+    a <KEY>_PREVIOUS in .env. Byte-identical to the template when none has."""
+    pending = {k[:-len(PREVIOUS_SUFFIX)]: v for k, v in env.items()
+               if k.endswith(PREVIOUS_SUFFIX) and k.startswith("VMAUTH_")}
+    if not pending:
+        return template
+    for key, prev in pending.items():
+        if key not in VMAUTH_TEMPLATE_KEYS:
+            fail(f"{key}{PREVIOUS_SUFFIX} is in .env but {key} is not a vmauth "
+                 f"credential — remove the stray line")
+        _validate_secret(f"{key}{PREVIOUS_SUFFIX}", prev, vmauth=True)
+        if prev == env.get(key):
+            fail(f"{key}{PREVIOUS_SUFFIX} equals {key} — vmauth refuses two "
+                 f"identical credentials for one user; resume the rotation with "
+                 f"python3 scripts/install.py --rotate-secret")
+    lines = template.split("\n")
+    out: list[str] = []
+    done: set[str] = set()
+    i = 0
+    while i < len(lines):
+        m = _VMAUTH_USER_HEADER.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and lines[j].startswith("    "):
+            j += 1
+        block = lines[i:j]
+        out.extend(block)
+        key = next((pm.group(1) for pm in map(_VMAUTH_PASSWORD_LINE.match, block) if pm), None)
+        if key in pending:
+            out.extend(_vmauth_previous_block(block, m.group(1), pending[key]))
+            done.add(key)
+        i = j
+    missing = sorted(set(pending) - done)
+    if missing:
+        fail("src/config/vmauth.yml has no user block for "
+             + ", ".join(missing) + " — cannot render its previous credential")
+    return "\n".join(out)
+
+
 def render_vmauth_config(template: str, env: Mapping[str, str]) -> str:
     """Substitute vmauth.yml's quoted percent-brace tokens from .env.
 
     The tracked template keeps its tokens (the helm chart still lets vmauth
     expand them from env); compose gets this rendered copy. Every value is
-    validated vmauth-safe first, so json.dumps yields exactly '"value"'."""
+    validated vmauth-safe first, so json.dumps yields exactly '"value"'.
+    During a rotation overlap (<KEY>_PREVIOUS in .env) the identity gets a
+    second, previous-credential block — see _vmauth_with_overlap."""
     def sub(m: re.Match) -> str:
         key = m.group(1)
         if key not in VMAUTH_TEMPLATE_KEYS:
@@ -2662,7 +2808,7 @@ def render_vmauth_config(template: str, env: Mapping[str, str]) -> str:
                  f"known vmauth credential — add it to VMAUTH_TEMPLATE_KEYS "
                  f"and generate_secrets() first")
         return json.dumps(_validate_secret(key, env.get(key), vmauth=True))
-    out = re.sub(r'"%\{([A-Za-z0-9_]+)\}"', sub, template)
+    out = re.sub(r'"%\{([A-Za-z0-9_]+)\}"', sub, _vmauth_with_overlap(template, env))
     if "%{" in out:
         fail("src/config/vmauth.yml holds a percent-brace token that is not a "
              "quoted credential value — refusing to render a config vmauth "
@@ -2764,19 +2910,24 @@ def _ensure_secret_dirs(base: Path, leaf_dirs: list[Path]) -> None:
 
 
 def render_service_secrets(root: Path, env: Mapping[str, str] | None = None, *,
-                           chown_paths=None) -> list[Path]:
+                           chown_paths=None, vmauth_only: bool = False) -> list[Path]:
     """Render every service credential file and vmauth's auth.yml from .env.
 
     Atomic per file (temp + fsync + rename), idempotent (a re-run converges to
     the same content, owner and mode), never prints a value. All files are
     staged and chowned BEFORE any is renamed into place, so a failure leaves
     the previous set intact and no temp file behind. Returns the paths
-    rendered (for tests and the caller's report)."""
+    rendered (for tests and the caller's report).
+
+    vmauth_only=True renders auth.yml alone and leaves every client file as
+    it is: the zero-downtime rotation (tracker 367 layer 3) must make vmauth
+    accept the NEW credential before any client is handed it."""
     if chown_paths is None:
         chown_paths = _chown_secret_paths   # resolved per call: tests patch it
     if env is None:
         env = _parse_env(root / "deployment" / "docker" / ".env")
-    warn_url_credentials(env)
+    if not vmauth_only:
+        warn_url_credentials(env)   # once per full render, not per rotation step
 
     template_path = root / VMAUTH_TEMPLATE_REL
     try:
@@ -2786,7 +2937,7 @@ def render_service_secrets(root: Path, env: Mapping[str, str] | None = None, *,
 
     base = root / "data" / SECRETS_SUBDIR
     plan: list[tuple[Path, str, tuple[int, int]]] = []
-    for s in SERVICE_SECRETS:
+    for s in () if vmauth_only else SERVICE_SECRETS:
         value = _validate_secret(s.env_key, env.get(s.env_key), vmauth=s.vmauth)
         plan.append((base / s.rel / SECRET_FILE_NAME, value, _secret_owner(s.owner, env)))
     plan.append((base / VMAUTH_RENDERED_REL, render_vmauth_config(template, env), (0, 0)))
@@ -5139,6 +5290,16 @@ def main() -> None:
                     help="Rotate only the secrets that can be rotated safely right now "
                          "(application secrets + live store credentials this tool can "
                          "reconcile and verify); keep the rest. Then exit.")
+    ap.add_argument("--rotate-secret", default=None, metavar="NAME[,NAME|vmauth-all]",
+                    help="Zero-downtime rotation of vmauth service credentials "
+                         "(vmauth-api, vmauth-prober, vmauth-vmalert, vmauth-grafana, "
+                         "vmauth-gnmic, vmauth-vector, or vmauth-all): vmauth accepts "
+                         "old and new while the clients move, the drain is proven, "
+                         "then the old one is revoked. Resumes an interrupted "
+                         "rotation. Needs the running stack. Then exit.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="With --rotate-secret: run the preflight and print the plan; "
+                         "change nothing.")
     ap.add_argument("--rotate-kafka-cluster-id", action="store_true",
                     help="DESTRUCTIVE opt-in: also rotate KAFKA_CLUSTER_ID, moving "
                          "data/kafka aside (discards every topic/offset on the "
@@ -5217,6 +5378,10 @@ def main() -> None:
                          "(line surgery on an existing .env). Absent flag keeps "
                          "discovery off (the opt-in default).")
     args = ap.parse_args()
+    if args.dry_run and args.rotate_secret is None:
+        ap.error("--dry-run is only meaningful with --rotate-secret")
+    if args.rotate_secret is not None and (args.reset_env or args.rotate_app_secrets):
+        ap.error("--rotate-secret cannot be combined with --reset-env or --rotate-app-secrets")
     if args.progress_json:
         _PROGRESS["on"] = True
     if args.bundle:
@@ -5308,6 +5473,20 @@ def main() -> None:
         validate_env_complete(env_path, before_migration=True)
         run_resource_plan(env_path, args.plan_resources or "auto", args.sizing_file)
         info("replan complete — apply with: cd deployment/docker && docker compose up -d")
+        return
+
+    # Standalone zero-downtime rotation (tracker 367 layer 3) — under the lock
+    # taken above; exits with the state machine's own code (4 = stopped with
+    # both credentials valid, re-run to resume).
+    if args.rotate_secret is not None:
+        step("rotating " + args.rotate_secret + (" (dry run)" if args.dry_run else "")
+             + " with zero downtime")
+        if not args.dry_run:
+            check_docker(args.bootstrap_docker)
+        code = rotate_overlap_secrets(root, compose_dir, env_path, args.rotate_secret,
+                                      dry_run=args.dry_run)
+        if code:
+            sys.exit(code)
         return
 
     # Standalone rotation (#FUNC-HIGH-1): rotate what is safely rotatable and

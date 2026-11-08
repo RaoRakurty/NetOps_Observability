@@ -22,6 +22,15 @@
 # SEC-017 territory. An unmatched or unauthenticated request gets 401 and is
 # counted by vmauth's own metrics (vmauth_http_request_errors_total).
 #
+# ROTATION (tracker 367 layer 3): every block carries `name:` (equal to its
+# username) and `metric_labels: cred: "current"`. While
+# `install.py --rotate-secret` overlaps an identity, the rendered copy holds
+# a SECOND block for the same username with the previous password, named
+# `<username>-previous` and labelled cred="previous", so both passwords
+# authenticate and vmauth_user_requests_total shows which one each client
+# still presents. The renderer derives that block from this one and refuses
+# a block without the two fields — keep them on every new user.
+#
 # EDITING RULE: a new client identity = a new user block here + a credential
 # in install.py generate_secrets() (+ rotation class in secret_rotation.py) +
 # the client's cutover — never a shared credential.
@@ -31,6 +40,9 @@ users:
   # poll scheduler and seam bootstrap.
   - username: "svc-api"
     password: "%{VMAUTH_API_PASSWORD}"
+    name: "svc-api"
+    metric_labels:
+      cred: "current"
     url_prefix: "http://victoria:8428"
 
   # gNMI metric lane (gnmic prometheus_write) — WRITE ONLY. The epic's
@@ -38,6 +50,9 @@ users:
   # the lab cutover asserts on sample counts, not just 2xx.
   - username: "svc-gnmic"
     password: "%{VMAUTH_GNMIC_PASSWORD}"
+    name: "svc-gnmic"
+    metric_labels:
+      cred: "current"
     url_map:
       - src_paths: ["/api/v1/write", "/api/v1/import.*"]
         url_prefix: "http://victoria:8428"
@@ -45,6 +60,9 @@ users:
   # Vector aggregator remote_write sinks (cloud metrics) — WRITE ONLY.
   - username: "svc-vector"
     password: "%{VMAUTH_VECTOR_PASSWORD}"
+    name: "svc-vector"
+    metric_labels:
+      cred: "current"
     url_map:
       - src_paths: ["/api/v1/write", "/api/v1/import.*"]
         url_prefix: "http://victoria:8428"
@@ -54,6 +72,9 @@ users:
   # flow (collector_up freshness), never just 2xx.
   - username: "svc-prober"
     password: "%{VMAUTH_PROBER_PASSWORD}"
+    name: "svc-prober"
+    metric_labels:
+      cred: "current"
     url_map:
       - src_paths: ["/api/v1/write", "/api/v1/import.*"]
         url_prefix: "http://victoria:8428"
@@ -61,11 +82,17 @@ users:
   # vmalert: rule evaluation reads + ALERTS/recording writes + remoteRead.
   - username: "svc-vmalert"
     password: "%{VMAUTH_VMALERT_PASSWORD}"
+    name: "svc-vmalert"
+    metric_labels:
+      cred: "current"
     url_prefix: "http://victoria:8428"
 
   # Grafana dashboards — READ ONLY.
   - username: "svc-grafana"
     password: "%{VMAUTH_GRAFANA_PASSWORD}"
+    name: "svc-grafana"
+    metric_labels:
+      cred: "current"
     url_map:
       - src_paths: ["/api/v1/query.*", "/api/v1/series.*", "/api/v1/label.*", "/api/v1/export.*", "/prometheus/.*"]
         url_prefix: "http://victoria:8428"
