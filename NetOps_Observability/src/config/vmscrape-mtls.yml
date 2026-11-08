@@ -18,7 +18,9 @@
 # EDITING RULE: any change to vmscrape.yml must be mirrored here (and vice
 # versa) — the only permitted divergences are the netops-api and correlation
 # jobs' scheme + target port + tls_config blocks (APP-001 moved correlation
-# to mTLS-only :8443 in this variant, 2026-08-05).
+# to mTLS-only :8443 in this variant, 2026-08-05), and the vmauth job, which
+# exists ONLY here because vmauth itself only runs on a TLS install (its
+# compose profile is activated by the TLS enablement).
 # ============================================================================
 
 global:
@@ -131,3 +133,20 @@ scrape_configs:
     # Grafana serves under the /grafana sub-path (serve_from_sub_path), so its
     # /metrics is exposed there too.
     metrics_path: '/grafana/metrics'
+
+  # vmauth (SEC-010), TLS installs only. Its per-user counters
+  # (vmauth_user_requests_total{username,cred}) are what proves a credential
+  # rotation drained and what CredentialRotationIncomplete
+  # (rules-scale-slo.yaml) watches; reload health is
+  # vmauth_config_last_reload_successful. /metrics needs no credential (no
+  # -metricsAuthKey is set) and is served on the same HTTPS listener as the
+  # proxy, under vmauth's registry SVID — verified with the mesh CA only, no
+  # client certificate (vmauth mTLS is Enterprise-only).
+  - job_name: 'vmauth'
+    scheme: https
+    static_configs:
+      - targets: ['vmauth:8427']
+    metrics_path: '/metrics'
+    tls_config:
+      ca_file: /etc/victoria/tls/ca.pem
+      server_name: vmauth

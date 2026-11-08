@@ -24,11 +24,16 @@ it has been changed too. So every secret is classified by what rotating it
 actually requires, and anything this tool cannot complete is REFUSED loudly
 before a single byte of .env is written.
 
-THE FIVE CLASSES
-----------------
+THE SIX CLASSES
+---------------
 free       The consuming process re-reads it from the environment at every
            start. Rewrite .env + `docker compose up -d` and it is genuinely
            rotated.
+overlap    A `free` secret whose VALIDATOR can hold the old and the new value
+           at once (vmauth: one username, two password blocks). Besides the
+           free path, `install.py --rotate-secret` rotates it with ZERO
+           downtime: both valid -> clients moved -> drain proven -> old one
+           revoked (scripts/overlap_rotation.py, tracker 367 layer 3).
 alter      The value provisioned a credential inside a store's own catalog on
            first boot. Rotation = ALTER on the LIVE store, verified with the new
            credential, before .env is written.
@@ -62,6 +67,7 @@ from typing import NamedTuple
 # ---- classes ----------------------------------------------------------------
 
 FREE = "free"
+OVERLAP = "overlap"
 ALTER = "alter"
 RECREATE = "recreate"
 SEEDED = "seeded"
@@ -125,22 +131,26 @@ POLICY: dict[str, Policy] = {
     # SEC-010 vmauth per-service credentials. Tracker 367 layer 1: they reach
     # vmauth (auth.yml) and every client as files under data/secrets, which
     # rotate_secrets() re-renders from the final .env. vmauth re-reads its
-    # config every 10 s and the api/prober re-read their file within 1 s;
-    # grafana, gnmic and vector read theirs at start/config load — so
-    # rotation = reset-env, then recreate those three. (Zero-downtime overlap
-    # is layer 3.)
+    # config every 10 s (and on SIGHUP); the api, prober and vmalert re-read
+    # their file within 1 s; grafana, gnmic and vector read theirs at
+    # start/config load. OVERLAP (layer 3): vmauth accepts the same username
+    # with two passwords, so `install.py --rotate-secret vmauth-<id>` keeps
+    # both valid while the clients move, proves the drain on vmauth's own
+    # per-user counters and only then revokes the old one. --reset-env /
+    # --rotate-app-secrets still treat them like FREE (one-shot swap +
+    # recreate, a short 401 window).
     "VMAUTH_API_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     "VMAUTH_GNMIC_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     "VMAUTH_VECTOR_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     "VMAUTH_VMALERT_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     "VMAUTH_GRAFANA_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     "VMAUTH_PROBER_PASSWORD": Policy(
-        FREE, "", "", ""),
+        OVERLAP, "", "", ""),
     # SEC-012: valkey reads --requirepass from env at start; clients read it at
     # their start — rotation = reset-env then recreate redis + api + prober.
     "REDIS_PASSWORD": Policy(
@@ -150,6 +160,13 @@ POLICY: dict[str, Policy] = {
     # operator action (hence FREE, not ALTER). OS_API_PASSWORD and
     # OS_BOOTSTRAP_PASSWORD also reach their clients as re-rendered files
     # (tracker 367 layer 1).
+    # NOT OVERLAP (investigated for tracker 367 layer 3): the security
+    # plugin's internalusers type holds exactly ONE bcrypt hash per user and
+    # apply-security.sh rewrites the whole index with securityadmin, so a user
+    # cannot validate two passwords at once. Overlap would need a second user
+    # per identity (blue/green) and every client switching USERNAME — which
+    # the api reads from container env (OPENSEARCH_AUTH_USER), i.e. a
+    # recreate, not a file re-read. Until that exists these stay FREE.
     "OS_API_PASSWORD": Policy(
         FREE, "", "", ""),
     "OS_ROUTER_PASSWORD": Policy(
@@ -333,7 +350,7 @@ def classify(root: Path, profiles: str = "", *,
                                "this secret has no rotation classification",
                                "classify it in scripts/secret_rotation.py:POLICY"))
             continue
-        if pol.cls == FREE:
+        if pol.cls in (FREE, OVERLAP):
             out.append(Verdict(name, pol.cls, True, False, "", "", ""))
             continue
         if not store_initialized(root, pol.store, profiles):
@@ -347,6 +364,11 @@ def classify(root: Path, profiles: str = "", *,
             out.append(Verdict(name, pol.cls, False, False, pol.store,
                                pol.why, pol.remedy))
     return out
+
+
+def overlap_names() -> list[str]:
+    """Every secret `install.py --rotate-secret` can rotate with zero downtime."""
+    return sorted(k for k, p in POLICY.items() if p.cls == OVERLAP)
 
 
 def blocked(verdicts: Iterable[Verdict]) -> list[Verdict]:
@@ -682,6 +704,7 @@ __all__ = [
     "ALTER",
     "FREE",
     "IMMUTABLE",
+    "OVERLAP",
     "POLICY",
     "RECREATE",
     "SEEDED",
@@ -693,6 +716,7 @@ __all__ = [
     "blocked",
     "classify",
     "install_started",
+    "overlap_names",
     "preflight",
     "provision_app_state_role",
     "reconcile_clickhouse_admin",

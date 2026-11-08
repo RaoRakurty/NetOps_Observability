@@ -214,10 +214,24 @@ def test_every_password_file_is_backed_by_a_declared_secret() -> None:
         declared = dict(_top_level_secrets(path))
         if extra is not None:
             declared.update(_top_level_secrets(extra))
+        volumes = [str(v) for v in (_svc(path, "vmalert").get("volumes") or [])]
         for target in sorted(wanted):
             assert target.startswith("/run/secrets/"), (
                 f"{path.name}: {target} is not a compose secret mount point"
             )
+            # Tracker 367 layer 3: a vmauth service credential is instead a file
+            # install.py renders under data/secrets/vmauth/<identity>/, mounted as
+            # a read-only DIRECTORY so a rotation reaches vmalert with no
+            # recreate (vmalert re-reads a passwordFile on use). Still never in
+            # argv or env: render_service_secrets() writes it from .env.
+            m = re.fullmatch(r"/run/secrets/(vmauth/[a-z-]+)/password", target)
+            if m:
+                mount = f"../../data/secrets/{m.group(1)}:/run/secrets/{m.group(1)}:ro"
+                assert mount in volumes, (
+                    f"{path.name}: passwordFile {target} needs the read-only directory "
+                    f"mount {mount!r} (volumes: {volumes})"
+                )
+                continue
             name = target[len("/run/secrets/"):]
             assert name in mounted, (
                 f"{path.name}: passwordFile {target} has no matching entry in the "

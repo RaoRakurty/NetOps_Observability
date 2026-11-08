@@ -120,7 +120,7 @@ def test_ownership_is_requested_for_the_consumer_uid_batched(tree):
     # chown at all. Root-run consumers and curl_user get exactly one batch each.
     assert set(owners) == {(0, 0), (100, 101)}, rec.calls
     root_dirs = sorted(Path(r).parent.as_posix() for r in owners[(0, 0)])
-    assert root_dirs == ["vmauth/gnmic", "vmauth/prober", "vmauth/vector", "vmauth/vmauth"]
+    assert root_dirs == ["vmauth/gnmic", "vmauth/prober", "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
     assert [Path(r).parent.as_posix() for r in owners[(100, 101)]] == ["opensearch/bootstrap"]
 
 
@@ -295,3 +295,95 @@ def test_secret_keys_are_generated_secrets():
     gen = install.generate_secrets()
     for k in KEYS:
         assert k in gen, f"{k} is rendered but never generated"
+
+
+# ── tracker 367 layer 3: the rotation overlap (two blocks per identity) ──────
+
+def _auth_yml(tree: Path) -> str:
+    return (tree / "data" / "secrets" / "vmauth" / "vmauth" / "auth.yml").read_text()
+
+
+def test_every_template_block_carries_name_and_cred_label():
+    """The renderer derives the previous block from name + metric_labels; the
+    helm copy must stay byte-identical (it is the same file for the chart)."""
+    for rel in ("src/config/vmauth.yml", "deployment/helm/correlix/files/config/vmauth.yml"):
+        users = yaml.safe_load((ROOT / rel).read_text())["users"]
+        assert len(users) == 6, rel
+        for u in users:
+            assert u["name"] == u["username"], (rel, u["username"])
+            assert u["metric_labels"] == {"cred": "current"}, (rel, u["username"])
+    assert (ROOT / "src/config/vmauth.yml").read_text() == \
+        (ROOT / "deployment/helm/correlix/files/config/vmauth.yml").read_text()
+
+
+def test_no_previous_key_renders_one_block_per_identity(tree):
+    render(tree, make_env())
+    users = yaml.safe_load(_auth_yml(tree))["users"]
+    assert len(users) == 6
+    assert {u["metric_labels"]["cred"] for u in users} == {"current"}
+    assert "ROTATION IN PROGRESS" not in _auth_yml(tree)
+
+
+def test_previous_key_renders_a_second_block_for_that_identity_only(tree):
+    env = make_env(VMAUTH_GNMIC_PASSWORD="new-gnmic-value",
+                   VMAUTH_GNMIC_PASSWORD_PREVIOUS="old-gnmic-value")
+    render(tree, env)
+    text = _auth_yml(tree)
+    assert "%{" not in text
+    users = yaml.safe_load(text)["users"]
+    assert len(users) == 7
+    gn = [u for u in users if u["username"] == "svc-gnmic"]
+    assert [(u["name"], u["password"], u["metric_labels"]["cred"]) for u in gn] == [
+        ("svc-gnmic", "new-gnmic-value", "current"),
+        ("svc-gnmic-previous", "old-gnmic-value", "previous")]
+    # identical routes: the old credential reaches exactly what the new one does
+    assert gn[0]["url_map"] == gn[1]["url_map"]
+    assert len({u["name"] for u in users}) == 7, "every vmauth `name` is unique"
+    # the client file carries the CURRENT value, never the previous one
+    assert (tree / "data/secrets/vmauth/gnmic/password").read_text() == "new-gnmic-value"
+
+
+def test_two_block_render_is_idempotent(tree):
+    env = make_env(VMAUTH_API_PASSWORD="n" * 24, VMAUTH_API_PASSWORD_PREVIOUS="o" * 24,
+                   VMAUTH_VECTOR_PASSWORD="m" * 24, VMAUTH_VECTOR_PASSWORD_PREVIOUS="p" * 24)
+    render(tree, env)
+    first = _auth_yml(tree)
+    render(tree, env)
+    assert _auth_yml(tree) == first
+    names = [u["name"] for u in yaml.safe_load(first)["users"]]
+    assert names.count("svc-api-previous") == 1 and names.count("svc-vector-previous") == 1
+
+
+def test_vmauth_only_render_leaves_client_files_alone(tree):
+    render(tree, make_env())
+    client = tree / "data/secrets/vmauth/api/password"
+    before = client.read_bytes()
+    env = make_env(VMAUTH_API_PASSWORD="brand-new-value",
+                   VMAUTH_API_PASSWORD_PREVIOUS=before.decode())
+    paths = install.render_service_secrets(tree, env, chown_paths=ChownRecorder(), vmauth_only=True)
+    assert paths == [tree / "data/secrets/vmauth/vmauth/auth.yml"]
+    assert client.read_bytes() == before, "a client must not see the new value before vmauth does"
+    assert "brand-new-value" in _auth_yml(tree)
+
+
+@pytest.mark.parametrize("extra, fragment, secret", [
+    ({"VMAUTH_API_PASSWORD_PREVIOUS": "pw-vmauth-api-password"}, "equals VMAUTH_API_PASSWORD", None),
+    ({"VMAUTH_BOGUS_PASSWORD_PREVIOUS": "bogus-value-1234"}, "not a vmauth credential", "bogus-value-1234"),
+    ({"VMAUTH_API_PASSWORD_PREVIOUS": 'quo"te-value-1234'}, "VMAUTH_API_PASSWORD_PREVIOUS", 'quo"te-value-1234'),
+])
+def test_unusable_previous_values_are_refused_by_name(tree, capsys, extra, fragment, secret):
+    with pytest.raises(SystemExit):
+        render(tree, make_env(**extra))
+    err = capsys.readouterr().err
+    assert fragment in err
+    if secret:
+        assert secret not in err, "a refusal must never echo the value"
+    assert not (tree / "data" / "secrets" / "vmauth" / "vmauth" / "auth.yml").exists()
+
+
+def test_a_block_without_name_and_label_cannot_be_overlapped(tree, capsys):
+    tpl = tree / "src" / "config" / "vmauth.yml"
+    tpl.write_text(tpl.read_text().replace('    name: "svc-api"\n', "", 1))
+    with pytest.raises(SystemExit):
+        render(tree, make_env(VMAUTH_API_PASSWORD_PREVIOUS="old-api-value"))
+    assert "must carry" in capsys.readouterr().err

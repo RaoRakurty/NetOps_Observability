@@ -19,6 +19,9 @@
 #   iris-ai-quality                — is Iris answering from evidence, and is
 #                                    its spend visible? (warning tier only;
 #                                    tracker 337 N-A3, 2026-09-27).
+#   credential-hygiene             — a service-credential rotation left
+#                                    half-done (warning tier only; tracker 367
+#                                    layer 3, 2026-11-08).
 #
 # Thresholds are tied to the MEASURED L0/L1 ceilings in
 # docs/scale/CORRELIX_SCALE_TEST_REPORT.md (4 vCPU / 16 GiB rig):
@@ -1190,3 +1193,51 @@ groups:
             returns something its contract does not allow — check the api logs
             for "rejected by its output schema".
           runbook: "docs/runbooks/iris-ai-quality.md#tool-evidence-dropped"
+
+  # ---------------------------------------------------------------------------
+  # credential-hygiene — is a service-credential rotation left half-done?
+  # (tracker 367 layer 3; mechanism: scripts/overlap_rotation.py; operator
+  # play: docs/runbooks/secret-rotation.md section 9.)
+  #
+  # `install.py --rotate-secret` makes vmauth accept an identity's OLD and NEW
+  # password at once while the clients move, then revokes the old one once
+  # vmauth's own counters prove nothing presents it. While the overlap stands
+  # vmauth exports the old credential's per-user series with cred="previous"
+  # (scraped by the `vmauth` job in vmscrape-mtls.yml). A healthy rotation
+  # holds that state for minutes (the drain is capped at 10 min); an hour
+  # means the tool stopped — a client never moved off the old password (exit
+  # 4, both valid on purpose) or the run was interrupted — and the password
+  # being rotated, for a reason, is still accepted.
+  #
+  # WHY PRESENCE, NOT RATE. The series exists exactly as long as the previous
+  # block is loaded (vmauth registers per-user metrics at config load and
+  # drops them when the block goes; verified on the pinned v1.101.0), so
+  # presence for 1h covers BOTH stuck shapes: still-used (a client is on the
+  # old password) and abandoned (nobody uses it, yet it still authenticates).
+  # A rate-only rule misses the second — the one a holder of a leaked value
+  # relies on. The description tells the operator to read the rate to tell
+  # the two apart.
+  #
+  # WARNING tier: a stuck rotation is security debt, not one of the four
+  # owner-approved page conditions (2026-09-02). No traffic is lost — both
+  # credentials work.
+  - name: credential-hygiene
+    rules:
+      - alert: CredentialRotationIncomplete
+        expr: max by (username) (vmauth_user_requests_total{job="vmauth", cred="previous"}) >= 0
+        for: 1h
+        labels: { severity: warning, layer: platform, tier: warning }
+        annotations:
+          summary: "vmauth still accepts the PREVIOUS credential {{ $labels.username }} more than an hour into a rotation"
+          description: >-
+            A zero-downtime credential rotation (install.py --rotate-secret)
+            has held vmauth in its overlap state for over an hour, so the old
+            password is still accepted. Read
+            rate(vmauth_user_requests_total{cred="previous"}[5m]) for this
+            username. Above zero, a client is still presenting the old
+            password and the rotation stopped on purpose with both valid; find
+            that client, fix or restart it. Zero, the rotation was interrupted
+            and nobody finished it. Either way re-run install.py
+            --rotate-secret with the same name: it resumes from .env, proves
+            the drain and revokes the old password.
+          runbook: "docs/runbooks/secret-rotation.md#9-zero-downtime-rotation-of-the-vmauth-credentials"
