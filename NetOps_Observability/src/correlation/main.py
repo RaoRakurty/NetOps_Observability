@@ -185,6 +185,7 @@ from scoring import (
     fidelity_weighting_stats,
     template_scoring_metric_lines,
 )
+from series_admission import unit_contradicts
 from series_budget import derive_max_series
 from signals import (
     EVIDENCE_CLASSES,
@@ -208,6 +209,9 @@ from signals import (
     derive_probe_scope,
     evidence_signal_from_event,
     origin_observer_enabled,
+    series_admission_enabled,
+    series_bucket_env_valid,
+    series_bucket_s,
 )
 from synthetic_normalize import synthetic_app_signal
 from tls_ident import PeerIdentityMiddleware
@@ -864,6 +868,11 @@ METRICS_DROPPED_STALE_TS = 0     # event timestamp outside the skew/age window
 # CORR_COUNTER_RATES=0 is the kill switch (restores the raw feed).
 COUNTER_RATES_ENABLED = os.environ.get("CORR_COUNTER_RATES", "1").strip().lower() not in ("0", "false", "no", "off")
 COUNTER_RATES = CounterRates()
+# P6 PR-C2 (flag CORR_SERIES_ADMISSION): RCA-family samples whose declared unit
+# contradicts series_admission.SERIES_SEMANTICS — refused before they reach the
+# counter-rate stage or the series. The cross-source bucket drops are counted
+# by the detector itself (DETECTOR.cross_source_dropped).
+METRICS_SERIES_UNIT_REJECTED = 0
 # The syslog lane is TOPICS[0] and the source of link_down / BGP-state / optics
 # evidence — the highest-value RCA evidence class — and had NO intake counter at
 # all, so a broken Vector syslog route was indistinguishable from a quiet night.
@@ -1398,6 +1407,13 @@ ENGINE_CFG = EngineConfig()
 if config_change_family_requested() and not config_change_family_enabled():
     log.error("CORR_CONFIG_CHANGE_FAMILY is set but CORR_ORIGIN_OBSERVER is off: "
               "the config-change family stays OFF (it requires the E1 rule)")
+# P6 PR-C2: a malformed bucket width is never silently honoured or ignored.
+if not series_bucket_env_valid():
+    log.error("CORR_SERIES_BUCKET_S is not a number of seconds within [1, 3600]: "
+              "series admission uses the default %.0f s", series_bucket_s())
+if series_admission_enabled():
+    log.info("series admission ON (CORR_SERIES_ADMISSION): one sample per series per %.0f s "
+             "bucket across collection paths; unit-contradicting samples refused", series_bucket_s())
 CATALOG = builtin_catalog()
 
 # Evidence window: every canonical Signal written to the spine also lands here
@@ -8206,17 +8222,27 @@ async def feed_episode_detector(
     modality: ModalityClass = ModalityClass.DEVICE_TELEMETRY,
     observer_type: ObserverType = ObserverType.DEVICE,
     extra_attrs: dict | None = None,
+    series_source: str | None = None,
 ) -> bool:
     """Stage [1]+[2]: run CUSUM over the canonical (entity, metric) series and
     persist episode signals. Identity is the canonical entity_id (device:ifName
     for interfaces, device:peer for BGP) so per-interface/per-peer series do not
     collide on a shared metric name. Provenance is threaded from the event —
     parameterized so a passive_flow volume series carries flow-exporter provenance
-    (C6) instead of device telemetry, exactly as probe episodes carry vantage-agent."""
+    (C6) instead of device telemetry, exactly as probe episodes carry vantage-agent.
+
+    `series_source` (P6 PR-C2, set by the metric lane only while
+    CORR_SERIES_ADMISSION is on): the sample's collection path, so the detector
+    admits one sample per series bucket across sources and the episode records
+    the sources that fed it. None = the legacy call, byte for byte."""
     global DEADLETTER_COUNT, DEVICE_TELEMETRY_SIGNALS
     if not CORR_SIGNALS_ENABLED or ch is None:
         return False
-    ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown")
+    if series_source is None:
+        ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown")
+    else:
+        ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown",
+                              source=series_source, bucket_s=series_bucket_s())
     if ev is None:
         return False  # still baselining / within hysteresis — no episode this sample
     try:
@@ -12479,6 +12505,7 @@ async def handle_metric(ev: dict) -> None:
     back-compat but carry no canonical identity."""
     global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED
     global METRICS_DROPPED_NO_VALUE, METRICS_DROPPED_NO_IDENTITY, METRICS_DROPPED_STALE_TS
+    global METRICS_SERIES_UNIT_REJECTED
     METRICS_RECEIVED += 1
 
     metric = str(ev.get("metric") or ev.get("name") or "")
@@ -12528,6 +12555,17 @@ async def handle_metric(ev: dict) -> None:
     collection_path = str(ev.get("collection_path") or "snmp_poll")
     METRICS_ACCEPTED += 1
 
+    # P6 PR-C2 (stage [2] series admission, flag CORR_SERIES_ADMISSION): one
+    # series is fed by every source of a device (owner 2026-11-07), so a sample
+    # must MEAN what the series means before it may join it. A declared unit
+    # that contradicts the canonical table is refused here — before it can seed
+    # a counter base or reach CUSUM — and counted (/healthz
+    # ingest.series_unit_rejected), never averaged in.
+    admission = series_admission_enabled()
+    if admission and unit_contradicts(metric, ev.get("unit")):
+        METRICS_SERIES_UNIT_REJECTED += 1
+        return
+
     # tracker 379 (stage [2]): a running total is not a level. Score the RATE;
     # the first sample of a series, a reset/wrap, and a non-advancing clock are
     # counted (COUNTER_RATES.counts → /healthz) and not scored.
@@ -12546,6 +12584,7 @@ async def handle_metric(ev: dict) -> None:
         entity_type=entity_type,
         kind_prefix=kind_prefix,
         entity_tokens=tokens,
+        series_source=collection_path if admission else None,
     )
 
     # A4 heartbeat plane. The episode detector above answers "did this move?";
@@ -15124,6 +15163,17 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_config_change_family_enabled 1 when any config-change kind satisfies the change signatures (CORR_CONFIG_CHANGE_FAMILY, requires E1).",
         "# TYPE corr_config_change_family_enabled gauge",
         f"corr_config_change_family_enabled {1 if config_change_family_enabled() else 0}",
+        # P6 PR-C2 series admission (flag CORR_SERIES_ADMISSION): declared
+        # either way so the two drop counters read against whether it was on.
+        "# HELP corr_series_admission_enabled 1 when one sample per series bucket is admitted across collection paths (CORR_SERIES_ADMISSION).",
+        "# TYPE corr_series_admission_enabled gauge",
+        f"corr_series_admission_enabled {1 if series_admission_enabled() else 0}",
+        "# HELP corr_series_cross_source_dropped_total Metric samples refused because another collection path already filled that series bucket.",
+        "# TYPE corr_series_cross_source_dropped_total counter",
+        f"corr_series_cross_source_dropped_total {ing['series_cross_source_dropped']}",
+        "# HELP corr_series_unit_rejected_total RCA-family metric samples refused because their declared unit contradicts the canonical table.",
+        "# TYPE corr_series_unit_rejected_total counter",
+        f"corr_series_unit_rejected_total {ing['series_unit_rejected']}",
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
@@ -15759,6 +15809,11 @@ def _health_payload() -> dict:
             "metrics_counter_rated": COUNTER_RATES.counts["rate"],
             "metrics_counter_reset": COUNTER_RATES.counts["reset"],
             "metrics_counter_stale": COUNTER_RATES.counts["stale"],
+            # P6 PR-C2 series admission (CORR_SERIES_ADMISSION): a second
+            # source's sample for an already-filled (series, bucket), and an
+            # RCA-family sample whose declared unit contradicts the table.
+            "series_cross_source_dropped": DETECTOR.cross_source_dropped,
+            "series_unit_rejected": METRICS_SERIES_UNIT_REJECTED,
             # P6-A: controller event_time present but unparseable → ingest time used.
             "controller_events_ts_fallback": controller_events_mod.TS_FALLBACKS,
             # tracker 376: duplicate family reports of one BGP transition.

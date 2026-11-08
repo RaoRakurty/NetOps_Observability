@@ -50,6 +50,7 @@ from enum import Enum
 
 from signals import (
     CONFIRM_AUTHORITIES,
+    SERIES_SOURCES_ATTR,
     ModalityClass,
     ProbeAuthority,
     ProbeFate,
@@ -57,6 +58,7 @@ from signals import (
     Signal,
     origin_device_of,
     origin_observer_enabled,
+    series_admission_enabled,
 )
 
 
@@ -71,6 +73,37 @@ class VerdictTier(str, Enum):
 # A kind not in either set is treated as an authority (fail-closed).
 TRANSPORT_PATHS = frozenset({"direct", "via_aggregator"})
 AUTHORITY_PATHS = frozenset({"via_controller", "via_cloud_api"})
+
+
+def authority_of_path(path: str) -> str | None:
+    """The measurement-authority fate bucket of one collection path, or None
+    for a transport path. Total: an unrecognised path fails closed into one
+    shared `unknown:<kind>` bucket per kind."""
+    kind, _, instance = (path or "direct").partition(":")
+    kind = kind.strip().lower()
+    if kind in TRANSPORT_PATHS:
+        return None
+    if kind in AUTHORITY_PATHS:
+        # Unknown instance ⇒ one shared instance per kind (conservative).
+        return f"{kind}:{instance.strip().lower()}" if instance.strip() else kind
+    return f"unknown:{kind}"
+
+
+def conservative_collection_path(paths: frozenset[str] | set[str] | tuple[str, ...] | list[str]) -> str:
+    """P6 PR-C2 honest observer: of the collection paths that fed ONE series,
+    the most conservative to name as its observer path — an authority path
+    (via_controller / via_cloud_api) first, then an unrecognised path (its own
+    fail-closed bucket), a transport path last; ties break by name so the
+    answer never depends on which sample happened to trip the episode. The
+    gate does not rely on this choice alone: `witness_of` additionally places
+    a multi-source episode in EVERY source's bucket (downgrade-only)."""
+    def rank(p: str) -> tuple[int, str]:
+        kind = p.partition(":")[0].strip().lower()
+        cls = 0 if kind in AUTHORITY_PATHS else (2 if kind in TRANSPORT_PATHS else 1)
+        return (cls, p)
+    if not paths:
+        return "direct"
+    return min(paths, key=rank)
 
 # Gate thresholds (config-hash members; P4 replay-driven calibration re-fits).
 MIN_MODALITIES = 2
@@ -94,6 +127,18 @@ class Witness:
     # reports. "" unless CORR_ORIGIN_OBSERVER is on and the lane stamped one —
     # so with the flag off every Witness compares and hashes exactly as before.
     origin: str = ""
+    # P6 PR-C2 honest observer: a series fed by SEVERAL collection paths is one
+    # witness that sits in EVERY source's authority bucket (its own `authority`
+    # included). Empty unless CORR_SERIES_ADMISSION is on and more than one
+    # source fed the episode — so with the flag off every Witness compares and
+    # hashes exactly as before.
+    series_authorities: frozenset[str] = frozenset()
+
+    def authority_buckets(self) -> frozenset[str]:
+        """Every measurement-authority bucket this witness belongs to."""
+        if self.series_authorities:
+            return self.series_authorities
+        return frozenset((self.authority,)) if self.authority is not None else frozenset()
 
     @property
     def trusted(self) -> bool:
@@ -122,6 +167,11 @@ class Witness:
         if self.origin and self.origin == other.origin:
             return False
         if self.authority is not None and self.authority == other.authority:
+            return False
+        # P6 PR-C2: a multi-source series shares fate with every authority that
+        # fed it. Downgrade-only — it can only remove an independent pair.
+        if (self.series_authorities or other.series_authorities) \
+                and self.authority_buckets() & other.authority_buckets():
             return False
         return not (self.fate is not None and other.fate is not None and self.fate.shares_fate_with(other.fate))
 
@@ -184,17 +234,7 @@ def witness_of(sig: Signal) -> Witness:
         support_only = method not in ("ssh", "snmp")
     fate = _fate_of(sig)
 
-    path = sig.observer.collection_path or "direct"
-    kind, _, instance = path.partition(":")
-    kind = kind.strip().lower()
-    if kind in TRANSPORT_PATHS:
-        authority = None
-    elif kind in AUTHORITY_PATHS:
-        # Unknown instance ⇒ one shared instance per kind (conservative).
-        authority = f"{kind}:{instance.strip().lower()}" if instance.strip() else kind
-    else:
-        # Unrecognized path: fail closed — one shared bucket per unknown kind.
-        authority = f"unknown:{kind}"
+    authority = authority_of_path(sig.observer.collection_path or "direct")
     return Witness(
         observer_id=sig.observer.observer_id,
         modality=sig.modality_class,
@@ -204,7 +244,25 @@ def witness_of(sig: Signal) -> Witness:
         probe_scope=probe_scope,
         support_only=support_only,
         origin=origin_device_of(sig) if origin_observer_enabled() else "",
+        series_authorities=_series_authorities(sig, authority) if series_admission_enabled() else frozenset(),
     )
+
+
+def _series_authorities(sig: Signal, authority: str | None) -> frozenset[str]:
+    """P6 PR-C2: the authority buckets of every source that fed a multi-source
+    series episode (`attrs["series_sources"]`), plus the observer's own. Empty
+    for a single-source or non-episode signal (the plain `authority` rules)."""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    raw = attrs.get(SERIES_SOURCES_ATTR)
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    paths = {str(p) for p in raw if isinstance(p, str) and p.strip()}
+    if len(paths) < 2:
+        return frozenset()
+    buckets = {a for a in (authority_of_path(p) for p in paths) if a is not None}
+    if authority is not None:
+        buckets.add(authority)
+    return frozenset(buckets)
 
 
 @dataclass(frozen=True)
@@ -257,7 +315,8 @@ def coverage(signals: list[Signal] | tuple[Signal, ...]) -> EvidenceCoverage:
         seen.setdefault(str(sig.signal_id), witness_of(sig))
     all_witnesses = sorted(
         set(seen.values()),
-        key=lambda w: (w.observer_id, w.modality.value, w.authority or ""),
+        key=lambda w: (w.observer_id, w.modality.value, w.authority or "",
+                       tuple(sorted(w.series_authorities))),
     )
 
     # Decision #1: debug_only / lab probes are EXCLUDED from customer-facing
@@ -304,11 +363,13 @@ def coverage(signals: list[Signal] | tuple[Signal, ...]) -> EvidenceCoverage:
 
     auth_groups: dict[str, str] = {}
     for w in witnesses:
-        if w.authority is not None:
-            if w.authority in auth_groups:
-                union(w.observer_id, auth_groups[w.authority])
+        # authority_buckets() is {authority} (or empty) unless a multi-source
+        # series sits in several buckets (P6 PR-C2, flag-gated).
+        for bucket in sorted(w.authority_buckets()):
+            if bucket in auth_groups:
+                union(w.observer_id, auth_groups[bucket])
             else:
-                auth_groups[w.authority] = w.observer_id
+                auth_groups[bucket] = w.observer_id
     fated = [w for w in witnesses if w.fate is not None]
     for i, a in enumerate(fated):
         for b in fated[i + 1:]:
