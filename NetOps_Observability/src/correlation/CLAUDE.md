@@ -82,6 +82,24 @@ the window filters (e.g. M:8157-8161).
   with |z|<1σ.
 - Severity from peak z: <5 warn, ≥5 high, ≥8 crit (producers.py:77-82).
 - Syslog, trap and controller records are point signals.
+- Cumulative counters (octets/errors/discards/fcs, BGP FSM transitions) become a
+  per-second rate per (tenant, entity, metric, collection_path) BEFORE the detector
+  (tracker 379, counter_rate.py; kill switch `CORR_COUNTER_RATES=0`).
+- **Series admission (P6 PR-C2, flag `CORR_SERIES_ADMISSION`, default OFF,
+  2026-11-07).** One metric series per device across SNMP + controller (owner,
+  NMS_DEVICE_IDENTITY §8); the CUSUM key stays (tenant, entity_id, metric). ON, on the
+  metric lane only: (1) one sample per (series, `CORR_SERIES_BUCKET_S`=60 s bucket)
+  across DIFFERENT collection paths — first arrival owns the bucket, a later sample
+  from another path for that or an earlier bucket is dropped and counted
+  (`EpisodeDetector.cross_source_dropped` → ingest `series_cross_source_dropped`,
+  `corr_series_cross_source_dropped_total`); a path's own samples always pass; state
+  in `_SeriesState` (MAX_SERIES LRU); (2) an RCA-family sample whose declared `unit`
+  contradicts `series_admission.SERIES_SEMANTICS` (pinned by parsing Go
+  `rcaMetricFamilies`, vManage realtime units and the gNMI shaper) is refused before
+  the counter-rate stage and counted (`series_unit_rejected`); (3) `EpisodeEvent.sources`
+  → `attrs["series_sources"]`; several sources → observer path =
+  `verdicts.conservative_collection_path` and the witness sits in EVERY source's
+  authority bucket (§5). OFF byte-identical (test_series_admission_p6.py).
 
 **Partitioning.** Producers key by tenant (murmur2); every topic has the same partition
 count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
@@ -226,6 +244,12 @@ host / egress / seam+target+schedule) (V:105-115).
   off and the rank_memo projection appends it only under the flag, so OFF is
   byte-identical (test_origin_observer_e1.py). Plan:
   docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md §7a/§7b.
+- **P6 PR-C2 multi-source series (flag `CORR_SERIES_ADMISSION`, default OFF):** an
+  episode fed by several collection paths (`attrs["series_sources"]`) gets
+  `Witness.series_authorities` = every source's bucket (incl. `unknown:snmp_poll`);
+  sharing ANY bucket blocks independence and joins the fate group. Naming one path
+  alone would not be downgrade-only (via_controller would lift it out of the shared
+  snmp_poll bucket). Projected into the rank_memo key only under the flag.
 - **E5c config-change family (flag `CORR_CONFIG_CHANGE_FAMILY`, default OFF, REQUIRES
   E1, 2026-11-02):** a change reaches the engine as `device_config_change` (the box),
   `controller_policy_change` (a controller) or `config_change`. ON: stage [6]

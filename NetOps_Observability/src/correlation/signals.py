@@ -487,6 +487,80 @@ def set_origin_observer(enabled: bool) -> None:
     _ORIGIN_OBSERVER = bool(enabled)
 
 
+# ── P6 PR-C2: stage [2] series admission (flag CORR_SERIES_ADMISSION) ─────────
+# Owner decision 2026-11-07 (NMS_DEVICE_IDENTITY_2026-11-01.md §8): when a
+# tenant has BOTH SNMP and a controller for a device, the engine keeps ONE
+# metric series — the CUSUM key stays (tenant, entity_id, metric), no source in
+# it. For that to be honest the metric lane must, before samples meet:
+#   1. admit ONE sample per (series, sampling bucket) across DIFFERENT
+#      collection paths — first arrival wins, the other is counted
+#      (episodes.EpisodeDetector.observe, `source=`); a source's own jittered
+#      samples are always admitted;
+#   2. refuse a sample whose declared unit contradicts the canonical semantics
+#      table (series_admission.SERIES_SEMANTICS), counted, never averaged in;
+#   3. record which sources fed an episode (`attrs["series_sources"]`) and,
+#      when several did, take the most conservative witness: the observer path
+#      is the authority path and the verdict gate treats the episode as
+#      sharing EVERY source's authority bucket (verdicts.Witness) —
+#      downgrade-only.
+# Default OFF: no source is passed to the detector, no attrs key is stamped,
+# no witness field is set — not one byte of any object moves.
+SERIES_SOURCES_ATTR = "series_sources"
+DEFAULT_SERIES_BUCKET_S = 60.0
+# A bucket must be a real interval: below 1 s it stops de-duplicating anything
+# a poller emits; above an hour it would starve a source of every sample.
+_SERIES_BUCKET_BOUNDS = (1.0, 3600.0)
+
+
+def _parse_series_bucket(raw: str | None) -> tuple[float, bool]:
+    """(bucket seconds, valid?) — a malformed or out-of-range value falls back
+    to the default and is REPORTED invalid (main.py logs it at start-up)."""
+    text = (raw or "").strip()
+    if not text:
+        return DEFAULT_SERIES_BUCKET_S, True
+    try:
+        val = float(text)
+    except ValueError:
+        return DEFAULT_SERIES_BUCKET_S, False
+    lo, hi = _SERIES_BUCKET_BOUNDS
+    if not (lo <= val <= hi):          # also rejects nan / inf
+        return DEFAULT_SERIES_BUCKET_S, False
+    return val, True
+
+
+_SERIES_ADMISSION: bool = os.environ.get(
+    "CORR_SERIES_ADMISSION", "0").strip().lower() in ("1", "true", "yes", "on")
+_SERIES_BUCKET_S, _SERIES_BUCKET_VALID = _parse_series_bucket(
+    os.environ.get("CORR_SERIES_BUCKET_S"))
+
+
+def series_admission_enabled() -> bool:
+    """Is stage [2] series admission ON? Default OFF."""
+    return _SERIES_ADMISSION
+
+
+def series_bucket_s() -> float:
+    """The cross-source admission bucket width (seconds, CORR_SERIES_BUCKET_S)."""
+    return _SERIES_BUCKET_S
+
+
+def series_bucket_env_valid() -> bool:
+    """False when CORR_SERIES_BUCKET_S was set but unusable (default in force)."""
+    return _SERIES_BUCKET_VALID
+
+
+def set_series_admission(enabled: bool, bucket_s: float | None = None) -> None:
+    """Test hook: toggle the flag (and optionally the bucket) in-process.
+    Production reads the env vars."""
+    global _SERIES_ADMISSION, _SERIES_BUCKET_S
+    _SERIES_ADMISSION = bool(enabled)
+    if bucket_s is not None:
+        val, ok = _parse_series_bucket(str(bucket_s))
+        if not ok:
+            raise ValueError(f"series bucket must be within {_SERIES_BUCKET_BOUNDS} s, got {bucket_s!r}")
+        _SERIES_BUCKET_S = val
+
+
 # ── E5c: the config-change family (flag CORR_CONFIG_CHANGE_FAMILY) ─────────────
 #
 # A configuration change reaches the engine as one of three kinds, named by who
