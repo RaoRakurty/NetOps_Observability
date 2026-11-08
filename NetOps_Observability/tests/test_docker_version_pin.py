@@ -62,11 +62,4 @@ def test_doctor_classifies_engine_versions() -> None:
 def test_doctor_problem_and_warn_always_carry_a_remedy() -> None:
     for version in ("29.5.0", "20.10.24", "29.9.3"):
         status, summary, remedy = doctor.classify_docker_version(version)
-        assert summary and "docker-upgrade.md" in remedy, (version, status)
-
-
-def test_the_upgrade_runbook_exists_and_names_the_drill() -> None:
-    rb = (ROOT / "docs" / "runbooks" / "docker-upgrade.md").read_text(encoding="utf-8")
-    for must in ("apt-mark unhold", "apt-mark hold", "deploy-qualify", "masked", "VALIDATED_DOCKER_VERSIONS",
-                 "DOCKER_CE_VERSION"):
-        assert must in rb, must
+        assert summary and "validated Docker Engine" in remedy, (version, status)

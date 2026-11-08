@@ -142,12 +142,12 @@ else
   # later releases (moby#53384). The pin is the version Correlix validated (lab
   # drill: receiver stop/start under live traffic, zero masked senders);
   # install_doctor.py VALIDATED_DOCKER_VERSIONS must list it (a test enforces
-  # it). Upgrades are deliberate: docs/runbooks/docker-upgrade.md.
+  # it).
   # Override for a deliberate, separately validated version: DOCKER_CE_VERSION.
   docker_pkg_ver=$(apt-cache madison docker-ce 2>/dev/null \
     | awk -v want="$DOCKER_CE_VERSION" -F' *[|] *' '$2 ~ ("^[0-9]+:" want "-") {print $2; exit}')
   if [ -z "$docker_pkg_ver" ]; then
-    fixfail "docker-ce ${DOCKER_CE_VERSION} (the Correlix-validated Engine) is not in Docker's apt repo for ${ID} ${VERSION_CODENAME} — check 'apt-cache madison docker-ce'; see docs/runbooks/docker-upgrade.md before choosing another version"
+    fixfail "docker-ce ${DOCKER_CE_VERSION} (the Correlix-validated Engine) is not in Docker's apt repo for ${ID} ${VERSION_CODENAME} — check 'apt-cache madison docker-ce'"
   else
     apt-get install -y -qq "docker-ce=${docker_pkg_ver}" "docker-ce-cli=${docker_pkg_ver}" containerd.io docker-compose-plugin
     # Hold it: neither `apt upgrade` nor unattended-upgrades may move the

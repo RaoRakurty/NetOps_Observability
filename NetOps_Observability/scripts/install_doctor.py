@@ -523,8 +523,8 @@ def classify_docker_version(version: str) -> tuple[str, str, str]:
         return ("unknown", f"could not parse the Docker Engine version {_token(version, 40)!r}", "")
     major, minor, patch = (int(g) for g in m.groups())
     ver = f"{major}.{minor}.{patch}"
-    upgrade = ("Install the Correlix-validated Engine — see docs/runbooks/docker-upgrade.md "
-               f"(validated: {', '.join(VALIDATED_DOCKER_VERSIONS)}).")
+    upgrade = (f"Install the Correlix-validated Docker Engine ({', '.join(VALIDATED_DOCKER_VERSIONS)}) — "
+               "scripts/prepare-host.sh installs and holds it.")
     if major < 23:
         return ("problem", f"Docker {ver} never clears stale UDP connection-tracking entries for "
                 "published ports: after a receiver restart, a chatty device's traps/syslog/flows can "

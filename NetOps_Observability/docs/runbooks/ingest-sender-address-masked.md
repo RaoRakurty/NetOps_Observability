@@ -77,8 +77,8 @@ move both the host and the container side together. Do not edit the compose
 
 ## Fixing it — and what the fix costs (2026-11-08)
 
-With host port == container port (#126) and a validated Docker Engine
-(docs/runbooks/docker-upgrade.md), **restarting the affected receiver clears the
+With host port == container port (#126) and the Correlix-validated Docker Engine
+(pinned and held by scripts/prepare-host.sh), **restarting the affected receiver clears the
 stale entries**: Docker's own flush runs when the container starts (proven on the
 lab, Engine 29.5.2: receiver stopped 40 s under live traffic → zero masked senders).
 
