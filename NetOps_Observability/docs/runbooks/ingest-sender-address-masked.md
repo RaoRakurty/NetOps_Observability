@@ -74,3 +74,29 @@ iptables -t raw -S PREROUTING   # confirm the rule is gone
 move both the host and the container side together. Do not edit the compose
 `ports:` entries by hand to map one port to a different one;
 `tests/test_compose_udp_port_parity.py` guards this.
+
+## Fixing it — and what the fix costs (2026-11-08)
+
+With host port == container port (#126) and a validated Docker Engine
+(docs/runbooks/docker-upgrade.md), **restarting the affected receiver clears the
+stale entries**: Docker's own flush runs when the container starts (proven on the
+lab, Engine 29.5.2: receiver stopped 40 s under live traffic → zero masked senders).
+
+| `topic` label on the alert | receiver to restart |
+|---|---|
+| `netops.syslog` | `docker compose restart syslog-ng` |
+| `netops.flows` | `docker compose restart goflow2` |
+| `netops.snmptrap` | the trap receiver runs inside `api`: `scripts/deploy.sh api` or `docker compose restart api` |
+
+**Trade-off — choose the moment.** Until you restart, nothing is lost: the
+affected device's messages are stored and searchable, but unattributed (no
+device, no tenant, no RCA evidence). A restart drops what arrives while the
+receiver is down — a few seconds for syslog-ng / goflow2 (every device on that
+lane), roughly 30–60 s of traps for `api`. That is why the restart is a human
+decision, not automatic.
+
+**If masking persists after a restart**, the cause is not a stale entry: an IPv6
+sender is always relayed to the IPv4 compose network and masked by design.
+Restarting will not help; it is fixed only by host-network telemetry ingress
+(tracker 373, decided and deferred).
+

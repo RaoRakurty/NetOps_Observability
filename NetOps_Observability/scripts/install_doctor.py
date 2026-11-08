@@ -503,6 +503,42 @@ def assess_container(c: dict, logs: str | None, now: float) -> tuple[str, str, s
     return "ok", note, "", details
 
 
+#: Docker Engine versions Correlix validated for UDP source-address integrity
+#: (tracker 373: receiver stop/start under live traffic → zero masked senders).
+#: scripts/prepare-host.sh DOCKER_CE_VERSION must be one of them (a test pins it).
+VALIDATED_DOCKER_VERSIONS = ("29.5.2",)
+
+
+def classify_docker_version(version: str) -> tuple[str, str, str]:
+    """(status, summary, remedy) for a Docker Engine version string.
+
+    problem: < 23 (no conntrack flush for published UDP ports at all) or
+    exactly 29.5.0 (the flush was broken; fixed in 29.5.1) — device source
+    addresses can be masked to the Docker gateway after any receiver restart.
+    ok: a Correlix-validated version. warn: anything else that parses (it works
+    upstream, but Correlix has not validated it). unknown: unparseable.
+    """
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", (version or "").strip())
+    if not m:
+        return ("unknown", f"could not parse the Docker Engine version {_token(version, 40)!r}", "")
+    major, minor, patch = (int(g) for g in m.groups())
+    ver = f"{major}.{minor}.{patch}"
+    upgrade = ("Install the Correlix-validated Engine — see docs/runbooks/docker-upgrade.md "
+               f"(validated: {', '.join(VALIDATED_DOCKER_VERSIONS)}).")
+    if major < 23:
+        return ("problem", f"Docker {ver} never clears stale UDP connection-tracking entries for "
+                "published ports: after a receiver restart, a chatty device's traps/syslog/flows can "
+                "arrive from the Docker gateway and lose their device and tenant", upgrade)
+    if (major, minor, patch) == (29, 5, 0):
+        return ("problem", "Docker 29.5.0 shipped a broken UDP conntrack flush (fixed in 29.5.1): "
+                "device source addresses can be masked after any receiver restart", upgrade)
+    if ver in VALIDATED_DOCKER_VERSIONS:
+        return ("ok", f"Docker {ver} is a Correlix-validated Engine", "")
+    return ("warn", f"Docker {ver} works upstream but is not a Correlix-validated Engine "
+            f"(validated: {', '.join(VALIDATED_DOCKER_VERSIONS)}); source-address integrity across "
+            "receiver restarts has not been checked on it", upgrade)
+
+
 def check_docker_and_containers(env: DoctorEnv, env_exists: bool, start: float) -> tuple[list[Check], str]:
     """Returns the docker + container checks and Docker's data root ("" if unknown)."""
     try:
@@ -520,6 +556,8 @@ def check_docker_and_containers(env: DoctorEnv, env_exists: bool, start: float) 
     droot = droot.strip() if droot.strip().startswith("/") else ""
     checks = [Check("docker", "Docker", "ok",
                     f"Docker {_token(version, 40)} answers (data root {_token(droot or '?', 200)})")]
+    vstatus, vsummary, vremedy = classify_docker_version(version)
+    checks.append(Check("docker_version", "Docker Engine version", vstatus, vsummary, vremedy))
 
     try:
         rc, out, err = env.runner(["docker", "ps", "-a", "--no-trunc", "--filter",
