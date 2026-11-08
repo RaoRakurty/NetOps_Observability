@@ -199,7 +199,9 @@ test("the dock width is resizable by pointer and keyboard, and remembered", asyn
   await open(page);
   expect(await mode(page)).toBe("docked");
   near((await rect(panelEl(page))).width, 412, "remembered width");
-  expect(await page.evaluate(() => localStorage.getItem("iris.panel.width"))).toBe("412");
+  // Per principal (tenant/user): the fake signs in as alice of t_acme.
+  expect(await page.evaluate(() => localStorage.getItem("iris.panel.width@t_acme%2Falice"))).toBe("412");
+  expect(await page.evaluate(() => localStorage.getItem("iris.panel.width")), "nothing under an unscoped key").toBeNull();
 });
 
 // ── 6 ─────────────────────────────────────────────────────────────────────
@@ -599,4 +601,170 @@ test("the header's engine line ends in an ellipsis, never clipped mid-word, in a
   expect(m.overflow).toBe("ellipsis");
   expect(m.right).toBeLessThanOrEqual(m.hdRight);
   expect(m.title.length).toBeGreaterThan(0); // the full line is on hover
+});
+
+// ── §15 + CLAUDE.md §3a: preferences are per operator ─────────────────────
+test("one operator's Iris layout never follows another into the same browser", async ({ page, context }) => {
+  await boot(page);
+  await openFloating(page); // alice of t_acme chooses Floating
+  await ctl(page, "Close Iris").click();
+  await settle(page);
+
+  // Bob, of another tenant, signs in in the same browser profile.
+  const bob = await context.newPage();
+  await bootIris(bob, {
+    answer: () => topCpuAnswer(), tenantConfig: TENANT_CONFIG,
+    me: { username: "bob", role: "admin", tenant_id: "t_globex", platform_admin: false, accessible_tenants: ["t_globex"], all_tenants: false, org_id: "org-globex" },
+  });
+  await bob.goto("/#/overview/home");
+  await openIris(bob);
+  await settle(bob);
+  expect(await bob.locator("#iris-panel").getAttribute("data-mode"), "Bob gets the default, not Alice's Floating").toBe("docked");
+
+  // Alice's choice is still hers.
+  await page.reload();
+  await open(page);
+  expect(await mode(page)).toBe("floating");
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("iris.panel")).sort());
+  expect(keys.every((k) => k.includes("@")), `every key is owner-scoped: ${keys.join(", ")}`).toBe(true);
+});
+
+// ── §1 / §10: thinking cue ────────────────────────────────────────────────
+test("the thinking pulse runs only while Iris is answering, and never under reduced motion", async ({ page }) => {
+  await boot(page);
+  await open(page);
+  // Hold the answer until the test has looked at the cue.
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route("**/api/ai/ask*", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  const pulsing = () => page.evaluate(() => {
+    const svg = document.querySelector("#iris-launcher svg");
+    const mark = document.querySelector("#iris-panel .op-hd-logo");
+    return {
+      launcher: document.getElementById("iris-launcher")!.hasAttribute("data-thinking"),
+      launcherAnim: svg ? getComputedStyle(svg).animationName : "",
+      markAnim: mark ? getComputedStyle(mark).animationName : "",
+      ms: svg ? parseFloat(getComputedStyle(svg).animationDuration) * 1000 : 0,
+    };
+  });
+  expect(await pulsing()).toMatchObject({ launcher: false, launcherAnim: "none", markAnim: "none" });
+  const box = page.getByPlaceholder(/Ask Iris AI/);
+  await box.fill("top 3 devices by cpu in the last hour");
+  await box.press("Enter");
+  await expect.poll(async () => (await pulsing()).launcher).toBe(true);
+  const on = await pulsing();
+  expect(on.launcherAnim).toBe("irisThink");
+  expect(on.markAnim).toBe("irisThink");
+  expect(on.ms, "calm: 700–900 ms per cycle").toBeGreaterThanOrEqual(700);
+  expect(on.ms).toBeLessThanOrEqual(900);
+  release();
+  await expect(irisPanel(page).locator(".op-row.assistant .op-bubble-grounded")).toHaveCount(1);
+  await expect.poll(async () => (await pulsing()).launcher).toBe(false);
+  expect(await pulsing()).toMatchObject({ launcherAnim: "none", markAnim: "none" });
+
+  // Reduced motion: the same state carries no animation at all.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.evaluate(() => document.getElementById("iris-launcher")!.setAttribute("data-thinking", ""));
+  expect((await pulsing()).launcherAnim).toBe("none");
+});
+
+// ── §10: press, dock edge, resize stop, hover ─────────────────────────────
+test("micro-interactions: press scale, dock edge highlight, resize stop, hover feedback", async ({ page }) => {
+  await boot(page);
+  const launcher = irisLauncher(page);
+  // Press: a very slight scale while held (0.96–0.98), back on release.
+  const b = await rect(launcher);
+  await page.mouse.move(b.left + b.width / 2, b.top + b.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => launcher.evaluate((el) => getComputedStyle(el).transform)).toMatch(/^matrix\(0\.97/);
+  await page.mouse.up();
+  await settle(page);
+  await expect.poll(() => launcher.evaluate((el) => getComputedStyle(el).transform)).toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+
+  // Hover on a header action: a surface highlight with a 120–160 ms transition.
+  const undock = ctl(page, "Undock");
+  const t = await undock.evaluate((el) => getComputedStyle(el).transitionDuration.split(",").map((d) => parseFloat(d) * 1000));
+  for (const ms of t) { expect(ms).toBeGreaterThanOrEqual(120); expect(ms).toBeLessThanOrEqual(160); }
+  const bgBefore = await undock.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await undock.hover();
+  await expect.poll(() => undock.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(bgBefore);
+
+  // Dock: the edge Iris joined lights once.
+  await undock.click();
+  await settle(page);
+  await ctl(page, "Dock").click();
+  const sep = irisPanel(page).getByRole("separator", { name: "Resize Iris" });
+  await expect(sep).toHaveAttribute("data-flash", "");
+  expect(await sep.evaluate((el) => getComputedStyle(el, "::after").animationName)).toBe("irisEdgeFlash");
+  await expect(sep).not.toHaveAttribute("data-flash", "", { timeout: 2000 });
+
+  // Resize stop: pushing past 650 shows a neutral stop while held, no bounce.
+  await settle(page);
+  const s = await rect(sep);
+  await page.mouse.move(s.left + 2, s.top + 200);
+  await page.mouse.down();
+  await page.mouse.move(60, s.top + 200, { steps: 4 });
+  await expect(sep).toHaveClass(/at-limit/);
+  near((await rect(panelEl(page))).width, 650, "held at the maximum");
+  await page.mouse.up();
+  await expect(sep).not.toHaveClass(/at-limit/);
+});
+
+// ── §12: context chip ─────────────────────────────────────────────────────
+test("the header shows the current page as a chip, and it follows navigation", async ({ page }) => {
+  await boot(page);
+  await open(page);
+  const chip = irisPanel(page).locator(".iris-context-chip");
+  await expect(irisPanel(page).getByText("Current page", { exact: true })).toBeVisible();
+  await expect(chip).toContainText("Overview");
+  const fs = await chip.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  expect(fs, "NOC-admin standard: ≥ 14 px").toBeGreaterThanOrEqual(14);
+  await page.evaluate(() => { window.location.hash = "#/operations/alerts"; });
+  await expect(chip).not.toContainText("Overview");
+  await expect(chip).toContainText(/Alerts/i);
+});
+
+// ── §16: phone width ──────────────────────────────────────────────────────
+test("at tablet width the ✦ Iris control stays on screen", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await boot(page);
+  await expect(irisLauncher(page)).toBeInViewport({ ratio: 1 });
+  await irisLauncher(page).click();
+  await settle(page);
+  await expect(panelEl(page), "too narrow to dock beside a usable workspace").toHaveClass(/is-floating/);
+  near((await rect(workspace(page))).width, 768 - (await rect(page.locator(".shell > .rail"))).right, "workspace not squeezed");
+});
+
+test("on a phone-width screen Iris is a full-width sheet that traps focus and Esc returns to ✦ Iris", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  const launcher = irisLauncher(page);
+  // At 390 px the global header's wordmark alone is ~320 px wide, so the
+  // header cluster (✦ Iris included) runs off-screen — a header-wide layout
+  // issue outside the Iris panel. The rail's Iris item is the way in here.
+  await page.locator('button.rail-item[title="Iris AI"]').click();
+  await settle(page);
+  await expect(panelEl(page)).toHaveClass(/is-sheet/);
+  const sheet = await rect(panelEl(page));
+  near(sheet.left, 0, "sheet left");
+  near(sheet.right, 390, "sheet right");
+  // Nothing inside the sheet is wider than the screen. (The page itself
+  // scrolls sideways at this width because of the header — see above.)
+  const widest = await panelEl(page).evaluate((el) => Math.max(...Array.from(el.querySelectorAll<HTMLElement>("*"))
+    .filter((c) => c.offsetParent !== null).map((c) => c.getBoundingClientRect().right)));
+  expect(widest, "no content past the right edge of the sheet").toBeLessThanOrEqual(390 + 0.5);
+  // Tab cycles inside the sheet.
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(() => !!document.getElementById("iris-panel")!.contains(document.activeElement));
+    expect(inside, `Tab ${i + 1} stays in the sheet`).toBe(true);
+  }
+  await page.getByPlaceholder(/Ask Iris AI/).focus();
+  await page.keyboard.press("Escape");
+  await settle(page);
+  expect(await mode(page)).toBe("closed");
+  await expect(launcher).toBeFocused();
 });

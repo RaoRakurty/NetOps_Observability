@@ -45,6 +45,10 @@ export interface IrisPanelState {
   beforeExpand: IrisRestingMode;
   /** The operator's docked width in px, within [DOCK_MIN_W, DOCK_MAX_W]. */
   width: number;
+  /** Whose preferences these are (irisOwnerKey of the signed-in principal),
+   *  null when nobody is signed in. Saving writes under this owner only, so one
+   *  operator's layout never follows another into a shared browser. */
+  owner: string | null;
 }
 
 export type IrisAction =
@@ -56,7 +60,10 @@ export type IrisAction =
   | { type: "expand" }
   | { type: "collapse" }
   | { type: "escape" }
-  | { type: "resize"; width: number };
+  | { type: "resize"; width: number }
+  /** Replace everything with the preferences loaded for a (new) principal —
+   *  sign in, sign out, or a switch of account in the same tab. Always closed. */
+  | { type: "hydrate"; state: IrisPanelState };
 
 // ── Geometry (design §2, §4) ───────────────────────────────────────────────
 /** Floating width (design: about 440–460 px). */
@@ -83,6 +90,7 @@ export const INITIAL_IRIS_STATE: IrisPanelState = {
   lastOpen: "docked",
   beforeExpand: "docked",
   width: DOCK_DEFAULT_W,
+  owner: null,
 };
 
 // go moves to an open mode and remembers it as the one to reopen in.
@@ -115,6 +123,8 @@ export function irisReducer(s: IrisPanelState, a: IrisAction): IrisPanelState {
       const width = clampWidth(a.width);
       return width === s.width ? s : { ...s, width };
     }
+    case "hydrate":
+      return { ...a.state, mode: "closed" };
   }
 }
 
@@ -123,6 +133,11 @@ export function irisReducer(s: IrisPanelState, a: IrisAction): IrisPanelState {
 // per value, every access in try/catch (a private window or blocked site data
 // throws). Nothing about the conversation is stored here — its id stays in
 // sessionStorage, owned by tabs/Iris.tsx.
+//
+// Keys are per PRINCIPAL (tenant + principal id): a browser shared by two
+// operators — or one operator signed in to two tenants — keeps a layout per
+// account, and nothing is read or written while nobody is signed in. The base
+// names below are suffixed by irisStorageKeys().
 export const IRIS_STORAGE_KEYS = {
   // ".v2" (2026-10-17): docked became the default, and every browser that had
   // opened Iris had "floating" saved under the old key — so the new default
@@ -132,6 +147,34 @@ export const IRIS_STORAGE_KEYS = {
   beforeExpand: "iris.panel.beforeExpand.v2",
   width: "iris.panel.width",
 } as const;
+
+/** The principal fields the owner key is built from (services/api AuthUser). */
+export interface IrisPrincipal {
+  id?: string;
+  username?: string;
+  tenant_id?: string;
+}
+
+/** The stable per-account owner of the panel preferences, or null when there
+ *  is no usable identity (signed out). The principal id is preferred; the
+ *  username is the fallback for an older API that does not send one. */
+export function irisOwnerKey(p: IrisPrincipal | null | undefined): string | null {
+  if (!p) return null;
+  const who = (p.id || p.username || "").trim();
+  if (!who) return null;
+  return `${(p.tenant_id || "").trim()}/${who}`;
+}
+
+/** One owner's storage keys: base key + "@" + the owner URI-encoded, so no
+ *  owner string can contain a separator that forges another owner's key. */
+export function irisStorageKeys(owner: string): Record<keyof typeof IRIS_STORAGE_KEYS, string> {
+  const at = `@${encodeURIComponent(owner)}`;
+  return {
+    lastOpen: IRIS_STORAGE_KEYS.lastOpen + at,
+    beforeExpand: IRIS_STORAGE_KEYS.beforeExpand + at,
+    width: IRIS_STORAGE_KEYS.width + at,
+  };
+}
 
 type KV = Pick<Storage, "getItem" | "setItem">;
 
@@ -143,29 +186,35 @@ function read(store: KV | null, key: string): string | null {
   }
 }
 
-/** Restores the remembered preferences. The panel always starts closed: a page
- *  load never opens Iris on its own. Values are validated — storage is input. */
-export function loadIrisState(store: KV | null = safeLocalStorage()): IrisPanelState {
-  const lastOpen = read(store, IRIS_STORAGE_KEYS.lastOpen);
-  const before = read(store, IRIS_STORAGE_KEYS.beforeExpand);
-  const rawW = read(store, IRIS_STORAGE_KEYS.width);
+/** Restores one owner's remembered preferences. The panel always starts
+ *  closed: a page load never opens Iris on its own. Values are validated —
+ *  storage is input. No owner = the defaults, and nothing is read. */
+export function loadIrisState(owner: string | null, store: KV | null = safeLocalStorage()): IrisPanelState {
+  if (!owner) return INITIAL_IRIS_STATE;
+  const keys = irisStorageKeys(owner);
+  const lastOpen = read(store, keys.lastOpen);
+  const before = read(store, keys.beforeExpand);
+  const rawW = read(store, keys.width);
   const w = rawW !== null && /^\d{1,4}$/.test(rawW) ? Number(rawW) : NaN;
   return {
     mode: "closed",
     lastOpen: lastOpen === "docked" || lastOpen === "expanded" || lastOpen === "floating" ? lastOpen : "docked",
     beforeExpand: before === "floating" ? "floating" : "docked",
     width: Number.isFinite(w) ? clampWidth(w) : DOCK_DEFAULT_W,
+    owner,
   };
 }
 
-/** Writes the preferences. Returns false when storage refused the write, so a
- *  caller can tell (the choice still holds for this page load). */
+/** Writes the preferences under the state's owner. Returns false when there is
+ *  no owner or storage refused the write, so a caller can tell (the choice
+ *  still holds for this page load). */
 export function saveIrisState(s: IrisPanelState, store: KV | null = safeLocalStorage()): boolean {
-  if (!store) return false;
+  if (!store || !s.owner) return false;
+  const keys = irisStorageKeys(s.owner);
   try {
-    store.setItem(IRIS_STORAGE_KEYS.lastOpen, s.lastOpen);
-    store.setItem(IRIS_STORAGE_KEYS.beforeExpand, s.beforeExpand);
-    store.setItem(IRIS_STORAGE_KEYS.width, String(clampWidth(s.width)));
+    store.setItem(keys.lastOpen, s.lastOpen);
+    store.setItem(keys.beforeExpand, s.beforeExpand);
+    store.setItem(keys.width, String(clampWidth(s.width)));
     return true;
   } catch {
     return false;

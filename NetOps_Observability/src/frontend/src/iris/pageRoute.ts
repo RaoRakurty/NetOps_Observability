@@ -28,6 +28,18 @@ export function currentPageRoute(hash: string = typeof window === "undefined" ? 
   return `${r.section.id}/${r.leaf.id}`;
 }
 
+/** The plain-language name of the page behind the Iris box ("Section · Page"),
+ *  for the panel's context chip (design §12) — the same validated page the
+ *  question carries, never anything else, so the chip shows only what the
+ *  operator is already looking at. undefined when there is no real page. */
+export function currentPageLabel(hash: string = typeof window === "undefined" ? "" : window.location.hash): string | undefined {
+  const route = currentPageRoute(hash);
+  if (!route) return undefined;
+  const r = resolveRoute(`#/${route}`);
+  if (!r.leaf) return undefined;
+  return r.leaf.label === r.section.label ? r.section.label : `${r.section.label} · ${r.leaf.label}`;
+}
+
 /** The ui-context the Iris box sends with a question: the current page, if
  *  there is one, merged under any context the caller already carries. */
 export function withPageContext(context?: Record<string, string>, hash?: string): Record<string, string> | undefined {

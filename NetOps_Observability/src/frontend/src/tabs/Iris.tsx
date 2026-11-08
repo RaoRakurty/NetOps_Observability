@@ -193,10 +193,16 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
-export default function Iris({ controls, onLeave, ask, onAskHandled }: {
+export default function Iris({ controls, context, onBusyChange, onLeave, ask, onAskHandled }: {
   /** The panel's window controls (Dock / Expand), rendered in this header
    *  just before Close — components/IrisPanel.tsx owns what they do. */
   controls?: ReactNode;
+  /** The panel's context chip row (the page behind the box, design §12),
+   *  rendered directly under this header. */
+  context?: ReactNode;
+  /** Told when a question starts and stops being worked on, so the panel can
+   *  show its calm "thinking" cue (design §1, §10) only while it is. */
+  onBusyChange?: (busy: boolean) => void;
   /** A citation is taking the operator to another page. The panel decides what
    *  that means for its mode; without a panel, Iris closes as before. */
   onLeave?: () => void;
@@ -232,6 +238,7 @@ export default function Iris({ controls, onLeave, ask, onAskHandled }: {
   const [ungrounded, setUngrounded] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   // What Iris is doing for the question in flight (N-E2); empty = no stream.
   const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -601,12 +608,12 @@ export default function Iris({ controls, onLeave, ask, onAskHandled }: {
           </span>
         </span>
         <span className="op-hd-actions">
-          <button className="op-hd-btn op-hd-new" title="New conversation" onClick={newConversation}>+</button>
-          <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="AI models" aria-label="AI models"
+          <button type="button" className="op-hd-btn op-hd-new" title="New conversation" aria-label="New conversation" onClick={newConversation}>+</button>
+          <button type="button" className={`op-hd-btn${showSettings ? " on" : ""}`} title="AI models" aria-label="AI models" aria-pressed={showSettings}
             onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
             <Icon name="model" size={15} />
           </button>
-          <button className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation"
+          <button type="button" className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation" aria-label="Help" aria-pressed={showHelp}
             onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
             <Icon name="help" size={15} />
           </button>
@@ -616,6 +623,7 @@ export default function Iris({ controls, onLeave, ask, onAskHandled }: {
           </button>
         </span>
       </div>
+      {context}
 
       {showHelp && (
         <div className="op-settings op-help">

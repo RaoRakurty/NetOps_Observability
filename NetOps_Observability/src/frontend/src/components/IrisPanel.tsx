@@ -25,7 +25,13 @@
 //     from where it was. Skipped under prefers-reduced-motion.
 //   · The splitter writes the width straight to two CSS custom properties while
 //     dragging (once per animation frame) and commits to React state only on
-//     release, so a drag re-renders nothing.
+//     release, so a drag re-renders nothing. At 380 / 650 px it shows a quiet
+//     stop; right after Dock its edge lights briefly so the operator sees where
+//     Iris went (design §10).
+//   · While a question is being worked on, the header mark and the `✦ Iris`
+//     control breathe slowly (design §1, §10) — never when idle, never under
+//     prefers-reduced-motion. The context chip under the header names the page
+//     behind the box (design §12) and animates only when that page changes.
 
 import {
   useCallback,
@@ -40,6 +46,7 @@ import {
 import Iris from "../tabs/Iris";
 import Icon from "./Icon";
 import { IRIS_ASK_EVENT, type IrisAskDetail } from "./AskIris";
+import { currentPageLabel } from "../iris/pageRoute";
 import {
   DOCK_MIN_W,
   DOCK_STEP_W,
@@ -79,7 +86,21 @@ function prefersReducedMotion(): boolean {
   }
 }
 
-type Drag = { pointer: number; startX: number; startW: number; max: number; w: number; frame: number };
+type Drag = { pointer: number; startX: number; startW: number; max: number; w: number; frame: number; atLimit: boolean };
+
+/** How long the splitter edge stays lit after Dock (the CSS fade is 480 ms). */
+const DOCK_FLASH_MS = 520;
+
+/** Reads the page behind the box for the context chip; re-read on navigation. */
+function usePageLabel(): string | undefined {
+  const [label, setLabel] = useState<string | undefined>(() => currentPageLabel());
+  useEffect(() => {
+    const onHash = () => setLabel(currentPageLabel());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return label;
+}
 
 export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; dispatch: (a: IrisAction) => void }) {
   const panelRef = useRef<HTMLElement | null>(null);
@@ -148,14 +169,22 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   const fromRect = useRef<DOMRect | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // Dock lights the edge Iris joined, once (design §10 "Dock control").
+  const [dockFlash, setDockFlash] = useState(false);
   const transition = useCallback((a: IrisAction) => {
     // Only an action that changes something gets a start point; a no-op
     // dispatch renders nothing and would otherwise leave a stale one behind.
     if (irisReducer(stateRef.current, a) !== stateRef.current) {
       fromRect.current = panelRef.current?.getBoundingClientRect() ?? null;
+      if (a.type === "dock") setDockFlash(true);
     }
     dispatch(a);
   }, [dispatch]);
+  useEffect(() => {
+    if (!dockFlash) return;
+    const t = window.setTimeout(() => setDockFlash(false), DOCK_FLASH_MS);
+    return () => window.clearTimeout(t);
+  }, [dockFlash]);
 
   const prevPresentation = useRef(presentation);
   useLayoutEffect(() => {
@@ -280,6 +309,35 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   }, [dispatch]);
   const onAskHandled = useCallback(() => setPendingAsk(null), []);
 
+  // ── Thinking cue (design §1, §10) ──────────────────────────────────────
+  // The content reports when a question is in flight. The header mark and the
+  // `✦ Iris` control (also while Iris is closed: the answer is still coming)
+  // carry data-thinking only then — the CSS pulse never runs when idle. The
+  // control is the TopBar's; like the shell column above, it is marked on the
+  // element rather than threaded through the shell context.
+  const [thinking, setThinking] = useState(false);
+  useLayoutEffect(() => {
+    const ctl = document.getElementById(IRIS_LAUNCHER_ID);
+    if (thinking) ctl?.setAttribute("data-thinking", "");
+    else ctl?.removeAttribute("data-thinking");
+  }, [thinking]);
+  useEffect(() => () => document.getElementById(IRIS_LAUNCHER_ID)?.removeAttribute("data-thinking"), []);
+
+  // ── Context chip (design §12) ───────────────────────────────────────────
+  // The page behind the box — the same validated page a question carries
+  // (iris/pageRoute.ts), nothing else. Keyed by the page so the chip animates
+  // in when the page changes and stays still while it does not.
+  const pageLabel = usePageLabel();
+  const context = useMemo(
+    () => (pageLabel ? (
+      <div className="iris-context">
+        <span className="iris-context-label">Current page</span>
+        <span key={pageLabel} className="iris-context-chip" title={pageLabel}>{pageLabel}</span>
+      </div>
+    ) : null),
+    [pageLabel],
+  );
+
   // A citation is taking the operator to another page. Docked, Iris stays
   // beside it (that is what docking is for); expanded, it steps back to its
   // previous mode so the page shows; a floating panel or sheet gets out of the
@@ -296,12 +354,16 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     panelRef.current?.closest<HTMLElement>(".shell")?.style.setProperty("--iris-dock-w", `${w}px`);
     splitterRef.current?.setAttribute("aria-valuenow", String(w));
   };
+  // The quiet stop at 380 / 650 px (design §10 "Resize limits"): the edge
+  // turns neutral while the operator pushes past a limit — no bounce.
+  const showLimit = (on: boolean) => splitterRef.current?.classList.toggle("at-limit", on);
   const endDrag = () => {
     const d = drag.current;
     if (!d) return;
     drag.current = null;
     cancelAnimationFrame(d.frame);
     paintWidth(d.w);
+    showLimit(false);
     document.documentElement.classList.remove("iris-resizing");
     splitterRef.current?.classList.remove("dragging");
     transition({ type: "resize", width: d.w });
@@ -316,7 +378,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     } catch {
       /* no capture (synthetic pointer): window-level moves still arrive while the button is held */
     }
-    drag.current = { pointer: e.pointerId, startX: e.clientX, startW: dockW, max: room, w: dockW, frame: 0 };
+    drag.current = { pointer: e.pointerId, startX: e.clientX, startW: dockW, max: room, w: dockW, frame: 0, atLimit: false };
     document.documentElement.classList.add("iris-resizing");
     e.currentTarget.classList.add("dragging");
   };
@@ -324,11 +386,14 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     const d = drag.current;
     if (!d || d.pointer !== e.pointerId) return;
     // The panel is on the right: dragging left widens it.
-    d.w = Math.round(Math.min(d.max, Math.max(DOCK_MIN_W, d.startW + d.startX - e.clientX)));
+    const want = Math.round(d.startW + d.startX - e.clientX);
+    d.w = Math.min(d.max, Math.max(DOCK_MIN_W, want));
+    d.atLimit = want <= DOCK_MIN_W || want >= d.max;
     if (!d.frame) {
       d.frame = requestAnimationFrame(() => {
         d.frame = 0;
         paintWidth(d.w);
+        showLimit(d.atLimit);
       });
     }
   };
@@ -342,7 +407,9 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
       : null;
     if (next === null) return;
     e.preventDefault();
-    transition({ type: "resize", width: Math.min(room, Math.max(DOCK_MIN_W, next)) });
+    const width = Math.min(room, Math.max(DOCK_MIN_W, next));
+    showLimit(width === DOCK_MIN_W || width === room);
+    transition({ type: "resize", width });
   };
 
   // ── Window controls, rendered in the Iris header ─────────────────────────
@@ -382,8 +449,10 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
 
   // The Iris content re-renders only when what it is given changes — never on a resize.
   const body = useMemo(
-    () => (initialized ? <Iris controls={controls} onLeave={onLeave} ask={pendingAsk} onAskHandled={onAskHandled} /> : null),
-    [initialized, controls, onLeave, pendingAsk, onAskHandled],
+    () => (initialized ? (
+      <Iris controls={controls} context={context} onBusyChange={setThinking} onLeave={onLeave} ask={pendingAsk} onAskHandled={onAskHandled} />
+    ) : null),
+    [initialized, controls, context, onLeave, pendingAsk, onAskHandled],
   );
 
   return (
@@ -396,6 +465,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
       aria-hidden={!open}
       tabIndex={-1}
       data-mode={state.mode}
+      data-thinking={thinking ? "" : undefined}
       style={{ ["--iris-w" as string]: `${dockW}px` }}
       onKeyDown={onPanelKeyDown}
     >
@@ -403,6 +473,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
         <div
           ref={splitterRef}
           className="iris-splitter"
+          data-flash={dockFlash ? "" : undefined}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize Iris"
@@ -418,6 +489,7 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
           onPointerCancel={endDrag}
           onLostPointerCapture={endDrag}
           onKeyDown={onSplitterKeyDown}
+          onBlur={() => showLimit(false)}
         />
       )}
       {body}
