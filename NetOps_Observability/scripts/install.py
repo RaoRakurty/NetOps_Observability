@@ -1114,9 +1114,10 @@ def generate_secrets() -> dict[str, str]:
         # userinfo use.
         "CORR_DEBUG_TOKEN":          generate_token(32),
         # SEC-010: per-service credentials for the vmauth metrics front
-        # (profile `vmauth`; src/config/vmauth.yml expands them via %{ENV}).
-        # URL-safe: every consumer embeds them in URL userinfo
-        # (VICTORIA_URL=https://svc-*:pw@vmauth:8427).
+        # (profile `vmauth`). Tracker 367: render_service_secrets() writes them
+        # into data/secrets (vmauth's auth.yml + one file per client); no URL
+        # carries them any more. Still URL-safe, which also keeps them safe in
+        # the YAML scalar and Vector config they are substituted into.
         "VMAUTH_API_PASSWORD":       generate_urlsafe_password(24),
         "VMAUTH_GNMIC_PASSWORD":     generate_urlsafe_password(24),
         "VMAUTH_VECTOR_PASSWORD":    generate_urlsafe_password(24),
@@ -2091,6 +2092,10 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     if failures:
         warn("FAILED to rotate: " + ", ".join(sorted(failures))
              + " — these keep their previous value in .env")
+    # The mounted credential files are derived from .env (tracker 367): they
+    # must describe the FINAL file — rotated values and rollbacks alike —
+    # before any consumer is recreated, or the rotation never reaches them.
+    render_service_secrets(root, _parse_env(env_path))
     return rotated, len(failures)
 
 
@@ -2509,6 +2514,312 @@ def ensure_data_dirs(root: Path) -> None:
             chown_tree(vuln, vuln_uid, vuln_gid, "data/vuln (operator-owned)")
 
     ok("data/ directories ready")
+
+
+# ---- service credential files (tracker 367 layer 1) -------------------------
+#
+# Service passwords used to reach their clients as URL userinfo or container
+# env (https://svc-api:<pw>@vmauth:8427, VMAUTH_*_PASSWORD on vmauth itself) —
+# readable with `docker inspect` and printed by anything that prints the URL.
+# They now reach every client as a READ-ONLY bind-mounted FILE:
+#
+#     data/secrets/<group>/<identity>/password   (one per client identity)
+#     data/secrets/vmauth/vmauth/auth.yml        (vmauth's rendered config)
+#
+# .env stays the single source of truth; this renders from it on every install,
+# upgrade (scripts/update.sh calls render_service_secrets too) and rotation.
+# The DIRECTORY is what is mounted, so the atomic rename below shows up inside
+# the running container as a new inode: the Go clients (internal/credfile)
+# pick a rotated password up within a second and vmauth within its
+# -configCheckInterval, with no recreate.
+#
+# Ownership: each file is 0400 and owned by the uid its container RUNS as —
+# the api/grafana are user-mapped to CORRELIX_UID; the prober runs as root
+# with cap_drop:ALL (no CAP_DAC_OVERRIDE, so root must OWN the file); vector,
+# gnmic and vmauth run as root; opensearch-init is curlimages/curl's curl_user
+# (100:101, verified on the pinned 8.10.1 image). The identity directories stay
+# installer-owned at 0711 (traversable, not listable) so the installer can
+# always replace a file it does not own; data/secrets itself is 0700.
+
+SECRETS_SUBDIR = "secrets"
+SECRET_FILE_NAME = "password"
+SECRET_MAX_BYTES = 1024           # matches internal/credfile.MaxSecretBytes
+VMAUTH_TEMPLATE_REL = Path("src") / "config" / "vmauth.yml"
+VMAUTH_RENDERED_REL = Path("vmauth") / "vmauth" / "auth.yml"
+_CURL_IMAGE_OWNER = (100, 101)    # curlimages/curl:8.10.1 `curl_user:curl_group`
+
+
+class ServiceSecret(NamedTuple):
+    rel: str        # identity dir under data/secrets
+    env_key: str    # the .env key it is rendered from
+    owner: str      # "api" | "grafana" | "root" | "curl" — see _secret_owner
+    vmauth: bool    # also substituted into vmauth's auth.yml / Vector config
+
+
+SERVICE_SECRETS: tuple[ServiceSecret, ...] = (
+    ServiceSecret("vmauth/api",           "VMAUTH_API_PASSWORD",     "api",     True),
+    ServiceSecret("vmauth/prober",        "VMAUTH_PROBER_PASSWORD",  "root",    True),
+    ServiceSecret("vmauth/grafana",       "VMAUTH_GRAFANA_PASSWORD", "grafana", True),
+    ServiceSecret("vmauth/vector",        "VMAUTH_VECTOR_PASSWORD",  "root",    True),
+    ServiceSecret("vmauth/gnmic",         "VMAUTH_GNMIC_PASSWORD",   "root",    True),
+    ServiceSecret("opensearch/api",       "OS_API_PASSWORD",         "api",     False),
+    ServiceSecret("opensearch/bootstrap", "OS_BOOTSTRAP_PASSWORD",   "curl",    False),
+)
+
+# Every key vmauth.yml may reference. vmalert keeps its compose `secrets:`
+# file (passwordFile flags) on the client side; vmauth still needs its value.
+VMAUTH_TEMPLATE_KEYS = frozenset({
+    "VMAUTH_API_PASSWORD", "VMAUTH_GNMIC_PASSWORD", "VMAUTH_VECTOR_PASSWORD",
+    "VMAUTH_VMALERT_PASSWORD", "VMAUTH_GRAFANA_PASSWORD", "VMAUTH_PROBER_PASSWORD",
+})
+
+# Characters a vmauth credential must not contain: it is substituted into a
+# YAML double-quoted scalar (" and \ would end or escape it), vmauth expands
+# percent-brace tokens anywhere in its config (%), and Vector interpolates the
+# secret into raw config text before parsing (same quoting hazard).
+_VMAUTH_UNSAFE = frozenset('"\\%')
+
+# `scheme://<userinfo>@` at the start of a value.
+_URL_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#@\s]*@")
+# *_URL keys whose userinfo is a KNOWN, separately-tracked case: named once as
+# deferred instead of warned on every run.
+_URL_USERINFO_DEFERRED = {
+    "DATABASE_URL": "libpq DSN for the app-state store; its move to a file is a separate follow-up",
+}
+
+
+def url_credential_keys(env: Mapping[str, str]) -> list[str]:
+    """The .env *_URL keys whose value carries URL userinfo (names only)."""
+    return sorted(k for k, v in env.items()
+                  if k.endswith("_URL") and _URL_USERINFO.match((v or "").strip()))
+
+
+def warn_url_credentials(env: Mapping[str, str]) -> list[str]:
+    """Warn — by KEY NAME only, never the value — about credentials in URLs."""
+    keys = url_credential_keys(env)
+    for k in keys:
+        if k in _URL_USERINFO_DEFERRED:
+            info(f"{k} carries a credential in its URL userinfo — known and "
+                 f"deferred ({_URL_USERINFO_DEFERRED[k]})")
+        else:
+            warn(f"{k} in .env carries a credential in its URL userinfo (value "
+                 f"not shown). Move it to the file-backed form "
+                 f"(*_AUTH_USER + *_AUTH_PASSWORD_FILE) — userinfo is honoured "
+                 f"for one release, then refused (tracker 367)")
+    return keys
+
+
+def _compose_user(env: Mapping[str, str], default: int) -> tuple[int, int]:
+    """CORRELIX_UID:CORRELIX_GID as compose resolves `${CORRELIX_UID:-default}`."""
+    try:
+        uid = int(env.get("CORRELIX_UID") or default)
+        gid = int(env.get("CORRELIX_GID") or default)
+    except ValueError:
+        fail("CORRELIX_UID / CORRELIX_GID in .env are not integers — cannot "
+             "decide who may read the service credential files")
+    return uid, gid
+
+
+def _secret_owner(kind: str, env: Mapping[str, str]) -> tuple[int, int]:
+    if kind == "api":
+        return _compose_user(env, 65532)      # api: user ${CORRELIX_UID:-65532}
+    if kind == "grafana":
+        return _compose_user(env, 472)        # grafana: user ${CORRELIX_UID:-472}
+    if kind == "root":
+        return 0, 0
+    if kind == "curl":
+        return _CURL_IMAGE_OWNER
+    raise ValueError(f"unknown secret owner kind {kind!r}")
+
+
+def _validate_secret(key: str, value: str | None, *, vmauth: bool) -> str:
+    """Refuse a value no consumer could use. Messages name the key only."""
+    if not value:
+        fail(f"{key} is missing or empty in .env — cannot render its credential "
+             f"file. Re-run python3 scripts/install.py (its migration seeds it).")
+    if len(value.encode("utf-8")) > SECRET_MAX_BYTES:
+        fail(f"{key} is longer than {SECRET_MAX_BYTES} bytes — refused")
+    if any(c < " " or c > "~" for c in value):
+        fail(f"{key} contains a character outside printable ASCII — refused "
+             f"(regenerate it: python3 scripts/install.py --rotate-app-secrets)")
+    if vmauth and _VMAUTH_UNSAFE.intersection(value):
+        fail(f"{key} contains a \", \\ or % character, which vmauth's auth.yml "
+             f"and Vector's config cannot carry safely — regenerate it: "
+             f"python3 scripts/install.py --rotate-app-secrets")
+    return value
+
+
+def render_vmauth_config(template: str, env: Mapping[str, str]) -> str:
+    """Substitute vmauth.yml's quoted percent-brace tokens from .env.
+
+    The tracked template keeps its tokens (the helm chart still lets vmauth
+    expand them from env); compose gets this rendered copy. Every value is
+    validated vmauth-safe first, so json.dumps yields exactly '"value"'."""
+    def sub(m: re.Match) -> str:
+        key = m.group(1)
+        if key not in VMAUTH_TEMPLATE_KEYS:
+            fail(f"src/config/vmauth.yml references {key}, which is not a "
+                 f"known vmauth credential — add it to VMAUTH_TEMPLATE_KEYS "
+                 f"and generate_secrets() first")
+        return json.dumps(_validate_secret(key, env.get(key), vmauth=True))
+    out = re.sub(r'"%\{([A-Za-z0-9_]+)\}"', sub, template)
+    if "%{" in out:
+        fail("src/config/vmauth.yml holds a percent-brace token that is not a "
+             "quoted credential value — refusing to render a config vmauth "
+             "would expand from its (now empty) environment")
+    return ("# RENDERED by scripts/install.py from src/config/vmauth.yml on every\n"
+            "# install, upgrade and rotation. Holds every vmauth credential; do not\n"
+            "# edit (it is overwritten) and never copy it out of data/secrets.\n"
+            + out)
+
+
+def _write_secret_temp(target: Path, text: str) -> Path:
+    """Write `text` to a fresh owner-only temp file beside `target` (O_EXCL,
+    every byte, fsync, mode 0400) and return its path. Never replaces."""
+    data = memoryview(text.encode("utf-8"))
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        while data:
+            n = _raw_write(fd, data)
+            if n <= 0:
+                raise OSError(errno.EIO, f"short write to {tmp.name}")
+            data = data[n:]
+        os.fchmod(fd, 0o400)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass  # never created past O_EXCL — nothing to clean
+        raise
+    os.close(fd)
+    return tmp
+
+
+def _docker_chown_paths(base: Path, rels: list[str], uid: int, gid: int) -> tuple[bool, str]:
+    """Chown the named files (NOT recursively) under `base` through the root
+    helper container — the non-root install path, same image and bounds as
+    _docker_chown. Paths are installer-built, passed as argv (no shell)."""
+    cmd = ["docker", "run", "--rm", "--network", "none",
+           "--entrypoint", "/bin/chown",
+           "-v", f"{base}:/target",
+           _chown_helper_ref(),
+           "-h", f"{uid}:{gid}", *[f"/target/{r}" for r in rels]]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if res.returncode != 0:
+        return False, (res.stderr or res.stdout or "").strip() or f"exit {res.returncode}"
+    return True, ""
+
+
+def _chown_secret_paths(base: Path, rels: list[str], uid: int, gid: int) -> None:
+    """Direct chown when we can (root installs), else the helper container;
+    fail (§16.1) when both cannot."""
+    pending: list[str] = []
+    for r in rels:
+        try:
+            os.chown(base / r, uid, gid, follow_symlinks=False)
+        except PermissionError:
+            pending.append(r)
+    if not pending:
+        return
+    done, err = _docker_chown_paths(base, pending, uid, gid)
+    if not done:
+        fail(f"cannot hand {len(pending)} credential file(s) under {base} to "
+             f"{uid}:{gid} — the container that reads them would refuse to "
+             f"start or fail every authenticated call.\n"
+             f"  direct chown: permission denied (not root)\n"
+             f"  helper container: {err}\n"
+             f"  Fix and re-run (idempotent):  sudo python3 scripts/install.py")
+
+
+def _ensure_secret_dirs(base: Path, leaf_dirs: list[Path]) -> None:
+    """data/secrets (0700) → group dirs (0700) → identity dirs (0711), all
+    installer-owned. A tree Docker created as root (a compose up that raced
+    the first render) is repaired to the installer first."""
+    me = (os.geteuid(), os.getegid())
+    if base.exists():
+        foreign = [d for d in [base, *base.rglob("*")]
+                   if d.is_dir() and not d.is_symlink()
+                   and (d.stat().st_uid, d.stat().st_gid) != me]
+        if foreign:
+            chown_tree(base, me[0], me[1], "data/secrets")
+    try:
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        base.chmod(0o700)
+        for leaf in leaf_dirs:
+            leaf.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            leaf.parent.chmod(0o700)
+            leaf.mkdir(mode=0o711, exist_ok=True)
+            leaf.chmod(0o711)
+    except OSError as exc:
+        fail(f"cannot prepare {base}: {exc}\n"
+             f"  Fix ownership and re-run:  sudo chown -R {me[0]}:{me[1]} {base}")
+
+
+def render_service_secrets(root: Path, env: Mapping[str, str] | None = None, *,
+                           chown_paths=None) -> list[Path]:
+    """Render every service credential file and vmauth's auth.yml from .env.
+
+    Atomic per file (temp + fsync + rename), idempotent (a re-run converges to
+    the same content, owner and mode), never prints a value. All files are
+    staged and chowned BEFORE any is renamed into place, so a failure leaves
+    the previous set intact and no temp file behind. Returns the paths
+    rendered (for tests and the caller's report)."""
+    if chown_paths is None:
+        chown_paths = _chown_secret_paths   # resolved per call: tests patch it
+    if env is None:
+        env = _parse_env(root / "deployment" / "docker" / ".env")
+    warn_url_credentials(env)
+
+    template_path = root / VMAUTH_TEMPLATE_REL
+    try:
+        template = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read the vmauth template {template_path}: {exc}")
+
+    base = root / "data" / SECRETS_SUBDIR
+    plan: list[tuple[Path, str, tuple[int, int]]] = []
+    for s in SERVICE_SECRETS:
+        value = _validate_secret(s.env_key, env.get(s.env_key), vmauth=s.vmauth)
+        plan.append((base / s.rel / SECRET_FILE_NAME, value, _secret_owner(s.owner, env)))
+    plan.append((base / VMAUTH_RENDERED_REL, render_vmauth_config(template, env), (0, 0)))
+
+    _ensure_secret_dirs(base, sorted({p.parent for p, _, _ in plan}))
+
+    staged: list[tuple[Path, Path]] = []
+    try:
+        by_owner: dict[tuple[int, int], list[str]] = {}
+        for target, text, owner in plan:
+            tmp = _write_secret_temp(target, text)
+            staged.append((tmp, target))
+            if owner != (os.geteuid(), os.getegid()):
+                by_owner.setdefault(owner, []).append(str(tmp.relative_to(base)))
+        for (uid, gid), rels in sorted(by_owner.items()):
+            chown_paths(base, rels, uid, gid)
+        for tmp, target in staged:
+            os.replace(tmp, target)
+        for d in sorted({t.parent for _, t in staged}):
+            dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+    finally:
+        for tmp, _ in staged:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass  # the normal case: replace() already moved it into place
+    ok(f"service credential files rendered under data/{SECRETS_SUBDIR} "
+       f"({len(plan)} files, mode 0400, values not shown)")
+    return [t for t, _, _ in plan]
 
 
 # ---- compose ----------------------------------------------------------------
@@ -5145,6 +5456,11 @@ def main() -> None:
 
     step("preparing data directories", stage="data-dirs")
     ensure_data_dirs(root)
+    # Tracker 367 layer 1: every client reads its service credential from a
+    # mounted file, so the files must exist (and match .env) before anything
+    # starts — on a fresh install, a re-run, and the --no-start path alike.
+    # Part of the data-dirs stage (the GUI stage contract is unchanged).
+    render_service_secrets(root, _parse_env(env_path))
 
     if args.no_start:
         if tls_enabled:

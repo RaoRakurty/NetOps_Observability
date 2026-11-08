@@ -72,6 +72,7 @@ EOF
 [[ $NO_BACKUP -eq 0 ]] && echo "  1) Snapshot data/ + .env  →  $BACKUP_DIR/"
 echo "  2) Validate the new scaffold (scripts/install.py validator)"
 echo "  3) Reconcile $ENV_FILE with any new variables introduced upstream"
+echo "     then render the service credential files under data/secrets from it"
 [[ $NO_BUILD -eq 0 ]]  && echo "  4) docker compose pull   (refresh pinned images)"
 [[ $NO_BUILD -eq 0 ]]  && echo "  5) docker compose build  (rebuild api / frontend / correlation)"
 echo "  6) docker compose up -d --remove-orphans   (recreate containers)"
@@ -303,6 +304,24 @@ print(f"  added {len(missing)} new variable(s):")
 for k, v in missing:
     redacted = v if "PASSWORD" not in k and "TOKEN" not in k and "KEY" not in k else f"<{len(v)} chars>"
     print(f"    {k}={redacted}")
+PY
+
+# ---- 2b: render the service credential files ---------------------------------
+#
+# Tracker 367 layer 1: every client reads its service password from a mounted
+# file under data/secrets, rendered from .env. It MUST run before `compose up`
+# (a container started without its file refuses to start or fails every
+# authenticated call) and after the reconcile (it needs the complete .env).
+# The SAME renderer install.py uses — one definition of names, owners and
+# modes. A failure aborts the upgrade (set -e): the containers are untouched.
+
+step "rendering service credential files"
+python3 - <<'PY'
+import importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("install", "scripts/install.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.render_service_secrets(pathlib.Path(".").resolve())
 PY
 
 # ---- 3: backup --------------------------------------------------------------

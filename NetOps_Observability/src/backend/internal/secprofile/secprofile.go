@@ -171,6 +171,26 @@ func plaintextURL(v string) bool {
 	return v != "" && strings.HasPrefix(v, "http://")
 }
 
+// credentialURLVars are the backend URL variables CRED-001 inspects — the
+// ones whose client reads a file-backed credential instead.
+var credentialURLVars = []string{"VICTORIA_URL", "METRICS_URL", "OPENSEARCH_URL"}
+
+// urlCarriesUserinfo reports whether a URL value holds userinfo
+// (scheme://user[:pass]@host). Textual on purpose: a malformed URL that still
+// carries a credential must be flagged, not skipped because it fails to parse.
+func urlCarriesUserinfo(v string) bool {
+	v = strings.TrimSpace(v)
+	i := strings.Index(v, "://")
+	if i < 0 {
+		return false
+	}
+	authority := v[i+3:]
+	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+		authority = authority[:j]
+	}
+	return strings.Contains(authority, "@")
+}
+
 // rules is the production fail-closed rule set (ADR-SEC-008 V1–V16). Each rule
 // is independent and names its own remedy.
 var rules = []rule{
@@ -264,6 +284,33 @@ var rules = []rule{
 			Source: "JWT_SECRET", Observed: "unset (dev fallback would be used)",
 			Required: "a generated secret", Remedy: "install.py generates it; set JWT_SECRET",
 			Severity: Fatal,
+		}, true
+	},
+	// ── Credentials out of URLs (tracker 367 layer 1) ──────────────────────────
+	func(env Env, fx func(string) bool) (Finding, bool) {
+		// A password in URL userinfo is printed by everything that prints the
+		// URL — `docker inspect`, error strings, push-failure logs (734 lines
+		// on the lab). The file-backed *_AUTH_PASSWORD_FILE form replaces it.
+		// WARN for one release while deployments migrate, then FATAL (owner
+		// decision 2026-11-07). Only variable NAMES are reported — never the
+		// value. DATABASE_URL is a libpq DSN and is deliberately out of scope
+		// here (its own follow-up).
+		var carrying []string
+		for _, v := range credentialURLVars {
+			if urlCarriesUserinfo(env(v)) {
+				carrying = append(carrying, v)
+			}
+		}
+		if len(carrying) == 0 {
+			return Finding{}, false
+		}
+		return Finding{
+			Rule: "CRED-001", Control: "service credentials are not carried in URLs", Component: "api",
+			Source:   strings.Join(carrying, " / "),
+			Observed: "credential in URL userinfo (value not shown)",
+			Required: "credential-free URL + VICTORIA_AUTH_USER/VICTORIA_AUTH_PASSWORD_FILE or OPENSEARCH_AUTH_USER/OPENSEARCH_AUTH_PASSWORD_FILE",
+			Remedy:   "re-run scripts/install.py (renders data/secrets/*) and use the shipped compose.tls.yml; becomes FATAL in the next release",
+			Severity: Warn,
 		}, true
 	},
 	// ── Datastore transport ───────────────────────────────────────────────────

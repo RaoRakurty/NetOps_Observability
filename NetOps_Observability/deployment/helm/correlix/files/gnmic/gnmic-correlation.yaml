@@ -219,6 +219,15 @@ outputs:
   victoria:
     type: prometheus_write
     url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
+    # Tracker 367 layer 1: the credential travels HERE, never in the URL.
+    # GNMIC_VMAUTH_PASSWORD exists only in gnmic's process env, loaded from a
+    # mounted file by cx-secret-env.sh (compose.tls.yml); gnmic prints it as
+    # "***". Unset on the plaintext baseline / helm: gnmic 0.46.0 expands it
+    # to "" (verified 2026-11-07) and a VictoriaMetrics without -httpAuth
+    # ignores the header, so those deployments behave exactly as before.
+    authentication:
+      username: svc-gnmic
+      password: ${GNMIC_VMAUTH_PASSWORD}
     metric-prefix: gnmi
     interval: 15s
 
@@ -258,6 +267,9 @@ outputs:
   victoria-canonical:
     type: prometheus_write
     url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
+    authentication:  # tracker 367 layer 1 — see the raw lane above
+      username: svc-gnmic
+      password: ${GNMIC_VMAUTH_PASSWORD}
     interval: 15s
     event-processors:
       - canon-override-ts

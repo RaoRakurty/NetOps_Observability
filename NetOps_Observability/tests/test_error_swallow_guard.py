@@ -145,6 +145,8 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("install.py", "_is_debian_family", "1cdb4321"): "docker-availability probe; returns False, caller reports/blocks",
     ("install.py", "ComposeRunner._run", "2e69c490"): "sandboxed exec shim; returns ExecResult(126, stderr=exc) — error propagated",
     ("install.py", "_docker_chown", "f2c7a328"): "chown_tree direct-attempt probe; returns (False, err) to the fallback chain",
+    ("install.py", "_docker_chown_paths", "f2c7a328"): "tracker 367: the same helper-container probe for single credential files; returns (False, err) and _chown_secret_paths fail()s on it",
+    ("install.py", "_chown_secret_paths", "8c859c3e"): "tracker 367: direct chown is EXPECTED to be denied for a non-root installer; the path is collected and handed to the helper container, whose failure fail()s",
     ("install.py", "chown_tree", "a3b625dd"): "chown_tree child walk; failures collected in `failed`, caller escalates",
     ("install.py", "chown_tree", "e11fa36c"): "chown_tree direct attempt; err captured, docker fallback runs, both-fail => fail()",
     ("vrl-harness.py", "available", "ef7cf66a"): "vector-binary availability probe; returns False => harness skips loudly",

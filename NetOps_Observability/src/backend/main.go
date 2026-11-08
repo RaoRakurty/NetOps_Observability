@@ -836,6 +836,13 @@ func newServer() *server {
 	if err := initBackendTransport(); err != nil {
 		log.Fatalf("backend TLS: %v", err)
 	}
+	// Tracker 367 layer 1: file-backed, origin-scoped backend credentials
+	// (VICTORIA_AUTH_* / OPENSEARCH_AUTH_*). Fail closed on a half or
+	// ambiguous configuration; a not-yet-loadable file only refuses the
+	// requests that need it (see initBackendCredentials).
+	if err := initBackendCredentials(); err != nil {
+		log.Fatalf("backend credentials: %v", err)
+	}
 	// The collectors' mesh egress (ClickHouse inserts, VictoriaMetrics pushes
 	// and queries, the Vector ingest lanes) rides the same hardened client.
 	// The factory defers to the transport at call time, so the post-CA
@@ -3196,6 +3203,11 @@ func runProber() {
 	if err := initBackendTransport(); err != nil {
 		log.Fatalf("prober backend TLS: %v", err)
 	}
+	// The prober's collector-sample pushes authenticate to vmauth as
+	// svc-prober from a mounted file (tracker 367 layer 1).
+	if err := initBackendCredentials(); err != nil {
+		log.Fatalf("prober backend credentials: %v", err)
+	}
 	collectors.SetMeshHTTPClient(backendHTTPClient)
 
 	pool := collectors.NewPool(nil)
@@ -4720,6 +4732,10 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_alerts_active Currently active alerts.\n")
 	fmt.Fprintf(w, "# TYPE netops_alerts_active gauge\n")
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
+
+	// Tracker 367 layer 1: legacy URL-userinfo credentials still in use, and
+	// whether each file-backed backend credential holds a value.
+	writeBackendCredentialMetrics(w)
 
 	// Registry storage posture (tracker 245). A registry whose storage cannot
 	// serve is invisible from the outside — the API answers honestly, but only

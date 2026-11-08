@@ -193,3 +193,61 @@ func TestBackupEncryptionIsVisibleButNotFatal(t *testing.T) {
 		t.Fatal("backup encryption must produce a visible finding when unverified — silence would imply coverage we do not have")
 	}
 }
+
+// CRED-001 (tracker 367 layer 1): a credential in URL userinfo is a WARN for
+// one release — visible in every profile, never blocking yet — and the finding
+// names the variables, never the value.
+func TestCredentialInURLIsWarnedByNameOnly(t *testing.T) {
+	const secret = "URL-SECRET-42"
+	find := func(rep Report) *Finding {
+		for i := range rep.Findings {
+			if rep.Findings[i].Rule == "CRED-001" {
+				return &rep.Findings[i]
+			}
+		}
+		return nil
+	}
+
+	if f := find(Evaluate(Production, envOf(secureEnv()), noFiles)); f != nil {
+		t.Fatalf("credential-free URLs produced CRED-001: %s", f)
+	}
+
+	e := secureEnv()
+	e["VICTORIA_URL"] = "https://svc-api:" + secret + "@vmauth:8427"
+	e["METRICS_URL"] = "https://vmauth:8427"
+	e["OPENSEARCH_URL"] = "https://svc_api:" + secret + "%zz@opensearch:9200" // malformed, still flagged
+	rep := Evaluate(Production, envOf(e), noFiles)
+	f := find(rep)
+	if f == nil {
+		t.Fatal("userinfo credentials produced no CRED-001 finding")
+	}
+	if f.Severity != Warn {
+		t.Fatalf("CRED-001 must WARN this release (owner decision), got %s", f.Severity)
+	}
+	if rep.Blocking() {
+		t.Fatalf("CRED-001 must not block a production boot yet:\n%s", rep.Error())
+	}
+	if !strings.Contains(f.Source, "VICTORIA_URL") || !strings.Contains(f.Source, "OPENSEARCH_URL") || strings.Contains(f.Source, "METRICS_URL") {
+		t.Fatalf("Source = %q — must name exactly the carrying variables", f.Source)
+	}
+	if strings.Contains(f.String(), secret) {
+		t.Fatalf("the finding leaks the secret: %s", f)
+	}
+}
+
+func TestURLCarriesUserinfo(t *testing.T) {
+	cases := map[string]bool{
+		"":                             false,
+		"https://vmauth:8427":          false,
+		"https://u:p@vmauth:8427":      true,
+		"https://token@vmauth:8427/x":  true,
+		"https://vmauth:8427/a@b":      false,
+		"https://vmauth:8427?next=a@b": false,
+		"not a url":                    false,
+	}
+	for in, want := range cases {
+		if got := urlCarriesUserinfo(in); got != want {
+			t.Fatalf("urlCarriesUserinfo(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/backendauth"
 	"netops/backend/internalca"
 )
 
@@ -44,16 +45,20 @@ func TestBackendTransportDormant(t *testing.T) {
 	if backendTr != nil {
 		t.Fatal("dormant must leave backendTr nil")
 	}
-	// SEC-010 made the userinfo seam unconditional: dormant means the
-	// DEFAULT transport underneath authURLTransport, not a nil Transport
-	// (this assertion previously predated the seam and checked for nil).
+	// The credential seam is unconditional (SEC-010, tracker 367): dormant
+	// means the DEFAULT transport underneath backendauth.Transport, not a nil
+	// Transport (this assertion previously predated the seam and checked for
+	// nil).
 	c := backendHTTPClient(time.Second)
-	at, ok := c.Transport.(authURLTransport)
+	ct, ok := c.Transport.(backendauth.Transport)
 	if !ok {
-		t.Fatalf("dormant client transport is %T, want authURLTransport", c.Transport)
+		t.Fatalf("dormant client transport is %T, want backendauth.Transport", c.Transport)
 	}
-	if at.base != http.DefaultTransport {
-		t.Fatal("dormant client must ride the default transport under the auth seam")
+	if ct.Base != http.DefaultTransport {
+		t.Fatal("dormant client must ride the default transport under the credential seam")
+	}
+	if c.CheckRedirect == nil {
+		t.Fatal("the backend client must carry the origin-scoped redirect policy")
 	}
 }
 
