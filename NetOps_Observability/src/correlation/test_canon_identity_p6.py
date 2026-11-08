@@ -398,8 +398,21 @@ def test_resolver_collision_drops_the_key_never_picks() -> None:
     # the same key on two DIFFERENT devices is no collision
     two = EntityResolver.from_rows([], [], [
         {"device": "a", "ifindex": "1", "ifname": "Ethernet1"},
-        {"device": "b", "ifindex": "1", "ifname": "Et1"}])
+        {"device": "b", "ifindex": "1", "ifname": "Et1"}], tenant="t")
     assert two.iface_key_status("a", "et1") == two.iface_key_status("b", "et1") == "ok"
+
+
+def test_legacy_unscoped_builds_skip_the_interface_key_index() -> None:
+    """The legacy loader's resolver builds sit on today's hot path; the P6
+    interface-key index is built only for the tenant-only identity resolver, so
+    an unscoped build pays nothing for structures nothing reads yet."""
+    rows = [{"device": "a", "ifindex": "1", "ifname": "Ethernet1"}]
+    legacy = EntityResolver.from_rows([], [], rows)
+    assert legacy.tenant is None
+    assert legacy.iface_key_to_name == {} and legacy.ifnames_by_device == {}
+    assert legacy.ifindex_to_name == {("a", "1"): "Ethernet1"}     # legacy index unchanged
+    scoped = EntityResolver.from_rows([], [], rows, tenant="t")
+    assert scoped.iface_key_status("a", "et1") == "ok"
 
 
 def test_resolver_ifname_set_per_device() -> None:

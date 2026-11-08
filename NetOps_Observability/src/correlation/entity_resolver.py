@@ -213,6 +213,13 @@ class EntityResolver:
         passes a tenant's rows ∪ global; identity_resolver_for passes the tenant's
         own). Pure; conflicting mappings drop to unresolvable. `tenant` records the
         scope (None = legacy/unscoped)."""
+        # The per-device interface-key index (a canon_iface_key regex per port
+        # name, plus the per-device ifName sets) is built ONLY for the tenant-only
+        # identity resolver (`tenant` set by identity_resolver_for): the legacy
+        # loader's builds sit on today's hot path and nothing reads that index
+        # until P6 PR-E wires it. The cheap name/address ambiguity tracking is
+        # kept everywhere so resolve_device answers the same on any resolver.
+        p6 = tenant is not None
         ip_dev_pairs: list[tuple] = []
         name_pairs: list[tuple] = []
         canon_ip_pairs: list[tuple] = []
@@ -235,14 +242,14 @@ class EntityResolver:
                 canon_ip_pairs.append((canonical_peer(ip), dev))
                 if name:
                     iface_pairs.append((ip, f"{dev}:{name}"))
-            if dev and isinstance(name, str) and name:
+            if p6 and dev and isinstance(name, str) and name:
                 port_names.append((dev, name))
         ifidx_pairs: list[tuple] = []
         for r in ifindex:
             dev, idx, name = r.get("device") or "", r.get("ifindex"), r.get("ifname") or ""
             if dev and idx not in (None, "") and name:
                 ifidx_pairs.append(((dev, str(idx)), name))
-                if isinstance(name, str):
+                if p6 and isinstance(name, str):
                     port_names.append((dev, name))
         names_by_dev: dict[str, set[str]] = {}
         key_pairs: list[tuple] = []
