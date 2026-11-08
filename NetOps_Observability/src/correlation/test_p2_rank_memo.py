@@ -341,8 +341,10 @@ def test_T1d_the_witness_projection_is_exactly_Witness_equality():
     # `origin` (E1) is projected only under CORR_ORIGIN_OBSERVER; with the flag
     # off witness_of leaves it "" on every Witness, so it cannot split two
     # equal projections. The implication is checked in BOTH states below.
+    # `series_authorities` (P6 PR-C2) follows the same rule under
+    # CORR_SERIES_ADMISSION.
     covered = {"observer_id", "modality", "authority", "probe_authority",
-               "probe_scope", "support_only", "fate", "origin"}
+               "probe_scope", "support_only", "fate", "origin", "series_authorities"}
     assert {f.name for f in dc_fields(Witness)} == covered, \
         "Witness gained a field — extend _witness_projection"
     assert {f.name for f in dc_fields(ProbeFate)} == {
@@ -351,15 +353,27 @@ def test_T1d_the_witness_projection_is_exactly_Witness_equality():
     # ...and the implication itself, over the random corpus — with the E1 flag
     # off and on (on, every signal also carries an origin, so the projection's
     # appended field is exercised).
-    from signals import ORIGIN_DEVICE_ATTR, set_origin_observer
-    for flag in (False, True):
+    from signals import (
+        ORIGIN_DEVICE_ATTR,
+        SERIES_SOURCES_ATTR,
+        series_admission_enabled,
+        set_origin_observer,
+        set_series_admission,
+    )
+    source_sets = (["snmp_poll"], ["snmp_poll", "via_controller"], ["gnmi_subscribe", "snmp_poll"],
+                   ["direct", "via_cloud_api", "via_controller"])
+    prev_admission = series_admission_enabled()
+    for flag, admission in ((False, False), (True, False), (False, True), (True, True)):
         set_origin_observer(flag)
+        set_series_admission(admission)
         try:
             seen: dict[tuple, Witness] = {}
             for s in range(200):
                 for i, x in enumerate(random_evidence(random.Random(9000 + s))):
                     if flag:
                         x = dc_replace(x, attrs={**x.attrs, ORIGIN_DEVICE_ATTR: f"dev{(s + i) % 3}"})
+                    if admission:
+                        x = dc_replace(x, attrs={**x.attrs, SERIES_SOURCES_ATTR: source_sets[(s + i) % 4]})
                     proj = signal_projection(x)[-1]
                     w = witness_of(x)
                     if proj in seen:
@@ -368,6 +382,7 @@ def test_T1d_the_witness_projection_is_exactly_Witness_equality():
             assert len(seen) > 20, "the corpus never varied the witness"
         finally:
             set_origin_observer(False)
+            set_series_admission(prev_admission)
 
 
 # ═══ T2 — SOUNDNESS: every key field must move the key ═══════════════════════

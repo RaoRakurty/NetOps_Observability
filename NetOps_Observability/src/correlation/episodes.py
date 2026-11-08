@@ -27,6 +27,7 @@ first, calibrated at P4 (replay-driven calibration), never silently tuned.
 
 from __future__ import annotations
 
+import sys
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -69,6 +70,13 @@ CLOCK_BUDGET_S = {
 # the same events (the aggregates are a pure function of the pushed values).
 STATS_RECOMPUTE_EVERY = 1024
 
+# P6 PR-C2 series admission (signals.CORR_SERIES_ADMISSION; detector side). A
+# collection path is wire text: bounded before it is kept per series, and at
+# most this many distinct sources are recorded for one run/open period (the
+# known paths are snmp_poll, gnmi_subscribe, via_controller, via_cloud_api).
+MAX_SOURCE_LEN = 64
+MAX_RUN_SOURCES = 8
+
 
 @dataclass(frozen=True)
 class EpisodeEvent:
@@ -85,6 +93,10 @@ class EpisodeEvent:
     peak_deviation: float      # max |z| so far / overall
     integral: float            # Σ|z|·dt (σ·seconds) — magnitude × duration
     clear_ts: datetime | None = None
+    # P6 PR-C2: the collection paths whose ADMITTED samples fed this episode —
+    # the CUSUM run that opened it (onset) or the run + open period (clear).
+    # Empty unless series admission is on (the caller passed `source=`).
+    sources: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -121,6 +133,12 @@ class _SeriesState:
     _sumsq: float = 0.0
     _shift: float = 0.0
     _pushes: int = 0
+    # P6 PR-C2 series admission — touched ONLY when the caller passes a source,
+    # so with the flag off these keep their defaults and nothing moves. They
+    # live here so the MAX_SERIES LRU bounds them with the series itself.
+    adm_bucket: int = -1            # latest admitted sampling bucket index
+    adm_source: str = ""            # the source that owns adm_bucket
+    run_sources: tuple[str, ...] = ()  # sorted sources of the current run/open period
 
     def _recompute(self) -> None:
         """Exact O(window) rebuild of the aggregates — the float-drift guard."""
@@ -182,6 +200,9 @@ class EpisodeDetector:
         self._max_series = max_series if max_series is not None else MAX_SERIES
         self._state: OrderedDict[tuple[str, str, str], _SeriesState] = OrderedDict()
         self.evicted = 0
+        # P6 PR-C2: samples refused because a DIFFERENT source already filled
+        # that (series, bucket) — /healthz ingest.series_cross_source_dropped.
+        self.cross_source_dropped = 0
 
     def _evict_if_needed(self) -> None:
         while len(self._state) > self._max_series:
@@ -201,8 +222,21 @@ class EpisodeDetector:
         ts: datetime,
         value: float,
         clock_quality: str = "unknown",
+        *,
+        source: str | None = None,
+        bucket_s: float = DEFAULT_INTERVAL_S,
     ) -> EpisodeEvent | None:
-        """Feed one sample; returns an EpisodeEvent on onset/clear, else None."""
+        """Feed one sample; returns an EpisodeEvent on onset/clear, else None.
+
+        `source` (P6 PR-C2 series admission; None = off, the exact legacy
+        path): the sample's collection path. ONE sample per (series, bucket of
+        `bucket_s` seconds) is admitted across DIFFERENT sources — the first
+        arrival owns the bucket and a later sample from another source for that
+        bucket, or for any earlier one, is refused and counted
+        (`cross_source_dropped`). A source's own samples are always admitted,
+        so its jitter is never mistaken for a duplicate. A refused sample
+        touches nothing but the LRU order: not the baseline, not the interval
+        estimate, not the CUSUM."""
         key = (tenant_id, entity_id, metric)
         st = self._state.get(key)
         if st is None:
@@ -211,6 +245,18 @@ class EpisodeDetector:
             self._evict_if_needed()
         else:
             self._state.move_to_end(key)          # LRU touch
+        src: str | None = None
+        if source is not None:
+            if not bucket_s > 0.0:
+                raise ValueError(f"bucket_s must be positive, got {bucket_s!r}")
+            src = sys.intern(str(source)[:MAX_SOURCE_LEN])
+            bucket = int(ts.timestamp() // bucket_s)
+            if st.adm_source and src != st.adm_source and bucket <= st.adm_bucket:
+                self.cross_source_dropped += 1
+                return None
+            if bucket >= st.adm_bucket:
+                st.adm_bucket = bucket
+                st.adm_source = src
         st.clock_quality = clock_quality
 
         # Sampling-interval EWMA (event-time): the uncertainty budget's first term.
@@ -234,19 +280,34 @@ class EpisodeDetector:
         z = (value - mean) / std
 
         if st.open:
-            return self._while_open(st, key, ts, value, z)
-        return self._while_closed(st, key, ts, value, z)
+            return self._while_open(st, key, ts, value, z, src)
+        return self._while_closed(st, key, ts, value, z, src)
+
+    @staticmethod
+    def _note_source(st: _SeriesState, src: str | None) -> None:
+        """Record `src` as having fed the current run / open period (bounded,
+        sorted so the recorded set never depends on arrival order)."""
+        if src is None or src in st.run_sources or len(st.run_sources) >= MAX_RUN_SOURCES:
+            return
+        st.run_sources = tuple(sorted((*st.run_sources, src)))
 
     # -- closed: accumulate CUSUM toward onset --------------------------------
 
     def _while_closed(
         self, st: _SeriesState, key: tuple[str, str, str],
-        ts: datetime, value: float, z: float,
+        ts: datetime, value: float, z: float, src: str | None = None,
     ) -> EpisodeEvent | None:
         pos_was = st.s_pos > 0.0
         neg_was = st.s_neg > 0.0
         st.s_pos = max(0.0, st.s_pos + z - CUSUM_K)
         st.s_neg = max(0.0, st.s_neg - z - CUSUM_K)
+        if src is not None:
+            # The sources that fed THIS run: a sample that leaves both
+            # accumulators at zero ends any run, so the set starts over.
+            if st.s_pos > 0.0 or st.s_neg > 0.0:
+                self._note_source(st, src)
+            else:
+                st.run_sources = ()
 
         if st.s_pos > 0.0 and not pos_was:
             st.run_start_pos = ts          # this sample started the upward run
@@ -286,6 +347,7 @@ class EpisodeDetector:
                 onset_uncertainty_s=uncertainty, value=value,
                 baseline=st.frozen_mean, deviation=z,
                 peak_deviation=st.peak, integral=st.integral,
+                sources=frozenset(st.run_sources),
             )
 
         st.push(value)  # below threshold: sample joins the baseline
@@ -295,8 +357,9 @@ class EpisodeDetector:
 
     def _while_open(
         self, st: _SeriesState, key: tuple[str, str, str],
-        ts: datetime, value: float, z: float,
+        ts: datetime, value: float, z: float, src: str | None = None,
     ) -> EpisodeEvent | None:
+        self._note_source(st, src)
         st.peak = max(st.peak, abs(z))
         st.integral += abs(z) * st.interval_s
 
@@ -315,6 +378,7 @@ class EpisodeDetector:
                 value=value, baseline=st.frozen_mean, deviation=z,
                 peak_deviation=st.peak, integral=st.integral,
                 clear_ts=clear_ts,
+                sources=frozenset(st.run_sources),
             )
             # Reset for the next episode; recovered samples re-seed the baseline.
             st.open = False
@@ -322,6 +386,7 @@ class EpisodeDetector:
             st.peak = 0.0
             st.integral = 0.0
             st.clear_run = 0
+            st.run_sources = ()
             st.push(value)
             return ev
         return None

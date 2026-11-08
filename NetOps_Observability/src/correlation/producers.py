@@ -39,6 +39,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Callable, Iterable
+from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
 from episodes import EpisodeDetector, EpisodeEvent
@@ -57,6 +58,7 @@ from rule_model import (
 )
 from signals import (
     MAX_ID_CHARS,
+    SERIES_SOURCES_ATTR,
     EntityType,
     ModalityClass,
     Observer,
@@ -67,6 +69,7 @@ from signals import (
     observer_of,
 )
 from timenorm import parse_any_timestamp
+from verdicts import conservative_collection_path
 
 log = logging.getLogger("correlation")
 
@@ -588,6 +591,16 @@ def episode_signal(
     }
     if ev.clear_ts is not None:
         attrs["clear_ts"] = ev.clear_ts.isoformat()
+    if ev.sources:
+        # P6 PR-C2 honest observer (series admission on): the episode records
+        # WHICH collection paths fed it, not just the path of the sample that
+        # happened to trip it. Several sources → the conservative path names
+        # the observer (authority first); the verdict gate additionally puts
+        # the witness in every source's bucket (verdicts._series_authorities).
+        # Both can only DOWNGRADE. Off: ev.sources is empty, nothing changes.
+        attrs[SERIES_SOURCES_ATTR] = sorted(ev.sources)
+        if len(ev.sources) > 1:
+            observer = dc_replace(observer, collection_path=conservative_collection_path(ev.sources))
     return Signal(
         tenant_id=tenant_id,
         ts=ev.onset_ts if ev.phase == "onset" else (ev.clear_ts or ev.onset_ts),

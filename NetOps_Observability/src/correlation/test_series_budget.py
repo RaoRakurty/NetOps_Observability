@@ -97,8 +97,26 @@ def test_measured_footprint_within_model():
                             t0 + timedelta(seconds=60 * j), 100.0 + rng.random())
         return det
 
+    def fill_episodes_admission(n):
+        # P6 PR-C2 series admission ON, two sources alternating: every series
+        # carries the admission bucket/owner and a recorded run-source tuple.
+        det = episodes.EpisodeDetector(max_series=n + 1)
+        t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        for i in range(n):
+            entity = f"i-{i:016x}"
+            for j in range(episodes.WINDOW_SIZE):
+                det.observe("tenant-a", entity, "if.in.octets",
+                            t0 + timedelta(seconds=60 * j), 100.0 + rng.random(),
+                            source="snmp_poll" if j % 2 else "via_controller", bucket_s=60.0)
+        return det
+
     per_legacy = _measure(fill_legacy, n)
     per_episode = _measure(fill_episodes, n)
+    per_admission = _measure(fill_episodes_admission, n)
+    assert per_admission <= sb.PER_SERIES_BYTES, (
+        f"episodes._SeriesState entry with series admission on grew to {per_admission:.0f} B > model "
+        f"{sb.PER_SERIES_BYTES} B — re-measure and re-fit series_budget.PER_SERIES_BYTES"
+    )
     assert per_legacy <= sb.PER_SERIES_BYTES, (
         f"main.Series entry grew to {per_legacy:.0f} B > model {sb.PER_SERIES_BYTES} B — "
         "re-measure and re-fit series_budget.PER_SERIES_BYTES"
