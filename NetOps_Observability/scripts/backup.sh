@@ -1064,10 +1064,20 @@ if [[ -d "$DATA_DIR" ]]; then
     #     the nightly abort on ENOSPC and leave nothing at all. The patterns are
     #     echoed into the MANIFEST and into the run report so the Data
     #     Protection page can never present a narrowed bundle as a full one.
+    #   /secrets — the per-service credential files (tracker 367 layer 1).
+    #     DERIVED material: scripts/install.py (and update.sh) re-render them
+    #     from .env, which this bundle already carries. Several are owned by a
+    #     container uid at mode 0400 (prober and vector run as root), so a
+    #     non-root nightly could not read them anyway — carrying them would
+    #     turn a routine backup into an rsync permission failure, and keep a
+    #     second plaintext copy of every service password for nothing.
+    #     restore.sh protects the live copy automatically (absent from the
+    #     archive => excluded from its --delete).
     declare -a DATA_EXCLUDES=(
         --exclude=/swtpm --exclude=/secrets-seal
         --exclude=/backups --exclude=/restore-staging
         --exclude=/victoria/snapshots
+        --exclude=/secrets
     )
     VM_COPY_NOTE="data/victoria INCLUDED as a live (torn) copy — no consistent snapshot was taken"
     if [[ "$(comp_status victoriametrics)" == "pass" ]]; then

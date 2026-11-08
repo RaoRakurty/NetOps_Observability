@@ -8,7 +8,7 @@ package backend
 //
 // The 2026-08-05 mesh-client incident class: a bare &http.Client{} literal at
 // a call site bypasses the hardened backend transport (mesh-CA trust + api
-// SVID presentation + authURLTransport, backend_client.go) and silently trusts
+// SVID presentation + backendauth.Transport, backend_client.go) and silently trusts
 // the system pool — or, on an https sidecar URL, fails verification and
 // tempts an InsecureSkipVerify "fix". Both gotenberg call sites must ride
 // backendHTTPClient (or an injected client wired from it); the ONLY permitted

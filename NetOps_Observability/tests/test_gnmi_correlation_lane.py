@@ -245,7 +245,15 @@ def test_correlation_env_is_declared_for_both_config_files():
     env = gnmic_service()["environment"]
     expanded = set(re.findall(r"\$\{([A-Z0-9_]+)\}", read(
         "deployment", "docker", "gnmic", "gnmic-correlation.yaml")))
-    missing = sorted(expanded - set(env))
+    # Tracker 367 layer 1: the vmauth credential is NOT declared env (that is
+    # the point — `docker inspect` must not show it). cx-secret-env.sh loads it
+    # from a mounted file into gnmic's process env under compose.tls.yml; on
+    # the plaintext baseline it is unset and gnmic 0.46 expands it to "" (an
+    # empty password, never a literal placeholder — verified 2026-11-07).
+    ep = compose("compose.tls.yml")["services"]["gnmic"]["entrypoint"]
+    wrapper_supplied = {a.split("=", 1)[0] for a in ep[2:ep.index("--")]}
+    assert wrapper_supplied == {"GNMIC_VMAUTH_PASSWORD"}, wrapper_supplied
+    missing = sorted(expanded - set(env) - wrapper_supplied)
     assert not missing, f"gnmic-correlation.yaml expands undeclared env: {missing}"
 
 

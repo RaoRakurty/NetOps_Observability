@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"netops/backend/internal/backendauth"
+	"netops/backend/internal/credfile"
 	"netops/backend/internal/dataprotect"
 	"netops/backend/tlsconfig"
 )
@@ -138,31 +141,60 @@ func initBackendTransport() error {
 	return nil
 }
 
-// authURLTransport honors credentials embedded in a backend URL's userinfo
-// (e.g. VICTORIA_URL=https://svc-api:<pw>@vmauth:8427, SEC-010): net/http
-// deliberately does NOT apply URL userinfo itself, so the shared transport
-// does — one seam instead of auth code in nine call sites. The userinfo is
-// stripped from the outgoing request so the credential can never leak into a
-// proxy log, Location echo, or error string that prints the URL.
-type authURLTransport struct{ base http.RoundTripper }
+// backendCreds is the parsed file-backed credential set (tracker 367 layer 1,
+// internal/backendauth), set once at startup by initBackendCredentials and
+// read by every backendHTTPClient. Atomic so a test can swap it without a race
+// against in-flight requests.
+var backendCreds atomic.Pointer[backendauth.Set]
 
-func (t authURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if u := req.URL.User; u != nil {
-		user := u.Username()
-		pass, _ := u.Password()
-		// Clone before mutating — a RoundTripper must not modify the caller's
-		// request (net/http contract).
-		req = req.Clone(req.Context())
-		req.URL.User = nil
-		req.SetBasicAuth(user, pass)
+// initBackendCredentials parses VICTORIA_AUTH_* / OPENSEARCH_AUTH_*, publishes
+// the set, logs each warning ONCE (variable names only), and reports whether
+// each configured password file loads now. Half or ambiguous configuration is
+// a boot error. A file that does not load yet is NOT (it may be rendered
+// moments later and every other feature should keep working) — but every
+// request needing it is refused, never sent anonymously, and
+// netops_backend_credential_loaded says so.
+func initBackendCredentials() error {
+	set, warnings, err := backendauth.Parse(os.Getenv, credfile.Options{
+		OnStateChange: func(e error) {
+			if e != nil {
+				logError("backend-auth", "backend credential file cannot be used — keeping the last good value if there is one", map[string]any{"error": e.Error()})
+				return
+			}
+			logInfo("backend-auth", "backend credential file readable again", nil)
+		},
+	})
+	if err != nil {
+		return err
 	}
-	return t.base.RoundTrip(req)
+	for _, w := range warnings {
+		logWarn("backend-auth", w, nil)
+	}
+	for _, c := range set.Credentials() {
+		f := c.Basic().File()
+		if _, err := f.Value(); err != nil {
+			logError("backend-auth", "backend credential not loaded at boot — requests to this backend are REFUSED until it loads", map[string]any{
+				"backend": c.Backend(), "file": f.Path(), "error": err.Error()})
+			continue
+		}
+		logInfo("backend-auth", "backend credential loaded from file", map[string]any{
+			"backend": c.Backend(), "user": c.Basic().User(), "file": f.Path(), "origins": c.Origins()})
+	}
+	backendCreds.Store(set)
+	return nil
+}
+
+// writeBackendCredentialMetrics renders the credential gauges for /metrics.
+func writeBackendCredentialMetrics(w io.Writer) {
+	backendauth.WriteMetrics(w, backendCreds.Load())
 }
 
 // backendHTTPClient returns an *http.Client for an internal-backend call with the
 // given timeout, sharing the one hardened transport (connection pooling) when
-// internal TLS is configured, else a plain client. Either way the transport
-// honors URL-userinfo credentials (authURLTransport).
+// internal TLS is configured, else the default transport. Either way it rides
+// backendauth.Transport: userinfo is always stripped from the wire request,
+// file-backed credentials are attached only to the origin they were configured
+// for, and a redirect off that origin drops them.
 func backendHTTPClient(timeout time.Duration) *http.Client {
 	// http.DefaultTransport is declared as http.RoundTripper upstream, so the
 	// inferred type is already the interface (QF1011).
@@ -170,7 +202,11 @@ func backendHTTPClient(timeout time.Duration) *http.Client {
 	if backendTr != nil {
 		base = backendTr
 	}
-	return &http.Client{Timeout: timeout, Transport: authURLTransport{base: base}}
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     backendauth.Transport{Base: base, Creds: backendCreds.Load},
+		CheckRedirect: backendauth.CheckRedirect,
+	}
 }
 
 // ── OpenSearch request plumbing ─────────────────────────────────────────────

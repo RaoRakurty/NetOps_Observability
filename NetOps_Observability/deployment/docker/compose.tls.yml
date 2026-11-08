@@ -135,16 +135,22 @@ services:
       TLS_OS_ADMIN_CERT_DIR: /data/tls/admin
       TLS_SERVICE_KEY_MODE: "0644"
       # SEC-010 slice C: the api's metrics reads/writes go via vmauth (TLS +
-      # svc-api credential in URL userinfo — the authURLTransport seam);
-      # backend https verifies against the mesh CA.
+      # the svc-api credential); backend https verifies against the mesh CA.
+      # Tracker 367 layer 1: the credential is NOT in the URL — it is read
+      # from a mounted file (re-read on change, origin-scoped to these URLs:
+      # internal/backendauth). URL userinfo is a deprecated form now.
       TLS_BACKEND_CA_FILE: /data/tls/ca.pem
-      VICTORIA_URL: "https://svc-api:${VMAUTH_API_PASSWORD}@vmauth:8427"
+      VICTORIA_URL: "https://vmauth:8427"
+      VICTORIA_AUTH_USER: svc-api
+      VICTORIA_AUTH_PASSWORD_FILE: /run/secrets/vmauth/api/password
       # SEC-009: ClickHouse over TLS (registry SVID; chhttp rides backendHTTPClient).
       CLICKHOUSE_URL: "https://clickhouse:8443"
-      # SEC-008: OpenSearch over TLS with the svc_api credential (the
-      # authURLTransport seam applies URL userinfo as basic auth).
-      OPENSEARCH_URL: "https://svc_api:${OS_API_PASSWORD}@opensearch:9200"
-      METRICS_URL: "https://svc-api:${VMAUTH_API_PASSWORD}@vmauth:8427"
+      # SEC-008: OpenSearch over TLS with the svc_api credential, file-backed
+      # the same way (tracker 367 layer 1).
+      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_AUTH_USER: svc_api
+      OPENSEARCH_AUTH_PASSWORD_FILE: /run/secrets/opensearch/api/password
+      METRICS_URL: "https://vmauth:8427"
       # APP-001: correlation is mTLS-only on :8443; backendHTTPClient presents
       # the api's registry SVID below (correlation accepts ONLY this identity
       # on data paths). The SVID is minted by the api itself into
@@ -199,6 +205,11 @@ services:
       - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/dev-ca/host-ca-bundle.pem:ro
       - ../../data/secrets-seal:/run/secrets-seal
       - ../../data/tls:/data/tls
+      # Tracker 367 layer 1: the api's two service credentials, rendered by
+      # scripts/install.py (0400, the api's uid). DIRECTORY mounts, so a
+      # rotation's atomic rename is visible without a restart.
+      - ../../data/secrets/vmauth/api:/run/secrets/vmauth/api:ro
+      - ../../data/secrets/opensearch/api:/run/secrets/opensearch/api:ro
 
   # SEC-011: correlation's PG client at verify-full against the mesh CA.
   # APP-001: correlation serves mTLS-only on :8443 (tls_serve.py — registry
@@ -212,7 +223,6 @@ services:
     environment:
       CLICKHOUSE_URL: "https://clickhouse:8443"
       CORRELATION_CA_FILE: /certs/ca.pem
-      OPENSEARCH_URL: "https://svc_correlation:${OS_CORRELATION_PASSWORD}@opensearch:9200"
       CORR_TLS_CERT: /certs/svid/correlation.crt
       CORR_TLS_KEY: /certs/svid/correlation.key
       CORR_TLS_CLIENT_CA: /certs/ca.pem
@@ -254,12 +264,20 @@ services:
       - ../../data/tls/services/opensearch/ca.pem:/certs/ca.pem:ro
 
   # SEC-008: template/ISM/snapshot bootstrap authenticates too.
+  # Tracker 367 layer 1: the credential comes from a mounted file; apply-ism.sh
+  # turns it into an Authorization header file inside the /tmp tmpfs below
+  # (umask 077, removed on exit) — never a URL, never a curl argv.
   opensearch-init:
     environment:
-      OPENSEARCH_URL: "https://svc_bootstrap:${OS_BOOTSTRAP_PASSWORD}@opensearch:9200"
+      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_AUTH_USER: svc_bootstrap
+      OPENSEARCH_AUTH_PASSWORD_FILE: /run/secrets/opensearch/bootstrap/password
       CURL_CA_BUNDLE: /certs/ca.pem
+    tmpfs:
+      - /tmp
     volumes:
       - ../../data/tls/services/opensearch/ca.pem:/certs/ca.pem:ro
+      - ../../data/secrets/opensearch/bootstrap:/run/secrets/opensearch/bootstrap:ro
 
   # SEC-008: security plugin enabled — node TLS + admin DN + the minimal
   # role model. Cert paths are RELATIVE to the config dir (plugin rule).
@@ -395,12 +413,13 @@ services:
 
   # SEC-010 slice C: grafana's VM datasources via vmauth (read-only
   # svc-grafana credential, mesh CA). Variant file over the base one.
+  # Tracker 367 layer 1: the password is read by Grafana's own $__file{}
+  # provider from a mounted file (0400, grafana's uid) — not from its env.
   grafana:
-    environment:
-      VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD}
     volumes:
       - ./grafana/datasources-mtls.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/secrets/vmauth/grafana:/run/secrets/vmauth/grafana:ro
 
   # SEC-010 slice C: aggregator's VM remote_write via vmauth (svc-vector,
   # write-only). SSL_CERT_FILE points the process at the mesh CA — safe: ALL
@@ -411,7 +430,14 @@ services:
   vector-aggregator:
     environment:
       VM_REMOTE_WRITE_URL: "https://vmauth:8427/api/v1/write"
-      VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD}
+      # Tracker 367 layer 1: a REFERENCE, not the password. vector.yaml's sink
+      # password is "${VMAUTH_VECTOR_PASSWORD_REF:-<plaintext placeholder>}";
+      # Vector interpolates env FIRST and secrets SECOND (verified on 0.40.0,
+      # 2026-11-07), so this resolves through the `vmauth` exec backend
+      # (vector/cx-secret-exec.sh) from the mounted file below at every
+      # config load — and an unreadable file refuses the config, it never
+      # sends the placeholder.
+      VMAUTH_VECTOR_PASSWORD_REF: "SECRET[vmauth.vector]"
       OPENSEARCH_STATS_URL: "https://opensearch:9200/_nodes/stats/indices/indexing"
       OPENSEARCH_HEALTH_URL: "https://opensearch:9200/_cluster/health"
       OPENSEARCH_STATS_USER: svc_aggregator
@@ -439,6 +465,7 @@ services:
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/vector-aggregator:/tls/svid:ro
+      - ../../data/secrets/vmauth/vector:/run/secrets/vmauth/vector:ro
 
   # F-1 (SEC-014.1): the forward hop into the aggregator rides mesh TLS —
   # the TLS variant conf verifies the aggregator SVID against the mesh CA and
@@ -454,9 +481,23 @@ services:
       - ../../data/tls/services/syslog-ng:/tls/svid:ro
 
   # SEC-010 slice C: gnmic writes via vmauth (svc-gnmic, write-only).
+  # Tracker 367 layer 1: the URL carries no credential (gnmic used to print
+  # it in its parsed-config echo at every start). gnmic.yaml's
+  # prometheus_write `authentication:` block expands ${GNMIC_VMAUTH_PASSWORD},
+  # which cx-secret-env.sh loads from the mounted file into the PROCESS env
+  # (not the container's declared env, so not in `docker inspect`) and then
+  # execs gnmic; gnmic masks it as "***" in its echo. A missing or invalid
+  # file is fatal (exit 78), never an unauthenticated start. The base
+  # `command:` (subscribe --config …) still applies after this entrypoint.
   gnmic:
+    entrypoint:
+      - /bin/sh
+      - /app/conf/cx-secret-env.sh
+      - GNMIC_VMAUTH_PASSWORD=/run/secrets/vmauth/gnmic/password
+      - --
+      - /app/gnmic
     environment:
-      VICTORIA_WRITE_URL: "https://svc-gnmic:${VMAUTH_GNMIC_PASSWORD}@vmauth:8427/api/v1/write"
+      VICTORIA_WRITE_URL: "https://vmauth:8427/api/v1/write"
       # Go honors SSL_CERT_FILE for its root store; gnmic's prometheus_write
       # has no per-output tls schema (an unknown tls: block is silently
       # dropped — proven from its parsed-config echo). Device-facing gNMI TLS
@@ -478,6 +519,7 @@ services:
       GNMI_CORRELATION_BROKERS: kafka:9094
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/secrets/vmauth/gnmic:/run/secrets/vmauth/gnmic:ro
 
   # SEC-009: router's two clickhouse sinks over TLS; mesh CA via
   # SSL_CERT_FILE (router egress is all-internal, same rationale as the
@@ -751,17 +793,23 @@ services:
       TLS_BACKEND_CERT_FILE: /tls/svid/prober.crt
       TLS_BACKEND_KEY_FILE: /tls/svid/prober.key
       # SEC-010: collector-sample pushes (emitMetrics import/prometheus) ride
-      # vmauth write routes; meshHTTPClient applies the URL-userinfo credential
-      # + mesh CA. Both vars overridden — emitMetrics falls back VICTORIA_URL
-      # -> METRICS_URL, and a plaintext fallback must not lurk in either.
-      VICTORIA_URL: "https://svc-prober:${VMAUTH_PROBER_PASSWORD}@vmauth:8427"
-      METRICS_URL: "https://svc-prober:${VMAUTH_PROBER_PASSWORD}@vmauth:8427"
+      # vmauth write routes; meshHTTPClient (= backendHTTPClient) adds the
+      # svc-prober credential + mesh CA. Both vars overridden — emitMetrics
+      # falls back VICTORIA_URL -> METRICS_URL, and a plaintext fallback must
+      # not lurk in either. Tracker 367 layer 1: the credential is a mounted
+      # file (0400 root — the prober is root with cap_drop:ALL, so it must
+      # OWN the file), never URL userinfo.
+      VICTORIA_URL: "https://vmauth:8427"
+      METRICS_URL: "https://vmauth:8427"
+      VICTORIA_AUTH_USER: svc-prober
+      VICTORIA_AUTH_PASSWORD_FILE: /run/secrets/vmauth/prober/password
       REDIS_TLS: "true"
       REDIS_PORT: "6380"
       REDIS_TLS_CA: /tls/ca.pem
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/prober:/tls/svid:ro
+      - ../../data/secrets/vmauth/prober:/run/secrets/vmauth/prober:ro
 
   # Gotenberg over TLS (pdf profile): the sidecar renders full tenant
   # RCA/report document bodies, the last plaintext app hop. Gotenberg 8 serves

@@ -53,6 +53,26 @@ acknowledgements:
 data_dir: /var/lib/vector
 
 # ----------------------------------------------------------------------------
+# SECRET BACKEND — file-mounted service credentials (tracker 367 layer 1).
+#
+# `SECRET[vmauth.<identity>]` resolves through cx-secret-exec.sh, which reads
+# /run/secrets/vmauth/<identity>/password (rendered from .env by
+# scripts/install.py, bind-mounted read-only). Nothing references it unless an
+# env var expands to a SECRET[...] token — Vector interpolates env FIRST and
+# secrets SECOND (verified on 0.40.0, 2026-11-07) — so the plaintext baseline
+# and helm never run it. Invoked through /bin/sh so the script needs no exec
+# bit. Re-run at every config reload (the wrapper's SIGHUP), so a rotated file
+# is picked up without a container recreate; an unreadable file refuses the
+# config (a reload keeps the previous topology) rather than sending nothing.
+# NOTE: Vector scans the RAW file text for secret references, comments
+# included — never write a complete backend.key reference in a comment here,
+# or the backend runs on every boot (caught by preflight, 2026-11-07).
+secret:
+  vmauth:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/vmauth"]
+
+# ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
 #
 # The Go API exports a CSV (identity,tenant_id) — one row per device name and per
@@ -1742,10 +1762,14 @@ sinks:
     # gets the scoped write-only identity. TLS trust rides SSL_CERT_FILE in
     # the enabling override (this sink is the aggregator's only https-capable
     # egress, so replacing the process root store with the mesh CA is safe).
+    # Tracker 367 layer 1: the password is never in this container's env. The
+    # TLS override sets VMAUTH_VECTOR_PASSWORD_REF to the vmauth.vector secret ref,
+    # which the `vmauth` secret backend above resolves from a mounted file;
+    # unset (plaintext baseline, helm) the placeholder applies as before.
     auth:
       strategy: basic
       user: "${VMAUTH_VECTOR_USER:-svc-vector}"
-      password: "${VMAUTH_VECTOR_PASSWORD:-unused-on-plaintext-victoria}"
+      password: "${VMAUTH_VECTOR_PASSWORD_REF:-unused-on-plaintext-victoria}"
     healthcheck: false
     # 324 — the aggregator's only request-pipeline sink, held to the same
     # bounded in-flight contract as the router's storage lanes (the router is

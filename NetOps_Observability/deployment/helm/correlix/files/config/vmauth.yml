@@ -4,9 +4,15 @@
 # vmauth route/user config (SEC-010.1) — the authenticating TLS front for
 # VictoriaMetrics. One scoped user per SERVICE identity (owner steer: simplest
 # sufficient native auth); passwords come from the installer-generated .env
-# (VMAUTH_*_PASSWORD) via vmauth's percent-brace env expansion — never from
-# this file. NOTE: vmauth expands percent-brace tokens EVERYWHERE in this
-# file, comments included — never write a literal one here.
+# (VMAUTH_*_PASSWORD) — never from this file. Docker Compose (tracker 367
+# layer 1): scripts/install.py render_service_secrets() substitutes the
+# quoted percent-brace tokens below and writes the result to
+# data/secrets/vmauth/vmauth/auth.yml, which vmauth reads (re-checked every
+# 10 s) — so no password sits in vmauth's container env. The helm chart still
+# hands this file to vmauth unrendered and lets vmauth expand the tokens from
+# its env (helm cutover is a follow-up). NOTE: vmauth expands percent-brace
+# tokens EVERYWHERE in this file, comments included — never write a literal
+# one here.
 #
 # Route scoping is per-SERVICE least privilege, NOT a tenant boundary: VM
 # tenant scoping remains the application-side device/tenant label filter

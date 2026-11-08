@@ -60,11 +60,22 @@ check_vector(){
   # $3 (optional): a SECOND config file the tier loads at runtime — the router's
   # generated processor hooks (item 121). The base config's sinks reference
   # transforms defined there, so validating the base alone would always fail.
-  local rel="$1" label="$2" extra="${3:-}"
+  # $4 (optional): "vmauth-secret" — boot the config the way compose.tls.yml
+  # does (tracker 367 layer 1): VMAUTH_VECTOR_PASSWORD_REF=SECRET[vmauth.vector]
+  # resolved by the REAL cx-secret-exec.sh backend from a stub credential
+  # file, so a broken secret backend fails here and not on the first TLS boot.
+  local rel="$1" label="$2" extra="${3:-}" mode="${4:-}"
   [ -f "$ROOT/$rel" ] || { skip "$label (no $rel)"; return; }
   local stub; stub="$(mktemp -d)"
   printf 'identity,tenant_id\n' > "$stub/device_tenant.csv"
-  local -a extra_mounts=() extra_flags=()
+  local -a extra_mounts=() extra_flags=() secret_args=()
+  if [ "$mode" = "vmauth-secret" ]; then
+    mkdir -p "$stub/secrets/vector"
+    printf 'preflight-stub-credential\n' > "$stub/secrets/vector/password"
+    secret_args=(-e 'VMAUTH_VECTOR_PASSWORD_REF=SECRET[vmauth.vector]'
+                 -v "$ROOT/$(dirname "$rel"):/etc/vector/conf:ro"
+                 -v "$stub/secrets:/run/secrets/vmauth:ro")
+  fi
   if [ -n "$extra" ]; then
     if [ ! -f "$ROOT/$extra" ]; then
       red "$label — companion config $extra is missing (the router cannot boot without it)"
@@ -85,7 +96,7 @@ check_vector(){
       -e INGEST_TOKEN_BUS=preflight-stub \
       -v "$ROOT/$rel:/etc/vector/vector.yaml:ro" \
       -v "$stub:/etc/vector/enrichment:ro" \
-      "${extra_mounts[@]}" \
+      "${extra_mounts[@]}" "${secret_args[@]}" \
       "$VECTOR_IMG" --config /etc/vector/vector.yaml "${extra_flags[@]}" 2>&1)"
   rm -rf "$stub"
   if grep -qE 'error\[E[0-9]+\]' <<<"$out"; then
@@ -272,6 +283,7 @@ check_syslogng(){
 
 echo "=== config preflight: fresh-load every committed service config ==="
 check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator"
+check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator (TLS: vmauth credential via SECRET[])" "" vmauth-secret
 # The router loads TWO configs at runtime: base + the generated processor hooks
 # (item 121). Validate with the checked-in no-op default standing in for the
 # generated file — exactly what install.py seeds on a cold start.

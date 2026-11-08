@@ -41,6 +41,15 @@ import install                        # noqa: E402
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def no_secret_chown(monkeypatch):
+    """rotate_secrets re-renders data/secrets from the final .env (tracker 367
+    layer 1). Handing root-run consumers their files needs a chown this
+    non-root test cannot do (and must not reach docker for): record nothing,
+    change nothing — test_install_vmauth_secrets_render.py owns that step."""
+    monkeypatch.setattr(install, "_chown_secret_paths", lambda base, rels, uid, gid: None)
+
+
 def make_install(tmp_path: Path, *, started_stores=(), env_extra=None) -> Path:
     """A throwaway project root: deployment/docker/.env + data/<store> dirs.
 
@@ -61,6 +70,10 @@ def make_install(tmp_path: Path, *, started_stores=(), env_extra=None) -> Path:
         p.write_text("16\n")
     compose_dir = tmp_path / "deployment" / "docker"
     compose_dir.mkdir(parents=True, exist_ok=True)
+    # The vmauth template the credential renderer reads (tracker 367).
+    (tmp_path / "src" / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "config" / "vmauth.yml").write_text(
+        (ROOT / "src" / "config" / "vmauth.yml").read_text())
     env = {
         "BASE_PORT": "8000",
         "DB_USER": "netops",

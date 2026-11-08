@@ -122,9 +122,13 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
-    # SEC-010 vmauth per-service credentials: vmauth expands them from env at
-    # start; each CLIENT reads its URL env at start too — rotation = reset-env
-    # then recreate vmauth + the owning client.
+    # SEC-010 vmauth per-service credentials. Tracker 367 layer 1: they reach
+    # vmauth (auth.yml) and every client as files under data/secrets, which
+    # rotate_secrets() re-renders from the final .env. vmauth re-reads its
+    # config every 10 s and the api/prober re-read their file within 1 s;
+    # grafana, gnmic and vector read theirs at start/config load — so
+    # rotation = reset-env, then recreate those three. (Zero-downtime overlap
+    # is layer 3.)
     "VMAUTH_API_PASSWORD": Policy(
         FREE, "", "", ""),
     "VMAUTH_GNMIC_PASSWORD": Policy(
@@ -143,7 +147,9 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     # SEC-008: applied to the security index by the opensearch-init bootstrap,
     # which re-runs on every stack start — a changed env var converges without
-    # operator action (hence FREE, not ALTER).
+    # operator action (hence FREE, not ALTER). OS_API_PASSWORD and
+    # OS_BOOTSTRAP_PASSWORD also reach their clients as re-rendered files
+    # (tracker 367 layer 1).
     "OS_API_PASSWORD": Policy(
         FREE, "", "", ""),
     "OS_ROUTER_PASSWORD": Policy(

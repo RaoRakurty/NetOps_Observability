@@ -34,10 +34,95 @@ SNAP_KEEP="${OPENSEARCH_SNAPSHOT_KEEP:-14}"
 PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-secfindings-*","netops-deadletter-*","security-auditlog-*"]'
 ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-secfindings-*,netops-deadletter-*,security-auditlog-*'
 
-# §8: OPENSEARCH_URL carries the bootstrap credential as URL userinfo on a
-# secured cluster — strip it before logging (this line used to echo the
-# password into the container log on every init run; found 2026-08-05).
+# §8: OPENSEARCH_URL may still carry the bootstrap credential as URL userinfo
+# (the legacy form, honoured for one release — see the file-backed block
+# below) — strip it before logging (this line used to echo the password into
+# the container log on every init run; found 2026-08-05).
 OS_REDACTED=$(printf '%s' "$OS" | sed 's#//[^@/]*@#//<redacted>@#')
+
+# ---------------------------------------------------------------------------
+# File-backed credential (tracker 367 layer 1).
+#
+# The TLS variant no longer puts the bootstrap password in OPENSEARCH_URL. It
+# mounts it as a file and names it here:
+#   OPENSEARCH_AUTH_USER=svc_bootstrap
+#   OPENSEARCH_AUTH_PASSWORD_FILE=/run/secrets/opensearch/bootstrap/password
+# The value becomes an `Authorization:` header in a file created under umask
+# 077 inside a private mktemp dir on the /tmp tmpfs, and EVERY curl in this
+# script reads it with `-H @file` (the `curl` function below) — so the secret
+# is never in a URL, a curl argv (`ps`), or this container's declared env.
+# The header file is removed on exit.
+#
+# Back-compat: userinfo in OPENSEARCH_URL still works for one release (with a
+# warning naming the variable); if both are set, the file wins and the
+# userinfo is stripped. Neither set = the plaintext baseline (no auth).
+# Validation mirrors internal/credfile: one trailing newline trimmed; empty,
+# > 1 KiB or non-printable ASCII refused — exit 78 (configuration).
+# ---------------------------------------------------------------------------
+CX_AUTH_DIR=""
+cx_auth_cleanup() {
+  if [ -n "$CX_AUTH_DIR" ]; then
+    rm -rf "$CX_AUTH_DIR"
+  fi
+}
+trap cx_auth_cleanup EXIT
+trap 'cx_auth_cleanup; exit 130' INT TERM
+
+if [ -n "${OPENSEARCH_AUTH_PASSWORD_FILE:-}" ] || [ -n "${OPENSEARCH_AUTH_USER:-}" ]; then
+  if [ -z "${OPENSEARCH_AUTH_PASSWORD_FILE:-}" ] || [ -z "${OPENSEARCH_AUTH_USER:-}" ]; then
+    echo "ism: ERROR OPENSEARCH_AUTH_USER and OPENSEARCH_AUTH_PASSWORD_FILE must be set together" >&2
+    exit 78
+  fi
+  _pf="$OPENSEARCH_AUTH_PASSWORD_FILE"
+  if [ ! -f "$_pf" ] || [ ! -r "$_pf" ]; then
+    echo "ism: ERROR the OpenSearch credential file $_pf is missing or unreadable (scripts/install.py renders it; is the data/secrets mount present?)" >&2
+    exit 78
+  fi
+  _psize=$(wc -c < "$_pf" | tr -d ' ')
+  case "$_psize" in
+    ''|*[!0-9]*) echo "ism: ERROR cannot read the size of $_pf" >&2; exit 78 ;;
+  esac
+  if [ "$_psize" -gt 1025 ]; then
+    echo "ism: ERROR the OpenSearch credential file $_pf is larger than 1024 bytes" >&2
+    exit 78
+  fi
+  # The sentinel keeps trailing newlines so exactly one can be trimmed.
+  _pw=$(cat "$_pf"; printf x)
+  _pw=${_pw%x}
+  _pw=${_pw%"
+"}
+  if [ -z "$_pw" ]; then
+    echo "ism: ERROR the OpenSearch credential file $_pf is empty" >&2
+    exit 78
+  fi
+  case "$_pw$OPENSEARCH_AUTH_USER" in
+    *[!\ -~]*) echo "ism: ERROR the OpenSearch credential or username contains non-printable characters" >&2; exit 78 ;;
+  esac
+  case "$OPENSEARCH_AUTH_USER" in
+    *:*) echo "ism: ERROR OPENSEARCH_AUTH_USER must not contain ':'" >&2; exit 78 ;;
+  esac
+  case "$OS" in
+    *://*@*) echo "ism: WARNING OPENSEARCH_URL carries a credential in its userinfo AND OPENSEARCH_AUTH_PASSWORD_FILE is set — the file wins; the userinfo is stripped (remove it from OPENSEARCH_URL)" >&2
+             OS=$(printf '%s' "$OS" | sed 's#//[^@/]*@#//#')
+             OS_REDACTED="$OS" ;;
+  esac
+  CX_AUTH_DIR=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/cx-ism-auth.XXXXXX") || {
+    echo "ism: ERROR cannot create a private directory for the auth header" >&2
+    exit 78
+  }
+  # printf and base64 read from a pipe: the value never appears in an argv.
+  _b64=$(printf '%s:%s' "$OPENSEARCH_AUTH_USER" "$_pw" | base64 | tr -d '\n')
+  (umask 077 && printf 'Authorization: Basic %s\n' "$_b64" > "$CX_AUTH_DIR/header")
+  unset _pw _b64
+  CX_AUTH_HEADER="$CX_AUTH_DIR/header"
+  # Every curl below — direct or through os_curl — now authenticates.
+  curl() { command curl -H "@$CX_AUTH_HEADER" "$@"; }
+  echo "ism: authenticating as $OPENSEARCH_AUTH_USER with the credential from $_pf"
+else
+  case "$OS" in
+    *://*@*) echo "ism: WARNING OPENSEARCH_URL carries a credential in its URL userinfo — still honoured for one release; move it to OPENSEARCH_AUTH_USER + OPENSEARCH_AUTH_PASSWORD_FILE (tracker 367)" >&2 ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # Bounded readiness wait (installer FMEA 2026-09-15, row 9 / O1).

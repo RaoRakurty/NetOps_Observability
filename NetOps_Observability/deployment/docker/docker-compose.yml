@@ -879,22 +879,24 @@ services:
     cpus: 0.5
     logging: *deflog
     restart: unless-stopped
+    # Tracker 367 layer 1: NO credential in this container's env any more
+    # (`docker inspect` used to show all six). scripts/install.py renders
+    # src/config/vmauth.yml with the .env values into
+    # data/secrets/vmauth/vmauth/auth.yml (0400, root — vmauth runs as root),
+    # and the DIRECTORY is mounted read-only so a re-render on rotation is a
+    # new inode vmauth sees: -configCheckInterval re-reads it every 10 s, no
+    # restart. A config that fails to parse is rejected and the previous one
+    # kept (vmauth's own reload semantics).
     command:
-      - "-auth.config=/etc/vmauth/config/vmauth.yml"
+      - "-auth.config=/etc/vmauth/secret/auth.yml"
+      - "-configCheckInterval=10s"
       - "-tls"
       - "-tlsCertFile=/tls/vmauth.crt"
       - "-tlsKeyFile=/tls/vmauth.key"
       - "-httpListenAddr=:8427"
-    environment:
-      VMAUTH_API_PASSWORD: ${VMAUTH_API_PASSWORD:-}
-      VMAUTH_GNMIC_PASSWORD: ${VMAUTH_GNMIC_PASSWORD:-}
-      VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD:-}
-      VMAUTH_VMALERT_PASSWORD: ${VMAUTH_VMALERT_PASSWORD:-}
-      VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD:-}
-      VMAUTH_PROBER_PASSWORD: ${VMAUTH_PROBER_PASSWORD:-}
     volumes:
-      # F-51: DIRECTORY mount (same src/config dir the api/victoria mount).
-      - ../../src/config:/etc/vmauth/config:ro
+      # F-51: DIRECTORY mount — the rendered config, read-only.
+      - ../../data/secrets/vmauth/vmauth:/etc/vmauth/secret:ro
       - ../../data/tls/services/vmauth:/tls:ro
     networks: [netops]
     depends_on:

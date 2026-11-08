@@ -185,7 +185,7 @@
       ],
       "security_profile": {
         "transport": "tls-via-vmauth",
-        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): https + svc-api credential (URL-userinfo seam); STORE-003 cleared, boot fatal 5->4"
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): https + svc-api credential (URL-userinfo seam); STORE-003 cleared, boot fatal 5->4. Tracker 367 layer 1 (2026-11-07): URL-userinfo seam RETIRED \u2014 credential-free VICTORIA_URL/METRICS_URL + VICTORIA_AUTH_USER/VICTORIA_AUTH_PASSWORD_FILE (data/secrets/vmauth/api, re-read on change, origin-scoped: internal/backendauth); legacy userinfo = WARN (CRED-001) for one release."
       }
     },
     {
@@ -751,7 +751,7 @@
       ],
       "security_profile": {
         "transport": "tls-via-vmauth",
-        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-gnmic write-only; TLS trust via SSL_CERT_FILE (gnmic has no per-output tls schema); lane verified by SAMPLE COUNTS after a silent 5-min blackhole proved logs alone lie"
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-gnmic write-only; TLS trust via SSL_CERT_FILE (gnmic has no per-output tls schema); lane verified by SAMPLE COUNTS after a silent 5-min blackhole proved logs alone lie Tracker 367 layer 1 (2026-11-07): credential out of VICTORIA_WRITE_URL (gnmic printed it at every start) \u2014 prometheus_write authentication block fed by cx-secret-env.sh from data/secrets/vmauth/gnmic."
       }
     },
     {
@@ -817,7 +817,7 @@
       ],
       "security_profile": {
         "transport": "tls-via-vmauth",
-        "notes": "Cutover 2026-08-07 (pre-enforce-wave sweep): prober emitMetrics import/prometheus pushes found riding victoria:8428 plaintext UNDECLARED in any contract — svc-prober write-only vmauth user added, VICTORIA_URL/METRICS_URL moved to vmauth in override + compose.tls.yml; verified by collector_up freshness"
+        "notes": "Cutover 2026-08-07 (pre-enforce-wave sweep): prober emitMetrics import/prometheus pushes found riding victoria:8428 plaintext UNDECLARED in any contract — svc-prober write-only vmauth user added, VICTORIA_URL/METRICS_URL moved to vmauth in override + compose.tls.yml; verified by collector_up freshness Tracker 367 layer 1 (2026-11-07): credential out of the URL \u2014 VICTORIA_AUTH_USER=svc-prober + VICTORIA_AUTH_PASSWORD_FILE (data/secrets/vmauth/prober, root-owned 0400)."
       }
     },
     {
@@ -984,7 +984,7 @@
       ],
       "security_profile": {
         "transport": "tls-via-vmauth",
-        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-vector write-only, always-present auth block (plaintext VM ignores it); F-17 series 3s fresh"
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-vector write-only, always-present auth block (plaintext VM ignores it); F-17 series 3s fresh Tracker 367 layer 1 (2026-11-07): password out of the container env \u2014 SECRET[vmauth.vector] via the cx-secret-exec.sh exec backend from data/secrets/vmauth/vector."
       }
     },
     {
@@ -1418,7 +1418,7 @@
       ],
       "security_profile": {
         "transport": "tls",
-        "notes": "LIVE 2026-08-06 (SEC-010 slice C): datasources-mtls.yaml variant — https://vmauth:8427 as svc-grafana (read-only scoped routes), mesh CA pinned (tlsAuthWithCACert)"
+        "notes": "LIVE 2026-08-06 (SEC-010 slice C): datasources-mtls.yaml variant — https://vmauth:8427 as svc-grafana (read-only scoped routes), mesh CA pinned (tlsAuthWithCACert) Tracker 367 layer 1 (2026-11-07): password via Grafana's file provider from data/secrets/vmauth/grafana, not the container env."
       }
     },
     {

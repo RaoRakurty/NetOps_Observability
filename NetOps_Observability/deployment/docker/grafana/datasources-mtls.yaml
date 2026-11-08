@@ -6,7 +6,10 @@
 # VictoriaMetrics datasources, which go https via vmauth with the svc-grafana
 # read-only credential + the mesh CA. Chosen at DEPLOY time by the TLS
 # override mounting THIS file over the base one (the default-mtls.conf
-# pattern). $VMAUTH_GRAFANA_PASSWORD expands from the grafana container env.
+# pattern). The svc-grafana password is read by Grafana's file-expansion provider
+# from /run/secrets/vmauth/grafana/password (rendered from .env by
+# scripts/install.py, mounted read-only by compose.tls.yml) — never from the
+# container env (tracker 367 layer 1). Read at provisioning (start-up).
 # EDITING RULE: any change to datasources.yaml must be mirrored here; the only
 # permitted divergence is the two VM datasource blocks.
 # ============================================================================
@@ -54,7 +57,7 @@ datasources:
       timeInterval: 15s
       tlsAuthWithCACert: true
     secureJsonData:
-      basicAuthPassword: $VMAUTH_GRAFANA_PASSWORD
+      basicAuthPassword: $__file{/run/secrets/vmauth/grafana/password}
       tlsCACert: $__file{/tls/ca.pem}
 
   - name: VictoriaMetrics
@@ -69,7 +72,7 @@ datasources:
       timeInterval: 15s
       tlsAuthWithCACert: true
     secureJsonData:
-      basicAuthPassword: $VMAUTH_GRAFANA_PASSWORD
+      basicAuthPassword: $__file{/run/secrets/vmauth/grafana/password}
       tlsCACert: $__file{/tls/ca.pem}
 
   - name: ClickHouse
