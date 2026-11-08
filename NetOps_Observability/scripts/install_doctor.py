@@ -526,17 +526,17 @@ def classify_docker_version(version: str) -> tuple[str, str, str]:
     upgrade = (f"Install the Correlix-validated Docker Engine ({', '.join(VALIDATED_DOCKER_VERSIONS)}) — "
                "scripts/prepare-host.sh installs and holds it.")
     if major < 23:
-        return ("problem", f"Docker {ver} never clears stale UDP connection-tracking entries for "
-                "published ports: after a receiver restart, a chatty device's traps/syslog/flows can "
-                "arrive from the Docker gateway and lose their device and tenant", upgrade)
+        return ("problem", (f"Docker {ver} never clears stale UDP connection-tracking entries for "
+                            "published ports: after a receiver restart, a chatty device's traps/syslog/flows "
+                            "can arrive from the Docker gateway and lose their device and tenant"), upgrade)
     if (major, minor, patch) == (29, 5, 0):
-        return ("problem", "Docker 29.5.0 shipped a broken UDP conntrack flush (fixed in 29.5.1): "
-                "device source addresses can be masked after any receiver restart", upgrade)
+        return ("problem", ("Docker 29.5.0 shipped a broken UDP conntrack flush (fixed in 29.5.1): "
+                            "device source addresses can be masked after any receiver restart"), upgrade)
     if ver in VALIDATED_DOCKER_VERSIONS:
         return ("ok", f"Docker {ver} is a Correlix-validated Engine", "")
-    return ("warn", f"Docker {ver} works upstream but is not a Correlix-validated Engine "
-            f"(validated: {', '.join(VALIDATED_DOCKER_VERSIONS)}); source-address integrity across "
-            "receiver restarts has not been checked on it", upgrade)
+    return ("warn", (f"Docker {ver} works upstream but is not a Correlix-validated Engine "
+                     f"(validated: {', '.join(VALIDATED_DOCKER_VERSIONS)}); source-address integrity "
+                     "across receiver restarts has not been checked on it"), upgrade)
 
 
 def check_docker_and_containers(env: DoctorEnv, env_exists: bool, start: float) -> tuple[list[Check], str]:

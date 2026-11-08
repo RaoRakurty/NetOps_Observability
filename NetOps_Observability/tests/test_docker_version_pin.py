@@ -17,13 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import install_doctor as doctor  # noqa: E402
+import install_doctor as doctor
 
 PREPARE = (ROOT / "scripts" / "prepare-host.sh").read_text(encoding="utf-8")
 
 
 def pinned_version() -> str:
-    m = re.search(r'^DOCKER_CE_VERSION="\$\{DOCKER_CE_VERSION:-([0-9.]+)\}"', PREPARE, re.M)
+    m = re.search(r'^DOCKER_CE_VERSION="\$\{DOCKER_CE_VERSION:-([0-9.]+)\}"', PREPARE, re.MULTILINE)
     assert m, "prepare-host.sh must declare DOCKER_CE_VERSION with a default"
     return m.group(1)
 
