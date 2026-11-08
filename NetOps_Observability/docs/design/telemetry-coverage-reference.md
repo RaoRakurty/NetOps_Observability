@@ -263,6 +263,12 @@ The two that most often get asked for:
   golden corpus carries one, so the frozen parity baseline stayed green with no
   new skips. See the matrix's "…and one the audit got wrong" and
   `src/correlation/test_link_status_enrichment_218.py`.
+  Tracker 378 (`parser_rev 2026-11-08-link-cause`) folds that status, plus
+  Cisco's `locIfReason` (the IOS Cisco-format trap carries no ifAdminStatus),
+  into one canonical `link_cause` (`admin` | `fault` | `unknown`) with the raw
+  text as `link_reason` — same `omit_empty` contract, identity untouched. See
+  the `trap_link_cause` fragment in `events.yaml` for the sources and
+  `src/correlation/test_link_cause_378.py`.
 
 ---
 

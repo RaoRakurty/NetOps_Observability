@@ -35,6 +35,18 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-08-link-cause — tracker 378: both trap link rules gain ONE canonical
+# cause attr, `link_cause` (admin | fault | unknown), plus the raw vendor reason
+# as `link_reason`. It answers the question tracker 218 opened: was this down an
+# operator's shutdown or a failure? Evidence, in priority order: RFC 2863
+# ifAdminStatus = down → admin; Cisco locIfReason (OLD-CISCO-INTERFACES-MIB,
+# decodes by name since tracker 377) "administratively down" → admin, a
+# documented failure reason ("Keepalive failed", "Lost Carrier" …) → fault;
+# anything else that was reported → unknown. Exactly the 218 shape: `state`,
+# `entity`, `severity` and `native_id` are untouched and both keys are
+# `omit_empty`, so a trap that carries neither varbind — every event in the
+# golden corpus — keeps a byte-identical attrs dict and signal_id.
+#
 # 2026-09-06-218 — the linkDown/linkUp STATUS ENRICHMENT the A9 audit deferred
 # (tracker 218). Both link rules now read the two varbinds RFC 2863 puts in the
 # notification itself — `ifAdminStatus` and `ifOperStatus` — so an
@@ -73,7 +85,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-07-nokia-bgp-ng"
+parser_rev: "2026-11-08-link-cause"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -281,6 +293,87 @@ _frag:
       - {when: {re: ['$oper_raw', '\b(?:down|2)\b']}, value: down}
       - {when: {re: ['$oper_raw', '\b(?:up|1)\b']}, value: up}
       - {when: {truthy: '$oper_raw'}, value: unknown}
+
+  # ── tracker 378: WHY the link changed — one canonical cause ───────────────
+  #
+  # `admin_status` (218) already says whether the port is administratively shut
+  # — when the agent sends it. Cisco IOS's default-format link trap does not: it
+  # sends ifIndex, ifDescr, ifType and the enterprise varbind `locIfReason`
+  # (OLD-CISCO-INTERFACES-MIB, `1.3.6.1.4.1.9.2.2.1.1.20`, "Reason for interface
+  # last status change", a DisplayString). That varbind reaches us BY NAME since
+  # tracker 377. `link_cause` folds every source into ONE vocabulary the engine
+  # can read without knowing the vendor:
+  #
+  #   admin    the interface was administratively disabled on THIS device
+  #   fault    the device NAMED a failure reason
+  #   unknown  status/reason evidence arrived but states no cause (a bare
+  #            "down", a linkUp, ifAdminStatus up with no reason, testing …)
+  #   (absent) the trap carried neither ifAdminStatus nor a reason varbind
+  #
+  # Priority (first match wins); admin/fault are decided on DOWN transitions
+  # only — a linkUp names no failure, whatever its varbinds say:
+  #   1. ifAdminStatus = down                                → admin  (RFC 2863)
+  #   2. reason "administratively down", ifAdminStatus ≠ up  → admin  (Cisco)
+  #      — an agent that says the port is admin-UP contradicts the text; the
+  #        standard object wins and the cause is not guessed (→ unknown).
+  #   3. reason is a documented failure reason               → fault  (Cisco)
+  #   4. any status/reason evidence present                  → unknown
+  #
+  # THE VOCABULARY IS RECORDED, NOT RECALLED:
+  #   - "administratively down" (linkDown) and "up" (linkUp) as locIfReason:
+  #     LoriotPro trap-log sample `trap_Feb_23_2002.csv`, Loopback10 on an IOS
+  #     agent ("administratively down,locifreason.12") —
+  #     loriotpro.com, LoriotProV3Doc I9-E5_Trap_Events.htm.
+  #   - the failure reasons: Della Maggiora et al., "Performance and Fault
+  #     Management" (Cisco Press, 2000), ch. "Error/Fault Monitoring", the list
+  #     of locIfReason values ("Fatal Tx Error", "Keepalive failed", "Lost
+  #     Carrier", "Late Collision", "Excessive collision", "Open Failure, Lobe",
+  #     "Ring Beaconing", "Duplicate Address", "Wire-fault", "Auto-removal",
+  #     "LAPB down", "EIA signal lost"). "Remove MAC" from the same list is
+  #     deliberately NOT a fault: it is a ring-station removal ORDERED by the
+  #     ring manager — neither a local shutdown nor a stated failure.
+  #   - a bare "down", "looped" or any unlisted text is `unknown`: it names the
+  #     new state (or a value no source documents), not a cause. Mapping it to
+  #     `fault` would be a fabricated reading; the raw text still rides as
+  #     `link_reason` for an operator.
+  #
+  # MULTI-VENDOR. Juniper (Junos mib2d — the SNMP_TRAP_LINK_DOWN syslog twin
+  # prints "ifAdminStatus down(2), ifOperStatus down(2), ifName xe-0/0/0"),
+  # Nokia SR OS / SR Linux, Arista EOS and SONiC (net-snmp) send the RFC 2863
+  # `OBJECTS { ifIndex, ifAdminStatus, ifOperStatus }` link trap, so arm 1 is
+  # their admin evidence. None of them defines a reason varbind in its link
+  # notification: the indexed JUNIPER-IF-MIB, JUNIPER-MIB, ARISTA-IF-MIB and
+  # TIMETRA-* modules carry no interface reason/cause object (checked against
+  # collectors/mibs/index/oididx.json). Nokia's TIMETRA-PORT-MIB
+  # `tmnxPortReasonDownFlags` is a polled port column, not a linkDown varbind,
+  # and is not in the index — wiring it is a metric-plane change, not this rule.
+  #
+  # BOUNDED: the reason is untrusted device text; trimmed to its first line and
+  # cut to 64 characters before it is either classified or emitted.
+  trap_reason_raw: &trap_reason_raw
+    alt:
+      - {vb: ['1.3.6.1.4.1.9.2.2.1.1.20']}   # locIfReason (OLD-CISCO-INTERFACES-MIB)
+      - {vbname: [locifreason]}
+  trap_link_reason: &trap_link_reason
+    re: [['$reason_raw', '(\S(?:[^\r\n]*\S)?)', 1, '']]
+    slice: 64
+  trap_link_cause: &trap_link_cause
+    case:
+      - when: {all: [{eq: ['$state', down]}, {eq: ['$admin_status', down]}]}
+        value: admin
+      - when:
+          all:
+            - {eq: ['$state', down]}
+            - {ne: ['$admin_status', up]}
+            - {re: ['$link_reason', '^administratively\s+down$', 'i']}
+        value: admin
+      - when:
+          all:
+            - {eq: ['$state', down]}
+            - re: ['$link_reason', '\b(?:keepalive\s+failed|lost\s+carrier|fatal\s+tx\s+error|late\s+collision|excessive\s+collisions?|open\s+failure|ring\s+beaconing|duplicate\s+address|wire-?fault|auto-?removal|lapb\s+down|eia\s+signal\s+lost)\b', 'i']
+        value: fault
+      - when: {any: [{truthy: '$admin_status'}, {truthy: '$link_reason'}]}
+        value: unknown
 
 # ══ THE RULE TABLE ═══════════════════════════════════════════════════════════
 # Declared in CLASSIFICATION ORDER within each lane, because ORDER IS BEHAVIOUR:
@@ -1327,6 +1420,9 @@ rules:
       oper_raw: *trap_oper_raw
       admin_status: *trap_admin_status
       oper_status: *trap_oper_status
+      reason_raw: *trap_reason_raw
+      link_reason: *trap_link_reason
+      link_cause: *trap_link_cause
     emit:
       kind: link_state_change
       metric: link_state
@@ -1342,6 +1438,8 @@ rules:
         authenticated: {var: authed}
         admin_status: {var: admin_status}
         oper_status: {var: oper_status}
+        link_cause: {var: link_cause}
+        link_reason: {var: link_reason}
       # tracker 218. NOTHING that identifies the signal moves: `state` is still
       # down/up from the trap OID alone, so `native_id`, `entity` and therefore
       # `signal_id` are byte-identical to what this rule has always emitted —
@@ -1349,7 +1447,9 @@ rules:
       # A9 audit deferred this enrichment on. The two keys appear only on the
       # events that actually carry the varbinds; every event already stored
       # carried none, so its attrs dict is unchanged too.
-      omit_empty: [admin_status, oper_status]
+      # tracker 378: same contract for the cause — present only when the trap
+      # carried a status or reason varbind (see `trap_link_cause` above).
+      omit_empty: [admin_status, oper_status, link_cause, link_reason]
 
   - rule_id: trap.device.restart
     lane: trap
@@ -1660,6 +1760,9 @@ rules:
       oper_raw: *trap_oper_raw
       admin_status: *trap_admin_status
       oper_status: *trap_oper_status
+      reason_raw: *trap_reason_raw
+      link_reason: *trap_link_reason
+      link_cause: *trap_link_cause
     emit:
       kind: link_state_change
       metric: link_state
@@ -1676,10 +1779,14 @@ rules:
         authenticated: {var: authed}
         admin_status: {var: admin_status}
         oper_status: {var: oper_status}
+        link_cause: {var: link_cause}
+        link_reason: {var: link_reason}
       # Same enrichment on the MIB-decoded twin: a vendor trap that decodes to a
       # link transition still carries the IF-MIB varbinds, and the two rules must
       # produce ONE vocabulary (they already share kind/entity/state/native_id).
-      omit_empty: [admin_status, oper_status]
+      # tracker 378: same contract for the cause — present only when the trap
+      # carried a status or reason varbind (see `trap_link_cause` above).
+      omit_empty: [admin_status, oper_status, link_cause, link_reason]
 
   - rule_id: trap.device.restart.event_type
     lane: trap

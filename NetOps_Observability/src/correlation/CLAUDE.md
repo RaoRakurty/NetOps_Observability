@@ -100,6 +100,17 @@ the window filters (e.g. M:8157-8161).
   → `attrs["series_sources"]`; several sources → observer path =
   `verdicts.conservative_collection_path` and the witness sits in EVERY source's
   authority bucket (§5). OFF byte-identical (test_series_admission_p6.py).
+- **Identity canonicalisation building blocks (P6 PR-D, 2026-11-08) — NOT WIRED;
+  nothing on the hot path imports them until PR-E.** `canon.py`: `canon_iface_key`
+  (table-free port key, a superset of Go `canonIface`, drift-tested; digit-only names
+  → an ifIndex marker), `canonical_peer`, `canonicalize(sig, resolver)` (D1/D2/D4/D5 on
+  the syslog/trap/controller lanes; rewrites `entity_id` + the raw device token only,
+  never `native_id`/`signal_id`; stamps `attrs["canon"]`; refuses a resolver not
+  scoped to the signal's tenant). `entity_resolver.identity_resolver_for(raw, tenant)`
+  is the TENANT-ONLY resolver (never ∪ global) with `resolve_device` (id/name/any
+  address, generic-hostname guard, ambiguity reason) and a collision-dropping
+  (device, key) → ifName index (test_canon_identity_p6.py,
+  test_identity_canon_isolation.py).
 
 **Partitioning.** Producers key by tenant (murmur2); every topic has the same partition
 count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
