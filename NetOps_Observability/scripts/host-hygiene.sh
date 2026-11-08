@@ -23,6 +23,8 @@
 #   * npm + pip caches
 #   * docker build cache    (keep 2 GB hot layers) + dangling images
 #   * oversized container json-logs (truncate > LOG_MAX_MB, default 512)
+#   * dev-host leftovers: golangci-lint docker cache, worktree caches, Claude
+#     session scratch untouched for HYGIENE_SESSION_STALE_DAYS (default 3)
 # Escalation (tier 2, disk >= CRITICAL_PCT, default 92):
 #   * docker build cache    (drop ALL of it)
 #   * docker images unused by any container and older than 72h
@@ -319,6 +321,71 @@ reclaim() {
   return 0
 }
 
+# ── dev-host leftovers the caches above miss (2026-11-08) ────────────────────
+# This script is LAB/DEV-HOST tooling: make-installer.sh lists it in LAB_PATHS,
+# so it never ships in a customer bundle. On 2026-11-08 the lab sat at 87-91 %
+# while every tier-1 step reported "nothing to reclaim" — the space was in
+# places it did not know: the golangci-lint docker cache the pre-push hook
+# fills (6.7 GB), worktree caches (2.3 GB) and old Claude session scratch
+# under /tmp (5.1 GB). None of it is product state or customer data.
+
+# SAFE_ROOTS: the only trees these helpers may empty. Anything else — an empty
+# variable, a path outside them, a symlink escape — is refused, loudly.
+# shellcheck disable=SC2317,SC2329  # called from empty_dir_via_docker (itself run via reclaim "$@")
+lab_safe_path() {  # $1 = absolute path; succeeds only inside a safe root
+  local p="$1" real
+  [ -n "$p" ] && [ -d "$p" ] || return 1
+  real=$(cd "$p" 2>/dev/null && pwd -P) || return 1
+  case "$real" in
+    "$HOME/.cache/"?*|"/tmp/claude-$(id -u)/"?*) return 0 ;;
+  esac
+  return 1
+}
+
+# Empty a directory whose files a container may have created as root, through
+# a throwaway container (the installer's own pattern) — the user cannot unlink
+# root-owned files, and this script deliberately runs without sudo.
+# shellcheck disable=SC2317,SC2329  # invoked indirectly: reclaim "$label" "$path" empty_dir_via_docker "$d"
+empty_dir_via_docker() {  # $1 = directory (must pass lab_safe_path)
+  local d="$1"
+  if ! lab_safe_path "$d"; then
+    echo "refused: $d is not inside \$HOME/.cache or /tmp/claude-$(id -u)" >&2
+    return 2
+  fi
+  docker run --rm -v "$d:/target" "${HYGIENE_HELPER_IMAGE:-alpine:3.20}" \
+    find /target -mindepth 1 -delete
+}
+
+# Print every Claude session scratch dir (/tmp/claude-<uid>/<project>/<session>)
+# in which NO file changed for $2 days — an active session always has recent
+# files, so it is never listed. Dir mtimes are not used: a session can work
+# for days without adding a top-level entry.
+stale_session_dirs() {  # $1 = /tmp/claude-<uid>, $2 = days
+  local root="$1" days="$2" d
+  [ -d "$root" ] || return 0
+  for d in "$root"/*/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    if [ -z "$(find "$d" -mmin -$(( days * 1440 )) -print -quit 2>/dev/null)" ]; then
+      printf '%s\n' "$d"
+    fi
+  done
+}
+
+lab_dev_leftovers() {
+  local d stale
+  for d in "$HOME/.cache/golangci-lint-docker" "$HOME/.cache/correlix-wt"; do
+    [ -d "$d" ] || continue
+    reclaim "$(basename "$d")" "$d" empty_dir_via_docker "$d"
+  done
+  stale=$(stale_session_dirs "/tmp/claude-$(id -u)" "${HYGIENE_SESSION_STALE_DAYS:-3}")
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    reclaim "stale session scratch $(basename "$d")" "$d" empty_dir_via_docker "$d"
+    rmdir "$d" 2>/dev/null || echo "   note: $d emptied but not removed (still in use?)"
+  done <<< "$stale"
+}
+
 tier1() {
   echo "-- tier 1: dev caches --"
   reclaim "go build cache" "$HOME/.cache/go-build"           go clean -cache
@@ -326,6 +393,7 @@ tier1() {
   reclaim "pip cache"      "$HOME/.cache/pip"                 python3 -m pip cache purge
   reclaim "docker build cache" ""  docker builder prune -f --keep-storage "${KEEP_BUILD_CACHE:-2GB}"
   reclaim "docker dangling images" ""  docker image prune -f
+  lab_dev_leftovers
   truncate_big_container_logs
   return 0
 }
