@@ -112,6 +112,9 @@ if ! command -v apt-get >/dev/null 2>&1; then
   echo "ERROR: Debian/Ubuntu-family hosts only (apt). See the header for what" >&2
   echo "to apply manually on other distros." >&2; exit 1
 fi
+# The Correlix-validated Docker Engine (tracker 373). Keep in step with
+# scripts/install_doctor.py VALIDATED_DOCKER_VERSIONS (tests/test_docker_version_pin.py).
+DOCKER_CE_VERSION="${DOCKER_CE_VERSION:-29.5.2}"
 TARGET_USER="${SUDO_USER:-root}"
 echo "${BOLD}== Correlix host preparation$( [ "$CHECK" = 1 ] && echo ' — AUDIT ONLY (--check)' )${RST}"
 
@@ -133,9 +136,26 @@ else
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
   apt-get update -qq
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
-  systemctl enable --now docker
-  fixd "docker-ce + compose plugin installed, service enabled"
+  # A VALIDATED Docker Engine, never "latest" (tracker 373): Docker's own UDP
+  # conntrack flush — what keeps device source addresses intact across a
+  # receiver restart — was broken outright in 29.5.0 and is port-sensitive in
+  # later releases (moby#53384). The pin is the version Correlix validated (lab
+  # drill: receiver stop/start under live traffic, zero masked senders);
+  # install_doctor.py VALIDATED_DOCKER_VERSIONS must list it (a test enforces
+  # it).
+  # Override for a deliberate, separately validated version: DOCKER_CE_VERSION.
+  docker_pkg_ver=$(apt-cache madison docker-ce 2>/dev/null \
+    | awk -v want="$DOCKER_CE_VERSION" -F' *[|] *' '$2 ~ ("^[0-9]+:" want "-") {print $2; exit}')
+  if [ -z "$docker_pkg_ver" ]; then
+    fixfail "docker-ce ${DOCKER_CE_VERSION} (the Correlix-validated Engine) is not in Docker's apt repo for ${ID} ${VERSION_CODENAME} — check 'apt-cache madison docker-ce'"
+  else
+    apt-get install -y -qq "docker-ce=${docker_pkg_ver}" "docker-ce-cli=${docker_pkg_ver}" containerd.io docker-compose-plugin
+    # Hold it: neither `apt upgrade` nor unattended-upgrades may move the
+    # Engine under a running Correlix.
+    apt-mark hold docker-ce docker-ce-cli >/dev/null
+    systemctl enable --now docker
+    fixd "docker-ce ${DOCKER_CE_VERSION} (validated, held) + compose plugin installed, service enabled"
+  fi
 fi
 
 # ---------- 2) small tools ----------------------------------------------------
