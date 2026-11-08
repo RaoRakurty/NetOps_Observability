@@ -6,9 +6,14 @@
 Plan of record: docs/design/P6_CANONICALISATION_PLAN_2026-11-07.md (rules D1, D2,
 D4, D5) and docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md. Tracker 374.
 
-NOT WIRED. Nothing on the hot path imports this module yet; PR-E calls
-`canonicalize` from `main.buffer_signal` behind `CORR_IDENTITY_CANON`. Until then
-the engine's behaviour is unchanged.
+Wired by P6 PR-E behind `CORR_IDENTITY_CANON` (default OFF; requires E1 and
+series admission — signals.identity_canon_enabled): `main.buffer_signal` calls
+`canonicalize_detailed` once per event-lane signal (syslog, trap, controller and
+the proactive checks built from them) after `canon_tenant` and before the E1
+origin stamp — never before the aggregation plane's `agg_admit`;
+`main.handle_metric` calls `canonicalize_series` on the metric lane's series key
+before the episode detector. With the flag OFF neither is called and the
+engine's behaviour is unchanged.
 
 What it solves: one box, one session or one port reaches the engine under a
 different spelling per lane — syslog names the box by its hostname (or, like the
@@ -17,7 +22,7 @@ inventory id; an interface is `Gi1` in one lane and `GigabitEthernet1` in anothe
 the controller rewrites a BGP peer address to the peer's inventory id. Each
 spelling becomes its own node, so the evidence never meets.
 
-Three pure functions:
+Four pure functions:
 
 * `canon_iface_key(name)` — a TABLE-FREE canonical interface key (owner decision
   OD1: `GigabitEthernet0/1` and `Gi0/1` → `gi0/1`; the raw name stays in attrs for
@@ -33,6 +38,10 @@ Three pure functions:
   device grounding token) rewritten, `attrs["canon"] = {"raw", "basis"}` stamped on
   a rewrite only. `native_id` and therefore `signal_id` are NEVER touched, so the
   archive identity and replay are unchanged.
+* `canonicalize_series(ev, entity_id, tokens, resolver, tenant)` — the same rules
+  for a metric-lane series key (`device`, `device:ifName`, `device:peer`,
+  `device:neighbour`); the SOURCE-DECLARED ifIndex (`index`) is the only licence
+  to read digits as an ifIndex.
 
 Safety properties (all tested in test_canon_identity_p6.py):
 
@@ -307,9 +316,13 @@ SESSION_KINDS: Final = frozenset({"bgp_adjacency_change", "ospf_adjacency_change
                                   "isis_adjacency_change", "routing_adjacency_change"})
 # D1 is BGP only: an OSPF syslog "Nbr" is the neighbour's ROUTER-ID while
 # ospfNbrTable is keyed by the neighbour's IP — no change without evidence.
-_D1_KINDS: Final = frozenset({"bgp_adjacency_change"})
+# `bgp_session_not_established` is the A4 proactive check built FROM a syslog
+# BGP adjacency (proactive.py `proactive.bgp.adjacency_down_persisting`: source
+# syslog, the line's host entity, its `peer` attr) — the same session, so it
+# binds the same `<device>:<peer>` node as the line it was derived from (PR-E).
+_D1_KINDS: Final = frozenset({"bgp_adjacency_change", "bgp_session_not_established"})
 # The event lanes PR-E canonicalises in buffer_signal. The metric lane keys its
-# series in handle_metric instead, and flows are PR-F.
+# series in handle_metric instead (canonicalize_series), and flows are PR-F.
 EVENT_SOURCES: Final = frozenset({Source.SYSLOG, Source.TRAP, Source.CONTROLLER})
 _IFACE_ATTR_KEYS: Final = ("interface", "interface_name")
 
@@ -574,3 +587,152 @@ def canonicalize(sig: Signal, resolver: EntityResolver | None) -> tuple[Signal, 
     Outcome ∈ OUTCOMES."""
     r = canonicalize_detailed(sig, resolver)
     return r.signal, r.outcome
+
+
+# ── metric-lane series keys (P6 PR-E) ────────────────────────────────────────
+
+# Every axis canonicalize_detailed / canonicalize_series reports — the closed
+# label set of main's corr_identity_canon_total{lane,axis,outcome}.
+AXES: Final = ("tenant", "parse", "device", "iface", "peer", "length", "model")
+
+# metric_identity families whose series key canonicalize_series understands.
+# cloud_resource keys a provider resource id, not an inventory device: untouched.
+_SERIES_FAMILIES: Final = frozenset({"interface", "bgp", "igp", "device_resource"})
+
+
+@dataclass(frozen=True)
+class SeriesCanon:
+    """What `canonicalize_series` decided for one metric sample's series key.
+    `entity_id` / `entity_tokens` are the INPUT values unless `outcome` is
+    REWRITTEN; `attrs` is `{"canon": {"raw", "basis"}}` on a rewrite, else None."""
+    entity_id: str
+    entity_tokens: tuple[str, ...]
+    outcome: str
+    axes: tuple[tuple[str, str], ...] = ()
+    basis: str = ""
+    attrs: Mapping[str, Mapping[str, str]] | None = None
+
+
+def _ev_str(ev: Mapping, key: str) -> str:
+    v = ev.get(key)
+    if isinstance(v, bool) or not isinstance(v, (str, int)):
+        return ""
+    s = str(v).strip()
+    return s if len(s) <= MAX_ID_CHARS else ""
+
+
+def _index_key(name: str, vendor_hint: str | None) -> str:
+    """The canonical key of an inventory ifName: its key, or the digits of a
+    digit-named port (as entity_resolver indexes it, plus the vendor hint);
+    "" when no key may be derived."""
+    key = canon_iface_key(name, vendor_hint)
+    if is_ifindex_marker(key):
+        return ifindex_of(key)
+    return "" if key in ("", IFACE_ABSTAIN) else key
+
+
+def _metric_iface_axis(device: str, if_name: str, index: str, resolver: EntityResolver,
+                       vendor_hint: str | None) -> _Axis:
+    """D4 for a MetricEvent port: `if_name` (IF-MIB ifName / the controller's
+    ifName) when it names the port, else the SOURCE-DECLARED ifIndex (`index`).
+
+    Digits are read as an ifIndex ONLY when the source declares that index — an
+    SNMP walk row always does (metric_events.go `Index`). A digit-only ifName is
+    first a NAME (HP ProCurve "1".."48"); when the inventory knows no such port
+    the declared ifIndex decides, and an inventory ifName that disagrees with the
+    source's own digit name is a conflict, never a pick."""
+    raw = if_name or index
+    if if_name and not _DIGITS.fullmatch(if_name):
+        return _iface_axis(device, if_name, resolver, vendor_hint)
+    declared = index if (_DIGITS.fullmatch(index) and len(index) <= MAX_IFINDEX_DIGITS) else ""
+    by_index = resolver.ifname(device, declared) if declared else None
+    if if_name and if_name in resolver.ifnames(device):
+        if by_index is not None and by_index != if_name:
+            return _Axis(raw, ABSTAIN_AMBIGUOUS)
+        key, basis = if_name, "iface:digit_name"
+    elif by_index is not None:
+        key = _index_key(by_index, vendor_hint)
+        if if_name and key != if_name:
+            # The source names the port "5"; the inventory says the declared
+            # ifIndex is a differently named port. Two authorities disagree.
+            return _Axis(raw, ABSTAIN_CONFLICT)
+        if not key:
+            return _Axis(raw, ABSTAIN_UNKNOWN)
+        basis = "iface:ifindex"
+    else:
+        return _Axis(raw, ABSTAIN_UNKNOWN)
+    if resolver.iface_key_status(device, key) == "ambiguous":
+        return _Axis(raw, ABSTAIN_AMBIGUOUS)
+    if key == raw:
+        return _Axis(raw, UNCHANGED)
+    return _Axis(key, REWRITTEN, basis)
+
+
+def _peer_axis(raw_peer: str, *, opaque_ok: bool) -> _Axis:
+    """A BGP peer / IGP neighbour → its compressed address. A non-address is an
+    abstention for BGP (identity.yaml keys a session by the remote ADDRESS) but a
+    legitimate identity for an IGP neighbour (an IS-IS system-id): `opaque_ok`."""
+    peer = canonical_peer(raw_peer)
+    if not peer:
+        return _Axis(raw_peer, UNCHANGED if opaque_ok else ABSTAIN_UNKNOWN)
+    if peer == raw_peer:
+        return _Axis(raw_peer, UNCHANGED)
+    return _Axis(peer, REWRITTEN, "peer:ip")
+
+
+def canonicalize_series(ev: Mapping, entity_id: str, entity_tokens: tuple[str, ...],
+                        resolver: EntityResolver | None, tenant: str) -> SeriesCanon:
+    """The metric lane's series key (`main.metric_identity` output) under rules
+    D2 (device) + D4 (port) + peer compression, for the VERIFIED `tenant`.
+
+    Pure; never raises on a hostile event. Abstains (keeps the input key) on a
+    resolver not scoped to `tenant` (§3a), an ambiguous or generic device (its
+    ports would weld two boxes together), an unparseable key, or a rebuilt key
+    longer than MAX_ID_CHARS. An unknown device keeps its spelling — the metric
+    lane names devices by inventory id already — while its port / peer is still
+    canonicalised, exactly as the event lanes' `_plan_interface` / `_plan_session`
+    do. Idempotent: every rebuilt key is a fixed point."""
+    rtenant = getattr(resolver, "tenant", None)
+    if resolver is None or rtenant is None or tenant_key(rtenant) != tenant_key(tenant):
+        return SeriesCanon(entity_id, entity_tokens, ABSTAIN_CONFLICT, (("tenant", ABSTAIN_CONFLICT),))
+    family = _ev_str(ev, "signal_family") if isinstance(ev, Mapping) else ""
+    device = ev.get("device") if isinstance(ev, Mapping) else None
+    if family not in _SERIES_FAMILIES or not isinstance(device, str) or not device:
+        return SeriesCanon(entity_id, entity_tokens, UNCHANGED)
+    part: str | None = None
+    if family != "device_resource":
+        if not (entity_id.startswith(device + ":") and len(entity_id) > len(device) + 1):
+            return SeriesCanon(entity_id, entity_tokens, ABSTAIN_UNKNOWN, (("parse", ABSTAIN_UNKNOWN),))
+        part = entity_id[len(device) + 1:]
+    elif entity_id != device:
+        return SeriesCanon(entity_id, entity_tokens, ABSTAIN_UNKNOWN, (("parse", ABSTAIN_UNKNOWN),))
+    d = _device_axis(device, resolver)
+    if d.outcome in (ABSTAIN_AMBIGUOUS, ABSTAIN_GENERIC, ABSTAIN_CONFLICT):
+        return SeriesCanon(entity_id, entity_tokens, d.outcome, (("device", d.outcome),))
+    axes: list[tuple[str, str]] = [("device", d.outcome)]
+    basis = [d.basis] if d.basis else []
+    swaps = {device: d.value}
+    if part is None:
+        new_id = d.value
+    elif family == "interface":
+        i = _metric_iface_axis(d.value, _ev_str(ev, "if_name"), _ev_str(ev, "index"), resolver,
+                               _ev_str(ev, "vendor") or None)
+        axes.append(("iface", i.outcome))
+        basis += [i.basis] if i.basis else []
+        new_id = f"{d.value}:{i.value}"
+    else:
+        p = _peer_axis(part, opaque_ok=(family == "igp"))
+        axes.append(("peer", p.outcome))
+        if p.basis:
+            basis.append(p.basis)
+            swaps[part] = p.value
+        new_id = f"{d.value}:{p.value}"
+    ax = tuple(axes)
+    if new_id == entity_id:
+        return SeriesCanon(entity_id, entity_tokens, _overall(ax), ax)
+    if len(new_id) > MAX_ID_CHARS:
+        return SeriesCanon(entity_id, entity_tokens, ABSTAIN_CONFLICT, (*ax, ("length", ABSTAIN_CONFLICT)))
+    tokens = tuple(dict.fromkeys(swaps.get(t, t) for t in entity_tokens))
+    joined = "+".join(basis)
+    return SeriesCanon(new_id, tokens, REWRITTEN, ax, joined,
+                       {CANON_ATTR: {"raw": entity_id, "basis": joined}})

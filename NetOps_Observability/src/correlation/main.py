@@ -85,6 +85,23 @@ import log_redact
 import signals
 from aggregation import AGG_EVICT_REASONS, AggPlane, DeltaClass
 from app_producers import app_identity_from_event
+from canon import (
+    AXES as CANON_AXES,
+)
+from canon import (
+    EVENT_SOURCES as CANON_EVENT_SOURCES,
+)
+from canon import (
+    OUTCOMES as CANON_OUTCOMES,
+)
+from canon import (
+    REWRITTEN as CANON_REWRITTEN,
+)
+from canon import (
+    canonicalize_detailed,
+    canonicalize_series,
+    tenant_key,
+)
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
 from cloud_log_parsers import (
@@ -129,7 +146,7 @@ from engine import (
     required_retention_s,
     run_window,
 )
-from entity_resolver import EntityResolver
+from entity_resolver import EntityResolver, identity_resolver_for
 from episodes import EpisodeDetector
 from evidence_plane import (
     EVIDENCE_CLASS_DECISION,
@@ -208,6 +225,8 @@ from signals import (
     derive_probe_authority,
     derive_probe_scope,
     evidence_signal_from_event,
+    identity_canon_enabled,
+    identity_canon_requested,
     origin_observer_enabled,
     series_admission_enabled,
     series_bucket_env_valid,
@@ -1414,6 +1433,25 @@ if not series_bucket_env_valid():
 if series_admission_enabled():
     log.info("series admission ON (CORR_SERIES_ADMISSION): one sample per series per %.0f s "
              "bucket across collection paths; unit-contradicting samples refused", series_bucket_s())
+# P6 PR-E: stage [1] identity canonicalisation needs E1 (one box seen by two
+# lanes is never two witnesses once its evidence shares a node) AND series
+# admission (SNMP + controller samples on one canonical series, one per bucket,
+# one scale). Requested without both it stays OFF — loudly, never silently.
+def identity_canon_missing_prereqs() -> tuple[str, ...]:
+    """The prerequisite flags CORR_IDENTITY_CANON needs that are OFF (empty when
+    both are on). Used by the start-up log and /healthz."""
+    return tuple(name for name, on in (("CORR_ORIGIN_OBSERVER", origin_observer_enabled()),
+                                       ("CORR_SERIES_ADMISSION", series_admission_enabled()))
+                 if not on)
+
+
+if identity_canon_requested() and not identity_canon_enabled():
+    log.error("CORR_IDENTITY_CANON is set but its prerequisites are off (%s): identity "
+              "canonicalisation stays OFF (it requires CORR_ORIGIN_OBSERVER and "
+              "CORR_SERIES_ADMISSION)", ", ".join(identity_canon_missing_prereqs()))
+elif identity_canon_enabled():
+    log.info("identity canonicalisation ON (CORR_IDENTITY_CANON): event-lane entities and "
+             "metric series keys are rewritten to the tenant's canonical spelling")
 CATALOG = builtin_catalog()
 
 # Evidence window: every canonical Signal written to the spine also lands here
@@ -1613,6 +1651,37 @@ def cached_entity_resolver_for(tenant: str) -> EntityResolver:
     if r is None:
         r = entity_resolver_for(tenant)
         _resolver_cache[tenant] = r
+    return r
+
+
+_identity_resolver_cache: dict[str, EntityResolver] = {}
+_identity_resolver_cache_mtime: float = -1.0
+
+
+def cached_identity_resolver_for(tenant: str) -> EntityResolver:
+    """The TENANT-ONLY resolver stage [1] canonicalisation uses (P6 PR-E, OD2):
+    `entity_resolver.identity_resolver_for` — the tenant's own rows, never
+    tenant ∪ global — memoized per (tenant, file mtime) with the same rule as
+    `cached_entity_resolver_for`: the whole cache is dropped when
+    entity_resolver.json changes.
+
+    Keyed by `canon.tenant_key` ("" and "global" are the one platform-global
+    principal) and BOUNDED BY THE FILE'S TENANT COUNT: only a tenant that owns
+    rows in the file (or the global principal) is cached. A tenant the file does
+    not know gets a fresh, empty, still tenant-scoped resolver (it abstains on
+    everything) that is never stored, so a stream of unknown tenant claims on the
+    metric lane — which is not registry-anchored — cannot grow this map."""
+    global _identity_resolver_cache, _identity_resolver_cache_mtime
+    raw = _entity_resolver_raw()
+    if _er_mtime != _identity_resolver_cache_mtime:
+        _identity_resolver_cache = {}
+        _identity_resolver_cache_mtime = _er_mtime
+    key = tenant_key(tenant)
+    r = _identity_resolver_cache.get(key)
+    if r is None:
+        r = identity_resolver_for(raw, key)
+        if key == "" or any(key in by_tenant for by_tenant in raw.values()):
+            _identity_resolver_cache[key] = r
     return r
 
 
@@ -1988,10 +2057,68 @@ def _stamp_origin_device(sig: Signal) -> Signal:
         token = sig.observer.observer_id.strip()
     if not token:
         return sig
-    canonical = (cached_entity_resolver_for(sig.tenant_id).canonical_device(token) or token)[:256]
+    if identity_canon_enabled():
+        # P6 PR-E (plan OD2, "move E1 onto it"): with stage [1] on, the origin is
+        # resolved by the SAME tenant-only resolver that canonicalised the
+        # entity. The legacy tenant ∪ global resolver drops a name or address a
+        # global row also claims, so the box's syslog (by address) and its trap
+        # (by id) would share a node yet carry two origins — the one-box
+        # over-count E1 exists to prevent. Flag off: the legacy lookup, unchanged.
+        resolved, _reason = cached_identity_resolver_for(sig.tenant_id).resolve_device(token)
+        canonical = (resolved or token)[:256]
+    else:
+        canonical = (cached_entity_resolver_for(sig.tenant_id).canonical_device(token) or token)[:256]
     if attrs.get(ORIGIN_DEVICE_ATTR) == canonical:
         return sig
     return dc_replace(sig, attrs={**attrs, ORIGIN_DEVICE_ATTR: canonical})
+
+
+# P6 PR-E stage [1] canonicalisation outcomes, corr_identity_canon_total
+# {lane,axis,outcome}. Every label comes from a CLOSED set: the lanes below, the
+# axes canon.AXES plus "signal" (the overall outcome of one call — the sum over
+# it is the number of canonicalisation calls), and canon.OUTCOMES. So the series
+# count is bounded (5 × 8 × 6) whatever the wire carries.
+CANON_LANES: tuple[str, ...] = ("syslog", "trap", "controller", "proactive", "metric")
+_CANON_AXIS_LABELS: frozenset[str] = frozenset((*CANON_AXES, "signal"))
+_CANON_OUTCOME_LABELS: frozenset[str] = frozenset(CANON_OUTCOMES)
+IDENTITY_CANON_COUNTS: dict[tuple[str, str, str], int] = {}
+# A4 proactive signals ride their trigger's source (syslog) but are their own
+# producer: the collection path proactive.proactive_signal stamps names them.
+_PROACTIVE_COLLECTION_PATH = "proactive_check"
+
+
+def _count_canon(lane: str, outcome: str, axes: tuple[tuple[str, str], ...]) -> None:
+    """Count one canonicalisation call: its overall outcome and every axis's.
+    A label outside the closed sets (impossible today) is folded, never minted."""
+    for axis, out in (("signal", outcome), *axes):
+        key = (lane if lane in CANON_LANES else "other",
+               axis if axis in _CANON_AXIS_LABELS else "other",
+               out if out in _CANON_OUTCOME_LABELS else "other")
+        IDENTITY_CANON_COUNTS[key] = IDENTITY_CANON_COUNTS.get(key, 0) + 1
+
+
+def identity_canon_totals() -> dict[str, int]:
+    """Per overall outcome (rewritten / unchanged / abstain_*) across lanes — the
+    /healthz ingest view of corr_identity_canon_total{axis="signal"}."""
+    out = dict.fromkeys(CANON_OUTCOMES, 0)
+    for (_lane, axis, outcome), n in IDENTITY_CANON_COUNTS.items():
+        if axis == "signal" and outcome in out:
+            out[outcome] += n
+    return out
+
+
+def _canonicalize_event(sig: Signal) -> Signal:
+    """Stage [1] identity canonicalisation of one event-lane signal (P6 PR-E,
+    flag CORR_IDENTITY_CANON): canon.canonicalize_detailed against the signal's
+    OWN tenant's resolver (cached_identity_resolver_for — never tenant ∪ global).
+    Rewrites `entity_id` and the raw device token only; `native_id` and so
+    `signal_id` never move, so window dedup, the archive slice and replay keep
+    the identity corr_signals was written under. Counted per lane and axis."""
+    lane = (CANON_LANES[3] if sig.observer.collection_path == _PROACTIVE_COLLECTION_PATH
+            else sig.source.value)
+    res = canonicalize_detailed(sig, cached_identity_resolver_for(sig.tenant_id))
+    _count_canon(lane, res.outcome, res.axes)
+    return res.signal
 
 
 def buffer_signal(sig: Signal) -> None:
@@ -2020,6 +2147,16 @@ def buffer_signal(sig: Signal) -> None:
     # of pre-fix objects stays bit-perfect (#101 contract).
     if sig.tenant_id != canon_tenant(sig.tenant_id):
         sig = dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id))
+    # P6 PR-E stage [1] (flag CORR_IDENTITY_CANON, default OFF; requires E1 +
+    # series admission): the entity becomes the tenant's canonical spelling —
+    # AFTER the tenant is canonical (the tenant picks the resolver) and BEFORE
+    # the E1 origin stamp; deliberately AFTER every lane's `agg_admit`, never
+    # before it (INVARIANTS §10a: the aggregation plane's new_vantage /
+    # new_modality merge paths are unproven, so its keys stay the raw ones).
+    # Here, at the single live window entry, so the archive slice — and replay,
+    # which never comes through here — carries the canonical entity.
+    if identity_canon_enabled() and sig.source in CANON_EVENT_SOURCES:
+        sig = _canonicalize_event(sig)
     # E1 (flag CORR_ORIGIN_OBSERVER, default OFF): after the tenant is canonical,
     # because the device is resolved through that tenant's inventory only.
     if origin_observer_enabled():
@@ -12555,6 +12692,21 @@ async def handle_metric(ev: dict) -> None:
     collection_path = str(ev.get("collection_path") or "snmp_poll")
     METRICS_ACCEPTED += 1
 
+    # P6 PR-E stage [1] (flag CORR_IDENTITY_CANON, default OFF; requires E1 +
+    # series admission): the SERIES KEY becomes the tenant's canonical spelling
+    # (device id, canon_iface_key port, compressed peer) — after the tenant is
+    # verified (it picks the resolver), before the counter-rate state, the
+    # episode detector, the A4 proactive plane and the legacy z-score, so one
+    # port polled by SNMP (`GigabitEthernet1`) and relayed by the controller
+    # (`Gi1`) is ONE series and its episode lands on the event lanes' node.
+    canon_attrs: dict | None = None
+    if identity_canon_enabled():
+        sc = canonicalize_series(ev, entity_id, tokens, cached_identity_resolver_for(tenant), tenant)
+        _count_canon(CANON_LANES[4], sc.outcome, sc.axes)
+        if sc.outcome == CANON_REWRITTEN:
+            entity_id, tokens = sc.entity_id, sc.entity_tokens
+            canon_attrs = {k: dict(v) for k, v in (sc.attrs or {}).items()}
+
     # P6 PR-C2 (stage [2] series admission, flag CORR_SERIES_ADMISSION): one
     # series is fed by every source of a device (owner 2026-11-07), so a sample
     # must MEAN what the series means before it may join it. A declared unit
@@ -12585,6 +12737,9 @@ async def handle_metric(ev: dict) -> None:
         kind_prefix=kind_prefix,
         entity_tokens=tokens,
         series_source=collection_path if admission else None,
+        # P6 PR-E: attrs["canon"] = {raw, basis} only when the key was rewritten
+        # (None otherwise: the legacy call, byte for byte).
+        extra_attrs=canon_attrs,
     )
 
     # A4 heartbeat plane. The episode detector above answers "did this move?";
@@ -15174,6 +15329,17 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_series_unit_rejected_total RCA-family metric samples refused because their declared unit contradicts the canonical table.",
         "# TYPE corr_series_unit_rejected_total counter",
         f"corr_series_unit_rejected_total {ing['series_unit_rejected']}",
+        # P6 PR-E identity canonicalisation (flag CORR_IDENTITY_CANON): 1 only
+        # when in force — requested without E1 + series admission reads 0 (fail
+        # closed, logged at start). Declared either way so the counter below
+        # reads against whether the stage ran.
+        "# HELP corr_identity_canon_enabled 1 when stage [1] rewrites entities to the tenant's canonical spelling (CORR_IDENTITY_CANON, requires E1 + series admission).",
+        "# TYPE corr_identity_canon_enabled gauge",
+        f"corr_identity_canon_enabled {1 if identity_canon_enabled() else 0}",
+        "# HELP corr_identity_canon_total Stage [1] canonicalisation outcomes by lane and axis (axis=\"signal\" = one per call).",
+        "# TYPE corr_identity_canon_total counter",
+        *(f'corr_identity_canon_total{{lane="{lane}",axis="{axis}",outcome="{outcome}"}} {n}'
+          for (lane, axis, outcome), n in sorted(IDENTITY_CANON_COUNTS.items())),
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
@@ -15814,6 +15980,10 @@ def _health_payload() -> dict:
             # RCA-family sample whose declared unit contradicts the table.
             "series_cross_source_dropped": DETECTOR.cross_source_dropped,
             "series_unit_rejected": METRICS_SERIES_UNIT_REJECTED,
+            # P6 PR-E stage [1] canonicalisation (CORR_IDENTITY_CANON): calls by
+            # overall outcome across lanes; the per-lane/axis split is
+            # corr_identity_canon_total on /metrics.
+            **{f"identity_canon_{outcome}": n for outcome, n in identity_canon_totals().items()},
             # P6-A: controller event_time present but unparseable → ingest time used.
             "controller_events_ts_fallback": controller_events_mod.TS_FALLBACKS,
             # tracker 376: duplicate family reports of one BGP transition.

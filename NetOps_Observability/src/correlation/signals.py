@@ -603,6 +603,45 @@ def set_config_change_family(enabled: bool) -> None:
     _CONFIG_CHANGE_FAMILY = bool(enabled)
 
 
+# ── P6 PR-E: stage [1] identity canonicalisation (flag CORR_IDENTITY_CANON) ──
+# One box, one session or one port reaches the engine under a different
+# spelling per lane (syslog hostname or management IP vs the inventory id;
+# `Gi1` vs `GigabitEthernet1`; the controller's peer rewritten to an inventory
+# id). ON, stage [1] rewrites the entity to the tenant's canonical spelling
+# (canon.py rules D1/D2/D4/D5) at the live window entry (main.buffer_signal,
+# event lanes) and on the metric lane's series key (main.handle_metric), so
+# the evidence meets on one node. `native_id` / `signal_id` never move.
+#
+# REQUIRES E1 (CORR_ORIGIN_OBSERVER) AND stage [2] series admission
+# (CORR_SERIES_ADMISSION) — plan docs/design/P6_CANONICALISATION_PLAN_2026-11-07.md
+# "Gates": once syslog grounds onto the device's node, a syslog-hostname vs
+# SNMP-id pair would confirm on one box's word without E1; and once SNMP and
+# controller samples share one canonical series, they must be admitted one per
+# bucket on one scale first. Requested without both, the flag stays OFF and
+# main.py logs an error at start-up (gauge corr_identity_canon_enabled 0).
+# Default OFF: canonicalize is never called and not one byte of any object moves.
+_IDENTITY_CANON: bool = os.environ.get(
+    "CORR_IDENTITY_CANON", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def identity_canon_requested() -> bool:
+    """Was stage [1] canonicalisation asked for (env), honoured or not?"""
+    return _IDENTITY_CANON
+
+
+def identity_canon_enabled() -> bool:
+    """Is stage [1] identity canonicalisation IN FORCE? Requires the E1
+    origin-observer rule AND series admission; requested without either it
+    stays off (fail closed)."""
+    return _IDENTITY_CANON and _ORIGIN_OBSERVER and _SERIES_ADMISSION
+
+
+def set_identity_canon(enabled: bool) -> None:
+    """Test hook: toggle the flag in-process. Production reads the env var."""
+    global _IDENTITY_CANON
+    _IDENTITY_CANON = bool(enabled)
+
+
 def origin_device_of(sig: Signal) -> str:
     """The canonical device a signal's own state belongs to, or "" when the lane
     stamped none. Lower-cased and trimmed so two lanes' spellings compare."""
