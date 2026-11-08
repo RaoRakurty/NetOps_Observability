@@ -396,6 +396,10 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         "trap.bgp.cisco_bgp4",
         # tracker 377: Nokia TIMETRA-BGP-MIB IPv6 session transitions.
         "trap.bgp.nokia_ng",
+        # tracker 378: link traps carrying Cisco locIfReason gain link_cause /
+        # link_reason; only the five 378 entries skip — every other link trap
+        # in the corpus stays IN the parity run (it carries no reason varbind).
+        "trap.link.state_change",
     }
     fired = set()
     for entry in golden:

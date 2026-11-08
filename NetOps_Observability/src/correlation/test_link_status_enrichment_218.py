@@ -246,7 +246,10 @@ def test_the_enrichment_is_purely_additive_on_the_attrs_dict():
     rich = classify(link_trap(admin=2, oper=2))
     for key, value in bare.attrs.items():
         assert rich.attrs[key] == value, f"attr {key!r} changed value"
-    assert set(rich.attrs) - set(bare.attrs) == {"admin_status", "oper_status"}
+    # tracker 378: admin_status=down also yields the canonical cause.
+    assert set(rich.attrs) - set(bare.attrs) == {"admin_status", "oper_status",
+                                                  "link_cause"}
+    assert rich.attrs["link_cause"] == "admin"
 
 
 def test_no_golden_corpus_event_carries_a_status_varbind():
@@ -383,7 +386,9 @@ def test_both_link_rules_declare_the_two_keys_as_omit_empty():
     for rid in ("trap.link.state_change", "trap.link.state_change.event_type"):
         rule = P.RULES_BY_ID[rid]
         assert rule.emit is not None
-        assert rule.emit.omit_empty == ("admin_status", "oper_status"), rid
+        # tracker 378 appends the cause keys under the same contract.
+        assert rule.emit.omit_empty == ("admin_status", "oper_status",
+                                        "link_cause", "link_reason"), rid
 
 
 def test_no_other_rule_drops_an_attr():
