@@ -96,6 +96,32 @@ for s in "${SERVICES[@]}"; do
   [ -n "$cid" ] && OLD_IMG[$s]="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
 done
 
+# 2b. render the service credential files (tracker 367 layer 1). The compose
+# files mount data/secrets/<group>/<identity>/ into every client and vmauth; a
+# container recreated without its file refuses to start or fails every
+# authenticated call. install.py and update.sh render them; this deploy path
+# must too, or the first `deploy.sh api` after the 367 upgrade takes metrics
+# down. The SAME renderer (one definition of names, owners, modes), BEFORE the
+# running stack is touched — a failure here leaves it untouched.
+# No .env = no installed stack (a plaintext dev checkout): nothing mounts a
+# credential file, so there is nothing to render — said out loud, not skipped
+# silently. With a .env (every install), a render failure aborts the deploy.
+if [ ! -f "$COMPOSE_DIR/.env" ]; then
+  warn "no $COMPOSE_DIR/.env — not an installed stack; service credential files not rendered"
+else
+  log "rendering service credential files…"
+  if ! ( cd "$ROOT" && python3 - <<'PY'
+import importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("install", "scripts/install.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.render_service_secrets(pathlib.Path(".").resolve())
+PY
+  ); then
+    die "rendering service credential files failed — running stack left UNTOUCHED."; exit 1
+  fi
+fi
+
 # 3. build ONLY the named services, then recreate ONLY them. `up --build`
 # also rebuilds (and, on a new image, recreates) every dependency with a build
 # section — deploying the api rebuilt secrets-seal from scratch (a ~35-minute

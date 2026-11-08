@@ -108,3 +108,18 @@ def test_no_explicit_compose_file_anywhere_in_deploy_sh():
     code = "\n".join(ln for ln in SCRIPT.read_text().splitlines() if not ln.lstrip().startswith("#"))
     assert "docker compose -f" not in code and "compose --file" not in code, (
         "deploy.sh names a compose file explicitly — that bypasses COMPOSE_FILE")
+
+
+def test_deploy_renders_service_credential_files_before_touching_the_stack() -> None:
+    """tracker 367 layer 1: every client mounts data/secrets/<group>/<identity>/.
+    deploy.sh must render them (the SAME install.py renderer) BEFORE it builds or
+    recreates anything — otherwise the first `deploy.sh api` after the upgrade
+    recreates clients without their credential files and metrics go down."""
+    src = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    render = src.find("render_service_secrets(")
+    build = src.find('dc build "${SERVICES[@]}"')
+    up = src.find('dc up -d --no-deps "${SERVICES[@]}"')
+    assert render != -1, "deploy.sh no longer renders the service credential files"
+    assert build != -1 and up != -1, "deploy.sh build/recreate lines moved — update this test"
+    assert render < build < up, "credential files must be rendered before the stack is touched"
+    assert "running stack left UNTOUCHED" in src[render:build], "a render failure must abort before build"
