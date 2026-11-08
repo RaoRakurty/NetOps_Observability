@@ -115,3 +115,76 @@ contract if a stage is added · the "29.5.0-specific" claim is unverified.
   (*recommended*; no evidence of a 29.5.0-specific defect).
 - **D6** Allow a one-time lab drill that plants a stale entry to prove the
   delete path on the lab.
+
+---
+
+## Research update 2026-11-08 (Fable; premises re-checked in the main session ✔)
+
+**Verdict: keep netguard, modified — but prove Docker's own flush first.** Lab facts ✔:
+Docker Engine **29.5.2**; `prepare-host.sh` runs `firewall-cmd --reload`; the compose
+network has no `enable_ipv6`.
+
+**What Docker already does.** Since Engine 23 (moby PR #44742, fixing #44688 — our
+exact symptom) Docker deletes stale UDP conntrack entries for published ports after
+installing the NAT rules on every container start. Two regressions: 29.5.0 broke it
+entirely (fixed in 29.5.1, moby #52640; Akvorado users hit it, akvorado#2431), and
+moby#53384 (still open, fix PR #53385 approved, unmerged) flushes by CONTAINER port
+— which is why the lab's 162→1162 mapping broke and why host==container parity (#126)
+fixes the deploy path. **Not covered by Docker:** firewalld reloads
+(`handleFirewalldReloadNw` re-applies rules with no flush — and our own prepare-host
+triggers one), rule wipes Docker doesn't see, future regressions (the installer tracks
+docker-ce latest). **IPv6 senders are always masked** (IPv4-only network → docker-proxy
+relays them) — a separate cause no conntrack fix can solve.
+
+**Prior art.** Akvorado (OSS NetFlow, compose) shipped exactly this as `conntrack-fixer`
+(NET_ADMIN, host netns, docker events) 2022–2025, removed when Docker ≥23 flushed —
+then hit by 29.5.0. kube-proxy reconciles with the same predicate (UDP to a service port
+whose reply-src is not a serving endpoint), deletes by full tuple; lessons: dst-port
+must be matched (k8s#129982: 12 GB memory, endless delete loops), flush only AFTER rules
+exist (k8s#106163), skip ports with no serving endpoint. CNI portmap flushes by host
+port after ADD/DEL.
+
+**Competitors avoid NAT instead of repairing it.** ElastiFlow: "network_mode must be set
+to host" (the bridge loses the source IP); Splunk SC4S: `--network host`; New Relic
+ktranslate flows and Kentik kproxy: `--net=host`; Datadog/Dynatrace/LogicMonitor:
+host/VM agents. No commercial vendor ships a conntrack flush. They can, because their
+collectors only need outbound HTTPS; ours talk to internal Kafka/Vector by compose DNS,
+which makes host networking expensive in TODAY's stack and cheap in the Collector tier.
+
+**Revised order.** (1) No-sudo lab drill: force-recreate syslog-ng + api while cEDGE-81
+sends; the masked counter must stay flat. (2) Doctor/qualify check: warn on Docker <23
+or ==29.5.0 (corrects D5). (3) Close our own firewalld-reload window in prepare-host
+(reload before the stack starts, or follow it with a guard run). (4) Netguard as defence
+in depth, with the corrections below. (5) Strategic: host-network UDP receivers in the
+Collector tier (tracker 372) — add source-address preservation as a C3/C5 requirement.
+
+**Corrections to this plan (must be in the build).**
+- E1 CRITICAL: a CT_DELETE without CTA_TUPLE_ORIG/REPLY FLUSHES THE WHOLE TABLE (all
+  families with version 0); unknown attribute IDs are silently ignored. Encoder-side
+  assertion that every DELETE carries a parseable ORIG tuple (proto 17, IPv4 dst) before
+  sendto; golden decode test of our own DELETE bytes; netns CI case proving an
+  unrelated TCP entry survives.
+- E2: container→host-IP hairpin traffic on a published port is relayed un-DNATed and
+  would be deleted every sweep → false `recurring` pages. Exclude orig-src in local
+  docker bridge subnets / local addresses; prove in netns CI.
+- E3: per-port skip when the publishing container is not running/healthy (kube-proxy
+  lesson).
+- E4: use IPS_DST_NAT (bit 5, 0x20), NOT DST_NAT_DONE (bit 8, set by the null binding
+  too); mask NLA_F_NESTED; EBUSY (offloaded, ≤5.15) and ENOENT are benign.
+- E5: kernel-side dump filter: CTA_STATUS=0 + CTA_STATUS_MASK=IPS_DST_NAT with
+  nfgen_family=AF_INET (Linux ≥5.15 — every supported OS); userland filter as fallback.
+  (CTA_FILTER is ≥5.8, not 5.9.)
+- E6: stream-decode with a hard cap; never accumulate failed deletes; dumps are not
+  snapshots (ctnetlink never sets NLM_F_DUMP_INTR) — the rescan covers it.
+- Kernel constants verified against uapi headers: NETLINK_NETFILTER 12, subsys
+  CTNETLINK 1, CT_GET 1 / CT_DELETE 2, CTA_TUPLE_ORIG 1, CTA_STATUS 3, CTA_ID 12,
+  CTA_FILTER 25, CTA_STATUS_MASK 26; CAP_NET_ADMIN required for every nfnetlink message
+  incl. dumps.
+- Name the problem precisely: "ufw reload" is unproven; the proven window is firewalld.
+  Runbook/alert must separate "stale entry" from "IPv6 sender".
+
+Sources (full list in the research report): moby #53384, #53385, #52640, #44742, #44688;
+akvorado#2431, commit f9eee6f; kube-proxy pkg/proxy/conntrack/cleanup.go, k8s#126130,
+#129982, PR #130484, PR #106163; CNI portmap main.go; kernel nf_conntrack_netlink.c,
+nfnetlink.c, nfnetlink_conntrack.h; ElastiFlow, SC4S, New Relic, Datadog, Dynatrace,
+LogicMonitor, Kentik docs.
