@@ -482,7 +482,14 @@ RULES_HASH_CBGP_TRANSITIONS = "3a1a5257f4ef396de0d5ca68e001deb101d711283755eeeb0
 #: the Nokia notification subtree. Additive: every earlier corpus entry replays
 #: byte-for-byte; new entries record the new rule's outputs.
 RULES_HASH_NOKIA_NG = "236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f72038d2d"
-RULES_HASH_A3 = RULES_HASH_NOKIA_NG
+#:
+#: Link cause (2026-11-08, tracker 378): both link rules read Cisco locIfReason
+#: and emit `link_cause` (admin|fault|unknown) + `link_reason`, both
+#: `omit_empty` — the 218 shape. Additive: no earlier corpus entry carries
+#: locIfReason, so every one replays byte-for-byte; five new entries record the
+#: new outputs (baseline-absent: the frozen code lacks the two keys).
+RULES_HASH_LINK_CAUSE = "57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735"
+RULES_HASH_A3 = RULES_HASH_LINK_CAUSE
 
 
 def _guard_patterns(node) -> list[str]:

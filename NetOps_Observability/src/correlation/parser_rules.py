@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, rules_hash
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-07-nokia-bgp-ng'
+PARSER_REV = '2026-11-08-link-cause'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -889,7 +889,20 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                           {'when': {'re': ['$oper_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
                                           {'when': {'re': ['$oper_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
                                           {'when': {'re': ['$oper_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
-                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]}},
+                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]},
+                 'reason_raw': {'alt': [{'vb': ['1.3.6.1.4.1.9.2.2.1.1.20']}, {'vbname': ['locifreason']}]},
+                 'link_reason': {'re': [['$reason_raw', '(\\S(?:[^\\r\\n]*\\S)?)', 1, '']], 'slice': 64},
+                 'link_cause': {'case': [{'when': {'all': [{'eq': ['$state', 'down']}, {'eq': ['$admin_status', 'down']}]}, 'value': 'admin'},
+                                         {'when': {'all': [{'eq': ['$state', 'down']},
+                                                           {'ne': ['$admin_status', 'up']},
+                                                           {'re': ['$link_reason', '^administratively\\s+down$', 'i']}]},
+                                          'value': 'admin'},
+                                         {'when': {'all': [{'eq': ['$state', 'down']},
+                                                           {'re': ['$link_reason',
+                                                                   '\\b(?:keepalive\\s+failed|lost\\s+carrier|fatal\\s+tx\\s+error|late\\s+collision|excessive\\s+collisions?|open\\s+failure|ring\\s+beaconing|duplicate\\s+address|wire-?fault|auto-?removal|lapb\\s+down|eia\\s+signal\\s+lost)\\b',
+                                                                   'i']}]},
+                                          'value': 'fault'},
+                                         {'when': {'any': [{'truthy': '$admin_status'}, {'truthy': '$link_reason'}]}, 'value': 'unknown'}]}},
      'emit': {'kind': 'link_state_change',
               'metric': 'link_state',
               'modality': 'control_plane',
@@ -902,8 +915,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
                         'trap_oid': {'var': 'oid'},
                         'authenticated': {'var': 'authed'},
                         'admin_status': {'var': 'admin_status'},
-                        'oper_status': {'var': 'oper_status'}},
-              'omit_empty': ['admin_status', 'oper_status']},
+                        'oper_status': {'var': 'oper_status'},
+                        'link_cause': {'var': 'link_cause'},
+                        'link_reason': {'var': 'link_reason'}},
+              'omit_empty': ['admin_status', 'oper_status', 'link_cause', 'link_reason']},
      'markers': [],
      'generic': False,
      'shadow': False},
@@ -1093,7 +1108,20 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                           {'when': {'re': ['$oper_raw', '\\b(?:testing|3)\\b']}, 'value': 'testing'},
                                           {'when': {'re': ['$oper_raw', '\\b(?:down|2)\\b']}, 'value': 'down'},
                                           {'when': {'re': ['$oper_raw', '\\b(?:up|1)\\b']}, 'value': 'up'},
-                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]}},
+                                          {'when': {'truthy': '$oper_raw'}, 'value': 'unknown'}]},
+                 'reason_raw': {'alt': [{'vb': ['1.3.6.1.4.1.9.2.2.1.1.20']}, {'vbname': ['locifreason']}]},
+                 'link_reason': {'re': [['$reason_raw', '(\\S(?:[^\\r\\n]*\\S)?)', 1, '']], 'slice': 64},
+                 'link_cause': {'case': [{'when': {'all': [{'eq': ['$state', 'down']}, {'eq': ['$admin_status', 'down']}]}, 'value': 'admin'},
+                                         {'when': {'all': [{'eq': ['$state', 'down']},
+                                                           {'ne': ['$admin_status', 'up']},
+                                                           {'re': ['$link_reason', '^administratively\\s+down$', 'i']}]},
+                                          'value': 'admin'},
+                                         {'when': {'all': [{'eq': ['$state', 'down']},
+                                                           {'re': ['$link_reason',
+                                                                   '\\b(?:keepalive\\s+failed|lost\\s+carrier|fatal\\s+tx\\s+error|late\\s+collision|excessive\\s+collisions?|open\\s+failure|ring\\s+beaconing|duplicate\\s+address|wire-?fault|auto-?removal|lapb\\s+down|eia\\s+signal\\s+lost)\\b',
+                                                                   'i']}]},
+                                          'value': 'fault'},
+                                         {'when': {'any': [{'truthy': '$admin_status'}, {'truthy': '$link_reason'}]}, 'value': 'unknown'}]}},
      'emit': {'kind': 'link_state_change',
               'metric': 'link_state',
               'modality': 'control_plane',
@@ -1107,8 +1135,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
                         'event_type': {'var': 'etype'},
                         'authenticated': {'var': 'authed'},
                         'admin_status': {'var': 'admin_status'},
-                        'oper_status': {'var': 'oper_status'}},
-              'omit_empty': ['admin_status', 'oper_status']},
+                        'oper_status': {'var': 'oper_status'},
+                        'link_cause': {'var': 'link_cause'},
+                        'link_reason': {'var': 'link_reason'}},
+              'omit_empty': ['admin_status', 'oper_status', 'link_cause', 'link_reason']},
      'markers': [],
      'generic': False,
      'shadow': False},
@@ -1378,5 +1408,5 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f72038d2d'
+BAKED_RULES_HASH = '57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735'
 RULES_HASH: str = rules_hash(RULES)
