@@ -1,6 +1,6 @@
 # Netguard — automatic stale-conntrack remedy (tracker 373 remainder)
 
-Status: **SUPERSEDED (owner decision 2026-11-08)** — Correlix will NOT build netguard. The plan of record is host-network telemetry ingress, per the owner's research `docs/research/PRESERVE_ORIGINAL_SOURCE_IP_2026-11-08.md`. This document is kept for the rationale and the research below.
+Status: **SUPERSEDED (owner decision 2026-11-08)** — Correlix will NOT build netguard. The plan of record is host-network telemetry ingress (DEFERRED by the owner on 2026-11-08 — ~3–4 days; revisit with the Collector tier / after Iris), per the owner's research `docs/research/PRESERVE_ORIGINAL_SOURCE_IP_2026-11-08.md`. This document is kept for the rationale and the research below.
 
 Original status: PLAN, awaiting owner decisions D1–D6 (2026-11-07). Research: Fable
 `researcher`; premises re-verified in the main session where marked ✔.
