@@ -153,6 +153,10 @@ Both rescues read packet content, which anything reaching UDP 162 controls, so
 they are gated. Without the gate, a forged `sysName` would be enough to file an
 event under a real device.
 
+A community is a shared credential, so it is compared on receipt and then
+discarded. It is never published, stored or logged. A stored v1 or v2c trap
+carries `snmp_community_present: true` instead.
+
 Source traps from the management or loopback address Correlix knows, and account
 for any NAT on the path.
 

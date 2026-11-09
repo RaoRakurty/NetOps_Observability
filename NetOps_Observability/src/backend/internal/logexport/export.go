@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
 	"netops/backend/reports"
 )
@@ -128,6 +129,8 @@ func BuildSearchBody(spec Spec, start, end time.Time, size int, searchAfter []an
 			map[string]any{"_id": "asc"}, // unique tiebreaker for search_after
 		},
 		"query": map[string]any{"bool": boolQuery},
+		// Stored documents may still hold a device credential: see logsecrets.
+		"_source": map[string]any{"excludes": logsecrets.SourceExcludes()},
 	}
 	if len(searchAfter) > 0 {
 		body["search_after"] = searchAfter
@@ -194,9 +197,16 @@ func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end ti
 		}
 		for i := range hits {
 			h := hits[i]
-			data.bytes += len(h.Source)
-			data.Rows = append(data.Rows, FlattenSource(h.Source, h.Index))
-			data.Raw = append(data.Raw, h.Source)
+			// Before any projection: csv/xlsx fall back to the raw document when
+			// it has no message, and json/ndjson write it verbatim. An export
+			// fails rather than ship a document the strip could not check.
+			source, err := logsecrets.StripSource(h.Source)
+			if err != nil {
+				return data, fmt.Errorf("log export: %w", err)
+			}
+			data.bytes += len(source)
+			data.Rows = append(data.Rows, FlattenSource(source, h.Index))
+			data.Raw = append(data.Raw, source)
 			if len(data.Rows) > maxRows {
 				return data, fmt.Errorf("%w: more than %d rows match — narrow the query or time range", ErrTooLarge, maxRows)
 			}

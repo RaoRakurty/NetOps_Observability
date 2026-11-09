@@ -10069,8 +10069,22 @@ def _dlq_spool_rows(topic: str, table: str, rows: list[dict],
     return durable
 
 
+# The v1/v2c community a trap receiver older than 2026-11-09 published. It is a
+# shared device credential: it must not reach the dead-letter ring, the durable
+# dead-letter file, or a debug peek, whatever topic or lane the record came from.
+TRAP_COMMUNITY_FIELD = "snmp_community"
+_TRAP_COMMUNITY_BYTES = re.compile(rb'"snmp_community"\s*:\s*"(?:[^"\\]|\\.?)*"?')
+
+
+def scrub_community_bytes(payload: bytes) -> bytes:
+    """Replace the community value in a raw record that was not, or cannot be, decoded."""
+    return _TRAP_COMMUNITY_BYTES.sub(b'"snmp_community":"[REDACTED]"', payload)
+
+
 def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
     """Build + store one quarantine record (ring + optional on-disk NDJSON)."""
+    if isinstance(event, dict) and TRAP_COMMUNITY_FIELD in event:
+        event = {k: v for k, v in event.items() if k != TRAP_COMMUNITY_FIELD}
     if isinstance(exc, TenantClaimRefused) and exc.reason == "identity_unattributable":
         # F-11 (INV-F11-10): a registry-MISS event is sealed by the ROUTER's
         # quarantine stage. Keeping its body here — in the /deadletters ring
@@ -10100,7 +10114,7 @@ def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
         # (errors="replace": a mangled byte becomes U+FFFD, nothing is dropped)
         # rather than a b'...' repr, so the poison record stays greppable and
         # can be replayed from the dead-letter file.
-        payload = bytes(event).decode("utf-8", "replace")[:CORR_QUARANTINE_PAYLOAD_CHARS]
+        payload = scrub_community_bytes(bytes(event)).decode("utf-8", "replace")[:CORR_QUARANTINE_PAYLOAD_CHARS]
     else:
         try:
             payload = json.dumps(event, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS]
@@ -12863,6 +12877,10 @@ async def handle_snmptrap(ev: dict) -> None:
     and create NO RCA signal (the anti-noise guardrail). The OpenSearch path is
     untouched — this is an ADDITIONAL evidence lane, not a replacement."""
     global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED, TRAPS_RECANON
+    # A record from an older receiver can still carry the v1/v2c community for
+    # the bus retention window. Nothing here reads it; removing it means no
+    # dead-letter path below can keep it.
+    ev.pop(TRAP_COMMUNITY_FIELD, None)
     TRAPS_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
@@ -14002,7 +14020,7 @@ async def _debug_kafka_peek(params: dict) -> dict:
                     payload = msg.value or b""
                     if not any(n in payload for n in needles):
                         continue
-                    excerpt = payload[:CORR_DEBUG_MAX_EXCERPT]
+                    excerpt = scrub_community_bytes(payload)[:CORR_DEBUG_MAX_EXCERPT]
                     if len(payload) > CORR_DEBUG_MAX_EXCERPT:
                         truncated = True
                     records.append({

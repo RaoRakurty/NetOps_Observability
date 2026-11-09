@@ -952,6 +952,12 @@ transforms:
     type: remap
     inputs: [trap_in]
     source: |
+      # The v1/v2c community is a shared device credential and goes no further
+      # than the receiver. A receiver older than this config still sends the
+      # value, so keep only the fact that it was present. First statement, so
+      # nothing below can read it.
+      if exists(.snmp_community) { .snmp_community_present = true }
+      del(.snmp_community)
       .signal   = "snmptrap"
       .severity = string(.severity) ?? "notice"
       dev = string(.device) ?? ""
