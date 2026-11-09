@@ -411,6 +411,9 @@
             "sample_rate": {
               "type": "long"
             },
+            "sampling_status": {
+              "type": "keyword"
+            },
             "vlan_id": {
               "type": "long"
             },

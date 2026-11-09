@@ -963,6 +963,20 @@ transforms:
       } else {
         .flow_type = "unknown"
       }
+      # Tracker 387 (PR 5) — what the EXPORTER said about sampling, stated rather
+      # than left for a reader to infer from a zero. goflow2 leaves sampling_rate
+      # at 0 when the export carries no rate (NetFlow v5 without the header
+      # field, or v9/IPFIX with no options record), and the flow queries treat 0
+      # as 1:1 (flows.go). So `not_reported_1to1` means "shown as received", which
+      # is right only if the exporter is not sampling: it is a statement about
+      # the data we hold, not a guarantee about the device.
+      #
+      # A LABEL, and nothing else: bytes, packets, sampling_rate and every total
+      # are untouched, and nothing here or downstream multiplies by anything. Not
+      # to be confused with `.sample_rate`, the router's OWN 1:50 sample of the
+      # OpenSearch copy (flows_os_stamped). Any inbound value is overwritten, so a
+      # producer cannot claim a status.
+      .sampling_status = if (to_int(.sampling_rate) ?? 0) > 0 { "reported" } else { "not_reported_1to1" }
       # Tenant attribution: match the flow exporter (sampler_address) to its
       # device's tenant. No match → "" (global). #20. This lookup used to live
       # in the aggregator's flows_normalized; it moved here with F-49, because
@@ -1433,8 +1447,8 @@ transforms:
   # enrichment failure, while a lab whose devices genuinely have no tenant reads
   # `platform_owned`, with a miss rate of 0 that a broken table visibly raises
   # (rules.yaml scopes the alert to a RISE, not to a level, and tracker 387 D6
-  # is what gave a platform-only deployment a rise to see). Exported on the existing :9598 exporter that
-  # vmscrape.yml already scrapes — no new service, no new scrape job.
+  # is what gave a platform-only deployment a rise to see). Exported on the
+  # existing :9598 exporter that vmscrape.yml already scrapes — no new service, no new scrape job.
   tenant_attribution_metric:
     type: log_to_metric
     inputs:

@@ -3,11 +3,11 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { flowEmptyReason, parseCoverage, FlowEmpty, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
+import { flowEmptyReason, parseCoverage, FlowEmpty, FlowSamplingNote, samplingNote, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
 import { api } from "../services/api";
 
 const cov = (o: Partial<FlowCoverage>): FlowCoverage => ({
-  flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, exporters: 0, ...o,
+  flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, flows_sampling_reported: 0, exporters: 0, ...o,
 });
 
 describe("flowEmptyReason — an empty panel says why", () => {
@@ -43,6 +43,43 @@ describe("flowEmptyReason — an empty panel says why", () => {
   it("parses ClickHouse's quoted 64-bit counts and rejects junk", () => {
     expect(parseCoverage({ flows: "12", tcp_flows: "x", exporters: -1 })).toEqual(cov({ flows: 12 }));
     expect(parseCoverage(undefined)).toBeNull();
+  });
+});
+
+describe("samplingNote — says what the exporters reported, multiplies nothing", () => {
+  it("no rate reported: shown as received, and it says when that would be wrong", () => {
+    const s = samplingNote(cov({ flows: 29875 }));
+    expect(s).toMatch(/report no sampling rate/);
+    expect(s).toMatch(/1:1/);
+    expect(s).toMatch(/read low/);
+    expect(s).not.toMatch(/×|x50|estimate/i);
+  });
+  it("every flow reports a rate: scaled by it", () => {
+    expect(samplingNote(cov({ flows: 10, flows_sampling_reported: 10 })))
+      .toBe("Every flow here reports a sampling rate, and counts are scaled by it.");
+  });
+  it("a mix names both halves", () => {
+    expect(samplingNote(cov({ flows: 10, flows_sampling_reported: 4 })))
+      .toBe("4 flows report a sampling rate and are scaled by it. The other 6 report none and are shown as received (1:1).");
+    expect(samplingNote(cov({ flows: 10, flows_sampling_reported: 1 })))
+      .toMatch(/^1 flow reports a sampling rate and is scaled by it/);
+  });
+  it("no flows or no answer: the general rule, never a claim about these exporters", () => {
+    for (const c of [null, cov({ flows: 0 })]) {
+      expect(samplingNote(c)).toMatch(/when it reports one/);
+    }
+  });
+  it("renders the sentence for the window on screen, and survives a failed read", async () => {
+    resetCoverageCache();
+    vi.spyOn(api, "flowsCoverage").mockResolvedValue({ data: [{ flows: "7", flows_sampling_reported: "7" }] } as never);
+    const q = { since: 3600, ftype: "", filters: {}, fkey: "" };
+    const { unmount } = render(<FlowSamplingNote q={q} />);
+    expect(await screen.findByText(/Every flow here reports a sampling rate/)).toBeInTheDocument();
+    unmount();
+    resetCoverageCache();
+    vi.spyOn(api, "flowsCoverage").mockRejectedValue(new Error("boom"));
+    render(<FlowSamplingNote q={q} />);
+    expect(await screen.findByTestId("flow-sampling-note")).toHaveTextContent(/when it reports one/);
   });
 });
 

@@ -314,6 +314,49 @@ def test_miss_rate_alert_counts_only_misses():
     assert (ROOT / "src/config/rules-tests/tenant-enrichment.test.yaml").is_file()
 
 
+# ── PR 5: sampling is labelled, never multiplied ─────────────────────────────
+
+def test_sampling_status_is_declared_in_both_stores():
+    assert _props("netops-flows")["sampling_status"]["type"] == "keyword"
+    # sample_rate is the router's own 1:50 stamp and must stay beside it.
+    assert _props("netops-flows")["sample_rate"]["type"] == "long"
+    init = (ROOT / "deployment/docker/clickhouse/init.sql").read_text(encoding="utf-8")
+    table = init[init.index("CREATE TABLE IF NOT EXISTS netops.flows"):]
+    table = table[:table.index("ENGINE")]
+    assert re.search(r"sampling_status\s+LowCardinality\(String\) DEFAULT ''", table), \
+        "fresh installs must get the column the boot ALTER gives upgrades"
+    go = (ROOT / "src/backend/internal/chschema/policies.go").read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS sampling_status LowCardinality(String) DEFAULT ''" in go
+
+
+def test_only_the_flow_lane_that_stores_the_row_stamps_it():
+    """flows_rekey is a declared pass-through: the engine's copy on netops.flows
+    must stay byte-equivalent to goflow2's, so the label goes on after it."""
+    t = _router()["transforms"]
+    assert "sampling_status" in t["flows_decoded"]["source"]
+    assert "sampling_status" not in t["flows_rekey"]["source"]
+
+
+def test_no_total_reads_the_label_and_the_scaling_rule_is_unchanged():
+    """Owner correction 2026-11-09 (plan §4): flows are not understated 50x and
+    nothing here may multiply anything. Every query scales by the exporter's own
+    rate, exactly as before; only the coverage count reads the new column."""
+    for path in (ROOT / "src" / "backend").glob("*.go"):
+        if path.name.endswith("_test.go"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "sampling_status" not in text:
+            continue
+        assert path.name == "flows.go", f"{path.name} reads the sampling label"
+        for line in text.splitlines():
+            if "sampling_status" in line:
+                assert "countIf(" in line and "bytes" not in line and "packets" not in line, line
+    flows = (ROOT / "src/backend/flows.go").read_text(encoding="utf-8")
+    assert "bytes * if(sampling_rate = 0, 1, sampling_rate)" in flows
+    src = _router()["transforms"]["flows_os_stamped"]["source"]
+    assert src.strip() == ".sample_rate = 50", "the router's sample stamp must not change"
+
+
 # ── `vector test` over the shipped config ────────────────────────────────────
 
 ENV_STUBS = ["CLICKHOUSE_USER=x", "CLICKHOUSE_PASSWORD=x"]

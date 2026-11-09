@@ -199,3 +199,79 @@ tests:
               assert_eq!(.tenant_attribution, "claim_rejected")
               assert_eq!(.tenant_seg, "untagged")
               assert_eq!(.tenant_id, "")
+
+  # ── PR 5: the sampling label, and the totals it must leave alone ────────────
+  - name: "flows: an exporter that reports a rate is labelled reported, and no counter moves"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "spine1"
+          src_addr: "10.0.0.1"
+          sampling_rate: 512
+          bytes: 1000
+          packets: 10
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.sampling_status, "reported")
+              assert_eq!(.sampling_rate, 512)
+              assert_eq!(.bytes, 1000)
+              assert_eq!(.packets, 10)
+              assert!(!exists(.sample_rate), "the router's own OpenSearch sample stamp is not this lane's")
+
+  - name: "flows: a rate of zero means none was reported, and no counter moves"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "spine1"
+          src_addr: "10.0.0.1"
+          sampling_rate: 0
+          bytes: 1000
+          packets: 10
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.sampling_status, "not_reported_1to1")
+              assert_eq!(.sampling_rate, 0)
+              assert_eq!(.bytes, 1000)
+              assert_eq!(.packets, 10)
+
+  - name: "flows: no rate field at all reads the same, and a producer cannot claim a status"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "spine1"
+          src_addr: "10.0.0.1"
+          sampling_status: "reported"
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.sampling_status, "not_reported_1to1")
+
+  - name: "flows: the OpenSearch copy keeps both facts, the exporter's and the router's own sample"
+    inputs:
+      - insert_at: flows_os_stamped
+        type: log
+        log_fields:
+          sampling_status: "not_reported_1to1"
+          sampling_rate: 0
+    outputs:
+      - extract_from: flows_os_stamped
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.sample_rate, 50)
+              assert_eq!(.sampling_status, "not_reported_1to1")
+              assert_eq!(.sampling_rate, 0)
