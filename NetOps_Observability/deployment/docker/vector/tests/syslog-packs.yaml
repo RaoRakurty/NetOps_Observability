@@ -703,6 +703,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_banner_probe", "wrong event_type")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")

@@ -357,6 +357,7 @@ fixtures:
     message: 'error: kex_exchange_identification: Connection closed by remote host'
     expect:
       parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
       event_type: ssh_banner_probe
       event_category: management_audit
       dedup_key: 'vEdge-1|sshd|ssh_banner_probe'
