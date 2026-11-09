@@ -100,3 +100,33 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/context/p
 | `404` | No such fact in your workspace. |
 | `409` | The text changed since it was reviewed, the state moved, the name exists, or a limit was reached. |
 | `503` | The Postgres platform store is not in use. |
+
+## When sources disagree
+
+The same device can be reported by a controller integration, by discovery and by hand, and the values
+can differ. Iris does not pick silently: it states each fact with the source it came from, and when
+sources disagree it says which one it used and what the others reported.
+
+The default order, highest first:
+
+1. **The controller** — an NMS or controller integration.
+2. **The device itself** — SNMP discovery and direct reads from the device.
+3. **The imported source of truth** — NetBox.
+4. **A manual entry** — the devices API or the inventory file.
+
+To change the order for your workspace, open **Administration → Iris → Network Context**, go to
+**Which source Iris believes**, move the sources up or down and choose **Save order**. **Use the platform
+default** undoes it. Your order applies only to your workspace.
+
+The order decides vendor, model, software version and serial number. It does not decide a device's name
+or address, and a site assigned by hand still wins over a site the device reports.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/source-authority
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"order":["discovered","controller","declared","manual"]}' http://localhost:8000/api/ai/source-authority
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/source-authority
+```
+
+Reading needs `administration:read`, changing needs `administration:admin`. In the Global view choose a
+workspace first. Without the Postgres platform store Iris uses the default and a change answers `503`.

@@ -600,6 +600,37 @@ func (a *DiscoveryAggregator) RawDevices() []models.Device {
 	return out
 }
 
+// Constituents returns the per-source records that were merged into the
+// device Devices() serves under mergedID — every source's own claim about that
+// one device, BEFORE mergeDevices' gap-fill hid the disagreeing values. Iris's
+// source-authority resolver (internal/srcauthority, tracker 337 N-F6) reads
+// these. The grouping is the same dedupeWithOwners union-find the inventory
+// uses (tenant-partitioned), so it cannot drift from what /api/devices shows.
+// Sorted by record id; nil when no device is served under mergedID.
+func (a *DiscoveryAggregator) Constituents(mergedID string) []models.Device {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, owners := dedupeWithOwners(a.cache)
+	var out []models.Device
+	for id, owner := range owners {
+		if owner == mergedID {
+			d := a.cache[id]
+			// Copy the labels: the caller reads them after the lock is
+			// released, and the cached map must never be shared out.
+			if d.Labels != nil {
+				lbl := make(map[string]string, len(d.Labels))
+				for k, v := range d.Labels {
+					lbl[k] = v
+				}
+				d.Labels = lbl
+			}
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // deviceIdentities returns every stable identity token a record carries:
 // management IP, serial (from labels), and normalized name. Two records that
 // share ANY token are the same physical device — even if one (e.g. an SNMP

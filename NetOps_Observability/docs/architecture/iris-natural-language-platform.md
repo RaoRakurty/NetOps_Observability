@@ -193,7 +193,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 39 | Investigation without incident: query → existing anomaly/RCA → tools | PARTIAL | Skill chain; no NL query step | N-I1 |
 | 40 | Model routing fast/advanced | DONE | Item 9 (N-A1) | — |
 | 41 | Environment Context feeds NLP/entity resolution; never overrides telemetry | DESIGNED | — | N-F1, N-C2 |
-| 42 | Configurable source authority order | MISSING | — | N-F6 |
+| 42 | Configurable source authority order | DONE | `internal/srcauthority`, migration 0065, design §4.2.1 | — |
 | 43 | "Have we seen this before?" | MISSING | — | N-F4 |
 | 44 | Investigative vs executable runbooks separated | DESIGNED | `Executable` flag, one object (design 7) | N-F2 |
 | 45 | ChatOps with identity mapping, never superuser | MISSING | — | N-I6 |
@@ -326,6 +326,83 @@ flowchart TB
 - Bounded everything: request bytes, turns per conversation, AST limits (window, rows, cardinality,
   joins), repair rounds, SSE duration, output tokens.
 
+### 4.2.1 N-F6 — configurable source authority (design of record, 2026-11-09)
+
+**Owner decision 2026-11-09 (binding):** default order **controller-observed > SNMP-discovered >
+manually entered**, configurable **per tenant** by that tenant's admin; the platform default stays
+as stated. Iris cites the source that won and says when others disagreed — never a silent pick.
+
+**What the code did before (verified).** A device seen by several sources is one row only after
+`internal/discovery.dedupeWithOwners` unions the per-source records (tenant-partitioned identity
+tokens) and `mergeDevices` folds them: the BASE record is NetBox > any directly-collected source >
+controller (`Source "api"`), and every other field is a **gap-fill** (`if base.X == "" { base.X =
+other.X }`). So when two sources disagree the base silently wins and the other value is dropped —
+the controller (most authoritative by the owner's order) actually loses every conflict. Iris's
+device tool (`get_device_health`, `moduleDeviceHealth`) read `vendor`/`address` off that merged row
+with no provenance. The per-field `os_version_source` / `serial_source` ladder (`internal/osprobe`)
+records HOW a version or serial was learned but nothing compares sources.
+
+**Design.**
+
+1. *Stage.* This is an **Iris read-path** change (the device-fact view Iris answers from). It does
+   NOT change `mergeDevices`: the merged row's id, address, source and credential decide what the
+   collectors poll and what syslog/traps/flows key on, and leaving it alone means nothing the
+   correlation engine receives changes. N-F6 gives RCA no new evidence; it makes Iris honest about
+   device facts. The device page keeps showing the merged row (see "Follow-up" below).
+2. *Closed authority classes* (`internal/srcauthority`): `controller` (an NMS/controller integration
+   — device source `api`, `wireless`; field source `api:<system>`), `discovered` (read off the device
+   itself — SNMP sweep, and the `snmp`/`gnmi`/`ssh` field sources of the osprobe ladder), `declared`
+   (an imported source of truth — NetBox), `manual` (an operator: the devices API, the inventory
+   file, field source `manual`, and an EMPTY field source, which the model contract already defines as
+   manual — except on a controller or NetBox record, whose own field it is). Any other source is `unranked`: it is shown, it never outranks a ranked class.
+   **Default order: controller > discovered > declared > manual.** `declared` is placed where the plan
+   row put it (between discovered and manual); the owner's three-class order is preserved exactly.
+3. *Facts resolved:* vendor, model, software version, serial — the comparable descriptive facts.
+   NOT resolved: name and address (identity/collection plumbing — a controller's system-IP and the
+   SNMP management address are different addresses, not a disagreement), `os` (the SNMP value is the
+   raw sysDescr, never comparable), site (owner decision 2026-10-18: a manually assigned site wins over
+   a device-reported site id — its own rule, untouched).
+4. *Resolver* (pure): per fact, collect one claim per constituent record (empty = the source did not
+   report it, it is not a claim); the winner is the claim of the best-ranked class; within one class
+   the most recent reading wins, then the source name, then the record id (deterministic) and the
+   result is marked `tie_broken`. Values are compared normalised (case, punctuation, vendor corporate
+   suffixes, leading zeros / trailing `.0` in versions), so `Cisco Systems, Inc.` = `cisco` and
+   `17.03.04` = `17.3.4` are agreement, not noise. Output: `{fact, value, winner, considered[],
+   disagreements[], tie_broken}`.
+5. *Policy store:* table `iris_source_authority` (migration **0065**) — one row per tenant, the order
+   as a permutation of the four classes (CHECKed in the database), `updated_by`, `updated_at`;
+   FORCE-RLS `tenant_iso`; every statement through `WithTenant`. No row = the platform default
+   (default-closed: an unreadable or invalid stored order falls back to the default AND says so).
+   A file-backend deployment has no store: Iris uses the default, writes answer 503.
+6. *API* `GET / PUT / DELETE /api/ai/source-authority` — AI configuration, so it is admin-plane
+   (gated by `administration`, not by a usage entitlement, like `/api/ai/tenant-config`): read =
+   `administration:read`, change/reset = `administration:admin`; the tenant is the principal's
+   (`principalTenant`), never a body field (`DisallowUnknownFields` refuses a smuggled `tenant_id`);
+   a Global (cross-tenant) view must choose a workspace first (400), exactly like Network context.
+   Every change is audited (old and new order, no other content).
+7. *Which tenant's order applies to a device:* a tenant principal always uses its OWN order (it can
+   only see its own devices and platform ones); a cross-tenant principal uses the order of the
+   device's owning tenant (platform devices: the Provider workspace's). A store read never reaches
+   outside the caller's reach.
+8. *Iris rendering:* `get_device_health` resolves the device's constituent records
+   (`DiscoveryAggregator.Constituents`, the same union-find the inventory uses, each record re-checked
+   with `canSeeDevice`) and returns the inventory line with each fact's winning source, plus — only
+   when sources disagree — a separate citable item `device:<id>:sources` that names the winner, the
+   order that decided it and every disagreeing value with its source. Values are stripped of control
+   and format characters and length-capped; everything is plain text the SPA renders escaped (§15).
+   Statement class: OBSERVED (it reports what sources said; it never infers). The agent doctrine asks
+   the model to say so, and `ai.EnsureDisagreementStated` makes it true whatever the model wrote: an
+   answer that repeats a contested value without citing that item gets the item appended. An answer
+   that never mentions a contested value is left alone (a CPU question needs no note on the serial).
+9. *Observability:* `netops_iris_source_authority_total{outcome}` — `agreed`, `disagreed`,
+   `single_source`, `policy_error` (a policy read that failed and fell back to the default).
+10. *UI:* Administration → Iris → Network Context gets a "Which source Iris believes" panel — the four
+    classes in order, move up/down, save, reset to the platform default.
+
+**Follow-up (not in N-F6):** apply the same policy to the device page / inventory API so the page
+and Iris show the same winner (today Iris shows the winner and the disagreement; the page still
+shows the merged row).
+
 ### 4.3 API surface (adapted to the existing `/api/ai/*` prefix, no parallel `/iris` tree)
 
 ```
@@ -415,7 +492,6 @@ plus a recorded-model run in the offline harness.
 | N-F3 | **Tenant-scoped hybrid retrieval** for Environment/Runbook/Incident layers: pre-filtered by tenant, retrieval objects carry tenant/source/authority/timestamps/type/scope; stemming BM25 + authority/recency rerank; fenced; retrieval evaluation (recall/precision/wrong-source/stale) | F1, G2 | 2 |
 | N-F4 | **Historical incident intelligence**: incident fingerprint (signature, seam, entities, provider, path, causal chain, symptoms, resolution); "have we seen this before?" = exact-key recall over `incident_time_metrics` + investigation memory, reranked by same-domain/signature/topology/provider/path; similar-incident card | B1 | 3 |
 | N-F5 | **Controlled learning loop**: resolved incident → operator validation → proposed context/runbook/alias update → review → version → test → activate; nothing retrains production | F1, F2 | 2 |
-| N-F6 | **Configurable source authority** (controller observed > discovered > declared > manual note > model inference), shown on conflicts | C2 | 1 |
 
 ### Phase G — Product knowledge: answer any product question (owner goal)
 
