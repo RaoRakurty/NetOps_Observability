@@ -66,7 +66,7 @@ func CheckKey(key string) error {
 	if strings.ContainsAny(key, "\n\r") {
 		return Problem{"key", "one_line", "the name must be one line"}
 	}
-	return checkText("key", key, nil, "")
+	return CheckText("key", key, nil, "")
 }
 
 // CheckBody validates a fact's text. tools are the registered Iris tool
@@ -78,7 +78,7 @@ func CheckBody(kind Kind, body string, tools []string) error {
 	if len(body) > MaxBodyBytes {
 		return Problem{"body", "too_long", fmt.Sprintf("the text is %d bytes; the limit is %d", len(body), MaxBodyBytes)}
 	}
-	return checkText("body", body, tools, kind)
+	return CheckText("body", body, tools, kind)
 }
 
 // CheckReason validates an approver's or retirer's note.
@@ -92,10 +92,13 @@ func CheckReason(reason string, required bool) error {
 	if len(reason) > MaxReasonBytes {
 		return Problem{"reason", "too_long", fmt.Sprintf("the note is %d bytes; the limit is %d", len(reason), MaxReasonBytes)}
 	}
-	return checkText("reason", reason, nil, "")
+	return CheckText("reason", reason, nil, "")
 }
 
-func checkText(field, s string, tools []string, kind Kind) error {
+// CheckText is the rule every customer-written line of prose passes, here and in
+// any other store whose text can reach a prompt. field names the field in the
+// Problem; a text naming one of tools is refused; kind adds kind-specific rules.
+func CheckText(field, s string, tools []string, kind Kind) error {
 	if !utf8.ValidString(s) {
 		return Problem{field, "encoding", "the text is not valid UTF-8"}
 	}
