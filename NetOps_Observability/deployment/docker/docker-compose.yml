@@ -1635,7 +1635,8 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
+      # Tracker 384: DB_PASSWORD is gone from here. Nothing in the api reads it,
+      # and it is the Postgres SUPERUSER's password.
       DB_NAME: ${DB_NAME:-netops}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -2229,7 +2230,13 @@ services:
       # STORE_PG_ALLOW_RLS_BYPASS=true for a deliberate single-tenant deploy).
       # See docs/DEPLOY_POSTGRES_APPSTATE.md.
       STORE_BACKEND: ${STORE_BACKEND:-file}
+      # Tracker 384: the DSN names the role and carries no password. The password
+      # is in the file below, rendered from .env by scripts/install.py, and the
+      # api re-reads it for every new connection, so a rotation needs no restart.
+      # A .env that still has a password in the URL keeps working: install.py,
+      # update.sh and deploy.sh all move it to APP_DB_PASSWORD first.
       DATABASE_URL: ${DATABASE_URL:-}
+      PGPASSFILE: /run/secrets/postgres/api/pgpass
       STORE_PG_ALLOW_RLS_BYPASS: ${STORE_PG_ALLOW_RLS_BYPASS:-}
       # Multi-replica cache coherence for the cached-by-design stores (API keys +
       # SNMP creds). Dormant (0) for a single API instance. Set to e.g. 30 only
@@ -2366,6 +2373,10 @@ services:
       # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
       # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
       - ../../data/secrets-seal:/run/secrets-seal
+      # Tracker 384: the app-state role's password (see PGPASSFILE above).
+      # DIRECTORY mount (F-51), so a rotation's atomic rename is a new inode the
+      # running api sees. Empty on a file-backend install, where nothing reads it.
+      - ../../data/secrets/postgres/api:/run/secrets/postgres/api:ro
       # Mint target for the internal CA (SEC-003 pattern): when TLS_INTERNAL_CA
       # is on, the api writes the mesh trust bundle + per-service SVIDs here
       # and the TLS variant (compose.tls.yml) mounts them into each service.

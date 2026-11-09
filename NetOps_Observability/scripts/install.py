@@ -1073,9 +1073,12 @@ def generate_secrets() -> dict[str, str]:
     (audit FUNC-HIGH-1).
     """
     return {
-        # URL-safe: the documented DATABASE_URL shape embeds it in userinfo
+        # URL-safe: operators may still write an external DSN with it in userinfo
         # (postgres://netops:pw@postgres:5432/...) — see _URLSAFE alphabet note.
         "DB_PASSWORD":              generate_urlsafe_password(28),
+        # The role the api connects as (tracker 245). NOT in DATABASE_URL any more
+        # (tracker 384): rendered to data/secrets/postgres/api/pgpass.
+        "APP_DB_PASSWORD":          generate_urlsafe_password(28),
         "JWT_SECRET":               generate_token(48),
         "ENCRYPTION_KEY":           generate_token(32),
         "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
@@ -1246,6 +1249,11 @@ def _env_migration_lines(env: dict, profiles: str = DEFAULT_PROFILES,
     # gate. bootstrap_grafana reconciles the ClickHouse user to it.
     if "GRAFANA_CH_PASSWORD" not in env:
         additions.append(f"GRAFANA_CH_PASSWORD={generate_password(24)}")
+    # Tracker 384. Only reached with no password in DATABASE_URL to move
+    # (migrate_env_credentials runs first): a file-backend install, say. It stays
+    # unused until such an install switches to Postgres.
+    if "APP_DB_PASSWORD" not in env:
+        additions.append(f"APP_DB_PASSWORD={generate_urlsafe_password(28)}")
     return additions
 
 
@@ -1266,6 +1274,10 @@ def write_env(env_path: Path, port: int, *, force: bool,
                  "would make the broker refuse its own data. Restore the key from "
                  f"{env_snapshot_path(env_path).name} or a backup (see "
                  "docs/runbooks/secret-rotation.md for a deliberate rotation).")
+        # Before the migration lines: it must MOVE the app-role password, never
+        # let them mint a second one beside it.
+        migrate_env_credentials(env_path)
+        env = _parse_env(env_path)
         additions = _env_migration_lines(env, profiles, retention_profile)
         if additions:
             write_env_text(
@@ -1307,12 +1319,6 @@ def write_env(env_path: Path, port: int, *, force: bool,
     # explicitly destructive way to force a re-seed).
 
     secrets_map = generate_secrets()
-    # The Postgres app-state role's password. Deliberately NOT part of
-    # generate_secrets(): it lives inside DATABASE_URL (the api reads a DSN, not
-    # a password), and install.py reconciles the live role against whatever that
-    # DSN says on every run — so rotating it is "edit DATABASE_URL, re-run
-    # install.py", not a --reset-env class. URL-safe: it rides URL userinfo.
-    app_db_password = generate_urlsafe_password(28)
     # Two values the GUI installer collects and this template writes verbatim.
     # They arrive through the environment rather than as flags because they are
     # not decisions install.py makes — they are strings it records once, on a
@@ -1590,8 +1596,11 @@ NETBOX_URL=
 # DATABASE_URL must authenticate as a NON-superuser role: superusers bypass
 # Row-Level Security, so the api refuses to start as one. install.py provisions
 # `netops_app` with the password below and keeps them in step on every re-run.
+# The DSN carries no password: the api reads APP_DB_PASSWORD from a mounted file
+# rendered from this .env (tracker 384). Rotate it with --rotate-app-secrets.
 STORE_BACKEND={store_backend}
-DATABASE_URL=postgres://netops_app:{app_db_password}@postgres:5432/netops?sslmode=disable
+DATABASE_URL=postgres://netops_app@postgres:5432/netops?sslmode=disable
+APP_DB_PASSWORD={secrets_map["APP_DB_PASSWORD"]}
 # On a --tls install postgres REQUIRES TLS (pg_hba `hostssl`, F-4): install.py
 # rewrites the DSN to ?sslmode=verify-full&sslrootcert=/data/tls/ca.pem in TLS
 # phase B. Set it by hand only if you point at an external database.
@@ -2028,6 +2037,31 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
             failures.append(name)
             new_values.pop(name, None)
 
+    # The app-state role, LAST and right before .env and its file move: from the
+    # ALTER until the file changes, a NEW connection from the api is refused
+    # (open ones are unaffected). Postgres holds one password per role, so that
+    # window cannot be zero; it can only be short. External database or no
+    # Postgres backend: there is no role here to change, so the value stays.
+    if "APP_DB_PASSWORD" in new_values:
+        v = next(x for x in plan if x.name == "APP_DB_PASSWORD")
+        app_user, _, host, dbname = _split_app_dsn(env.get("DATABASE_URL") or "")
+        if app_state_backend(env) != "postgres" or host not in ("postgres", "localhost", "127.0.0.1"):
+            info("APP_DB_PASSWORD kept: this install's app-state store is not the "
+                 "bundled Postgres, so there is no role here to change")
+            new_values.pop("APP_DB_PASSWORD")
+        elif v.reconcile:
+            done, msg = sr.provision_app_state_role(
+                runner, db_user=env.get("DB_USER", "netops"),
+                db_name=dbname or env.get("DB_NAME", "netops"),
+                app_user=app_user or APP_STATE_ROLE,
+                app_password=new_values["APP_DB_PASSWORD"])
+            if done:
+                ok(f"APP_DB_PASSWORD: {msg}")
+            else:
+                warn(f"APP_DB_PASSWORD NOT rotated — {msg}")
+                failures.append("APP_DB_PASSWORD")
+                new_values.pop("APP_DB_PASSWORD")
+
     # -- write .env (line surgery: operator edits survive) -------------------
     text = env_path.read_text()
     backup = env_path.with_suffix(env_path.suffix + ".rotate.bak")
@@ -2040,6 +2074,10 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     rotated.update(new_values)
     ok(f"{env_path} updated ({len(new_values)} secrets; previous copy at "
        f"{backup.name}, mode 0600)")
+    # The role already changed: its file must follow now, not after the phase-B
+    # recreates below, or the api cannot open a connection for all of that time.
+    if "APP_DB_PASSWORD" in new_values:
+        render_service_secrets(root, _parse_env(env_path))
 
     # -- phase B: credentials the RUNNING container re-reads from .env -------
     def _revert(name: str, why: str) -> None:
@@ -2689,14 +2727,115 @@ _URL_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#@\s]*@")
 # *_URL keys whose userinfo is a KNOWN, separately-tracked case: named once as
 # deferred instead of warned on every run.
 _URL_USERINFO_DEFERRED = {
-    "DATABASE_URL": "libpq DSN for the app-state store; its move to a file is a separate follow-up",
+    "DATABASE_URL": "it could not be moved to a file automatically (tracker 384: "
+                    "a key=value DSN, or a password that .env cannot hold); the "
+                    "api still honours it",
 }
 
 
 def url_credential_keys(env: Mapping[str, str]) -> list[str]:
-    """The .env *_URL keys whose value carries URL userinfo (names only)."""
-    return sorted(k for k, v in env.items()
-                  if k.endswith("_URL") and _URL_USERINFO.match((v or "").strip()))
+    """The .env *_URL keys whose value carries URL userinfo (names only).
+    DATABASE_URL may name its role there: only a password counts for it."""
+    out = []
+    for k, v in env.items():
+        v = (v or "").strip()
+        if not k.endswith("_URL") or not _URL_USERINFO.match(v):
+            continue
+        if k == "DATABASE_URL" and split_database_url_credential(v) is None:
+            continue
+        out.append(k)
+    return sorted(out)
+
+
+# ---- the app-state role's password (tracker 384) -----------------------------
+#
+# DATABASE_URL used to carry it as URL userinfo, so it reached the api's container
+# environment. It now lives in .env as APP_DB_PASSWORD and reaches the api as a
+# file in the format the driver itself reads (pgx: PGPASSFILE), so an api image
+# from before this change, on a rollback, still authenticates.
+
+APP_DB_SECRET_REL = "postgres/api"
+APP_DB_SECRET_FILE = "pgpass"
+
+
+def split_database_url_credential(dsn: str) -> tuple[str, str] | None:
+    """(the same DSN without its password, the password) for a URL DSN whose
+    userinfo has one, else None. String surgery rather than urlunsplit, so every
+    other byte of an operator's DSN survives untouched."""
+    from urllib.parse import unquote, urlsplit
+    dsn = (dsn or "").strip()
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return None
+    if not parts.scheme or "@" not in parts.netloc:
+        return None
+    userinfo = parts.netloc.rsplit("@", 1)[0]
+    if ":" not in userinfo:
+        return None
+    user, raw_pw = userinfo.split(":", 1)
+    if not raw_pw:
+        return None
+    return dsn.replace(f"{userinfo}@", f"{user}@", 1), unquote(raw_pw)
+
+
+def _env_can_hold(value: str) -> bool:
+    """Can .env and the credential file carry this value byte for byte? Printable
+    ASCII within the size limit, no edge whitespace (_parse_env strips it), and no
+    leading quote (compose's .env parser would read one as quoting the value)."""
+    return (bool(value) and len(value) <= SECRET_MAX_BYTES
+            and all(" " <= c <= "~" for c in value)
+            and value == value.strip() and value[0] not in "\"'")
+
+
+def app_db_password(env: Mapping[str, str]) -> str | None:
+    """The password the app-state role's file must hold, or None when no file can
+    be rendered from this .env. A password still in DATABASE_URL wins: it is what
+    the running stack has been using, and a value minted beside it must never
+    silently replace it."""
+    dsn = (env.get("DATABASE_URL") or "").strip()
+    legacy = split_database_url_credential(dsn)
+    if legacy is not None:
+        return legacy[1] if _env_can_hold(legacy[1]) else None
+    if "password=" in dsn:
+        return None   # a key=value DSN: it stays authoritative, see the warning
+    return env.get("APP_DB_PASSWORD") or None
+
+
+def _pgpass_line(password: str) -> str:
+    """One pgpass line matching any connection. `\\` and `:` are the only escapes
+    the format has (pgconn reads this file, and platformdb/passfile.go too)."""
+    return "*:*:*:*:" + password.replace("\\", "\\\\").replace(":", "\\:") + "\n"
+
+
+def migrate_env_credentials(env_path: Path) -> None:
+    """Bring an existing .env to the credential-free form. Idempotent; never prints
+    a value. Runs on every install, update and deploy, before anything renders or
+    restarts, so nobody has to touch .env.
+
+      * a password in DATABASE_URL moves to APP_DB_PASSWORD, and the URL keeps its
+        role, host, database and options;
+      * GRAFANA_CH_PASSWORD, read from a file since tracker 384, must exist before
+        the renderer runs (a .env that predates it used to get an empty value).
+
+    A value .env cannot hold, or a key=value DSN, stays exactly as it is: the api
+    still honours it and the renderer says so by key name."""
+    env = _parse_env(env_path)
+    changes: dict[str, str] = {}
+    legacy = split_database_url_credential(env.get("DATABASE_URL") or "")
+    if legacy is not None and _env_can_hold(legacy[1]):
+        changes["DATABASE_URL"], changes["APP_DB_PASSWORD"] = legacy
+    if not env.get("GRAFANA_CH_PASSWORD"):
+        changes["GRAFANA_CH_PASSWORD"] = generate_password(24)
+    if not changes:
+        return
+    new_text, missing = _rotation_module().substitute_env(env_path.read_text(), changes)
+    if missing:
+        new_text = (new_text.rstrip("\n") + "\n\n# ---- moved by install.py (tracker 384) ----\n"
+                    + "".join(f"{k}={changes[k]}\n" for k in missing))
+    write_env_text(env_path, new_text, what="move credentials out of DATABASE_URL")
+    ok("moved service credentials in .env to their file-backed form: "
+       + ", ".join(sorted(changes)))
 
 
 def warn_url_credentials(env: Mapping[str, str]) -> list[str]:
@@ -2985,9 +3124,18 @@ def render_service_secrets(root: Path, env: Mapping[str, str] | None = None, *,
     for d in () if vmauth_only else DERIVED_SECRETS:
         value = _validate_secret(d.env_key, env.get(d.env_key), vmauth=False)
         plan.append((base / d.rel / d.file, d.render(value), _secret_owner(d.owner, env)))
+    if not vmauth_only and app_state_backend(env) == "postgres":
+        app_pw = app_db_password(env)
+        if app_pw:
+            _validate_secret("APP_DB_PASSWORD", app_pw, vmauth=False)
+            plan.append((base / APP_DB_SECRET_REL / APP_DB_SECRET_FILE,
+                         _pgpass_line(app_pw), _secret_owner("api", env)))
     plan.append((base / VMAUTH_RENDERED_REL, render_vmauth_config(template, env), (0, 0)))
 
-    _ensure_secret_dirs(base, sorted({p.parent for p, _, _ in plan}))
+    # The app-role directory always exists: compose mounts it on every install,
+    # and Docker would otherwise create the missing bind source as root.
+    _ensure_secret_dirs(base, sorted({p.parent for p, _, _ in plan}
+                                     | ({base / APP_DB_SECRET_REL} if not vmauth_only else set())))
 
     staged: list[tuple[Path, Path]] = []
     try:
@@ -4987,7 +5135,8 @@ def bootstrap_app_state_role(compose_dir: Path, env: dict, *,
              "start without it. Set DATABASE_URL in deployment/docker/.env "
              "(docs/DEPLOY_POSTGRES_APPSTATE.md) and re-run.")
         return
-    app_user, app_pw, host, dbname = _split_app_dsn(dsn)
+    app_user, _, host, dbname = _split_app_dsn(dsn)
+    app_pw = app_db_password(env) or ""
     if host not in ("postgres", "localhost", "127.0.0.1"):
         info(f"DATABASE_URL points at an external database ({host}) — provision "
              f"its non-superuser app role yourself (deployment/docker/postgres/"
@@ -4996,8 +5145,9 @@ def bootstrap_app_state_role(compose_dir: Path, env: dict, *,
     db_user = env.get("DB_USER", "netops")
     dbname = dbname or env.get("DB_NAME", "netops")
     if not app_user or not app_pw:
-        fail("DATABASE_URL carries no user/password for the app-state role; "
-             "expected postgres://<role>:<password>@postgres:5432/<db>")
+        fail("the app-state role has no user or password: DATABASE_URL must name "
+             "the role (postgres://<role>@postgres:5432/<db>) and APP_DB_PASSWORD "
+             "must be set in .env")
         return
     # Everything below is interpolated into SQL/shell inside the container —
     # validate at the boundary instead of trusting an operator-edited .env (§3).

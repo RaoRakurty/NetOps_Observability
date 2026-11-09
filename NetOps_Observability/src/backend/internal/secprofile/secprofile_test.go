@@ -29,7 +29,7 @@ func secureEnv() map[string]string {
 		"OPENSEARCH_URL":          "https://opensearch:9200",
 		"CLICKHOUSE_URL":          "https://clickhouse:8443",
 		"VICTORIA_URL":            "https://vmauth:8427",
-		"DATABASE_URL":            "postgres://u:p@postgres:5432/netops?sslmode=verify-full",
+		"DATABASE_URL":            "postgres://u@postgres:5432/netops?sslmode=verify-full",
 		"REDIS_HOST":              "redis",
 		"REDIS_PASSWORD":          "x",
 		"CORRELATION_URL":         "https://correlation:8000",
@@ -65,7 +65,7 @@ func TestEachProhibitedConfigurationIsCaught(t *testing.T) {
 		{"plaintext ClickHouse", func(m map[string]string) { m["CLICKHOUSE_URL"] = "http://clickhouse:8123" }, "CLICKHOUSE_URL"},
 		{"plaintext VictoriaMetrics", func(m map[string]string) { m["VICTORIA_URL"] = "http://victoria:8428" }, "VICTORIA_URL"},
 		{"postgres sslmode=disable", func(m map[string]string) {
-			m["DATABASE_URL"] = "postgres://u:p@postgres:5432/netops?sslmode=disable"
+			m["DATABASE_URL"] = "postgres://u@postgres:5432/netops?sslmode=disable"
 		}, "sslmode=disable"},
 		{"anonymous Valkey", func(m map[string]string) { delete(m, "REDIS_PASSWORD") }, "REDIS_PASSWORD"},
 		{"plaintext correlation", func(m map[string]string) { m["CORRELATION_URL"] = "http://correlation:8000" }, "CORRELATION_URL"},
@@ -191,6 +191,58 @@ func TestBackupEncryptionIsVisibleButNotFatal(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("backup encryption must produce a visible finding when unverified — silence would imply coverage we do not have")
+	}
+}
+
+// Tracker 384: DATABASE_URL may name its role; only a password counts.
+func TestCredentialInDatabaseURLIsWarned(t *testing.T) {
+	for dsn, want := range map[string]bool{
+		"":                               false,
+		"postgres://u@db:5432/x":         false,
+		"postgres://db:5432/x":           false,
+		"postgres://u@db/x?sslmode=full": false,
+		"postgres://u:p@db:5432/x":       true,
+		"postgres://u:p%zz@db:5432/x":    true, // malformed, still flagged
+		"postgres://u@db/x?password=p":   true,
+		"host=db user=u password=p":      true,
+		"host=db user=u":                 false,
+	} {
+		e := secureEnv()
+		e["DATABASE_URL"] = dsn
+		got := false
+		for _, f := range Evaluate(Production, envOf(e), noFiles).Findings {
+			if f.Rule == "CRED-001" {
+				got = true
+				if strings.Contains(f.Observed+f.Source+f.Remedy, "p%zz") {
+					t.Fatalf("finding quotes the value: %s", f)
+				}
+				if f.Source != "DATABASE_URL" {
+					t.Fatalf("Source = %q", f.Source)
+				}
+			}
+		}
+		if got != want {
+			t.Errorf("DATABASE_URL %q: CRED-001 = %v, want %v", dsn, got, want)
+		}
+	}
+}
+
+// A DSN read from DATABASE_URL_FILE is not in a URL variable, so it is not flagged,
+// but the sslmode rule still sees it (the api resolves the file for this check).
+func TestDSNFromAFileIsNotACredentialInAURLButIsStillChecked(t *testing.T) {
+	e := secureEnv()
+	e["DATABASE_URL_FILE"] = "/run/secrets/postgres/api/database_url"
+	e["DATABASE_URL"] = "postgres://u:p@db/x?sslmode=disable"
+	var rules []string
+	for _, f := range Evaluate(Production, envOf(e), noFiles).Findings {
+		rules = append(rules, f.Rule)
+	}
+	joined := strings.Join(rules, ",")
+	if strings.Contains(joined, "CRED-001") {
+		t.Fatalf("a file-mounted DSN must not raise CRED-001: %s", joined)
+	}
+	if !strings.Contains(joined, "STORE-004") {
+		t.Fatalf("sslmode=disable must still be refused: %s", joined)
 	}
 }
 

@@ -66,13 +66,18 @@ Nothing to do. `python3 scripts/install.py` writes
 
 ```dotenv
 STORE_BACKEND=postgres
-DATABASE_URL=postgres://netops_app:<generated>@postgres:5432/netops?sslmode=disable
+DATABASE_URL=postgres://netops_app@postgres:5432/netops?sslmode=disable
+APP_DB_PASSWORD=<generated>
 ```
 
 and, before starting the stack, provisions `netops_app` as a **non-superuser,
 NOBYPASSRLS** role with that password (idempotent; a re-run re-aligns the live
-role with whatever the DSN now says, which is also how you rotate it). A
-superuser — or any `BYPASSRLS` role — ignores RLS even under `FORCE ROW LEVEL
+role with `.env`). The DSN carries no password: the api reads it from
+`data/secrets/postgres/api/pgpass`, rendered from `.env` and named by `PGPASSFILE`,
+and re-reads it for every new connection. To rotate it, see
+[secret-rotation.md](runbooks/secret-rotation.md) §10. A `.env` with a password
+still in `DATABASE_URL` keeps working: install, `update.sh` and `deploy.sh` move
+it to `APP_DB_PASSWORD` by themselves. A superuser — or any `BYPASSRLS` role — ignores RLS even under `FORCE ROW LEVEL
 SECURITY`, so the API **refuses to start** as one; the override
 `STORE_PG_ALLOW_RLS_BYPASS=true` exists for a deliberate single-tenant
 deployment and is **never** set by the installer.
@@ -85,6 +90,8 @@ becomes `hostssl`-only.
 Pointing at an **external** database instead? Set `DATABASE_URL` yourself; the
 installer detects a non-local host and leaves role provisioning to you
 (`deployment/docker/postgres/netops-app-role.sql` is the same SQL it would run).
+A password you put in that URL moves to the file on the next run. A key=value DSN,
+or a password `.env` cannot hold, stays in `DATABASE_URL` and is reported by name.
 
 ## Upgrades — read this before changing `STORE_BACKEND`
 
@@ -309,13 +316,15 @@ In `deployment/docker/.env`:
 
 ```dotenv
 STORE_BACKEND=postgres
-DATABASE_URL=postgres://netops_app:<pw>@postgres:5432/netops?sslmode=verify-full&sslrootcert=/data/tls/ca.pem
+DATABASE_URL=postgres://netops_app@postgres:5432/netops?sslmode=verify-full&sslrootcert=/data/tls/ca.pem
+APP_DB_PASSWORD=<pw>
 IMPORT_FILE_STATE_DIR=/data
 ```
 
 `sslmode=verify-full` + `sslrootcert` because the lab's postgres is
 **`hostssl`-only** — a plaintext DSN is refused at the server, not by us. Keep
-the URL on ONE line and percent-encode any `@ : / ? # &` in the password.
+the URL on ONE line. The password goes in `APP_DB_PASSWORD` as it is, with no
+percent-encoding; run `python3 scripts/install.py` so it reaches its file.
 
 ### 3. Restart just the API
 

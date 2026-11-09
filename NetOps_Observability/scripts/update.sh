@@ -314,6 +314,9 @@ PY
 # authenticated call) and after the reconcile (it needs the complete .env).
 # The SAME renderer install.py uses — one definition of names, owners and
 # modes. A failure aborts the upgrade (set -e): the containers are untouched.
+#
+# Tracker 384: first move any credential still in an old-form .env (a password
+# in DATABASE_URL) to its file-backed key. Idempotent; no manual step.
 
 step "rendering service credential files"
 python3 - <<'PY'
@@ -321,7 +324,9 @@ import importlib.util, pathlib
 spec = importlib.util.spec_from_file_location("install", "scripts/install.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-mod.render_service_secrets(pathlib.Path(".").resolve())
+root = pathlib.Path(".").resolve()
+mod.migrate_env_credentials(root / "deployment" / "docker" / ".env")
+mod.render_service_secrets(root)
 PY
 
 # ---- 3: backup --------------------------------------------------------------
