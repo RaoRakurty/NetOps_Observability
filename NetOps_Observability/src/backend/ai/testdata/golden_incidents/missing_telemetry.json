@@ -36,6 +36,9 @@
       }
     },
     "model_reply": "The root cause is congestion on the DIA circuit at dia-gw-1 [problem:aa01dddd-0000-4000-8000-000000000011]. Next: raise the circuit bandwidth.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "undetermined", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "undetermined",
       "status": "Undetermined",
@@ -89,6 +92,9 @@
       }
     },
     "provider_down": true,
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "undetermined", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "undetermined",
       "status": "Undetermined",
@@ -142,6 +148,9 @@
       }
     },
     "model_reply": "Syslog for edge-1 could not be read on this deployment, so the transition cannot be pinned from the device's own logs, and no configuration change was recorded in the last 24 hours. Next: enable syslog collection for edge-1.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_active_major_incidents", "get_bgp_feed_recent", "get_bgp_rpki", "get_bgp_watchlist", "get_case_timeline", "get_config_diff", "get_device_health", "get_device_state", "get_metric_anomalies", "get_problem_evidence", "get_rca_verdict", "get_recent_changes", "get_security_findings", "get_topology_context", "recall_investigations", "run_protocol_diagnostic"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 3},
     "expect": {
       "required_text": [
         "is not available on this deployment",
@@ -193,6 +202,9 @@
       }
     },
     "model_reply": "The logs on edge-1 are clean and nothing changed in the last 24 hours, so the device is healthy. Next: close the investigation.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_active_major_incidents", "get_bgp_feed_recent", "get_bgp_rpki", "get_bgp_watchlist", "get_case_timeline", "get_config_diff", "get_device_health", "get_device_state", "get_metric_anomalies", "get_problem_evidence", "get_rca_verdict", "get_recent_changes", "get_security_findings", "get_topology_context", "recall_investigations", "run_protocol_diagnostic"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 3},
     "expect": {
       "required_text": [
         "is not available on this deployment",

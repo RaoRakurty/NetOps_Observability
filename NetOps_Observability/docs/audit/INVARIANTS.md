@@ -610,6 +610,23 @@ Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 | Accuracy on real operator-labelled cases is measured | ❌ **not built** | No importer yet; the field split is empty |
 | The 73-example library performs as well as the previous 82 on a live model | ❌ **not measured** | `-tags nlqmodeleval` needs a provider key; no run since the change |
 
+**Incident Replay, offline leg (tracker 337 N-H2, 2026-11-09). BUILD, not PROVEN:** nothing here has run against a real incident, a live model or a production ledger. Details in `docs/ai/evals.md`.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Replay reads the case and nothing else; the package imports no store, network or process API | ✅ | **BUILD** — `TestReplayImportsNoStore` (AST), `TestExportWritesNoFile` |
+| A tool not in `allowed_tools` is not registered; a request for it is `not_registered`, never a live call | ✅ | **BUILD** — `TestUnlistedToolIsNotRegistered` |
+| Two runs of one input are identical but for timestamps and latency | ✅ | **BUILD** — `TestReplayIsDeterministic` |
+| The harness catches a prohibited tool, a forbidden string in a prompt alone, and a budget overrun | ✅ | **BUILD** — `TestProhibitedToolThatRanFailsTheCase`, `TestForbiddenAnywhereCoversPrompts`, `TestToolBudgetExceededFailsTheCase` |
+| The fingerprint moves on one byte of a skill file, a prompt builder, a tool contract, a pin or a model name | ✅ | **BUILD** — `TestFingerprintHashesBytes`. Prompts are hashed as rendered on a fixed input, so a builder change that does not alter that rendering is not seen |
+| A pin mismatch is reported, never substituted; cost without provider usage or a price is `censored` | ✅ | **BUILD** — `TestPinMismatchIsReportedNeverSubstituted`, `TestCostIsCensoredUnlessMeasured` |
+| Replay feeds only existing gates, adds no bar, and RCA agreement gates nothing | ✅ | **BUILD** — `TestReplayMeasuresFeedExistingGatesOnly`, `TestBarsArePinned` |
+| The export is own-tenant only: foreign and unknown are one 404, `as_tenant` is ignored, every string is redacted, `source` is `field` and held out | ✅ | **BUILD** — `iris_replay_export_isolation_test.go`, `TestExportRedactsEveryTextField`. The CH store is faked, and `pgintegration` does not cover this route |
+| Committed cases are synthetic only | ✅ | **BUILD** — `tests/test_iris_replay_customer_data.py` |
+| Replay with a live model, and re-running on a model, prompt, tool or runbook change | ❌ **not built** | The live-model leg, `IRIS_REPLAY_LIVE`, token budgets and the nightly workflow are out of this item; `ModelLeg` is the seam |
+| A re-read at capture equals what the decision saw | ❌ **cannot hold** | The ledger keeps hashes only. A capture compares and reports `live_data_moved`; a tool whose arguments it cannot name is `args_not_recoverable` |
+| Topology is replayed as of the incident | ❌ **not possible today** | The api has no versioned topology store: frozen as a tool result, and reports say so |
+
 ## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
 
 | Invariant | Status | Proof |

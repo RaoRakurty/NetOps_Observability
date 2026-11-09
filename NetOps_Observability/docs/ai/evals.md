@@ -161,6 +161,79 @@ ratchet floors are still judged on all cases together. Measured 2026-11-09:
 Any future calibration, such as the `incidentfp` weights listed as not calibrated in
 `docs/audit/INVARIANTS.md`, must use the dev split only.
 
+## Replay (N-H2, offline leg)
+
+Replay runs one frozen incident through the real answer path and reports what came
+out, so that a change to a prompt, a skill, a tool contract or a model is judged on
+cases. Code: `src/backend/internal/irisreplay`, `cmd/irisreplay`. The offline leg
+is built; **the live-model leg is not**, and `ModelLeg` is its seam.
+
+```bash
+cd src/backend
+go run ./cmd/irisreplay run --cases ai/testdata/golden_incidents --report /tmp/a.json --markdown /tmp/a.md
+go run ./cmd/irisreplay compare /tmp/a.json /tmp/b.json   # names what changed
+go run ./cmd/irisreplay fingerprint
+```
+
+**One corpus, one loader.** A case is a golden incident plus optional fields:
+`frozen_at`, `engine_version`, `catalog_version`, `topology`, `config`,
+`context_version` and `context_facts`, `allowed_tools`, `policy`, `model`,
+`model_tool_requests`, `expected`, `source`, `capture`. The schema and strict loader
+live in `ai/replay_case.go`, not in the replay package, because the corpus test is
+an in-package test of `ai` and cannot import a package that imports `ai`. The corpus
+test ignores the new fields, and its per-case report is unchanged by them.
+
+**Frozen seams.** `Freeze` builds the `DataSource` and `TroubleshootDeps` from the
+case alone. A seam not in `allowed_tools` is nil, so its tool is not registered, and
+a request for it is `OutcomeNotRegistered`: a finding, never a live call. Absent
+`allowed_tools` means no tools. The engine is not re-run: replay consumes the stored
+`hypotheses` blob and `RCAResult`, and a pin mismatch is reported, never substituted
+(the rule of `src/correlation/replay.py`).
+
+**The report**, per case and in aggregate:
+
+| Section | Measures |
+|---|---|
+| RCA (never gates) | stored and shipped verdict, status, stored leading hypothesis against `expected.leading_hypothesis`, whether the answer names it, contradicting lines |
+| Evidence | required and forbidden citations, citations stripped by `VerifyGrounding`, `forbidden_anywhere` hits in the answer and in the prompts, separately |
+| Tools | the sequence, requests for unregistered tools, a prohibited tool that ran (fails the case), count against `expected.max_tools` |
+| Cost | tokens only when the provider reports them, dollars only with a configured price, otherwise `censored`, never an estimate |
+| Latency | wall time on this machine with no provider in it; excluded from determinism |
+| Claims | statements by N-B4 class, `unsupported` (not OBSERVED, CORRELIX_RCA or DOCUMENTATION; a RECOMMENDATION is counted apart because it states no fact), certainty-vocabulary hits under an unconfirmed verdict, guard firings |
+| Fingerprint | SHA-256 over the bytes of the skill files, rendered prompt builders, tool contracts, the `ENGINE_SEMVER` pins in the cases and the model names, with per-item hashes so that a comparison names the file |
+
+**Gates.** Replay feeds `cross_tenant`, `citation`, `injection` and `audit` as source
+`irisreplay.corpus`, tagged per split. It adds no bar. RCA agreement is not a gate.
+
+**Split.** `evalsplit.Assign("incidents", id, source)`. A case derived from a golden
+incident keeps its id, so it keeps its split. `source: field` is always held out.
+
+**Export.** `GET /api/ai/replay/export/{correlation_id}` returns one correlation as a
+one-element case array the runner can load: `administration:read`, tenant-scoped, 404
+for unknown and foreign alike, every string through `ai.Redact`, nothing written on
+the server. The ledger holds only hashes, so a tool output is **re-read at capture**
+and compared with the ledger's hash. A difference is recorded as "live data moved
+since the decision". Reports say re-read at capture, never as seen. A capture never
+re-runs a probe or `compile_query`.
+
+**Customer data.** Committed cases are synthetic. Keep captures under
+`data/iris-replay/` (gitignored). `tests/test_iris_replay_customer_data.py` refuses
+`*.replay.json` under `src/` outside the corpus, and any field case inside it.
+
+**What the offline leg does not prove.**
+
+- The model is scripted. It shows what the guards do with a given reply, not what a
+  live model would say. Every corpus reply is the worst plausible one.
+- Topology and configuration are tool results as of capture, not as-of state: the api
+  has no versioned topology store.
+- An exported case replays evidence-only until someone scripts a reply, because the
+  ledger keeps no reply text.
+- Module reads such as `get_ticket_status` cannot be scripted in a case, so the classic
+  path reports them as not registered. Grounding stamps on evidence rows beyond the
+  stored blob do not survive export (they are never serialized).
+- The export has no synthetic marker to read from a correlation object yet, so every
+  HTTP export is `source: field`.
+
 ## Running
 
 ```bash
