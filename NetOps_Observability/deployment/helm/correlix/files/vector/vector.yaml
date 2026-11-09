@@ -71,6 +71,12 @@ secret:
   vmauth:
     type: exec
     command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/vmauth"]
+  # Tracker 384: svc_aggregator's password for the OpenSearch stats scrapes.
+  # Same script, same rules, another root; same "nothing references it unless an
+  # env var expands to a token" (the plaintext baseline keeps the placeholder).
+  opensearch:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/opensearch"]
 
 # ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).

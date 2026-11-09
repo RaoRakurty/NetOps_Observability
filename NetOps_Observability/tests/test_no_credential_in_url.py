@@ -103,11 +103,9 @@ def test_no_compose_value_carries_a_credential_in_a_url(path: Path) -> None:
 
 
 SERVICE_PASSWORD_ENV = re.compile(r"^(VMAUTH_[A-Z]+_PASSWORD|OS_[A-Z]+_PASSWORD)$")
-# Services whose credential moved to a file. OS_* values that still reach
-# OTHER consumers via env (opensearch-dashboards' own OSD settings, the
-# vector-router / aggregator OpenSearch sinks) are out of this row's scope
-# and are not listed here.
+# Services whose credential moved to a file (tracker 367 layer 1, tracker 384).
 CONVERTED = ("vmauth", "api", "prober", "grafana", "gnmic", "vector-aggregator",
+             "vector-router", "opensearch-dashboards", "opensearch-security-init",
              "opensearch-init", "correlation")
 
 
@@ -120,7 +118,7 @@ def test_converted_services_hold_no_password_env(path: Path) -> None:
         for key, value in env_of(svc).items():
             if SERVICE_PASSWORD_ENV.match(key):
                 hits.append(f"{svc_name}.{key}")
-            if re.search(r"\$\{(VMAUTH_[A-Z]+_PASSWORD|OS_(API|BOOTSTRAP|CORRELATION)_PASSWORD)\b", value):
+            if re.search(r"\$\{(VMAUTH_[A-Z]+_PASSWORD|OS_[A-Z]+_PASSWORD)\b", value):
                 hits.append(f"{svc_name}.{key} (interpolates a service password)")
     assert not hits, f"{path.name}: service password still in a container env: {hits}"
 
@@ -188,7 +186,7 @@ def test_tls_clients_read_their_credential_from_a_mounted_file() -> None:
 
 
 def test_every_mounted_secret_is_one_install_renders() -> None:
-    rendered = {s.rel for s in install.SERVICE_SECRETS}
+    rendered = {s.rel for s in install.SERVICE_SECRETS} | {d.rel for d in install.DERIVED_SECRETS}
     mounted = set()
     for path in COMPOSE_FILES:
         mounted |= set(re.findall(r"\.\./\.\./data/secrets/([a-z]+/[a-z-]+):", path.read_text()))
@@ -242,6 +240,60 @@ def test_vector_sink_resolves_the_password_through_the_secret_backend() -> None:
     auth = cfg["sinks"]["victoria_cloud_metrics"]["auth"]
     assert auth["password"] == "${VMAUTH_VECTOR_PASSWORD_REF:-unused-on-plaintext-victoria}"
     assert "VMAUTH_VECTOR_PASSWORD}" not in (COMPOSE_DIR / "vector" / "vector.yaml").read_text()
+
+
+def test_vector_opensearch_passwords_are_references_to_mounted_files() -> None:
+    """Tracker 384. The variable keeps its name, because a running container
+    must still agree with a newer vector.yaml during a partial deploy, so what
+    is pinned is that its VALUE is a reference and never a password."""
+    tls = services("compose.tls.yml")
+    router, agg = tls["vector-router"], tls["vector-aggregator"]
+    assert env_of(router)["OPENSEARCH_PASSWORD"] == "SECRET[opensearch.router]"
+    assert env_of(agg)["OPENSEARCH_STATS_PASSWORD"] == "SECRET[opensearch.aggregator]"
+    assert _secret_mount("opensearch/router") in _mounts(router)
+    assert _secret_mount("opensearch/aggregator") in _mounts(agg)
+
+    # The reference only resolves if a backend of that name exists and its root
+    # is where the identity directory is mounted.
+    router_cfg = yaml.safe_load((COMPOSE_DIR / "vector-router" / "vector.yaml").read_text())
+    assert router_cfg["secret"]["opensearch"]["command"] == [
+        "/bin/sh", "/etc/vector/shared/cx-secret-exec.sh", "/run/secrets/opensearch"]
+    agg_cfg = yaml.safe_load((COMPOSE_DIR / "vector" / "vector.yaml").read_text())
+    assert agg_cfg["secret"]["opensearch"]["command"] == [
+        "/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/opensearch"]
+    # The router has the script through its ./vector mount.
+    assert "./vector:/etc/vector/shared:ro" in _mounts(services("docker-compose.yml")["vector-router"])
+
+
+def test_dashboards_reads_its_password_from_a_second_config_file() -> None:
+    """Tracker 384. The image's entrypoint turns OPENSEARCH_PASSWORD into
+    `--opensearch.password=<value>` on argv, so the env form is a ps leak too."""
+    svc = services("compose.tls.yml")["opensearch-dashboards"]
+    assert "OPENSEARCH_PASSWORD" not in env_of(svc)
+    secret_cfg = "/run/secrets/opensearch/dashboards/opensearch_dashboards.secret.yml"
+    assert svc["command"][0] == "opensearch-dashboards"
+    assert svc["command"][-2:] == ["--config", secret_cfg]
+    # Naming a --config replaces the default, so the image's own must come first.
+    assert svc["command"][1:3] == [
+        "--config", "/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml"]
+    assert _secret_mount("opensearch/dashboards") in _mounts(svc)
+    d = next(d for d in install.DERIVED_SECRETS if d.rel == "opensearch/dashboards")
+    assert f"/run/secrets/{d.rel}/{d.file}" == secret_cfg
+
+
+def test_security_init_reads_every_identity_from_files_and_hashes_off_argv() -> None:
+    """Tracker 384. An exited one-shot keeps its environment, so `docker inspect`
+    on it used to show all six passwords."""
+    svc = services("docker-compose.yml")["opensearch-security-init"]
+    env = env_of(svc)
+    assert not [k for k in env if SERVICE_PASSWORD_ENV.match(k)]
+    assert env["OS_SECRET_DIR"] == "/run/secrets/opensearch/security-init"
+    assert _secret_mount("opensearch/security-init") in _mounts(svc)
+    src = (COMPOSE_DIR / "opensearch" / "security" / "apply-security.sh").read_text()
+    assert 'hash.sh" -env "$1"' in src
+    assert not re.search(r'hash\.sh"?\s+-p\b', src), "-p puts the password on the java argv"
+    wanted = set(re.findall(r"\bOS_[A-Z]+_PASSWORD\b", src))
+    assert wanted == set(install._OS_IDENTITY_KEYS), "script and renderer disagree on the identities"
 
 
 @pytest.mark.parametrize("rel", ["vector/vector.yaml", "vector-router/vector.yaml"])

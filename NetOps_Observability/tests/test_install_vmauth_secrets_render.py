@@ -36,7 +36,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import install  # noqa: E402
 
-KEYS = [s.env_key for s in install.SERVICE_SECRETS] + sorted(install.VMAUTH_TEMPLATE_KEYS)
+KEYS = ([s.env_key for s in install.SERVICE_SECRETS]
+        + [d.env_key for d in install.DERIVED_SECRETS]
+        + sorted(install.VMAUTH_TEMPLATE_KEYS))
 
 
 @pytest.fixture(autouse=True)
@@ -112,15 +114,19 @@ def test_modes(tree):
     assert mode(base / "vmauth" / "vmauth" / "auth.yml") == 0o400
 
 
-def test_ownership_is_requested_for_the_consumer_uid_batched(tree):
+def test_ownership_is_requested_for_the_consumer_uid_batched(tree, monkeypatch):
+    # A uid no installer runs as: on a host where the installer IS 1000 no chown
+    # is needed and there would be nothing to observe.
+    monkeypatch.setattr(install, "_OPENSEARCH_IMAGE_OWNER", (4000, 4000))
     rec = ChownRecorder()
     render(tree, make_env(), rec)
     owners = {(uid, gid): rels for uid, gid, rels in rec.calls}
     # api + grafana are user-mapped to CORRELIX_UID == the installer here: no
     # chown at all. Root-run consumers and curl_user get exactly one batch each.
-    assert set(owners) == {(0, 0), (100, 101)}, rec.calls
+    assert set(owners) == {(0, 0), (100, 101), (4000, 4000)}, rec.calls
     root_dirs = sorted(Path(r).parent.as_posix() for r in owners[(0, 0)])
-    assert root_dirs == ["vmauth/gnmic", "vmauth/prober", "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
+    assert root_dirs == ["opensearch/aggregator", "opensearch/router", "vmauth/gnmic", "vmauth/prober",
+                         "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
     assert [Path(r).parent.as_posix() for r in owners[(100, 101)]] == ["opensearch/bootstrap"]
 
 
@@ -230,6 +236,30 @@ def test_refuses_unusable_values_naming_only_the_key(tree, capsys, key, value, w
     if value:
         assert value not in err, "a refusal must never echo the value"
     assert not (tree / "data" / "secrets" / "vmauth" / "vmauth" / "auth.yml").exists()
+
+
+def test_dashboards_config_carries_exactly_the_password(tree):
+    """Tracker 384. Any printable value must survive the YAML round trip."""
+    hostile = 'a"b\\c: #d\'e%f'
+    render(tree, make_env(OS_DASHBOARDS_PASSWORD=hostile))
+    f = tree / "data" / "secrets" / "opensearch" / "dashboards" / "opensearch_dashboards.secret.yml"
+    assert yaml.safe_load(f.read_text()) == {"opensearch.password": hostile}
+    assert mode(f) == 0o400
+
+
+def test_security_init_gets_one_file_per_identity(tree, monkeypatch):
+    monkeypatch.setattr(install, "_OPENSEARCH_IMAGE_OWNER", (4000, 4000))
+    env = make_env()
+    rec = ChownRecorder()
+    render(tree, env, rec)
+    base = tree / "data" / "secrets" / "opensearch" / "security-init"
+    assert sorted(p.name for p in base.iterdir()) == sorted(install._OS_IDENTITY_KEYS)
+    for key in install._OS_IDENTITY_KEYS:
+        assert (base / key).read_text() == env[key], key
+        assert mode(base / key) == 0o400
+    owned = {Path(r).parent.as_posix() for uid, gid, rels in rec.calls
+             if (uid, gid) == (4000, 4000) for r in rels}
+    assert owned == {"opensearch/dashboards", "opensearch/security-init"}
 
 
 def test_os_passwords_may_use_the_full_printable_alphabet(tree):

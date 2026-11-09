@@ -56,7 +56,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -2607,6 +2607,9 @@ SECRET_MAX_BYTES = 1024           # matches internal/credfile.MaxSecretBytes
 VMAUTH_TEMPLATE_REL = Path("src") / "config" / "vmauth.yml"
 VMAUTH_RENDERED_REL = Path("vmauth") / "vmauth" / "auth.yml"
 _CURL_IMAGE_OWNER = (100, 101)    # curlimages/curl:8.10.1 `curl_user:curl_group`
+# The pinned opensearch and opensearch-dashboards images both run as 1000:1000
+# (verified on 2.16.0, 2026-11-09), and compose maps neither to another user.
+_OPENSEARCH_IMAGE_OWNER = (1000, 1000)
 
 
 class ServiceSecret(NamedTuple):
@@ -2630,10 +2633,43 @@ SERVICE_SECRETS: tuple[ServiceSecret, ...] = (
     ServiceSecret("vmauth/vmalert",       "VMAUTH_VMALERT_PASSWORD", "root",    True),
     ServiceSecret("opensearch/api",       "OS_API_PASSWORD",         "api",     False),
     ServiceSecret("opensearch/bootstrap", "OS_BOOTSTRAP_PASSWORD",   "curl",    False),
+    # Tracker 384. Vector resolves both through its `opensearch` exec backend at
+    # every config load (cx-secret-exec.sh).
+    ServiceSecret("opensearch/router",    "OS_ROUTER_PASSWORD",      "root",    False),
+    ServiceSecret("opensearch/aggregator", "OS_AGGREGATOR_PASSWORD", "root",    False),
     # Tracker 384. Grafana reads both at start: the ClickHouse datasource through
     # its $__file{} provider, the admin seed through GF_*__FILE.
     ServiceSecret("clickhouse/grafana",   "GRAFANA_CH_PASSWORD",     "grafana", False),
     ServiceSecret("grafana/admin",        "GRAFANA_ADMIN_PASSWORD",  "grafana", False),
+)
+
+
+class DerivedSecret(NamedTuple):
+    """A credential file that is not a bare password named `password`."""
+    rel: str        # identity dir under data/secrets
+    file: str       # file name inside it
+    env_key: str    # the .env key it is rendered from
+    owner: str      # see _secret_owner
+    render: Callable[[str], str]
+
+
+def _osd_secret_config(password: str) -> str:
+    """OpenSearch Dashboards' second --config file. json.dumps of a validated
+    printable-ASCII value is a valid YAML double-quoted scalar."""
+    return ("# RENDERED by scripts/install.py from .env. Do not edit (it is overwritten).\n"
+            f"opensearch.password: {json.dumps(password)}\n")
+
+
+# Six files in one directory for the opensearch-security-init one-shot: it hashes
+# every identity's password, so it needs all of them, under the image's uid.
+_OS_IDENTITY_KEYS = ("OS_API_PASSWORD", "OS_ROUTER_PASSWORD", "OS_CORRELATION_PASSWORD",
+                     "OS_BOOTSTRAP_PASSWORD", "OS_DASHBOARDS_PASSWORD", "OS_AGGREGATOR_PASSWORD")
+
+DERIVED_SECRETS: tuple[DerivedSecret, ...] = (
+    DerivedSecret("opensearch/dashboards", "opensearch_dashboards.secret.yml",
+                  "OS_DASHBOARDS_PASSWORD", "opensearch-image", _osd_secret_config),
+    *(DerivedSecret("opensearch/security-init", key, key, "opensearch-image", str)
+      for key in _OS_IDENTITY_KEYS),
 )
 
 # Every key vmauth.yml may reference (each also has a client file above).
@@ -2698,6 +2734,8 @@ def _secret_owner(kind: str, env: Mapping[str, str]) -> tuple[int, int]:
         return 0, 0
     if kind == "curl":
         return _CURL_IMAGE_OWNER
+    if kind == "opensearch-image":
+        return _OPENSEARCH_IMAGE_OWNER
     raise ValueError(f"unknown secret owner kind {kind!r}")
 
 
@@ -2944,6 +2982,9 @@ def render_service_secrets(root: Path, env: Mapping[str, str] | None = None, *,
     for s in () if vmauth_only else SERVICE_SECRETS:
         value = _validate_secret(s.env_key, env.get(s.env_key), vmauth=s.vmauth)
         plan.append((base / s.rel / SECRET_FILE_NAME, value, _secret_owner(s.owner, env)))
+    for d in () if vmauth_only else DERIVED_SECRETS:
+        value = _validate_secret(d.env_key, env.get(d.env_key), vmauth=False)
+        plan.append((base / d.rel / d.file, d.render(value), _secret_owner(d.owner, env)))
     plan.append((base / VMAUTH_RENDERED_REL, render_vmauth_config(template, env), (0, 0)))
 
     _ensure_secret_dirs(base, sorted({p.parent for p, _, _ in plan}))

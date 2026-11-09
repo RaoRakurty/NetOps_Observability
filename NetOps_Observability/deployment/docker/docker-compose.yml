@@ -851,15 +851,14 @@ services:
       OS_ADMIN_CA: /certs/ca.pem
       OS_ADMIN_CERT: /certs/admin/admin.crt
       OS_ADMIN_KEY: /certs/admin/admin.key
-      OS_API_PASSWORD: ${OS_API_PASSWORD:-}
-      OS_ROUTER_PASSWORD: ${OS_ROUTER_PASSWORD:-}
-      OS_CORRELATION_PASSWORD: ${OS_CORRELATION_PASSWORD:-}
-      OS_BOOTSTRAP_PASSWORD: ${OS_BOOTSTRAP_PASSWORD:-}
-      OS_DASHBOARDS_PASSWORD: ${OS_DASHBOARDS_PASSWORD:-}
-      OS_AGGREGATOR_PASSWORD: ${OS_AGGREGATOR_PASSWORD:-}
+      # Tracker 384: one file per identity, rendered from .env by
+      # scripts/install.py. These six used to be declared here, and an exited
+      # one-shot keeps its environment: `docker inspect` on it showed all of them.
+      OS_SECRET_DIR: /run/secrets/opensearch/security-init
     volumes:
       - ./opensearch/security:/security:ro
       - ../../data/tls:/certs:ro
+      - ../../data/secrets/opensearch/security-init:/run/secrets/opensearch/security-init:ro
     depends_on:
       opensearch:
         condition: service_healthy
