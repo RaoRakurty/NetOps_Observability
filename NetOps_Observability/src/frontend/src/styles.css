@@ -1601,6 +1601,90 @@ code, kbd, pre, .mono, td.mono {
   border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
 
+/* ── Narrow header ─────────────────────────────────────────────────────────
+   TopBar stamps data-tier="medium" (≤ 1000 px) or "phone" (≤ 720 px) on the
+   header; the breakpoints live ONLY in components/topBarTier.ts, so every rule
+   here keys off the attribute, never a media query of its own. The desktop
+   header carries no data-tier, so nothing below touches it. */
+.topbar[data-tier] { gap: var(--sp-3, 12px); }
+.topbar[data-tier] .topbar-right { gap: 8px; }
+.topbar[data-tier="phone"] { padding: 0 var(--sp-3, 12px); }
+
+/* Phone: the same BLOGO5 wordmark, scaled down — never cropped to the eye.
+   The owner rejected a standalone eye (2026-07-21: the wordmark with its
+   eye-as-O is the shell's only brand mark), so the phone tier shrinks the
+   whole artwork (1356 × 160) instead. No new asset, no new colour; the theme
+   swap between the two images is unchanged. */
+.topbar[data-tier="phone"] .cx-brand-img {
+  --mark-h: 18px;
+  flex: none;
+  height: var(--mark-h);
+  width: auto;
+}
+
+/* Tap targets: every control left in a narrow bar is at least 44 × 44. */
+.topbar[data-tier] .iris-launch { min-height: 44px; min-width: 44px; justify-content: center; }
+.topbar[data-tier] .user-btn { min-height: 44px; min-width: 44px; justify-content: center; }
+.topbar[data-tier="phone"] .user-name { display: none; }
+
+/* The ONE overflow control. Static, so its panel anchors to .topbar-right (the
+   bar's right edge) rather than to the button — the panel then never runs off
+   the left of a phone screen, whatever sits after the button. */
+.topbar-more { display: flex; align-items: center; flex: none; }
+.topbar-more-btn {
+  position: relative; display: inline-grid; place-items: center;
+  width: 44px; height: 44px; flex: none; cursor: pointer;
+  border-radius: var(--r-2, 8px); border: 1px solid transparent; background: transparent; color: var(--muted);
+  transition: color .14s ease, background-color .14s ease, border-color .14s ease;
+}
+.topbar-more-btn:hover, .topbar-more-btn[aria-expanded="true"] {
+  color: var(--fg); background: var(--hover, var(--surface-2)); border-color: var(--panel-border);
+}
+.shell-v2 .topbar-more-btn { color: var(--rail-fg-muted, var(--muted)); }
+.shell-v2 .topbar-more-btn:hover, .shell-v2 .topbar-more-btn[aria-expanded="true"] {
+  color: var(--rail-fg); background: var(--rail-hover); border-color: var(--rail-border);
+}
+.topbar-more-btn:focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 1px; }
+.topbar-more-alert {
+  position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bad); box-shadow: 0 0 0 2px var(--panel-solid, var(--bg));
+}
+.topbar-more-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 70;
+  width: min(340px, calc(100vw - 24px));
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  padding: 12px; border-radius: 12px;
+  background: var(--panel-solid); color: var(--fg); border: 1px solid var(--panel-border);
+  box-shadow: 0 12px 32px rgba(17, 24, 39, 0.18);
+  font-size: 14px;
+}
+.topbar-more-panel[hidden] { display: none; }
+/* Rows inside the panel: full width, 44 px tall, 14 px text (16 px in the two
+   fields, so a phone does not zoom the page on focus). The panel is panel-
+   coloured, so the shell-v2 rail colours of the inline controls are reset. */
+.topbar .topbar-more-panel .omni.omni-compact {
+  flex: none; width: 100%; max-width: none; min-width: 0; height: 44px;
+  background: var(--bg); border: 1px solid var(--panel-border);
+}
+.topbar .topbar-more-panel .omni input { font-size: 16px; color: var(--fg); }
+.topbar .topbar-more-panel .omni input::placeholder { color: var(--muted); }
+.topbar .topbar-more-panel .omni-icon { color: var(--muted); }
+.topbar .topbar-more-panel .omni-kbd { display: none; }
+.topbar .topbar-more-panel .omni-pop { left: 0; right: 0; min-width: 0; max-height: 50vh; }
+.topbar .topbar-more-panel .scope-sel { width: 100%; }
+.topbar .topbar-more-panel .scope-chip,
+.topbar .topbar-more-panel .scope-btn { width: 100%; max-width: none; min-height: 44px; font-size: 14px; }
+.topbar .topbar-more-panel .range-picker {
+  width: 100%; min-height: 44px; padding: 0 12px; font-size: 16px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--panel-border);
+}
+.topbar .topbar-more-panel .help-btn {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  width: 100%; height: 44px; padding: 0 12px; font-size: 14px;
+  color: var(--fg); border-color: var(--panel-border);
+}
+.topbar .topbar-more-panel .health { min-height: 44px; padding: 0 12px; font-size: 14px; color: var(--fg); }
+
 /* Modern Create-User form (labeled grid + scope security panel). */
 .user-form { border: 1px solid var(--panel-border); border-radius: 10px; padding: 14px 16px; margin: 8px 0 14px; background: var(--bg); }
 .uf-head { font-weight: 600; font-size: 13px; margin-bottom: 10px; }

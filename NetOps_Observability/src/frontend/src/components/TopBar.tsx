@@ -13,6 +13,7 @@ import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
 import ScopeBadge from "./ScopeBadge";
 import IrisLauncher from "./IrisLauncher";
+import { useTopBarTier, TOPBAR_MORE_LABEL, TOPBAR_MORE_PANEL_ID } from "./topBarTier";
 
 type Props = {
   health: Health | null;
@@ -42,6 +43,12 @@ const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND
 // tenant-scoped unified search (lib/omniSearch), plus a raw log-search
 // handoff — a true global search, not just a log query. Each row navigates
 // to the entity's permanent URL.
+//
+// Narrow windows (topBarTier.ts): at 1000 px and below, scope, time range,
+// help and health fold into ONE "More" disclosure; at 720 px and below the
+// search joins them and the wordmark shrinks to fit (never the eye alone). ✦ Iris and
+// the account menu always stay in the bar. Above 1000 px the markup is the
+// desktop header exactly as it was.
 export default function TopBar({ health, user, onLogout, onChangePassword, onTwoFactor, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
   // "*" is the match-all sentinel for the query; don't surface it literally in
@@ -54,13 +61,23 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
   const [ranges, setRanges] = useState(() => allRanges());
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
+  // Narrow header: the "More" disclosure holding whatever the tier folds away.
+  const tier = useTopBarTier();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  const moreBtnRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => setDraft(query === "*" ? "" : query), [query]);
+
+  // Crossing a breakpoint re-lays the bar out; a panel left open would
+  // reappear somewhere else, so it closes instead.
+  useEffect(() => setMoreOpen(false), [tier]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
       if (omniRef.current && !omniRef.current.contains(e.target as Node)) setOpen(false);
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -111,6 +128,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
     setQuery(draft.trim() || "*");
     navigate("explore/logs");
     setOpen(false);
+    setMoreOpen(false);
   };
 
   const choose = (h: TopHit) => {
@@ -120,6 +138,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
     }
     navigate(h.href);
     setOpen(false);
+    setMoreOpen(false);
   };
 
   const submitSearch = (e: React.FormEvent) => {
@@ -154,8 +173,127 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
     }
   };
 
+  // Esc closes the More panel and returns focus to its button — unless a
+  // popup inside it (search results, the scope list) is open: that Esc is the
+  // popup's and closes only the popup. preventDefault keeps the same key from
+  // also closing an open Iris sheet (IrisPanel ignores handled Escapes).
+  const onMoreKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Escape" || !moreOpen) return;
+    if (moreRef.current?.querySelector(".omni-pop, .scope-pop")) return;
+    e.preventDefault();
+    setMoreOpen(false);
+    moreBtnRef.current?.focus();
+  };
+
+  const narrow = tier !== "full";
+
+  const searchForm = (
+    <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
+      <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => rows.length > 0 && setOpen(true)}
+        onKeyDown={onKeyDown}
+        placeholder="Search…"
+        spellCheck={false}
+        role="combobox"
+        aria-label="Search devices, resources, and logs"
+        aria-expanded={open && rows.length > 0}
+        aria-controls="omni-results"
+        aria-autocomplete="list"
+        aria-activedescendant={open && active >= 0 ? `omni-opt-${active}` : undefined}
+      />
+      <kbd className="omni-kbd" title="Command palette" aria-hidden="true">⌘K</kbd>
+      {open && rows.length > 0 && (
+        <div className="omni-pop" id="omni-results" role="listbox" aria-label="Search results">
+          {rows.map(({ hit: g, header }, i) => (
+            <div key={`${g.kind}:${g.id}:${i}`}>
+              {header && <div className="omni-group" role="presentation">{header}</div>}
+              <button
+                type="button"
+                id={`omni-opt-${i}`}
+                role="option"
+                aria-selected={i === active}
+                tabIndex={-1}
+                className={`omni-item${i === active ? " active" : ""}`}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => choose(g)}
+              >
+                <span className={`omni-kind k-${g.kind}`}>
+                  <Icon name={hitIcon(g.kind)} size={13} />
+                </span>
+                <span className="omni-text">
+                  <span className="omni-title">{g.label}</span>
+                  {g.sublabel && <span className="omni-sub">{g.sublabel}</span>}
+                </span>
+                <span className="omni-tag">{hitTag(g.kind)}</span>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </form>
+  );
+
+  const rangePicker = (
+    <select
+      className="range-picker"
+      value={range.minutes}
+      onChange={(e) => {
+        if (e.target.value === "__add") {
+          const raw = window.prompt("New time-range preset — enter minutes (e.g. 30, 720, 4320):");
+          const mins = raw ? parseInt(raw, 10) : NaN;
+          if (mins && mins > 0) {
+            setRanges(addCustomPreset(mins));
+            setRange(rangeFromMinutes(mins));
+          }
+          return;
+        }
+        setRange(rangeFromMinutes(Number(e.target.value)));
+      }}
+      title="Time range (remembered per section)"
+      aria-label="Time range"
+    >
+      {/* If the current range isn't in the preset list (a one-off), show it. */}
+      {!ranges.some((r) => r.minutes === range.minutes) && (
+        <option value={range.minutes}>{range.label}</option>
+      )}
+      {ranges.map((r) => (
+        <option key={r.minutes} value={r.minutes}>
+          {r.label}
+        </option>
+      ))}
+      <option value="__add">＋ Add preset…</option>
+    </select>
+  );
+
+  const helpButton = (
+    <button
+      className="help-btn"
+      type="button"
+      onClick={() => {
+        setMoreOpen(false);
+        setHelpOpen(true);
+      }}
+      title="Documentation"
+      aria-label="Open documentation"
+    >
+      <Icon name="help" size={16} />
+      {/* In the More panel the row carries a visible word, not just the glyph. */}
+      {narrow && <span className="topbar-more-label">Documentation</span>}
+    </button>
+  );
+
+  const healthChip = (
+    <span className={`health${ok ? "" : " bad"}`} role="status" title={ok ? `v${health?.version}` : "Disconnected"}>
+      <span className="dot" aria-hidden="true" />
+      {ok ? "Healthy" : "Disconnected"}
+    </span>
+  );
+
   return (
-    <header className="topbar">
+    <header className="topbar" data-tier={narrow ? tier : undefined}>
       {/* Brand (owner 2026-07-21, final): the BLOGO5 artwork itself — the
           glowing network-eye as the O in CORRELIX — served from
           public/brand/ (background-stripped + trimmed masters, 160px tall for
@@ -163,110 +301,70 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
           it is the ONLY brand mark in the shell (the rail's standalone eye is
           gone by the same decision). Two theme variants of the same artwork:
           navy/blue on light chrome, neon leafy green on dark — CSS shows
-          exactly one per [data-theme], so AT announces the brand once. */}
+          exactly one per [data-theme], so AT announces the brand once.
+          On the phone tier the same two images are scaled down (CSS, "Narrow
+          header") — never cropped to the eye alone, which the owner rejected. */}
       <img className="cx-brand-img cx-brand-light" src="/brand/blogo5.png" alt={BRAND} />
       <img className="cx-brand-img cx-brand-dark" src="/brand/blogo5-dark.png" alt={BRAND} />
       <div className="topbar-right">
-        <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
-          <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => rows.length > 0 && setOpen(true)}
-            onKeyDown={onKeyDown}
-            placeholder="Search…"
-            spellCheck={false}
-            role="combobox"
-            aria-label="Search devices, resources, and logs"
-            aria-expanded={open && rows.length > 0}
-            aria-controls="omni-results"
-            aria-autocomplete="list"
-            aria-activedescendant={open && active >= 0 ? `omni-opt-${active}` : undefined}
-          />
-          <kbd className="omni-kbd" title="Command palette" aria-hidden="true">⌘K</kbd>
-          {open && rows.length > 0 && (
-            <div className="omni-pop" id="omni-results" role="listbox" aria-label="Search results">
-              {rows.map(({ hit: g, header }, i) => (
-                <div key={`${g.kind}:${g.id}:${i}`}>
-                  {header && <div className="omni-group" role="presentation">{header}</div>}
-                  <button
-                    type="button"
-                    id={`omni-opt-${i}`}
-                    role="option"
-                    aria-selected={i === active}
-                    tabIndex={-1}
-                    className={`omni-item${i === active ? " active" : ""}`}
-                    onMouseEnter={() => setActive(i)}
-                    onClick={() => choose(g)}
-                  >
-                    <span className={`omni-kind k-${g.kind}`}>
-                      <Icon name={hitIcon(g.kind)} size={13} />
-                    </span>
-                    <span className="omni-text">
-                      <span className="omni-title">{g.label}</span>
-                      {g.sublabel && <span className="omni-sub">{g.sublabel}</span>}
-                    </span>
-                    <span className="omni-tag">{hitTag(g.kind)}</span>
-                  </button>
-                </div>
-              ))}
+        {tier !== "phone" && searchForm}
+        {narrow ? (
+          // The narrow header's ONE overflow control: a disclosure (not an ARIA
+          // menu — it holds a search field and a select, not menu items). The
+          // panel follows the button in the DOM, so Tab walks straight into it.
+          <div className="topbar-more" ref={moreRef} onKeyDown={onMoreKeyDown}>
+            <button
+              ref={moreBtnRef}
+              type="button"
+              className="topbar-more-btn"
+              aria-label={ok ? TOPBAR_MORE_LABEL : `${TOPBAR_MORE_LABEL} (disconnected)`}
+              title={tier === "phone" ? "Search, time range, help and status" : "Time range, help and status"}
+              aria-expanded={moreOpen}
+              aria-controls={TOPBAR_MORE_PANEL_ID}
+              onClick={() => setMoreOpen((o) => !o)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="5" cy="12" r="1.8" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                <circle cx="19" cy="12" r="1.8" fill="currentColor" />
+              </svg>
+              {/* The health chip is folded away here, so a lost connection
+                  still shows on the bar itself. */}
+              {!ok && <span className="topbar-more-alert" aria-hidden="true" />}
+            </button>
+            <div
+              id={TOPBAR_MORE_PANEL_ID}
+              className="topbar-more-panel"
+              role="group"
+              aria-label={tier === "phone" ? "Search, time range, help and status" : "Time range, help and status"}
+              hidden={!moreOpen}
+            >
+              {tier === "phone" && searchForm}
+              <ScopeSelector />
+              {rangePicker}
+              {helpButton}
+              {healthChip}
             </div>
-          )}
-        </form>
-        <ScopeSelector />
-        <select
-          className="range-picker"
-          value={range.minutes}
-          onChange={(e) => {
-            if (e.target.value === "__add") {
-              const raw = window.prompt("New time-range preset — enter minutes (e.g. 30, 720, 4320):");
-              const mins = raw ? parseInt(raw, 10) : NaN;
-              if (mins && mins > 0) {
-                setRanges(addCustomPreset(mins));
-                setRange(rangeFromMinutes(mins));
-              }
-              return;
-            }
-            setRange(rangeFromMinutes(Number(e.target.value)));
-          }}
-          title="Time range (remembered per section)"
-          aria-label="Time range"
-        >
-          {/* If the current range isn't in the preset list (a one-off), show it. */}
-          {!ranges.some((r) => r.minutes === range.minutes) && (
-            <option value={range.minutes}>{range.label}</option>
-          )}
-          {ranges.map((r) => (
-            <option key={r.minutes} value={r.minutes}>
-              {r.label}
-            </option>
-          ))}
-          <option value="__add">＋ Add preset…</option>
-        </select>
+          </div>
+        ) : (
+          <>
+            <ScopeSelector />
+            {rangePicker}
 
-        {/* Time display (Local/UTC) moved to Settings → a per-TENANT persisted
-            preference (owner 2026-07-17): every user of the tenant reads the
-            same zone; storage stays UTC (lib/time.ts still renders it). */}
+            {/* Time display (Local/UTC) moved to Settings → a per-TENANT persisted
+                preference (owner 2026-07-17): every user of the tenant reads the
+                same zone; storage stays UTC (lib/time.ts still renders it). */}
 
-        {/* Appearance knob removed from the topbar (owner 2026-07-18): theme is
-            chosen on the login screen and carries over (shared netops.theme
-            pref); an explicit Theme control lives in the account menu's
-            Appearance settings (AppearanceControls). */}
+            {/* Appearance knob removed from the topbar (owner 2026-07-18): theme is
+                chosen on the login screen and carries over (shared netops.theme
+                pref); an explicit Theme control lives in the account menu's
+                Appearance settings (AppearanceControls). */}
 
-        <button
-          className="help-btn"
-          type="button"
-          onClick={() => setHelpOpen(true)}
-          title="Documentation"
-          aria-label="Open documentation"
-        >
-          <Icon name="help" size={16} />
-        </button>
+            {helpButton}
 
-        <span className={`health${ok ? "" : " bad"}`} role="status" title={ok ? `v${health?.version}` : "Disconnected"}>
-          <span className="dot" aria-hidden="true" />
-          {ok ? "Healthy" : "Disconnected"}
-        </span>
+            {healthChip}
+          </>
+        )}
 
         {/* Iris — the primary entry point (owner design 2026-10-05 §1), upper right. */}
         <IrisLauncher />
