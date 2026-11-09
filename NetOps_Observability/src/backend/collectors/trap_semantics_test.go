@@ -18,7 +18,7 @@ import (
 // adding data and nothing else.
 
 // A community is required on the wire and means nothing here: fabricated.
-const fabricatedCommunity = "fixture-community"
+const fixtureTrapCommunity = "fixture-community"
 
 // tvb is one binding of a fabricated trap: the dotted OID and its BER value.
 type tvb struct {
@@ -56,7 +56,7 @@ func buildTrapV2c(t *testing.T, trapOID string, bindings ...tvb) []byte {
 	pduBody = append(pduBody, berInt(0)...)
 	pduBody = append(pduBody, berTLV(0x30, vbs)...)
 	msg := berInt(1)
-	msg = append(msg, berOctets(fabricatedCommunity)...)
+	msg = append(msg, berOctets(fixtureTrapCommunity)...)
 	msg = append(msg, berTLV(0xA7, pduBody)...)
 	return berTLV(0x30, msg)
 }
