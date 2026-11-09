@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-09-train-c'
+PARSER_REV = '2026-11-09-syslog-framing'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -246,6 +246,25 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_sdwan',
   'source': ''},
  {'pack': 'standard',
   'vendor': '',
+  'id': 'standard.sshd_banner_probe',
+  'parser_id': 'standard_mgmt_audit.v1',
+  'literal': 'kex_exchange_identification: ',
+  'apps': ['sshd'],
+  'pattern': '^error: kex_exchange_identification: ',
+  'facility': '',
+  'event_type': 'ssh_banner_probe',
+  'summary': '',
+  'sev_digit': '',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': '',
+  'native_code': '',
+  'alarm_floor': None,
+  'category': 'management_audit',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'standard',
+  'vendor': '',
   'id': 'standard.sshd_session',
   'parser_id': 'standard_mgmt_audit.v1',
   'literal': 'pam_unix(sshd:session): session ',
@@ -265,16 +284,7 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_sdwan',
   'source': ''})
 
 #: Vendor-pack syslog envelope rules, in match order.
-SYSLOG_ENVELOPES: tuple[dict[str, Any], ...] = ({'pack': 'standard',
-  'id': 'standard.rfc5424_remnant',
-  'literal': ' - - ',
-  'pattern': '^(?P<procid>\\d{1,10}|-) - - (?P<rest>.*)',
-  'message': 'rest',
-  'lift': {'procid': 'procid'},
-  'skip_values': ['-'],
-  'preserve_as': 'message_original',
-  'fidelity': 'lab_validated',
-  'source': ''},)
+SYSLOG_ENVELOPES: tuple[dict[str, Any], ...] = ()
 
 #: The rule rows, in CLASSIFICATION ORDER. Order is behaviour: the interpreter
 #: walks a lane's rules in sequence, first match wins.
@@ -509,7 +519,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
               'metric': 'link_state',
               'modality': 'control_plane',
               'entity': {'type': 'interface', 'id': '{host}:{ifname}'},
-              'severity': {'by_state': {'down': 'high'}, 'default': 'warn'},
+              'severity': {'case': [{'when': {'all': [{'eq': ['tag', 'UNKNOWN']}, {'contains': ['ctoken', 'LINEPROTO']}]}, 'value': 'warn'},
+                                    {'when': {'eq': ['$state', 'down']}, 'value': 'high'}],
+                           'default': 'warn'},
               'native_id': '{host}|link|{ifname}|{state}|{ts_ms}',
               'tokens': [{'t': '{host}'}],
               'attrs': {'interface': {'var': 'ifname'}, 'state': {'var': 'state'}, 'tag': {'var': 'tag'}}},
@@ -1092,6 +1104,29 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'markers': [],
      'shadow': False,
      'known_benign': False},
+    {'rule_id': 'syslog.standard.sshd_banner_probe',
+     'lane': 'syslog',
+     'source': 'syslog',
+     'kind': 'device_alarm',
+     'entity_type': 'device',
+     'family': None,
+     'vendors': ['any'],
+     'fidelity_status': 'lab_validated',
+     'known_benign': True,
+     'benign_reason': 'a TCP peer closed before the SSH banner (port probe or health check); no device state in the text',
+     'pattern_src': '^error: kex_exchange_identification: ',
+     'guard': {'re': ['msg', '^error: kex_exchange_identification: ', '']},
+     'severity': 'warn',
+     'emit': {'metric': 'device_alarm',
+              'modality': 'control_plane',
+              'entity': {'type': 'device', 'id': '{host}'},
+              'native_id': '{host}|sshd_banner_probe|{ts_ms}',
+              'tokens': [{'t': '{host}'}],
+              'attrs': {},
+              'kind': 'device_alarm'},
+     'markers': [],
+     'generic': False,
+     'shadow': False},
     {'rule_id': 'syslog.generic.device_alarm',
      'lane': 'syslog',
      'source': 'syslog',
@@ -1115,7 +1150,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
               'metric': 'device_alarm',
               'modality': 'control_plane',
               'entity': {'when': {'truthy': '$ifname'}, 'type': 'interface', 'id': '{host}:{ifname}', 'else': {'type': 'device', 'id': '{host}'}},
-              'severity': {'from_severity_num': True},
+              'severity': {'from_severity_num': {'err': 'warn'}},
               'native_id': '{host}|alarm|{facility}|{mnem|?}|{ifname|-}|{ts_ms}',
               'content_tag': 'msg',
               'tokens': [{'t': '{host}'}],
@@ -2550,6 +2585,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '72841087e8f1bce0d1296f4f5a2eb3d5b22a755eb3310adac6f3cc9bc1f43dd1'
+BAKED_RULES_HASH = 'd19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc83da35062cdb4'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

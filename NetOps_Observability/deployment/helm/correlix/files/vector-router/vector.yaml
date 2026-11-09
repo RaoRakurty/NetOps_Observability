@@ -1638,6 +1638,25 @@ transforms:
         tags:
           topic: "{{ topic }}"
 
+  # Tracker 387, PR 10: frames the edge could not read as syslog, and frames it had to
+  # trim. `reason` is the aggregator's frame_problem, a closed set of four (malformed_pri,
+  # malformed_5424, no_pri, oversized), so the label cannot grow with the data. The record
+  # itself is stored; this says how many there were.
+  syslog_bad_frame_events:
+    type: filter
+    inputs: [syslog_tagged]
+    condition: exists(.frame_problem)
+
+  syslog_bad_frame_metric:
+    type: log_to_metric
+    inputs: [syslog_bad_frame_events]
+    metrics:
+      - type: counter
+        field: frame_problem
+        name: netops_ingest_syslog_bad_frames
+        tags:
+          reason: "{{ frame_problem }}"
+
   # F-18: the DLQ lane bypasses the log_lane anchor, so it gets its own
   # coordinate stamp. Deliberately UNCONDITIONAL here (unlike the anchor's
   # exists-guard on cx_event_id): a dead-letter record may CARRY the original
@@ -1662,7 +1681,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

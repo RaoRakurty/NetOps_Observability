@@ -597,7 +597,12 @@ RULES_HASH_VBOND_DNS_ALARM = "e3caac0e27f0ae5cc6159606a9365435c285cfcb71111b9040
 #: Train 2026-11-09-c (tracker 387): the trap packs and the syslog vendor packs together.
 #: Each stream's rows are pinned above on its own; this is the merged table.
 RULES_HASH_TRAIN_C = "72841087e8f1bce0d1296f4f5a2eb3d5b22a755eb3310adac6f3cc9bc1f43dd1"
-RULES_HASH_A3 = RULES_HASH_TRAIN_C
+#:
+#: Syslog framing (2026-11-09, tracker 387 PR 10, owner D3): the generic net's err rung moves
+#: below the open floor, the IOS protocol line is `warn`, and the SSH banner probe gains a
+#: known_benign row and an audit grammar. The envelope row is deleted.
+RULES_HASH_SYSLOG_FRAMING = "d19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc83da35062cdb4"
+RULES_HASH_A3 = RULES_HASH_SYSLOG_FRAMING
 
 
 def _guard_patterns(node) -> list[str]:

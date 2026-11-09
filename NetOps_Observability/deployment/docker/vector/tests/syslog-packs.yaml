@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 41
+# cases: 45
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -20,7 +20,7 @@ tests:
           hostname: "vEdge-1"
           appname: "FTMD"
           severity: "notice"
-          message: "3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1"
+          message: "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -36,9 +36,7 @@ tests:
               assert_eq!(.severity_native_text, "ERRO", "wrong severity_native_text")
               assert_eq!(.severity_native_code, "3", "wrong severity_native_code")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
-              assert_eq!(.procid, "3875", "wrong procid")
               assert_eq!(.message, "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1", "wrong message")
-              assert_eq!(.message_original, "3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1", "wrong message_original")
   - name: "cisco_sdwan: a warning line with a hyphenated host"
     inputs:
       - insert_at: syslog_normalized
@@ -47,7 +45,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%"
+          message: "%Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -67,7 +65,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%"
+          message: "%Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -85,7 +83,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)"
+          message: "%Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -122,7 +120,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 90% (critically high)\" cpu-user-percentage:\"9.18\" cpu-system-percentage:\"90.82\" cpu-idle-percentage:\"0.00\""
+          message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 90% (critically high)\" cpu-user-percentage:\"9.18\" cpu-system-percentage:\"90.82\" cpu-idle-percentage:\"0.00\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -179,7 +177,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 75%\" cpu-user-percentage:\"2.11\" cpu-system-percentage:\"85.26\" cpu-idle-percentage:\"12.63\""
+          message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 75%\" cpu-user-percentage:\"2.11\" cpu-system-percentage:\"85.26\" cpu-idle-percentage:\"12.63\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -196,7 +194,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%"
+          message: "%Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -212,7 +210,7 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "notice"
-          message: "913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage back to normal level\" cpu-user-percentage:\"8.29\" cpu-system-percentage:\"35.75\" cpu-idle-percentage:\"55.96\""
+          message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage back to normal level\" cpu-user-percentage:\"8.29\" cpu-system-percentage:\"35.75\" cpu-idle-percentage:\"55.96\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -229,13 +227,14 @@ tests:
           hostname: "vEdge-1"
           appname: "VTRACKER"
           severity: "notice"
-          message: "3137 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
+          message: "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "3137", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_normalized
@@ -244,13 +243,14 @@ tests:
           hostname: "vEdge-1"
           appname: "VDAEMON"
           severity: "notice"
-          message: "3130 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
+          message: "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "3130", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_normalized
@@ -259,13 +259,14 @@ tests:
           hostname: "vEdge-1"
           appname: "VTRACKER"
           severity: "notice"
-          message: "3137 - - monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via "
+          message: "monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via "
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "3137", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -274,13 +275,14 @@ tests:
           hostname: "vEdge-1"
           appname: "VTRACKER"
           severity: "notice"
-          message: "3890 - - dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none"
+          message: "dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "3890", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -289,13 +291,14 @@ tests:
           hostname: "vEdge-1"
           appname: "VTRACKER"
           severity: "notice"
-          message: "3890 - - monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via "
+          message: "monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via "
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "3890", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -417,40 +420,7 @@ tests:
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
-  - name: "standard: the procid is lifted and the original kept"
-    inputs:
-      - insert_at: syslog_normalized
-        type: log
-        log_fields:
-          hostname: "vEdge-1"
-          appname: "confd"
-          severity: "notice"
-          message: "2939 - - something a daemon said"
-    outputs:
-      - extract_from: syslog_normalized
-        conditions:
-          - type: vrl
-            source: |
-              assert_eq!(.procid, "2939", "wrong procid")
-              assert_eq!(.message, "something a daemon said", "wrong message")
-              assert_eq!(.message_original, "2939 - - something a daemon said", "wrong message_original")
-  - name: "standard: a nil procid is not lifted"
-    inputs:
-      - insert_at: syslog_normalized
-        type: log
-        log_fields:
-          hostname: "vEdge-1"
-          appname: "SYSMGR"
-          severity: "notice"
-          message: "- - - USER PID %CPU %MEM"
-    outputs:
-      - extract_from: syslog_normalized
-        conditions:
-          - type: vrl
-            source: |
-              assert_eq!(.message, "USER PID %CPU %MEM", "wrong message")
-              assert_eq!(.message_original, "- - - USER PID %CPU %MEM", "wrong message_original")
-  - name: "standard: the tokens later in a line are left alone"
+  - name: "standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -458,13 +428,13 @@ tests:
           hostname: "spine1"
           appname: "app"
           severity: "notice"
-          message: "a line saying 12 - - in the middle"
+          message: "a genuine message that begins this way"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.message, "a line saying 12 - - in the middle", "wrong message")
+              assert_eq!(.message, "a genuine message that begins this way", "wrong message")
   - name: "standard: an SNMP poll session opening, with its key"
     inputs:
       - insert_at: syslog_normalized
@@ -473,7 +443,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "2939 - - audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+          message: "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -485,7 +455,6 @@ tests:
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
-              assert_eq!(.procid, "2939", "wrong procid")
               assert_eq!(.message, "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
   - name: "standard: a NETCONF session opening keeps its own key"
     inputs:
@@ -495,7 +464,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "2939 - - audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh"
+          message: "audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -512,7 +481,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "2939 - - audit user: svc-user/777134 assigned to groups: basic"
+          message: "audit user: svc-user/777134 assigned to groups: basic"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -529,7 +498,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "2939 - - audit user: svc-user/777134 terminated session (reason: normal)"
+          message: "audit user: svc-user/777134 terminated session (reason: normal)"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -546,7 +515,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "4220 - - netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id=\"1\""
+          message: "netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id=\"1\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -563,7 +532,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "4220 - - netconf id=987343 sending rpc-reply, attrs: nc:message-id=\"1\""
+          message: "netconf id=987343 sending rpc-reply, attrs: nc:message-id=\"1\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -579,7 +548,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "4220 - - netconf id=987343 close-session attrs: nc:message-id=\"2\""
+          message: "netconf id=987343 close-session attrs: nc:message-id=\"2\""
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -595,7 +564,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "4220 - - netconf id=987344 new tcp session for user svc-user from 192.0.2.1"
+          message: "netconf id=987344 new tcp session for user svc-user from 192.0.2.1"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -611,7 +580,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "4220 - - netconf id=987345 sending notification {http://viptela.com/system}cpu-usage"
+          message: "netconf id=987345 sending notification {http://viptela.com/system}cpu-usage"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -627,7 +596,7 @@ tests:
           hostname: "vEdge-1"
           appname: "sshd"
           severity: "notice"
-          message: "27761 - - Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed"
+          message: "Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -646,7 +615,7 @@ tests:
           hostname: "vEdge-1"
           appname: "sshd"
           severity: "notice"
-          message: "27761 - - pam_unix(sshd:session): session opened for user svc-user by (uid=0)"
+          message: "pam_unix(sshd:session): session opened for user svc-user by (uid=0)"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -662,7 +631,7 @@ tests:
           hostname: "vEdge-1"
           appname: "sshd"
           severity: "notice"
-          message: "27761 - - pam_unix(sshd:session): session closed for user svc-user"
+          message: "pam_unix(sshd:session): session closed for user svc-user"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -678,13 +647,14 @@ tests:
           hostname: "vEdge-1"
           appname: "sshd"
           severity: "notice"
-          message: "27761 - - Failed password for svc-user from 192.0.2.1 port 35112 ssh2"
+          message: "Failed password for svc-user from 192.0.2.1 port 35112 ssh2"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.procid, "27761", "wrong procid")
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: the same words from another app are not classified"
     inputs:
       - insert_at: syslog_normalized
@@ -718,3 +688,102 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "standard: a peer that hangs up before the SSH banner is filed, and emits nothing at err"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "err"
+          message: "error: kex_exchange_identification: Connection closed by remote host"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.event_type, "ssh_banner_probe", "wrong event_type")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_banner_probe", "wrong dedup_key")
+  - name: "standard: another sshd error is not the banner probe"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "err"
+          message: "error: Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "standard: a tagged line whose mnemonic is the only severity it states"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "edge01"
+          appname: "Rib"
+          severity: "notice"
+          message: "%FOO-3-BAR: a line no rule knows"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "standard: a mnemonic later in the line sets no severity"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "edge01"
+          appname: "unknown"
+          severity: "notice"
+          message: "a sender quoting %FOO-1-BAR in its own text"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "standard: a critical line with no pack still opens alone"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "edge01"
+          appname: "otherd"
+          severity: "crit"
+          message: "the fan tray has failed"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "standard: an error line with no pack stays below the open floor"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "edge01"
+          appname: "otherd"
+          severity: "err"
+          message: "something this platform calls an error"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")

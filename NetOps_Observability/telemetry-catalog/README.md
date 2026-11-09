@@ -193,7 +193,8 @@ file.** The engine, the bake and the Vector generator name no vendor.
 | `pack`, `vendor` | The pack's name and the vendor it stamps. `vendor: null` is a vendor-neutral pack; it runs after every vendor pack and stamps nothing |
 | `grammars` | Body grammars, first match wins: `parser_id`, a `literal` the line must contain, an optional `apps` list, `pattern` with named groups, `{group}` templates for `facility`, `event_type` and `summary`, `severity` (`{digit: group}` or `{word: group}`), `native_text`, `native_code`, `alarm_floor`, `category`, `fidelity`, `source` |
 | `severity_words` | The vendor's severity words to RFC 5424 numbers, for `{word: group}` |
-| `envelopes` | Rewrites of a line's framing: `literal`, `pattern`, the `message` group, `lift` (field to group), `preserve_as` |
+| `edge_shapes` | Frame shapes syslog-ng's legacy parser cannot read, run on the raw frame before it: `match` (anchored at the PRI), then `replace` (back to plain RFC 3164) or `no_header: true` (the whole body is the message), `fidelity`, `source`. Names a shape, never a vendor |
+| `envelopes` | Rewrites of a line's framing after the parser: `literal`, `pattern`, the `message` group, `lift` (field to group), `preserve_as`. No pack needs one today |
 | `rules` | Ordinary rule rows (schema in `events.yaml`), each with its own `fidelity_status`. They run after the vendor-neutral rules and before the generic net |
 | `fixtures` | Lines with the parse (`expect`) and the signal (`signal`) they must produce, each with its fidelity. A pack with no fixtures does not bake |
 | `wanted` | Rows that have no source yet, so the gap is recorded rather than guessed |
@@ -217,7 +218,10 @@ cp deployment/docker/vector/vector.yaml deployment/helm/correlix/files/vector/
 
 `tests/test_syslog_packs.py` runs every fixture on the shipped transform and adds a
 synthetic vendor through a data file alone. The two executors are `src/correlation/syslog_packs.py`
-and the block the generator splices into `syslog_normalized`.
+and the block the generator splices into `syslog_normalized`. `gen-syslog-packs.py` also
+splices `edge_shapes` into `deployment/docker/syslog-ng/core.conf`;
+`tests/test_syslog_edge_framing.py` sends raw wire frames through the real syslog-ng, Vector
+and classifier. Add a frame there for any new shape, and assert on values.
 
 ## Relationship to the runtime
 

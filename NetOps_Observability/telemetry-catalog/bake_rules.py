@@ -301,9 +301,15 @@ def normalize_row(row: dict) -> dict:
 # ── vendor packs ─────────────────────────────────────────────────────────────
 
 PACK_KEYS = frozenset({
-    "pack", "vendor", "description", "severity_words", "envelopes", "grammars",
-    "rules", "fixtures", "wanted",
+    "pack", "vendor", "description", "severity_words", "edge_shapes", "envelopes",
+    "grammars", "rules", "fixtures", "wanted",
 })
+#: A frame shape normalised at the edge, before syslog-ng's legacy parser runs. `match`
+#: is anchored at the PRI, so it costs one failed anchor on any other frame.
+EDGE_SHAPE_KEYS = frozenset({"id", "match", "replace", "no_header", "fidelity", "source"})
+#: Characters a shape may not contain: the row is pasted into a syslog-ng `'...'`
+#: string, and a backtick there is a config variable.
+EDGE_SHAPE_FORBIDDEN_CHARS = ("'", "`", "\n")
 PACK_REQUIRED = ("pack", "vendor", "fixtures")
 GRAMMAR_KEYS = frozenset({
     "id", "parser_id", "literal", "apps", "pattern", "facility", "event_type",
@@ -445,6 +451,45 @@ def _bake_envelope(pack: dict, e: dict, seen: set[str]) -> dict:
         "preserve_as": e["preserve_as"], "fidelity": e["fidelity"],
         "source": e.get("source") or "",
     }
+
+
+def edge_shapes(packs: list[dict]) -> list[dict]:
+    """The frame shapes every pack states, validated, in pack order. Compiled into
+    syslog-ng's core.conf by scripts/gen-syslog-packs.py. The engine never reads a raw
+    frame, so these stay out of PACK_DIGEST: a shape moves no signal by itself."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for pack in packs:
+        for row in pack.get("edge_shapes") or []:
+            where = f"pack {pack['pack']!r} edge shape {row.get('id')!r}"
+            unknown = sorted(set(row) - EDGE_SHAPE_KEYS)
+            if unknown:
+                raise BakeError(f"{where}: unknown key(s) {unknown}")
+            if not row.get("id") or not row.get("match"):
+                raise BakeError(f"{where}: `id` and `match` are required")
+            sid = f"{pack['pack']}.{row['id']}"
+            if sid in seen:
+                raise BakeError(f"{where}: duplicate edge shape id")
+            seen.add(sid)
+            _check_fidelity(where, row)
+            match = str(row["match"])
+            replace = row.get("replace")
+            no_header = bool(row.get("no_header"))
+            if (replace is None) == (not no_header):
+                raise BakeError(f"{where}: state exactly one of `replace` or `no_header`")
+            if not match.startswith("^<") and not match.startswith("^(<"):
+                raise BakeError(f"{where}: `match` must be anchored at the PRI")
+            for ch in EDGE_SHAPE_FORBIDDEN_CHARS:
+                if ch in match or ch in str(replace or ""):
+                    raise BakeError(f"{where}: {ch!r} cannot be compiled into syslog-ng soundly")
+            try:
+                re.compile(match)
+            except re.error as exc:
+                raise BakeError(f"{where}: `match` does not compile — {exc}") from exc
+            out.append({"id": sid, "match": match, "replace": replace,
+                        "no_header": no_header, "fidelity": row["fidelity"],
+                        "source": row.get("source") or ""})
+    return out
 
 
 def _check_fixture(pack: dict, fx: dict) -> None:

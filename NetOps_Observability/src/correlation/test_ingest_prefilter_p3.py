@@ -315,8 +315,10 @@ def test_counters_account_for_every_screened_line(corpus):
 # screen's hit set is exactly {marker}. Drop the marker and the line must be
 # rejected, which is the failure mode this change could introduce.
 ISOLATING = [
-    ("updown", "LINK-3-UPDOWN",
-     "%LINK-3-UPDOWN: Interface Ethernet1, changed state to down"),
+    # Digit 5, not 3: the mnemonic at the start of a message is a severity the line states
+    # (tracker 387 PR 10), and an err digit would pass the severity gate, not this one.
+    ("updown", "LINK-5-UPDOWN",
+     "%LINK-5-UPDOWN: Interface Ethernet1, changed state to down"),
     ("adjchange", "BGP-5-ADJCHANGE", "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Down"),
     ("adjchg", "OSPF-5-ADJCHG",
      "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 from FULL to DOWN"),

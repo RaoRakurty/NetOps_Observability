@@ -238,6 +238,18 @@
             "procid": {
               "type": "keyword"
             },
+            "msgid": {
+              "type": "keyword"
+            },
+            "syslog_facility": {
+              "type": "keyword"
+            },
+            "frame_format": {
+              "type": "keyword"
+            },
+            "frame_problem": {
+              "type": "keyword"
+            },
             "severity": {
               "type": "keyword"
             },

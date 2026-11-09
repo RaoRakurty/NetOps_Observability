@@ -74,7 +74,20 @@ The cause is two parses in `deployment/docker/syslog-ng/core.conf`. The `udp()` 
 
 Removing the second parser keeps PRI and the mnemonic, but RFC 5424 frames then become program `1` with host = sender, so the fix needs a real RFC 5424 parser, not just that deletion.
 
-**This is why PR 10 moves up, and it affects every vendor,** since all syslog passes through the same two parses. PR 8's `NNNN - - ` envelope row is a stop-gap until then. Once real PRI flows, a line such as `sshd error: kex_exchange_identification` (`<35>`, err) reaches the generic alarm net at `high`, so it needs a row before PR 10 lands.
+**This is why PR 10 moves up, and it affects every vendor,** since all syslog passes through the same two parses.
+
+**Built in PR 10 (2026-11-09).** `core.conf` reads every frame with `no-parse` and branches on its bytes: a strict RFC 5424 parser for `<PRI>1 `, the legacy parser for the rest, after data-driven shape rewrites (`edge_shapes` in the packs). Vector's own parser was evaluated and rejected: it produced no record for 12 of 31 fixtures and let a structured-data element overwrite the hostname. Also found while fixing it, and fixed:
+
+- **One non-UTF-8 byte stalled the whole lane.** Vector's octet decoder treats it as a broken stream and syslog-ng waits 60 s to reconnect. The source now sanitises.
+- **Every RFC 3164 timestamp was the receive time,** since the second parse found no date. Device time now survives, so a device with a wrong clock or a non-UTC zone reaches the engine with that time. `clock_skew_s` reports it.
+- **`<>` reads as PRI 0, `kern.emerg`,** and a failed parse injects text at `err`. A frame with no valid PRI is now kept unparsed at `notice` and counted.
+- **Sender-written structured data reaches no field.** It travels as one text value, `structured_data`.
+
+The `NNNN - - ` envelope row is deleted: over 3,825 frames of real lab traffic it fired on 3,785 before the fix and on none after. `sshd error: kex_exchange_identification` got its row first. Result on real traffic: the same 113 signals and 3 objects before and after. Bad frames are counted in `netops_ingest_syslog_bad_frames{reason}`.
+
+**The generic net:** only emerg, alert and crit open an object alone; err arrives below the floor (D3). **Link lines:** `%LINEPROTO-*-UPDOWN` from a sender with no process tag is `warn`, because IOS logs it after a fault and after a `shutdown`; `%LINK-3-UPDOWN` opens. Telling a protocol-only fault from a shutdown needs both lines (tracker 388).
+
+**Still wrong, on purpose, for later streams:** IOS-XR, NX-OS `%ETHPORT-*`, Junos, SR OS and SONiC bodies stay `parser_status=unparsed` or generic, so their real link faults reach the engine as `device_alarm` at `warn` or not at all. The envelope is right; the grammar is theirs. SONiC's `{{os_version}}` template variant is not handled. The storm parity leg (§6 row 10) has not run: the rig injects directly to Kafka and never reaches syslog-ng or the aggregator.
 
 ### 3.4 Storage and API defects
 

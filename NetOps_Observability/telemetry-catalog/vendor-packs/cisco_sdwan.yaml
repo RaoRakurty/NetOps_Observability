@@ -11,9 +11,10 @@
 # live. Cisco's syslog message catalogue was not retrievable.
 #
 # FRAMING SEEN ON THE WIRE. vEdge sends true RFC 5424 with a real PRI
-# (`<187>1 <ts> vEdge-51 FTMD 3875 - - %Viptela-...`). syslog-ng's double parse then
-# resets PRI to 13 (notice) and leaves `3875 - - ` in the message (plan §3.3, fixed by
-# PR 10). The grammars are unanchored, so they read the line before and after that fix.
+# (`<187>1 <ts> vEdge-51 FTMD 3875 - - %Viptela-...`), and cEdge a hostname-less
+# `<189>25165: <ts>: %DMI-5-AUTH_PASSED: ...`. Since PR 10 the PRI, the procid and the
+# clean message all arrive (tests/test_syslog_edge_framing.py). The grammars stay
+# unanchored, because a frame already on the bus at upgrade still has the old shape.
 pack: cisco_sdwan
 vendor: cisco
 description: Cisco Catalyst SD-WAN edges and controllers.
@@ -74,9 +75,8 @@ grammars:
   # `event_category` and a stable `dedup_key`; repeats are grouped at READ time and every
   # record stays stored. Usernames stay in the message (D7 is another stream).
   #
-  # The cEdge mnemonic never reaches storage today, and this is the part of the line that
-  # survives: wire `%DMI-5-AUTH_PASSED: R0/0: dmiauthd: ...` is stored as app `R0/0`,
-  # `dmiauthd: ...`. PR 10's framing fix moves the app, so the dedup key moves with it.
+  # Wire `%DMI-5-AUTH_PASSED: R0/0: dmiauthd: ...`. IOS sends no process tag, so the app
+  # is `unknown` and the mnemonic stays in the message (PR 10). The dedup key follows.
   - id: iosxe_dmi_auth
     parser_id: cisco_mgmt_audit.v1
     literal: 'dmiauthd: User '
@@ -391,7 +391,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: FTMD
-    message: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
+    message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
     expect:
       vendor: cisco
       vendor_source: format
@@ -403,16 +403,14 @@ fixtures:
       severity_native_text: ERRO
       severity_native_code: '3'
       normalized_severity: error
-      procid: '3875'
       message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
-      message_original: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
     signal: null
 
   - name: a warning line with a hyphenated host
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%'
+    message: '%Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%'
     expect:
       parser_status: parsed
       facility: SYSMGR
@@ -426,7 +424,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%'
+    message: '%Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%'
     expect:
       parser_status: parsed
       event_type: sysmgr_200072
@@ -438,7 +436,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)'
+    message: '%Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)'
     expect:
       parser_status: parsed
       event_type: sysmgr_200069
@@ -463,7 +461,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 90% (critically high)" cpu-user-percentage:"9.18" cpu-system-percentage:"90.82" cpu-idle-percentage:"0.00"'
+    message: '%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 90% (critically high)" cpu-user-percentage:"9.18" cpu-system-percentage:"90.82" cpu-idle-percentage:"0.00"'
     expect:
       parser_status: parsed
       facility: sysmgrd
@@ -502,7 +500,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 75%" cpu-user-percentage:"2.11" cpu-system-percentage:"85.26" cpu-idle-percentage:"12.63"'
+    message: '%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 75%" cpu-user-percentage:"2.11" cpu-system-percentage:"85.26" cpu-idle-percentage:"12.63"'
     expect:
       parser_status: parsed
       event_type: cpu-usage
@@ -513,7 +511,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%'
+    message: '%Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%'
     expect:
       parser_status: parsed
       event_type: sysmgr_200070
@@ -523,7 +521,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
-    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage back to normal level" cpu-user-percentage:"8.29" cpu-system-percentage:"35.75" cpu-idle-percentage:"55.96"'
+    message: '%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage back to normal level" cpu-user-percentage:"8.29" cpu-system-percentage:"35.75" cpu-idle-percentage:"55.96"'
     expect:
       parser_status: parsed
       event_type: cpu-usage
@@ -534,45 +532,40 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
-    message: '3137 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
-    expect:
-      procid: '3137'
+    message: 'dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
+    expect: {}
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the same failure from the other daemon
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VDAEMON
-    message: '3130 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
-    expect:
-      procid: '3130'
+    message: 'dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
+    expect: {}
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the resolver reports the same failure in its own words
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
-    message: '3137 - - monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via '
-    expect:
-      procid: '3137'
+    message: 'monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via '
+    expect: {}
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: a vBond lookup success emits nothing
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
-    message: '3890 - - dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none'
-    expect:
-      procid: '3890'
+    message: 'dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none'
+    expect: {}
     signal: null
 
   - name: the resolver success emits nothing
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
-    message: '3890 - - monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via '
-    expect:
-      procid: '3890'
+    message: 'monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via '
+    expect: {}
     signal: null
 
   - name: the same DNS words from a daemon outside this pack mean nothing

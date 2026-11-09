@@ -478,7 +478,8 @@ def test_generic_alarm_interface_scoped_when_named():
     assert s is not None and s.kind == "device_alarm"
     assert s.entity_type is EntityType.INTERFACE
     assert s.entity_id == "leaf1:Ethernet5"
-    assert s.severity is Severity.HIGH
+    # Tracker 387 PR 10 (owner D3): an unrecognised err line joins, it does not open.
+    assert s.severity is Severity.WARN
     # tracker 168 (INTENTIONAL DELTA): interface-scoped alarm — entity_id is
     # already "leaf1:Ethernet5", so the bare local name is redundant AND unsafe.
     assert s.entity_id == "leaf1:Ethernet5"
@@ -503,11 +504,16 @@ def test_specific_classifier_wins_over_generic_alarm():
 
 
 def test_generic_alarm_severity_from_mnemonic_digit_only():
-    # No RFC5424 severity field, but the Cisco %FAC-N-MNEMONIC digit (err=3) drives it.
+    # No RFC5424 severity field, but the Cisco %FAC-N-MNEMONIC digit drives it: err=3 is
+    # below the open floor (tracker 387 PR 10, owner D3), crit=2 opens.
     s = syslog_control_signal({"hostname": "sw1", "appname": "%PLATFORM-3-ELEMENT_FAULT",
                                "message": "PSU 1 voltage out of range", "timestamp": T0.isoformat()},
                               "", T0)
-    assert s is not None and s.kind == "device_alarm" and s.severity is Severity.HIGH
+    assert s is not None and s.kind == "device_alarm" and s.severity is Severity.WARN
+    s = syslog_control_signal({"hostname": "sw1", "appname": "%PLATFORM-2-ELEMENT_FAULT",
+                               "message": "PSU 1 voltage out of range", "timestamp": T0.isoformat()},
+                              "", T0)
+    assert s is not None and s.kind == "device_alarm" and s.severity is Severity.CRIT
 
 
 # ── flow lane (C6 passive_flow) ───────────────────────────────────────────────

@@ -12,6 +12,8 @@ through the block this script splices into `syslog_normalized`. It writes
   deployment/docker/vector/vector.yaml              the spliced block
   deployment/helm/correlix/files/vector/vector.yaml the same block
   deployment/docker/vector/tests/syslog-packs.yaml  its `vector test` suite
+  deployment/docker/syslog-ng/core.conf             the frame shapes (`edge_shapes`)
+  deployment/helm/correlix/files/syslog-ng/core.conf the same shapes
 
 The suite runs against the shipped transform (`insert_at: syslog_normalized`). Its
 expected values come from `syslog_packs.PackTable.parse` and from each fixture's own
@@ -54,6 +56,10 @@ END_MARK = "      # <<< END GENERATED-SYSLOG-PACKS"
 CONFIG_RELS = ("deployment/docker/vector/vector.yaml",
                "deployment/helm/correlix/files/vector/vector.yaml")
 TESTS_REL = "deployment/docker/vector/tests/syslog-packs.yaml"
+SHAPES_BEGIN = "# >>> BEGIN GENERATED-EDGE-SHAPES (scripts/gen-syslog-packs.py)"
+SHAPES_END = "# <<< END GENERATED-EDGE-SHAPES"
+EDGE_CONFIG_RELS = ("deployment/docker/syslog-ng/core.conf",
+                    "deployment/helm/correlix/files/syslog-ng/core.conf")
 
 #: The fields a fixture's `expect:` may assert, in the order they are written.
 ASSERTED = ("vendor", "vendor_source", "parser_id", "parser_status", "facility",
@@ -67,6 +73,8 @@ class GenerationError(RuntimeError):
 
 
 def _envelope_lines(rows: list[dict]) -> list[str]:
+    if not rows:
+        return []   # VRL warns on an unused local
     out = ['cx_pk_raw = string(.message) ?? ""']
     for e in rows:
         out += [
@@ -152,6 +160,37 @@ def splice(existing: str, block: str) -> str:
     if start < 0 or end < 0 or end < start:
         raise GenerationError(
             f"vector.yaml carries no generated pack block:\n  {BEGIN_MARK}\n  {END_MARK}")
+    end_line = existing.find("\n", end)
+    return existing[:start] + block + existing[end_line + 1:]
+
+
+def render_edge_shapes(shapes: list[dict]) -> str:
+    """The generated part of syslog-ng's core.conf. Both objects must exist because the
+    framing channel names them, so a catalogue with no such row refuses to generate."""
+    filters = [s for s in shapes if s["no_header"]]
+    rewrites = [s for s in shapes if not s["no_header"]]
+    if not filters or not rewrites:
+        raise GenerationError("edge_shapes needs at least one `no_header` and one `replace` row")
+    lines = [SHAPES_BEGIN,
+             "# GENERATED from telemetry-catalog/vendor-packs/*.yaml. DO NOT EDIT: change a",
+             "# pack and re-run scripts/gen-syslog-packs.py; a drift test fails on a stale copy."]
+    for s in filters:
+        lines.append(f"# {s['id']} ({s['fidelity']})")
+    alternatives = " or ".join(f"message('{s['match']}')" for s in filters)
+    lines += [f"filter f_shape_no_header {{ {alternatives}; }};", "rewrite r_edge_shapes {"]
+    for s in rewrites:
+        lines += [f"    # {s['id']} ({s['fidelity']})",
+                  f"    subst('{s['match']}', '{s['replace']}', value(\"MESSAGE\"));"]
+    lines += ["};", SHAPES_END]
+    return "\n".join(lines) + "\n"
+
+
+def splice_edge_shapes(existing: str, block: str) -> str:
+    start = existing.find(SHAPES_BEGIN)
+    end = existing.find(SHAPES_END)
+    if start < 0 or end < 0 or end < start:
+        raise GenerationError(
+            f"core.conf carries no generated shape block:\n  {SHAPES_BEGIN}\n  {SHAPES_END}")
     end_line = existing.find("\n", end)
     return existing[:start] + block + existing[end_line + 1:]
 
@@ -257,6 +296,13 @@ def build(packs_dir: str, root: str) -> dict[str, str]:
             continue
         with open(path, encoding="utf-8") as fh:
             out[path] = splice(fh.read(), block)
+    shapes = render_edge_shapes(bake_rules.edge_shapes(packs))
+    for rel in EDGE_CONFIG_RELS:
+        path = os.path.join(root, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            out[path] = splice_edge_shapes(fh.read(), shapes)
     return out
 
 
