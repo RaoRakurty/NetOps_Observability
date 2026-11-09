@@ -1777,7 +1777,11 @@ func (o *Orchestrator) systemPrompt() string {
 	return o.baseSystemPrompt() + "\n\n" + o.orgBlock + "\n\n" + DataNotInstructionsFence()
 }
 
-func (o *Orchestrator) baseSystemPrompt() string {
+func (o *Orchestrator) baseSystemPrompt() string { return baseSystemPromptText() }
+
+// baseSystemPromptText is the base prompt itself. It depends on nothing an
+// Orchestrator holds, so the harness fingerprint can read it without building one.
+func baseSystemPromptText() string {
 	return strings.Join([]string{
 		"You are Iris AI, an evidence-grounded NOC assistant for a network observability platform.",
 		"Answer ONLY from the EVIDENCE provided in the user message. Be concise and operational (a NOC engineer is reading).",

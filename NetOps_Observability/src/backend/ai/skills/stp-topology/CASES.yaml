@@ -53,6 +53,8 @@ expect_never:
   - mac-flap
   - interface-down
   - log-confirmation
+expect_never_tools:
+  - run_protocol_diagnostic
 
 ---
 

@@ -47,6 +47,9 @@ expect_never:
   - path-seam-handoff
   - log-confirmation
 expect_select: app-edge-5xx
+expect_never_tools:
+  - run_protocol_diagnostic
+  - get_device_state
 
 ---
 
