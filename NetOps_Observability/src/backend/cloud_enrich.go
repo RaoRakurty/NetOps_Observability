@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/rca"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +40,16 @@ type cloudLiveState struct {
 	CPUPct       *float64 // nil = not measured
 }
 
+// cloudVMBase is the metrics upstream of the cloud reads: the same setting every
+// other VictoriaMetrics reader uses, so on a TLS install it is vmauth and
+// backendHTTPClient attaches the svc-api credential (origin-scoped to this URL)
+// and verifies against the mesh CA. Tracker 384: these reads used their own
+// VM_QUERY_URL, which nothing ever set, and a bare client, so they talked to
+// plain victoria:8428 past vmauth.
+func cloudVMBase() string {
+	return envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+}
+
 // vmQuery runs one instant PromQL query against VictoriaMetrics and returns
 // resource_id → value. Failure is degradation, never an error the UI sees:
 // an unreachable metric store means "unknown", not "healthy".
@@ -51,17 +60,12 @@ func vmQuery(ctx context.Context, q string) map[string]float64 {
 // vmQueryBy is vmQuery keyed by an arbitrary result label (e.g. "provider"
 // for the ingestion matrix's per-provider freshness).
 func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
-	base := os.Getenv("VM_QUERY_URL")
-	if base == "" {
-		base = "http://victoria:8428"
-	}
-	u := fmt.Sprintf("%s/api/v1/query?query=%s", strings.TrimRight(base, "/"), url.QueryEscape(q))
+	u := fmt.Sprintf("%s/api/v1/query?query=%s", strings.TrimRight(cloudVMBase(), "/"), url.QueryEscape(q))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil
 	}
-	cl := &http.Client{Timeout: 4 * time.Second}
-	resp, err := cl.Do(req)
+	resp, err := backendHTTPClient(4 * time.Second).Do(req)
 	if err != nil {
 		return nil
 	}
