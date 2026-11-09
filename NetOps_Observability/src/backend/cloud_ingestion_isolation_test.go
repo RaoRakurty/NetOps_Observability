@@ -88,7 +88,7 @@ func newIngFakeVM(t *testing.T, series []ingFakeSeries) *ingFakeVM {
 		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[%s]}}`, strings.Join(rows, ","))
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("VM_QUERY_URL", srv.URL)
+	t.Setenv("VICTORIA_URL", srv.URL) // tracker 384: cloud reads use the shared metrics upstream
 	return f
 }
 
