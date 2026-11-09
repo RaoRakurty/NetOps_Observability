@@ -25,16 +25,16 @@ the answer is badged **Verified**.
 
 ## Golden Q&A set (intelligence plan P3)
 
-`docs/ai/golden-examples/golden-qa.json` is the versioned golden set — 91
+`docs/ai/golden-examples/golden-qa.json` is the versioned golden set — 152
 fixtures in five categories, loaded by the strict `ai/goldenset.go` loader (a
 malformed or underspecified fixture fails loading; nothing is silently
 skipped). The evals run deterministically on the mock provider and gate CI:
 
 | Category | Items | Eval | Guarantee |
 |----------|-------|------|-----------|
-| `docs` | 120 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.80, hit@3 ≥ 0.95** (floors) |
-| `docs` | 120 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
-| `docs` (`nav`) | 105 screens | `TestGoldenCoversEveryNavLeaf` (`ai/`) | every console screen read from `src/frontend/src/nav.tsx` (each nav leaf, plus each in-page view a leaf declares in `subItems` that has no `route` of its own) has a docs item naming it in `nav`, every `nav` names a real screen, and for every screen at least one of its items hits@3 |
+| `docs` | 122 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.80, hit@3 ≥ 0.95** (floors) |
+| `docs` | 122 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
+| `docs` (`nav`) | 108 screens | `TestGoldenCoversEveryNavLeaf` (`ai/`) | every console screen read from `src/frontend/src/nav.tsx` (each nav leaf, plus each in-page view a leaf declares in `subItems` that has no `route` of its own) has a docs item naming it in `nav`, every `nav` names a real screen, and for every screen at least one of its items hits@3 |
 | `intent` | 7 | `TestGoldenIntentRouting` (`ai/`) | the deterministic router classifies each question exactly |
 | `agent_tool` | 11 | `TestGoldenAgentToolPlumbing` (server pkg) | the expected tool is in the caller's manifest, executes tenant-scoped, yields cited evidence that survives the grounding verifier |
 | `decline` | 7 | `TestGoldenDeclines` (`ai/`) | honesty floor: zero hits + explicit "documentation doesn't cover that" + zero citations; `known_gap` items report, never gate |
@@ -72,7 +72,11 @@ retrieval is unchanged by construction. Measured on 120 items: plain hit@1
 the boost never costs a question asked elsewhere its hit@3 floor
 (`TestPageBoostKeepsGoldenRetrieval`).
 
-**Decision gate (plan P5):** hit@3 1.00 on 119 items means BM25 recall is still
+**Current measurement (2026-11-09):** on 122 docs items, hit@1 0.90 (110/122),
+hit@3 1.00 (122/122); 108 screens, all covered. The dated paragraphs above record
+how each number moved at the time.
+
+**Decision gate (plan P5):** hit@3 1.00 on 122 items means BM25 recall is still
 NOT the bottleneck, so the vector/hybrid retrieval upgrade stays deferred. The
 evidence is the re-measured number above, not the 2026-07-02 one. Revisit only
 if the hit@3 floor starts failing on legitimate paraphrase items.
