@@ -119,6 +119,12 @@ const (
 	SourceSystemLedger        = "ledger"
 	SourceSystemConfigCapture = "config_capture"
 	SourceSystemAudit         = "correlix_audit"
+	// The device's own word (a typed config-change trap or syslog line) and the
+	// cloud provider's audit trail, bridged from the engine's durable signals
+	// (internal/changeledger, N-D2).
+	SourceSystemDeviceTrap   = "device_trap"
+	SourceSystemDeviceSyslog = "device_syslog"
+	SourceSystemCloudAudit   = "cloud_audit"
 )
 
 // maxSourceSystemBytes bounds the producer name. It is a label, not a payload.

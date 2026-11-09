@@ -1964,6 +1964,36 @@
      "physical": [
       "correlix_audit"
      ]
+    },
+    {
+     "value": "device_trap",
+     "aliases": [
+      "snmp trap",
+      "device notification"
+     ],
+     "physical": [
+      "device_trap"
+     ]
+    },
+    {
+     "value": "device_syslog",
+     "aliases": [
+      "device log",
+      "device syslog"
+     ],
+     "physical": [
+      "device_syslog"
+     ]
+    },
+    {
+     "value": "cloud_audit",
+     "aliases": [
+      "cloud audit log",
+      "cloud provider audit"
+     ],
+     "physical": [
+      "cloud_audit"
+     ]
     }
    ],
    "operators": [

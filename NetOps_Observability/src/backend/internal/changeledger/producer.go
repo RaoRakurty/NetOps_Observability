@@ -50,6 +50,10 @@ const ScheduledCaptureActor = "correlix:config-backup"
 // platform-scope action). It is a SKIP, counted as such, never a failure.
 var ErrNotAChange = errors.New("changeledger: not a recordable change")
 
+// errInvalidChange marks a record the ledger's own validation refused. It is
+// permanent: writing the same record again gets the same answer.
+var errInvalidChange = errors.New("changeledger: invalid change")
+
 // Retry policy for one ledger write (§9: network calls retry with backoff and
 // jitter). Three attempts inside one bounded budget.
 const (
@@ -141,7 +145,7 @@ func (p *Producer) write(ctx context.Context, producer string, ev experience.Cha
 		p.metrics.record(producer, OutcomeFailed)
 		p.logWarn("the change ledger refused an invalid change", map[string]any{
 			"producer": producer, "tenant": ev.TenantID, "object": ev.Object, "error": err.Error()})
-		return err
+		return fmt.Errorf("%w: %w", errInvalidChange, err)
 	}
 	var err error
 	for attempt := 0; attempt < writeAttempts; attempt++ {
