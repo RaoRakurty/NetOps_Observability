@@ -39,6 +39,7 @@ import (
 	"netops/backend/internal/nlquery/validate"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/srcauthority"
 	"netops/backend/internal/tac"
 	"netops/backend/models"
 )
@@ -3042,6 +3043,119 @@ func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
 	s.orgContextMetrics.Rendered()
 	aidecision.FromContext(ctx).AddContext(ai.ContextBlockSHA256(block), n)
 	return block
+}
+
+// ── Source authority (tracker 337 N-F6, internal/srcauthority) ─────────────
+//
+// Which source Iris believes when several report the same device. §3a: the
+// order is per-tenant DATA → requirePerm(administration) + the principal's own
+// tenant (never a body field); it is AI CONFIGURATION, so it is admin-plane —
+// not gated by a usage entitlement (an admin must be able to set it while AI
+// is off, like /api/ai/tenant-config).
+
+// newSrcAuthorityStore: Postgres (RLS) or nothing — a file-backend deployment
+// keeps the platform default and refuses changes rather than hold a tenant's
+// order in memory that a restart would silently forget.
+func newSrcAuthorityStore() srcauthority.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return srcauthority.NewPGStore(ps.DB())
+	}
+	return nil
+}
+
+func (s *server) handleAISourceAuthority(w http.ResponseWriter, r *http.Request) {
+	s.srcAuthorityAPI().Handler(w, r)
+}
+
+func (s *server) srcAuthorityAPI() srcauthority.Deps {
+	return srcauthority.Deps{
+		Store: s.srcAuthority,
+		Authorize: func(w http.ResponseWriter, r *http.Request, level srcauthority.Level) (srcauthority.Caller, bool) {
+			perm := LevelRead
+			if level == srcauthority.LevelChange {
+				perm = LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, "administration", perm)
+			if !ok {
+				return srcauthority.Caller{}, false
+			}
+			// An API key may read the order, never change it: same rule as the
+			// network context, because the order decides what Iris tells people.
+			if level == srcauthority.LevelChange && strings.HasPrefix(claims.Sub, "apikey:") {
+				writeError(w, http.StatusForbidden, errors.New("changing the source order needs a signed-in person, not an API key"))
+				return srcauthority.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return srcauthority.Caller{Tenant: tenant, Cross: cross, Sub: claims.Sub}, true
+		},
+		Audit: func(r *http.Request, c srcauthority.Caller, detail map[string]any) {
+			s.audit.Record(AuditEvent{
+				Time: time.Now().UTC(), Actor: c.Sub, Tenant: c.Tenant, Cross: c.Cross,
+				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: "allow", Detail: detail,
+			})
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Log:        func(msg string, err error) { logError("iris.source_authority", msg, errf(err)) },
+	}
+}
+
+// deviceFacts is one device's descriptive facts as Iris states them: each
+// fact's winning source under the applicable order, and the disagreements.
+type deviceFacts struct {
+	Resolutions []srcauthority.Resolution
+	Order       []srcauthority.Class
+	Customized  bool
+	// PolicyFailed: the workspace's order could not be read (or no longer
+	// validated) and the platform default was used — said in the answer.
+	PolicyFailed bool
+}
+
+// srcAuthorityTenant is whose order applies when principal (tenant, cross)
+// asks about dev. A tenant principal always uses its OWN order — it can only
+// see its own and platform devices — so a store read never leaves the
+// caller's tenant. A cross-tenant principal uses the device owner's order
+// (platform devices: the Provider workspace's).
+func srcAuthorityTenant(dev models.Device, tenant string, cross bool) string {
+	if !cross {
+		return tenant
+	}
+	if t := deviceTenant(dev); t != "" {
+		return t
+	}
+	return TenantGlobal
+}
+
+// deviceFactsFor resolves dev's facts from every per-source record merged
+// into it. Each record is re-checked against the caller (zero trust: the
+// union-find is tenant-partitioned, but a record the caller may not see must
+// never contribute a value to its answer).
+func (s *server) deviceFactsFor(ctx context.Context, dev models.Device, tenant string, cross bool) deviceFacts {
+	var records []models.Device
+	if s.discovery != nil {
+		for _, rec := range s.discovery.Constituents(dev.ID) {
+			if canSeeDevice(rec, tenant, cross) {
+				records = append(records, rec)
+			}
+		}
+	}
+	if len(records) == 0 {
+		records = []models.Device{dev} // a device served without a raw record: its own row is its one source
+	}
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	order, customized, err := srcauthority.Effective(rctx, s.srcAuthority, srcAuthorityTenant(dev, tenant, cross))
+	out := deviceFacts{Order: order, Customized: customized}
+	if err != nil {
+		out.PolicyFailed = true
+		s.srcAuthorityMetrics.PolicyError()
+		logError("iris.source_authority", "the workspace's source order could not be read; using the platform default", errf(err))
+	}
+	out.Resolutions = srcauthority.ResolveDevice(order, records)
+	for _, r := range out.Resolutions {
+		s.srcAuthorityMetrics.Observe(r)
+	}
+	return out
 }
 
 // irisDataTimer times one data-class Iris request (tracker 337 N-H4): the NL

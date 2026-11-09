@@ -93,6 +93,10 @@ var routeIsolationLedger = map[string]string{
 	// foreign approve/rollback/retire → 404 — org_context_isolation_test.go.
 	"/api/ai/context":  "scoped",
 	"/api/ai/context/": "scoped",
+	// Source authority (N-F6): the order is the token tenant's (RLS
+	// iris_source_authority + store tenant key), no id in the path, a Global view
+	// must choose a workspace — source_authority_isolation_test.go.
+	"/api/ai/source-authority": "scoped",
 	// AI decision ledger (N-A6): appended in the asker's tenant from the token
 	// (RLS ai_decision_ledger, append-only); read by a workspace admin (own
 	// tenant only — another tenant's decision id lists nothing, as_tenant is

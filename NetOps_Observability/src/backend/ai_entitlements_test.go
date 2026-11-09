@@ -73,10 +73,11 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// loop runs, so reading one back is part of ai.investigate.
 	"/api/ai/hypotheses/": aientitlement.Investigate,
 
-	"/api/ai/tenant-config": adminPlane, // requireAdmin: the tenant's own BYO provider key
-	"/api/ai/tenants":       adminPlane, // requirePlatformAdmin: per-tenant AI switches
-	"/api/ai/tenants/":      adminPlane, // requirePlatformAdmin
-	"/api/copilot/config":   adminPlane, // requirePlatformAdmin: provider + platform key
+	"/api/ai/source-authority": adminPlane, // requirePerm(administration): the tenant's own source order (N-F6)
+	"/api/ai/tenant-config":    adminPlane, // requireAdmin: the tenant's own BYO provider key
+	"/api/ai/tenants":          adminPlane, // requirePlatformAdmin: per-tenant AI switches
+	"/api/ai/tenants/":         adminPlane, // requirePlatformAdmin
+	"/api/copilot/config":      adminPlane, // requirePlatformAdmin: provider + platform key
 }
 
 // aiHandlerName matches a handler that implements an AI surface, wherever its
@@ -329,6 +330,7 @@ var adminPlaneProbes = []aiProbe{
 	{"/api/ai/tenants/", http.MethodPut, "/api/ai/tenants/t-a", `{"assistant_enabled":true}`, adminPlane},
 	{"/api/copilot/config", http.MethodGet, "/api/copilot/config", "", adminPlane},
 	{"/api/ai/decisions", http.MethodGet, "/api/ai/decisions", "", adminPlane},
+	{"/api/ai/source-authority", http.MethodPut, "/api/ai/source-authority", `{"order":["manual","controller","discovered","declared"]}`, adminPlane},
 }
 
 func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
@@ -354,8 +356,9 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
-		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" {
+		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" {
 			// A tenant admin legitimately configures their OWN tenant's key, and
+			// sets their OWN source order (source_authority_isolation_test.go), and
 			// reads their OWN workspace's decision ledger (cross-tenant reads are
 			// pinned by TestDecisionLedgerIsolation).
 			continue

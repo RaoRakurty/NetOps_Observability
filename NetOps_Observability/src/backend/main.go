@@ -117,6 +117,7 @@ import (
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/srcauthority"
 	"netops/backend/internal/tac"
 	// SECURITY-LANE-BEGIN
 	"netops/backend/internal/seclane"
@@ -398,6 +399,11 @@ type server struct {
 	// file-backend deployment (the routes answer 503).
 	orgContext        orgcontext.Store
 	orgContextMetrics *orgcontext.Metrics
+	// srcAuthority is the per-tenant source-authority order (tracker 337
+	// N-F6); nil on a file-backend deployment (Iris uses the platform
+	// default; changes answer 503).
+	srcAuthority        srcauthority.Store
+	srcAuthorityMetrics *srcauthority.Metrics
 	// Iris per-tenant caches (tracker 337 N-H4): the hot reads every answer
 	// makes, keyed by tenant identity and invalidated by their writers.
 	irisAliasCache   *iriscache.Cache[[]entityalias.Alias]
@@ -1279,16 +1285,18 @@ func newServer() *server {
 		// Counters for query capture (N-C8) — rendered on /metrics.
 		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
-		aiDecisions:       newAIDecisionStore(),
-		aiDecisionMetrics: aidecision.NewMetrics(),
-		aiToolGateway:     ai.NewToolGateway(),
-		irisStreamMetrics: &irisstream.Metrics{},
-		orgContext:        newOrgContextStore(),
-		orgContextMetrics: &orgcontext.Metrics{},
-		irisAliasCache:    newIrisAliasCache(),
-		irisContextCache:  newIrisContextCache(),
-		nlqExamples:       modelc.EmbeddedExamples(),
-		aiHypotheses:      irishypo.NewMemStore(),
+		aiDecisions:         newAIDecisionStore(),
+		aiDecisionMetrics:   aidecision.NewMetrics(),
+		aiToolGateway:       ai.NewToolGateway(),
+		irisStreamMetrics:   &irisstream.Metrics{},
+		orgContext:          newOrgContextStore(),
+		orgContextMetrics:   &orgcontext.Metrics{},
+		srcAuthority:        newSrcAuthorityStore(),
+		srcAuthorityMetrics: &srcauthority.Metrics{},
+		irisAliasCache:      newIrisAliasCache(),
+		irisContextCache:    newIrisContextCache(),
+		nlqExamples:         modelc.EmbeddedExamples(),
+		aiHypotheses:        irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -3937,24 +3945,25 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
-	mux.HandleFunc("/api/ai/commands", s.handleAICommands)              // slash-command registry for the "/" menu
-	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)  // typed-fragment suggestions
-	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)              // thumbs up/down (audited)
-	mux.HandleFunc("/api/ai/context", s.handleAIContext)                // Iris Network context (N-F1): facts, review, history
-	mux.HandleFunc("/api/ai/context/", s.handleAIContext)               // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
-	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                // Iris NL: per-tenant entity aliases (N-C2)
-	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve) // Iris NL: resolution ladder (N-C2)
-	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)     // Iris NL: question → validated query (N-C5)
-	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)     // Iris NL: validated query → ResultSet (N-C5)
-	mux.HandleFunc("/api/ai/query/", s.handleAIQueryRecord)             // Iris NL: one query + /explain (N-C5)
-	mux.HandleFunc("/api/changes", s.handleChanges)                     // change ledger (N-D3): list, one, diff
-	mux.HandleFunc("/api/changes/", s.handleChanges)                    // /{id} · /{id}/diff
-	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)    // Iris NL: start a conversation (N-C7)
-	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)    // Iris NL: read one · ask in context (N-C7)
-	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                // Iris NL: recent questions (N-C8)
-	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)       // Iris NL: "that's not what I meant" (N-C8)
-	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)            // Iris AI decision ledger (N-A6): admins, own tenant
-	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)         // Iris investigation hypotheses (N-B3): own tenant, by id
+	mux.HandleFunc("/api/ai/commands", s.handleAICommands)                // slash-command registry for the "/" menu
+	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)    // typed-fragment suggestions
+	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)                // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/context", s.handleAIContext)                  // Iris Network context (N-F1): facts, review, history
+	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
+	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
+	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
+	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
+	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)
+	mux.HandleFunc("/api/ai/query/", s.handleAIQueryRecord)               // Iris NL: one query + /explain (N-C5)
+	mux.HandleFunc("/api/changes", s.handleChanges)                       // change ledger (N-D3): list, one, diff
+	mux.HandleFunc("/api/changes/", s.handleChanges)                      // /{id} · /{id}/diff
+	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)      // Iris NL: start a conversation (N-C7)
+	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)      // Iris NL: read one · ask in context (N-C7)
+	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                  // Iris NL: recent questions (N-C8)
+	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)         // Iris NL: "that's not what I meant" (N-C8)
+	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
+	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
@@ -4819,6 +4828,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.aiDecisionMetrics.Write(w)                                 // Iris AI decision ledger appends (N-A6); nil-safe
 	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
 	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
+	_ = s.srcAuthorityMetrics.Write(w)                           // source-authority resolutions (N-F6); nil-safe, best-effort like the line above
 	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above
 	if s.aiToolGateway != nil {
 		_ = s.aiToolGateway.Metrics.Write(w) // best-effort: a failed scrape write surfaces to the scraper, not here

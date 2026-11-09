@@ -179,6 +179,9 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 		res.Citations = append(res.Citations, ai.Citation{ID: ev.CitationID, Kind: ev.Kind, Label: label, Href: ev.Href})
 	}
 	res.Text = ai.VerifyGrounding(res.Text, validIDs).Text
+	// Source authority (N-F6): the doctrine asks the model to say when sources
+	// disagree; this makes it true whatever the model wrote.
+	res.Text = ai.EnsureDisagreementStated(res.Text, evidence)
 	// Statement classes (N-B4) — the same rules the grounded engine runs: the
 	// correlation engine alone owns the cause, a change near an incident is
 	// temporally correlated unless the engine establishes it, and every
