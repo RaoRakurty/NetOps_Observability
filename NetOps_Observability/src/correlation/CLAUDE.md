@@ -64,7 +64,11 @@ the aggregator's Stage B (`scripts/gen-syslog-packs.py`), so the two cannot disa
 matched and the severity is past its `alarm_floor`, it returns None, so reading a severity
 never opens an object by itself (owner D3). The hash covers the packs: `rules_hash(RULES,
 PACK_DIGEST)`. The VRL's `cx_inventory_vendor` is the empty seam for PR 12; an inventory
-vendor narrows the grammars in both executors.
+vendor narrows the grammars in both executors. Pack rows sit behind the vendor-neutral
+rules and ahead of the generic net. A `known_benign` row counts the line
+(`corr_parser_known_benign_total`), emits nothing and ends the walk; unlike a shadow row it
+is a decision, not a candidate. Stage [1] only: no template, gate or constant moved, so
+ENGINE_SEMVER does not move.
 
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).

@@ -1105,6 +1105,10 @@ class Rule:
     severity: Severity | None = None   # the fixed severity, when the rule has one
     generic: bool = False              # the unclassified safety net
     shadow: bool = False               # evaluated + counted, emits NOTHING (A8)
+    #: Tracker 387 — a line reviewed and judged not to be evidence. Counted, emits
+    #: nothing and ENDS the walk, so the generic net cannot alarm on it. A shadow row
+    #: is a candidate waiting to emit and falls through; this one is a decision.
+    known_benign: bool = False
     guard_src: Any = None
     extract_src: Any = field(default=None, repr=False)
     emit_src: Any = field(default=None, repr=False)
@@ -1160,6 +1164,7 @@ class Rule:
             self.severity.value if self.severity is not None else "",
             "1" if self.generic else "0",
             "1" if self.shadow else "0",
+            "1" if self.known_benign else "0",
             _canon(self.guard_src), _canon(self.extract_src), _canon(self.emit_src),
         )
 
@@ -1277,6 +1282,7 @@ def compile_rule(row: Mapping[str, Any]) -> Rule:
         severity=_SEV_BY_NAME[sev] if sev else None,
         generic=bool(row.get("generic")),
         shadow=bool(row.get("shadow")),
+        known_benign=bool(row.get("known_benign")),
         guard_src=row.get("guard"),
         extract_src=row.get("extract"),
         emit_src=row.get("emit"),

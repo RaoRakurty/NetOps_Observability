@@ -48,6 +48,24 @@ EMITTED_KINDS: frozenset[str] = PRODUCER_EMITTED_KINDS | EVIDENCE_BUS_KINDS
 # Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.
 # Structured: every entry says why it is allowed to stay unconsumed.
 INTENTIONAL_BLIND: dict[str, dict] = {
+    # Tracker 387: a device's own recovery lines. build_nodes skips `*_clear` kinds, so
+    # no template reads them; they record that the symptom ended.
+    "device_resource_anomaly_clear": {
+        "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "dns_failure_rate_clear": {
+        "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "controller_control_connection_loss_clear": {
+        "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "controller_bfd_down_clear": {
+        "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
     "wireless_ap_up": {
         "reason": "#128 recovery/clear signal — supports and closes, never fault evidence",
         "owner": "correlix", "date_added": "2026-07-26",
@@ -380,7 +398,7 @@ COLLECTION_PENDING: dict[str, dict] = {
     **_group("v0-theoretical template; Layer-2 collection pending (#73)",
              "#73", "2026-06-20", [
         "app_large_transfer_fail", "bgp_path_change", "cloud_gw_anomaly",
-        "dns_failure_rate", "if_crc", "optical_power_low",
+        "if_crc", "optical_power_low",
         "path_change", "qos_drops",
     ]),
     # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-

@@ -217,6 +217,29 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
                    "name": "ccmHistoryEventTerminalUser", "value": "admin"}])),
 }
 
+# Tracker 387: a vendor pack's rows are fixtured by the corpus lines the pack's own
+# fixtures recorded (telemetry-catalog/record_pack_corpus.py), so adding a vendor adds no
+# entry here. Keyed by the rule that claims each line.
+def _pack_rule_fixtures() -> dict[str, tuple[str, dict]]:
+    out: dict[str, tuple[str, dict]] = {}
+    with open(GOLDEN, encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    for row in rows:
+        if not str(row.get("origin") or "").startswith("pack:"):
+            continue
+        before = dict(P.KNOWN_BENIGN_HITS)
+        sig = P.syslog_control_signal(dict(row["ev"]), "t1", T0)
+        if sig is not None:
+            out.setdefault(sig.attrs["rule_id"], ("control", row["ev"]))
+            continue
+        for rid, hits in P.KNOWN_BENIGN_HITS.items():
+            if hits > before.get(rid, 0):
+                out.setdefault(rid, ("control", row["ev"]))
+    return out
+
+
+RULE_FIXTURES.update(_pack_rule_fixtures())
+
 PRODUCERS = {
     "control": P.syslog_control_signal,
     "port": P.port_event_signal,
@@ -323,6 +346,12 @@ def test_every_rule_stamps_its_own_provenance(rule_id):
         assert P.SHADOW_HITS[rule_id] == before + 1, (
             f"the fixture for {rule_id!r} never reaches its guard")
         return
+    if rule.known_benign:
+        # Tracker 387: counted, no signal, and the walk ends.
+        before = P.KNOWN_BENIGN_HITS[rule_id]
+        assert fire(rule_id) is None, f"{rule_id} is known_benign and must emit nothing"
+        assert P.KNOWN_BENIGN_HITS[rule_id] == before + 1
+        return
     sig = fire(rule_id)
     assert sig is not None, f"fixture for {rule_id!r} classified as nothing"
     assert sig.attrs["rule_id"] == rule_id, (
@@ -341,7 +370,7 @@ def test_every_emitted_kind_carries_a_rule_id(kind):
     parser emits is ever anonymous."""
     fired = [fire(rid) for rid, r in
              ((rid, P.RULES_BY_ID[rid]) for rid in sorted(RULE_FIXTURES))
-             if r.kind == kind and not r.shadow]
+             if r.kind == kind and not r.shadow and not r.known_benign]
     assert fired, (
         f"no fixture emits {kind!r} — every rule that CAN emit it is a shadow "
         "row, so the kind is unreachable in production")
@@ -402,8 +431,8 @@ def test_the_tracker_198_pinned_identities_still_hold():
 def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
     """The whole point of keeping provenance out of the identity key: a rule
     revision must not orphan the signals already stored."""
-    if P.RULES_BY_ID[rule_id].shadow:
-        pytest.skip("shadow row: it emits no signal, so none can be re-identified")
+    if P.RULES_BY_ID[rule_id].shadow or P.RULES_BY_ID[rule_id].known_benign:
+        pytest.skip("this row emits no signal, so none can be re-identified")
     before = fire(rule_id)
     assert before is not None
     monkeypatch.setattr(P, "PARSER_REV", "9999-12-31-mutant")
@@ -494,7 +523,12 @@ RULES_HASH_LINK_CAUSE = "57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196
 #: and envelopes, because they change what the parser emits (severity, alarm floor).
 #: No rule row moved; every earlier corpus entry replays byte-for-byte.
 RULES_HASH_VENDOR_PACKS = "6ee65c7a91d889e221319fc03cef07efd9dabafa33ba9becf899b0918bda96d8"
-RULES_HASH_A3 = RULES_HASH_VENDOR_PACKS
+#:
+#: Cisco SD-WAN typed rows (2026-11-09, tracker 387 PR 9): the pack's CPU, DNS, control
+#: connection and BFD rows, the FTMD known_benign row and the below-floor rows, all behind
+#: the older rules, plus the known_benign digest field. No older rule's grammar moved.
+RULES_HASH_SDWAN_RULES = "60245d18d78bafc2e5232ab7b3292607c8f19a709f6e451b81b559dc0302e883"
+RULES_HASH_A3 = RULES_HASH_SDWAN_RULES
 
 
 def _guard_patterns(node) -> list[str]:

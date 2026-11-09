@@ -10,6 +10,7 @@ opens an object alone" (owner D3) is enforced for every pack by construction.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -125,3 +126,50 @@ def test_pack_rows_sit_ahead_of_the_net_and_behind_every_older_rule():
     if pack_ids:
         first = min(syslog.index(i) for i in pack_ids if i in syslog)
         assert syslog.index("syslog.config.change") < first
+
+
+def test_a_benign_row_counts_and_stops_the_walk():
+    """FTMD-3-ERRO-1000003, the plan's warning: a storm must open nothing, and must be
+    visible. It is admitted by the screen so the count is real, and no signal comes out
+    even though the line carries an error severity."""
+    P.reset_parser_counters()
+    raw = {"hostname": "vEdge-1", "appname": "FTMD", "severity": "notice",
+           "timestamp": "2026-11-09T10:00:00Z",
+           "message": "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; "
+                      "kernel if_name= ge0_0; encap = 1"}
+    for _ in range(1000):
+        assert P.syslog_promotable(raw)
+        assert P.syslog_control_signal(dict(raw), "t1", datetime.now(timezone.utc)) is None
+    hits = P.parser_stats()["known_benign_hits"]
+    assert hits["syslog.sdwan.ftmd.interface_dump"] == 1000
+    assert P.syslog_severity_num(raw, "FTMD") == 3      # read correctly, not hidden
+
+
+def test_a_benign_row_needs_its_reason():
+    row = dict(next(r for r in B.load()[1] if r["known_benign"]))
+    del row["benign_reason"]
+    with pytest.raises(B.BakeError, match="benign_reason"):
+        B.validate_row(row, {}, set())
+
+
+def test_a_benign_row_cannot_be_shadow_too():
+    """Shadow falls through to the net, benign stops the walk: one row cannot be both."""
+    raw = dict(next(r for p in B.load_packs() for r in p.get("rules") or []
+                    if r.get("known_benign")))
+    raw["shadow"] = True
+    with pytest.raises(B.BakeError, match="cannot be shadow"):
+        B.validate_row(raw, {}, set())
+
+
+def test_every_pack_line_is_recorded_in_the_golden_corpus():
+    """So a later change that moves a signal's identity is red. Adding a vendor runs the
+    recorder; it does not edit a test."""
+    proc = subprocess.run([sys.executable, os.path.join(HERE, "record_pack_corpus.py"),
+                           "--check"], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_every_wanted_row_says_why():
+    for pack in B.load_packs():
+        for w in pack.get("wanted") or []:
+            assert w["why_absent"].strip() and w["symptom"].strip()

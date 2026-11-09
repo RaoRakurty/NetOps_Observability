@@ -70,7 +70,8 @@ FIDELITY_STATUSES = ("doc_claimed", "lab_validated", "live_validated",
 ROW_KEYS = frozenset({
     "rule_id", "lane", "source", "kind", "entity_type", "family", "vendors",
     "markers", "pattern_src", "state", "state_re", "severity", "generic",
-    "shadow", "guard", "extract", "emit", "fidelity_status",
+    "shadow", "guard", "extract", "emit", "fidelity_status", "known_benign",
+    "benign_reason",
 })
 ROW_REQUIRED = ("rule_id", "lane", "source", "kind", "entity_type", "guard", "emit")
 EMIT_KEYS = frozenset({
@@ -177,9 +178,14 @@ def validate_row(row: dict, families: dict, seen: set[str]) -> None:
     if fid is not None and fid not in FIDELITY_STATUSES:
         raise BakeError(
             f"{where}: fidelity_status {fid!r} not on the ladder {FIDELITY_STATUSES}")
-    for k in ("generic", "shadow"):
+    for k in ("generic", "shadow", "known_benign"):
         if k in row and not isinstance(row[k], bool):
             raise BakeError(f"{where}: {k} must be a boolean")
+    if row.get("known_benign"):
+        if not str(row.get("benign_reason") or "").strip():
+            raise BakeError(f"{where}: known_benign must state its benign_reason")
+        if row.get("shadow") or row.get("generic"):
+            raise BakeError(f"{where}: known_benign cannot be shadow or generic")
     for k in ("vendors", "markers"):
         v = row.get(k, [])
         if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
@@ -276,6 +282,7 @@ def normalize_row(row: dict) -> dict:
     out.setdefault("markers", [])
     out.setdefault("generic", False)
     out.setdefault("shadow", False)
+    out.setdefault("known_benign", False)
     emit = out["emit"]
     emit.setdefault("kind", out["kind"])
     # A row's own `kind` is a BAKE-TIME CONSTANT, folded into the templates that

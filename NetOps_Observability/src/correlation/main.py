@@ -14704,6 +14704,13 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_parser_shadow_hits_total counter",]
     for _rid, _hits in sorted(_parser["shadow_hits"].items()):
         lines.append(f'corr_parser_shadow_hits_total{{rule_id="{_rid}"}} {_hits}')
+    # Tracker 387: lines a catalog row judged not to be evidence. Emitted no signal,
+    # so without this a benign row would be invisible. Bounded: fixed rule corpus.
+    lines += [
+        "# HELP corr_parser_known_benign_total Lines matched by a known_benign rule, which emit NO signal, by rule.",
+        "# TYPE corr_parser_known_benign_total counter",]
+    for _rid, _hits in sorted(_parser["known_benign_hits"].items()):
+        lines.append(f'corr_parser_known_benign_total{{rule_id="{_rid}"}} {_hits}')
     _proactive = proactive_stats()
     lines += [
         # A4 proactive checks. The SAME split as the parser's shadow series and

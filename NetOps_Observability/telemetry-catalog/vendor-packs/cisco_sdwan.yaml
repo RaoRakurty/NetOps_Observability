@@ -69,12 +69,315 @@ grammars:
     fidelity: doc_claimed
     source: 'Cisco Community, "How to check BFD logging in Cisco SDWAN fabric" (`%Cisco-SDWAN-vm5-FTMD-5-NTCE-1000009: BFD-session ...`)'
 
+# Typed rows, in match order. D3: only the critical CPU row may open an object alone.
+# Everything else states `warn` or `info`, below `severity_open_floor`, so it can join
+# a component and cannot start one. E1 still makes a device's own syslog and its SNMP
+# episode one observation: these rows corroborate and cannot confirm on their own.
+rules:
+  # CPU. Lab evidence: SYSMGR 200069 (2-CRIT above 90%), 200070 (4-WARN above 75%),
+  # 200071 (4-WARN above 60%), 200072 (5-NTCE below 75%), each also as a sysmgrd
+  # `Notification: cpu-usage` line. Keyed on the text, not the ids: the id list is not
+  # documented and the wording is what the lines were seen to say. Case-sensitive, so
+  # the notification twin (`-sysmgrd-`) does not emit a second signal for one crossing.
+  - rule_id: syslog.sdwan.cpu_high.critical
+    lane: syslog
+    source: syslog
+    kind: device_resource_anomaly
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: '-SYSMGR-[0-2]-[A-Z]{4}-\d+: System cpu usage is above \d+%'
+    guard: {re: [msg, '-SYSMGR-[0-2]-[A-Z]{4}-\d+: System cpu usage is above \d+%', '']}
+    severity: crit
+    extract: &cpu_extract
+      threshold: {re: [[msg, 'System cpu usage is (?:above|below) (\d+)%', 1, '']]}
+    emit: &cpu_emit
+      metric: device_resource
+      modality: device_telemetry
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|cpu|{threshold|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        resource: {const: cpu}
+        threshold_pct: {var: threshold}
+
+  - rule_id: syslog.sdwan.cpu_high.warning
+    lane: syslog
+    source: syslog
+    kind: device_resource_anomaly
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: '-SYSMGR-[3-7]-[A-Z]{4}-\d+: System cpu usage is above \d+%'
+    guard: {re: [msg, '-SYSMGR-[3-7]-[A-Z]{4}-\d+: System cpu usage is above \d+%', '']}
+    severity: warn
+    extract: *cpu_extract
+    emit: *cpu_emit
+
+  # A clear means this threshold is no longer crossed, not that the device is healthy:
+  # the lab sends `above 60%` and `below 75%` in the same millisecond on the way down.
+  - rule_id: syslog.sdwan.cpu_high.clear
+    lane: syslog
+    source: syslog
+    kind: device_resource_anomaly_clear
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: '-SYSMGR-[0-7]-[A-Z]{4}-\d+: System cpu usage is below \d+%'
+    guard: {re: [msg, '-SYSMGR-[0-7]-[A-Z]{4}-\d+: System cpu usage is below \d+%', '']}
+    severity: info
+    extract: *cpu_extract
+    emit: *cpu_emit
+
+  - rule_id: syslog.sdwan.cpu_normal.clear
+    lane: syslog
+    source: syslog
+    kind: device_resource_anomaly_clear
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: 'Notification: cpu-usage .{0,200}?System cpu usage back to normal level'
+    guard: {re: [msg, 'Notification: cpu-usage .{0,200}?System cpu usage back to normal level', '']}
+    severity: info
+    extract: {threshold: {const: normal}}
+    emit: *cpu_emit
+
+  # vBond DNS. Lab evidence: VTRACKER and VDAEMON, one failure reported as both a lookup
+  # and a resolution line. Reused kind: `dns_failure_rate` on a device is what the local
+  # resolver template reads. Whether this should also feed control-connection reasoning
+  # is an owner question; it stays a DNS symptom here.
+  - rule_id: syslog.sdwan.dns.failed
+    lane: syslog
+    source: syslog
+    kind: dns_failure_rate
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: 'DNS (?:lookup|resolution) failed for'
+    guard:
+      all:
+        - {equals_any: [tag, [VTRACKER, VDAEMON]]}
+        - {re: [msg, 'DNS (?:lookup|resolution) failed for', '']}
+    severity: warn
+    extract: &dns_extract
+      target: {re: [[msg, ' for (\S{1,128})', 1, '']]}
+      step: {re: [[msg, 'DNS (lookup|resolution)', 1, '']]}
+    emit: &dns_emit
+      metric: dns_failure
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|dns|{step|?}|{target|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        target: {var: target}
+        step: {var: step}
+
+  - rule_id: syslog.sdwan.dns.succeeded
+    lane: syslog
+    source: syslog
+    kind: dns_failure_rate_clear
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    pattern_src: 'DNS (?:lookup succeeded|resolution successful) for'
+    guard:
+      all:
+        - {equals_any: [tag, [VTRACKER, VDAEMON]]}
+        - {re: [msg, 'DNS (?:lookup succeeded|resolution successful) for', '']}
+    severity: info
+    extract: *dns_extract
+    emit: *dns_emit
+
+  # Same vocabulary as nms/vmanage_kinds.go, which maps this very event name
+  # (`bfd-state-change`) to controller_bfd_down, so a device's own report and the
+  # controller's name the same hypothesis. Bound to the device, not a tunnel: a syslog
+  # line alone cannot build the `tloc_pair` id the controller lane uses.
+  #
+  # Control connections and BFD. NOT seen on the lab (a substring search of 18,436 stored
+  # lines found neither). Documented shape only, so `doc_claimed` and fixtures hand-built
+  # from the citations; a real capture is what promotes them. Sources:
+  #   Cisco 215359 https://www.cisco.com/c/en/us/support/docs/routers/vedge-router/215359-bidirectional-forwarding-detection-flap.html
+  #   Splunk https://research.splunk.com/sources/350c4a45-24df-4339-ba57-8b8c09f2865f/
+  - rule_id: syslog.sdwan.control_connection.down
+    lane: syslog
+    source: syslog
+    kind: controller_control_connection_loss
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: 'control-connection-state-change\b.{0,400}?\bnew-state:down\b'
+    guard: {re: [msg, 'control-connection-state-change\b.{0,400}?\bnew-state:down\b', '']}
+    severity: warn
+    extract: &ctrl_extract
+      peer_type: {re: [[msg, '\bpeer-type:([A-Za-z]{1,32})', 1, '']]}
+      peer: {re: [[msg, '\bpeer-system-ip:(\S{1,64})', 1, '']]}
+    emit: &ctrl_emit
+      metric: control_connection
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|control_connection|{peer_type|?}|{peer|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        peer_type: {var: peer_type}
+        peer: {var: peer}
+
+  - rule_id: syslog.sdwan.control_connection.up
+    lane: syslog
+    source: syslog
+    kind: controller_control_connection_loss_clear
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: 'control-connection-state-change\b.{0,400}?\bnew-state:up\b'
+    guard: {re: [msg, 'control-connection-state-change\b.{0,400}?\bnew-state:up\b', '']}
+    severity: info
+    extract: *ctrl_extract
+    emit: *ctrl_emit
+
+  - rule_id: syslog.sdwan.bfd.down
+    lane: syslog
+    source: syslog
+    kind: controller_bfd_down
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '\bbfd-state-change\b.{0,500}?\bnew-state:down\b'
+    guard: {re: [msg, '\bbfd-state-change\b.{0,500}?\bnew-state:down\b', '']}
+    severity: warn
+    extract: &bfd_extract
+      reason: {re: [[msg, '\bflap-reason:(\S{1,48})', 1, '']]}
+      local_color: {re: [[msg, '\blocal-color:"?([\w-]{1,32})', 1, '']]}
+      remote_color: {re: [[msg, '\bremote-color:"?([\w-]{1,32})', 1, '']]}
+    emit: &bfd_emit
+      metric: bfd_session
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|bfd|{local_color|?}|{remote_color|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        flap_reason: {var: reason}
+        local_color: {var: local_color}
+        remote_color: {var: remote_color}
+
+  - rule_id: syslog.sdwan.bfd.up
+    lane: syslog
+    source: syslog
+    kind: controller_bfd_down_clear
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '\bbfd-state-change\b.{0,500}?\bnew-state:up\b'
+    guard: {re: [msg, '\bbfd-state-change\b.{0,500}?\bnew-state:up\b', '']}
+    severity: info
+    extract: *bfd_extract
+    emit: *bfd_emit
+
+  # Repeats on every vEdge sampled (1,277 stored lines from 3 devices) at severity 3,
+  # with no state in the text. Harmlessness is NOT proven, the plan says "may be
+  # harmless", and the owner is asked to rule on it. The guard is the whole text shape:
+  # a different message under the same id still reaches the below-floor row.
+  - rule_id: syslog.sdwan.ftmd.interface_dump
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: repeating FTMD interface dump with no state or fault in the text
+    pattern_src: '-FTMD-3-ERRO-1000003: User ifname = \S+; kernel if_name= \S+; encap = \d+'
+    guard: {re: [msg, '-FTMD-3-ERRO-1000003: User ifname = \S+; kernel if_name= \S+; encap = \d+', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+  # Rule 1, "ingestion is not incident creation": any other error or warning of this
+  # grammar still reaches the engine, at `warn`, so it can join a component and enrich an
+  # undetermined outcome. It matches no signature.
+  - rule_id: syslog.sdwan.below_floor
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    generic: true
+    fidelity_status: lab_validated
+    pattern_src: '%Viptela-\S{1,64}?-[A-Za-z]\w{0,31}-[34]-[A-Z]{4}-\d{1,12}:'
+    guard: {re: [msg, '%Viptela-\S{1,64}?-[A-Za-z]\w{0,31}-[34]-[A-Z]{4}-\d{1,12}:', '']}
+    severity: warn
+    extract: &below_extract
+      facility: {re: [[msg, '-([A-Za-z]\w{0,31})-[34]-[A-Z]{4}-\d{1,12}:', 1, '']]}
+      mnem: {re: [[msg, '-[34]-([A-Z]{4}-\d{1,12}):', 1, '']]}
+      text: {var: msg, slice: 256}
+    emit: &below_emit
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|alarm|{facility|?}|{mnem|?}|-|{ts_ms}'
+      content_tag: msg
+      tokens: [{t: '{host}'}]
+      attrs:
+        facility: {var: facility}
+        mnemonic: {var: mnem}
+        tag: {var: tag}
+        text: {var: text}
+
+  - rule_id: syslog.sdwan.below_floor.iosxe
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    generic: true
+    fidelity_status: doc_claimed
+    pattern_src: '%Cisco-SDWAN-\S{1,64}?-[A-Za-z]\w{0,31}-[34]-[A-Z]{4}-\d{1,12}:'
+    guard: {re: [msg, '%Cisco-SDWAN-\S{1,64}?-[A-Za-z]\w{0,31}-[34]-[A-Z]{4}-\d{1,12}:', '']}
+    severity: warn
+    extract: *below_extract
+    emit: *below_emit
+
+# Rows with no source. Recorded rather than guessed; a capture or a citable document
+# is what adds them.
+wanted:
+  - symptom: OMP peer up/down
+    kind: controller_control_connection_loss
+    why_absent: no lab line (substring search of 18,436 stored lines), no documented syslog wording found
+  - symptom: TLOC state change
+    kind: controller_bfd_down
+    why_absent: no lab line, no documented syslog wording found
+  - symptom: System memory usage raise and clear
+    kind: device_resource_anomaly
+    why_absent: no lab line; a `memory` substring search found none, and the CPU wording cannot be assumed
+  - symptom: IOS-XE BFD and control-connection wording
+    kind: controller_bfd_down
+    why_absent: the one public example was only readable as far as `BFD-session <a> -> <b>`, with no state word
+  - symptom: Cisco's full syslog message-ID catalogue
+    why_absent: not retrievable; the recovery wording of each id is unknown
+
 fixtures:
   - name: an error line parses and lifts severity
     fidelity: lab_validated
     hostname: vEdge-1
     appname: FTMD
-    message: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+    message: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
     expect:
       vendor: cisco
       vendor_source: format
@@ -82,13 +385,13 @@ fixtures:
       parser_status: parsed
       facility: FTMD
       event_type: ftmd_1000003
-      summary: 'User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+      summary: 'User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
       severity_native_text: ERRO
       severity_native_code: '3'
       normalized_severity: error
       procid: '3875'
-      message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
-      message_original: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+      message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
+      message_original: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1'
     signal: null
 
   - name: a warning line with a hyphenated host
@@ -102,7 +405,7 @@ fixtures:
       severity_native_text: WARN
       severity_native_code: '4'
       normalized_severity: warning
-    signal: null
+    signal: {rule_id: syslog.sdwan.cpu_high.warning, kind: device_resource_anomaly, severity: warn, opens_alone: false}
 
   - name: a notice line does not lift above the wire level
     fidelity: lab_validated
@@ -113,7 +416,7 @@ fixtures:
       event_type: sysmgr_200072
       severity_native_text: NTCE
       normalized_severity: notice
-    signal: null
+    signal: {rule_id: syslog.sdwan.cpu_high.clear, kind: device_resource_anomaly_clear, severity: info, opens_alone: false}
 
   - name: a critical line lifts to critical
     fidelity: lab_validated
@@ -125,7 +428,7 @@ fixtures:
       severity_native_text: CRIT
       severity_native_code: '2'
       normalized_severity: critical
-    signal: {kind: device_alarm, severity: crit, opens_alone: true}
+    signal: {rule_id: syslog.sdwan.cpu_high.critical, kind: device_resource_anomaly, severity: crit, opens_alone: true}
 
   - name: a critical line with no typed row still alarms
     fidelity: doc_claimed
@@ -172,4 +475,135 @@ fixtures:
       event_type: ftmd_1000009
       severity_native_text: WARN
       normalized_severity: warning
+    signal: {rule_id: syslog.sdwan.below_floor.iosxe, kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: a critical crossing and its notification twin make one signal, not two
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 75%" cpu-user-percentage:"2.11" cpu-system-percentage:"85.26" cpu-idle-percentage:"12.63"'
+    expect:
+      event_type: cpu-usage
+      severity_native_text: major
     signal: null
+
+  - name: cpu above 75 percent stays below the floor
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%'
+    expect:
+      event_type: sysmgr_200070
+    signal: {rule_id: syslog.sdwan.cpu_high.warning, kind: device_resource_anomaly, severity: warn, opens_alone: false}
+
+  - name: cpu back to normal is a clear
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage back to normal level" cpu-user-percentage:"8.29" cpu-system-percentage:"35.75" cpu-idle-percentage:"55.96"'
+    expect:
+      event_type: cpu-usage
+      severity_native_text: minor
+    signal: {rule_id: syslog.sdwan.cpu_normal.clear, kind: device_resource_anomaly_clear, severity: info, opens_alone: false}
+
+  - name: a vBond lookup failure is a below-floor DNS symptom
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: '3137 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
+    expect:
+      procid: '3137'
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+
+  - name: the same failure from the other daemon
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VDAEMON
+    message: '3130 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
+    expect:
+      procid: '3130'
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+
+  - name: the resolver reports the same failure in its own words
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: '3137 - - monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via '
+    expect:
+      procid: '3137'
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+
+  - name: a vBond lookup success is the clear
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: '3890 - - dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none'
+    expect:
+      procid: '3890'
+    signal: {rule_id: syslog.sdwan.dns.succeeded, kind: dns_failure_rate_clear, severity: info, opens_alone: false}
+
+  - name: the resolver success is the clear too
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: '3890 - - monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via '
+    expect:
+      procid: '3890'
+    signal: {rule_id: syslog.sdwan.dns.succeeded, kind: dns_failure_rate_clear, severity: info, opens_alone: false}
+
+  - name: the same DNS words from a daemon outside this pack mean nothing
+    fidelity: lab_validated
+    hostname: spine1
+    appname: resolved
+    message: 'DNS lookup failed for host.example.net via none'
+    expect: {}
+    signal: null
+
+  - name: a control connection going down, documented shape
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: VDAEMON
+    message: '%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:down peer-type:vsmart peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005'
+    expect:
+      facility: VDAEMON_0
+      event_type: vdaemon_0_1000001
+    signal: {rule_id: syslog.sdwan.control_connection.down, kind: controller_control_connection_loss, severity: warn, opens_alone: false}
+
+  - name: a control connection coming up is the clear
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: VDAEMON
+    message: '%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:up peer-type:vmanage peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005'
+    expect:
+      event_type: vdaemon_0_1000001
+    signal: {rule_id: syslog.sdwan.control_connection.up, kind: controller_control_connection_loss_clear, severity: info, opens_alone: false}
+
+  - name: a BFD session going down, documented shape
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: FTMD
+    message: '%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 local-color:"mpls" remote-color:"biz-internet" new-state:down deleted:"false" flap-reason:timeout'
+    expect:
+      facility: ftmd
+      event_type: bfd-state-change
+      severity_native_text: major
+    signal: {rule_id: syslog.sdwan.bfd.down, kind: controller_bfd_down, severity: warn, opens_alone: false}
+
+  - name: a BFD session coming up is the clear
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: FTMD
+    message: '%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 local-color:"mpls" remote-color:"biz-internet" new-state:up deleted:"false" flap-reason:na'
+    expect:
+      event_type: bfd-state-change
+    signal: {rule_id: syslog.sdwan.bfd.up, kind: controller_bfd_down_clear, severity: info, opens_alone: false}
+
+  - name: the same FTMD id with different text is not the benign line
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: FTMD
+    message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: forwarding table programming failed'
+    expect:
+      event_type: ftmd_1000003
+      normalized_severity: error
+    signal: {rule_id: syslog.sdwan.below_floor, kind: device_alarm, severity: warn, opens_alone: false}

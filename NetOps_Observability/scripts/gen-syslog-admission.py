@@ -114,7 +114,7 @@ assert VRL_TAG_SEV_PATTERN != TAG_SEV_PATTERN, "digit group could not be named"
 # carry no regex metacharacter and no quote. This is a REFUSAL, not an escape:
 # a literal outside this class means the screen grew a shape this generator was
 # never designed for, and silently escaping it would be a guess.
-SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/%-]+$")
+SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/%=-]+$")
 
 
 class GenerationError(RuntimeError):

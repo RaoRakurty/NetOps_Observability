@@ -35,6 +35,11 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-sdwan-rules — tracker 387 PR 9 (owner D3): the Cisco SD-WAN pack's typed
+# rows (vendor-packs/cisco_sdwan.yaml) and the `known_benign` row form. Every earlier
+# rule keeps its grammar and every pack row sits behind the older rules, so the golden
+# corpus replays byte-for-byte; `rules_hash` moves because the table grew.
+#
 # 2026-11-09-vendor-packs — tracker 387 (plan §5.1, §6a): the vendor-pack mechanism,
 # with Cisco SD-WAN as the first pack (telemetry-catalog/vendor-packs/). A grammar in a
 # pack reads severity from the message, for the engine and for Vector alike, and states
@@ -90,7 +95,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-09-vendor-packs"
+parser_rev: "2026-11-09-sdwan-rules"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -127,6 +132,10 @@ parser_rev: "2026-11-09-vendor-packs"
 #   shadow       EVALUATED and COUNTED, emits NOTHING and falls through to the
 #                next rule (A8). How a candidate grammar earns its promotion on
 #                real traffic before it is allowed to produce evidence.
+#   known_benign EVALUATED and COUNTED (`corr_parser_known_benign_total`), emits
+#                NOTHING and ENDS the walk, so the generic net cannot alarm on the
+#                line (tracker 387). Requires `benign_reason`. The record stays in
+#                storage and the rule keeps its screen literals so the count is real.
 #
 # SCREEN CONTRACT (the ingest pre-filter is DERIVED from these — see
 # producers._build_syslog_screen)

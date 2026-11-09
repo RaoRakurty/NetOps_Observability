@@ -47,8 +47,9 @@ def test_the_lanes_are_the_declared_ones(rows):
     assert {r["lane"] for r in rows} <= set(B.LANES)
     runtime = [r for r in rows if r["lane"] in B.RUNTIME_LANES]
     # 38 through A9 · 40 since A9b (`syslog.config.change`, `trap.config.change`)
-    # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since 377 (`trap.bgp.nokia_ng`).
-    assert len(runtime) == 42, (
+    # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since 377 (`trap.bgp.nokia_ng`)
+    # · 55 since 387 (the Cisco SD-WAN pack's 13 rows).
+    assert len(runtime) == 55, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 

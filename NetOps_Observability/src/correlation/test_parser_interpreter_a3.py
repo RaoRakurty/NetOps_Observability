@@ -143,8 +143,9 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
-    # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`).
-    assert len(P.RULES) == 42
+    # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`)
+    # · 55 since tracker 387 (the Cisco SD-WAN pack's 13 rows).
+    assert len(P.RULES) == 55
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -368,11 +369,12 @@ def test_every_baseline_skip_is_declared_and_justified(golden):
         assert len(reason) > 40, (
             f"a baseline skip needs a REASON, not a flag: {entry['ev']}")
         ev = entry["ev"]
-        for name, new_fn, old_fn in LANE_FNS[entry["lane"]]:
-            got, want = _call(new_fn, ev), _call(old_fn, ev)
-            assert got != want, (
-                f"{name}: this entry claims the frozen branch code cannot "
-                f"classify it, but the two agree — remove the skip. {ev}")
+        # A syslog entry runs two lanes and only one claims a given line, so the claim
+        # is that SOME lane differs (the trap lane has one, so nothing moves for it).
+        assert any(_call(new_fn, ev) != _call(old_fn, ev)
+                   for _name, new_fn, old_fn in LANE_FNS[entry["lane"]]), (
+            f"this entry claims the frozen branch code cannot classify it, but the "
+            f"two agree — remove the skip. {ev}")
 
 
 def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
@@ -401,6 +403,10 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         # link_reason; only the five 378 entries skip — every other link trap
         # in the corpus stays IN the parity run (it carries no reason varbind).
         "trap.link.state_change",
+        # tracker 387: vendor-pack rows. Read from the pack files, so adding a vendor
+        # does not touch this list.
+        *(r["rule_id"] for p in bake.load_packs() for r in p.get("rules") or []
+          if not r.get("known_benign")),
     }
     fired = set()
     for entry in golden:
@@ -409,8 +415,7 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         for _name, new_fn, _old in LANE_FNS[entry["lane"]]:
             sig = _call(new_fn, entry["ev"])
             if sig is not None and "error" not in sig:
-                fired.add(P.trap_control_signal(
-                    dict(entry["ev"]), "t1", T0).attrs["rule_id"])
+                fired.add(new_fn(dict(entry["ev"]), "t1", T0).attrs["rule_id"])
     assert fired == allowed, f"unexpected baseline-skipping rules: {fired ^ allowed}"
 
 
@@ -423,6 +428,7 @@ def test_the_corpus_exercises_every_rule(golden):
     alone would leave a shadow row permanently uncovered and the gap invisible.
     """
     before = dict(P.SHADOW_HITS)
+    before_benign = dict(P.KNOWN_BENIGN_HITS)
     fired: set[str] = set()
     for entry in golden:
         for _name, fn, _old in LANE_FNS[entry["lane"]]:
@@ -433,6 +439,7 @@ def test_the_corpus_exercises_every_rule(golden):
             if sig is not None:
                 fired.add(sig.attrs["rule_id"])
     fired |= {rid for rid, n in P.SHADOW_HITS.items() if n > before.get(rid, 0)}
+    fired |= {rid for rid, n in P.KNOWN_BENIGN_HITS.items() if n > before_benign.get(rid, 0)}
     missing = sorted({r.rule_id for r in P.RULES} - fired)
     assert not missing, f"the corpus never fires: {missing}"
 

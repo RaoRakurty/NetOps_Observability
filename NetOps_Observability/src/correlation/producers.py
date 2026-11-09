@@ -278,6 +278,10 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # own (it is emitted at `info`, below `severity_open_floor`, so it cannot
     # open an RCA object by itself).
     "device_config_change",
+    # Vendor-pack typed rows (tracker 387): a device's own report of a symptom other
+    # lanes already name, in the same vocabulary, each with its recovery as `_clear`.
+    "device_resource_anomaly_clear", "dns_failure_rate", "dns_failure_rate_clear",
+    "controller_control_connection_loss_clear", "controller_bfd_down_clear",
     # DC overlay (P2)
     "vtep_state_change", "evpn_mac_move",
     # trap lane
@@ -482,6 +486,9 @@ GENERIC_FALLBACKS: dict[str, int] = {"syslog": 0, "trap": 0}
 # `corr_parser_rule_hits_total` in main.py, which this module does not own. No
 # shadow row ships today, so the map — and the series — are empty until one does.
 SHADOW_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.shadow}
+# Tracker 387: matches of a `known_benign` row. The count is what keeps the decision
+# honest: a benign row whose rate moves is a decision to revisit, not silence.
+KNOWN_BENIGN_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.known_benign}
 
 # The semantic-promotion rate is measured over a ROLLING WINDOW of the last
 # PROMOTION_WINDOW ADMITTED lines — "admitted" meaning a line that produced a
@@ -540,6 +547,7 @@ def parser_stats() -> dict:
         ],
         "rule_hits": dict(RULE_HITS),
         "shadow_hits": dict(SHADOW_HITS),
+        "known_benign_hits": dict(KNOWN_BENIGN_HITS),
         "generic_fallbacks": dict(GENERIC_FALLBACKS),
         "semantic_promotion_rate": round(semantic_promotion_rate(), 6),
         "promotion_window": PROMOTION_WINDOW,
@@ -556,6 +564,8 @@ def reset_parser_counters() -> None:
         GENERIC_FALLBACKS[k] = 0
     for k in SHADOW_HITS:
         SHADOW_HITS[k] = 0
+    for k in KNOWN_BENIGN_HITS:
+        KNOWN_BENIGN_HITS[k] = 0
     _PROMO_RING.clear()
     _PROMO_POS = 0
     _PROMO_TYPED = 0
@@ -1398,6 +1408,11 @@ def _run(
             # change what the parser emits.
             SHADOW_HITS[rule.rule_id] = SHADOW_HITS.get(rule.rule_id, 0) + 1
             continue
+        if rule.known_benign:
+            # Tracker 387: counted, no signal, and nothing after it runs. The raw
+            # record is already durable upstream; only the evidence path ends here.
+            KNOWN_BENIGN_HITS[rule.rule_id] = KNOWN_BENIGN_HITS.get(rule.rule_id, 0) + 1
+            return None
         ctx.enter(rule.extract)
         return _build_signal(em, ctx, tenant, ts, observer, owner, source)
     return None

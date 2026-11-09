@@ -209,8 +209,10 @@ After editing a pack:
 
 ```bash
 python3 telemetry-catalog/bake_rules.py && python3 telemetry-catalog/coverage_matrix.py
+python3 telemetry-catalog/source_equivalence.py && python3 telemetry-catalog/record_pack_corpus.py
 python3 scripts/gen-syslog-packs.py && python3 scripts/gen-syslog-admission.py
 cp deployment/docker/vector/generated/syslog-admission.vrl deployment/helm/correlix/files/vector/
+cp deployment/docker/vector/vector.yaml deployment/helm/correlix/files/vector/
 ```
 
 `tests/test_syslog_packs.py` runs every fixture on the shipped transform and adds a
