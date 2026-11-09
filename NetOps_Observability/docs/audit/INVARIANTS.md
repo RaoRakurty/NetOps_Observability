@@ -597,6 +597,19 @@ pass by absence. Bars are pinned by `TestBarsArePinned` and are not lowered.
 Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 `-tags nlqmodeleval` only) and the incident corpus as a whole (owner decision D5).
 
+**Held-out split (tracker 337 N-H3, 2026-11-09).** The rule and its limits are in
+`docs/ai/evals.md`.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| A case's split is a pure, pinned function of corpus, group and source; a field case is always held out | ✅ | **BUILD** — `TestAssignVectorsArePinned` (vectors computed independently in Python), `TestFieldCasesAreAlwaysHeldOut` |
+| No held-out NL case is in the model's few-shot library, by id or by text | ✅ | **BUILD** — `TestHeldOutCasesNeverReachTheExampleLibrary`, with negative control `TestHeldOutLeakGuardCatchesAPlantedCase`. It found 12 leaked examples when first run; they are removed |
+| Operator RCA verdicts have no route into tuning | ✅ | **BUILD** — `TestOperatorFeedbackHasNoRouteIntoTuning` (only the root API imports `rcafeedback`), `TestCorrelationEngineDoesNotReadTheVerdictRegister` |
+| The release-gate table shows dev and held-out separately | ✅ | **BUILD** — `TestSplitsAreReportedAndDoNotChangeTheVerdict`. Verdicts are judged on all cases together |
+| Held-out scores measure generalisation | ❌ **not yet** | Every current case is synthetic and existed while the rules were tuned, so the gap understates overfitting. Rewording is not detected |
+| Accuracy on real operator-labelled cases is measured | ❌ **not built** | No importer yet; the field split is empty |
+| The 73-example library performs as well as the previous 82 on a live model | ❌ **not measured** | `-tags nlqmodeleval` needs a provider key; no run since the change |
+
 ## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
 
 | Invariant | Status | Proof |

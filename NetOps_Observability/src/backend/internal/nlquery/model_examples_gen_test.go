@@ -9,8 +9,10 @@ package nlquery_test
 // corpus edit never breaks another engineer's build; modelc's own test proves
 // every embedded example still decodes and validates.
 //
-// Selection: answerable single-turn cases with no page or conversation context
-// and no absolute (calendar) window — those depend on the fixture's clock.
+// Selection: answerable single-turn DEV cases with no page or conversation
+// context and no absolute (calendar) window — those depend on the fixture's
+// clock. A held-out case never enters the library, nor does a dev case asking
+// the same thing as a held-out one (heldout_test.go guards the result).
 // Every entity id becomes a per-type placeholder, so an example can teach a
 // shape but never hand the model a usable id.
 
@@ -23,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/nlquery/ast"
 )
 
@@ -38,6 +41,16 @@ func placeholderID(typ string, n int) string {
 		return fmt.Sprintf("probe:example-%d", n)
 	}
 	return fmt.Sprintf("%s:example-%d", typ, n)
+}
+
+// exampleCandidate is the library's selection rule for one case.
+func exampleCandidate(c *goldenCase) bool {
+	if c.split() != evalsplit.Dev {
+		return false
+	}
+	cx := c.Context
+	return len(c.Expect.AST) > 0 && !cx.Cross && len(cx.PriorAST) == 0 && cx.IncidentID == "" && cx.Script == "" && cx.Turn == 0 &&
+		!bytes.Contains(c.Expect.AST, []byte(`"absolute"`)) && !bytes.Contains(c.Expect.AST, []byte(`"incident:`))
 }
 
 func TestWriteModelExamples(t *testing.T) {
@@ -56,10 +69,15 @@ func TestWriteModelExamples(t *testing.T) {
 		AST      json.RawMessage `json:"ast"`
 	}
 	var out []example
-	for _, c := range loadCases(t) {
-		cx := c.Context
-		if len(c.Expect.AST) == 0 || cx.Cross || len(cx.PriorAST) > 0 || cx.IncidentID != "" || cx.Script != "" || cx.Turn > 0 ||
-			bytes.Contains(c.Expect.AST, []byte(`"absolute"`)) || bytes.Contains(c.Expect.AST, []byte(`"incident:`)) {
+	cases := loadCases(t)
+	heldOutTexts := map[string]bool{}
+	for _, h := range heldOutCases(cases) {
+		for _, x := range h.Texts {
+			heldOutTexts[evalsplit.Normalize(x)] = true
+		}
+	}
+	for _, c := range cases {
+		if !exampleCandidate(c) || heldOutTexts[evalsplit.Normalize(c.Question)] {
 			continue
 		}
 		q := decodeAST(t, c.ID, c.Expect.AST)

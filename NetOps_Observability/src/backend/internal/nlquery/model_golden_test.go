@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/compile"
@@ -86,6 +87,27 @@ func unparsedPhrasings(t *testing.T, cat *catalog.Catalog, w *world) (out []phra
 		}
 	}
 	return out, total
+}
+
+// phrasingsOfSplit keeps one split's phrasings, in order.
+func phrasingsOfSplit(ps []phrasing, sp evalsplit.Split) []phrasing {
+	var out []phrasing
+	for _, p := range ps {
+		if p.c.split() == sp {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// capPerSplit bounds a paid run to limit phrasings without losing a split: each
+// split gets half, and a split with fewer gives its unused share to the other.
+func capPerSplit(ps []phrasing, limit int) []phrasing {
+	dev, held := phrasingsOfSplit(ps, evalsplit.Dev), phrasingsOfSplit(ps, evalsplit.HeldOut)
+	nHeld := min(limit/2, len(held))
+	nDev := min(limit-nHeld, len(dev))
+	nHeld = min(limit-nDev, len(held))
+	return append(append([]phrasing{}, dev[:nDev]...), held[:nHeld]...)
 }
 
 // modelTally is the model path's scoreboard.
@@ -239,6 +261,13 @@ func TestModelPathAgainstTheGoldenCorpus(t *testing.T) {
 	or := runModelPath(t, cat, w, ps, oracle)
 	t.Logf("golden phrasings %d, left Unparsed by the grammar %d", total, len(ps))
 	t.Logf("oracle : %s", or)
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		sub := phrasingsOfSplit(ps, sp)
+		if len(sub) == 0 {
+			t.Errorf("the %s split has no phrasing that reaches the model", sp)
+		}
+		t.Logf("oracle %s: %s", sp, runModelPath(t, cat, w, sub, oracle))
+	}
 
 	rp := runModelPath(t, cat, w, ps, func(p phrasing) modelc.Model {
 		first := mutated(p, func(q *ast.AST) {

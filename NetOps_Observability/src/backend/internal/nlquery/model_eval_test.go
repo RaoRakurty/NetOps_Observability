@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/modelc"
 )
@@ -53,15 +54,17 @@ func TestModelPathLiveProvider(t *testing.T) {
 	cat := catalog.MustLoad()
 	w := loadWorld(t)
 	ps, total := unparsedPhrasings(t, cat, w)
-	if len(ps) > limit {
-		ps = ps[:limit]
-	}
+	ps = capPerSplit(ps, limit)
 	start := time.Now()
-	tally := runModelPath(t, cat, w, ps, func(phrasing) modelc.Model { return m })
-	t.Logf("live %s/%s over %d of %d golden phrasings the grammar left Unparsed (%s)", m.provider, m.model, len(ps), total, time.Since(start).Round(time.Second))
-	t.Logf("model path: %s", tally)
-	t.Logf("coverage %.3f · answered precision %.3f", ratio(tally.accepted, tally.answerable), ratio(tally.correct, tally.accepted))
-	for _, s := range tally.safety {
-		t.Errorf("SAFETY: %s", s)
+	// Dev and held-out are reported separately: a model doing better on dev is
+	// being helped by examples that resemble the question.
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		tally := runModelPath(t, cat, w, phrasingsOfSplit(ps, sp), func(phrasing) modelc.Model { return m })
+		t.Logf("%s model path: %s", sp, tally)
+		t.Logf("%s coverage %.3f · answered precision %.3f", sp, ratio(tally.accepted, tally.answerable), ratio(tally.correct, tally.accepted))
+		for _, s := range tally.safety {
+			t.Errorf("SAFETY: %s", s)
+		}
 	}
+	t.Logf("live %s/%s over %d of %d golden phrasings the grammar left Unparsed (%s)", m.provider, m.model, len(ps), total, time.Since(start).Round(time.Second))
 }

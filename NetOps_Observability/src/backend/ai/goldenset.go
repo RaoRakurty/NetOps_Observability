@@ -8,7 +8,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+
+	"netops/backend/internal/evalsplit"
 )
+
+// GoldenQACorpus names this corpus in the held-out split's hash.
+const GoldenQACorpus = "qa"
 
 // reGoldenNav is the shape of a GoldenItem.Nav address: two or three
 // lower-case nav ids. Whether the address EXISTS is the coverage test's job
@@ -65,6 +70,19 @@ type GoldenItem struct {
 	// view. golden_nav_coverage_test.go requires one per nav leaf (N-G1).
 	Nav   string `json:"nav,omitempty"`
 	Notes string `json:"notes,omitempty"`
+	// Source is "synthetic" (the default) or "field" (operator-labelled, always
+	// held out). See internal/evalsplit.
+	Source string `json:"source,omitempty"`
+}
+
+// Split is the item's partition. LoadGoldenSet has already refused an unknown
+// source, and evalsplit holds out anything it does not recognise.
+func (it GoldenItem) Split() evalsplit.Split {
+	src := evalsplit.SourceSynthetic
+	if it.Source != "" {
+		src = evalsplit.Source(it.Source)
+	}
+	return evalsplit.Assign(GoldenQACorpus, it.ID, src)
 }
 
 // GoldenSet is the parsed fixture file.
@@ -111,6 +129,9 @@ func LoadGoldenSet(path string) (*GoldenSet, error) {
 			return nil, fmt.Errorf("golden set: duplicate id %q", it.ID)
 		}
 		seen[it.ID] = true
+		if _, err := evalsplit.ParseSource(it.Source); err != nil {
+			return nil, fmt.Errorf("golden set: %s: %w", it.ID, err)
+		}
 		if it.Nav != "" {
 			if it.Category != GoldenDocs {
 				return nil, fmt.Errorf("golden set: %s: only a docs item can name a nav leaf", it.ID)

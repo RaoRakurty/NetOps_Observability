@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/irisgate"
 )
 
@@ -119,7 +120,10 @@ func TestGoldenDocsRetrieval(t *testing.T) {
 		Hit1     bool     `json:"hit_at_1"`
 		Hit3     bool     `json:"hit_at_3"`
 		Anchor   bool     `json:"anchor_hit,omitempty"`
+		Split    string   `json:"split"`
 	}
+	type splitHits struct{ n, hit1, hit3 int }
+	bySplit := map[evalsplit.Split]*splitHits{evalsplit.Dev: {}, evalsplit.HeldOut: {}}
 	var rows []row
 	hit1, hit3, anchorWant, anchorHit := 0, 0, 0, 0
 	for _, it := range items {
@@ -129,7 +133,15 @@ func TestGoldenDocsRetrieval(t *testing.T) {
 			top3 = append(top3, h.Chunk.ID)
 		}
 		r := row{ID: it.ID, Question: it.Question, Expected: it.Expect.Slugs, Top3: top3,
-			Hit1: hitSlugs(hits, it.Expect.Slugs, 1), Hit3: hitSlugs(hits, it.Expect.Slugs, 3)}
+			Hit1: hitSlugs(hits, it.Expect.Slugs, 1), Hit3: hitSlugs(hits, it.Expect.Slugs, 3), Split: string(it.Split())}
+		sh := bySplit[it.Split()]
+		sh.n++
+		if r.Hit1 {
+			sh.hit1++
+		}
+		if r.Hit3 {
+			sh.hit3++
+		}
 		if r.Hit1 {
 			hit1++
 		}
@@ -156,6 +168,12 @@ func TestGoldenDocsRetrieval(t *testing.T) {
 	rate3 := float64(hit3) / float64(n)
 	t.Logf("golden docs retrieval: hit@1 %d/%d (%.2f), hit@3 %d/%d (%.2f), anchors %d/%d",
 		hit1, n, rate1, hit3, n, rate3, anchorHit, anchorWant)
+	dev, held := bySplit[evalsplit.Dev], bySplit[evalsplit.HeldOut]
+	t.Logf("  dev:      hit@1 %d/%d, hit@3 %d/%d", dev.hit1, dev.n, dev.hit3, dev.n)
+	t.Logf("  held-out: hit@1 %d/%d, hit@3 %d/%d", held.hit1, held.n, held.hit3, held.n)
+	if dev.n == 0 || held.n == 0 {
+		t.Errorf("both splits must have docs items: dev %d, held-out %d", dev.n, held.n)
+	}
 	if rate1 < goldenHitAt1Floor {
 		t.Errorf("hit@1 %.2f fell under the %.2f floor — retrieval regressed", rate1, goldenHitAt1Floor)
 	}
@@ -169,7 +187,11 @@ func TestGoldenDocsRetrieval(t *testing.T) {
 			"hit_at_1": rate1, "hit_at_3": rate3,
 			"anchor_hits": anchorHit, "anchor_targets": anchorWant,
 			"floors": map[string]float64{"hit_at_1": goldenHitAt1Floor, "hit_at_3": goldenHitAt3Floor},
-			"items":  rows,
+			"splits": map[string]map[string]int{
+				"dev":     {"total": dev.n, "hit_at_1": dev.hit1, "hit_at_3": dev.hit3},
+				"heldout": {"total": held.n, "hit_at_1": held.hit1, "hit_at_3": held.hit3},
+			},
+			"items": rows,
 		}
 		b, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
@@ -192,15 +214,19 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 	plan := Plan{Intent: "product_question", Modules: []string{"product_navigation"}, Mode: ModeProductAnswer}
 	// N-H5 citation coverage: of every docs question, the answers that cite an
 	// expected page with a working link (a retrieval miss is uncovered).
-	var covered, total int64
+	covered, total := map[evalsplit.Split]int64{}, map[evalsplit.Split]int64{}
 	defer func() {
-		if err := irisgate.Record("ai.docs.citation", irisgate.Measure{Gate: irisgate.GateCitation, OK: covered, Total: total,
-			Note: "docs answers citing an expected page with a link"}); err != nil {
+		var ms []irisgate.Measure
+		for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+			ms = append(ms, irisgate.Measure{Gate: irisgate.GateCitation, OK: covered[sp], Total: total[sp], Split: string(sp),
+				Note: "docs answers citing an expected page with a link"})
+		}
+		if err := irisgate.Record("ai.docs.citation", ms...); err != nil {
 			t.Fatal(err)
 		}
 	}()
 	for _, it := range gs.Category(GoldenDocs) {
-		total++
+		total[it.Split()]++
 		hits := o.Docs.Search(it.Question, 3)
 		if !hitSlugs(hits, it.Expect.Slugs, 3) {
 			continue // retrieval miss — already accounted by the hit@k gate
@@ -226,7 +252,7 @@ func TestGoldenDocsCitationCorrectness(t *testing.T) {
 			continue
 		}
 		if cited {
-			covered++
+			covered[it.Split()]++
 		}
 	}
 }
