@@ -66,7 +66,7 @@ The capture above is real, from a lab running 40 rules across three lanes: 16 on
 | `promotion_rate` | The semantic promotion rate. See below. |
 | `window_lines` | How many admitted lines the promotion window currently holds. This is the rate's denominator. |
 | `prefilter.passed` | Raw syslog lines the ingest screen handed to the full classifiers. |
-| `prefilter.rejected` | Raw lines the screen proved cannot promote, so it did not classify them. |
+| `prefilter.rejected` | Raw lines the screen proved no current parser rule can promote, so it did not classify them. The console shows this as **Skipped, not relevant to RCA**. They are still stored and searchable. A high count is normal and is not a warning; it is a statement about today's rules, so a vendor whose format has no rule yet is skipped too. |
 | `generic_fallback` | Emitted observations per lane that fell through to the generic net instead of matching a typed rule. |
 | `rules[]` | One row per rule: `rule_id`, `lane`, `kind`, `fidelity`, `hits` and `shadow`. |
 

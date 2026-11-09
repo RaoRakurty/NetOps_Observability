@@ -73,8 +73,15 @@ describe("header stats", () => {
     expect(screen.getByText("240,000 lines")).toBeInTheDocument();
 
     expect(screen.getByText("Prefilter passed")).toBeInTheDocument();
-    expect(screen.getByText("Prefilter rejected")).toBeInTheDocument();
-    expect(screen.getByText("18,422")).toBeInTheDocument();
+    expect(screen.queryByText("Prefilter rejected")).not.toBeInTheDocument();
+    // Skipping a line is the screen doing its job, so the count carries no warning
+    // tone. The generic-fallback counts beside it do warn, which proves the tone
+    // check is looking at a real class.
+    const skipped = screen.getByText("Skipped, not relevant to RCA").closest(".ds-stat") as HTMLElement;
+    expect(skipped).toHaveTextContent("18,422");
+    expect(skipped.className).not.toMatch(/warn/);
+    const fallback = screen.getByText("Generic fallback (syslog)").closest(".ds-stat") as HTMLElement;
+    expect(fallback.className).toMatch(/warn/);
     expect(screen.getByText("Generic fallback (syslog)")).toBeInTheDocument();
     expect(screen.getByText("Generic fallback (trap)")).toBeInTheDocument();
     expect(screen.getByText("1,204")).toBeInTheDocument();
