@@ -6,8 +6,42 @@ package collectors
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 )
+
+// The circuit series' ownership labels (tracker 337 N-B5): a target with an
+// inventory id is stamped device + tenant_id (lower-cased, as the scope
+// compares); one without is not, so it stays platform-only; the pre-existing
+// labels are unchanged; and a hostile value cannot break out of its label.
+func TestEchoSeriesLabelsOwnership(t *testing.T) {
+	owned := EchoSeriesLabels(EchoTarget{CircuitID: "wan-1", Tenant: " Acme ", LocalDevice: "edge-1",
+		LocalDeviceID: "dev-1", LocalIf: "Ethernet1", RemoteAddr: "198.51.100.1"}, "icmp", true)
+	for _, want := range []string{`circuit="wan-1"`, `local_device="edge-1"`, `tenant=" Acme "`,
+		`method="icmp"`, `source_bound="true"`, `,device="dev-1"`, `,tenant_id="acme"`} {
+		if !strings.Contains(owned, want) {
+			t.Errorf("owned circuit labels %q lack %s", owned, want)
+		}
+	}
+
+	env := EchoSeriesLabels(EchoTarget{CircuitID: "env-x", LocalDevice: "prober", RemoteAddr: "198.51.100.9"}, "tcp", false)
+	if strings.Contains(env, ",device=") || strings.Contains(env, "tenant_id=") {
+		t.Errorf("an env target with no inventory id was given ownership labels: %q", env)
+	}
+
+	// An id with no tenant is a platform-owned device: device label (so it is
+	// scoped exactly like that device's own series), no tenant_id.
+	plat := EchoSeriesLabels(EchoTarget{CircuitID: "wan-2", LocalDeviceID: "shared", RemoteAddr: "198.51.100.2"}, "icmp", true)
+	if !strings.Contains(plat, `,device="shared"`) || strings.Contains(plat, "tenant_id=") {
+		t.Errorf("platform-owned circuit labels wrong: %q", plat)
+	}
+
+	hostile := EchoSeriesLabels(EchoTarget{CircuitID: "wan-3", Tenant: "t", LocalDeviceID: `x",tenant_id="victim`,
+		RemoteAddr: "198.51.100.3"}, "icmp", true)
+	if strings.Count(hostile, `,tenant_id="`) != 1 || !strings.Contains(hostile, `device="x\",tenant_id=\"victim"`) {
+		t.Errorf("a quote in a device id escaped its label: %q", hostile)
+	}
+}
 
 func almost(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
