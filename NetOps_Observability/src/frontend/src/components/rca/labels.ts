@@ -73,6 +73,7 @@ const SIG_NAME: Record<string, string> = {
   "sig.ent.middle-mile.dia-egress-latency": "ISP / DIA egress latency",
   "sig.ent.wan-edge.bgp-peer-flap": "BGP peer flap",
   "sig.ent.access.local-link-fault": "Local link fault",
+  "sig.ent.access.admin-link-change-induced": "Interface shut down by an operator",
   "sig.ent.wan-edge.congestion": "WAN edge congestion",
   "sig.ent.wan-edge.routing-instability": "Routing instability",
   "sig.ent.middle-mile.physical-degradation": "Circuit / optics degradation",
@@ -110,6 +111,7 @@ const SIG_NOC_TITLE: Record<string, string> = {
   "sig.ent.wan-edge.congestion": "WAN edge congestion",
   "sig.ent.wan-edge.tunnel-mtu-blackhole": "Path MTU blackhole",
   "sig.ent.access.local-link-fault": "Link state change",
+  "sig.ent.access.admin-link-change-induced": "Interface shut down by an operator",
   "sig.ent.internet.dns-impairment": "DNS resolution impairment",
   "sig.ent.cloud.region-degradation": "Cloud region degradation",
   "sig.ent.cloud.region-impairment": "Cloud region impairment",
@@ -274,6 +276,8 @@ const KIND_NOC: Record<string, string> = {
   // producing rule/control identity rides in attrs.
   security_posture: "Security posture finding", security_exposure: "Exposure finding",
   security_signal: "Security detection",
+  // tracker 385: how the engine names the discriminator that rules out a link fault.
+  "link_state_change[link_cause=admin]": "Interface shut down by an operator",
 };
 // "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {
