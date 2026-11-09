@@ -149,6 +149,23 @@ func serviceKeyMode() (os.FileMode, error) {
 	return os.FileMode(m64), nil
 }
 
+// adminDirMode is the mode of the directory holding the OpenSearch admin key.
+const adminDirMode os.FileMode = 0o700
+
+// ensureCustodyDir creates dir if it is missing and forces its mode. It runs
+// before the key is written, and on every re-issue, so an install that predates
+// the mode converges at the next boot. A failure is returned, never swallowed:
+// a key directory this process cannot secure is one it should not mint into.
+func ensureCustodyDir(dir string, mode os.FileMode) error {
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return fmt.Errorf("create key directory %s: %w", dir, err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		return fmt.Errorf("set key directory %s to %04o: %w", dir, mode, err)
+	}
+	return nil
+}
+
 // writeBundle writes the CA trust anchor (clients verify peers against it).
 func (m *caManager) writeBundle(path string) error {
 	return writeFileAtomic(path, m.ca.CertPEM(), 0o644)
@@ -256,20 +273,18 @@ func (m *caManager) provisionFromEnv() error {
 	// credential, not a workload. It is the identity securityadmin.sh
 	// presents to write the security index, mapped by DN in admin_dn
 	// (internalca sets Subject CN = the SPIFFE ID, which IS that DN).
+	//
+	// CUSTODY (2026-11-09): this DN bypasses every role and index check, so the
+	// key is 0600 in a 0700 directory and NO environment variable can widen it.
+	// Its one reader, opensearch-security-init, runs as this process's uid and
+	// mounts only this directory. Do not add a key-mode escape hatch here.
 	if dir := os.Getenv("TLS_OS_ADMIN_CERT_DIR"); dir != "" {
-		keyPath := filepath.Join(dir, "admin.key")
-		if err := m.issueService(filepath.Join(dir, "admin.crt"), keyPath,
-			"opensearch-admin", m.ttl, nil, true, false); err != nil {
+		if err := ensureCustodyDir(dir, adminDirMode); err != nil {
 			return fmt.Errorf("tls ca: opensearch admin identity: %w", err)
 		}
-		mode, err := serviceKeyMode()
-		if err != nil {
-			return err
-		}
-		if mode != 0o600 {
-			if err := os.Chmod(keyPath, mode); err != nil {
-				return fmt.Errorf("tls ca: set opensearch admin key mode: %w", err)
-			}
+		if err := m.issueService(filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key"),
+			"opensearch-admin", m.ttl, nil, true, false); err != nil {
+			return fmt.Errorf("tls ca: opensearch admin identity: %w", err)
 		}
 		if err := m.writeBundle(filepath.Join(dir, "ca.pem")); err != nil {
 			return fmt.Errorf("tls ca: admin trust bundle: %w", err)

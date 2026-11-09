@@ -2364,6 +2364,25 @@ def tls_service_mount_dirs(compose_dir: Path) -> list[str]:
     return sorted(out)
 
 
+def tls_custody_dir_modes() -> dict[str, int]:
+    """data/-relative TLS directories whose mode is part of the contract.
+
+    data/tls/admin holds the OpenSearch admin key, whose DN bypasses every role
+    and index check. Owner only, and never widened by any setting."""
+    return {"tls/admin": 0o700}
+
+
+def set_custody_dir_mode(d: Path, mode: int) -> None:
+    """Force a key directory's mode, or fail the install (§16.1). The api enforces
+    the same mode at every boot; this covers the window before it first runs."""
+    try:
+        if stat.S_IMODE(d.stat().st_mode) != mode:
+            d.chmod(mode)
+    except OSError as exc:
+        fail(f"cannot set mode {mode:04o} on {d}: {exc}\n"
+             f"    sudo chmod {mode:04o} {d}")
+
+
 def ensure_data_dirs(root: Path) -> None:
     """Create per-service subdirectories under data/ and (where we know
     the container runs as a non-root user) chown them to that UID/GID.
@@ -2421,6 +2440,11 @@ def ensure_data_dirs(root: Path) -> None:
         # api can never mint. Pre-creating the root — and each mounted child, see
         # tls_service_mount_dirs below — is what keeps it the api's tree.
         "tls/services": (api_uid, api_gid),
+        # opensearch-security-init bind-mounts this directory, so on phase A
+        # Docker would create it as ROOT if it were missing, and the api could
+        # then never mint the admin identity: the same deadlock as
+        # tls/services, on the one credential the security bootstrap needs.
+        "tls/admin": (api_uid, api_gid),
         # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP,
         # internal/configstore). Same class as data/tls: a bind-mount source
         # Docker would otherwise auto-create as ROOT, into which the api
@@ -2483,6 +2507,11 @@ def ensure_data_dirs(root: Path) -> None:
                          f"    sudo chmod {mode:04o} {d}")
         if uid_gid is not None:
             chown_tree(d, uid_gid[0], uid_gid[1], f"data/{name}")
+
+    # Custody modes come AFTER the ownership loop: a directory Docker left owned
+    # by root can only be chmodded once chown_tree has handed it back.
+    for rel, mode in tls_custody_dir_modes().items():
+        set_custody_dir_mode(root / "data" / rel, mode)
 
     # ------------------------------------------------------------------
     # A SIGN ON THE DOOR for data/opensearch-snapshots (2026-09-03).
@@ -2701,14 +2730,16 @@ def _osd_secret_config(password: str) -> str:
 
 
 # Six files in one directory for the opensearch-security-init one-shot: it hashes
-# every identity's password, so it needs all of them, under the image's uid.
+# every identity's password, so it needs all of them. Owned by the uid that job
+# runs as, which is CORRELIX_UID, not the image's 1000: it must also read the
+# 0600 admin key, which the api's uid owns (2026-11-09, OPENSEARCH_ACCESS design).
 _OS_IDENTITY_KEYS = ("OS_API_PASSWORD", "OS_ROUTER_PASSWORD", "OS_CORRELATION_PASSWORD",
                      "OS_BOOTSTRAP_PASSWORD", "OS_DASHBOARDS_PASSWORD", "OS_AGGREGATOR_PASSWORD")
 
 DERIVED_SECRETS: tuple[DerivedSecret, ...] = (
     DerivedSecret("opensearch/dashboards", "opensearch_dashboards.secret.yml",
                   "OS_DASHBOARDS_PASSWORD", "opensearch-image", _osd_secret_config),
-    *(DerivedSecret("opensearch/security-init", key, key, "opensearch-image", str)
+    *(DerivedSecret("opensearch/security-init", key, key, "security-init", str)
       for key in _OS_IDENTITY_KEYS),
 )
 
@@ -2877,6 +2908,10 @@ def _secret_owner(kind: str, env: Mapping[str, str]) -> tuple[int, int]:
         return _CURL_IMAGE_OWNER
     if kind == "opensearch-image":
         return _OPENSEARCH_IMAGE_OWNER
+    if kind == "security-init":
+        # opensearch-security-init: user ${CORRELIX_UID:-65532}:1000. The file's
+        # group is irrelevant at 0400; the owner is what lets the job read it.
+        return _compose_user(env, 65532)
     raise ValueError(f"unknown secret owner kind {kind!r}")
 
 

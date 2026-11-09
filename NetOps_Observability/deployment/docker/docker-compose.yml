@@ -843,21 +843,29 @@ services:
     logging: *deflog
     profiles: [security]
     restart: "no"
+    # The admin key is 0600 under CORRELIX_UID in a 0700 directory, so this job
+    # runs as that uid and mounts only that directory (2026-11-09). The fixed
+    # gid 1000 is the image's own group: the stock image keeps securityadmin.sh
+    # and its home at 1000:1000 with no access for others, and
+    # opensearch/Dockerfile opens the home to the group. Group 1000 is not the
+    # key's group, so this grants nothing on the key.
+    user: "${CORRELIX_UID:-65532}:1000"
     entrypoint: ["/security/apply-security.sh"]
     environment:
       OS_HOST: opensearch
       OS_PORT: "9200"
       SEC_CONF_SRC: /security
       OS_ADMIN_CA: /certs/ca.pem
-      OS_ADMIN_CERT: /certs/admin/admin.crt
-      OS_ADMIN_KEY: /certs/admin/admin.key
+      OS_ADMIN_CERT: /certs/admin.crt
+      OS_ADMIN_KEY: /certs/admin.key
       # Tracker 384: one file per identity, rendered from .env by
       # scripts/install.py. These six used to be declared here, and an exited
       # one-shot keeps its environment: `docker inspect` on it showed all of them.
+      # They are owned by CORRELIX_UID, the uid this job runs as (2026-11-09).
       OS_SECRET_DIR: /run/secrets/opensearch/security-init
     volumes:
       - ./opensearch/security:/security:ro
-      - ../../data/tls:/certs:ro
+      - ../../data/tls/admin:/certs:ro
       - ../../data/secrets/opensearch/security-init:/run/secrets/opensearch/security-init:ro
     depends_on:
       opensearch:

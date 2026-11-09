@@ -70,6 +70,16 @@ RUN set -eu; \
            /usr/share/opensearch/jdk/jmods \
            /usr/share/opensearch/jdk/lib/ct.sym
 
+# Stage 1c: let group 1000 into the home. The stock image keeps it at 0700,
+# with securityadmin.sh, hash.sh and the security config at 1000:1000 with no
+# access for others, so nothing but uid 1000 can run the security tools.
+# opensearch-security-init must run as the admin key's owner (CORRELIX_UID, any
+# uid on a customer host) because that key is 0600 and is never widened. It runs
+# with gid 1000, and this one chmod is what lets it in. Verified on the pinned
+# base 2026-11-09: as 1234:1234 and as 1234:1000 the tools fail with "Permission
+# denied" until the home is 0750.
+RUN chmod 0750 /usr/share/opensearch
+
 # Stage 2: FLATTEN. Deleting files in a Docker layer only writes whiteouts on
 # top — `docker save` (the install bundle) still ships every base layer with
 # the plugins in it, so the trim above saves ZERO bundle bytes on its own
