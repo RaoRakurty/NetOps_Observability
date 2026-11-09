@@ -73,7 +73,13 @@ type CaptureSeams struct {
 
 // Capture builds the frozen case for one correlation the caller may see.
 // ai.ErrNotFound means unknown or another tenant's; the two are the same.
+//
+// A case holds correlation data, so administration:read alone is not enough: a
+// custom role that reads the admin area but not incidents gets ai.ErrForbidden.
 func Capture(ctx context.Context, s CaptureSeams, id string) (*Case, error) {
+	if !s.Principal.Can("correlations:read") {
+		return nil, ai.ErrForbidden
+	}
 	snap, err := s.Snapshot(ctx, id)
 	if err != nil {
 		return nil, err

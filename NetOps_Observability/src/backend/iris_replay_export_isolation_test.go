@@ -27,6 +27,7 @@ import (
 	"netops/backend/internal/aidecision"
 	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/irisreplay"
+	"netops/backend/internal/rbac"
 )
 
 const (
@@ -182,6 +183,15 @@ func TestReplayExportPermissions(t *testing.T) {
 	op.Role = "operator"
 	if w := replayExport(t, s, op, replayIDA, ""); w.Code != http.StatusForbidden {
 		t.Fatalf("no administration:read: %d", w.Code)
+	}
+	// A custom role that reads the admin area but not incidents: refused too.
+	if _, err := s.roles.Upsert(rbac.Role{ID: "admin-reader", Name: "Admin Reader", Permissions: map[string]int{"administration": LevelRead}}); err != nil {
+		t.Fatal(err)
+	}
+	reader := a
+	reader.Role = "admin-reader"
+	if w := replayExport(t, s, reader, replayIDA, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("administration:read without incident read: %d %s", w.Code, w.Body.String())
 	}
 	r := httptest.NewRequest(http.MethodPost, "/api/ai/replay/export/"+replayIDA, nil)
 	r = r.WithContext(context.WithValue(r.Context(), userCtxKey, a))

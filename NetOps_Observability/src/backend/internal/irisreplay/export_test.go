@@ -124,6 +124,15 @@ func TestCaptureUnknownIsNotFound(t *testing.T) {
 	}
 }
 
+// administration:read does not by itself read incidents.
+func TestCaptureNeedsCorrelationRead(t *testing.T) {
+	f := captureFixture(t, nil)
+	f.seams.Principal.Perms = map[string]bool{"administration:read": true}
+	if _, err := Capture(context.Background(), f.seams, captureID); !errors.Is(err, ai.ErrForbidden) {
+		t.Fatalf("%v", err)
+	}
+}
+
 // source is forced to field unless the incident is a synthetic or twin fixture.
 func TestCaptureSourceIsFieldUnlessSynthetic(t *testing.T) {
 	f := captureFixture(t, nil)

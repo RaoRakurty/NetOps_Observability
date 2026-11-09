@@ -2996,6 +2996,9 @@ func (s *server) handleAIReplayExport(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ai.ErrNotFound):
 		notFound()
 		return
+	case errors.Is(err, ai.ErrForbidden):
+		writeError(w, http.StatusForbidden, errors.New("infrastructure read permission required"))
+		return
 	case err != nil:
 		logError("ai.replay", "export failed", errf(err))
 		writeError(w, http.StatusInternalServerError, errors.New("the case could not be captured"))
