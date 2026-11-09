@@ -17,8 +17,11 @@ package backend
 // Freshness: seen within FRESH → flowing; within STALE_MAX → stale; else off.
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +33,23 @@ import (
 const (
 	ingestFreshWindow = 15 * time.Minute
 	ingestStaleWindow = 24 * time.Hour
+
+	// cloudStatusUnknown is a metrics row whose proof could not be read: the
+	// store did not answer, or the caller's inventory could not be turned into a
+	// selector. Distinct from "off", which is a measured absence.
+	cloudStatusUnknown        = "unknown"
+	cloudMetricsUnknownDetail = "Metrics could not be checked for this workspace, so this does not mean none are arriving."
+
+	// cloudMetricProofMaxSelectorBytes bounds one batch's resource_id alternation.
+	// VictoriaMetrics refuses a query longer than -search.maxQueryLen (16 KiB by
+	// default, and this stack does not set it); the margin covers the rest of the
+	// PromQL expression around the selector.
+	cloudMetricProofMaxSelectorBytes = 12 << 10
+	// cloudMetricProofMaxBatches bounds the VictoriaMetrics reads one request can
+	// cause (two per batch). An inventory past it reports "unknown".
+	cloudMetricProofMaxBatches = 8
+	// cloudMetricProofTimeout bounds all of those reads together.
+	cloudMetricProofTimeout = 10 * time.Second
 )
 
 // cloudSourceKinds maps a UI source type to the corr_signals kinds that prove it.
@@ -59,7 +79,7 @@ var cloudSourceOrder = []string{
 
 type cloudSourceStatus struct {
 	SourceType  string `json:"source_type"`
-	Status      string `json:"status"` // flowing | stale | off
+	Status      string `json:"status"` // flowing | stale | off | unknown
 	Volume      int64  `json:"volume"`
 	LastSeenISO string `json:"last_seen_iso,omitempty"`
 	// Capability distinguishes WHY a source can be "off" — the UI must never
@@ -94,6 +114,121 @@ func ingestStatusFor(volume int64, lastSeen time.Time, now time.Time) string {
 type kindStat struct {
 	volume   int64
 	lastSeen time.Time
+}
+
+// cloudMetricProof is the metric store's proof-of-life per provider label:
+// last-sample unix time and series count. known=false means it could not be read
+// at the caller's boundary, and last/series are then empty, never partial.
+type cloudMetricProof struct {
+	last   map[string]float64
+	series map[string]float64
+	known  bool
+}
+
+// cloudResourceIDBatches renders the inventory's ids as resource_id alternations
+// ready to sit inside a PromQL matcher, each within the selector budget. ok=false
+// means the inventory does not fit the batch cap.
+//
+// An id that fails cloud.ValidResourceID is dropped rather than rendered. The
+// empty id is the one that matters: an alternation with an empty branch also
+// matches series with NO resource_id label, which are not this caller's.
+func cloudResourceIDBatches(res []cloud.CloudResource) (batches []string, ok bool) {
+	seen := make(map[string]bool, len(res))
+	ids := make([]string, 0, len(res))
+	for _, rs := range res {
+		if cloud.ValidResourceID(rs.ResourceID) && !seen[rs.ResourceID] {
+			seen[rs.ResourceID] = true
+			ids = append(ids, rs.ResourceID)
+		}
+	}
+	sort.Strings(ids) // one inventory always renders the same queries
+
+	var cur []string
+	size := 0
+	for _, id := range ids {
+		n := len(regexAlternation([]string{id})) + 1 // +1 for the "|"
+		if len(cur) > 0 && size+n > cloudMetricProofMaxSelectorBytes {
+			batches = append(batches, regexAlternation(cur))
+			cur, size = nil, 0
+		}
+		cur = append(cur, id)
+		size += n
+	}
+	if len(cur) > 0 {
+		batches = append(batches, regexAlternation(cur))
+	}
+	return batches, len(batches) <= cloudMetricProofMaxBatches
+}
+
+// readCloudMetricProof reads the per-provider metric proof at the caller's
+// boundary (CLAUDE.md §3a).
+//
+// The boundary is the inventory, not a tenant label. The cloud lane's tenant_id
+// label cannot prove ownership: the poller's metric_event carries no tenant, and
+// the Vector aggregator stamps one by looking the resource NAME up in the
+// device_tenant table (vector.yaml metrics_normalized), which holds network
+// devices, not cloud resources. So the label is normally empty, and it names a
+// stranger when a resource shares a name with that stranger's device. Resource
+// ownership lives in the cloud inventory, which is also how the metric-series
+// endpoint, the monitors and the SLOs scope these same series.
+//
+// An empty inventory asks the store nothing: no resources means no series of
+// the caller's to prove, which is a measured "off".
+func readCloudMetricProof(ctx context.Context, res []cloud.CloudResource, invErr error, fleetWide bool) cloudMetricProof {
+	if fleetWide {
+		return cloudMetricProof{
+			last:   vmQueryBy(ctx, cloudMetricLastQuery(""), "provider"),
+			series: vmQueryBy(ctx, cloudMetricCountQuery(""), "provider"),
+			known:  true,
+		}
+	}
+	if invErr != nil {
+		slog.Warn("cloud ingestion: inventory unreadable, metric proof unknown", "error", invErr)
+		return cloudMetricProof{}
+	}
+	batches, fits := cloudResourceIDBatches(res)
+	if !fits {
+		slog.Warn("cloud ingestion: inventory exceeds the metric proof budget, metric proof unknown",
+			"batches", len(batches), "max_batches", cloudMetricProofMaxBatches)
+		return cloudMetricProof{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, cloudMetricProofTimeout)
+	defer cancel()
+	proof := cloudMetricProof{last: map[string]float64{}, series: map[string]float64{}, known: true}
+	for _, ids := range batches {
+		last := vmQueryBy(ctx, cloudMetricLastQuery(ids), "provider")
+		series := vmQueryBy(ctx, cloudMetricCountQuery(ids), "provider")
+		if last == nil || series == nil {
+			slog.Warn("cloud ingestion: metric store did not answer, metric proof unknown")
+			return cloudMetricProof{}
+		}
+		for p, ts := range last {
+			if ts > proof.last[p] {
+				proof.last[p] = ts
+			}
+		}
+		for p, n := range series {
+			proof.series[p] += n // one id lands in one batch, so counts add up
+		}
+	}
+	return proof
+}
+
+// cloudMetricSelector is the cloud_* series selector; idAlternation is a rendered
+// regexAlternation, "" meaning fleet-wide.
+func cloudMetricSelector(idAlternation string) string {
+	if idAlternation == "" {
+		return `{__name__=~"cloud_.+"}`
+	}
+	return `{__name__=~"cloud_.+",resource_id=~"` + idAlternation + `"}`
+}
+
+func cloudMetricLastQuery(idAlternation string) string {
+	return `max by (provider) (timestamp(last_over_time(` + cloudMetricSelector(idAlternation) + `[24h])))`
+}
+
+func cloudMetricCountQuery(idAlternation string) string {
+	return `count by (provider) (last_over_time(` + cloudMetricSelector(idAlternation) + `[24h]))`
 }
 
 // handleCloudIngestion serves GET /api/cloud/ingestion.
@@ -157,14 +292,6 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 		byProvKind[prov][kind] = kindStat{vol, ts.UTC()}
 	}
 
-	// The metric lane's canonical store is VictoriaMetrics, not ClickHouse
-	// (audit D-P1-8): live series prove "metrics flowing" even when no anomaly
-	// signal reached the bus. Per-provider last-sample + series count.
-	vmLast := vmQueryBy(r.Context(),
-		`max by (provider) (timestamp(last_over_time({__name__=~"cloud_.+"}[24h])))`, "provider")
-	vmSeries := vmQueryBy(r.Context(),
-		`count by (provider) (last_over_time({__name__=~"cloud_.+"}[24h]))`, "provider")
-
 	// Inventory per provider (declared resources).
 	invByProv := map[string]int64{}
 	var invTotal int64
@@ -173,7 +300,8 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 	// record ("IAM denied EKS reads") must not hide behind a flowing VM count.
 	wlByProv := map[string]int64{}
 	var wlTotal int64
-	if res, _, _, err := s.cloudResources(r); err == nil {
+	res, _, invCross, invErr := s.cloudResources(r)
+	if invErr == nil {
 		invTotal = int64(len(res))
 		for _, rs := range res {
 			invByProv[strings.ToLower(string(rs.Provider))]++
@@ -184,6 +312,15 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 			}
 		}
 	}
+
+	// The metric lane's canonical store is VictoriaMetrics, not ClickHouse
+	// (audit D-P1-8): live series prove "metrics flowing" even when no anomaly
+	// signal reached the bus. Per-provider last-sample + series count, read at
+	// the caller's boundary: fleet-wide only for an unrestricted cross-tenant
+	// caller, otherwise bound to the inventory this request is allowed to see.
+	fleetWide := invCross && !vis.deny && len(vis.exclude) == 0
+	metricProof := readCloudMetricProof(r.Context(), res, invErr, fleetWide)
+	vmLast, vmSeries := metricProof.last, metricProof.series
 
 	// Providers worth a matrix: anything the inventory declares or a signal /
 	// metric series proves. (GCP appears here automatically once connected.)
@@ -264,6 +401,12 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 					}
 				}
 				st.Status = ingestStatusFor(st.Volume, mustParseZero(st.LastSeenISO), now)
+				// A store we could not ask is not a store that said "nothing":
+				// "off" would claim an absence nobody measured.
+				if src == "metrics" && !metricProof.known && st.Status == "off" {
+					st.Status = cloudStatusUnknown
+					st.Detail = cloudMetricsUnknownDetail
+				}
 			}
 			rows = append(rows, st)
 		}

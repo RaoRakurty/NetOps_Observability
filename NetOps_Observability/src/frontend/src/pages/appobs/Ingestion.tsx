@@ -303,7 +303,7 @@ function SourceCell({ r, detailed }: { r: SourceReadiness; detailed: boolean }) 
   const since = errored ? sinceLabel(r.sinceIso) : "";
   const title = `${SOURCE_LABEL[r.sourceType]}: ${meta.label}` +
     (errored && since ? ` ${since}` : "") +
-    (errored && r.lastError ? ` · ${r.lastError}` : "") +
+    ((errored || r.status === "unknown") && r.lastError ? ` · ${r.lastError}` : "") +
     (measured && r.lastSyncIso ? ` · updated ${freshnessLabel(r.lastSyncIso)}` : "") +
     (r.volume != null && measured ? ` · ${r.volume} resources` : "");
   return (
