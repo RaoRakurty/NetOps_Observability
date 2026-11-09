@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/models"
 )
 
 // entity_resolver_enrichment.go — exports the C7.1 EntityResolver inputs to the
@@ -59,25 +60,51 @@ type entityResolverExport struct {
 	IfIndex      []erIfIndex `json:"ifindex"`
 }
 
+// buildEntityResolverExport joins the inventory to the tenant-less SNMP maps. A row
+// whose device is not in the inventory is LEFT OUT: its tenant is unknown, and ""
+// means global, which every tenant's resolver reads (§3a). The maps and the inventory
+// are read at different moments, so such a row exists for up to a poll interval after
+// a device is removed.
+func buildEntityResolverExport(devs []models.Device, ifaddr, ifidx map[string]map[string]string) entityResolverExport {
+	tenantBy := make(map[string]string, len(devs))
+	out := entityResolverExport{}
+	for _, d := range devs {
+		if d.ID == "" {
+			continue
+		}
+		t := deviceTenant(d)
+		tenantBy[d.ID] = t
+		out.Devices = append(out.Devices, erDevice{
+			TenantID: t, Device: d.ID, Name: d.Name, MgmtIP: d.Address,
+		})
+	}
+	for dev, m := range ifaddr {
+		t, known := tenantBy[dev]
+		if !known {
+			continue
+		}
+		for ip, name := range m {
+			out.InterfaceIPs = append(out.InterfaceIPs, erIfaceIP{TenantID: t, Device: dev, IP: ip, IfName: name})
+		}
+	}
+	for dev, m := range ifidx {
+		t, known := tenantBy[dev]
+		if !known {
+			continue
+		}
+		for idx, name := range m {
+			out.IfIndex = append(out.IfIndex, erIfIndex{TenantID: t, Device: dev, IfIndex: idx, IfName: name})
+		}
+	}
+	return out
+}
+
 func (s *server) startEntityResolverEnrichment(ctx context.Context) {
 	dir := os.Getenv("TENANT_ENRICHMENT_DIR")
 	if dir == "" || s.discovery == nil {
 		return
 	}
 	write := func() {
-		// deviceID → tenant, to scope the tenant-less Redis maps below.
-		tenantBy := map[string]string{}
-		out := entityResolverExport{}
-		for _, d := range s.discovery.Devices() {
-			t := deviceTenant(d)
-			if d.ID == "" {
-				continue
-			}
-			tenantBy[d.ID] = t
-			out.Devices = append(out.Devices, erDevice{
-				TenantID: t, Device: d.ID, Name: d.Name, MgmtIP: d.Address,
-			})
-		}
 		// Both registry reads are OMIT-THE-ROWS-AND-SAY-SO (tracker 307). The
 		// resolver abstains for a pair it has no row for, which is the correct and
 		// safe behaviour — it never guesses — but "abstain" and "the SNMP collector
@@ -87,22 +114,9 @@ func (s *server) startEntityResolverEnrichment(ctx context.Context) {
 		// come from discovery and are unaffected, so the export still happens.
 		ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
 		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO interface-IP rows, so the correlation engine cannot resolve an interface IP to device:ifName this cycle", ifaddrErr, nil)
-		for dev, m := range ifaddr {
-			for ip, name := range m {
-				out.InterfaceIPs = append(out.InterfaceIPs, erIfaceIP{
-					TenantID: tenantBy[dev], Device: dev, IP: ip, IfName: name,
-				})
-			}
-		}
 		ifidx, ifidxErr := collectors.FetchIfIndexMap(ctx)
 		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO ifIndex rows, so NetFlow/gNMI ifIndexes cannot be resolved to device:ifName this cycle", ifidxErr, nil)
-		for dev, m := range ifidx {
-			for idx, name := range m {
-				out.IfIndex = append(out.IfIndex, erIfIndex{
-					TenantID: tenantBy[dev], Device: dev, IfIndex: idx, IfName: name,
-				})
-			}
-		}
+		out := buildEntityResolverExport(s.discovery.Devices(), ifaddr, ifidx)
 		data, err := json.Marshal(out)
 		if err != nil {
 			log.Printf("entity-resolver-enrichment: marshal: %v", err)

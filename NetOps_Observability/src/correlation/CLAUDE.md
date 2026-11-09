@@ -106,6 +106,15 @@ interface and BGP keep the device lane's `state=up` convention (tracker 380). A 
 trap binds `<tloc pair>` without the controller's `@instance`, so it meets vManage's
 report through the device token (rank 7), not as one node.
 
+**A device's interface rows outlive its polls.** `interface_ips` and `ifindex` in
+`entity_resolver.json` are each device's LAST-KNOWN rows, so `device_for_ip` still
+recovers a trap sent from an interface address by a device that has stopped answering.
+The retention is on the collector side (`collectors/if_rows_retention.go`; the wire
+format is unchanged): a completed walk replaces the rows, and they go when the device
+leaves the inventory or changes tenant, or 7 days after its last completed walk. An
+address two devices claimed at once stays claimed by both, so it stays ambiguous.
+Gauge: `collector_if_rows_retained_devices`.
+
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).
 - Aggregation plane: aggregation.py:30. OFF in the image (M:2138), ON in compose.
