@@ -39,7 +39,7 @@ Proven by running live lines through `producers.syslog_promotable`. It rejected:
 - `%Viptela-vEdge-52-FTMD-3-ERRO-1000003: ...`
 - `DNS lookup failed for 0/vbond...`
 
-Cause: devices send every line at PRI `notice` and carry the real severity in the text. Neither parser reads that format:
+Cause: every line reaches storage at PRI `notice`, and the real severity survives only in the text. Devices do send real PRI (§3.3); our own syslog-ng resets it. Neither parser reads the text format:
 
 - `_TAG_SEV_RE` (`src/correlation/producers.py:196`) searches only the appname tag and expects `%FAC-N-MNEMONIC`.
 - The Vector regex (`deployment/docker/vector/vector.yaml`, vendor test ~580 and Stage B ~658) expects an uppercase facility and one hyphen.
@@ -60,7 +60,21 @@ The MIB defines 124 notifications, including the faults that matter: `viptelaBfd
 
 ### 3.3 Syslog framing
 
-`deployment/docker/syslog-ng/core.conf` uses the default legacy `syslog-parser()`, which ends PROGRAM at a space, so `confd 2939 - - audit...` becomes program `confd` and message `2939 - - audit...`. This matches the owner's diagnosis. What the device actually sends is **unverified** and needs a raw capture first. On cEdge the IOS-XE mnemonic (`%DMI-5-AUTH_PASSED`) never reaches storage and the hostname falls back to the sender address; the mechanism is also unverified.
+**Corrected 2026-11-09 from a 120 s capture of the lab's syslog stream.** Devices send real PRI. Syslog-ng throws it away.
+
+| Device | On the wire |
+|---|---|
+| vEdge | True RFC 5424 with real severity: `<187>1 <ts> vEdge-N FTMD 3875 - - %Viptela-...` (`<187>` is err, `<188>` warning, `<142>` and `<190>` info) |
+| cEdge | `<189>25165: <ts>: %DMI-5-AUTH_PASSED: R0/0: dmiauthd: ...`, with no hostname in the frame |
+
+The cause is two parses in `deployment/docker/syslog-ng/core.conf`. The `udp()` source parses once, then `parser(p_syslog)` re-parses `$MSG`, which no longer has a PRI, so every message becomes PRI 13 (`notice`). Run through the shipped config in an isolated container:
+
+- vEdge becomes program `FTMD`, message `3875 - - %Viptela-...`.
+- cEdge becomes host = sender address, program `R0/0`, and the `%DMI-5-AUTH_PASSED` mnemonic is discarded.
+
+Removing the second parser keeps PRI and the mnemonic, but RFC 5424 frames then become program `1` with host = sender, so the fix needs a real RFC 5424 parser, not just that deletion.
+
+**This is why PR 10 moves up, and it affects every vendor,** since all syslog passes through the same two parses. PR 8's `NNNN - - ` envelope row is a stop-gap until then. Once real PRI flows, a line such as `sshd error: kex_exchange_identification` (`<35>`, err) reaches the generic alarm net at `high`, so it needs a row before PR 10 lands.
 
 ### 3.4 Storage and API defects
 
@@ -309,7 +323,6 @@ Rotating before PR 1 is live would write the new value to OpenSearch in clear as
 
 ## 11. Still unverified
 
-- What vEdge and cEdge send on the wire (PR 10 captures it).
 - Whether the lab's exporters sample (check the cflowd policy, §4).
 - That polling causes the `confd` and port-161 volume (strong correlation only).
 - The full Viptela syslog message-ID list, and the recovery wording for each.
