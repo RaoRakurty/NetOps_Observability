@@ -204,6 +204,25 @@ def test_grafana_reads_the_password_through_its_file_provider() -> None:
     assert "$VMAUTH_GRAFANA_PASSWORD" not in src
 
 
+@pytest.mark.parametrize("rel", ["grafana/provisioning/datasources/datasources.yaml",
+                                 "grafana/datasources-mtls.yaml"])
+def test_grafana_reads_the_clickhouse_password_from_a_file(rel: str) -> None:
+    """Tracker 384: both datasource variants, because either one is what runs."""
+    src = (COMPOSE_DIR / rel).read_text()
+    assert "password: $__file{/run/secrets/clickhouse/grafana/password}" in src
+    assert "GRAFANA_CH_PASSWORD" not in src
+
+
+def test_grafana_holds_no_password_in_its_environment() -> None:
+    svc = services("docker-compose.yml")["grafana"]
+    env = env_of(svc)
+    assert "GRAFANA_CH_PASSWORD" not in env
+    assert "GF_SECURITY_ADMIN_PASSWORD" not in env
+    assert env["GF_SECURITY_ADMIN_PASSWORD__FILE"] == "/run/secrets/grafana/admin/password"
+    assert _secret_mount("clickhouse/grafana") in _mounts(svc)
+    assert _secret_mount("grafana/admin") in _mounts(svc)
+
+
 @pytest.mark.parametrize("name", ["gnmic.yaml", "gnmic-correlation.yaml"])
 def test_gnmic_authenticates_in_its_output_not_its_url(name: str) -> None:
     cfg = yaml.safe_load((COMPOSE_DIR / "gnmic" / name).read_text())

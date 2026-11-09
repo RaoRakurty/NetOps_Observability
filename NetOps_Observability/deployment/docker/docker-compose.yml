@@ -1243,7 +1243,10 @@ services:
     logging: *deflog
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      # Tracker 384: the image's own __FILE form (its run.sh loads the file into
+      # the process, so the value is not in `docker inspect`). Rendered from .env
+      # by scripts/install.py into data/secrets, mounted below.
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana/admin/password
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       # Seamless SSO — auth-proxy: the app's osd-gate authenticates the platform
@@ -1290,12 +1293,16 @@ services:
       # insecure fallback for intercepted networks; on clean networks you can
       # instead set GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env.
       GF_INSTALL_PLUGINS: ${GRAFANA_PLUGINS:-}
-      # Read-only ClickHouse user the provisioned ClickHouse datasource binds to
-      # (tenant_scope='' → platform/infra rows only). Created by install.py.
-      GRAFANA_CH_PASSWORD: ${GRAFANA_CH_PASSWORD:-}
     volumes:
       - ../../data/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Tracker 384: the read-only ClickHouse user the provisioned datasource
+      # binds to (tenant_scope='' → platform/infra rows only; created by
+      # install.py). Grafana's $__file{} provider reads this at start, so the
+      # value is in neither the container's environment nor the provisioning
+      # file. DIRECTORY mounts (F-51): a rotation's atomic rename stays visible.
+      - ../../data/secrets/clickhouse/grafana:/run/secrets/clickhouse/grafana:ro
+      - ../../data/secrets/grafana/admin:/run/secrets/grafana/admin:ro
     depends_on: [victoria, clickhouse]
     networks: [netops]
     restart: *restart

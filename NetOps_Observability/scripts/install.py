@@ -2630,6 +2630,10 @@ SERVICE_SECRETS: tuple[ServiceSecret, ...] = (
     ServiceSecret("vmauth/vmalert",       "VMAUTH_VMALERT_PASSWORD", "root",    True),
     ServiceSecret("opensearch/api",       "OS_API_PASSWORD",         "api",     False),
     ServiceSecret("opensearch/bootstrap", "OS_BOOTSTRAP_PASSWORD",   "curl",    False),
+    # Tracker 384. Grafana reads both at start: the ClickHouse datasource through
+    # its $__file{} provider, the admin seed through GF_*__FILE.
+    ServiceSecret("clickhouse/grafana",   "GRAFANA_CH_PASSWORD",     "grafana", False),
+    ServiceSecret("grafana/admin",        "GRAFANA_ADMIN_PASSWORD",  "grafana", False),
 )
 
 # Every key vmauth.yml may reference (each also has a client file above).
@@ -5065,6 +5069,8 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
             + f"GRAFANA_CH_PASSWORD={ch_pw}\n",
             what="add GRAFANA_CH_PASSWORD")
         info("added GRAFANA_CH_PASSWORD to .env")
+        # Grafana reads it from a mounted file (tracker 384), not its env.
+        render_service_secrets(root, _parse_env(env_path))
 
     # 2. Create / update the read-only ClickHouse user. tenant_scope='' is pinned
     #    CONST so the row policies on netops.* return only untagged platform/infra
@@ -5104,7 +5110,7 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     ok("grafana-clickhouse-datasource installed")
 
     # 4. Recreate Grafana so it loads the plugin, the ClickHouse datasource, and
-    #    the (possibly newly added) GRAFANA_CH_PASSWORD env.
+    #    the (possibly newly added) GRAFANA_CH_PASSWORD credential file.
     subprocess.run(["docker", "compose", "up", "-d", "grafana"],
                    cwd=str(compose_dir), check=False)
     ok("grafana reloaded with ClickHouse datasource + flow/findings dashboards")

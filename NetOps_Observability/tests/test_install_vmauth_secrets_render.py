@@ -128,7 +128,7 @@ def test_api_and_grafana_follow_correlix_uid(tree):
     rec = ChownRecorder()
     render(tree, make_env(CORRELIX_UID="4242", CORRELIX_GID="4343"), rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
-    assert sorted(owners[(4242, 4343)]) == ["opensearch/api", "vmauth/api", "vmauth/grafana"]
+    assert sorted(owners[(4242, 4343)]) == ["clickhouse/grafana", "grafana/admin", "opensearch/api", "vmauth/api", "vmauth/grafana"]
 
 
 def test_compose_defaults_when_correlix_uid_unset(tree):
@@ -138,7 +138,7 @@ def test_compose_defaults_when_correlix_uid_unset(tree):
     render(tree, env, rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
     assert sorted(owners[(65532, 65532)]) == ["opensearch/api", "vmauth/api"]
-    assert owners[(472, 472)] == ["vmauth/grafana"]
+    assert sorted(owners[(472, 472)]) == ["clickhouse/grafana", "grafana/admin", "vmauth/grafana"]
 
 
 def test_auth_yml_is_fully_rendered(tree):
