@@ -569,6 +569,62 @@ def test_deploy_refuses_when_it_cannot_tell(tmp_path):
     assert not any(c.endswith("up -d --no-deps api") for c in calls), "the api must not be touched"
 
 
+# ── gotenberg's staged copies survive the installer's recursive chown ────────
+
+def test_staged_uid_matches_the_init_job():
+    text = (COMPOSE_DIR / "compose.tls.yml").read_text()
+    uid = install.GOTENBERG_STAGED_UID
+    assert f"chown {uid}:{uid} /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem" in text
+    assert install.GOTENBERG_STAGED_REL == "tls/services/gotenberg-staged"
+    assert f"../../data/{install.GOTENBERG_STAGED_REL}:/staged" in text
+
+
+def test_ensure_data_dirs_hands_the_staged_copies_back_after_the_chown(tmp_path, monkeypatch):
+    root = _fake_root(tmp_path)
+    staged = root / "data" / install.GOTENBERG_STAGED_REL
+    staged.mkdir(parents=True)
+    for n in ("gotenberg.crt", "gotenberg.key", "ca.pem"):
+        (staged / n).write_text("x")
+    events: list[tuple] = []
+    monkeypatch.setattr(install, "chown_tree", lambda d, u, g, name: events.append(("tree", name)))
+    monkeypatch.setattr(install, "_chown_secret_paths",
+                        lambda base, rels, u, g: events.append(("files", base, tuple(rels), u, g)))
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+
+    install.ensure_data_dirs(root)
+
+    restore = [e for e in events if e[0] == "files"]
+    assert restore == [("files", staged, ("ca.pem", "gotenberg.crt", "gotenberg.key"), 1001, 1001)]
+    tree_calls = [i for i, e in enumerate(events) if e[0] == "tree" and e[1].startswith("data/tls")]
+    assert tree_calls and max(tree_calls) < events.index(restore[0]), (
+        "the restore must come after every chown of data/tls, or that chown undoes it")
+
+
+def test_no_staged_dir_no_chown(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(install, "_chown_secret_paths", lambda *a: called.append(a))
+    install.restore_staged_owner(tmp_path / "absent")
+    (tmp_path / "empty").mkdir()
+    install.restore_staged_owner(tmp_path / "empty")
+    assert called == []
+
+
+def test_a_failed_restore_fails_the_install(tmp_path, monkeypatch, capsys):
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "gotenberg.key").write_text("x")
+
+    def deny(path, uid, gid, follow_symlinks=True):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(install.os, "chown", deny)
+    monkeypatch.setattr(install, "_docker_chown_paths", lambda *a: (False, "daemon down"))
+    with pytest.raises(SystemExit):
+        install.restore_staged_owner(staged)
+    assert "daemon down" in capsys.readouterr().err
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root enters any directory")
 def test_kafka_wrapper_names_the_missing_group_not_the_mint(tmp_path):
     """Without group_add the key directory cannot be entered, and every file in it

@@ -2401,6 +2401,26 @@ def tls_custody_dir_modes() -> dict[str, int]:
     return modes
 
 
+# gotenberg's staged SVID copy: gotenberg-tls-init chowns it to this uid (the
+# gotenberg 8 image's user) at 0400. Must match compose.tls.yml.
+GOTENBERG_STAGED_REL = "tls/services/gotenberg-staged"
+GOTENBERG_STAGED_UID = 1001
+
+
+def restore_staged_owner(staged: Path) -> None:
+    """Give the staged files back to gotenberg after a recursive chown of data/tls."""
+    try:
+        names = sorted(p.name for p in staged.iterdir() if p.is_file() and not p.is_symlink())
+    except FileNotFoundError:
+        return  # pdf profile never staged anything
+    except OSError as exc:
+        fail(f"cannot list {staged}: {exc} — gotenberg's staged certificate could "
+             f"not be checked; re-run as the owner of data/tls, or with sudo")
+        return
+    if names:
+        _chown_secret_paths(staged, names, GOTENBERG_STAGED_UID, GOTENBERG_STAGED_UID)
+
+
 def tls_tree_has_keys(data: Path) -> bool:
     """True once the api has minted anything under data/tls."""
     try:
@@ -2789,6 +2809,13 @@ def ensure_data_dirs(root: Path) -> None:
                          f"    sudo chmod {mode:04o} {d}")
         if uid_gid is not None:
             chown_tree(d, uid_gid[0], uid_gid[1], f"data/{name}")
+
+    # The recursive chown of data/tls above also took gotenberg's staged copies
+    # (0400, owned by gotenberg's uid so it can read them: compose.tls.yml
+    # gotenberg-tls-init), and gotenberg could not read them again until that
+    # one-shot happened to re-run. Hand them back, file by file. Fail-closed
+    # through the same helper as the credential files.
+    restore_staged_owner(root / "data" / GOTENBERG_STAGED_REL)
 
     # Custody modes come AFTER the ownership loop: a directory Docker left owned
     # by root can only be chmodded once chown_tree has handed it back.
