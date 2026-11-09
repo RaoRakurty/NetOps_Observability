@@ -143,14 +143,42 @@ Each item is a separate PR. Rule changes re-pin `BAKED_RULES_HASH`, the admissio
 
 **The rule behind PR 14:** test the value, never the presence. A field present on 100% of records with the value `unparsed` is the failure this plan exists to fix. PR 14 can start as soon as PR 8 lands.
 
-### Multi-vendor (binding)
+## 6a. All vendors (owner, 2026-11-09, binding)
 
-Every fix covers Cisco, Juniper, Nokia, Arista, SONiC and others, standard MIBs first:
+Cisco SD-WAN is the first vendor because it is the one the lab has. It is not the scope. The programme covers Cisco (IOS, IOS-XE, NX-OS, IOS-XR, ASA, Catalyst SD-WAN), Juniper, Nokia (SR OS, SR Linux), HPE and Aruba, Dell, Arista, SONiC, Extreme, and the other vendors Correlix detects: Huawei, Fortinet, Palo Alto, Check Point, F5, MikroTik, Ruckus, Sophos, Ubiquiti. Each fix must be a mechanism that a new vendor plugs into, with no vendor names in engine logic.
 
-- `HOST-RESOURCES-MIB`, `CISCO-PROCESS-MIB`, `TIMETRA-SYSTEM-MIB` and `JUNIPER-MIB` are already indexed, so CPU-threshold rows can cover them when the OID resolves.
-- `BFD-STD-MIB` (RFC 7331) is the standard BFD path and is not yet indexed.
-- cEdge uses separate `sdwan/device/<release>/` MIBs.
-- Only Cisco can be verified on the lab; everything else ships as `doc_claimed`.
+### Coverage measured on 2026-11-09
+
+| Layer | Today |
+|---|---|
+| Detection | 20 vendor profiles (`internal/vendorprofile/profiles`) |
+| Enterprise MIBs in the OID index | **4**: Nokia (3,061 nodes), Cisco (700), Juniper (366), Arista (122), plus 1,500 standard nodes |
+| Vector syslog body grammars | **3**: `%FAC-SEV-MNEMONIC`, SR Linux, FortiGate key-value. Nothing else sets `parser_id` |
+| Engine syslog rules naming a vendor | Cisco 13, Arista 9, Juniper 4, Nokia 2; Fortinet and Palo Alto in the catalogue lane only |
+| Engine trap rules naming a vendor | Cisco 6, Juniper 4, Nokia 3, Arista 3; standard and any-vendor 11 |
+| HPE/Aruba, Dell, Extreme, SONiC | **No enterprise MIB, no grammar, no vendor rule.** Only standard-MIB traps and generic rules reach the engine |
+
+### Three layers, in order
+
+1. **Standard layer, every vendor at once.** RFC 5424 and 3164 envelope parsing, `IF-MIB`, `BGP4-MIB`, `OSPF-MIB`, `ISIS-MIB`, `ENTITY-MIB`, `LLDP-MIB`, `BFD-STD-MIB` (RFC 7331, not yet indexed), `HOST-RESOURCES-MIB`, flows. This gives every vendor, SONiC especially, useful results without a vendor pack.
+2. **Inventory-driven vendor.** Vendor comes from discovery (`sysObjectID` and the vendor profiles), not from guessing at message text. This moves PR 12 up: it now lands right after Tranche 0, because grammar selection and the coverage scorecard both depend on it. A sender not in inventory falls back to format matching, recorded as such.
+3. **Vendor packs.** One format per vendor: envelope and body grammars, pinned MIBs, rule rows, a severity map and fixtures, each row carrying its fidelity. Adding a vendor means adding a pack, not changing engine or pipeline code. Cisco SD-WAN (PRs 7 to 9) is the first pack and proves the format. Other vendors' packs follow PR 8's mechanism.
+
+### Priority
+
+By market relevance and owner's list, and re-ranked by the unknown trap OIDs and unparsed formats customers actually send (PR 14 measures both):
+
+1. **First wave:** Cisco classic IOS/XE/NX-OS/XR (syslog grammar exists, MIB and rule gaps), Juniper, Arista, Nokia.
+2. **Second wave:** HPE/Aruba, Dell, Extreme, SONiC.
+3. **Third wave:** Huawei, Fortinet, Palo Alto, Check Point, F5, then the rest.
+
+### Honest fidelity
+
+Only Cisco can be proven on the lab. Every other row ships `doc_claimed`, labelled so in the UI, and it can never be part of the confirming pair when `CORR_FIDELITY_WEIGHTING` is on. A row needs a cited vendor source and a fixture. Promotion needs a real capture. Tracker 249 and the owner's hardware rule still apply, so no device purchase is implied. Containerised network OSes could supply real captures with no hardware; the vendor research reports which are usable.
+
+### Coverage scorecard
+
+PR 14 reports per vendor and per lane: MIBs present, grammar present, rules by fidelity, live parse rate, unknown OIDs. CI ratchets the row count and fixtures, so coverage cannot silently regress. It can be shown on the Telemetry Coverage page.
 
 ## 7. Logs page design
 
