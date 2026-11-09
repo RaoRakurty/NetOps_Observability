@@ -55,11 +55,15 @@ from path_graph import (
 )
 from rank_memo import RankMemo, rank_key
 from scoring import RankingResult, rank
-from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
+from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.2.0"  # 3.2.0: NMS-first T4c — a controller tunnel node (PATH
+ENGINE_SEMVER = "3.3.0"  # 3.3.0: tracker 385 — a no-edge link_state_change node whose
+# every opening-severity signal is link_cause=admin opens no object (stage [5]), and
+# stage [6] scores an admin link change as a change, not a link fault. Byte-identical
+# (bar this version and catalog_version) for evidence with no link_cause=admin.
+# 3.2.0: NMS-first T4c — a controller tunnel node (PATH
 # `<tunnel>@<instance>`) is looked up on the adjacency rung by its own id
 # (Node.adjacency_key), so tunnel↔endpoint rows in topology_links.json ground it
 # to its edge devices at rank 3; byte-identical when no such row exists.
@@ -3432,6 +3436,44 @@ def _band_of(sig: Signal) -> str:
     return str(sig.attrs.get("band", "")) if isinstance(sig.attrs, dict) else ""
 
 
+def _admin_change_only(node: Node, open_floor: int) -> bool:
+    """tracker 385: a no-edge link_state_change node whose every signal AT OR ABOVE the
+    open floor carries link_cause=admin is an operator change, not a fault. Fail-closed:
+    one opening-severity signal without link_cause=admin (fault/unknown/absent) opens.
+    Filtered to opening severity so shutdown + no-shutdown on one port (the warn linkUp
+    is link_cause=unknown) stays exempt."""
+    if node.kind != "link_state_change":
+        return False
+    opening = [s for s in node.signals if _SEV_RANK[s.severity] >= open_floor]
+    return bool(opening) and all(clause_attr(s, "link_cause") == "admin" for s in opening)
+
+
+# §10: the exemption is never a silent drop. A process counter like
+# scoring's template counters — observability only, never read by the engine.
+_ADMIN_LINK_CHANGE_SINGLETONS_TOTAL = 0
+
+
+def _count_admin_link_change_singleton() -> None:
+    global _ADMIN_LINK_CHANGE_SINGLETONS_TOTAL
+    _ADMIN_LINK_CHANGE_SINGLETONS_TOTAL += 1
+
+
+def admin_link_change_singletons_total() -> int:
+    return _ADMIN_LINK_CHANGE_SINGLETONS_TOTAL
+
+
+def admin_link_change_metric_lines() -> tuple[str, ...]:
+    """The counter's exposition lines; the name is owned by the module that counts."""
+    return (
+        ("# HELP corr_admin_link_change_singletons_total Cohort touches of a no-edge "
+         "link_state_change node exempted from the singleton rule because every "
+         "opening-severity signal is link_cause=admin (tracker 385). The evidence is "
+         "kept; no object opened."),
+        "# TYPE corr_admin_link_change_singletons_total counter",
+        f"corr_admin_link_change_singletons_total {_ADMIN_LINK_CHANGE_SINGLETONS_TOTAL}",
+    )
+
+
 def _storm_dedup_node(node: Node) -> tuple[Node, int]:
     """§1 dedup: collapse a node's repeated signals to ONE representative per grounding
     identity + an occurrences count. Returns (possibly-rewritten node, collapsed count).
@@ -3670,7 +3712,13 @@ def run_window(
         comp_keys = {n.key for n in comp}
         comp_edges = tuple(e for k in sorted(comp_keys)
                            for e in edges_by_from.get(k, ()))
-        if not comp_edges and _SEV_RANK[comp[0].peak_severity] < open_floor:
+        admin_only = not comp_edges and _admin_change_only(comp[0], open_floor)
+        if admin_only and (cohort_keys is None or comp[0].key in cohort_keys):
+            # Counted where a cohort touches the node, not on each re-evaluation
+            # of a window that still holds it. The signals remain in the window
+            # and corr_signals, so a later grounded fault still folds them in.
+            _count_admin_link_change_singleton()
+        if not comp_edges and (admin_only or _SEV_RANK[comp[0].peak_severity] < open_floor):
             if storm_mode and _SEV_RANK[comp[0].peak_severity] < agg_floor:
                 # §3: a below-agg-floor singleton episode. Non-storm it is silently
                 # skipped (next line); under a declared storm it is folded into the

@@ -276,7 +276,7 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 			site = b.Site
 		}
 		ep := WanEndpoint{
-			TenantID: deviceTenant(d), Device: d.Name, Interface: ref.ifn,
+			TenantID: deviceTenant(d), DeviceID: d.ID, Device: d.Name, Interface: ref.ifn,
 			Address: ref.ip, Measurable: ref.ip, Site: site,
 			ConnectedToWAN: !wanDev[ref.dev],
 		}
@@ -341,6 +341,32 @@ func (s *server) wanNeighborIndex(ctx context.Context, visible map[string]models
 
 // ---- interface-target publisher (→ Redis, for the wan-echo collector) ----
 
+// echoTargetsFor renders the enabled, measurable circuits as the wan-echo
+// collector's target list. Each target carries the local device's tenant AND
+// inventory id: the collector stamps them as the circuit series' `tenant_id`
+// and `device` labels, which is what lets the tenant metric scope admit a
+// tenant's own circuit series and nobody else's (tracker 337 N-B5).
+func echoTargetsFor(circuits []WanCircuit) []collectors.EchoTarget {
+	targets := make([]collectors.EchoTarget, 0, len(circuits))
+	for _, c := range circuits {
+		if !c.Enabled || c.Remote.Measurable == "" {
+			continue
+		}
+		targets = append(targets, collectors.EchoTarget{
+			CircuitID:     c.ID,
+			Tenant:        c.Local.TenantID,
+			LocalDevice:   c.Local.Device,
+			LocalDeviceID: c.Local.DeviceID,
+			LocalIf:       c.Local.Interface,
+			LocalAddr:     c.Local.Measurable,
+			RemoteDevice:  c.Remote.Device,
+			RemoteIf:      c.Remote.Interface,
+			RemoteAddr:    c.Remote.Measurable,
+		})
+	}
+	return targets
+}
+
 // startWANCircuitPublish periodically projects every tenant's interface→target
 // links and publishes them to Redis as the wan-echo collector's target list, so
 // the prober measures the DERIVED targets. Gated by FEATURE_WAN_ECHO; a no-op
@@ -373,22 +399,7 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 				map[string]any{"error": err.Error()})
 			return
 		}
-		targets := make([]collectors.EchoTarget, 0, len(circuits))
-		for _, c := range circuits {
-			if !c.Enabled || c.Remote.Measurable == "" {
-				continue
-			}
-			targets = append(targets, collectors.EchoTarget{
-				CircuitID:    c.ID,
-				Tenant:       c.Local.TenantID,
-				LocalDevice:  c.Local.Device,
-				LocalIf:      c.Local.Interface,
-				LocalAddr:    c.Local.Measurable,
-				RemoteDevice: c.Remote.Device,
-				RemoteIf:     c.Remote.Interface,
-				RemoteAddr:   c.Remote.Measurable,
-			})
-		}
+		targets := echoTargetsFor(circuits)
 		if err := collectors.PublishWANCircuits(ctx, targets, int(3*interval/time.Second)); err != nil {
 			log.Printf("wan-echo: publish targets: %v", err)
 			return

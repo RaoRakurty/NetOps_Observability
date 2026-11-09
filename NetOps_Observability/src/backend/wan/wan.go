@@ -67,7 +67,11 @@ func (k TargetKind) Label() string {
 // Endpoint is one WAN (or WAN-connected) transport interface, with its derived
 // measurement target.
 type Endpoint struct {
-	TenantID   string `json:"tenant_id,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
+	// DeviceID is the inventory id of Device (a name). It is what the wan-echo
+	// collector stamps as the circuit series' `device` label, so the tenant
+	// metric scope admits the owning tenant's circuit series (tracker 337 N-B5).
+	DeviceID   string `json:"device_id,omitempty"`
 	Device     string `json:"device"`
 	Interface  string `json:"interface"`       // ifName (Ethernet1)
 	Address    string `json:"address"`         // interface IP

@@ -475,9 +475,11 @@ def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
     # counters must account for the whole catalog between them. The residue is
     # the tracker-157 structural gate, which is not the fast path and does not
     # go away when the fast path does — that is exactly the point of counting
-    # it separately.
+    # it separately. The tracker-385 anchor gate is not the fast path either: this
+    # evidence has no link_cause=admin, so its one anchored template sits out.
+    anchored_out = 1
     assert st_mutant["candidates"] == len(ALL_TEMPLATES)
-    assert st_mutant["scored"] + st_mutant["ungrounded"] == len(ALL_TEMPLATES)
+    assert st_mutant["scored"] + st_mutant["ungrounded"] == len(ALL_TEMPLATES) - anchored_out
     assert st_mutant["scored"] > st_indexed["scored"], (
         "dropping the fast path did not change the numerator — the counters are "
         "not measuring the fast path")
@@ -485,7 +487,7 @@ def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
         return s["scored"] / s["candidates"]
 
     def reached(s: dict) -> float:
-        return (s["scored"] + s["ungrounded"]) / s["candidates"]
+        return (s["scored"] + s["ungrounded"] + anchored_out) / s["candidates"]
 
     assert reached(st_mutant) == 1.0 and reached(st_indexed) < 1.0
     assert ratio(st_mutant) > ratio(st_indexed)

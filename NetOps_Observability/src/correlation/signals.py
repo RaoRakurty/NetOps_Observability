@@ -391,6 +391,25 @@ def fidelity_of(sig: Signal) -> str:
     return str(attrs.get("fidelity", "") or "").strip()
 
 
+# tracker 385: the attrs keys a catalog clause may test. A CLOSED set, because a
+# key a clause reads is a key `rank` reads, and every such key must reach the
+# rank_memo projection (rank_memo.signal_projection walks this set). The catalog
+# validator, the scorer and the memo key all read through `clause_attr`, so what
+# is keyed cannot drift from what is scored.
+CLAUSE_ATTR_KEYS: frozenset[str] = frozenset({"link_cause"})
+CLAUSE_ATTR_MAX_LEN = 64
+
+
+def clause_attr(sig: Signal, key: str) -> str:
+    """Bounded, fail-closed read of one clause-testable attrs value. Malformed
+    attrs, a non-string value and an absent key are all "" (zero-trust: the wire
+    value is validated for shape). "" can never satisfy a positive predicate:
+    the catalog refuses an empty predicate value."""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    raw = attrs.get(key, "")
+    return raw.strip()[:CLAUSE_ATTR_MAX_LEN] if isinstance(raw, str) else ""
+
+
 def is_validated_fidelity(fidelity: str) -> bool:
     """May evidence with this fidelity anchor a confirming pair?
 
