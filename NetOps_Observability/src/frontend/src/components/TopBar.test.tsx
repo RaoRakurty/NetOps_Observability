@@ -5,7 +5,7 @@
 // which fold into the ONE "More" disclosure, and how that disclosure behaves
 // (aria-expanded/aria-controls, Esc closes and returns focus, popups inside it
 // keep their own Esc, outside click closes). Layout geometry — no sideways
-// scroll, 44 px targets, the mark crop — is proven in a real browser by
+// scroll, 44 px targets, the scaled-down wordmark — is proven in a real browser by
 // e2e/headerPhoneWidth.spec.ts.
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";

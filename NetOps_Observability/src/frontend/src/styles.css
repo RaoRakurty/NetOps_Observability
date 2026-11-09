@@ -1610,16 +1610,16 @@ code, kbd, pre, .mono, td.mono {
 .topbar[data-tier] .topbar-right { gap: 8px; }
 .topbar[data-tier="phone"] { padding: 0 var(--sp-3, 12px); }
 
-/* The mark: the same BLOGO5 artwork, cropped to the eye-as-O (artwork columns
-   168–438 of 1356, full 160 px height) — no new asset, no new colour; the
-   theme swap between the two images is unchanged. */
+/* Phone: the same BLOGO5 wordmark, scaled down — never cropped to the eye.
+   The owner rejected a standalone eye (2026-07-21: the wordmark with its
+   eye-as-O is the shell's only brand mark), so the phone tier shrinks the
+   whole artwork (1356 × 160) instead. No new asset, no new colour; the theme
+   swap between the two images is unchanged. */
 .topbar[data-tier="phone"] .cx-brand-img {
-  --mark-h: 36px;
+  --mark-h: 18px;
   flex: none;
   height: var(--mark-h);
-  width: calc(var(--mark-h) * 270 / 160);
-  object-fit: cover;
-  object-position: calc(var(--mark-h) * -168 / 160) 50%;
+  width: auto;
 }
 
 /* Tap targets: every control left in a narrow bar is at least 44 × 44. */

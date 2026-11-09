@@ -14,9 +14,10 @@ import { useSyncExternalStore } from "react";
 //                       scope · time range · help · health · ✦ Iris · account.
 //   medium (≤ 1000 px)  wordmark · search · [More] · ✦ Iris · account. Scope,
 //                       time range, help and health move into the More panel.
-//   phone  (≤ 720 px)   Correlix mark · [More] · ✦ Iris · account. Search moves
-//                       into the More panel too; the wordmark (≈ 320 px on its
-//                       own) gives way to the mark.
+//   phone  (≤ 720 px)   small wordmark · [More] · ✦ Iris · account. Search
+//                       moves into the More panel too; the wordmark (≈ 320 px
+//                       at full size) scales down to 18 px tall — never the
+//                       eye alone (owner rejected a standalone eye).
 //
 // Why these numbers: in the default shell (44 px rail) the full cluster needs
 // roughly 1000 px before its tail runs off-screen; wordmark + search (at its

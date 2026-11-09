@@ -77,9 +77,11 @@ for (const width of [...PHONES, TABLET]) {
     await expect(brand(page)).toHaveAttribute("src", /\/brand\/blogo5(-dark)?\.png$/);
     const b = await box(brand(page));
     if (width <= 480) {
-      // Phone: the mark (the eye-as-O crop), not the ≈ 320 px wordmark.
-      expect(b.width, "mark width").toBeLessThanOrEqual(64);
-      expect(b.width, "mark width").toBeGreaterThanOrEqual(44);
+      // Phone: the whole wordmark scaled down (18 px tall ≈ 153 px wide), never
+      // the eye cropped out of it — the owner rejected a standalone eye.
+      expect(b.height, "wordmark height").toBeLessThanOrEqual(20);
+      expect(b.width / b.height, "uncropped aspect (1356:160)").toBeGreaterThan(8);
+      expect(b.width, "wordmark width").toBeLessThanOrEqual(170);
       await expect(search(page), "search folds into More on a phone").toBeHidden();
     } else {
       // Tablet: the wordmark stays and search stays inline.

@@ -46,7 +46,7 @@ const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND
 //
 // Narrow windows (topBarTier.ts): at 1000 px and below, scope, time range,
 // help and health fold into ONE "More" disclosure; at 720 px and below the
-// search joins them and the wordmark gives way to the Correlix mark. ✦ Iris and
+// search joins them and the wordmark shrinks to fit (never the eye alone). ✦ Iris and
 // the account menu always stay in the bar. Above 1000 px the markup is the
 // desktop header exactly as it was.
 export default function TopBar({ health, user, onLogout, onChangePassword, onTwoFactor, hideUserMenu }: Props) {
@@ -302,9 +302,8 @@ export default function TopBar({ health, user, onLogout, onChangePassword, onTwo
           gone by the same decision). Two theme variants of the same artwork:
           navy/blue on light chrome, neon leafy green on dark — CSS shows
           exactly one per [data-theme], so AT announces the brand once.
-          On the phone tier the same two images are cropped (CSS, "Narrow
-          header") to the eye-as-O — the mark replaces the wordmark rather than
-          sitting beside it, so it is still the shell's only brand mark. */}
+          On the phone tier the same two images are scaled down (CSS, "Narrow
+          header") — never cropped to the eye alone, which the owner rejected. */}
       <img className="cx-brand-img cx-brand-light" src="/brand/blogo5.png" alt={BRAND} />
       <img className="cx-brand-img cx-brand-dark" src="/brand/blogo5-dark.png" alt={BRAND} />
       <div className="topbar-right">
