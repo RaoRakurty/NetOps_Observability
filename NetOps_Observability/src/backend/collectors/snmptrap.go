@@ -51,19 +51,23 @@ type TrapVarbind struct {
 
 // TrapEvent is the normalized, transport-agnostic trap, JSON-emitted to the bus.
 type TrapEvent struct {
-	Signal        string        `json:"_signal"` // always "snmptrap" — Vector routes on this
-	Timestamp     string        `json:"timestamp"`
-	Host          string        `json:"host"`   // source IP (vector-router maps → tenant)
-	Device        string        `json:"device"` // inventory device id if the source is known
-	Version       string        `json:"snmp_version"`
-	User          string        `json:"snmp_user,omitempty"`      // v3 securityName
-	Community     string        `json:"snmp_community,omitempty"` // v1/v2c (kept for audit; not a secret)
-	TrapOID       string        `json:"trap_oid"`
-	TrapName      string        `json:"trap_name,omitempty"`
-	Severity      string        `json:"severity"`
-	Authenticated bool          `json:"authenticated"` // v3 auth verified (v1/v2c are spoofable → false)
-	Message       string        `json:"message"`
-	Varbinds      []TrapVarbind `json:"varbinds,omitempty"`
+	Signal    string `json:"_signal"` // always "snmptrap" — Vector routes on this
+	Timestamp string `json:"timestamp"`
+	Host      string `json:"host"`   // source IP (vector-router maps → tenant)
+	Device    string `json:"device"` // inventory device id if the source is known
+	Version   string `json:"snmp_version"`
+	User      string `json:"snmp_user,omitempty"` // v3 securityName
+	// CommunityPresent says a v1/v2c trap carried a non-empty community. The
+	// value itself is a shared device credential and never leaves the receiver:
+	// see the unexported community field. SNMPv3 has no community, so the flag is
+	// absent there.
+	CommunityPresent bool          `json:"snmp_community_present,omitempty"`
+	TrapOID          string        `json:"trap_oid"`
+	TrapName         string        `json:"trap_name,omitempty"`
+	Severity         string        `json:"severity"`
+	Authenticated    bool          `json:"authenticated"` // v3 auth verified (v1/v2c are spoofable → false)
+	Message          string        `json:"message"`
+	Varbinds         []TrapVarbind `json:"varbinds,omitempty"`
 
 	// Truncation provenance (audit PIPE-MED-8). A trap is an UNAUTHENTICATED UDP
 	// datagram from an untrusted source: v1/v2c are spoofable, and a single 65 KB
@@ -100,6 +104,11 @@ type TrapEvent struct {
 	// source IP). Unexported: package-internal device attribution only, never
 	// serialized. (v2c/v3 traps have no agent-addr; identity comes from sysName.)
 	agentAddr string
+
+	// community is the v1/v2c community as received. It is a shared device
+	// credential, used only by the receive-time identity checks (M4), so it is
+	// unexported (never serialized) and decodePacket clears it once they ran.
+	community string
 }
 
 // vendorFromOID returns the vendor for an enterprise OID via the shared
@@ -588,6 +597,14 @@ func decodeTrapV1(ev *TrapEvent, pduBody []byte) error {
 	return nil
 }
 
+// setCommunity records a decoded v1/v2c community for the receive-time identity
+// checks and publishes only the fact that one was present. An empty OCTET STRING
+// presents no credential, so it does not set the flag.
+func (ev *TrapEvent) setCommunity(raw []byte) {
+	ev.community = string(raw)
+	ev.CommunityPresent = len(raw) > 0
+}
+
 // credResolver maps a source IP to its inventory device id and (for v3) creds.
 type credResolver func(ip string) (Target, bool)
 
@@ -628,7 +645,7 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 		if err != nil || commTag != 0x04 {
 			return nil, fmt.Errorf("snmptrap: v1 community")
 		}
-		ev.Community = string(commRaw)
+		ev.setCommunity(commRaw)
 		guardTrapCommunity(ev, srcKnown, srcTG)
 		pduTag, pduBody, _, err := readTLV(r)
 		if err != nil || pduTag != 0xA4 {
@@ -645,7 +662,7 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 		if err != nil || commTag != 0x04 {
 			return nil, fmt.Errorf("snmptrap: v2c community")
 		}
-		ev.Community = string(commRaw)
+		ev.setCommunity(commRaw)
 		guardTrapCommunity(ev, srcKnown, srcTG)
 		pduTag, pduBody, _, err := readTLV(r)
 		if err != nil {
@@ -673,8 +690,8 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 // guardTrapCommunity drops the source-IP device attribution when a v1/v2c
 // trap's community does not verify against the resolved device's expected
 // community (M4). The community is the ONLY authenticator those versions have:
-// the trap receiver stored it "for audit" but never compared it, so any host
-// that could reach :162 claimed a known device's identity — and every consumer
+// without this comparison any host that could reach :162 claims a known device's
+// identity — and every consumer
 // downstream (events, correlation, RCA) filed the forged evidence under the
 // real device. The trap itself is kept (evidence under its source host, the
 // honest-unknown convention) — only the claimed identity is refused.
@@ -682,7 +699,7 @@ func guardTrapCommunity(ev *TrapEvent, srcKnown bool, tg Target) {
 	if !srcKnown || ev.Device == "" {
 		return
 	}
-	if !communityMatchesDevice(ev.Community, tg) {
+	if !communityMatchesDevice(ev.community, tg) {
 		ev.Device = ""
 	}
 }
@@ -715,7 +732,7 @@ func communityMatchesDevice(community string, tg Target) bool {
 func trapIdentityTrusted(ev *TrapEvent, t Target) bool {
 	switch ev.Version {
 	case "v1", "v2c":
-		return communityMatchesDevice(ev.Community, t)
+		return communityMatchesDevice(ev.community, t)
 	case "v3":
 		return ev.Authenticated || (t.SNMPVersion == 3 && t.V3Level == "noAuthNoPriv")
 	default:
@@ -1124,6 +1141,10 @@ func (r *trapReceiver) decodePacket(pkt []byte, srcIP string) (ev *TrapEvent, er
 			return
 		}
 		r.attributeDevice(ev, srcIP)
+		// The identity checks are done, so the credential has no further use.
+		// Everything after this point (queue, envelope, trace, forward) holds an
+		// event that cannot leak it, whatever it serializes or formats.
+		ev.community = ""
 	})
 	if !completed {
 		return nil, fmt.Errorf("snmptrap: decoder panicked on %d-byte packet from %s", len(pkt), srcIP)

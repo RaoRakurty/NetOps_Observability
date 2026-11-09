@@ -18,6 +18,7 @@ import (
 
 	"netops/backend/internal/applog"
 
+	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
 	// DEBUG-ROUTES-BEGIN
 	"netops/backend/internal/pipedebug"
@@ -193,6 +194,10 @@ func logsForbiddenErr(signal string) error {
 	return errors.New("app logs are restricted to the platform owner")
 }
 
+// logsSearchResponseCap bounds how much of one search answer is held in memory
+// for the credential strip (§9). A page is at most 5000 documents.
+const logsSearchResponseCap = 256 << 20
+
 func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET, POST")
@@ -296,6 +301,8 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		"track_total_hits": true,
 		"sort":             []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
 		"query":            map[string]any{"bool": boolQuery},
+		// Stored documents may still hold a device credential: see logsecrets.
+		"_source": map[string]any{"excludes": logsecrets.SourceExcludes()},
 	}
 	if req.Offset > 0 {
 		body["from"] = req.Offset
@@ -309,18 +316,40 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
+	// An error answer carries no documents, so it is relayed as it was.
+	if resp.StatusCode >= 300 {
+		w.WriteHeader(resp.StatusCode)
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			log.Printf("logs: copy response: %v", err)
+		}
+		return
+	}
+	// Default-closed: a success body is served only after the credential strip
+	// has run over all of it. One too large to read whole, or one that may hold
+	// the field but cannot be parsed, is refused rather than relayed.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, logsSearchResponseCap+1))
+	if err != nil {
+		logError("logs", "read search response", map[string]any{"err": err.Error()})
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if len(raw) > logsSearchResponseCap {
+		logError("logs", "search response over the read cap", map[string]any{"cap_bytes": logsSearchResponseCap})
+		writeError(w, http.StatusBadGateway, errors.New("log search response is too large: narrow the query, time range or page size"))
+		return
+	}
+	raw, err = logsecrets.StripSearchResponse(raw)
+	if err != nil {
+		logError("logs", "search response refused by the credential strip", map[string]any{"err": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be checked"))
+		return
+	}
 	// Sample honesty: signal=flows serves the router's 1:50 OpenSearch sample
 	// (ClickHouse keeps the canonical store). Inject the sampling disclosure
 	// into the successful response object so "showing X of Y matched" can never
 	// read as exact — the payload itself passes through untouched. Any body
-	// that fails to parse as a JSON object is streamed verbatim instead.
-	if isFlowsSignal(req.Signal) && resp.StatusCode < 300 {
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
-		if err != nil {
-			logError("logs", "read flows search response", map[string]any{"err": err.Error()})
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
+	// that fails to parse as a JSON object is served verbatim instead.
+	if isFlowsSignal(req.Signal) {
 		var out map[string]any
 		if json.Unmarshal(raw, &out) == nil {
 			out["sampling"] = flowsSamplingMeta()
@@ -328,13 +357,10 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 			return
 		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(raw) // best-effort: status committed; a failed write means the client is gone
-		return
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("logs: copy response: %v", err)
+	if _, err := w.Write(raw); err != nil {
+		log.Printf("logs: write response: %v", err)
 	}
 }
 

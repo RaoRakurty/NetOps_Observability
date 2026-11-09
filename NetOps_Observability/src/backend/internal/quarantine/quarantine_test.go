@@ -106,6 +106,21 @@ func TestSealContextMatchesTheEdge(t *testing.T) {
 	}
 }
 
+// A trap sealed before the receiver stopped publishing the community must not
+// carry it back onto the bus when restored.
+func TestRestoreEventDropsTheTrapCommunity(t *testing.T) {
+	ev, err := RestoreEvent([]byte(`{"message":"m","snmp_community":"fabricated-community-7f3a","snmp_version":"v2c"}`), "acme", "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ev["snmp_community"]; ok {
+		t.Fatalf("restored event holds the community: %v", ev)
+	}
+	if ev["snmp_version"] != "v2c" || ev["tenant_id"] != "acme" {
+		t.Fatalf("restored event lost its fields: %v", ev)
+	}
+}
+
 func TestRestoreEvent(t *testing.T) {
 	ev, err := RestoreEvent([]byte(`{"message":"m","hostname":"edge-1","tenant_id":"","tenant_registry":"miss"}`), "acme", "e1")
 	if err != nil {

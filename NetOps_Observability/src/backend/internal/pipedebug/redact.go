@@ -19,6 +19,7 @@ package pipedebug
 
 import (
 	"netops/backend/internal/asciifold"
+	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/protocoldiag"
 )
 
@@ -51,7 +52,7 @@ func RedactString(s string) string {
 	if s == "" {
 		return ""
 	}
-	return stripBearer(protocoldiag.RedactOutput(s))
+	return stripBearer(protocoldiag.RedactOutput(logsecrets.ScrubText(s)))
 }
 
 // stripBearer replaces the value that follows any known credential prefix,
@@ -119,6 +120,9 @@ func RedactFields(in map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(in))
 	for k, v := range in {
+		if k == logsecrets.TrapCommunityField {
+			continue // removed, not masked: a stored trap's community
+		}
 		out[k] = redactValue(v)
 	}
 	return out

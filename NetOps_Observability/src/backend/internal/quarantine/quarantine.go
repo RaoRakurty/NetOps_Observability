@@ -29,6 +29,7 @@ import (
 	"io"
 	"strings"
 
+	"netops/backend/internal/logsecrets"
 	"netops/backend/processors"
 	"netops/backend/sealing"
 )
@@ -325,6 +326,9 @@ func RestoreEvent(plaintext []byte, tenant, eventID string) (map[string]any, err
 	if ev == nil {
 		return nil, errors.New("quarantine: payload decoded to null")
 	}
+	// A trap sealed before the receiver stopped publishing the community must
+	// not carry it back onto the bus.
+	logsecrets.StripFields(ev)
 	ev["tenant_id"] = tenant
 	delete(ev, "tenant_registry")
 	ev["cx_event_id"] = eventID
