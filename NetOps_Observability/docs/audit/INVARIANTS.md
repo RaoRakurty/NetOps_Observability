@@ -647,7 +647,7 @@ and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
 | The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
 | Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |
 
-## 22. Admin link change — BUILT, not proven on the rig (tracker 385, 2026-11-09)
+## 23. Admin link change — BUILT, not proven on the rig (tracker 385, 2026-11-09)
 
 **An admin link change opens no object alone and is scored as a change.** BUILD: unit
 and fixture tests only (`src/correlation/test_admin_link_change_385.py`); the §10a rig
