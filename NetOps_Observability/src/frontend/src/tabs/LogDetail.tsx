@@ -86,6 +86,7 @@ function SummaryTab({ ev }: { ev: LogEvent }) {
             </dd>
           </>
         )}
+        {ev.owner && <><dt>Owner</dt><dd>{ev.owner}</dd></>}
         {ev.trap?.oid && (
           <>
             <dt>Trap OID</dt>

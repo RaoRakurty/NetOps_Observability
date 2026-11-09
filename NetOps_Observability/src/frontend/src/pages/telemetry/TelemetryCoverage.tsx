@@ -191,7 +191,7 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
       </div>
 
       <StatStrip>
-        <Stat label="Prefilter passed" value={stats.prefilter.passed.toLocaleString("en-US")} />
+        <Stat label="Checked for RCA" value={stats.prefilter.passed.toLocaleString("en-US")} />
         <Stat label="Skipped, not relevant to RCA" value={stats.prefilter.rejected.toLocaleString("en-US")} />
         <Stat label="Generic fallback (syslog)" value={stats.generic_fallback.syslog.toLocaleString("en-US")} tone={stats.generic_fallback.syslog > 0 ? "warn" : ""} />
         <Stat label="Generic fallback (trap)" value={stats.generic_fallback.trap.toLocaleString("en-US")} tone={stats.generic_fallback.trap > 0 ? "warn" : ""} />

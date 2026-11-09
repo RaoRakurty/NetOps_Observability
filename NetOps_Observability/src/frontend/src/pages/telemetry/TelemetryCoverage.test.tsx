@@ -72,7 +72,8 @@ describe("header stats", () => {
     expect(screen.getByText("81.3%")).toBeInTheDocument();
     expect(screen.getByText("240,000 lines")).toBeInTheDocument();
 
-    expect(screen.getByText("Prefilter passed")).toBeInTheDocument();
+    expect(screen.getByText("Checked for RCA")).toBeInTheDocument();
+    expect(screen.queryByText("Prefilter passed")).not.toBeInTheDocument();
     expect(screen.queryByText("Prefilter rejected")).not.toBeInTheDocument();
     // Skipping a line is the screen doing its job, so the count carries no warning
     // tone. The generic-fallback counts beside it do warn, which proves the tone
