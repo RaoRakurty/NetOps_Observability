@@ -133,6 +133,7 @@ from engine import (
     TopologyAdjacency,
     WindowPrep,
     _ch_dt,
+    admin_link_change_metric_lines,
     blob_cycle_begin,
     blob_cycle_end,
     bound_hypotheses_blob,
@@ -15341,6 +15342,8 @@ def _metrics_text(health: dict | None = None) -> str:
         # sits behind. scored/candidates IS the selectivity ratio; the metric
         # NAMES are owned by scoring.py so they cannot drift from the counters.
         *template_scoring_metric_lines(),
+        # tracker 385: admin link changes exempted from the singleton rule.
+        *admin_link_change_metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until

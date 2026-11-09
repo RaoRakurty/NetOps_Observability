@@ -7,7 +7,8 @@ judged by what it gives the engine: signals, entities, topology, contrast, timin
 ownership. A change to the engine is framed as a change to one named stage below. Never
 propose as new something this file says already exists.
 
-Verified against the code on 2026-10-24 (main 646c40e2). **If the code and this file
+Verified against the code on 2026-10-24 (main 646c40e2); singleton rule, clause
+fields and ENGINE_SEMVER re-verified 2026-11-09 (tracker 385). **If the code and this file
 disagree, the code wins: fix this file in the same change.**
 Abbreviations: **E** engine.py · **M** main.py · **S** signals.py · **SC** scoring.py ·
 **V** verdicts.py · **C** catalog.py · **CF** confirmability.py · **R** replay.py.
@@ -193,6 +194,13 @@ count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
 - A component with no edge and peak severity < `severity_open_floor`="high" (E:104)
   opens NO object.
 - Any component with ≥1 edge opens one.
+- **Admin link change (tracker 385).** A no-edge `link_state_change` node whose every
+  signal at or above the floor is `link_cause=admin` also opens none
+  (`_admin_change_only`): an operator's shutdown is a change. Fail-closed: one
+  opening-severity signal with fault/unknown/no cause opens. Severity is NOT lowered at
+  the parser (storm eviction is severity-ordered). The evidence stays in the window and
+  `corr_signals`, so a grounded fault later folds it in. Counted:
+  `corr_admin_link_change_singletons_total`.
 
 **Identity** `cid = uuid5(corrobj|tenant|earliest node key|onset_ms)` (E:3752).
 - A cid that overlaps an open object adopts that object's id: entity Jaccard ≥0.4 +
@@ -252,11 +260,19 @@ graph (SC:14-19, 266, 1018).
 ## 4. Scoring — [6] (SC): competing hypotheses, already built
 
 **Catalog.** Built-in templates only; PG/tenant overrides are not wired (M:1357,
-M:1420). 149 templates, 103 enabled. The version hash changes on any edit (C:382-397).
+M:1420). 150 templates, 104 enabled. The version hash changes on any edit (C:382-397).
 
 **Template** (C:257-303):
 - `requires` clauses: kind `a|b`, optional `entity_type` / `min_deviation` /
   `optional`; at least one mandatory.
+- Clause `attrs` (every pair equal; absent key fails) and `attrs_not` (no pair equal;
+  absent key passes), over the closed `signals.CLAUSE_ATTR_KEYS`, read through
+  `clause_attr` by the scorer AND the rank_memo projection (tracker 385). They only make
+  a clause stricter, so the kind index, structure gate and confirmability stay kind-only
+  supersets. A verification witness goes through the same predicate.
+- Clause `anchor` (required clauses only): while no signal satisfies it, `rank` omits the
+  template from that ranking altogether. Rows tie-break by id, so even a zero row would
+  displace visible competitors and the nearest-template checklist.
 - `discriminators{absent, else_prefer}`.
 - `required_modalities`.
 - `requires_structure` (device_tier / redundancy_group / overlay_encap / transit_path).
@@ -267,6 +283,7 @@ M:1420). 149 templates, 103 enabled. The version hash changes on any edit (C:382
 - Declared but read nowhere: `within_s`, `applies_when`, `direction_expect` [lead].
 
 **`rank()`** (SC:973):
+0. An unattested `anchor` removes the template from this ranking.
 1. The kind index scores unreachable templates analytically (SC:451-484).
 2. The **structure gate** refuses templates whose structure the evidence does not
    attest (SC:736-818).
@@ -328,6 +345,13 @@ host / egress / seam+target+schedule) (V:105-115).
   of `assess` (context, never a confirming plane). Requested without E1 it stays off
   and logs an error; gauge `corr_config_change_family_enabled`. OFF catalog version is
   unchanged (test_config_change_family_e5.py).
+  An admin link change (tracker 385) does not need this flag: the unflagged sibling
+  `sig.ent.access.admin-link-change-induced` scores `link_cause=admin` as the change half
+  (`[admin link change (anchor), a fault that is not itself admin]`), and contradicts
+  `local-link-fault` and `lastmile-circuit-flap` (×0.2, tag
+  `link_state_change[link_cause=admin]`). `apply_config_change_family` leaves it alone.
+  The engine does not order change against fault: a shutdown done as remediation reads the
+  same way, so the template discloses that under `false_positives`. It is capped at suspected (`allow_root_cause_confirmed=false`): a shutdown causes its own traffic drop, and the engine does not order change against fault.
 
 **Trusted:**
 - non-probe evidence: yes;
@@ -480,7 +504,7 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
-  ENGINE_SEMVER 3.2.0; byte-identical when no tunnel rows exist. The verdict tier still
+  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385); byte-identical when no tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.

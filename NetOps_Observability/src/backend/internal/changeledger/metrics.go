@@ -57,7 +57,7 @@ func (m *Metrics) Count(producer, outcome string) int64 {
 	return m.counts[[2]string{producer, outcome}]
 }
 
-// Write emits netops_change_ledger_writes_total. Both producers are always
+// Write emits netops_change_ledger_writes_total. Every producer is always
 // rendered with every outcome, so a producer that has never written is a
 // visible zero rather than an absent series.
 func (m *Metrics) Write(w io.Writer) {
@@ -68,7 +68,8 @@ func (m *Metrics) Write(w io.Writer) {
 	defer m.mu.Unlock()
 	fmt.Fprint(w, "# HELP netops_change_ledger_writes_total Change-ledger producer outcomes (Iris N-D2), by producer and outcome.\n")
 	fmt.Fprint(w, "# TYPE netops_change_ledger_writes_total counter\n")
-	producers := map[string]bool{ProducerConfigCapture: true, ProducerAudit: true}
+	producers := map[string]bool{ProducerConfigCapture: true, ProducerAudit: true,
+		ProducerDeviceTrap: true, ProducerDeviceSyslog: true, ProducerCloudAudit: true}
 	for k := range m.counts {
 		producers[k[0]] = true
 	}

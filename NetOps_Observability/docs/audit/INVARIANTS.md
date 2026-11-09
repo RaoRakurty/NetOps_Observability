@@ -666,7 +666,21 @@ Device syslog carries usernames, retained on purpose for security attribution. T
 | A role with `explore:read` and no security need cannot read usernames | ❌ **not enforced** | Every built-in role except Ingest holds `explore:read`. Narrowing that is an owner decision (a role-model change) |
 | The raw console (`/search`) leaves who, the query and the row count | ❌ **not in this trail** | Entry is recorded (`CONSOLE`, once a minute per person). Queries go directly to OpenSearch; on the TLS profile the security plugin's audit log is the only record |
 
-## 22. Configurable source authority (tracker 337 N-F6, 2026-11-09)
+## 23. Admin link change — BUILT, not proven on the rig (tracker 385, 2026-11-09)
+
+**An admin link change opens no object alone and is scored as a change.** BUILD: unit
+and fixture tests only (`src/correlation/test_admin_link_change_385.py`); the §10a rig
+measurement has not run, so nothing here is PROVEN at scale.
+
+- Stage [5]: a no-edge `link_state_change` node whose every opening-severity signal is
+  `link_cause=admin` opens nothing, is counted
+  (`corr_admin_link_change_singletons_total`), and stays in the window so a grounded fault
+  folds it in. Any other cause on an opening-severity signal opens.
+- Stage [6]: `local-link-fault` and `lastmile-circuit-flap` are contradicted by it, and
+  `sig.ent.access.admin-link-change-induced` scores it.
+- Evidence with no `link_cause=admin` is byte-identical bar `engine` and `catalog_version`.
+- Only trap link events carry `link_cause` today; the other sources are an open tracker row.
+## 24. Configurable source authority (tracker 337 N-F6, 2026-11-09)
 
 Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
 reorder, Iris never picks silently. Design: `docs/architecture/iris-natural-language-platform.md` §4.2.1.
