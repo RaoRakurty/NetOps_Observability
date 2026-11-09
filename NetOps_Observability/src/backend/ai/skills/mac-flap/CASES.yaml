@@ -55,6 +55,8 @@ expect_never:
   - interface-down
   - log-confirmation
 expect_select: mac-flap
+expect_never_tools:
+  - run_protocol_diagnostic
 
 ---
 

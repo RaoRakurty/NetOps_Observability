@@ -109,7 +109,7 @@ func chainTestSet(names []string, steps int) *SkillSet {
 	set := &SkillSet{byName: map[string]*Skill{}}
 	for i, n := range names {
 		sk := &Skill{
-			Name: n, Layer: LayerBGP, Version: 1,
+			Name: n, Layer: LayerBGP, Version: 1, Origin: SkillOriginCompiled,
 			WhenToUse: []string{n}, SymptomKinds: []string{"bgp"},
 			Tools:   []string{"get_rca_verdict"},
 			LookFor: []string{"anything"},

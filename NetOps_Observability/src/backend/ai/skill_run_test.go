@@ -21,7 +21,7 @@ import (
 // controls exactly which tools the gather names.
 func runSkill() *Skill {
 	return &Skill{
-		Name: "bgp-session-down", Layer: LayerBGP, Version: 3,
+		Name: "bgp-session-down", Layer: LayerBGP, Version: 3, Origin: SkillOriginCompiled,
 		WhenToUse: []string{"bgp down"}, SymptomKinds: []string{"bgp"},
 		Tools: []string{"get_rca_verdict", "get_device_health"},
 		Gather: []GatherStep{

@@ -30,6 +30,9 @@ expect_never:
   - log-confirmation
   - bgp-prefix-missing
 expect_select: bgp-session-down
+expect_hypotheses:
+  - bgp-session=SUPPORTED
+  - link-down=INCONCLUSIVE
 
 ---
 
@@ -84,6 +87,8 @@ expect_verdict:
   - transition
 expect_never:
   - bgp-prefix-missing
+expect_hypotheses:
+  - bgp-fault-signature=SUPPORTED
 
 ---
 
@@ -164,6 +169,8 @@ expect_notes:
   - Log search is not available on this deployment
 expect_never:
   - interface-down
+expect_hypotheses:
+  - bgp-session=INCONCLUSIVE
 
 ---
 
@@ -191,6 +198,8 @@ expect_never:
   - log-confirmation
   - bgp-prefix-missing
   - path-seam-handoff
+expect_never_tools:
+  - get_config_diff
 
 ---
 

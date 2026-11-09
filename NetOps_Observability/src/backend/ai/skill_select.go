@@ -16,6 +16,7 @@ package ai
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -132,13 +133,15 @@ const (
 //
 //  1. An excluded intent never yields a skill.
 //  2. Score every skill by its when_to_use phrases and symptom kinds; the best
-//     score above zero wins (ties broken by layer order, then name, so the
-//     result is stable across builds).
+//     score above zero wins (ties broken by layer order, then a compiled method
+//     over a customer's runbook, then name, so the result is stable across
+//     builds).
 //  3. Otherwise, an UNMATCHED question that reads like an operational complaint
 //     falls to the entry method (osi-bisection), which starts from the engine's
 //     verdict and bisects by layer.
 //
-// The method skill never wins step 2 — it is the fallback, not a competitor.
+// The method skill never wins step 2 — it is the fallback, not a competitor. A
+// MOP is never selected at all: it is a procedure for a human.
 func SelectSkill(set *SkillSet, question string, plan Plan) (SkillMatch, bool) {
 	if set == nil || set.Len() == 0 {
 		return SkillMatch{}, false
@@ -160,7 +163,7 @@ func SelectSkill(set *SkillSet, question string, plan Plan) (SkillMatch, bool) {
 	var best []scored
 	for _, name := range set.Names() {
 		sk := set.byName[name]
-		if sk.Layer == LayerMethod {
+		if sk.Layer == LayerMethod || sk.isMOP() {
 			continue // the entry method is the fallback, never a keyword winner
 		}
 		var matched []string
@@ -189,9 +192,20 @@ func SelectSkill(set *SkillSet, question string, plan Plan) (SkillMatch, bool) {
 			if LayerRank(best[i].sk.Layer) != LayerRank(best[j].sk.Layer) {
 				return LayerRank(best[i].sk.Layer) < LayerRank(best[j].sk.Layer)
 			}
+			if a, b := best[i].sk.customerAuthored(), best[j].sk.customerAuthored(); a != b {
+				return b // the compiled method wins a tie
+			}
 			return best[i].sk.Name < best[j].sk.Name
 		})
 		w := best[0]
+		if w.sk.customerAuthored() {
+			// Reason reaches the user message outside the runbook's data section,
+			// so it stays server-worded. Matched still names the phrases.
+			return SkillMatch{
+				Skill: w.sk, Score: w.score, Matched: w.matched,
+				Reason: "matched the customer runbook " + w.sk.Name + " on " + strconv.Itoa(len(w.matched)) + " of its match phrases",
+			}, true
+		}
 		return SkillMatch{
 			Skill: w.sk, Score: w.score, Matched: w.matched,
 			Reason: "matched the " + string(w.sk.Layer) + "-layer method " + w.sk.Name +
@@ -205,7 +219,7 @@ func SelectSkill(set *SkillSet, question string, plan Plan) (SkillMatch, bool) {
 		return SkillMatch{}, false
 	}
 	for _, name := range set.Names() {
-		if sk := set.byName[name]; sk.Layer == LayerMethod {
+		if sk := set.byName[name]; sk.Layer == LayerMethod && !sk.isMOP() {
 			return SkillMatch{
 				Skill: sk, Score: 0,
 				Reason: "no single fault signature matched — starting from the entry method " + sk.Name +
