@@ -823,8 +823,8 @@ func ReplayPromptProbes() (map[string]string, error) {
 		return nil, errors.New("no skills loaded")
 	}
 	sort.Strings(names)
-	sk, _ := set.Get(names[0]) // names came from the set
-	o := &Orchestrator{}
+	sk, _ := set.Get(names[0])           // names came from the set
+	o := &Orchestrator{Redactor: Redact} // nothing is sent; the rendering is the production one
 	bundle := []EvidenceItem{{CitationID: "probe:1", Kind: "finding", Text: "probe evidence line", Href: "#/probe"}}
 	pr := &Problem{ID: "00000000-0000-4000-8000-000000000000", Title: "probe incident", Verdict: "suspected", Confidence: 0.5,
 		Devices: []string{"probe-device"}, MissingEvidence: []string{"probe_gap"}}

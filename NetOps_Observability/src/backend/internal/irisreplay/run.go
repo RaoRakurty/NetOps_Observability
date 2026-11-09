@@ -231,6 +231,7 @@ func execute(ctx context.Context, c *Case, opt Options, skills *ai.SkillSet) (*e
 		LLM:          llm,
 		Flags:        flags,
 		Policy:       ai.NewPolicyEngine(cfg, flags),
+		Redactor:     ai.Redact, // the same outbound filter production prompts pass through
 		Troubleshoot: frozen.Deps,
 		Gateway:      ai.NewToolGateway(),
 		Trace:        col,

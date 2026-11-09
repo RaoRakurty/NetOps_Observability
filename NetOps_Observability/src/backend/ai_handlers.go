@@ -3013,8 +3013,10 @@ func (s *server) handleAIReplayExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	// JSON encoded by irisreplay.RedactedJSON and served as application/json, no-sniff.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil { // #nosec G705 -- a JSON document with a JSON content type, not HTML
 		logError("ai.replay", "export write failed", errf(err))
 	}
 }
