@@ -108,7 +108,60 @@ var (
 	// almost always a count ("users: 42"), and masking counts would degrade the
 	// answers without protecting anyone.
 	reIdentityKV = regexp.MustCompile(`(?i)\b(user|user[_-]?name|userid|user[_-]?id|login|logon|account|identity|eap[_-]?identity|eap[_-]?id|principal|upn|sam[_-]?account[_-]?name|calling[_-]?station[_-]?id|supplicant|dot1x[_-]?user|nt[_-]?user)\b(\s*[:=]\s*"?)` + valueChars)
+
+	// The device-syslog forms, which name a person with no key=value at all
+	// (owner decision D7: usernames stay in the store for security attribution,
+	// and still never cross the provider boundary, §15 LLM06). Multi-vendor:
+	//
+	//	User '<name>' authenticated        Cisco DMI, Juniper UI_LOGIN_EVENT
+	//	Accepted publickey for <name>      sshd: SONiC, Arista, Linux-based NOS
+	//	Failed password for invalid user <name>
+	//	session opened for user <name>     PAM
+	//	Configured from console by <name>  Cisco IOS SYS-5-CONFIG_I
+	//	User <name> logged in              Juniper, Nokia SR OS
+	reUserQuoted = regexp.MustCompile(`(?i)\b(user(?:[_-]?name)?)\s+(?:'[^']*'|"[^"]*")`)
+	reSSHAuthFor = regexp.MustCompile(`(?i)\b((?:accepted|failed)\s+[a-z0-9/-]+\s+for)\s+(invalid\s+user\s+)?` + valueChars)
+	rePrepUser   = regexp.MustCompile(`(?i)\b((?:for|by|from|of|invalid|illegal|unknown|authenticating)\s+user(?:[_-]?name)?)\s+(` + valueChars + `)`)
+	reConfigBy   = regexp.MustCompile(`(?i)\b(configured\s+from\s+\S+\s+by)\s+` + valueChars)
+	reUserVerb   = regexp.MustCompile(`(?i)\b(user(?:[_-]?name)?)\s+(` + valueChars + `)(\s+(?:has|had|logged|login|logout|authenticated|authentication|failed|from|on|exited|connected|disconnected|successfully|created|opened|closed)\b)`)
 )
+
+// identityStopwords are words that follow "user" in ordinary prose and cannot be
+// an account name in a sentence like this, so "for user traffic" stays readable.
+// The same trade as cliSecretStopwords: a filter that mangles plain English is a
+// filter that gets removed.
+var identityStopwords = map[string]bool{
+	"a": true, "an": true, "account": true, "accounts": true, "activity": true,
+	"and": true, "authentication": true, "experience": true, "from": true,
+	"has": true, "had": true, "impact": true, "in": true, "is": true,
+	"login": true, "name": true, "on": true, "or": true, "population": true,
+	"requests": true, "session": true, "sessions": true, "the": true, "to": true,
+	"traffic": true, "was": true, "who": true, "with": true,
+}
+
+// maskPrepUser masks the name after "for user", "by user" and their kin.
+func maskPrepUser(m string) string {
+	sub := rePrepUser.FindStringSubmatch(m)
+	if sub == nil {
+		return Mask // unexpected - fail safe
+	}
+	if identityStopwords[strings.ToLower(sub[2])] {
+		return m
+	}
+	return sub[1] + " " + Mask
+}
+
+// maskUserVerb masks the name in "user <name> logged in" and its kin.
+func maskUserVerb(m string) string {
+	sub := reUserVerb.FindStringSubmatch(m)
+	if sub == nil {
+		return Mask // unexpected - fail safe
+	}
+	if identityStopwords[strings.ToLower(sub[2])] {
+		return m
+	}
+	return sub[1] + " " + Mask + sub[3]
+}
 
 // cliSecretStopwords are words that CANNOT be a credential but do follow
 // "password"/"secret"/"community" in ordinary English and in auth-failure log
@@ -178,6 +231,11 @@ func Redact(s string) string {
 	s = reMACDotted.ReplaceAllStringFunc(s, maskMACDotted)
 	s = reEmail.ReplaceAllString(s, Mask+"@${1}")
 	s = reIdentityKV.ReplaceAllString(s, "${1}${2}"+Mask)
+	s = reUserQuoted.ReplaceAllString(s, "${1} "+Mask)
+	s = reSSHAuthFor.ReplaceAllString(s, "${1} ${2}"+Mask)
+	s = rePrepUser.ReplaceAllStringFunc(s, maskPrepUser)
+	s = reConfigBy.ReplaceAllString(s, "${1} "+Mask)
+	s = reUserVerb.ReplaceAllStringFunc(s, maskUserVerb)
 	return s
 }
 

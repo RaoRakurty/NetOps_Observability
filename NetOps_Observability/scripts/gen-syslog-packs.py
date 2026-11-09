@@ -45,8 +45,9 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-import syslog_pack_vrl as V
 from syslog_packs import PackTable
+
+import syslog_pack_vrl as V
 
 BEGIN_MARK = "      # >>> BEGIN GENERATED-SYSLOG-PACKS (scripts/gen-syslog-packs.py)"
 END_MARK = "      # <<< END GENERATED-SYSLOG-PACKS"

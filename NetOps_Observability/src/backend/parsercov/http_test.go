@@ -659,14 +659,18 @@ func TestProposeDraftsAndAppliesNothing(t *testing.T) {
 		}
 	}
 	// ...and it is audited, without the device line in the record.
-	if len(h.audits) != 1 {
+	// The listing read that found the template is audited too (D7): one of each.
+	if len(h.audits) != 2 {
 		t.Fatalf("audits = %v", h.audits)
 	}
-	a := h.audits[0]
+	read, a := h.audits[0], h.audits[1]
+	if read["action"] != "parsercov.read" || read["tenant"] != "acme" || read["scanned"] != 1 {
+		t.Fatalf("read audit record = %v", read)
+	}
 	if a["action"] != "parser.catalog_row_drafted" || a["applied"] != false || a["tenant"] != "acme" {
 		t.Fatalf("audit record = %v", a)
 	}
-	raw := mustMarshal(t, a)
+	raw := mustMarshal(t, h.audits)
 	if strings.Contains(raw, "GigabitEthernet") || strings.Contains(raw, "Interface Gi0/3") {
 		t.Fatalf("the audit record embeds the device log line: %s", raw)
 	}

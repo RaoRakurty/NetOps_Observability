@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/discovery"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -43,7 +44,11 @@ func logsTestServer(t *testing.T) *server {
 	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
-	return &server{discovery: d}
+	rs, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &server{discovery: d, roles: rs}
 }
 
 const osAggReply = `{"hits":{"total":{"value":123456,"relation":"eq"},"hits":[]},` +

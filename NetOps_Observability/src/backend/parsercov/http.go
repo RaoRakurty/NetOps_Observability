@@ -344,6 +344,13 @@ func (a *API) HandleUnrecognized(w http.ResponseWriter, r *http.Request) {
 		a.d.Metrics.IncRun(outcomeOf(run))
 		a.d.Metrics.AddLines(run.Scanned)
 	}
+	// Mining hands back sample log lines, so it is a read of the log store and
+	// is audited as one: who, what and how many, never a line.
+	if a.d.Audit != nil {
+		a.d.Audit(r, p.Tenant, "parsercov.read", map[string]any{
+			"days": days, "lane": lane, "limit": limit, "scanned": run.Scanned, "cached": cached,
+		})
+	}
 	a.d.WriteJSON(w, http.StatusOK, run.page(limit))
 }
 

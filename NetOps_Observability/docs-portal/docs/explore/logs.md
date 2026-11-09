@@ -11,7 +11,8 @@ sidebar_position: 3
 
 ## Before you begin
 
-- An authenticated session. Every search runs against a tenant-scoped surface, so another tenant's records are never returned.
+- The **Explore** permission at read level or above. Search, export, the retention line and the index listing all refuse a role without it, with `explore read permission required`. Every built-in role holds it except the Ingest machine identity. To give someone network views without log lines, use a custom role that leaves Explore at none.
+- Every search runs against a tenant-scoped surface, so another tenant's records are never returned.
 - Devices sending syslog or traps. See [Send syslog](/send-data/syslog) and [Send SNMP traps](/send-data/traps).
 - The **App logs** source is the platform's own container and API logs, and is offered to the platform owner only. The backend refuses it for anyone else.
 
@@ -67,6 +68,10 @@ Interactive paging ends at 10,000 rows. Past that the page says so and points at
 
 A large export is queued rather than blocked, and the page reports it: `Large export (N rows) queued — preparing…`, where `N` is the matched count reported by the export request, or a question mark when the count is not known.
 
+The stored file of a queued export lasts 24 hours by default (`EXPORT_ARTIFACT_RETENTION`, a Go duration such as `12h`). After that its download link stops working, the export status reports `expired`, and the file is removed within the hour. Run the export again if you need it later. A file you have downloaded is outside the platform's access control and retention, and each export response carries an `X-Data-Notice` header saying so.
+
+If the audit trail cannot record an export, the export is refused with a 503 and nothing is delivered. Try again once the trail is healthy.
+
 ### Step 6 - Save the search
 
 Select the save control, name the search, and find it again under **Explore → Saved Searches**. See [Open a saved search](/explore/saved-searches).
@@ -84,6 +89,20 @@ The routes behind the page:
 | `GET /api/logs/indices` | The indices behind the sources. |
 | `GET /api/logs/export` | The whole result set, synchronous or queued. |
 | `POST /api/logs/export/rows` | Only the rows you selected. |
+
+## Usernames in device logs
+
+Device logs name the people who signed in to the device, for example `Accepted publickey for <name>`. They are kept on purpose, so that a security review can tell who did what. They are protected in these ways:
+
+| Control | What applies |
+|---|---|
+| Who can read them | Anyone with the Explore permission in that tenant. There is no separate permission for the username inside a line. |
+| Tenant isolation | Your own tenant's logs, plus untagged logs from your own devices. The Provider scope also reads untagged logs from platform devices and unknown senders. |
+| Audit trail | Each search, export and download is recorded with who, the query and the row count, and never the log lines. Search text that looks like a credential is masked. Find these in the audit trail as `LOG_READ`, `EXPORT`, `EXPORT_DONE` and `EXPORT_DOWNLOAD`. |
+| Iris | Iris needs the same permission. Usernames are masked before a log line reaches the model, and each Iris log search is recorded as `LOG_READ`. |
+| Retention | Log indices are deleted after `OPENSEARCH_LOG_RETENTION_DAYS` days, 14 by default. Daily snapshots contain them too, so a deleted index can remain in a snapshot for up to `OPENSEARCH_SNAPSHOT_KEEP` more days, 14 by default. |
+
+The raw search console at `/search` is for the platform owner only. Entry is recorded as `CONSOLE`, at most once a minute. The queries run there are not in this trail, because the console talks to the search store directly.
 
 ## Related
 

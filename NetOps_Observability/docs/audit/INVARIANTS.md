@@ -646,3 +646,22 @@ and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
 | Bounded: 50 candidates after an exact-key prefilter, at most 8 fingerprints built per request (written through, closed incidents only), 5 matches | ✅ | **BUILD** — `TestRecallServiceBuildsWithinBudgetAndStores`, `TestRankOrderAndCap` |
 | The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
 | Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |
+
+## 22. Usernames in device logs (owner decision D7, tracker 387, 2026-11-09)
+
+Device syslog carries usernames, retained on purpose for security attribution. There is no field-level redaction in the store or on an authorised read; the controls are around the read.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every log door (search, retention, indices, export, selected-row export, export status) needs `explore:read` and refuses before OpenSearch is touched | ✅ | **BUILD** — `TestEveryLogDoorRefusesARoleWithoutLogAccess` (ingest key, custom role, unknown role) |
+| Parser-coverage reads and proposals hand back raw lines, so they need `explore:read` too | ✅ | **BUILD** — `TestParserCoverageLinesNeedLogAccess` |
+| `reports:read` cannot fetch an export file by execution id | ✅ | **BUILD** — `TestReportHistoryRefusesAnExportByID` |
+| A caller reads its own tenant only; `as_tenant` into another org is ignored; another tenant's export id answers exactly as an unknown id does | ✅ | **BUILD** — `TestLogReadsCrossOrgIsolation`, through the real router |
+| Each read and export leaves who, the query and the row count, never a row, with credential-shaped query text masked | ✅ | **BUILD** — `TestLogSearchAuditHoldsWhoQueryAndCountsAndNoRow`, `TestSyncExportAuditHoldsWhoQueryAndRowsAndNoRow`, `TestQueuedExportAuditTrail`, `TestIrisLogSearchIsAuditedAndMasksEveryUsernameForm` |
+| An export the trail cannot record is not delivered | ✅ | **BUILD** — `TestAnExportTheTrailRefusesIsNotDelivered` (sync, rows, queued, download) |
+| A username never reaches an LLM provider in the forms the fixture lists | 🟡 | **BUILD** for the listed vendor shapes (`TestRedactMasksDeviceSyslogUsernames`). A regex filter cannot prove the negative for a line shape nobody has seen |
+| A stored export file ends at its retention on every read path, and the sweep removes it | ✅ | **BUILD** — `TestExportFileRetentionHoldsOnEveryReadPath`, `TestSweepRemovesOnlyFilesPastRetentionAndIsIdempotent`, plus `TestExportSubstratePG` through FORCE RLS |
+| `netops-syslog-*` is under the `netops-retention` ISM policy | ✅ | **BUILD** — `test_syslog_is_under_the_retention_policy`; **RUNTIME (partial)** — the lab node's log on 2026-11-09 shows `netops-syslog-*` indices being deleted, which fits the 3-day lab window but does not name ISM as the deleter. `_ism/explain` was not run: the node needs a credential |
+| The bootstrap reports ISM coverage, and says so when it cannot tell | ✅ | **BUILD** — `test_coverage_report_*`. It printed nothing until 2026-11-09: it piped into python3 in an image with no python |
+| A role with `explore:read` and no security need cannot read usernames | ❌ **not enforced** | Every built-in role except Ingest holds `explore:read`. Narrowing that is an owner decision (a role-model change) |
+| The raw console (`/search`) leaves who, the query and the row count | ❌ **not in this trail** | Entry is recorded (`CONSOLE`, once a minute per person). Queries go directly to OpenSearch; on the TLS profile the security plugin's audit log is the only record |

@@ -469,6 +469,10 @@ inventory, which is exactly how `busybox` stayed invisible for months.
 
 ---
 
+### `tracker-387-mibs` (tracker 390, added 2026-11-09)
+
+`github.com/cisco/cisco-mibs` has no licence file, and no SD-WAN module grants redistribution. Correlix fetches VIPTELA and CISCO-SDWAN modules at build time, pinned to a commit and verified by sha256, never vendors them, and ships only OID, name, type and enum facts. Owner decision D4 asks that licensing be validated before deployment, so this stays open until the owner or counsel rules on shipping those facts to customers. The lab deployment is not a distribution.
+
 ## 5. Base-image licences (context, not action)
 
 Container base layers carry their own mixed licences. This is normal, universally
