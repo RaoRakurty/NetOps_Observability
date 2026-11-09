@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, OrgContextFact, OrgContextList, OrgContextPreview, OrgContextVersion } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import { operatorError } from "../../lib/errors";
+import SourceAuthorityPanel from "./SourceAuthorityPanel";
 
 const STATE_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -106,6 +107,7 @@ export default function NetworkContext() {
   });
 
   return (
+    <>
     <div className="card disc-card nctx" style={{ marginBottom: 16 }}>
       <div className="disc-head">
         <div>
@@ -212,6 +214,8 @@ export default function NetworkContext() {
         facts.map((f) => <History key={f.id} fact={f} label={kindLabel[f.kind] ?? f.kind} busy={busy} run={run} />)
       )}
     </div>
+    <SourceAuthorityPanel />
+    </>
   );
 }
 

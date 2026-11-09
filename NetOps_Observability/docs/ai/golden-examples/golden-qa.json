@@ -1693,6 +1693,18 @@
       "notes": "midnight Q9: seam verdicts (dia-egress-corroborated) carry provider-vs-us"
     },
     {
+      "id": "tool-012",
+      "category": "agent_tool",
+      "question": "what software version is core-1 running, and do the sources agree?",
+      "expect": {
+        "tool": "get_device_health",
+        "args": {
+          "device": "core-1"
+        }
+      },
+      "notes": "N-F6: the tool states each fact with its source and a citable note when sources disagree; the answer text is pinned by TestAgentAnswerAlwaysStatesTheDisagreement"
+    },
+    {
       "id": "decline-007",
       "category": "decline",
       "known_gap": true,
@@ -1710,6 +1722,17 @@
       },
       "nav": "admin/ticketing/cases",
       "notes": "nav-leaf coverage (N-G1): Administration → Incident Response → RCA Tickets → Vendor case routing"
+    },
+    {
+      "id": "docs-123",
+      "category": "docs",
+      "question": "When the controller and SNMP report different versions for a device, which one does Iris believe and can I change the order?",
+      "expect": {
+        "slugs": [
+          "administration/network-context"
+        ]
+      },
+      "notes": "N-F6: configurable source authority"
     }
   ]
 }

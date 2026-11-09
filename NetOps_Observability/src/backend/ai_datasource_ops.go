@@ -14,6 +14,8 @@ import (
 	"netops/backend/ai"
 
 	"netops/backend/internal/oslog"
+	"netops/backend/internal/srcauthority"
+	"netops/backend/models"
 )
 
 // ai_datasource_ops.go — the P2 operational reads behind the agent loop's two
@@ -181,26 +183,29 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	if name == "" {
 		return ai.ToolResult{}, fmt.Errorf("get_device_health: device required")
 	}
-	var devID, devName, devVendor, devAddr string
-	var lastSeen time.Time
+	var dev models.Device
 	found := false
-	for _, dev := range d.srv.discovery.Devices() {
-		if !canSeeDevice(dev, p.Tenant, p.Cross) {
+	for _, cand := range d.srv.discovery.Devices() {
+		if !canSeeDevice(cand, p.Tenant, p.Cross) {
 			continue
 		}
-		if strings.EqualFold(dev.Name, name) || strings.EqualFold(dev.ID, name) {
-			devID, devName, devVendor, devAddr, lastSeen = dev.ID, dev.Name, dev.Vendor, dev.Address, dev.LastSeen
-			found = true
+		if strings.EqualFold(cand.Name, name) || strings.EqualFold(cand.ID, name) {
+			dev, found = cand, true
 			break
 		}
 	}
 	if !found {
 		return ai.ToolResult{}, ai.ErrNotFound
 	}
+	devID, devName, lastSeen := dev.ID, dev.Name, dev.LastSeen
 
 	href := "#/infrastructure/devices"
 	label := aiFirst(devName, devID)
-	inv := fmt.Sprintf("%s — inventory: vendor %s, address %s", label, aiFirst(devVendor, "unknown"), aiFirst(devAddr, "unknown"))
+	// N-F6: every descriptive fact is stated with the source it came from,
+	// decided by the applicable source order across EVERY source that reports
+	// this device — never the merged row's silent gap-fill.
+	facts := d.srv.deviceFactsFor(d.ctx, dev, p.Tenant, p.Cross)
+	inv := label + " — inventory: " + deviceInventoryText(facts, dev.Address)
 	if !lastSeen.IsZero() {
 		if age := time.Since(lastSeen); age < 5*time.Minute {
 			inv += "; telemetry current (last sample under 5m ago)"
@@ -211,6 +216,17 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	tr := ai.ToolResult{Items: []ai.EvidenceItem{{
 		CitationID: "device:" + devID, Kind: "device", Text: inv, Href: href,
 	}}}
+	if txt := deviceDisagreementText(facts); txt != "" {
+		// Its own citable item, so an answer that relies on a contested
+		// fact can cite where the disagreement is stated.
+		tr.Items = append(tr.Items, ai.EvidenceItem{
+			CitationID: "device:" + devID + ":sources", Kind: "device", Text: label + " — " + txt, Href: href,
+			Contested: srcauthority.ContestedValues(facts.Resolutions),
+		})
+	}
+	if facts.PolicyFailed {
+		tr.Notes = append(tr.Notes, "this workspace's source order could not be read, so the platform default order was used to choose between sources")
+	}
 
 	// Metrics snapshot. The or-chain covers the three producer label schemes
 	// (device=id for Go collectors, hostname/source=name for Telegraf/gnmic).
@@ -269,4 +285,35 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 		tr.Notes = append(tr.Notes, "no recent metric samples for this device — reachability may be down or collection not yet warmed")
 	}
 	return tr, nil
+}
+
+// deviceInventoryText is the inventory clause of the device item: each
+// resolved fact with its winning source, then the management address (an
+// identity, not a resolved fact). Device-supplied values are cleaned
+// (srcauthority.Clean) — plain text the SPA renders escaped (§15).
+func deviceInventoryText(f deviceFacts, addr string) string {
+	parts := make([]string, 0, len(f.Resolutions)+2)
+	have := map[srcauthority.Fact]bool{}
+	for _, r := range f.Resolutions {
+		parts = append(parts, srcauthority.FactText(r))
+		have[r.Fact] = true
+	}
+	if !have[srcauthority.FactVendor] {
+		parts = append([]string{"vendor unknown"}, parts...)
+	}
+	parts = append(parts, "address "+aiFirst(srcauthority.Clean(addr, srcauthority.MaxValueRunes), "unknown"))
+	return strings.Join(parts, ", ")
+}
+
+// deviceDisagreementText states every fact the sources disagree on — the
+// value used, the source and order that decided it, and what each other
+// source said. "" when every source agreed (or only one reported).
+func deviceDisagreementText(f deviceFacts) string {
+	var out []string
+	for _, r := range f.Resolutions {
+		if t := srcauthority.DisagreementText(r, f.Order, f.Customized); t != "" {
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, " ")
 }

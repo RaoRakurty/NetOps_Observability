@@ -104,6 +104,11 @@ type EvidenceItem struct {
 	// correlation object itself), stamped where it is read. Empty for every
 	// other item.
 	Verdict string `json:"-"`
+	// Contested marks an item that STATES a source disagreement (N-F6): the
+	// device-fact values the sources disagree on. An answer that repeats one
+	// must carry the disagreement (EnsureDisagreementStated). Server-stamped,
+	// never serialized.
+	Contested []string `json:"-"`
 }
 
 // ToolResult is a read-only tool's output. Truncated discloses a cap was hit.

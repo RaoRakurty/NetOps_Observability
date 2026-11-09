@@ -665,3 +665,21 @@ Device syslog carries usernames, retained on purpose for security attribution. T
 | The bootstrap reports ISM coverage, and says so when it cannot tell | ✅ | **BUILD** — `test_coverage_report_*`. It printed nothing until 2026-11-09: it piped into python3 in an image with no python |
 | A role with `explore:read` and no security need cannot read usernames | ❌ **not enforced** | Every built-in role except Ingest holds `explore:read`. Narrowing that is an owner decision (a role-model change) |
 | The raw console (`/search`) leaves who, the query and the row count | ❌ **not in this trail** | Entry is recorded (`CONSOLE`, once a minute per person). Queries go directly to OpenSearch; on the TLS profile the security plugin's audit log is the only record |
+
+## 22. Configurable source authority (tracker 337 N-F6, 2026-11-09)
+
+Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
+reorder, Iris never picks silently. Design: `docs/architecture/iris-natural-language-platform.md` §4.2.1.
+
+**PROVEN by tests:** the resolver (default order, tenant override, ties, missing sources, disagreement,
+agreement is not noise) — `internal/srcauthority/resolve_test.go`; isolation over HTTP and through the
+device tool — `source_authority_isolation_test.go`; RLS and the permutation CHECK on a real Postgres —
+`TestSourceAuthorityRLSIsolationPG`; a model that omits the disagreement still produces an answer that
+states it — `TestAgentAnswerAlwaysStatesTheDisagreement`.
+
+**BUILT, NOT PROVEN:** no live multi-source device has been asked about on the lab yet. Whether real
+vManage and SNMP values normalise to agreement (and how often sources really disagree) is measurable from
+`netops_iris_source_authority_total` once deployed.
+
+**NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
+show a different value from the one Iris cites. The collectors and identity deliberately keep that row.

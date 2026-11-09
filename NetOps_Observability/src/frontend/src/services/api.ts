@@ -1909,6 +1909,18 @@ export type CopilotConfig = {
 // ---- Network context (tracker 337 N-F1, internal/orgcontext) ----
 // Facts a workspace writes about its own network; a version reaches Iris only
 // after a SECOND administrator approves it. Text is plain and rendered as text.
+export interface SourceAuthorityClass {
+  class: string;
+  label: string;
+}
+export interface SourceAuthorityView {
+  order: SourceAuthorityClass[];
+  default: SourceAuthorityClass[];
+  customized: boolean;
+  editable: boolean;
+  updated_by?: string;
+  updated_at?: string;
+}
 export type OrgContextState = "draft" | "pending" | "active" | "superseded" | "rejected" | "retired";
 export interface OrgContextVersion {
   version: number;
@@ -6544,6 +6556,12 @@ export const api = {
   // (Re)issue the embedded-console gate cookie for the current session so a raw
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
+
+  // Source authority (N-F6): which source Iris believes. The tenant always comes from the token.
+  sourceAuthority: () => request<SourceAuthorityView>("/api/ai/source-authority"),
+  sourceAuthoritySave: (order: string[]) =>
+    request<SourceAuthorityView>("/api/ai/source-authority", { method: "PUT", body: JSON.stringify({ order }) }),
+  sourceAuthorityReset: () => request<SourceAuthorityView>("/api/ai/source-authority", { method: "DELETE" }),
 
   // Network context (N-F1). The tenant always comes from the token.
   orgContext: () => request<OrgContextList>("/api/ai/context"),

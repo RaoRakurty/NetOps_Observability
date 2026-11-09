@@ -21,7 +21,7 @@ const KINDS = [
 function newServer() {
   const facts: Fact[] = [];
   const approvals: { by: string; sha: string }[] = [];
-  return { facts, approvals };
+  return { facts, approvals, order: null as string[] | null };
 }
 
 async function bootAs(page: Page, user: string, srv: ReturnType<typeof newServer>) {
@@ -39,6 +39,17 @@ async function bootAs(page: Page, user: string, srv: ReturnType<typeof newServer
     }
     if (p === "/api/scopes") {
       return json({ scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "org-acme", org_name: "Acme", region: "us" }], all_tenants: false });
+    }
+    if (p === "/api/ai/source-authority") {
+      const CLASSES: Record<string, string> = {
+        controller: "the controller", discovered: "the device itself (SNMP)",
+        declared: "the imported source of truth (NetBox)", manual: "a manual entry",
+      };
+      const dflt = ["controller", "discovered", "declared", "manual"];
+      if (req.method() === "PUT") srv.order = (body() as { order: string[] }).order;
+      if (req.method() === "DELETE") srv.order = null;
+      const toInfo = (o: string[]) => o.map((c) => ({ class: c, label: CLASSES[c] }));
+      return json({ order: toInfo(srv.order ?? dflt), default: toInfo(dflt), customized: srv.order !== null, editable: true, updated_by: srv.order ? user : undefined });
     }
     if (p === "/api/ai/context" && req.method() === "GET") {
       return json({ facts: srv.facts, kinds: KINDS, you: user, limits: { body_bytes: 2000, key_bytes: 80, facts: 50 } });
@@ -113,4 +124,19 @@ test("fact text is shown as text, never as markup", async ({ page }) => {
   await expect(page.getByText("Proposed")).toBeVisible();
   await expect(page.locator(".nctx img")).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __nctx?: number }).__nctx)).toBeUndefined();
+});
+
+test("an administrator reorders which source Iris believes, and goes back to the default", async ({ page }) => {
+  const srv = newServer();
+  await bootAs(page, "alice", srv);
+  const panel = page.getByTestId("source-authority");
+  await expect(panel.getByText("This workspace uses the platform default order.")).toBeVisible();
+  await panel.getByRole("button", { name: "Move the device itself (SNMP) up" }).click();
+  expect(srv.order).toBeNull(); // nothing is stored until it is saved
+  await panel.getByRole("button", { name: "Save order" }).click();
+  await expect(panel.getByText("This workspace uses its own order, last set by alice.")).toBeVisible();
+  expect(srv.order).toEqual(["discovered", "controller", "declared", "manual"]);
+  await panel.getByRole("button", { name: "Use the platform default" }).click();
+  await expect(panel.getByText("This workspace uses the platform default order.")).toBeVisible();
+  expect(srv.order).toBeNull();
 });
