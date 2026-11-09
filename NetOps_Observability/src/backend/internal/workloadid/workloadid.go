@@ -32,6 +32,13 @@ type Entry struct {
 	DNS []string
 	// Client/Server select the EKUs the leaf carries.
 	Client, Server bool
+	// KeyGroupRead marks a row whose compose reader cannot read a 0600 key owned
+	// by the api's uid: it runs as another uid, or as root without
+	// CAP_DAC_OVERRIDE. Its key gets TLS_SERVICE_KEY_MODE (0640 on a TLS install)
+	// and the reader holds CORRELIX_GID through group_add in compose.tls.yml.
+	// Every other row stays 0600. deployment/docker/tls-key-readers.json is the
+	// reader table this flag must agree with.
+	KeyGroupRead bool
 }
 
 // Registry is the v1 identity table (SEC-003.3 step 1, encoded as data).
@@ -54,25 +61,25 @@ var Registry = []Entry{
 	// on MTLS:9094 — a serverAuth-only leaf cannot act as that client
 	// (broker rejects it with certificate_unknown; proven on the lab). Same
 	// both-EKU precedent as opensearch below.
-	{Service: "kafka", DNS: []string{"kafka"}, Client: true, Server: true},
-	{Service: "opensearch", DNS: []string{"opensearch"}, Client: true, Server: true}, // SEC-008: node cert needs BOTH EKUs — the security plugin uses it for transport-layer mutual auth between nodes
-	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true},               // SEC-009
-	{Service: "postgres", DNS: []string{"postgres"}, Server: true},                   // SEC-011
-	{Service: "redis", DNS: []string{"redis"}, Server: true},                         // SEC-012 (Valkey; compose name is redis)
+	{Service: "kafka", DNS: []string{"kafka"}, Client: true, Server: true, KeyGroupRead: true},
+	{Service: "opensearch", DNS: []string{"opensearch"}, Client: true, Server: true, KeyGroupRead: true}, // SEC-008: node cert needs BOTH EKUs — the security plugin uses it for transport-layer mutual auth between nodes
+	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true},                                   // SEC-009
+	{Service: "postgres", DNS: []string{"postgres"}, Server: true},                                       // SEC-011
+	{Service: "redis", DNS: []string{"redis"}, Server: true, KeyGroupRead: true},                         // SEC-012 (Valkey; compose name is redis)
 
 	// Application services.
-	{Service: "correlation", DNS: []string{"correlation"}, Client: true, Server: true}, // SEC-013: serves the api, consumes the bus/stores
+	{Service: "correlation", DNS: []string{"correlation"}, Client: true, Server: true, KeyGroupRead: true}, // SEC-013: serves the api, consumes the bus/stores
 
 	// Bus producers/consumers and ingest actors — client identities (SEC-006/007/013).
 	{Service: "vector-aggregator", DNS: []string{"vector-aggregator"}, Client: true, Server: true}, // server: the ingest lanes it terminates (SEC-013)
 	{Service: "vector-router", Client: true},
 	{Service: "goflow2", Client: true},
 	{Service: "gnmic", Client: true},
-	{Service: "prober", Client: true},
+	{Service: "prober", Client: true, KeyGroupRead: true},
 	{Service: "syslog-ng", Client: true}, // its forward hop into vector (SEC-014.1)
 	{Service: "kafka-exporter", Client: true},
-	{Service: "cloud-ingest", Client: true}, // SEC-013: mTLS to the ingest lanes; task #9: mTLS kafka producer
-	{Service: "vmalert", Client: true},      // queries victoria via vmauth once SEC-010 lands
+	{Service: "cloud-ingest", Client: true, KeyGroupRead: true}, // SEC-013: mTLS to the ingest lanes; task #9: mTLS kafka producer
+	{Service: "vmalert", Client: true},                          // queries victoria via vmauth once SEC-010 lands
 
 	// Ops/UI tier behind nginx — server identities so their inner hops can be
 	// meshed later without re-deciding identity.

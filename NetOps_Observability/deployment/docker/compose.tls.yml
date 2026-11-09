@@ -19,6 +19,13 @@
 # must be mirrored here (and vice versa) or this variant silently drops base
 # behavior.
 
+# KEY CUSTODY (2026-11-09): the api mints every private key 0600 under its own
+# uid, except the readers that cannot read that (tls-key-readers.json, "group"
+# rows), whose keys are 0640 and who hold CORRELIX_GID through group_add below.
+# data/tls and data/tls/services are 0700, so a service mounts its own directory,
+# never the tree. Upgrade order matters: the readers must carry group_add before
+# the api tightens, which a single `compose up` and deploy.sh both ensure.
+
 # Bounded container logs — same cap as docker-compose.yml's x-logging anchor.
 # YAML anchors do NOT cross files, so every compose file that introduces a
 # service of its own has to restate it; services this file merely PATCHES
@@ -76,7 +83,13 @@ services:
       # nginx -> API mutual TLS: the include, plus the SVID + trust bundle the
       # API's internal CA mints at boot (read-only).
       - ./nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro
-      - ../../data/tls:/etc/nginx/tls:ro
+      # Its own SVID directory and the trust anchor, not the whole of data/tls
+      # (2026-11-09): data/tls is 0700, and nginx has no business seeing the
+      # other keys. The paths inside the container are unchanged.
+      - ../../data/tls/nginx:/etc/nginx/tls/nginx:ro
+      - ../../data/tls/ca.pem:/etc/nginx/tls/ca.pem:ro
+    # nginx runs as uid 101 with cap_drop ALL; its key is 0640 under the api's gid.
+    group_add: ["${CORRELIX_GID:-65532}"]
   # The TLS mesh REQUIRES custody — the seal sidecar is unconditional in this
   # variant (profile-gating cleared): the api depends_on below must reference
   # an always-defined service, or compose refuses the whole project whenever
@@ -119,9 +132,12 @@ services:
       TLS_CERT_FILE: /data/tls/api.crt          # api server SVID
       TLS_KEY_FILE: /data/tls/api.key
       TLS_NGINX_CERT_DIR: /data/tls/nginx       # nginx client SVID
-      # nginx runs as uid 101 and cannot read a 0600 key owned by the API's
-      # uid 65532; this mount is shared only with nginx. Explicit, warned.
-      TLS_NGINX_KEY_MODE: "0644"
+      # nginx runs as uid 101 with cap_drop ALL and cannot read a 0600 key the
+      # api owns: 0640, read through group_add on the nginx service. A mode with
+      # "other" bits is refused at boot (tls_ca.go keyModeFromEnv).
+      TLS_NGINX_KEY_MODE: "0640"
+      # The mint root is forced to 0700 at every boot (2026-11-09).
+      TLS_MINT_ROOT: /data/tls
       # victoria client SVID (#149) — the metrics scraper must present an
       # identity once the API listens mTLS-only. No key-mode widening: the
       # stock victoria image runs as root, which reads the 0600 key.
@@ -130,10 +146,12 @@ services:
       # under /data/tls/services/<name>/. Consumed per-epic (postgres first,
       # SEC-011).
       TLS_SERVICE_CERT_ROOT: /data/tls/services
-      # SEC-008: the securityadmin credential (not a workload identity), and
-      # the cross-uid key mode stores need to read their own SVIDs.
+      # SEC-008: the securityadmin credential (not a workload identity); its key
+      # is 0600 whatever any variable says. TLS_SERVICE_KEY_MODE applies ONLY to
+      # the registry rows flagged KeyGroupRead, whose readers carry group_add
+      # below; every other key stays 0600.
       TLS_OS_ADMIN_CERT_DIR: /data/tls/admin
-      TLS_SERVICE_KEY_MODE: "0644"
+      TLS_SERVICE_KEY_MODE: "0640"
       # SEC-010 slice C: the api's metrics reads/writes go via vmauth (TLS +
       # the svc-api credential); backend https verifies against the mesh CA.
       # Tracker 367 layer 1: the credential is NOT in the URL — it is read
@@ -220,6 +238,11 @@ services:
   # and the healthcheck below all moved with it in the same cutover.
   correlation:
     command: ["python", "tls_serve.py"]
+    # uid 10001, cap_drop ALL.
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     environment:
       CLICKHOUSE_URL: "https://clickhouse:8443"
       CORRELATION_CA_FILE: /certs/ca.pem
@@ -294,6 +317,11 @@ services:
   # SEC-008: security plugin enabled — node TLS + admin DN + the minimal
   # role model. Cert paths are RELATIVE to the config dir (plugin rule).
   opensearch:
+    # uid 1000 (image USER).
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     environment:
       DISABLE_SECURITY_PLUGIN: "false"
       # The demo-config installer REWRITES opensearch.yml (demo certs + the
@@ -591,7 +619,11 @@ services:
       - "--promscrape.suppressScrapeErrors"
       - "--promscrape.configCheckInterval=60s"
     volumes:
-      - ../../data/tls:/etc/victoria/tls:ro
+      # Its own SVID directory and the trust anchor, not the whole of data/tls
+      # (2026-11-09). victoria runs as root with default capabilities, so the
+      # 0600 key needs no group. Paths inside the container are unchanged.
+      - ../../data/tls/victoria:/etc/victoria/tls/victoria:ro
+      - ../../data/tls/ca.pem:/etc/victoria/tls/ca.pem:ro
 
   # SEC-013.2 + task #9: cloud-ingest's metrics lane over mTLS and its direct
   # kafka producer on the mTLS listener, both with the cloud-ingest SVID.
@@ -599,6 +631,11 @@ services:
   # deployment-specific and stay in the (gitignored) local override / .env.
   # The service itself remains profile-gated ("cloud-ingest") in the base.
   cloud-ingest:
+    # poller, uid 1000 (image USER).
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     environment:
       METRIC_EVENT_SINK_URL: "https://vector-aggregator:8690/"
       INGEST_TLS_CA: /tls/ca.pem
@@ -627,6 +664,11 @@ services:
   # CN=spiffe://... down to the bare service name for readable ACLs.
   kafka:
     logging: *deflog
+    # appuser, uid 1000 (image USER).
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     entrypoint: ["/kafka-tls-entrypoint.sh"]
     # Overriding entrypoint DROPS the image CMD (proven live 2026-08-05: the
     # broker crash-looped exec'ing the stock entrypoint with no args) — restate
@@ -709,6 +751,11 @@ services:
   # keystore wants key+crt concatenated (SEC-006 lesson), staged into /tmp
   # (the only dir uid 1000 owns).
   kafka-init:
+    # appuser, uid 1000 (image USER); same key as the broker.
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     volumes:
       - ../../data/tls/services/kafka:/certs-src:ro
     entrypoint:
@@ -795,6 +842,16 @@ services:
   # the TLS listener. `command` replaces the base list wholesale — base flags
   # restated.
   redis:
+    # The image starts as root and drops to valkey with `setpriv --clear-groups`,
+    # which would throw away the group that reads redis.key. Running directly as
+    # valkey's own uid:gid (999:1000) skips that path and keeps group_add. The
+    # data dir is valkey's already (its root path chowned it); install.py owns it
+    # 999:1000 on a fresh install.
+    user: "999:1000"
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     command: ["valkey-server", "--save", "60", "1",
       "--maxmemory", "${REDIS_MAXMEMORY:-96mb}",
       "--requirepass", "${REDIS_PASSWORD:-}",
@@ -816,6 +873,11 @@ services:
   # SEC-013.2: prober presents its SVID to the mTLS probes lane; the api
   # forwarders ride backendHTTPClient (SVID already wired by APP-001).
   prober:
+    # root, but cap_drop ALL (+ NET_RAW): no DAC override, so not an owner read.
+    # KEY CUSTODY (2026-11-09): this reader is not the key's owner and cannot
+    # override file permissions, so it reads its 0640 key through the api's gid.
+    # Reader table: tls-key-readers.json. Removing this takes the service down.
+    group_add: ["${CORRELIX_GID:-65532}"]
     environment:
       PROBE_EVENT_SINK_URL: "https://vector-aggregator:8689/"
       TLS_BACKEND_CA_FILE: /tls/ca.pem
@@ -883,6 +945,7 @@ services:
         && cp /certs-src/gotenberg.crt /certs-src/gotenberg.key /certs-src/ca.pem /staged/
         && chown 1001:1001 /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem
         && chmod 0400 /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem
+        && chmod 0711 /staged
         && echo "gotenberg-tls-init: SVID staged for uid 1001 (0400)" >&2
     volumes:
       - ../../data/tls/services/gotenberg:/certs-src:ro

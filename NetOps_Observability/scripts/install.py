@@ -2364,12 +2364,49 @@ def tls_service_mount_dirs(compose_dir: Path) -> list[str]:
     return sorted(out)
 
 
+# The reader table: every private key under data/tls, who reads it and how. One
+# file for the mint test, this installer and the compose shape test. Resolved from
+# this script, not `root`, because it describes the code being run.
+KEY_READERS_REL = Path("deployment") / "docker" / "tls-key-readers.json"
+
+
+def load_key_readers() -> dict:
+    path = Path(__file__).resolve().parent.parent / KEY_READERS_REL
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        fail(f"cannot read the key reader table {path}: {exc} — the tree is incomplete")
+        raise SystemExit(2) from exc
+
+
 def tls_custody_dir_modes() -> dict[str, int]:
     """data/-relative TLS directories whose mode is part of the contract.
 
-    data/tls/admin holds the OpenSearch admin key, whose DN bypasses every role
-    and index check. Owner only, and never widened by any setting."""
-    return {"tls/admin": 0o700}
+    data/tls and data/tls/services are owner only: containers get their keys
+    through bind mounts Docker resolves as root, so only the api and root ever
+    traverse them, and a host user who shares CORRELIX_GID cannot reach a
+    group-readable key. A leaf is 0750 only when a group_add reader must enter
+    it. data/tls/admin holds the OpenSearch admin key, whose DN bypasses every
+    role and index check: owner only, and never widened by any setting."""
+    table = load_key_readers()
+    modes: dict[str, int] = {}
+    for rel, mode in table["dirs"].items():
+        modes["tls" if rel == "." else f"tls/{rel}"] = int(mode, 8)
+    for row in table["keys"]:
+        parts = row["path"].split("/")
+        if parts[0] == "services":
+            modes[f"tls/services/{parts[1]}"] = 0o750 if row["how"] == "group" else 0o700
+    for row in table["staged"]:
+        modes[f"tls/{Path(row['path']).parent}"] = int(row["dir_mode"], 8)
+    return modes
+
+
+def tls_tree_has_keys(data: Path) -> bool:
+    """True once the api has minted anything under data/tls."""
+    try:
+        return any(p.is_file() for p in (data / "tls").rglob("*.key"))
+    except OSError:
+        return True  # unreadable somewhere: assume minted, the cautious answer
 
 
 def set_custody_dir_mode(d: Path, mode: int) -> None:
@@ -2378,9 +2415,247 @@ def set_custody_dir_mode(d: Path, mode: int) -> None:
     try:
         if stat.S_IMODE(d.stat().st_mode) != mode:
             d.chmod(mode)
+    except FileNotFoundError:
+        return  # a row the api has not minted yet: it sets the mode when it does
     except OSError as exc:
         fail(f"cannot set mode {mode:04o} on {d}: {exc}\n"
              f"    sudo chmod {mode:04o} {d}")
+
+
+# ---- key custody: verify, upgrade, rollback ------------------------------------
+
+def _mode_problem(rel: str, st: os.stat_result, want: int) -> str | None:
+    got = stat.S_IMODE(st.st_mode)
+    return None if got == want else f"{rel} is {got:04o}, want {want:04o}"
+
+
+def verify_tls_custody(data: Path, uid: int, gid: int) -> list[str]:
+    """Compare data/tls with the reader table. Modes and names only."""
+    tls = data / "tls"
+    if not tls.is_dir() or not tls_tree_has_keys(data):
+        return []  # nothing minted (a plaintext install): nothing in custody
+    table = load_key_readers()
+    want_dirs = tls_custody_dir_modes()
+    keys = {row["path"]: row for row in table["keys"]}
+    staged = {row["path"]: row for row in table["staged"]}
+    problems: list[str] = []
+
+    # Declared directories first: the walk below cannot enter one this uid may not
+    # read, such as the staged directory its reader owns, and must still judge it.
+    for rel, want in want_dirs.items():
+        try:
+            bad = _mode_problem(f"data/{rel}", (data / rel).stat(), want)
+        except FileNotFoundError:
+            continue  # a row the api has not minted yet
+        except OSError as exc:
+            problems.append(f"cannot stat data/{rel}: {exc.strerror} — custody not verified there")
+            continue
+        if bad:
+            problems.append(bad)
+
+    def walk_error(exc: OSError) -> None:
+        name = Path(exc.filename or "?")
+        if name.name == "gotenberg-staged" and isinstance(exc, PermissionError):
+            return  # owned by its reader, and its mode was judged above
+        problems.append(f"cannot read {name}: {exc.strerror} — custody not verified there")
+
+    for dirpath, _dirnames, filenames in os.walk(tls, onerror=walk_error):
+        here = Path(dirpath)
+        rel_dir = here.relative_to(data).as_posix()
+        if rel_dir not in want_dirs:
+            mode = stat.S_IMODE(here.stat().st_mode)
+            if mode & 0o027:
+                problems.append(f"data/{rel_dir} is {mode:04o}: a directory no row declares "
+                                f"may not give others access")
+        for name in filenames:
+            f = here / name
+            rel = f.relative_to(tls).as_posix()
+            try:
+                fst = f.lstat()
+            except FileNotFoundError:
+                continue  # a re-issue renamed its temp file while we walked
+            except OSError as exc:
+                problems.append(f"cannot stat data/tls/{rel}: {exc.strerror}")
+                continue
+            fmode = stat.S_IMODE(fst.st_mode)
+            if ".key." in name:
+                # An in-flight re-issue, or litter from a crash. The temp file has
+                # its final mode before any byte lands, so only the mode can be wrong.
+                if fmode & 0o007:
+                    problems.append(f"data/tls/{rel} is {fmode:04o}: temp key file open to others")
+                continue
+            if name.endswith(".key"):
+                if rel in staged:
+                    row = staged[rel]
+                    if fmode != int(row["mode"], 8):
+                        problems.append(f"data/tls/{rel} is {fmode:04o}, want {row['mode']}")
+                    continue
+                row = keys.get(rel)
+                if row is None:
+                    problems.append(f"data/tls/{rel} is a key the reader table does not list "
+                                    f"(mode {fmode:04o})")
+                    continue
+                if fmode != int(row["mode"], 8):
+                    problems.append(f"data/tls/{rel} is {fmode:04o}, want {row['mode']} "
+                                    f"(read by {', '.join(row['readers']) or 'nothing yet'})")
+                if (fst.st_uid, fst.st_gid) != (uid, gid):
+                    problems.append(f"data/tls/{rel} is owned by {fst.st_uid}:{fst.st_gid}, "
+                                    f"want the api's {uid}:{gid}")
+            elif fmode & 0o022:
+                problems.append(f"data/tls/{rel} is {fmode:04o}: writable beyond its owner")
+    return problems
+
+
+def secret_file_owners(env: Mapping[str, str]) -> dict[str, tuple[int, int]]:
+    """data/secrets-relative path -> (uid, gid) for every file the renderer may
+    write. The app-state role's pgpass is listed whatever the backend: it exists
+    only on a postgres install, and where it exists it must be the api's."""
+    owners = {f"{s.rel}/{SECRET_FILE_NAME}": _secret_owner(s.owner, env) for s in SERVICE_SECRETS}
+    owners.update({f"{d.rel}/{d.file}": _secret_owner(d.owner, env) for d in DERIVED_SECRETS})
+    owners[f"{APP_DB_SECRET_REL}/{APP_DB_SECRET_FILE}"] = _secret_owner("api", env)
+    owners[VMAUTH_RENDERED_REL.as_posix()] = (0, 0)
+    return owners
+
+
+def verify_secret_custody(data: Path, env: Mapping[str, str]) -> list[str]:
+    """Compare data/secrets with what render_service_secrets writes. Modes and
+    names only.
+
+    The expected files come from the same tables the renderer reads
+    (SERVICE_SECRETS, DERIVED_SECRETS, the app-state role's pgpass, vmauth's
+    auth.yml), so a row added there is checked here with no second list. The
+    identity directories are 0711, the one place other users keep an access bit,
+    and it is execute only: the reader is a container uid that owns nothing here
+    and has to enter its bind mount. Their parents stay 0700."""
+    base = data / SECRETS_SUBDIR
+    if not base.is_dir():
+        return []
+    problems: list[str] = []
+    want_files = secret_file_owners(env)
+    leaves = {str(Path(rel).parent) for rel in want_files} | {APP_DB_SECRET_REL}
+
+    def walk_error(exc: OSError) -> None:
+        problems.append(f"cannot read {exc.filename}: {exc.strerror} — custody not verified there")
+
+    for dirpath, _dirnames, filenames in os.walk(base, onerror=walk_error):
+        here = Path(dirpath)
+        rel_dir = "" if here == base else here.relative_to(base).as_posix()
+        want = 0o711 if rel_dir in leaves else 0o700
+        bad = _mode_problem(f"data/{SECRETS_SUBDIR}/{rel_dir}".rstrip("/"), here.stat(), want)
+        if bad:
+            problems.append(bad)
+        for name in filenames:
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            try:
+                fst = (here / name).lstat()
+            except OSError as exc:
+                problems.append(f"cannot stat data/{SECRETS_SUBDIR}/{rel}: {exc.strerror}")
+                continue
+            owner = want_files.get(rel)
+            if owner is None and name.startswith(".") and name.endswith(".tmp"):
+                # A render in flight: _write_secret_temp creates it 0600, then 0400.
+                if stat.S_IMODE(fst.st_mode) & 0o077:
+                    problems.append(f"data/{SECRETS_SUBDIR}/{rel} is a temp file open beyond its owner")
+                continue
+            if owner is None:
+                problems.append(f"data/{SECRETS_SUBDIR}/{rel} is not a file the installer renders")
+                continue
+            bad = _mode_problem(f"data/{SECRETS_SUBDIR}/{rel}", fst, 0o400)
+            if bad:
+                problems.append(bad)
+            if (fst.st_uid, fst.st_gid) != owner:
+                problems.append(f"data/{SECRETS_SUBDIR}/{rel} is owned by "
+                                f"{fst.st_uid}:{fst.st_gid}, want {owner[0]}:{owner[1]}")
+    return problems
+
+
+def verify_custody(root: Path) -> list[str]:
+    """Every key and secret file against the explicit reader table (§3, §8)."""
+    env_path = root / "deployment" / "docker" / ".env"
+    env = _parse_env(env_path) if env_path.exists() else {}
+    uid, gid = api_runtime_uid(root)
+    data = root / "data"
+    return verify_tls_custody(data, uid, gid) + verify_secret_custody(data, env)
+
+
+def cmd_verify_custody(root: Path) -> int:
+    """--verify-custody: read-only, for an operator and the watchdog. Exit 1 on any
+    violation or anything it could not check. Prints modes and names only."""
+    problems = verify_custody(root)
+    for line in problems:
+        print(f"[fail ] custody: {line}", file=sys.stderr)
+    if problems:
+        print(f"[fail ] key custody: {len(problems)} problem(s). The api re-applies key "
+              f"modes at boot; see docs/runbooks/tls-mtls.md", file=sys.stderr)
+        return 1
+    ok("key custody matches the reader table")
+    return 0
+
+
+def relax_custody_for_rollback(data: Path) -> list[str]:
+    """Put data/tls back the way a version before custody expects it.
+
+    Going back to a release from before 2026-11-09 only: its containers have no
+    group_add and nginx and victoria mount the whole tree, so they cannot read this
+    tree as it stands, and that release's api cannot repair it because redis and
+    postgres must be up before the api starts. Returns what could not be changed."""
+    tls = data / "tls"
+    problems: list[str] = []
+    if not tls.is_dir():
+        return problems
+    for dirpath, dirnames, filenames in os.walk(tls):
+        here = Path(dirpath)
+        if here.name == "gotenberg-staged":
+            dirnames[:] = []  # its reader owns it, which that release's job also expects
+            continue
+        try:
+            here.chmod(0o755)
+            for name in filenames:
+                if name.endswith(".key"):
+                    (here / name).chmod(0o644)
+        except OSError as exc:
+            problems.append(f"{exc.filename}: {exc.strerror}")
+    return problems
+
+
+def cmd_custody_rollback(data: Path) -> int:
+    problems = relax_custody_for_rollback(data)
+    for line in problems:
+        print(f"[fail ] custody rollback: {line}", file=sys.stderr)
+    if problems:
+        print("[fail ] custody rollback incomplete: the previous version's stores would "
+              "fail to read their keys. Re-run as the owner of data/tls, or with sudo.",
+              file=sys.stderr)
+        return 1
+    warn(f"{data / 'tls'}: keys are 0644 and directories 0755 again, as the previous "
+         f"version requires. Every local user can read these keys until the next upgrade.")
+    return 0
+
+
+def prepare_tls_custody(root: Path) -> bool:
+    """The upgrade half that must run before `compose up` on a TLS install.
+
+    Brings .env in line with compose.tls.yml, so a stale TLS_SERVICE_KEY_MODE=0644
+    cannot reach the api (it would refuse to boot), and pre-creates the bind sources
+    Docker would otherwise create as root. It tightens NOTHING: the api does that
+    when it boots, after the readers have been recreated with group_add, and that
+    ordering is the whole risk of this upgrade. Returns True on a TLS install."""
+    env_path = root / "deployment" / "docker" / ".env"
+    if not env_path.exists() or _parse_env(env_path).get("TLS_INTERNAL_CA") != "true":
+        return False
+    splice_env_values(
+        env_path,
+        {k: TLS_ENV_VALUES[k] for k in ("TLS_MINT_ROOT", "TLS_NGINX_KEY_MODE",
+                                        "TLS_SERVICE_KEY_MODE")},
+        ["# ---- TLS key custody (2026-11-09) — pairs with compose.tls.yml ----"],
+        "TLS key custody variables")
+    uid, gid = api_runtime_uid(root)
+    for rel in ("tls/admin", "tls/nginx", "tls/victoria"):
+        d = root / "data" / rel
+        if not d.exists():
+            d.mkdir(parents=True)
+            chown_tree(d, uid, gid, f"data/{rel}")
+    return True
 
 
 def ensure_data_dirs(root: Path) -> None:
@@ -2393,12 +2668,16 @@ def ensure_data_dirs(root: Path) -> None:
         clickhouse    101 (clickhouse)
         victoria     1000
         kafka        1000 (appuser)
-    The other services (postgres, redis, api correlation store) either
-    chown their own data dirs on first boot or write as root."""
+        redis         999 (valkey, gid 1000)
+    The other services (postgres, api correlation store) either chown their
+    own data dirs on first boot or write as root."""
     api_uid, api_gid = api_runtime_uid(root)
     owners: dict[str, tuple[int, int] | None] = {
         "postgres":   None,             # initdb chowns its own
-        "redis":      None,             # writes as redis user via its own init
+        # valkey's uid:gid. The TLS variant runs it directly as this uid (its
+        # image's root path clears supplementary groups, which would lose the
+        # group that reads redis.key), so nothing chowns the data dir at start.
+        "redis":      (999, 1000),
         "victoria":   (1000, 1000),
         "grafana":    None,             # user-mapped to the installing user (CORRELIX_UID)
         "kafka":      (1000, 1000),
@@ -2445,6 +2724,9 @@ def ensure_data_dirs(root: Path) -> None:
         # then never mint the admin identity: the same deadlock as
         # tls/services, on the one credential the security bootstrap needs.
         "tls/admin": (api_uid, api_gid),
+        # Same reason: nginx and victoria bind-mount these two (compose.tls.yml).
+        "tls/nginx": (api_uid, api_gid),
+        "tls/victoria": (api_uid, api_gid),
         # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP,
         # internal/configstore). Same class as data/tls: a bind-mount source
         # Docker would otherwise auto-create as ROOT, into which the api
@@ -2510,8 +2792,16 @@ def ensure_data_dirs(root: Path) -> None:
 
     # Custody modes come AFTER the ownership loop: a directory Docker left owned
     # by root can only be chmodded once chown_tree has handed it back.
+    #
+    # On a tree that already holds keys, only the admin directory is tightened
+    # here. Its one reader is a one-shot that runs after the recreate. Every other
+    # directory is the api's to tighten when it boots, AFTER `compose up` has
+    # recreated the readers with group_add: tightening now, under containers that
+    # predate group_add, would break each of them at its next restart, and leave
+    # them broken if this run stops before `compose up`.
     for rel, mode in tls_custody_dir_modes().items():
-        set_custody_dir_mode(root / "data" / rel, mode)
+        if rel == "tls/admin" or not tls_tree_has_keys(root / "data"):
+            set_custody_dir_mode(root / "data" / rel, mode)
 
     # ------------------------------------------------------------------
     # A SIGN ON THE DOOR for data/opensearch-snapshots (2026-09-03).
@@ -3276,11 +3566,12 @@ TLS_ENV_VALUES: dict[str, str] = {
     "TLS_CERT_FILE":         "/data/tls/api.crt",
     "TLS_KEY_FILE":          "/data/tls/api.key",
     "TLS_NGINX_CERT_DIR":    "/data/tls/nginx",
-    "TLS_NGINX_KEY_MODE":    "0644",
+    "TLS_NGINX_KEY_MODE":    "0640",
     "TLS_VICTORIA_CERT_DIR": "/data/tls/victoria",
     "TLS_SERVICE_CERT_ROOT": "/data/tls/services",
     "TLS_OS_ADMIN_CERT_DIR": "/data/tls/admin",
-    "TLS_SERVICE_KEY_MODE":  "0644",
+    "TLS_SERVICE_KEY_MODE":  "0640",
+    "TLS_MINT_ROOT":         "/data/tls",
     "SEAL_PROVIDER":         "swtpm",
 }
 
@@ -5611,7 +5902,23 @@ def main() -> None:
                          "ENABLE_SNMP_DISCOVERY=true + SNMP_CIDR_RANGES in .env "
                          "(line surgery on an existing .env). Absent flag keeps "
                          "discovery off (the opt-in default).")
+    ap.add_argument("--verify-custody", action="store_true",
+                    help="Read-only: compare every key under data/tls and every "
+                         "credential file under data/secrets with the reader table "
+                         "(deployment/docker/tls-key-readers.json). Exit 1 on any "
+                         "violation. Prints modes and names only.")
+    ap.add_argument("--custody-rollback", nargs="?", const="", default=None, metavar="DATA_DIR",
+                    help="Before going back to a release from before 2026-11-09: widen "
+                         "data/tls to what that release's containers expect (keys 0644, "
+                         "directories 0755). See docs/runbooks/tls-mtls.md.")
     args = ap.parse_args()
+    # Neither touches .env or the stack, so both run ahead of every install step.
+    if args.verify_custody:
+        raise SystemExit(cmd_verify_custody(Path(__file__).resolve().parent.parent))
+    if args.custody_rollback is not None:
+        default_data = Path(__file__).resolve().parent.parent / "data"
+        raise SystemExit(cmd_custody_rollback(Path(args.custody_rollback) if args.custody_rollback
+                                              else default_data))
     if args.dry_run and args.rotate_secret is None:
         ap.error("--dry-run is only meaningful with --rotate-secret")
     if args.rotate_secret is not None and (args.reset_env or args.rotate_app_secrets):

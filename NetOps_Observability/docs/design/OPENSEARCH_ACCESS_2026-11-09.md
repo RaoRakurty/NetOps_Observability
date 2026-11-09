@@ -118,3 +118,48 @@ These are platform identities. What keeps them from customers: secrets exist onl
 
 ## UNVERIFIED items
 2.16 image's default `audit.yml` matches upstream main; super-admin requests are audited; snapshot-create index-level check; securityadmin running as a non-1000 uid; nginx's effective uid under the TLS variant; current lab state of `security-auditlog-*` growth and ISM failure; exact hunk overlap with PRs #162/#163.
+
+---
+
+## Corrections from implementation (PRs A and B, 2026-11-09)
+
+Each was checked on the pinned images, in the rendered compose for every
+profile, and in a throwaway TLS bring-up with `CORRELIX_UID=1234`.
+
+1. **securityadmin cannot run as a non-1000 uid on the stock image.** Its home
+   `/usr/share/opensearch` is 0700 at 1000:1000, and `securityadmin.sh`,
+   `hash.sh` and the default security config give others no access. As 1234:1234
+   and as 1234:1000 every tool fails with "Permission denied". The plan's
+   "needs a writable /tmp" was not the blocker (`/tmp` is 1777). The smallest
+   correct alternative that keeps the 0600 decision: the slim image chmods its
+   home 0750, and `opensearch-security-init` runs as `CORRELIX_UID:1000`. Group
+   1000 opens the image's own files and is not the key's group. Proven with a
+   real `securityadmin -cd` as uid 1234 against a TLS OpenSearch (exit 0, then
+   anonymous 401, `svc_api` 200, a wrong password 401).
+2. **Eight readers need more than 0600, not three.** Effective identities:
+   opensearch 1000; kafka and kafka-init 1000 (appuser); nginx 101 with
+   `cap_drop: ALL`; correlation 10001 with `cap_drop: ALL`; prober root but with
+   `cap_drop: ALL` (+NET_RAW), so no DAC override; cloud-ingest 1000 (poller);
+   redis, whose image starts as root and drops to 999 with
+   `setpriv --clear-groups`, which also discards any `group_add`. Redis therefore
+   runs as `999:1000` directly in the TLS variant. Every other reader is root
+   with Docker's default capabilities (it reads a 0600 file of any owner), a root
+   wrapper that stages the key (postgres, clickhouse, gotenberg-tls-init), or a
+   row nothing mounts (11 dormant rows).
+3. **nginx's effective uid is 101** under the TLS variant (`Dockerfile.nginx`
+   `USER 101`, `cap_drop: ALL`), confirmed on the running lab container. Its key
+   is 0640, read through `group_add`.
+4. **nginx and victoria mounted the whole of `data/tls`,** as the security job
+   did. Each now mounts its own directory plus `ca.pem`, with unchanged
+   container paths. With `data/tls` at 0700, a reader that holds `CORRELIX_GID`
+   cannot reach another reader's key.
+5. **The helm chart mints nothing on disk.** Its keys are cert-manager Secrets
+   mounted per pod, so `TLS_SERVICE_KEY_MODE` has no equivalent there, and PR B
+   changes nothing in the chart. Its security job mounts the CA Secret as the
+   admin certificate (`bootstrap-jobs.yaml`). That cannot match `admin_dn`, and it
+   puts the CA's private key in a job pod. This falls under owner decision 7
+   (file and defer) and is not fixed here.
+6. **backup.sh would have lost its snapshot call** at 0600, because its curl
+   container runs as uid 100. PR A runs it as the key's owner until PR C moves it
+   to `svc_backup`. `host-hygiene.sh` reads the key on the host as the cron user,
+   who is `CORRELIX_UID`, so it keeps working unchanged.

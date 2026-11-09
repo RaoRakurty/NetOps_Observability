@@ -117,6 +117,13 @@ func (m *caManager) spiffeID(svc string) string {
 // issueService mints a SVID for svc and writes cert (0644) + key (0600) to the
 // given paths. Re-issued each boot (short TTL) — atomic-ish via write+rename.
 func (m *caManager) issueService(certPath, keyPath, svc string, ttl time.Duration, dns []string, client, server bool) error {
+	return m.issueServiceKeyMode(certPath, keyPath, svc, ttl, dns, client, server, keyModeOwnerOnly)
+}
+
+// issueServiceKeyMode is issueService with an explicit key mode. The mode is set
+// on the temp file before the rename, so no reader ever sees the key at a mode
+// other than its final one.
+func (m *caManager) issueServiceKeyMode(certPath, keyPath, svc string, ttl time.Duration, dns []string, client, server bool, keyMode os.FileMode) error {
 	svid, err := m.ca.Issue(internalca.Request{
 		SPIFFEID: m.spiffeID(svc), DNSNames: dns, TTL: ttl, Client: client, Server: server,
 	})
@@ -126,31 +133,76 @@ func (m *caManager) issueService(certPath, keyPath, svc string, ttl time.Duratio
 	if err := writeFileAtomic(certPath, svid.CertPEM, 0o644); err != nil {
 		return err
 	}
-	return writeFileAtomic(keyPath, svid.KeyPEM, 0o600)
+	return writeFileAtomic(keyPath, svid.KeyPEM, keyMode)
 }
 
-// serviceKeyMode resolves the file mode for issued service keys. Default 0600.
-// The cross-uid handoff (keys minted by the api's uid, read by store
-// containers running as their own uids, this process non-root so Chown is
-// EPERM) makes widening necessary for some deployments; it is EXPLICIT via
-// TLS_SERVICE_KEY_MODE and warned, never silent. Each key lives in a dir
-// mounted read-only into exactly one container.
-func serviceKeyMode() (os.FileMode, error) {
-	mv := envOr("TLS_SERVICE_KEY_MODE", "")
-	if mv == "" || mv == "0600" {
-		return 0o600, nil
+// Key custody modes (docs/design/OPENSEARCH_ACCESS_2026-11-09.md). The reader
+// table is deployment/docker/tls-key-readers.json; the registry's KeyGroupRead
+// flag and tls_ca_custody_test.go keep the mint in line with it.
+const (
+	// keyModeOwnerOnly is the default for every key.
+	keyModeOwnerOnly os.FileMode = 0o600
+	// keyModeCeiling bounds what TLS_SERVICE_KEY_MODE and TLS_NGINX_KEY_MODE may
+	// ask for: owner read/write and group read. No other bits, ever.
+	keyModeCeiling os.FileMode = 0o640
+	// A directory holding a key only the owner or root reads.
+	keyDirOwnerOnly os.FileMode = 0o700
+	// A directory holding a key a group_add reader must reach: it is the root of
+	// that reader's bind mount, so the group needs to enter it.
+	keyDirGroupRead os.FileMode = 0o750
+)
+
+// keyModeFromEnv resolves a key mode from the named variable. Unset means owner
+// only. The value applies only to readers that cannot read a 0600 key this
+// process owns, and those readers get it through the group, so a mode with any
+// bit above keyModeCeiling is refused: an "other" bit makes a private key
+// readable by every local user, which is what every TLS install did until
+// 2026-11-09. ALLOW_DEV_SECRETS=true is the one way past it, the same dev escape
+// hatch the seal gate honours, and secprofile reports it at boot.
+func keyModeFromEnv(name string) (os.FileMode, error) {
+	mv := envOr(name, "")
+	if mv == "" {
+		return keyModeOwnerOnly, nil
 	}
 	m64, err := strconv.ParseUint(strings.TrimPrefix(mv, "0o"), 8, 32)
 	if err != nil {
-		return 0, fmt.Errorf("tls ca: TLS_SERVICE_KEY_MODE %q is not an octal file mode: %w", mv, err)
+		return 0, fmt.Errorf("tls ca: %s %q is not an octal file mode: %w", name, mv, err)
 	}
-	logWarn("tls", "service SVID key mode widened by TLS_SERVICE_KEY_MODE — each key is readable by anything that can read its per-service mount; acceptable only because each dir is mounted into exactly one container",
-		map[string]any{"mode": mv})
-	return os.FileMode(m64), nil
+	if m64 > 0o777 {
+		return 0, fmt.Errorf("tls ca: %s %q sets more than the permission bits", name, mv)
+	}
+	mode := os.FileMode(m64)
+	if mode&0o400 == 0 {
+		return 0, fmt.Errorf("tls ca: %s %q leaves the key unreadable by its owner", name, mv)
+	}
+	if mode&^keyModeCeiling == 0 {
+		return mode, nil
+	}
+	if os.Getenv("ALLOW_DEV_SECRETS") == "true" {
+		logWarn("tls", "SVID key mode widened past owner and group by ALLOW_DEV_SECRETS — local development only; other local users may read this private key",
+			map[string]any{"variable": name, "mode": mv})
+		return mode, nil
+	}
+	return 0, fmt.Errorf("tls ca: %s %q refused: a private key must not carry bits beyond %04o. Readers that need more than the owner hold the key through group_add; set it to 0640 (installs before 2026-11-09 carried 0644: re-run scripts/update.sh or install.py)",
+		name, mv, keyModeCeiling)
+}
+
+// serviceKeyMode resolves the mode for the registry rows that read through the
+// group (workloadid.Entry.KeyGroupRead). Every other row stays owner only.
+func serviceKeyMode() (os.FileMode, error) {
+	return keyModeFromEnv("TLS_SERVICE_KEY_MODE")
+}
+
+// keyDirModeFor is the directory mode a key at keyMode needs.
+func keyDirModeFor(keyMode os.FileMode) os.FileMode {
+	if keyMode&0o077 == 0 {
+		return keyDirOwnerOnly
+	}
+	return keyDirGroupRead
 }
 
 // adminDirMode is the mode of the directory holding the OpenSearch admin key.
-const adminDirMode os.FileMode = 0o700
+const adminDirMode = keyDirOwnerOnly
 
 // ensureCustodyDir creates dir if it is missing and forces its mode. It runs
 // before the key is written, and on every re-issue, so an install that predates
@@ -208,6 +260,15 @@ func bootstrapInternalCA(vault *vault.Vault) (*caManager, error) {
 // the env-configured paths. Idempotent to re-run — that's exactly what the
 // re-issue loop does to rotate before expiry.
 func (m *caManager) provisionFromEnv() error {
+	// The whole mint tree is owner only: containers reach their keys through
+	// their own bind mounts, which Docker resolves as root, so nothing but this
+	// process and root ever traverses it. This also keeps a host user who shares
+	// CORRELIX_GID away from the group-readable keys below.
+	if root := os.Getenv("TLS_MINT_ROOT"); root != "" {
+		if err := ensureCustodyDir(root, keyDirOwnerOnly); err != nil {
+			return fmt.Errorf("tls ca: mint root: %w", err)
+		}
+	}
 	if p := os.Getenv("TLS_CLIENT_CA_FILE"); p != "" {
 		if err := m.writeBundle(p); err != nil {
 			return err
@@ -219,37 +280,27 @@ func (m *caManager) provisionFromEnv() error {
 		}
 	}
 	if dir := os.Getenv("TLS_NGINX_CERT_DIR"); dir != "" {
-		certPath, keyPath := filepath.Join(dir, "nginx.crt"), filepath.Join(dir, "nginx.key")
-		if err := m.issueService(certPath, keyPath,
-			"nginx", m.ttl, []string{"nginx"}, true, false); err != nil {
-			return err
-		}
-		// CROSS-UID HANDOFF. This key is MINTED by the API (uid 65532) but READ
-		// by nginx (nginx-unprivileged, uid 101). A 0600 key owned by us is
-		// unreadable there and nginx refuses to boot —
+		// CROSS-UID HANDOFF. This key is MINTED by the API (CORRELIX_UID) but READ
+		// by nginx (uid 101, cap_drop ALL). A 0600 key owned by us is unreadable
+		// there and nginx refuses to boot —
 		//   "cannot load certificate key ...: Permission denied"
 		// — so enabling mTLS takes the edge down. Proven live, 2026-08-04.
 		//
 		// We cannot fix it by chown: this process is deliberately non-root, so
-		// os.Chown to another uid returns EPERM. The two honest options are
-		// (a) align the uids at deploy time (chown the mount, or run nginx with
-		// a matching user), or (b) widen the key mode for a mount that only
-		// these two containers see.
-		//
-		// The mode is therefore EXPLICIT and defaults to the safe value.
-		// TLS_NGINX_KEY_MODE=0644 opts into (b) and logs a warning naming the
-		// tradeoff — a private key readable by anything that can read the mount.
-		// Never silently widened.
-		if mode := envOr("TLS_NGINX_KEY_MODE", ""); mode != "" && mode != "0600" {
-			m64, perr := strconv.ParseUint(strings.TrimPrefix(mode, "0o"), 8, 32)
-			if perr != nil {
-				return fmt.Errorf("tls ca: TLS_NGINX_KEY_MODE %q is not an octal file mode: %w", mode, perr)
-			}
-			if err := os.Chmod(keyPath, os.FileMode(m64)); err != nil {
-				return fmt.Errorf("tls ca: set nginx key mode: %w", err)
-			}
-			logWarn("tls", "nginx SVID key mode widened by TLS_NGINX_KEY_MODE — the private key is readable beyond its owner; acceptable only when the mount is shared solely with nginx",
-				map[string]any{"path": keyPath, "mode": mode})
+		// os.Chown to another uid returns EPERM. nginx instead holds this
+		// process's gid through group_add (compose.tls.yml) and the key is group
+		// readable. TLS_NGINX_KEY_MODE=0640 opts into that; the default stays
+		// 0600, and a mode with other bits is refused (keyModeFromEnv).
+		mode, err := keyModeFromEnv("TLS_NGINX_KEY_MODE")
+		if err != nil {
+			return err
+		}
+		if err := ensureCustodyDir(dir, keyDirModeFor(mode)); err != nil {
+			return fmt.Errorf("tls ca: nginx identity: %w", err)
+		}
+		if err := m.issueServiceKeyMode(filepath.Join(dir, "nginx.crt"), filepath.Join(dir, "nginx.key"),
+			"nginx", m.ttl, []string{"nginx"}, true, false, mode); err != nil {
+			return err
 		}
 	}
 	// VictoriaMetrics client SVID (#149): once the API listens mTLS-only, the
@@ -262,6 +313,9 @@ func (m *caManager) provisionFromEnv() error {
 	// TLS_CLIENT_ALLOWED_URIS and points the scrape job at the mTLS variant
 	// config (vmscrape-mtls.yml) — see the tls-mtls runbook.
 	if dir := os.Getenv("TLS_VICTORIA_CERT_DIR"); dir != "" {
+		if err := ensureCustodyDir(dir, keyDirOwnerOnly); err != nil {
+			return fmt.Errorf("tls ca: victoria identity: %w", err)
+		}
 		if err := m.issueService(filepath.Join(dir, "victoria.crt"), filepath.Join(dir, "victoria.key"),
 			"victoria", m.ttl, []string{"victoria"}, true, false); err != nil {
 			return err
@@ -297,29 +351,33 @@ func (m *caManager) provisionFromEnv() error {
 	// epic mounts it — so minting cannot break a running stack. Re-issued by
 	// the same TTL/2 loop that calls this method.
 	if root := os.Getenv("TLS_SERVICE_CERT_ROOT"); root != "" {
-		// Cross-uid handoff, same tradeoff as the nginx SVID above: these keys
-		// are MINTED by the api (uid 65532) and READ by store containers
-		// running as their own uids (opensearch 1000, …), which cannot read a
-		// 0600 file owned by us, and this process is non-root so os.Chown is
-		// EPERM. Each service dir is mounted read-only into exactly ONE
-		// container, so widening the mode exposes the key to that container
-		// and nothing else. EXPLICIT and warned — never silently widened.
-		mode, err := serviceKeyMode()
+		// Cross-uid handoff, same as the nginx SVID above: these keys are MINTED by
+		// the api (CORRELIX_UID), this process is non-root so os.Chown is EPERM,
+		// and only the rows flagged KeyGroupRead have a reader that cannot read a
+		// 0600 file of ours. Those hold this process's gid through group_add and
+		// get the configured group mode. Every other row stays 0600: its reader is
+		// root with Docker's default capabilities, or a wrapper that stages the
+		// key as root, or nothing at all yet.
+		groupMode, err := serviceKeyMode()
 		if err != nil {
 			return err
 		}
+		if err := ensureCustodyDir(root, keyDirOwnerOnly); err != nil {
+			return fmt.Errorf("tls ca: service cert root: %w", err)
+		}
 		for _, e := range workloadid.Registry {
 			dir := filepath.Join(root, e.Service)
-			keyPath := filepath.Join(dir, e.Service+".key")
-			if err := m.issueService(
-				filepath.Join(dir, e.Service+".crt"), keyPath,
-				e.Service, m.ttl, e.DNS, e.Client, e.Server); err != nil {
+			keyMode := keyModeOwnerOnly
+			if e.KeyGroupRead {
+				keyMode = groupMode
+			}
+			if err := ensureCustodyDir(dir, keyDirModeFor(keyMode)); err != nil {
 				return fmt.Errorf("tls ca: svid registry: %s: %w", e.Service, err)
 			}
-			if mode != 0o600 {
-				if err := os.Chmod(keyPath, mode); err != nil {
-					return fmt.Errorf("tls ca: set %s key mode: %w", e.Service, err)
-				}
+			if err := m.issueServiceKeyMode(
+				filepath.Join(dir, e.Service+".crt"), filepath.Join(dir, e.Service+".key"),
+				e.Service, m.ttl, e.DNS, e.Client, e.Server, keyMode); err != nil {
+				return fmt.Errorf("tls ca: svid registry: %s: %w", e.Service, err)
 			}
 			// Each service dir is SELF-CONTAINED: cert + key + the trust
 			// anchor. Consumers can then mount one directory read-only and

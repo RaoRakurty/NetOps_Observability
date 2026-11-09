@@ -2577,8 +2577,24 @@ cd '$PREV_COMPOSE_DIR' && docker compose down --remove-orphans
 [ -f '$PREV_ENV' ] || cp -p '$UPGRADE_BACKUP_PATH/config/.env' '$PREV_ENV'
 while IFS='|' read -r ref id keep; do docker tag "\$id" "\$ref"; done < '$UPGRADE_BACKUP_PATH/rollback-images.txt'
 '$PREV_ROOT/scripts/restore.sh' '$UPGRADE_BACKUP_ARTIFACT'    # ONLY if the data itself is damaged: it overwrites data/
+python3 -u '$ROOT/scripts/install.py' --custody-rollback '$PREV_ROOT/data'    # ONLY if that version predates 2026-11-09: it cannot read tightened keys
 cd '$PREV_COMPOSE_DIR' && docker compose up -d
 EOF
+}
+
+# A version from before key custody (2026-11-09) has no group_add: its containers
+# read keys through "other" bits, and its api cannot repair a tightened tree because
+# redis and postgres must be up before the api starts.
+# Only a minted tree needs it: no key under data/tls means a plaintext install.
+upgrade_prev_predates_key_custody() {
+  local key
+  [ -f "$PREV_COMPOSE_DIR/compose.tls.yml" ] || return 1
+  ! grep -q 'group_add:' "$PREV_COMPOSE_DIR/compose.tls.yml" || return 1
+  [ -d "$PREV_ROOT/data/tls" ] || return 1
+  # find prints its own errors (an unreadable subdirectory) to the log and exits
+  # non-zero; any key it did see still answers "minted", and that is all we ask.
+  key=$(find "$PREV_ROOT/data/tls" -name '*.key' -print -quit) || true
+  [ -n "$key" ]
 }
 
 # Settings carried forward: .env byte-for-byte (never regenerated, never the
@@ -2734,6 +2750,13 @@ upgrade_rollback() {
     ok "previous image tags restored"
   else
     problems="$problems$TAG_PROBLEMS"
+  fi
+  if [ -z "$problems" ] && upgrade_prev_predates_key_custody; then
+    say "  widening data/tls to what the previous version expects..."
+    if ! python3 -u "$ROOT/scripts/install.py" --custody-rollback "$PREV_ROOT/data"; then
+      problems="$problems
+  - could not widen $PREV_ROOT/data/tls for the previous version (see above); its stores cannot read their keys"
+    fi
   fi
   if [ -z "$problems" ]; then
     say "  starting the previous version again..."
