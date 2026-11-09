@@ -1,0 +1,36 @@
+{
+  "name": "Operator shuts an interface, the BGP session on it drops: a change, not a link fault",
+  "signals": [
+    {
+      "kind": "link_state_change",
+      "entity_type": "interface",
+      "entity_id": "r1:Gi0/1",
+      "observer_id": "r1",
+      "modality": "control_plane",
+      "attrs": {"link_cause": "admin"},
+      "ts_offset_s": 0
+    },
+    {
+      "kind": "bgp_adjacency_change",
+      "entity_type": "device",
+      "entity_id": "r1",
+      "observer_id": "r1",
+      "modality": "control_plane",
+      "ts_offset_s": 20
+    },
+    {
+      "kind": "if_metric_anomaly",
+      "entity_type": "interface",
+      "entity_id": "r1:Gi0/1",
+      "observer_id": "r1-snmp",
+      "modality": "device_telemetry",
+      "ts_offset_s": 30
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.admin-link-change-induced",
+    "tier": "suspected",
+    "min_confidence": 1.0,
+    "owner": "netops"
+  }
+}

@@ -43,6 +43,7 @@ from signals import (
     ModalityClass,
     ProbeAuthority,
     Signal,
+    clause_attr,
     config_change_family_enabled,
     fidelity_weighting_enabled,
     probe_authority_of,
@@ -87,6 +88,26 @@ def _same_entity(a: Signal, b: Signal) -> bool:
     return bool(set(a.entity_tokens) & set(b.entity_tokens))
 
 
+def _clause_attrs_hold(clause: Clause, sig: Signal) -> bool:
+    """tracker 385: `attrs` (every pair equal; absent fails) and `attrs_not` (no
+    pair equal; absent passes). Two None checks for every clause that has neither."""
+    if clause.attrs is not None and any(
+            clause_attr(sig, k) != v for k, v in clause.attrs.items()):
+        return False
+    return clause.attrs_not is None or not any(
+        clause_attr(sig, k) == v for k, v in clause.attrs_not.items())
+
+
+def _clause_tag(clause: Clause) -> str:
+    """How a contradiction names its discriminator. The bare kind for a kind-only
+    clause (byte-identical to every pre-385 template); an attrs-bearing clause
+    says which attrs, because "link_state_change" alone would claim that ANY link
+    change contradicts the template."""
+    pairs = [f"{k}={v}" for k, v in sorted((clause.attrs or {}).items())]
+    pairs += [f"{k}!={v}" for k, v in sorted((clause.attrs_not or {}).items())]
+    return f"{clause.kind}[{','.join(pairs)}]" if pairs else clause.kind
+
+
 def clause_matches(clause: Clause, sig: Signal) -> bool:
     """Total predicate: signal vs one clause. Role constraints need per-signal
     topology context the scorer does not have — a role-constrained clause
@@ -104,6 +125,8 @@ def clause_matches(clause: Clause, sig: Signal) -> bool:
         return False
     if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
         return False
+    if not _clause_attrs_hold(clause, sig):
+        return False
     return not (clause.min_deviation is not None and abs(sig.deviation) < clause.min_deviation)
 
 
@@ -118,6 +141,11 @@ def _verification_corroborates(clause: Clause, sig: Signal) -> bool:
     if sig.kind != VERIFICATION_RESULT_KIND:
         return False
     if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
+        return False
+    # tracker 385: a verification witness carries no link_cause, so it can never
+    # stand in for an `attrs` clause ("an operator did this" is not what a failing
+    # read-only check says). The same predicate, not a second rule.
+    if not _clause_attrs_hold(clause, sig):
         return False
     return bool(_attr_kinds(sig, "corroborates_kinds") & clause.kinds())
 
@@ -309,7 +337,7 @@ def score_template(
     forced: list[str] = []
     for disc in template.discriminators:
         if _satisfying(disc.absent, evidence):
-            contradictions.append(disc.absent.kind)
+            contradictions.append(_clause_tag(disc.absent))
             forced.append(disc.else_prefer)
 
     # Active-verification refutation (spec item 8): a HEALTHY read-only check
@@ -369,7 +397,7 @@ def score_template(
             tier=VerdictTier.SUSPECTED,
             coverage=gate.coverage,
             reasons=gate.reasons + (
-                "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)",),
+                template.confirm_cap_reason or "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)",),
         )
     # A7 fidelity cap (flag CORR_FIDELITY_WEIGHTING, default OFF) — the same
     # shape as the #94 cap above, one rung further down the evidence chain: the
@@ -670,6 +698,26 @@ def _catalog_structure_plan(catalog: Catalog) -> tuple[dict[str, frozenset[str]]
         _CATALOG_STRUCTURE_CACHE.clear()
     _CATALOG_STRUCTURE_CACHE[id(catalog)] = (catalog, declared, ungrounded)
     return declared, ungrounded
+
+
+# tracker 385: template id -> its anchor clauses, for the gate in `rank`. Built once
+# per catalog, identity-keyed exactly like the two plans above; holds only the
+# templates that declare an anchor, so the hot path pays one dict lookup per
+# template.
+_CATALOG_ANCHOR_CACHE: dict[int, tuple[Catalog, dict[str, tuple[Clause, ...]]]] = {}
+_CATALOG_ANCHOR_CACHE_MAX = 4
+
+
+def _catalog_anchor_plan(catalog: Catalog) -> dict[str, tuple[Clause, ...]]:
+    hit = _CATALOG_ANCHOR_CACHE.get(id(catalog))
+    if hit is not None and hit[0] is catalog:
+        return hit[1]
+    anchors = {t.id: anchored for t in catalog.enabled_templates()
+               for anchored in (tuple(c for c in t.requires if c.anchor),) if anchored}
+    if len(_CATALOG_ANCHOR_CACHE) >= _CATALOG_ANCHOR_CACHE_MAX:
+        _CATALOG_ANCHOR_CACHE.clear()
+    _CATALOG_ANCHOR_CACHE[id(catalog)] = (catalog, anchors)
+    return anchors
 
 
 def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
@@ -995,12 +1043,20 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     # cannot fire.
     declared, ungrounded_score = _catalog_structure_plan(catalog)
     attested = evidence_structure(ev, present) if declared else frozenset()
+    anchors = _catalog_anchor_plan(catalog)
     templates = catalog.enabled_templates()
     scores: list[HypothesisScore] = []
     append = scores.append          # bound once: this loop runs catalog-sized
     scored = 0                      # per rank(), and rank() runs per component
     ungrounded = 0
     for t in templates:
+        # tracker 385: an unattested anchor removes the template from THIS ranking
+        # altogether, rather than scoring it zero: rows are ordered by id among
+        # ties, so even a zero row would displace a visible competitor or the
+        # "nearest template" checklist on evidence that has nothing to do with it.
+        anchored = anchors.get(t.id)
+        if anchored is not None and not all(_satisfying(c, ev) for c in anchored):
+            continue
         reachable = bool(index[t.id] & present)
         need = declared.get(t.id)
         if need is not None and not need <= attested:
