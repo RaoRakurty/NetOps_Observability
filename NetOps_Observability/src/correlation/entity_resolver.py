@@ -216,9 +216,10 @@ class EntityResolver:
         # The per-device interface-key index (a canon_iface_key regex per port
         # name, plus the per-device ifName sets) is built ONLY for the tenant-only
         # identity resolver (`tenant` set by identity_resolver_for): the legacy
-        # loader's builds sit on today's hot path and nothing reads that index
-        # until P6 PR-E wires it. The cheap name/address ambiguity tracking is
-        # kept everywhere so resolve_device answers the same on any resolver.
+        # loader's builds sit on the hot path and only stage [1] canonicalisation
+        # (P6 PR-E, via main.cached_identity_resolver_for) reads that index. The
+        # cheap name/address ambiguity tracking is kept everywhere so
+        # resolve_device answers the same on any resolver.
         p6 = tenant is not None
         ip_dev_pairs: list[tuple] = []
         name_pairs: list[tuple] = []

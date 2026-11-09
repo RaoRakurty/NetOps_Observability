@@ -100,17 +100,38 @@ the window filters (e.g. M:8157-8161).
   → `attrs["series_sources"]`; several sources → observer path =
   `verdicts.conservative_collection_path` and the witness sits in EVERY source's
   authority bucket (§5). OFF byte-identical (test_series_admission_p6.py).
-- **Identity canonicalisation building blocks (P6 PR-D, 2026-11-08) — NOT WIRED;
-  nothing on the hot path imports them until PR-E.** `canon.py`: `canon_iface_key`
-  (table-free port key, a superset of Go `canonIface`, drift-tested; digit-only names
-  → an ifIndex marker), `canonical_peer`, `canonicalize(sig, resolver)` (D1/D2/D4/D5 on
-  the syslog/trap/controller lanes; rewrites `entity_id` + the raw device token only,
-  never `native_id`/`signal_id`; stamps `attrs["canon"]`; refuses a resolver not
-  scoped to the signal's tenant). `entity_resolver.identity_resolver_for(raw, tenant)`
-  is the TENANT-ONLY resolver (never ∪ global) with `resolve_device` (id/name/any
-  address, generic-hostname guard, ambiguity reason) and a collision-dropping
-  (device, key) → ifName index (test_canon_identity_p6.py,
-  test_identity_canon_isolation.py).
+- **Stage [1] identity canonicalisation (P6 PR-D blocks 2026-11-08, PR-E wiring;
+  flag `CORR_IDENTITY_CANON`, default OFF, REQUIRES E1 `CORR_ORIGIN_OBSERVER` AND
+  `CORR_SERIES_ADMISSION` — requested without both it stays off, logs an error at
+  start-up, gauge `corr_identity_canon_enabled 0`; ENGINE_SEMVER unchanged until the
+  default-ON PR).** One box / session / port reaches the engine under a different
+  spelling per lane (syslog hostname or management IP vs inventory id; `Gi1` vs
+  `GigabitEthernet1`; the controller's peer rewritten to an inventory id), so the
+  evidence never met. `canon.py` (pure): `canon_iface_key` (table-free port key, a
+  superset of Go `canonIface`, drift-tested; digit-only names → an ifIndex marker),
+  `canonical_peer`, `canonicalize_detailed(sig, resolver)` (D1 syslog BGP host →
+  `<device>:<peer>`, also for the A4 `bgp_session_not_established` check derived from
+  it; D2 host → device id; D4 `<device>:<port key>`; D5 controller peer → its
+  address), `canonicalize_series` (the metric-lane key; digits are an ifIndex only
+  when the source declares `index`). Rewrites `entity_id` + the raw device token only,
+  never `native_id`/`signal_id`; stamps `attrs["canon"]={raw,basis}` on a rewrite
+  only; abstains (keeps the raw spelling) on unknown/ambiguous/generic/conflicting
+  identities; refuses a resolver not scoped to the signal's tenant.
+  `entity_resolver.identity_resolver_for` is the TENANT-ONLY resolver (never ∪ global;
+  collision-dropping (device, key) → ifName index); `main.cached_identity_resolver_for`
+  memoizes it per (tenant, file mtime), caching only tenants the file holds.
+  **Seams (ON):** event lanes (syslog, trap, controller, proactive) in `buffer_signal`
+  AFTER `canon_tenant`, BEFORE the E1 origin stamp, and so AFTER every lane's
+  `agg_admit` (the aggregation plane keeps raw keys: INVARIANTS §10a); the metric lane
+  in `handle_metric` after `verified_tenant`, before the counter-rate state, the
+  episode detector, A4 and the z-score. `corr_signals` keeps the RAW entity (written
+  before the window); the window, the archive slice and therefore objects and replay
+  carry the canonical one — replay never comes through `buffer_signal`, so it is
+  flag-independent. Counted `corr_identity_canon_total{lane,axis,outcome}` (closed
+  labels; axis `signal` = one per call) + /healthz `ingest.identity_canon_<outcome>`.
+  OFF: canonicalize is never called, byte-identical (test_canon_identity_p6.py,
+  test_identity_canon_isolation.py, test_identity_canon_wiring_p6e.py,
+  test_source_parity_e7.py `KNOWN_DIVERGENCES` / `_ON`).
 
 **Partitioning.** Producers key by tenant (murmur2); every topic has the same partition
 count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
@@ -251,7 +272,11 @@ host / egress / seam+target+schedule) (V:105-115).
   `buffer_signal` stamps the origin (metric/trap/syslog/flow observer, or the device a
   controller event reports about) canonicalised through the TENANT's resolver
   (`EntityResolver.canonical_device`: id, name or address → id; ambiguous → kept
-  verbatim), so the archive and replay carry it. `Witness.origin` is "" with the flag
+  verbatim), so the archive and replay carry it. With `CORR_IDENTITY_CANON` on, the
+  origin is resolved by the same TENANT-ONLY resolver that canonicalised the entity
+  (P6 OD2): a global row spelled like the tenant's box would otherwise drop the
+  name/address from the legacy tenant ∪ global resolver and give one node two
+  origins. `Witness.origin` is "" with the flag
   off and the rank_memo projection appends it only under the flag, so OFF is
   byte-identical (test_origin_observer_e1.py). Plan:
   docs/design/NMS_DEVICE_IDENTITY_2026-11-01.md §7a/§7b.
@@ -431,3 +456,13 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   producers.py:1388). If they differ for one box, the gate over-counts it as two
   independent witnesses — proven by test_origin_observer_e1.py; closed by the E1
   origin-observer rule when `CORR_ORIGIN_OBSERVER` is on (§5).
+- **NMS-only identity (P6 PR-E, `CORR_IDENTITY_CANON`, §1).** The controller's
+  device id is the inventory id already (nms/identity.go), so stage [1] leaves
+  controller device kinds alone (a `device or site` binding is never read as a
+  hostname); it puts a session's peer back to the address nms/identity.go kept in
+  `correlation_hints.controller_peer_id` (D5), so the controller's report and the
+  router's own trap are ONE node (E7 `controller_peer_is_inventory_id` heals ON), and
+  canonicalises controller port spellings (E2a `<device>:<ifname>`, E3 realtime
+  `ifName` on the metric lane) onto the SNMP port key. A controller-only device the
+  inventory does not know keeps its id verbatim. The witness rule is unchanged: still
+  one `via_controller` bucket, and E1 keeps the device's own lanes one witness.
