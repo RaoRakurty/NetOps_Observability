@@ -537,6 +537,29 @@ transforms:
       if cx_sd != "" {
         .structured_data = cx_sd
       }
+      # Event time (log-time standard R2, R4, R5). An RFC 3164 time has no zone and no
+      # year, so it cannot prove an instant. A device logging local time, or with a wrong
+      # clock, would otherwise reach the engine hours away from its neighbours and never
+      # correlate: `timestamp` is what the engine, the router's `ts` and the Logs sort read.
+      # So past the skew tolerance a zone-less claim is not believed: event time is when
+      # the edge read the frame, the claim stays on the record as device_timestamp, and
+      # ts_source and clock_skew_s say so. Inside the tolerance the device's own time
+      # stands, which keeps sub-second order. A frame that STATES its zone is left alone:
+      # it may truly be old (a replay, a backlog), and re-stamping it would fabricate
+      # freshness; clock_skew_s reports it and the engine's buffer_signal bounds it.
+      # 300 is producers.SYSLOG_CLOCK_SKEW_TOLERANCE_S, pinned by the edge suite.
+      cx_recv, cx_recv_err = parse_timestamp(string(.cx.recv) ?? "", "%+")
+      if cx_recv_err == null {
+        .ingested_at = cx_recv
+        cx_claim = parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? cx_recv
+        cx_skew = to_unix_timestamp(cx_claim) - to_unix_timestamp(cx_recv)
+        if (string(.cx.zone) ?? "") != "stated" && abs(cx_skew) > 300 {
+          .device_timestamp = cx_claim
+          .timestamp = cx_recv
+          .ts_source = "edge_receive"
+          .clock_skew_s = cx_skew
+        }
+      }
       del(.cx)
       # Counted by the router (netops_ingest_syslog_bad_frames). The record itself stays.
       # 32768 is syslog-ng's log-msg-size: a frame this long may have lost its tail.
@@ -994,13 +1017,15 @@ transforms:
       # receive clock. |skew| > 300s ⇒ stamp clock_skew_s (signed seconds,
       # positive = device clock ahead) so the record is searchable in
       # OpenSearch and the correlation service raises a per-device finding off
-      # the bus copy. The timestamp itself is NEVER rewritten (R2: origin time
-      # preserved; R3: receive time alongside).
+      # the bus copy. Compared to when the EDGE read the frame (ingested_at, R3)
+      # where known, so a frame held in syslog-ng's disk buffer is not a wrong clock.
+      # syslog_sender has already handled a zone-less claim past the tolerance; a
+      # frame that states its zone keeps its timestamp (R2).
       # (`to_timestamp` does not exist in this Vector's VRL — exit 78 at boot,
       # caught in deploy 2026-07-17. Render→parse handles both a native
       # timestamp and a string form of .timestamp.)
       ots = to_unix_timestamp(parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? now())
-      skew_s = ots - to_unix_timestamp(now())
+      skew_s = ots - to_unix_timestamp(parse_timestamp(to_string(.ingested_at) ?? "", "%+") ?? now())
       if abs(skew_s) > 300 { .clock_skew_s = skew_s }
 
       # ── Scale P0: tenant partition key ──────────────────────────────────

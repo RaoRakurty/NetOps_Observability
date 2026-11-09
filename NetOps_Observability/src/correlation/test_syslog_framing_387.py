@@ -159,10 +159,51 @@ def test_the_old_tag_shape_of_the_protocol_line_is_unmoved() -> None:
     assert sig.severity.value == "high"
 
 
+ADMIN_TRAP = {
+    "device": "r1", "trap_oid": "1.3.6.1.6.3.1.1.5.3", "trap_name": "linkDown", "timestamp": TS,
+    "varbinds": [{"oid": "1.3.6.1.2.1.31.1.1.1.1.1", "value": "Gi1"},
+                 {"oid": "1.3.6.1.2.1.2.2.1.7.1", "name": "ifAdminStatus", "value": "2"},
+                 {"oid": "1.3.6.1.2.1.2.2.1.8.1", "name": "ifOperStatus", "value": "2"}],
+}
+
+
+def _objects_with_trap(*events: dict) -> int:
+    trap = P.trap_control_signal(dict(ADMIN_TRAP), "t1", NOW)
+    assert (trap.attrs.get("link_cause"), trap.severity.value) == ("admin", "high")
+    sigs = [trap] + [s for s in (_signal(ev) for ev in events) if s]
+    sigs.sort(key=lambda s: (s.ts, s.signal_id))
+    return len(run_window(tuple(sigs), builtin_catalog(), ()))
+
+
+def test_a_shutdown_trap_alone_opens_nothing() -> None:
+    assert _objects_with_trap() == 0
+
+
+def test_the_protocol_line_does_not_defeat_the_admin_exemption() -> None:
+    """The reason the IOS protocol line is warn. `_admin_change_only` fails closed on any
+    opening-severity signal with no cause, and this line carries none: at high it would
+    reopen every shutdown the trap had correctly exempted."""
+    assert _objects_with_trap(_ios("LINK-5-CHANGED", ADMIN_DOWN, "notice"),
+                              _ios("LINEPROTO-5-UPDOWN", PROTO_DOWN, "notice")) == 0
+
+
+def test_a_real_fault_beside_the_admin_trap_opens() -> None:
+    """Fail-closed in the other direction: the fault line has no admin cause."""
+    assert _objects_with_trap(_ios("LINK-3-UPDOWN", LINK_DOWN, "err")) == 1
+
+
+def test_a_tagged_protocol_line_beside_the_admin_trap_opens() -> None:
+    """EOS's line is its fault line, so it cannot be exempted on the trap's word. This is
+    the one shutdown shape that still opens: tracker 388."""
+    ev = _ev(f"%LINEPROTO-5-UPDOWN: {PROTO_DOWN}", "notice", appname="Ebra",
+             facility="LINEPROTO", event_type="updown")
+    assert _objects_with_trap(ev) == 1
+
+
 @pytest.mark.parametrize("word", WORDS)
 def test_pri_cannot_move_a_typed_link_row(word: str) -> None:
     """The rows state severity by state and shape. Real PRI cannot widen or narrow what
-    stage [5] opens on them, nor what `_admin_change_only` (#155) sees as opening."""
+    stage [5] opens on them, nor what `_admin_change_only` sees as opening."""
     assert _signal(_ios("LINK-3-UPDOWN", LINK_DOWN, word)).severity.value == "high"
     assert _signal(_ios("LINK-3-UPDOWN", "Interface Gi1, changed state to up", word)).severity.value == "warn"
     assert _signal(_ios("LINEPROTO-5-UPDOWN", PROTO_DOWN, word)).severity.value == "warn"

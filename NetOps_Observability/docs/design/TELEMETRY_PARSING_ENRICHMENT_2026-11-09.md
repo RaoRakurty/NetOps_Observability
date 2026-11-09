@@ -79,7 +79,7 @@ Removing the second parser keeps PRI and the mnemonic, but RFC 5424 frames then 
 **Built in PR 10 (2026-11-09).** `core.conf` reads every frame with `no-parse` and branches on its bytes: a strict RFC 5424 parser for `<PRI>1 `, the legacy parser for the rest, after data-driven shape rewrites (`edge_shapes` in the packs). Vector's own parser was evaluated and rejected: it produced no record for 12 of 31 fixtures and let a structured-data element overwrite the hostname. Also found while fixing it, and fixed:
 
 - **One non-UTF-8 byte stalled the whole lane.** Vector's octet decoder treats it as a broken stream and syslog-ng waits 60 s to reconnect. The source now sanitises.
-- **Every RFC 3164 timestamp was the receive time,** since the second parse found no date. Device time now survives, so a device with a wrong clock or a non-UTC zone reaches the engine with that time. `clock_skew_s` reports it.
+- **Every RFC 3164 timestamp was the receive time,** since the second parse found no date, and that accident is what let a fleet logging local time correlate. Device time now survives within the 300 s skew tolerance. Past it a zone-less claim is not believed: event time is the edge's receive time, the claim stays as `device_timestamp`, `ts_source` says `edge_receive` and `clock_skew_s` is stamped. A frame stating `Z` or an offset keeps its time and is flagged: it can truly be old.
 - **`<>` reads as PRI 0, `kern.emerg`,** and a failed parse injects text at `err`. A frame with no valid PRI is now kept unparsed at `notice` and counted.
 - **Sender-written structured data reaches no field.** It travels as one text value, `structured_data`.
 
@@ -299,7 +299,7 @@ Defects being fixed: all row text is monospaced at 11.5–12.5px, below the floo
 - **PR 11 (D2, rule 2):** deduplication is at read time over a stable key, so every stored audit document survives. The Logs page groups repeats with first seen, last seen and count.
 - **PR 8/9 (D3, rule 1):** a typed rule's catalogue severity decides whether a lone event can open an object. Only qualifying critical events carry `crit`; lower ones reach the engine below the open floor, where they can still join a component.
 - **PR 7 (D4):** `FETCH_PINS` URLs name a commit, not a branch. The licence question is resolved in that PR's report: `cisco-mibs` shows no licence file, so nothing is redistributed until it is settled.
-- **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs.
+- **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs. PR 10 delivers the field: `message_original` on every syslog frame, accepted at about +11.5% mean JSON per document on the lab (808 to 901 bytes over 3,825 frames). Still owed: the operator docs.
 - **New PR 16 (D7):** audit and close gaps in access, audit trail, export control and retention for syslog carrying usernames, with a §3a test.
 - **PR 4 (D6):** the label change also covers API filters and dashboards.
 

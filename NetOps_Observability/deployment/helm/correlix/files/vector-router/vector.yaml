@@ -640,7 +640,10 @@ transforms:
         dts, dterr = parse_timestamp(to_string(.timestamp) ?? "", format: "%+")
         if dterr == null {
           .ts = to_unix_timestamp(dts, unit: "milliseconds")
-          .ts_source = "timestamp"
+          # The aggregator names a timestamp it had to replace (edge_receive). Keep that.
+          if !exists(.ts_source) {
+            .ts_source = "timestamp"
+          }
         }
       }
 

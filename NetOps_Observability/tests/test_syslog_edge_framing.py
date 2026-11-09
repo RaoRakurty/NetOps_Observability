@@ -23,6 +23,7 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,8 @@ CATALOG = ROOT / "telemetry-catalog"
 CORRELATION = ROOT / "src" / "correlation"
 LOG_MSG_SIZE = 32768
 
+#: How long a frame may take from the sender to the document on a loaded test host.
+RECORD_TOLERANCE_S = 60
 SENDER = "<the sender's address>"  # the container's own address, known only at run time
 _SKIP = ("docker is unavailable, so the edge suite DID NOT RUN against the shipped "
          "syslog-ng config. Run it before shipping.")
@@ -146,7 +149,6 @@ FRAMES = [
     ("cEdge, no hostname and the mnemonic survives", CEDGE, {
         "frame_format": "rfc3164", "hostname": SENDER, "appname": "unknown",
         "severity": "notice", "syslog_facility": "local7",
-        "timestamp": "2026-11-09T09:00:00.123Z",
         "message": "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User svc-user authenticated "
                    "successfully from 192.0.2.1:50000",
         "structured_data": '[meta sequenceId="25165"]',
@@ -401,6 +403,128 @@ def test_true_pri_cannot_move_a_typed_link_rows_severity(pri: int) -> None:
     ])
     assert (down["kind"], down["severity"]) == ("link_state_change", "high")
     assert (up["kind"], up["severity"]) == ("link_state_change", "warn")
+
+
+# ── time: a zone-less claim cannot prove an instant (log-time standard R2, R4, R5) ──
+#
+# Every shape's frame states a time relative to NOW, so these hold on any day.
+
+def _bsd(at: datetime) -> str:
+    return f"{at.strftime('%b')} {at.day:2d} {at.strftime('%H:%M:%S')}"
+
+
+def _iso(at: datetime, zone: str = "Z") -> str:
+    return at.strftime("%Y-%m-%dT%H:%M:%S.") + f"{at.microsecond // 1000:03d}" + zone
+
+
+#: Vendor shapes with no zone the parser can read. A zone WORD is dropped, so it counts.
+ZONELESS = [
+    ("IOS no hostname", "<187>25166: {bsd}.123: %LINK-3-UPDOWN: Interface Gi1, changed state to down"),
+    ("IOS zone word", "<187>25166: {bsd}.123 PST: %LINK-3-UPDOWN: Interface Gi1, changed state to down"),
+    ("IOS hostname", "<187>{bsd} r5 %LINK-3-UPDOWN: Interface Gi1, changed state to down"),
+    ("IOS origin-id", "<187>34: r5: *{bsd}.123: %LINK-3-UPDOWN: Interface Gi1, changed state to down"),
+    ("NX-OS", "<190>sw01: {year} {bsd} UTC: %AUTHPRIV-6-SYSTEM_MSG: session opened"),
+    ("IOS-XR", "<187>94307: gw2 LC/0/2/CPU0:{bsd}.834 : ifmgr[214]: %PKT_INFRA-LINK-3-UPDOWN : Interface Te0/2/0/4, changed state to Down"),
+    ("EOS", "<149>{bsd} edge01 Rib: %BGP-3-NOTIFICATION: received from neighbor 192.0.2.1"),
+    ("Junos standard", "<28>{bsd} Branch1 rpd[2310]: RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 192.0.2.1 down"),
+    ("SR OS", "<188>{bsd} 10.221.38.108 TMNX: 17 Base SYSTEM-WARNING-tmnxStateChange-2009 [subject]: changed"),
+]
+#: Vendor shapes that state an instant.
+ZONED = [
+    ("vEdge RFC 5424", "<187>1 {iso} vEdge-1 FTMD 3875 - - a line"),
+    ("Junos structured data", '<165>1 {iso} router1 mgd 3046 UI_X [junos@2636.1.1 u="x"] a line'),
+    ("ASA EMBLEM", "<166>:{iso}: %ASA-6-110002: a line"),
+    ("ASA with a device id", "<166>{iso} asa : %ASA-6-110002: a line"),
+    ("SONiC", "<30>{iso} sonic-1 INFO bgp#bgpd[123]: a line"),
+]
+FIVE_HOURS = timedelta(hours=5)
+
+
+def _frame(template: str, at: datetime) -> bytes:
+    return template.format(bsd=_bsd(at), year=at.year, iso=_iso(at)).encode()
+
+
+def _ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+@pytest.mark.parametrize("name,template", ZONELESS, ids=[z[0] for z in ZONELESS])
+def test_a_zoneless_device_five_hours_behind_is_read_at_receive_time(edge: H.Edge, name: str, template: str) -> None:
+    now = datetime.now(timezone.utc)
+    claimed = now - FIVE_HOURS
+    doc = edge.send(_frame(template, claimed))
+    assert doc["ts_source"] == "edge_receive", doc
+    assert abs((_ts(doc["timestamp"]) - now).total_seconds()) < RECORD_TOLERANCE_S, doc
+    assert doc["timestamp"] == doc["ingested_at"], doc
+    assert abs((_ts(doc["device_timestamp"]) - claimed).total_seconds()) < 2, doc
+    assert -FIVE_HOURS.total_seconds() - RECORD_TOLERANCE_S < doc["clock_skew_s"] < -FIVE_HOURS.total_seconds() + RECORD_TOLERANCE_S, doc
+    assert doc["message_original"] == _frame(template, claimed).decode(), "the claim stays on the record"
+
+
+@pytest.mark.parametrize("name,template", ZONELESS, ids=[z[0] for z in ZONELESS])
+def test_a_zoneless_device_within_the_skew_keeps_its_true_time(edge: H.Edge, name: str, template: str) -> None:
+    claimed = datetime.now(timezone.utc) - timedelta(seconds=60)
+    doc = edge.send(_frame(template, claimed))
+    assert "ts_source" not in doc and "device_timestamp" not in doc and "clock_skew_s" not in doc, doc
+    assert abs((_ts(doc["timestamp"]) - claimed).total_seconds()) < 2, doc
+    assert abs((_ts(doc["ingested_at"]) - datetime.now(timezone.utc)).total_seconds()) < RECORD_TOLERANCE_S, doc
+
+
+@pytest.mark.parametrize("name,template", ZONED, ids=[z[0] for z in ZONED])
+def test_a_frame_that_states_its_zone_keeps_its_time_and_is_flagged(edge: H.Edge, name: str, template: str) -> None:
+    """It may truly be old, and re-stamping would fabricate freshness (buffer_signal says
+    the same). Five hours off it is flagged, and buffer_signal counts it past the window."""
+    claimed = datetime.now(timezone.utc) - FIVE_HOURS
+    doc = edge.send(_frame(template, claimed))
+    assert "ts_source" not in doc and "device_timestamp" not in doc, doc
+    assert abs((_ts(doc["timestamp"]) - claimed).total_seconds()) < 2, doc
+    assert -FIVE_HOURS.total_seconds() - RECORD_TOLERANCE_S < doc["clock_skew_s"] < -FIVE_HOURS.total_seconds() + RECORD_TOLERANCE_S, doc
+
+
+def test_a_zoneless_device_ahead_is_read_at_receive_time_too(edge: H.Edge) -> None:
+    claimed = datetime.now(timezone.utc) + FIVE_HOURS
+    doc = edge.send(_frame(ZONELESS[2][1], claimed))
+    assert doc["ts_source"] == "edge_receive", doc
+    assert abs((_ts(doc["timestamp"]) - datetime.now(timezone.utc)).total_seconds()) < RECORD_TOLERANCE_S, doc
+
+
+_WINDOW_PROBE = textwrap.dedent("""\
+    import json, sys
+    from datetime import datetime, timezone
+    import catalog, engine, producers as P
+    now = datetime.now(timezone.utc)
+    sigs = [s for s in (P.syslog_control_signal(dict(d), "t1", now) for d in json.load(sys.stdin)) if s]
+    sigs.sort(key=lambda s: (s.ts, s.signal_id))
+    snaps = engine.run_window(tuple(sigs), catalog.builtin_catalog(), ())
+    print(json.dumps({"signals": len(sigs), "objects": len(snaps)}))
+""")
+
+
+def test_a_device_five_hours_behind_still_correlates_with_a_frame_on_time(edge: H.Edge) -> None:
+    """THE REGRESSION. Each line can open an object alone, so two objects means they never
+    met: the gap between them was five hours. One object means they correlated."""
+    now = datetime.now(timezone.utc)
+    behind = edge.send(_frame(ZONELESS[2][1], now - FIVE_HOURS))
+    on_time = edge.send(f"<186>1 {_iso(now)} r5 chassisd 1 - - a critical line no rule knows".encode())
+    assert behind["hostname"] == on_time["hostname"] == "r5"
+    proc = subprocess.run(
+        [sys.executable, "-c", _WINDOW_PROBE], input=json.dumps([behind, on_time]), capture_output=True,
+        text=True, check=False, timeout=120, env={"PYTHONPATH": str(CORRELATION), "PATH": "/usr/bin:/bin"})
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"signals": 2, "objects": 1}, proc.stdout
+
+
+def test_a_frame_with_no_time_is_not_flagged(edge: H.Edge) -> None:
+    doc = edge.send(FORTI)
+    assert "ts_source" not in doc and "clock_skew_s" not in doc, doc
+
+
+def test_the_tolerance_is_one_number_in_both_executors() -> None:
+    shipped = yaml.safe_load(VECTOR_YAML.read_text(encoding="utf-8"))["transforms"]
+    assert 'abs(cx_skew) > 300' in shipped["syslog_sender"]["source"]
+    assert 'abs(skew_s) > 300' in shipped["syslog_normalized"]["source"]
+    producers = (CORRELATION / "producers.py").read_text(encoding="utf-8")
+    assert "SYSLOG_CLOCK_SKEW_TOLERANCE_S = 300.0" in producers
 
 
 # ── the generic net: real PRI, no pack (owner D3) ────────────────────────────────

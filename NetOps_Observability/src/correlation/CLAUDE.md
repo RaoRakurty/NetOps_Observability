@@ -93,9 +93,14 @@ Three things changed at stage [1] because of it, nothing else:
   `high`. No typed row reads PRI.
 `.facility` no longer carries the PRI facility (that is `syslog_facility`): `local` is a screen
 literal, and a fleet on local7 would have passed every line through the prefilter.
-Device timestamps now survive on RFC 3164 frames, which were all receive time before: a device
-whose clock is wrong or not in UTC now lands outside the window instead of at arrival time
-(`clock_skew_signal` reports it).
+`ev.timestamp` is the device's own time when it can be believed. An RFC 3164 time has no zone
+or year: within `SYSLOG_CLOCK_SKEW_TOLERANCE_S` it stands, which keeps sub-second order; past it
+the aggregator replaces it with the edge's receive time (`ts_source=edge_receive`, the claim in
+`device_timestamp`, `clock_skew_s` stamped), so a device logging local time still correlates. A
+frame with `Z` or an offset keeps its timestamp whatever it says, because it can truly be old:
+re-stamping would fabricate freshness, as `buffer_signal` already reasons, which clamps the
+future and counts the past. So a wrong clock with a stated zone does not correlate, and
+`clock_skew_signal` reports it.
 
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).

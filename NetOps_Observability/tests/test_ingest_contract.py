@@ -858,6 +858,9 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         # device writes its element and param names, so mapping them is a mapping
         # explosion; it is read from _source.
         "structured_data",
+        # tracker 387 PR 10: what a device claimed when its zone-less time was not believed.
+        # Kept for retrieval; `timestamp` is the searchable time.
+        "device_timestamp",
         "vendor", "hostname", "appname", "severity", "facility", "summary",
         "subsystem", "event_type", "normalized_severity", "clock_skew_s",
         "fgt", "app_id", "app_vendor", "app_src", "app_dst", "app_dport",
