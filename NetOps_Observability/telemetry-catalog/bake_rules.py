@@ -50,7 +50,7 @@ LANES = ("syslog", "port", "trap", "catalog")
 RUNTIME_LANES = ("syslog", "port", "trap")   # what the image actually ships
 SOURCES = ("syslog", "trap")
 SEVERITIES = ("info", "warn", "high", "crit")
-ENTITY_TYPES = ("device", "interface", "device_or_interface")
+ENTITY_TYPES = ("device", "interface", "device_or_interface", "path")
 #: The catalog's fidelity ladder (README). A ROW may state its own rung when the
 #: family's rung is not its evidence — see `fidelity_status` below.
 FIDELITY_STATUSES = ("doc_claimed", "lab_validated", "live_validated",

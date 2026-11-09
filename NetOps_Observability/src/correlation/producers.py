@@ -248,6 +248,10 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "vtep_state_change", "evpn_mac_move",
     # trap lane
     "device_restart",
+    # trap packs (tracker 387): the standard BFD session kind a template already
+    # names, and the recoveries the device lane now reports (build_nodes skips them).
+    "bfd_session_flap", "bfd_session_flap_clear", "device_resource_anomaly_clear",
+    "controller_bfd_down_clear", "controller_control_connection_loss_clear",
     # generic-alarm keystone (#80 §4)
     "device_alarm",
     # metric episodes (main.py metric_identity + C6 flow)
@@ -1102,6 +1106,7 @@ def syslog_promotable(ev: dict) -> bool:
 
 _ENTITY_TYPES: dict[str, EntityType] = {
     "device": EntityType.DEVICE, "interface": EntityType.INTERFACE,
+    "path": EntityType.PATH,
 }
 _MODALITIES: dict[str, ModalityClass] = {
     "control_plane": ModalityClass.CONTROL_PLANE,

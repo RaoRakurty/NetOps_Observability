@@ -19,26 +19,95 @@ The Go **runtime stays stdlib-only** (CLAUDE.md §6): no MIB compiler, no new mo
 (**pysmi**, pure-Python, offline) is **build-time tooling only** — it never enters
 `go.mod` or the API image.
 
-`index/oididx.json` today is a **seed** migrated 1:1 from the former curated maps
-(IF-MIB / SNMPv2-MIB / BGP4-MIB / OSPF / ENTITY / Cisco config-change). Enterprise
-trees (Arista 30065, Cisco 9, Juniper 2636, Nokia 6527) decode as raw OIDs **until
-their MIBs are vendored here** and the index is regenerated.
+`index/oididx.json` is the compiled index of every module in `gen_index.py`:
+`DEFAULT_MIBS` through pysmi and the `NETSNMP_ROOTS` subtrees through net-snmp. It
+covers the standard MIBs and the enterprise trees of Arista (30065), Cisco (9),
+Juniper (2636), Nokia (6527) and Cisco SD-WAN's Viptela OS (41916). An OID in no
+compiled module, which means most other enterprises today, stays honestly raw:
+`enterpriseSpecific` with its numeric OID.
 
 ## Add a vendor's traps (runbook)
 
-1. Drop the vendor's `.mib` files into `mibs/vendor/<vendor>/` (and any IETF/IANA
-   imports they need into `mibs/ietf/` / `mibs/iana/`). Note the source + license
-   in a `SOURCES.md` per vendor dir (zero-trust provenance).
+1. Pin the vendor's modules in `gen_index.py` `FETCH_PINS`, with the import chain
+   the vendored tree lacks: an exact commit in the URL and a sha256. Add the trap
+   subtrees to `NETSNMP_ROOTS`. Record source and licence in `vendored/SOURCES.md` and
+   `scripts/license-data.json`. Only a module with a redistribution grant may be
+   checked in, under `vendored/` (see "What we redistribute" below).
 2. `make mib-index` — runs pysmi over the tree → regenerates `index/oididx.json`
    (the diff is reviewable in the PR), recomputes the content-hash `version`, and
    runs the resolve-assertions + `snmptranslate` cross-check.
 3. `go build ./...` — `go:embed` picks up the new index; `go test ./collectors/`
    runs `oidindex_test.go` + the trap fixtures.
-4. Commit the `.mib` files **and** the regenerated `oididx.json` together.
+4. Commit the regenerated `oididx.json`, then write the vendor's trap pack (below).
 
 MIBs change rarely, so a backend rebuild per MIB batch is acceptable (the design
 rejects a runtime MIB compiler as a §6 violation). No trap-receiver code changes —
 only data.
+
+`gen_index.py` starts from the checked-in index, so a regeneration can add and
+correct nodes but never drop one (`CLEAN=1` opts out). Compare the node diff before
+committing: an unexpected removal or rename is a finding.
+
+## Trap packs: what a decoded trap means (tracker 387)
+
+The index knows what a MIB states: names, types, enums. `packs/*.json` holds what a
+MIB cannot state: which object is the vendor's own severity, which one says whether
+the condition raised or cleared, and which text is really a number. The receiver
+(`collectors/trap_semantics.go`) names no vendor. **Adding a vendor means adding its
+MIB pins and a pack, with no code change.**
+`TestTrapSemantics_SecondEnterpriseThroughDataOnly` proves it with an enterprise that
+exists nowhere else, and `TestTrapPacks_EmbeddedLoadClean` fails on a pack row whose
+OID, name or enum label is not what the index says.
+
+```json
+{"schema": 1, "pack": "acme", "source": "where each fact comes from",
+ "objects": {
+   "<object OID>": {"name": "acmeLevel", "role": "native_severity",
+                    "normalized": {"sev-high": "crit", "sev-low": "warning"}},
+   "<object OID>": {"name": "acmeNote", "role": "summary", "field": "note", "type": "string"},
+   "<object OID>": {"name": "acmeTemp", "field": "temperature_c", "type": "float"}},
+ "notifications": {
+   "<OID>": {"name": "acmePortChange", "fidelity": "doc_claimed", "category": "data_plane", "family": "ports",
+             "state_object": "<object OID>", "raise": ["broken"], "clear": ["healthy"]},
+   "<OID>": {"name": "acmeFabricDown", "fidelity": "doc_claimed", "event_state": "raise"},
+   "<OID>": {"name": "acmeHeat", "fidelity": "doc_claimed", "text_object": "<object OID>",
+             "text": [{"contains": ["cooled"], "state": "clear", "fidelity": "lab_validated"}]}}}
+```
+
+Rules a pack follows:
+
+- **Keyed by OID**, with the name beside it as a check. A name is not unique across
+  modules; `netconfNotificationSeverity` is defined by five.
+- **State needs evidence.** A state object is preferred, then wording, and a value
+  or wording outside the row reads `point`. Each wording carries its own fidelity,
+  because a captured recovery says nothing about how the raise is worded.
+- **Fidelity is honest:** `doc_claimed` until a real capture replays in a fixture.
+- **A listed notification needs a typed rule** in `telemetry-catalog/events.yaml` for
+  every state it can report. Its normalized severity follows the vendor's, and only
+  a typed rule may decide what that opens (`test_every_pack_state_has_a_typed_row`).
+  An unlisted notification keeps its `SEVERITY_HINT`, whatever the vendor calls it.
+
+A varbind always keeps its numeric OID and `raw_value`; everything else is added
+beside them. Fields on the event: `severity_native_text`, `severity_native_code`,
+`event_state` (`raise|clear|point`), `event_state_fidelity`, `mib_module`,
+`mib_bundle_version` (the index `version`), `device_event_time`, `values` (typed
+numbers), and per varbind `type`, `enum_label`, `time`, `num`.
+
+## Cisco SD-WAN: which directory, and which release
+
+`github.com/cisco/cisco-mibs` is pinned at one commit
+(`c9ab98c03ee051de74edda72f6d5c43ee65cad91`). It has no directory for the lab's
+releases (Viptela OS 20.6.1, IOS XE 17.03), so the arcs were compared across every
+directory it does have.
+
+| Platform | Directory | Tree | What the comparison shows |
+|---|---|---|---|
+| vEdge (Viptela OS) and the controllers | `sdwan/controller/<release>/VIPTELA-TRAPS.mib` | `41916.100` | Every notification and varbind arc is identical from 20.9 to 26.1. 20.12 holds all 123 notifications; a trap captured from a 20.6.1 vEdge matches it. |
+| cEdge (IOS XE SD-WAN) | `sdwan/device/<release>/CISCO-SDWAN-*.my` | `9.9.1002`, `1003`, `1006` | Notification arcs are stable from 17.9 to 26.1, as are the OMP and security varbinds. **BFD varbinds move** (17.9, 17.12 and 26.1 differ), so only BFD's notifications are indexed and its varbinds stay numeric until a capture says which layout a device sends. |
+
+A vEdge trap is never decoded through the cEdge tree or the reverse: they are
+different OIDs. Each module name has one pinned file, so releases cannot clash, and
+`gen_index.py` keys everything by OID because the same symbol recurs across modules.
 
 ## Multi-vendor coverage + software-version ↔ MIB matching (#34)
 
@@ -120,6 +189,9 @@ An operator with no network installs and runs with full trap decode either way.
 Removing the Arista modules is **not** redistribution by another name: nothing in
 the shipped path ever needed the module files.
 
+**Cisco SD-WAN and BFD-STD-MIB follow the same posture** (tracker 387, `vendored/SOURCES.md`).
+The trap decode needs only the checked-in index, so CI and offline builds never fetch them.
+
 **Version matching.** MIBs evolve across NOS versions (new OIDs appear; rarely
 semantics shift). The rigorous model: a device's `sysObjectID` + `sysDescr` →
 vendor + model + **NOS version** → the version-appropriate MIB set. Current stance
@@ -131,6 +203,9 @@ diverges, and select the MIB set by the device's detected version. Until then,
 decode is "best known definition," and an un-vendored OID stays honestly raw.
 
 ## Index schema (`index/oididx.json`)
+
+`version` is the content hash of the nodes; the receiver stamps it on every decoded
+trap as `mib_bundle_version`.
 
 `nodes[oid] = { name, mib, kind: scalar|column|notification, type?, enum?{val:label},
 index?[], severity_hint? }`. Runtime lookup: exact for scalars/notifications,

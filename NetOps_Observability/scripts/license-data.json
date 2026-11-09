@@ -173,6 +173,16 @@
       "rationale": "CISCO-BGP4-MIB decodes IOS-XE's BGP session notifications (cbgp*), which carry IPv6/VRF peers the RFC 4273 MIB cannot; the index needs its OIDs, not its text.",
       "status": "DECIDED"
     },
+    "tracker-387-mibs": {
+      "decided": "fetch-at-build-time",
+      "evidence": "src/backend/collectors/mibs/gen_index.py FETCH_PINS: VIPTELA-TRAPS and VIPTELA-GLOBAL (sdwan/controller/20.12) and CISCO-SDWAN-BFD/OMP/SECURITY-MIB (sdwan/device/17.18) from github.com/cisco/cisco-mibs at commit c9ab98c03ee051de74edda72f6d5c43ee65cad91, which has no licence file; the module text carries a Cisco or Viptela copyright or no notice, and no grant. BFD-STD-MIB, BFD-TC-STD-MIB, IANA-BFD-TC-STD-MIB (IETF Simplified BSD) and their imports DIFFSERV-MIB, DIFFSERV-DSCP-TC, INTEGRATED-SERVICES-MIB from the LibreNMS commit tracker 377 pins. All by https URL and sha256 into the gitignored vendored/.fetched/ cache for the net-snmp pass; never committed. Only the generated, checked-in index/oididx.json and packs/*.json (OID, name, type and enum facts) ship. Documented in vendored/SOURCES.md; test_gen_index.py pins the table.",
+      "license": "LicenseRef-Vendor-MIB-NoGrant",
+      "obligation": "none — Correlix does not redistribute these files in any form",
+      "owner_decision": "DECIDED 2026-11-09 (owner D4): Cisco's official repo, exact commit, checksums verified, licensing and OID mappings validated before deployment. The fetch posture is decided. Still open: whether OID, name and enum facts from a repo with no licence may ship in the index.",
+      "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
+      "rationale": "These modules decode Cisco SD-WAN notifications (vEdge 41916.100; cEdge 9.9.100x) and the standard BFD session notifications; the index needs their OIDs, not their text.",
+      "status": "OPEN: owner D4 asks for licensing validation before deployment; the repo has no licence file"
+    },
     "tracker-377-mibs": {
       "decided": "fetch-at-build-time",
       "evidence": "src/backend/collectors/mibs/gen_index.py FETCH_PINS: LLDP-MIB (IEEE), RSTP-MIB (IETF), OLD-CISCO-INTERFACES-MIB (Cisco, no redistribution grant), TIMETRA-BGP-MIB and its Nokia import chain (TIMETRA-*, Nokia copyright, no redistribution grant) plus IETF/IANA/IEEE imports, 22 modules pinned by https URL at ONE LibreNMS commit (a7de98cf…) and sha256 into the gitignored vendored/.fetched/ cache for the net-snmp pass; never committed. LLDP/RSTP/OLD-CISCO-INTERFACES/TIMETRA-BGP were already fetched UNPINNED at build time by pysmi (DEFAULT_MIBS) and silently ignored; the pin adds a checksum and changes no distribution. Only the generated, checked-in index/oididx.json (OID→name/type/enum facts) ships. Documented in vendored/SOURCES.md; test_gen_index.py pins the table.",

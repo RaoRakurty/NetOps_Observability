@@ -169,6 +169,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # the same transition, so the two can co-confirm.
     "igp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "device_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
+    # Tracker 387: trap recoveries and the standard BFD session kind. A clear is
+    # never a node (build_nodes), so it adds nothing to a template's reachability.
+    "device_resource_anomaly_clear": ModalityClass.DEVICE_TELEMETRY,
+    "controller_bfd_down_clear": ModalityClass.MANAGEMENT_PLANE,
+    "controller_control_connection_loss_clear": ModalityClass.MANAGEMENT_PLANE,
+    "bfd_session_flap": ModalityClass.CONTROL_PLANE,
+    "bfd_session_flap_clear": ModalityClass.CONTROL_PLANE,
     # Provider-reported cloud resource health/utilization (CloudWatch / Azure
     # Monitor). DEVICE_TELEMETRY: an INDEPENDENT observer class from the active
     # probes, so provider health + a synthetic app check can co-confirm a cloud

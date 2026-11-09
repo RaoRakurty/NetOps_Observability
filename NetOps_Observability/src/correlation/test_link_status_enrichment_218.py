@@ -403,7 +403,14 @@ def test_no_other_rule_drops_an_attr():
     assert declaring == {"trap.link.state_change",
                          "trap.link.state_change.event_type",
                          "trap.bgp.cisco_bgp4",
-                         "trap.bgp.nokia_ng"}   # 377: bgp_instance when the index has it
+                         "trap.bgp.nokia_ng",   # 377: bgp_instance when the index has it
+                         # 387: the same meaning, per optional varbind.
+                         "trap.sdwan.cpu_threshold", "trap.sdwan.cpu_threshold.clear",
+                         "trap.sdwan.memory_threshold", "trap.sdwan.memory_threshold.clear",
+                         "trap.sdwan.control_connection", "trap.sdwan.control_connection.clear",
+                         "trap.sdwan.omp", "trap.sdwan.omp.clear", "trap.sdwan.omp_tloc_change",
+                         "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface",
+                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear"}
 
 
 def test_omit_empty_cannot_name_a_key_the_rule_does_not_emit():

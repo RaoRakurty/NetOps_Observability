@@ -18,9 +18,9 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 
 | Profile | Sources | Evidence types supplied | Matchable templates | Fidelity |
 |---|---|---|---|---|
-| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 | lab_validated |
-| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 | lab_validated |
-| SNMP polling + traps only | snmp_poll, trap | 8/13 | 7 | lab_validated |
+| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 12/13 | 16 | lab_validated |
+| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 11/13 | 15 | lab_validated |
+| SNMP polling + traps only | snmp_poll, trap | 10/13 | 8 | lab_validated |
 | Syslog only | syslog | 5/13 | 14 | lab_validated |
 | vManage only | vmanage | 11/13 | 8 | lab_validated |
 | vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 19 | lab_validated |
@@ -39,11 +39,11 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 | **interface_health** | ✅ | 💤 | — | — | — | ✅ | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
 | **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
-| **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ⬜ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
-| **control_connection** | ❓ | ❓ | ⬜ | ⬜ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
+| **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
+| **control_connection** | ❓ | ❓ | ⬜ | ✅ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
 | **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ᵈ | ✅ᵈ | ❓ | ✅ᵈ | 🟠 | 🟠 | ❓ | ❓ |
 | **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
-| **device_resource** | ✅ | 💤 | ⬜ | ⬜ | — | ✅ | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
+| **device_resource** | ✅ | 💤 | ⬜ | ✅ | — | ✅ | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
 | **config_change** | ⬜ | ⬜ | 💤 | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **l2_control** | ⬜ | ⬜ | ✅ | ✅ | — | ❓ | ❓ | ❓ | ❓ | ❓ | — | — | — | ❓ |
 | **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
@@ -126,13 +126,10 @@ Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change, bgp
 
 ### trap — SNMP traps (events.yaml runtime rules)
 
-Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change); device_restart (device_restart); config_change (device_config_change); l2_control (fhrp_state_change, stp_topology_change).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change); igp_adjacency (isis_adjacency_change, ospf_adjacency_change); overlay_tunnel (bfd_session_flap, controller_bfd_down); control_connection (controller_control_connection_loss); device_restart (device_restart); device_resource (device_resource_anomaly); config_change (device_config_change); l2_control (fhrp_state_change, stp_topology_change).
 
 - **interface_health** — unavailable: traps carry state transitions, not counters
-- **overlay_tunnel** ⬜ collection_pending: VIPTELA / CISCO-SDWAN MIBs define BFD state traps; no rule maps them (design §7b E4)
-- **control_connection** ⬜ collection_pending: SD-WAN control-connection traps exist; no rule maps them (design §7b E4)
 - **device_reachability** — unavailable: a device cannot trap its own unreachability
-- **device_resource** ⬜ collection_pending: vendor CPU / memory threshold traps (e.g. CISCO-PROCESS-MIB) not mapped
 - **physical_layer** ⬜ collection_pending: transceiver / sensor threshold traps are vendor-specific and not mapped (#94)
 - **flow_volume** — unavailable: traps are not flow export
 

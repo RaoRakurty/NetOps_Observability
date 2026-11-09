@@ -56,6 +56,14 @@ func lookupOID(oid string) (node OIDNode, indexSuffix string, ok bool) {
 	if n, found := oidIdx.Nodes[oid]; found {
 		return n, "", true
 	}
+	// A scalar's instance is <object>.0, and that is what a varbind carries. The
+	// compilers index the object, so without this every scalar of every vendor
+	// stays unnamed (RFC 2578 §7.7).
+	if base, ok := strings.CutSuffix(oid, ".0"); ok {
+		if n, found := oidIdx.Nodes[base]; found && n.Kind == "scalar" {
+			return n, "0", true
+		}
+	}
 	// longest-prefix for columns: strip trailing arcs at dot boundaries
 	s := oid
 	for {
