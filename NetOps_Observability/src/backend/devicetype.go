@@ -54,6 +54,19 @@ func withDeviceType(ds []models.Device) []models.Device {
 	return ds
 }
 
+// controllerReportedVersion is the version a controller reported for a device
+// it manages (OSVersionSource "api:<system>", nms.ToInventoryDevice): already a
+// clean version string, but its OS label ("Catalyst SD-WAN") is not one the
+// vendor's sysDescr patterns parse, so without this the inventory showed "—"
+// for every controller-only device. Only a controller's own report is used
+// this way — never a free-form OS text.
+func controllerReportedVersion(d models.Device) string {
+	if !strings.HasPrefix(d.OSVersionSource, "api:") {
+		return ""
+	}
+	return strings.TrimSpace(d.OSVersion)
+}
+
 // stampDeviceReadFields fills the read-only, server-stamped fields of an
 // inventory read (tracker 349 follow-up, owner report 2026-10-10):
 //
@@ -93,7 +106,8 @@ func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds
 		// report per component.
 		ds[i].SoftwareVersion = firstNonEmpty(
 			collectors.ResolveDeviceOS(strings.ToLower(ds[i].Vendor), ds[i].OS, ds[i].OSVersion).Version,
-			swRevs[ds[i].ID])
+			swRevs[ds[i].ID],
+			controllerReportedVersion(ds[i]))
 		ds[i].ConfiguredLocation = locs[ds[i].ID]
 	}
 	return ds
