@@ -69,6 +69,12 @@ This directory only holds this pointer.
   rejected AST names a tenant-B id. The test proves it is refused byte-identically to an
   id that never existed.
 
+## Held-out split
+
+A case may carry `"source": "field"`; absent means synthetic. `internal/evalsplit` assigns each
+case to dev or held-out, and held-out cases must stay out of `modelc/examples.v1.json`. See
+`docs/ai/evals.md`.
+
 ## Running it
 
 ```bash

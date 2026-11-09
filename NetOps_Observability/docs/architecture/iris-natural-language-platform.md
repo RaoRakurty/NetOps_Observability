@@ -169,7 +169,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 15 | `NLQueryCompiler` pipeline + compile/execute/get/explain APIs + `compile_query` tool | PARTIAL | Grammar → guarded model fallback (`internal/nlquery/modelc`) → validator; compile/execute APIs; `compile_query` tool (`ai/compile_query.go`, interpret-only). `GET /api/ai/query/{id}` + `/explain` missing | N-C5 |
 | 16 | Query validation + hard limits; reject unknown/cross-tenant/forbidden | MISSING | — | N-C3 |
 | 17 | Query repair loop with structured errors, bounded retries | SHIPPED | ≤ 2 repair rounds fed closed codes/paths/catalog suggestions only (`modelc/prompt.go` `repairPrompt`) | — |
-| 18 | Versioned validated NL↔Intent↔AST example library | SHIPPED | `modelc/examples.v1.json` (82 golden-derived pairs, placeholder ids; every entry decodes + validates in `examples_test`) | — |
+| 18 | Versioned validated NL↔Intent↔AST example library | SHIPPED | `modelc/examples.v1.json` (73 golden-derived pairs from the dev split only, placeholder ids; every entry decodes + validates in `examples_test`) | — |
 | 19 | No fine-tuning first; frontier model + structure | COMPLIANT | Owner decision: no training a proprietary model | — |
 | 20 | Golden NL query corpus `tests/iris/nlquery/golden/` | MISSING | — | N-C6 |
 | 21 | Controlled synthetic paraphrases validated against same AST | MISSING | — | N-C6 |
@@ -431,7 +431,7 @@ plus a recorded-model run in the offline harness.
 |---|---|---|---:|
 | N-H1 | **Golden incident corpus** (Part 1 §47 incl. coincident non-causal change, missing telemetry, contradictions, dual failure, log injection, cross-tenant alias collision) | B1 | 2 |
 | N-H2 | **Incident Replay**: freeze telemetry slice, topology as-of, config state, context version, allowed tools; run Iris blind; compare RCA/evidence/tools/cost/latency/unsupported claims; re-run on model/prompt/tool/runbook/RCA change | H1, A6 | 4 |
-| N-H3 | **Held-out field eval split (D13)** | H1 | 3 |
+| N-H3 | **Held-out field eval split (D13)**. SHIPPED 2026-11-09: `internal/evalsplit` rule, dev and held-out reported per corpus and in the release-gate table, leak guards; see `docs/ai/evals.md`. Remainder: importing real operator-labelled cases (tracker 337) | H1 | 3 |
 | N-H4 | **Performance classes + tenant-keyed caches** (schema, aliases, context, examples) with p50/p95 targets per class | C5 | 1 |
 | N-H5 | **Release gates as CI checks**: entity ≥99 %, executable ≥98 %, semantic ≥95 %, cross-tenant = 0, unauthorized = 0, citation coverage, injection suite, audit completeness | C6, H1 | 1 |
 | N-H6 | **Seasonal baselines + robust z (D18)** — detection depth | H3 | 12–18 |

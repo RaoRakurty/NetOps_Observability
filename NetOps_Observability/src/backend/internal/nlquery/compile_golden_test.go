@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/irisgate"
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
@@ -148,6 +149,36 @@ func canon(a *ast.AST) string {
 
 type score struct{ ok, total int }
 
+func (s score) plus(o score) score { return score{ok: s.ok + o.ok, total: s.total + o.total} }
+
+// compileMetrics is the scorecard of one split. Per-metric numbers cover every
+// answerable phrasing (N-C6); refused and the foreign counts are the SAFETY
+// checks as numbers for the release gates (N-H5).
+type compileMetrics struct {
+	qScore, pScore, entityP, executable, answeredP, coverage, refused score
+	foreignChecks, foreignBad                                         int64
+}
+
+func (m *compileMetrics) plus(o *compileMetrics) *compileMetrics {
+	return &compileMetrics{
+		qScore: m.qScore.plus(o.qScore), pScore: m.pScore.plus(o.pScore), entityP: m.entityP.plus(o.entityP),
+		executable: m.executable.plus(o.executable), answeredP: m.answeredP.plus(o.answeredP),
+		coverage: m.coverage.plus(o.coverage), refused: m.refused.plus(o.refused),
+		foreignChecks: m.foreignChecks + o.foreignChecks, foreignBad: m.foreignBad + o.foreignBad,
+	}
+}
+
+// measures is the release-gate report of one split.
+func (m *compileMetrics) measures(split string) []irisgate.Measure {
+	return []irisgate.Measure{
+		{Gate: irisgate.GateEntity, OK: int64(m.entityP.ok), Total: int64(m.entityP.total), Split: split, Note: "compiled entity precision"},
+		{Gate: irisgate.GateExecutable, OK: int64(m.executable.ok), Total: int64(m.executable.total), Split: split},
+		{Gate: irisgate.GateSemantic, OK: int64(m.answeredP.ok), Total: int64(m.answeredP.total), Split: split, Note: "answered precision"},
+		{Gate: irisgate.GateCrossTenant, Bad: m.foreignBad, Total: m.foreignChecks, Split: split, Note: "compiled queries naming another tenant's entity"},
+		{Gate: irisgate.GateInjection, OK: int64(m.refused.ok), Total: int64(m.refused.total), Split: split, Note: "actions/injection phrasings refused"},
+	}
+}
+
 func (s score) rate() float64 {
 	if s.total == 0 {
 		return 1
@@ -163,7 +194,6 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}, Topo: fixtureLookups{w: w}}}
 
 	perCat := map[string]*score{}
-	var qScore, pScore score
 	// Per-metric numbers over every answerable phrasing (N-C6):
 	//   entity precision   — refs the compiler emitted that the expected query
 	//                        (or an alternate) also names: a WRONG entity is
@@ -174,14 +204,11 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	//                        right");
 	//   coverage           — the share it compiled at all (the rest go to the
 	//                        model fallback or a clarifying question).
-	var entityP, executable, answeredP, coverage score
+	byS := map[evalsplit.Split]*compileMetrics{evalsplit.Dev: {}, evalsplit.HeldOut: {}}
 	var misses []string
-	// Release-gate counts (N-H5): the SAFETY checks below as numbers.
-	var refused score       // SAFETY 1: phrasings that must be refused and were
-	var foreignChecks int64 // SAFETY 2: compiled queries checked for a foreign entity
-	var foreignBad int64    //           ... and the ones that named one
 
 	for _, c := range cases {
+		m := byS[c.split()]
 		loc, err := time.LoadLocation(firstNonEmpty(c.Context.TZ, "UTC"))
 		if err != nil {
 			t.Fatalf("%s: tz: %v", c.ID, err)
@@ -199,22 +226,22 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 			}
 			// SAFETY 1: actions / injection / cross-tenant are declined.
 			if c.Expect.Decline == compile.DeclineNotAQuery {
-				refused.total++
-				refused.ok++
+				m.refused.total++
+				m.refused.ok++
 				if res.AST != nil {
 					v, vr := validate.Validate(ctx, cat, sc, res.AST)
 					if vr.Valid && v != nil {
-						refused.ok--
+						m.refused.ok--
 						t.Errorf("SAFETY %s %q: must be refused, compiled to a valid query %s", c.ID, question, canon(res.AST))
 					}
 				}
 			}
 			// SAFETY 2: nothing compiled names another tenant's entity.
 			if res.AST != nil {
-				foreignChecks++
+				m.foreignChecks++
 				for _, r := range res.AST.Refs {
 					if w.owner[r.ID] != "" && w.owner[r.ID] != w.a.Tenant {
-						foreignBad++
+						m.foreignBad++
 						t.Errorf("SAFETY %s %q: compiled a foreign entity %s", c.ID, question, r.ID)
 					}
 				}
@@ -241,18 +268,18 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 			for _, wv := range want {
 				hit = hit || got == wv
 			}
-			coverage.total++
+			m.coverage.total++
 			if res.AST != nil {
-				coverage.ok++
-				answeredP.total++
+				m.coverage.ok++
+				m.answeredP.total++
 				if hit {
-					answeredP.ok++
+					m.answeredP.ok++
 				} else if testing.Verbose() && qi == 0 {
 					t.Logf("WRONG %s %q\n    got  %s\n    want %s", c.ID, question, got, want[0])
 				}
-				executable.total++
+				m.executable.total++
 				if _, vr := validate.Validate(ctx, cat, sc, res.AST); vr.Valid {
-					executable.ok++
+					m.executable.ok++
 				}
 				expected := map[string]bool{}
 				for _, raw := range append([]json.RawMessage{c.Expect.AST}, c.Expect.Alternates...) {
@@ -261,9 +288,9 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 					}
 				}
 				for _, r := range res.AST.Refs {
-					entityP.total++
+					m.entityP.total++
 					if expected[r.Type+"|"+r.ID] {
-						entityP.ok++
+						m.entityP.ok++
 					} else if testing.Verbose() {
 						t.Logf("ENTITY-MISS %s %q → %s|%s (expected %v)", c.ID, question, r.Type, r.ID, expected)
 					}
@@ -275,18 +302,18 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 				perCat[c.Category] = s
 			}
 			if qi == 0 {
-				qScore.total++
+				m.qScore.total++
 				s.total++
 				if hit {
-					qScore.ok++
+					m.qScore.ok++
 					s.ok++
 				} else if len(misses) < 400 {
 					misses = append(misses, fmt.Sprintf("%s %q\n    got  %s\n    want %s", c.ID, question, orUnparsed(got, res), want[0]))
 				}
 			} else {
-				pScore.total++
+				m.pScore.total++
 				if hit {
-					pScore.ok++
+					m.pScore.ok++
 					if testing.Verbose() {
 						t.Logf("PARA-HIT %s %q", c.ID, question)
 					}
@@ -296,6 +323,9 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 			}
 		}
 	}
+	dev, held := byS[evalsplit.Dev], byS[evalsplit.HeldOut]
+	all := dev.plus(held)
+	qScore, pScore, entityP, executable, answeredP, coverage := all.qScore, all.pScore, all.entityP, all.executable, all.answeredP, all.coverage
 	var cats []string
 	for k := range perCat {
 		cats = append(cats, k)
@@ -310,18 +340,24 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	for _, k := range cats {
 		fmt.Fprintf(&b, "  %-18s %d/%d\n", k, perCat[k].ok, perCat[k].total)
 	}
+	for _, x := range []struct {
+		name string
+		m    *compileMetrics
+	}{{"dev", dev}, {"held-out", held}} {
+		fmt.Fprintf(&b, "%-8s questions %d/%d · entity %d/%d · executable %d/%d · answered precision %d/%d · coverage %d/%d\n", x.name,
+			x.m.qScore.ok, x.m.qScore.total, x.m.entityP.ok, x.m.entityP.total, x.m.executable.ok, x.m.executable.total,
+			x.m.answeredP.ok, x.m.answeredP.total, x.m.coverage.ok, x.m.coverage.total)
+	}
 	t.Log(b.String())
 	if testing.Verbose() {
 		t.Log("misses:\n" + strings.Join(misses, "\n"))
 	}
 	// N-H5: the measurements, as counts, for the release gates.
-	if err := irisgate.Record("nlquery.compile",
-		irisgate.Measure{Gate: irisgate.GateEntity, OK: int64(entityP.ok), Total: int64(entityP.total), Note: "compiled entity precision"},
-		irisgate.Measure{Gate: irisgate.GateExecutable, OK: int64(executable.ok), Total: int64(executable.total)},
-		irisgate.Measure{Gate: irisgate.GateSemantic, OK: int64(answeredP.ok), Total: int64(answeredP.total), Note: "answered precision"},
-		irisgate.Measure{Gate: irisgate.GateCrossTenant, Bad: foreignBad, Total: foreignChecks, Note: "compiled queries naming another tenant's entity"},
-		irisgate.Measure{Gate: irisgate.GateInjection, OK: int64(refused.ok), Total: int64(refused.total), Note: "actions/injection phrasings refused"},
-	); err != nil {
+	var measures []irisgate.Measure
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		measures = append(measures, byS[sp].measures(string(sp))...)
+	}
+	if err := irisgate.Record("nlquery.compile", measures...); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []struct {

@@ -13,7 +13,12 @@
 // THE BARS ARE THE OWNER'S AND ARE NOT LOWERED HERE. When a gate fails today,
 // it fails; the gap is reported. Bars() is pinned by a test.
 //
-// Stdlib only.
+// DEV AND HELD-OUT (N-H3). A scorer may tag a measure with the split it came
+// from (internal/evalsplit). A gate's verdict is judged on every measurement,
+// tagged or not; the split counts are reported beside it so that a corpus the
+// system has overfitted shows as a gap between the two columns.
+//
+// Stdlib only (internal/evalsplit is stdlib only too).
 package irisgate
 
 import (
@@ -23,8 +28,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+
+	"netops/backend/internal/evalsplit"
 )
 
 // Gate names (closed).
@@ -79,6 +87,9 @@ type Measure struct {
 	Bad    int64  `json:"bad"`
 	Source string `json:"source"`
 	Note   string `json:"note,omitempty"`
+	// Split is evalsplit.Dev or evalsplit.HeldOut. Empty means the scorer does
+	// not split this measurement.
+	Split string `json:"split,omitempty"`
 }
 
 // EnvReportDir names the directory scorers write to.
@@ -105,6 +116,9 @@ func RecordTo(dir, source string, ms ...Measure) error {
 		ms[i].Source = source
 		if !known(ms[i].Gate) {
 			return fmt.Errorf("irisgate: unknown gate %q", ms[i].Gate)
+		}
+		if ms[i].Split != "" && !evalsplit.ValidSplit(ms[i].Split) {
+			return fmt.Errorf("irisgate: unknown split %q for %s", ms[i].Split, ms[i].Gate)
 		}
 		if ms[i].OK < 0 || ms[i].Total < 0 || ms[i].Bad < 0 || ms[i].OK > ms[i].Total {
 			return fmt.Errorf("irisgate: impossible counts for %s: %+v", ms[i].Gate, ms[i])
@@ -136,6 +150,11 @@ func known(g string) bool {
 	return false
 }
 
+// SplitCount is one split's share of a gate's counts.
+type SplitCount struct {
+	OK, Total, Bad int64
+}
+
 // Result is one gate's verdict.
 type Result struct {
 	Bar     Bar
@@ -146,6 +165,10 @@ type Result struct {
 	Value   float64
 	Pass    bool
 	Missing bool
+	// Dev and HeldOut are the counts tagged with each split. They are reported
+	// only: Pass is judged on the totals above.
+	Dev     SplitCount
+	HeldOut SplitCount
 }
 
 // Evaluate reads every report in dir and judges each gate.
@@ -176,12 +199,22 @@ func Evaluate(dir string) ([]Result, error) {
 			r.Total += m.Total
 			r.Bad += m.Bad
 			r.Sources = append(r.Sources, m.Source)
+			switch evalsplit.Split(m.Split) {
+			case evalsplit.Dev:
+				r.Dev.add(m)
+			case evalsplit.HeldOut:
+				r.HeldOut.add(m)
+			case "":
+			default:
+				return nil, fmt.Errorf("irisgate: %s: unknown split %q", filepath.Base(f), m.Split)
+			}
 		}
 	}
 	var out []Result
 	for _, b := range Bars() {
 		r := sum[b.Gate]
 		sort.Strings(r.Sources)
+		r.Sources = slices.Compact(r.Sources) // a split scorer reports twice per gate
 		switch {
 		case r.Total == 0:
 			r.Missing = true // nothing measured: never a pass by absence
@@ -195,6 +228,23 @@ func Evaluate(dir string) ([]Result, error) {
 		out = append(out, *r)
 	}
 	return out, nil
+}
+
+func (c *SplitCount) add(m Measure) {
+	c.OK += m.OK
+	c.Total += m.Total
+	c.Bad += m.Bad
+}
+
+// render is one split's table cell.
+func (c SplitCount) render(k Kind) string {
+	switch {
+	case c.Total == 0:
+		return "—"
+	case k == KindZero:
+		return fmt.Sprintf("%d of %d", c.Bad, c.Total)
+	}
+	return fmt.Sprintf("%.1f %% (%d/%d)", float64(c.OK)/float64(c.Total)*100, c.OK, c.Total)
 }
 
 // ErrGatesFailed is returned by Check when any gate fails or is missing.
@@ -214,7 +264,7 @@ func Check(rs []Result) error {
 func Markdown(rs []Result, mode string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Iris release gates (%s)\n\n", mode)
-	b.WriteString("| Gate | Bar | Measured | Verdict | Sources |\n|---|---|---|---|---|\n")
+	b.WriteString("| Gate | Bar | Measured | Verdict | Sources | Dev | Held-out |\n|---|---|---|---|---|---|---|\n")
 	for _, r := range rs {
 		bar := fmt.Sprintf("≥ %.0f %%", r.Bar.Min*100)
 		if r.Bar.Kind == KindZero {
@@ -235,7 +285,9 @@ func Markdown(rs []Result, mode string) string {
 		} else if !r.Pass {
 			verdict = "❌ fail"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", r.Bar.Gate, bar, measured, verdict, strings.Join(r.Sources, ", "))
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", r.Bar.Gate, bar, measured, verdict, strings.Join(r.Sources, ", "),
+			r.Dev.render(r.Bar.Kind), r.HeldOut.render(r.Bar.Kind))
 	}
+	b.WriteString("\nThe verdict is judged on every measurement. Dev and Held-out show the counts a scorer tagged with that split; a gap between them suggests overfitting.\n")
 	return b.String()
 }

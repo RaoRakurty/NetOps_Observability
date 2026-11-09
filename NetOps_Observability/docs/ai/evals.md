@@ -25,16 +25,16 @@ the answer is badged **Verified**.
 
 ## Golden Q&A set (intelligence plan P3)
 
-`docs/ai/golden-examples/golden-qa.json` is the versioned golden set — 91
+`docs/ai/golden-examples/golden-qa.json` is the versioned golden set — 152
 fixtures in five categories, loaded by the strict `ai/goldenset.go` loader (a
 malformed or underspecified fixture fails loading; nothing is silently
 skipped). The evals run deterministically on the mock provider and gate CI:
 
 | Category | Items | Eval | Guarantee |
 |----------|-------|------|-----------|
-| `docs` | 120 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.80, hit@3 ≥ 0.95** (floors) |
-| `docs` | 120 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
-| `docs` (`nav`) | 105 screens | `TestGoldenCoversEveryNavLeaf` (`ai/`) | every console screen read from `src/frontend/src/nav.tsx` (each nav leaf, plus each in-page view a leaf declares in `subItems` that has no `route` of its own) has a docs item naming it in `nav`, every `nav` names a real screen, and for every screen at least one of its items hits@3 |
+| `docs` | 122 | `TestGoldenDocsRetrieval` (`ai/`) | retrieval ranks an expected portal page: **hit@1 ≥ 0.80, hit@3 ≥ 0.95** (floors) |
+| `docs` | 122 | `TestGoldenDocsCitationCorrectness` (`ai/`) | every retrieval hit produces a product answer that CITES an expected page, with a working Help-drawer link |
+| `docs` (`nav`) | 108 screens | `TestGoldenCoversEveryNavLeaf` (`ai/`) | every console screen read from `src/frontend/src/nav.tsx` (each nav leaf, plus each in-page view a leaf declares in `subItems` that has no `route` of its own) has a docs item naming it in `nav`, every `nav` names a real screen, and for every screen at least one of its items hits@3 |
 | `intent` | 7 | `TestGoldenIntentRouting` (`ai/`) | the deterministic router classifies each question exactly |
 | `agent_tool` | 11 | `TestGoldenAgentToolPlumbing` (server pkg) | the expected tool is in the caller's manifest, executes tenant-scoped, yields cited evidence that survives the grounding verifier |
 | `decline` | 7 | `TestGoldenDeclines` (`ai/`) | honesty floor: zero hits + explicit "documentation doesn't cover that" + zero citations; `known_gap` items report, never gate |
@@ -72,7 +72,11 @@ retrieval is unchanged by construction. Measured on 120 items: plain hit@1
 the boost never costs a question asked elsewhere its hit@3 floor
 (`TestPageBoostKeepsGoldenRetrieval`).
 
-**Decision gate (plan P5):** hit@3 1.00 on 119 items means BM25 recall is still
+**Current measurement (2026-11-09):** on 122 docs items, hit@1 0.90 (110/122),
+hit@3 1.00 (122/122); 108 screens, all covered. The dated paragraphs above record
+how each number moved at the time.
+
+**Decision gate (plan P5):** hit@3 1.00 on 122 items means BM25 recall is still
 NOT the bottleneck, so the vector/hybrid retrieval upgrade stays deferred. The
 evidence is the re-measured number above, not the 2026-07-02 one. Revisit only
 if the hit@3 floor starts failing on legitimate paraphrase items.
@@ -90,6 +94,72 @@ as JSON.
 `TestGoldenLiveToolSelection` (server pkg) — asks the real model to pick a tool
 for each `agent_tool` fixture and reports the match rate (advisory ≥50% bar,
 per plan §2.4: LLM spot checks stay small-N).
+
+## Held-out split (N-H3)
+
+Part of each corpus is never used for tuning, so the score on it can show
+overfitting. The rule is in `src/backend/internal/evalsplit` and nobody chooses
+cases by hand:
+
+- `source: "field"` (operator-labelled) is always held out.
+- `source: "synthetic"`, the default, is held out when SHA-256 of
+  `correlix.evalsplit.v1\0<corpus>\0<group>`, read as a big-endian integer from its
+  first 8 bytes, modulo 100, is below 20.
+- The group is the case id. The turns of one scripted NL conversation share a
+  group so they stay together.
+- There is no per-case override. Adding or reordering other cases moves nothing.
+
+| Corpus | Name in the hash | Cases | Held out |
+|---|---|---|---|
+| NL query (`internal/nlquery/testdata/golden`) | `nlquery` | 215 | 32 |
+| Golden Q&A (`golden-qa.json`) | `qa` | 152 | 29 |
+| Golden incidents (`ai/testdata/golden_incidents`) | `incidents` | 23 | 3 |
+
+**Reporting.** `TestCompilerAgainstTheGoldenCorpus`, `TestModelPathAgainstTheGoldenCorpus`,
+`TestGoldenDocsRetrieval` and `TestGoldenIncidentCorpus` log each split, and the
+live leg `TestModelPathLiveProvider` reports them separately. The release-gate
+table (`internal/irisgate`) has Dev and Held-out columns. Gate verdicts and
+ratchet floors are still judged on all cases together. Measured 2026-11-09:
+
+| Measure | Dev | Held-out |
+|---|---|---|
+| Compiler, questions right | 103/141 | 15/24 |
+| Compiler, answered precision | 258/301 | 48/55 |
+| Docs retrieval, hit@1 | 88/97 | 22/25 |
+| Docs retrieval, hit@3 | 97/97 | 25/25 |
+| Golden incidents, passing | 20/20 | 2/3 |
+
+**Guards.**
+
+- `TestHeldOutCasesNeverReachTheExampleLibrary` fails if a held-out case is in
+  `modelc/examples.v1.json`, by id or by normalized text.
+- `TestHeldOutCasesAreAbsentFromSources` (NL) and
+  `TestGoldenHeldOutCasesAreAbsentFromSources` (`ai/`) scan non-test sources for
+  held-out ids and questions of at least four words. Rewording is not detected.
+- `TestOperatorFeedbackHasNoRouteIntoTuning` and
+  `TestCorrelationEngineDoesNotReadTheVerdictRegister` keep the RCA verdict register
+  out of anything that could be tuned from it.
+- Negative controls plant a held-out case and require the same checks to report it.
+- `TestGoldenIncidentFixturesDoNotMixTenants` allows more than one tenant in a
+  fixture only for `cross_tenant_alias` cases (§3a).
+
+**What the numbers do not prove yet.**
+
+- Every current case is synthetic, and all of them existed while the grammar,
+  retrieval and routing were tuned. Removing them from the example library makes
+  them held out for the model's few-shot examples, not unseen by the people who
+  wrote the rules, so the current gap understates overfitting. Two visible cases
+  are recorded in `knownContamination`, and the retrieval relevance floor
+  (`ai/docs_index.go`) was calibrated on the docs questions as they stood.
+- Three held-out incident cases are too few to read as a rate. The one not passing,
+  `mt-skill-model-calls-uncollected-logs-clean`, is a known-defect `expected_failure`.
+- The correlation fixtures, `routing_golden.json` and the skill `CASES.yaml` are
+  not split. The rig-measured RCA accuracy is not covered either.
+- There is no importer for real operator-labelled cases yet, so the field split is
+  empty. Item 13 of the commercial review remains open until there is.
+
+Any future calibration, such as the `incidentfp` weights listed as not calibrated in
+`docs/audit/INVARIANTS.md`, must use the dev split only.
 
 ## Running
 

@@ -1,63 +1,60 @@
-# AI Copilot
+# Iris provider path (`/api/copilot/chat`)
 
-The Copilot tab in the dashboard is a chat pane that talks to an LLM
-through the Go API. The model gets only the messages the user provides
-— there's no autonomous tool use, no agent loop, no automatic indexing.
-This is deliberate: it keeps the trust boundary clean and the failure
-modes predictable. When the model is wrong, the worst that happens is
-the operator gets a wrong answer in the chat window.
+Iris has two answer paths. `/api/ai/ask` is the grounded engine, which works
+without a provider key. `/api/copilot/chat`, described here, is the provider path:
+the Go API calls an LLM on the operator's behalf. Evaluation is covered in
+`docs/ai/evals.md`.
 
 ## Configuration
 
-In `deployment/docker/.env`:
+Install defaults live in `deployment/docker/.env`:
 
 ```
 FEATURE_COPILOT=true
-COPILOT_PROVIDER=anthropic           # or 'openai'
-COPILOT_API_KEY=sk-ant-...           # the secret
-COPILOT_MODEL=claude-sonnet-4-5      # any model the provider supports
+COPILOT_PROVIDER=anthropic           # anthropic, openai or gemini
+COPILOT_API_KEY=...                  # the secret
+COPILOT_MODEL=...                    # any model the provider supports
 ```
 
-Then `docker compose up -d` (the api container picks up the new env).
-
-If you flip `COPILOT_PROVIDER=openai`, set `COPILOT_API_KEY` to your
-OpenAI key and `COPILOT_MODEL` to something OpenAI ships (e.g.
-`gpt-4o-mini`).
+`COPILOT_PROVIDER_CHAIN` sets the order in which providers are tried. A tenant's
+own key takes priority over the platform chain, and a tenant set to
+`no_platform_key` gets no platform key (`src/backend/ai_tenant_config.go`).
 
 ## How it works
 
-* Frontend (`src/frontend/src/tabs/Copilot.tsx`) maintains an in-memory
-  chat history. Each turn posts the full history to `/api/copilot/chat`.
-* The Go API (`src/backend/copilot.go`) checks the feature flag and
-  API key, then forwards to either Anthropic's Messages API or OpenAI's
-  Chat Completions API. Responses are streamed back to the SPA
-  unmodified.
-* A default system prompt nudges the model toward the NetOps role —
-  override per-request by sending a `system` field in the POST body.
-* The "+ Context" button in the UI fetches the most recent 50 log
-  lines from OpenSearch and appends them to the next message. Use this
-  to keep the model grounded in actual data instead of inviting it to
-  hallucinate.
+* **Frontend.** The Iris UI (`src/frontend/src/tabs/Iris.tsx`) reaches this route
+  through `src/frontend/src/services/api.ts`.
+* **Request limits.** `src/backend/copilot.go` checks the feature flag, a
+  per-principal rate limit (`COPILOT_RATE_PER_MIN`, default 20) and the AI
+  entitlement. It caps the body at 256 KiB, and `ai.SanitizeMessages` caps the
+  message count and characters.
+* **The server owns the prompt and the conversation (OWASP LLM01).** The system
+  prompt is server-controlled. A `system` field in the request body is decoded for
+  backward compatibility and **ignored**; it cannot override the prompt.
+  `ai.SanitizeMessages` (`src/backend/ai/llm_transport.go`) keeps only `user`
+  turns, dropping client-supplied `system` and `assistant` turns.
+* **Documentation grounding.** The server retrieves documentation sections for the
+  latest question and appends them to the system prompt as a labelled data block.
+  `doc:` citations the model invents are stripped.
+* **Tools.** When `FEATURE_AI_TOOLS` is on and the caller is in the rollout, the
+  turn runs an agent loop over the grounded engine's governed read-only tools,
+  under a daily token budget. Every tool call is authorized again when it runs and
+  recorded in the decision ledger as hashes. If the loop fails after a lookup has
+  run, the turn fails with an error instead of restarting as plain chat.
+* **Provider fallback.** Candidates are tried in order. If every provider fails,
+  the grounded engine answers with evidence only, and the response says so
+  (`fallback: provider_unavailable`).
+* **Labelling.** The response carries `is_grounded`. A plain completion is `false`
+  because no tenant evidence was read, and the engine fallback is `true`.
 
-## What the model can NOT do (yet)
+## What the model cannot do
 
-* It cannot run queries on its own. There is no tool-use loop wired up.
-* It cannot read findings, devices, or alerts directly. The UI must
-  paste any required context into the conversation.
-* It does not stream tokens — the full response comes back in one POST
-  body. SSE/streaming is straightforward to add when needed; the
-  nginx proxy is already configured with `proxy_read_timeout 120s`.
-
-## Why pass through, not embed?
-
-The Go API is the policy/audit/auth boundary. A future hardening pass
-will add per-user quotas, prompt logging into ClickHouse for
-post-incident review, and PII scrubbing on the way out. Keeping the
-LLM call behind that boundary makes those additions one-place changes
-rather than scattered UI patches.
+* It cannot change its own instructions, or see turns the client wrote in the
+  model's voice.
+* It cannot execute anything outside the tools the caller's manifest allows.
+* Its output is untrusted: the rules for handling it are in `CLAUDE.md` §15.
 
 ## Cost notes
 
-LLM calls are per-token. A Sonnet query with ~50 lines of log context
-runs around $0.001-0.01 per turn at current pricing — small operations
-might never notice, larger NOCs should set provider-side limits.
+Provider calls are billed per token. The per-principal rate limit and the daily
+token budget bound usage; larger NOCs should also set provider-side limits.

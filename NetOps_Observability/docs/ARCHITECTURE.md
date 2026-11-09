@@ -1,204 +1,207 @@
 # Architecture
 
-The platform follows the reference NOC/SOC architecture: dedicated edge
-collectors, a Vector aggregation layer, an Apache Kafka streaming bus, fan-
-out to OpenSearch (hot search) + VictoriaMetrics (TS) + ClickHouse
-(OLAP), a Python correlation/AI engine, a Go API + GraphQL gateway, and
-a React UI with ECharts and an LLM-backed copilot.
+A Docker Compose stack behind nginx on one port (`:8000`): edge collectors, a
+Vector aggregation layer, an Apache Kafka bus, storage (OpenSearch,
+VictoriaMetrics, ClickHouse), a Python correlation engine, a Go API, and a React
+UI with the Iris assistant. The purpose of the platform is correlation and root
+cause analysis; every other tier exists to feed it signals, entities, topology
+and ownership, or to present its results.
 
 ```
-   Network devices (routers / switches / firewalls)
-       │             │             │
-    Syslog        SNMP          Flow (NetFlow/IPFIX/sFlow)
-       ▼             ▼             ▼
-   syslog-ng   Go collectors    goflow2
-               (in the api)
-       │             │             │
-       └─────────────┼─────────────┘
-                     ▼
+   Network devices · controllers (NMS) · cloud APIs · probes
+       │            │             │            │
+    Syslog/traps   SNMP/gNMI    Flows      Connectors
+       ▼            ▼             ▼            ▼
+   syslog-ng   Go collectors   goflow2    api, cloud-ingest,
+               (in the api)               prober
+       │            │             │            │
+       │            ├── full samples ─────────────► VictoriaMetrics
+       ▼            ▼             ▼            ▼
        VECTOR AGGREGATOR  (parse, normalize, enrich, buffer)
                      │
                      ▼
-       APACHE KAFKA (KRaft) ─ topics: netops.{syslog, metrics, flows, applogs}
-                     │
-                     ▼
-              VECTOR ROUTER
-              │      │      │
-              ▼      ▼      ▼
-       OpenSearch  Victoria  ClickHouse
-       (hot       (SNMP +   (NetFlow analytics,
-        search)    telemetry) findings,
-                              long-term trends)
-              │      │      │
-              └──────┼──────┘
-                     ▼
-       CORRELATION + AI ENGINE  (Python / FastAPI)
-       - anomaly detection (rolling z-score)
-       - severity-weighted event correlation
-       - RCA stubs, automation triggers
-                     │
-                     ▼
-       API + QUERY LAYER  (Go REST + GraphQL gateway + LLM copilot proxy)
-                     │
-                     ▼
-       MODERN UI (React + ECharts + Topology + Copilot)
+       APACHE KAFKA (KRaft) ─ netops.* topics
+              │                          │
+              ▼                          ▼
+        VECTOR ROUTER            CORRELATION ENGINE (Python)
+              │                  signals → grounded graph →
+              ▼                  ranked hypotheses + verdict
+       OpenSearch · ClickHouse           │
+              │                          ▼
+              │                     ClickHouse corr_* tables
+              └────────────┬─────────────┘
+                           ▼
+       API  (Go REST + GraphQL + Iris, tenant-scoped)
+                           │
+                           ▼
+       UI  (React + ECharts, served by nginx)
 ```
 
 ## Tier by tier
 
 ### Edge ingestion
 
-Three protocol-specific collectors, each one well-suited to its job and
-deliberately not asked to do anything else.
-
 * **syslog-ng** listens on UDP/TCP 514, parses RFC3164 and RFC5424, and
   forwards to vector-aggregator over TCP/6601 with `syslog-protocol`
   framing. Config: `deployment/docker/syslog-ng/syslog-ng.conf`.
-* **SNMP polling is native Go, in-process in the api** —
-  `src/backend/collectors/` (`poller.go`, `snmpmetrics.go`, `snmpv3.go`)
-  polls the device list and produces `netops.metrics` to the bus directly.
-  Telegraf is **legacy and does not run** (`profiles: [legacy]` in compose,
-  kept only for archaeology); do not point an incident investigation at it.
-* **goflow2** decodes NetFlow v5/v9, IPFIX, sFlow and produces one JSON
-  record per flow to Kafka (`netops.flows.raw`); vector-router re-keys it by
-  tenant onto `netops.flows`. Settings are flags on the compose `command:`;
-  the one mounted file is `deployment/docker/goflow2/mapping.yaml` (exporter
-  application identity, IE 95/96, kept hex). `goflow2.yaml` beside it is
+* **SNMP polling is native Go, in-process in the api** (`src/backend/collectors/`:
+  `poller.go`, `snmpmetrics.go`, `snmpv3.go`). The collector writes the full
+  sample set straight to VictoriaMetrics, and POSTs a filtered canonical subset
+  (the RCA metric families, `collectors/metric_events.go`) to Vector, which
+  publishes it on `netops.metrics` for the engine. Telegraf is **legacy and does
+  not run** (`profiles: [legacy]` in compose).
+* **goflow2** decodes NetFlow v5/v9, IPFIX and sFlow and produces one JSON record
+  per flow to Kafka (`netops.flows.raw`); vector-router re-keys it by tenant onto
+  `netops.flows`. Settings are flags on the compose `command:`; the one mounted
+  file is `deployment/docker/goflow2/mapping.yaml`. `goflow2.yaml` beside it is
   reference documentation of the flow schema.
-
-The collectors run as separate containers so they can be scaled
-independently — a high-flow site can run multiple goflow2 instances
-behind a Layer-4 load balancer without affecting syslog or SNMP paths.
+* **Other sources:** gNMI (`gnmic`, `collectors/gnmi.go`), controller and NMS
+  integrations (`src/backend/nms/`, publishing `netops.controller_events`), cloud
+  connectors (`cloud-ingest`, profile `cloud-ingest`) and active probes (`prober`,
+  profile `prober`).
 
 ### Vector aggregator
 
-`deployment/docker/vector/vector.yaml`. Receives from the three edges,
-parses (JSON unpacking on app logs), normalizes (uniform `signal`
-field), enriches (device labels), buffers, and produces to four Kafka
-topics:
-
-| Topic              | Source             | Sink (router)                    |
-|--------------------|--------------------|----------------------------------|
-| `netops.applogs`   | docker_logs        | OpenSearch `netops-applogs-*`    |
-| `netops.syslog`    | syslog-ng          | OpenSearch `netops-syslog-*`     |
-| `netops.metrics`   | Go collectors (api) | VictoriaMetrics remote_write     |
-| `netops.flows`     | vector-router re-key of `netops.flows.raw` (goflow2 kafka://) | OpenSearch + ClickHouse |
+`deployment/docker/vector/vector.yaml`. Receives from the edges, parses,
+normalizes, enriches and buffers, then produces to the bus with end-to-end
+acknowledgements. Topic list: the `kafka-init` service in
+`deployment/docker/docker-compose.yml`.
 
 ### Apache Kafka
 
-Single-node broker in KRaft mode. Provides the decoupling benefits of
-a streaming bus (replay, multi-consumer fan-out, ingestion absorption
-during storage outages) without a Zookeeper dependency. The broker is
-internal to the compose network (`kafka:9092`, no host ports); every
-client resolves it via `BROKER_URLS` in `.env`, and a one-shot
-`kafka-init` service pre-creates the netops.* topics. Future producers
-— a SIEM, a data-lake exporter, a custom analytics job — attach by
-pointing the stack at an external Kafka-compatible cluster
-(`install-correlix.sh --external-kafka --broker-urls ...`).
+Single-node broker in KRaft mode (service `kafka`, profile `embedded-bus`),
+internal to the compose network. Every client resolves it through `BROKER_URLS`,
+so an external Kafka-compatible cluster can replace it
+(`install-correlix.sh --external-kafka --broker-urls ...`). The one-shot
+`kafka-init` service pre-creates the `netops.*` topics. Redpanda and Prometheus
+were removed for licensing reasons (#97); see Valkey below for the Redis
+replacement.
 
 ### Vector router
 
-`deployment/docker/vector-router/vector.yaml`. Four Kafka consumer
-groups, one per topic. Writes:
-
-* App logs and syslog → OpenSearch via `elasticsearch` sink.
-* Metrics → VictoriaMetrics via `prometheus_remote_write` sink.
-* Flows → both OpenSearch (ad-hoc search) and ClickHouse (analytics).
-
-Decoupling consumers via Kafka means a router restart re-reads from the
-consumer-group offset, not from scratch — replay is free.
+`deployment/docker/vector-router/vector.yaml`. One consumer group per lane
+(`netops-router-*`: applogs, syslog, snmptrap, flows, flows-rekey, cloudlogs,
+security, deadletter, experience, cloudcosts). It writes logs, traps, security
+findings and dead letters to OpenSearch, and flows, cloud costs and experience
+events to ClickHouse (flows go to OpenSearch as well). It does **not** consume
+`netops.metrics`; that lane exists for the engine.
 
 ### Storage tier
 
-* **OpenSearch** — hot search and SIEM. Three rolling indices:
-  `netops-applogs-YYYY.MM.DD`, `netops-syslog-YYYY.MM.DD`,
-  `netops-flows-YYYY.MM.DD`. Templates are in
-  `deployment/docker/opensearch/index-templates.json`; apply with
-  `scripts/bootstrap-opensearch.sh`.
-* **OpenSearch Dashboards** — power-user UI for ad-hoc exploration,
-  served under `/search/`.
-* **VictoriaMetrics** — long-term time-series for SNMP + telemetry.
-  Self-metrics are scraped by VictoriaMetrics itself (vmscrape.yml — the
-  Prometheus service was removed; VM serves the same PromQL API the alert
-  engine evaluates rules.yaml against).
-* **ClickHouse** — OLAP. Tables: `netops.flows` (raw flow records, TTL
-  90 days), `netops.flows_hourly` (materialized rollup for top-talker
-  dashboards), `netops.findings` (correlation engine output). Init SQL
-  in `deployment/docker/clickhouse/init.sql`.
+* **OpenSearch** — hot search, in rolling daily `netops-*` indices. Templates are
+  in `deployment/docker/opensearch/index-templates.json`; the installer and
+  `scripts/update.sh` apply them through `scripts/bootstrap-opensearch.sh`, and
+  `scripts/deploy-qualify.sh` verifies them. **OpenSearch Dashboards** is
+  optional (profile `osd`), served under `/search/`.
+* **VictoriaMetrics** — time series for SNMP and telemetry, and the query API the
+  alert rules run against (`vmalert`).
+* **ClickHouse** — OLAP. `netops.flows` (default TTL 7 days,
+  `deployment/docker/clickhouse/init.sql`), the correlation tables (below), and
+  the path, application, wireless and experience tables. Row policies enforce
+  tenant isolation.
+* **PostgreSQL** — relational app state, under FORCE-RLS `tenant_iso` policies.
+  The installer writes `STORE_BACKEND` explicitly; Postgres is the default for
+  fresh installs, and the file backend remains for compatibility.
+* **Valkey** — collector state and caches. The compose service is still named
+  `redis` so that `REDIS_HOST` consumers are unchanged, but the image is Valkey
+  (BSD-3), not Redis.
 
-### Correlation + AI engine
+### Correlation engine
 
-`src/correlation/`. Python 3.12 + FastAPI + aiokafka. Subscribes to
-the netops.* topics, runs:
+`src/correlation/`, Python with FastAPI and aiokafka. The authoritative
+description, with line references, is
+[`src/correlation/CLAUDE.md`](../src/correlation/CLAUDE.md); this section is only
+the outline. `engine.py`, `scoring.py` and `verdicts.py` form a pure core with no
+IO, clock or randomness, and `main.py` is the impure shell around it.
 
-* Per-(device, metric) rolling z-score anomaly detection over a
-  200-sample window with threshold 3σ.
-* Severity-weighted syslog burst correlation — accumulates per-host
-  severity points in a 60-second window and emits a correlation
-  finding when the bucket exceeds 30.
-* RCA endpoint is a stub — the integration shape is ready (Kafka in,
-  ClickHouse out, REST API for the UI), the algorithm is a placeholder.
+1. **Normalize.** Kafka lane records become canonical `Signal`s carrying tenant,
+   event time, observer, collection path, clock quality, modality and entity. A
+   record that fails a construction gate goes to a dead letter. Raw evidence is
+   written to `corr_signals` before any window filter.
+2. **Episodes.** Metrics and flow volumes go through a two-sided **CUSUM**
+   change-point detector (`episodes.py`: H=4σ, K=0.5σ, at least 20 baseline
+   samples). Onset uncertainty is carried, not discarded: it is the observed
+   sampling interval plus a budget for the source's clock quality. Cumulative
+   counters are converted to rates first. Syslog, traps and controller records
+   are point signals.
+3. **Window.** Signals are grouped per tenant in an event-time window. A window
+   is single-tenant by construction, and a mixed one raises an error.
+4. **Grounding gate.** Two nodes join only through a ranked relationship: shared
+   identity or containment, seam membership, path hop or adjacency, app binding,
+   flow or NAT stitch, then inferred route and shared token. Ranks 1–5 can be
+   authoritative; 6–7 never are. An ungrounded pair is a gap hint, never an edge.
+   Topology comes from enrichment files the API writes, including the path graph
+   defined by the frozen contract in `docs/design/service-path-graph-contract.md`.
+5. **Objects.** Connected components become versioned correlation objects with a
+   stable identity and an `open`, `closed` or `merged` lifecycle.
+6. **Scoring (the rank).** `scoring.py` ranks competing hypotheses from a
+   declarative signature catalog (`catalog.py`: 149 templates, 103 enabled) using
+   a structure gate, clause coverage and a discriminator penalty that promotes the
+   competing template. It reports the top 4 plus forced and contradicted
+   competitors. Below the 0.3 floor the result is `undetermined`, with the
+   evidence that is missing; a root cause is never forced. The rank is a heuristic
+   rank, not a probability.
+7. **Verdict (the tier).** `verdicts.py` grades the evidence separately from the
+   rank. `CONFIRMED` needs at least two modalities and two observers, a trusted,
+   cross-modality, independent pair, and every required modality met by a trusted
+   witness; otherwise the verdict is `SUSPECTED`. Later caps can only downgrade,
+   for example when the component has no authoritative edge.
+8. **Persist.** Objects go to `corr_objects` and `corr_current`, then evidence to
+   `corr_edges`, `corr_evidence` and `corr_signals_archive` through a bounded
+   queue. Identical inputs replay to byte-identical snapshots, pinned to
+   `engine_version`.
 
-Writes findings to `clickhouse.netops.findings`; the Findings tab in the
-UI renders them as a ranked triage queue.
+RCA auto-promotion requires a `CONFIRMED` verdict with confirmed impact
+(`src/backend/internal/rca/rca_promotion_model.go`).
 
-**Horizontal scale (scale P0):** the engine scales by tenant-keyed
-co-partitioning — every bus producer keys records by tenant (Java murmur2),
-every `netops.*` topic carries `BUS_PARTITIONS` partitions, and the
-consumer's range assignor gives `docker compose up --scale correlation=N`
-instance k partition k of every topic: a complete, disjoint slice of tenants
-with worker-local state. Full design, producer/keying matrix, scale-up drain
-procedure and multi-replica endpoint semantics: `docs/scale-correlation.md`.
+**Legacy findings path.** `main.py` also keeps an older path that writes
+`netops.findings`: a per-(device, metric) rolling z-score (200 samples, 3σ) and a
+severity-weighted syslog burst detector. It is retained for compatibility and is
+not how root causes are determined.
 
-### API + query layer
+**Horizontal scale.** Every bus producer keys records by tenant (Java murmur2),
+every `netops.*` topic carries `BUS_PARTITIONS` partitions, and the range assignor
+gives `docker compose up --scale correlation=N` instance k partition k of every
+topic: a disjoint slice of tenants with worker-local state. See
+`docs/scale-correlation.md`.
 
-Go API at `src/backend/`. Handlers:
+### API
 
-| Route                        | Backed by                          |
-|------------------------------|------------------------------------|
-| `/api/devices`               | in-memory discovery aggregator     |
-| `/api/collectors`            | collector pool                     |
-| `/api/alerts` / `/rules`     | alert engine                       |
-| `/api/logs/search`           | OpenSearch query_string DSL        |
-| `/api/logs/indices`          | OpenSearch `_cat/indices`          |
-| `/api/flows/top`             | ClickHouse `netops.flows`          |
-| `/api/flows/by-proto`        | ClickHouse `netops.flows`          |
-| `/api/flows/timeseries`      | ClickHouse `netops.flows`          |
-| `/api/findings`              | ClickHouse `netops.findings`       |
-| `/api/copilot/chat`          | Anthropic / OpenAI passthrough     |
-| `/api/graphql`               | minimal stub (see `graphql.go`)    |
+Go, at `src/backend/` (routes are registered in `main.go`). Data routes scope by
+the caller's tenant. The main route families:
 
-The GraphQL endpoint is a scaffold — it answers a small set of named
-queries by dispatching to the REST handlers behind it. Swap in
-`graph-gophers/graphql-go` when you want a real schema.
+| Routes | Backed by |
+|---|---|
+| `/api/correlations` and `/api/correlations/...` | ClickHouse `corr_current` under the tenant scope (`correlations.go`) |
+| `/api/findings` | ClickHouse `netops.findings` (legacy path above) |
+| `/api/devices`, `/api/collectors` | device inventory and collector pool |
+| `/api/alerts`, `/api/rules` | alert engine |
+| `/api/logs/*` | OpenSearch |
+| `/api/flows/*` | ClickHouse `netops.flows` |
+| `/api/ai/*`, `/api/copilot/chat` | Iris (see below) |
+| `/api/graphql` | a fixed schema with its own parser, permission-checked (`graphql.go`) |
+
+**Iris** is the assistant. `/api/ai/ask` answers through the grounded engine in
+`src/backend/ai/`: read-only tools, tenant-scoped data, and citations checked
+against the evidence it read. It reports the engine's verdict and does not produce
+its own. `/api/copilot/chat` is the provider path; see `docs/COPILOT.md` and
+`docs/ai/evals.md`.
 
 ### UI
 
-React + TypeScript + ECharts, served by nginx at `http://localhost:8000`.
-Tabs:
+React, TypeScript and ECharts, served by nginx at `http://localhost:8000`. The
+navigation (`src/frontend/src/nav.tsx`) has these sections: Overview, Operations,
+Investigate, Infrastructure, Explore, Security, Analytics, Iris AI, Administration
+(tenant level) and Platform (provider only).
 
-| Tab        | Backed by                            |
-|------------|--------------------------------------|
-| Dashboard  | KPI tiles + recent alerts            |
-| Devices    | `/api/devices` CRUD                  |
-| Topology   | ECharts force graph over device list |
-| Collectors | `/api/collectors`                    |
-| Alerts     | `/api/alerts`                        |
-| Rules      | `/api/rules`                         |
-| Findings   | `/api/findings` (ClickHouse)         |
-| Logs       | `/api/logs/search` (OpenSearch DSL)  |
-| Flows      | `/api/flows/*` (ClickHouse + ECharts) |
-| Iris AI | `/api/copilot/chat` (LLM)           |
-| Self-Monitoring | iframe (Grafana, self-monitoring add-on; Victoria + ClickHouse datasources) |
-| OS Dashboards | iframe (`/search/`)               |
-| Settings   | integration status + manual refresh  |
+## Monitoring
 
-## What's still TODO inside this architecture
+Three independent layers: vmalert rules, alert delivery through the API receiver,
+and the external `scripts/stack-watchdog.sh`. See
+`docs/runbooks/engine-not-consuming.md` and
+`docs/runbooks/engine-liveness-matrix.md`.
 
-* GraphQL is a stub — replace `graphql.go` with a real schema + resolver.
-* RCA in the correlation engine is a stub — wire in incident-cluster
-  detection and feed the result back to the Go alerts engine.
-* OpenSearch index templates aren't applied automatically — run
-  `scripts/bootstrap-opensearch.sh` after the first start.
-* The frontend dev dependencies (echarts, echarts-for-react) need
-  `npm install` — the build container does this automatically.
+## Open work
+
+`docs/TRACKER.md` lists open items, and `docs/audit/INVARIANTS.md` records what is
+proven versus merely built.
