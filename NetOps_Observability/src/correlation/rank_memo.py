@@ -44,6 +44,7 @@ Per-signal inputs `rank` reads (transitively):
 | `probe_authority_of(sig)` | `scoring.py:102` (`_satisfying`), `scoring.py:481` (`evidence_kinds`); derived in `signals.py:296` from `modality_class` + `attrs["probe_authority"]` | the DEBUG_ONLY exclusion |
 | `attrs["corroborates_kinds"]` | `scoring.py:93`, `scoring.py:485` | only for `kind == active_verification_result` |
 | `attrs["refutes_kinds"]` | `scoring.py:236` | only for `kind == active_verification_healthy` |
+| `signals.CLAUSE_ATTR_KEYS` (`attrs["link_cause"]`), via `clause_attr` | `scoring._clause_attrs_hold` (tracker 385), reached from `clause_matches` + `_verification_corroborates` | clause `attrs` / `attrs_not` predicates; absent and "" are one class |
 | `attrs["fidelity"]`, `attrs["rule_id"]` | `scoring.py` A7 cap (`fidelity_weighting_enabled()`) | ONLY when `CORR_FIDELITY_WEIGHTING` is on — see `signal_projection` |
 | `attrs["origin_device"]` (via `Witness.origin`) | `verdicts.Witness.independent_of` (E1) | ONLY when `CORR_ORIGIN_OBSERVER` is on — see `_witness_projection` |
 | `attrs["series_sources"]` (via `Witness.series_authorities`) | `verdicts.Witness.independent_of` + `coverage` fate groups (P6 PR-C2) | ONLY when `CORR_SERIES_ADMISSION` is on — see `_witness_projection` |
@@ -346,7 +347,9 @@ from scoring import (
     _attr_kinds,
 )
 from signals import (
+    CLAUSE_ATTR_KEYS,
     Signal,
+    clause_attr,
     fidelity_of,
     fidelity_weighting_enabled,
     origin_observer_enabled,
@@ -960,6 +963,10 @@ def signal_projection(sig: Signal) -> tuple:
          if kind == VERIFICATION_RESULT_KIND else ()),
         (tuple(sorted(_attr_kinds(sig, "refutes_kinds")))
          if kind == VERIFICATION_HEALTHY_KIND else ()),
+        # tracker 385: clause attrs predicates read these through the same
+        # `clause_attr`. Unconditional: the predicates are not flag-gated. Stays
+        # ahead of the witness, which test_T1d reads as the last element.
+        tuple(clause_attr(sig, k) for k in sorted(CLAUSE_ATTR_KEYS)),
         _witness_projection(witness_of(sig)),
     )
     if fidelity_weighting_enabled():

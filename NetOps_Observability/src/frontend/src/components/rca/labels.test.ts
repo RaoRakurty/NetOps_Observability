@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { signatureNocTitle, friendlyProblemId, friendlyIncidentId } from "./labels";
+import { signatureNocTitle, signatureName, kindLabel, friendlyProblemId, friendlyIncidentId } from "./labels";
 
 // Friendly Problem ID — the NOC handle shown in the Action Queue, RCA inspector
 // and Iris AI. MUST stay byte-identical to the Go backend problemDisplayID
@@ -69,5 +69,16 @@ describe("signatureNocTitle — scenario library", () => {
     for (const id of ["sig.ent.cloud.region-impairment", "sig.ent.sdwan.tunnel-sla-breach", "sig.ent.wan-edge.bgp-peer-flap"]) {
       expect(signatureNocTitle(id)).not.toMatch(/confirmed|outage|root cause/i);
     }
+  });
+});
+
+// tracker 385: the engine's attrs-bearing contradiction tag and the sibling get NOC words.
+describe("admin link change labels", () => {
+  it("names the discriminator tag in plain language", () => {
+    expect(kindLabel("link_state_change[link_cause=admin]")).toBe("Interface shut down by an operator");
+  });
+  it("names the sibling signature", () => {
+    expect(signatureName("sig.ent.access.admin-link-change-induced")).toBe("Interface shut down by an operator");
+    expect(signatureNocTitle("sig.ent.access.admin-link-change-induced")).toBe("Interface shut down by an operator");
   });
 });

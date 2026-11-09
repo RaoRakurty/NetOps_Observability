@@ -725,3 +725,18 @@ func TestBriefingShipsStatementsAndKeepsAConfirmedIncidentsCause(t *testing.T) {
 		t.Errorf("classes = %+v", ans.Statements)
 	}
 }
+
+// tracker 385: the admin-link-change sibling IS a change, by its id, with no new
+// code path. Its title deliberately says what happened, not "change".
+func TestAdminLinkChangeHypothesisNamesAChange(t *testing.T) {
+	h := RankedHypothesis{
+		ID:    "sig.ent.access.admin-link-change-induced",
+		Title: "Interface shut down by an operator, then a fault",
+	}
+	if !hypothesisNamesChange(h) {
+		t.Fatal("the admin-link-change sibling must read as a change")
+	}
+	if hypothesisNamesChange(RankedHypothesis{ID: "sig.ent.access.local-link-fault", Title: "Local link fault"}) {
+		t.Fatal("a link fault must not read as a change")
+	}
+}
