@@ -171,6 +171,10 @@ def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict
             ev.setdefault("severity", "notice")
             got = table.parse(ev)
             want = dict(fx["expect"])
+            if not want and "parser_id" in got:
+                raise GenerationError(
+                    f"fixture {fx['name']!r}: an empty expect claims no pack applies, "
+                    f"but {got['parser_id']} matched (event: {ev!r})")
             for key, val in want.items():
                 actual = got.get(key)
                 if key not in got and key not in ASSERTED:

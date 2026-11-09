@@ -44,6 +44,9 @@ def test_the_fixture_gets_its_parse_and_its_signal(pack, fx):
     ev = _event(fx)
     for key, want in fx["expect"].items():
         assert ev.get(key) == want, f"{key}: {ev.get(key)!r} != {want!r}"
+    if not fx["expect"]:
+        # An empty `expect` is a claim that no pack has an opinion on this line.
+        assert "parser_id" not in ev and "event_category" not in ev
     sig = P.syslog_control_signal(dict(ev), "t1", datetime.now(timezone.utc))
     want = fx["signal"]
     if want is None:
@@ -65,6 +68,17 @@ def test_a_signal_the_engine_produces_was_also_admitted(pack, fx):
     ev = _event(fx)
     if P.syslog_control_signal(dict(ev), "t1", datetime.now(timezone.utc)) is not None:
         assert P.syslog_promotable(ev)
+
+
+def test_the_alarm_floor_holds_on_the_real_pack():
+    """Only the critical line may pass severity gates, whatever a row would do later."""
+    def _ev(sev: str) -> dict:
+        return {"hostname": "e", "appname": "SYSMGR", "severity": "notice",
+                "message": f"%Viptela-e-SYSMGR-{sev}-XXXX-1: text"}
+    assert P.syslog_alarm_num(_ev("2"), "SYSMGR") == 2
+    assert P.syslog_alarm_num(_ev("3"), "SYSMGR") is None
+    assert P.syslog_alarm_num(_ev("4"), "SYSMGR") is None
+    assert P.syslog_severity_num(_ev("3"), "SYSMGR") == 3, "read, not hidden"
 
 
 def test_only_a_critical_may_open_an_object_alone():
