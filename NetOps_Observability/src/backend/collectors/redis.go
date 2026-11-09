@@ -721,14 +721,20 @@ const wanCircuitsKey = "netops:wan:circuits"
 // by the wan-echo collector. Network-level (cross-tenant) by design — the prober
 // is platform infrastructure; the Tenant label scopes the resulting metric.
 type EchoTarget struct {
-	CircuitID    string `json:"circuit_id"`
-	Tenant       string `json:"tenant,omitempty"`
-	LocalDevice  string `json:"local_device"`
-	LocalIf      string `json:"local_if"`
-	LocalAddr    string `json:"local_addr"` // source-bind address (best-effort)
-	RemoteDevice string `json:"remote_device"`
-	RemoteIf     string `json:"remote_if"`
-	RemoteAddr   string `json:"remote_addr"` // probe destination (the measurable address)
+	CircuitID   string `json:"circuit_id"`
+	Tenant      string `json:"tenant,omitempty"`
+	LocalDevice string `json:"local_device"`
+	// LocalDeviceID is the inventory id of LocalDevice. With Tenant it is the
+	// circuit series' ownership: the echo collector stamps it as `device` and
+	// Tenant as `tenant_id`, the two labels the tenant metric scope binds
+	// (tracker 337 N-B5). Empty (an env-configured target, an older API) means
+	// the series carries no device label and stays platform-only — fail closed.
+	LocalDeviceID string `json:"local_device_id,omitempty"`
+	LocalIf       string `json:"local_if"`
+	LocalAddr     string `json:"local_addr"` // source-bind address (best-effort)
+	RemoteDevice  string `json:"remote_device"`
+	RemoteIf      string `json:"remote_if"`
+	RemoteAddr    string `json:"remote_addr"` // probe destination (the measurable address)
 }
 
 // PublishWANCircuits writes the circuit list for the echo collector. Best-effort;

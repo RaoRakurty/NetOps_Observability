@@ -6079,6 +6079,7 @@ classes:
         - ConfigChanged
       hypotheses:
         - sig.ent.wan-edge.controller-change-induced
+        - sig.ent.access.admin-link-change-induced
         - sig.ent.security.hardening-drift-story
       log_regex:
         - '(?i)%SYS-\d-CONFIG_I'

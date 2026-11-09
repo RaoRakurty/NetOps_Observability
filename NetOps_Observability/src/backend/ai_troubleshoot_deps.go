@@ -2425,7 +2425,8 @@ const nlqChangeFetch = 500
 // nlqLedgerQuery maps the planner's change query onto the ledger store's. Every
 // field the plan can filter on has a store-side counterpart, so nothing is
 // post-filtered in Go; Sources are the ledger's source_system values ("ledger",
-// "config_capture", "correlix_audit").
+// "config_capture", "correlix_audit", "device_trap", "device_syslog",
+// "cloud_audit").
 func nlqLedgerQuery(q plan.ChangeQuery, limit int) experience.ChangeQuery {
 	return experience.ChangeQuery{
 		Since: q.From, Until: q.To, Types: q.Types, Sites: q.Sites, Apps: q.Apps, Seams: q.Seams,

@@ -410,6 +410,8 @@ KEY_CASES: dict[str, tuple] = {
         s.observer, observer_id="somebody-else")), None),
     "collection_path": (lambda s: dc_replace(s, observer=dc_replace(
         s.observer, collection_path="via_controller:vmanage-9")), None),
+    # tracker 385: read by the clause attrs predicates, via signals.clause_attr.
+    "link_cause": (lambda s: dc_replace(s, attrs={**s.attrs, "link_cause": "admin"}), None),
 }
 
 PROBE_ATTR_CASES = ["probe_authority", "probe_scope", "agent_host",
