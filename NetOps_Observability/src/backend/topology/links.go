@@ -32,6 +32,12 @@ type TopoLink struct {
 	Resolved      bool   `json:"resolved"`         // target is a managed device in inventory
 	Bidirectional bool   `json:"bidirectional"`    // both ends reported the adjacency
 	LastSeen      int64  `json:"last_observed_at"` // unix millis
+	// What the SOURCE device heard from its neighbour (LLDP/CDP): the
+	// neighbour's chassis id and its own port description. Additive; empty
+	// when the protocol carries none. This is the caller's own device's
+	// observation, never a row of another tenant (see the handler's scoping).
+	TargetChassis  string `json:"target_chassis,omitempty"`
+	TargetPortDesc string `json:"target_port_desc,omitempty"`
 }
 
 // NormalizeLLDP turns raw directed half-links into deduped undirected topology
@@ -133,6 +139,7 @@ func NormalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 			LocalPort: localPort, RemotePort: remPort,
 			SourceProto: proto, IGP: n.IGP, Area: n.Area,
 			Resolved: resolved, LastSeen: n.TS,
+			TargetChassis: strings.TrimSpace(n.RemChassis), TargetPortDesc: strings.TrimSpace(n.RemPortDesc),
 		}
 		if resolved {
 			l.TargetName = ownedID[tgtID]
@@ -229,6 +236,17 @@ func addProto(existing, add string) string {
 
 // LinkSources reports which discovery protocols contributed the returned links,
 // as a stable "+"-joined set (e.g. "bgp_ls+lldp"). Empty set → "none".
+// LinksOfDevice keeps the links with id at either end. Pure.
+func LinksOfDevice(links []TopoLink, id string) []TopoLink {
+	out := make([]TopoLink, 0, len(links))
+	for _, l := range links {
+		if l.Source == id || l.Target == id {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 func LinkSources(links []TopoLink) string {
 	set := map[string]bool{}
 	for _, l := range links {
