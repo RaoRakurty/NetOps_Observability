@@ -54,10 +54,6 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
         "owner": "correlix", "date_added": "2026-11-09",
     },
-    "dns_failure_rate_clear": {
-        "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
-        "owner": "correlix", "date_added": "2026-11-09",
-    },
     "controller_control_connection_loss_clear": {
         "reason": "387 recovery signal from a vendor pack; closes, never fault evidence",
         "owner": "correlix", "date_added": "2026-11-09",
@@ -398,7 +394,7 @@ COLLECTION_PENDING: dict[str, dict] = {
     **_group("v0-theoretical template; Layer-2 collection pending (#73)",
              "#73", "2026-06-20", [
         "app_large_transfer_fail", "bgp_path_change", "cloud_gw_anomaly",
-        "if_crc", "optical_power_low",
+        "dns_failure_rate", "if_crc", "optical_power_low",
         "path_change", "qos_drops",
     ]),
     # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-

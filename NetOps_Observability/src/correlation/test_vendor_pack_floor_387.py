@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from catalog import builtin_catalog
 from engine import EngineConfig, run_window
-from producers import syslog_control_signal, syslog_promotable
+from producers import RULES, syslog_control_signal, syslog_promotable
 
 T0 = datetime(2026, 11, 9, 10, 0, 0, tzinfo=timezone.utc)
 CPU_CRIT = "%Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)"
@@ -79,4 +79,59 @@ def test_a_below_floor_signal_joins_a_component_it_is_grounded_to():
     dns = _sig(DNS_FAIL, "VTRACKER", offset_s=5)
     snaps = _objects([crit, dns])
     assert len(snaps) == 1
-    assert {n.kind for n in snaps[0].nodes} == {"device_resource_anomaly", "dns_failure_rate"}
+    assert {n.kind for n in snaps[0].nodes} == {"device_resource_anomaly", "device_alarm"}
+
+
+def _dns_template_ids() -> set[str]:
+    return {t.id for t in builtin_catalog().templates
+            if any("dns" in part for clause in t.requires for part in clause.kind.split("|"))}
+
+
+def test_a_vbond_dns_line_can_never_produce_a_dns_template_top_hypothesis():
+    """A device failing to resolve its own orchestrator says nothing about the internet's
+    DNS. `sig.ent.internet.dns-impairment` needs one kind and names the ISP as owner, so
+    feeding it these lines would blame the ISP in any component on that device, with no
+    independent evidence. Run through the real ranker, with the lines as the only other
+    evidence beside a critical line that opens the object, across every shape of the
+    failure, and alone in numbers."""
+    dns_ids = _dns_template_ids()
+    assert "sig.ent.internet.dns-impairment" in dns_ids, "the guard lost its subject"
+    dns_lines = [
+        (DNS_FAIL, "VTRACKER"),
+        (DNS_FAIL, "VDAEMON"),
+        ("monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via ", "VTRACKER"),
+    ]
+    windows = [
+        [_sig(CPU_CRIT, "SYSMGR"), *[_sig(m, a, offset_s=5 + i) for i, (m, a) in enumerate(dns_lines)]],
+        [_sig(CPU_CRIT, "SYSMGR"), *[_sig(DNS_FAIL, "VTRACKER", offset_s=i) for i in range(1, 200)]],
+    ]
+    for signals in windows:
+        snaps = _objects(signals)
+        assert len(snaps) == 1
+        ranking = snaps[0].ranking
+        assert ranking.top_hypothesis not in dns_ids
+        for hyp in ranking.hypotheses:
+            cited = " ".join(hyp.satisfied)
+            assert "dns_" not in cited, f"{hyp.template_id} cites DNS evidence: {cited}"
+            if hyp.template_id in dns_ids:
+                assert hyp.confidence_rank < 0.3, f"{hyp.template_id} scored {hyp.confidence_rank}"
+
+
+def test_no_pack_row_feeds_a_kind_a_dns_template_needs():
+    """Structural, so a later row cannot reintroduce it: every kind a template names under a
+    `dns` clause is out of reach for a pack line that talks about DNS."""
+    dns_kinds = {part for t in builtin_catalog().templates for clause in t.requires
+                 for part in clause.kind.split("|") if "dns" in part}
+    assert "dns_failure_rate" in dns_kinds
+    for rule in RULES:
+        if rule.lane == "syslog" and "sdwan" in rule.rule_id:
+            assert rule.kind not in dns_kinds, rule.rule_id
+
+
+def test_dns_success_lines_emit_nothing_and_stay_out_of_the_screen():
+    for msg in ("dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none",
+                "monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via "):
+        ev = {"hostname": "vEdge-1", "appname": "VTRACKER", "severity": "notice", "message": msg,
+              "timestamp": T0.isoformat()}
+        assert syslog_control_signal(dict(ev), "t1", T0) is None
+        assert not syslog_promotable(ev)

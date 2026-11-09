@@ -102,8 +102,6 @@ from signals import EVIDENCE_CLASS_BY_KIND, ModalityClass
 # emit site (each entry mirrors the ModalityClass its producer stamps).
 KIND_MODALITY: dict[str, ModalityClass] = {
     # Vendor-pack typed rows (tracker 387); each mirrors the row's `modality:`.
-    "dns_failure_rate": ModalityClass.CONTROL_PLANE,
-    "dns_failure_rate_clear": ModalityClass.CONTROL_PLANE,
     "device_resource_anomaly_clear": ModalityClass.DEVICE_TELEMETRY,
     "controller_control_connection_loss_clear": ModalityClass.CONTROL_PLANE,
     "controller_bfd_down_clear": ModalityClass.CONTROL_PLANE,

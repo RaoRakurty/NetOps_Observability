@@ -280,7 +280,7 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "device_config_change",
     # Vendor-pack typed rows (tracker 387): a device's own report of a symptom other
     # lanes already name, in the same vocabulary, each with its recovery as `_clear`.
-    "device_resource_anomaly_clear", "dns_failure_rate", "dns_failure_rate_clear",
+    "device_resource_anomaly_clear",
     "controller_control_connection_loss_clear", "controller_bfd_down_clear",
     # DC overlay (P2)
     "vtep_state_change", "evpn_mac_move",

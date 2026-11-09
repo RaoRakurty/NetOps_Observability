@@ -53,8 +53,9 @@ grammars:
     fidelity: lab_validated
 
   # IOS-XE SD-WAN edges. NOT seen on the lab: the capture's cEdge lines are all
-  # %DMI-5-AUTH_PASSED. Shape from a public example, so it stays doc_claimed until a
-  # capture promotes it.
+  # %DMI-5-AUTH_PASSED. doc_claimed until a capture promotes it. SOURCE NOT READ: the
+  # Cisco Community page below returned 403; the shape comes from a search engine's
+  # quotation of it, nothing better was found.
   - id: cisco_sdwan
     parser_id: cisco_sdwan.v1
     literal: '%Cisco-SDWAN-'
@@ -162,16 +163,24 @@ rules:
     emit: *cpu_emit
 
   # vBond DNS. Lab evidence: VTRACKER and VDAEMON, one failure reported as both a lookup
-  # and a resolution line. Reused kind: `dns_failure_rate` on a device is what the local
-  # resolver template reads. Whether this should also feed control-connection reasoning
-  # is an owner question; it stays a DNS symptom here.
+  # and a resolution line. `device_alarm`, on purpose, NOT `dns_failure_rate`: the kind
+  # `sig.ent.internet.dns-impairment` needs alone, and it names the ISP as owner, so a
+  # chronic vBond failure would score full coverage and blame the ISP in any component
+  # on that device with no independent evidence. A device failing to resolve its own
+  # orchestrator says nothing about the internet's DNS. `failure` names it for an operator;
+  # test_vendor_pack_floor_387.py pins that no DNS template can pick it up.
+  #
+  # `DNS lookup succeeded` has no row and emits nothing. There is no honest clear to send:
+  # `device_alarm_clear` would read as the end of every alarm on the device, and a kind
+  # of its own would have nothing to clear. The record stays stored and searchable.
   - rule_id: syslog.sdwan.dns.failed
     lane: syslog
     source: syslog
-    kind: dns_failure_rate
+    kind: device_alarm
     entity_type: device
     family: null
     vendors: [cisco]
+    generic: true
     fidelity_status: lab_validated
     pattern_src: 'DNS (?:lookup|resolution) failed for'
     guard:
@@ -179,35 +188,19 @@ rules:
         - {equals_any: [tag, [VTRACKER, VDAEMON]]}
         - {re: [msg, 'DNS (?:lookup|resolution) failed for', '']}
     severity: warn
-    extract: &dns_extract
+    extract:
       target: {re: [[msg, ' for (\S{1,128})', 1, '']]}
       step: {re: [[msg, 'DNS (lookup|resolution)', 1, '']]}
-    emit: &dns_emit
-      metric: dns_failure
+    emit:
+      metric: device_alarm
       modality: control_plane
       entity: {type: device, id: '{host}'}
-      native_id: '{host}|dns|{step|?}|{target|?}|{ts_ms}'
+      native_id: '{host}|alarm|dns_resolution_failed|{step|?}|{target|?}|{ts_ms}'
       tokens: [{t: '{host}'}]
       attrs:
+        failure: {const: dns_resolution_failed}
         target: {var: target}
         step: {var: step}
-
-  - rule_id: syslog.sdwan.dns.succeeded
-    lane: syslog
-    source: syslog
-    kind: dns_failure_rate_clear
-    entity_type: device
-    family: null
-    vendors: [cisco]
-    fidelity_status: lab_validated
-    pattern_src: 'DNS (?:lookup succeeded|resolution successful) for'
-    guard:
-      all:
-        - {equals_any: [tag, [VTRACKER, VDAEMON]]}
-        - {re: [msg, 'DNS (?:lookup succeeded|resolution successful) for', '']}
-    severity: info
-    extract: *dns_extract
-    emit: *dns_emit
 
   # Same vocabulary as nms/vmanage_kinds.go, which maps this very event name
   # (`bfd-state-change`) to controller_bfd_down, so a device's own report and the
@@ -216,7 +209,10 @@ rules:
   #
   # Control connections and BFD. NOT seen on the lab (a substring search of 18,436 stored
   # lines found neither). Documented shape only, so `doc_claimed` and fixtures hand-built
-  # from the citations; a real capture is what promotes them. Sources:
+  # from the citations; a real capture is what promotes them. The Splunk page was read and
+  # quotes the control-connection line. The Cisco page was only readable through a tool
+  # that summarised it, so the BFD wording is partly second-hand: `bfd-state-change`,
+  # `flap-reason:` and the state values, plus `new-state` from nms/vmanage_kinds.go. Sources:
   #   Cisco 215359 https://www.cisco.com/c/en/us/support/docs/routers/vedge-router/215359-bidirectional-forwarding-detection-flap.html
   #   Splunk https://research.splunk.com/sources/350c4a45-24df-4339-ba57-8b8c09f2865f/
   - rule_id: syslog.sdwan.control_connection.down
@@ -297,10 +293,11 @@ rules:
     extract: *bfd_extract
     emit: *bfd_emit
 
-  # Repeats on every vEdge sampled (1,277 stored lines from 3 devices) at severity 3,
-  # with no state in the text. Harmlessness is NOT proven, the plan says "may be
-  # harmless", and the owner is asked to rule on it. The guard is the whole text shape:
-  # a different message under the same id still reaches the below-floor row.
+  # PENDING OWNER REVIEW (decision 2026-11-09: keep it narrow and counted). Repeats on
+  # every vEdge sampled (1,277 stored lines from 3 devices) at severity 3, with no state
+  # in the text. Harmlessness is NOT proven; the plan says "may be harmless". The guard is
+  # the whole text shape: a different message under the same id still reaches the
+  # below-floor row, and `corr_parser_known_benign_total` shows if the rate moves.
   - rule_id: syslog.sdwan.ftmd.interface_dump
     lane: syslog
     source: syslog
@@ -310,7 +307,7 @@ rules:
     vendors: [cisco]
     fidelity_status: lab_validated
     known_benign: true
-    benign_reason: repeating FTMD interface dump with no state or fault in the text
+    benign_reason: repeating FTMD interface dump with no state or fault in the text; pending owner review
     pattern_src: '-FTMD-3-ERRO-1000003: User ifname = \S+; kernel if_name= \S+; encap = \d+'
     guard: {re: [msg, '-FTMD-3-ERRO-1000003: User ifname = \S+; kernel if_name= \S+; encap = \d+', '']}
     severity: warn
@@ -354,6 +351,8 @@ rules:
         tag: {var: tag}
         text: {var: text}
 
+  # SOURCE NOT READ, as for the `cisco_sdwan` grammar above: this row rests on that one
+  # quoted example.
   - rule_id: syslog.sdwan.below_floor.iosxe
     lane: syslog
     source: syslog
@@ -521,14 +520,14 @@ fixtures:
       severity_native_text: minor
     signal: {rule_id: syslog.sdwan.cpu_normal.clear, kind: device_resource_anomaly_clear, severity: info, opens_alone: false}
 
-  - name: a vBond lookup failure is a below-floor DNS symptom
+  - name: a vBond lookup failure is a below-floor alarm, not a DNS symptom
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
     message: '3137 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
     expect:
       procid: '3137'
-    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the same failure from the other daemon
     fidelity: lab_validated
@@ -537,7 +536,7 @@ fixtures:
     message: '3130 - - dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
     expect:
       procid: '3130'
-    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the resolver reports the same failure in its own words
     fidelity: lab_validated
@@ -546,25 +545,25 @@ fixtures:
     message: '3137 - - monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via '
     expect:
       procid: '3137'
-    signal: {rule_id: syslog.sdwan.dns.failed, kind: dns_failure_rate, severity: warn, opens_alone: false}
+    signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
-  - name: a vBond lookup success is the clear
+  - name: a vBond lookup success emits nothing
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
     message: '3890 - - dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none'
     expect:
       procid: '3890'
-    signal: {rule_id: syslog.sdwan.dns.succeeded, kind: dns_failure_rate_clear, severity: info, opens_alone: false}
+    signal: null
 
-  - name: the resolver success is the clear too
+  - name: the resolver success emits nothing
     fidelity: lab_validated
     hostname: vEdge-1
     appname: VTRACKER
     message: '3890 - - monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via '
     expect:
       procid: '3890'
-    signal: {rule_id: syslog.sdwan.dns.succeeded, kind: dns_failure_rate_clear, severity: info, opens_alone: false}
+    signal: null
 
   - name: the same DNS words from a daemon outside this pack mean nothing
     fidelity: lab_validated

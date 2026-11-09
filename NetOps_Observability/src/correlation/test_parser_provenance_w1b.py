@@ -532,7 +532,12 @@ RULES_HASH_SDWAN_RULES = "60245d18d78bafc2e5232ab7b3292607c8f19a709f6e451b81b559
 #: Management audit grammars (2026-11-09, tracker 387 PR 11): pack rows classify ConfD and
 #: SSH audit lines, non-alarm. No rule row and no severity moved; the hash covers the packs.
 RULES_HASH_MGMT_AUDIT = "567960e225d82b2f34e4a7673cf55b7d1a8dd49e7f71f508da4266f9fe58353e"
-RULES_HASH_A3 = RULES_HASH_MGMT_AUDIT
+#:
+#: vBond DNS as device_alarm (2026-11-09, tracker 387): syslog.sdwan.dns.failed moves off
+#: dns_failure_rate, which the ISP-owned dns-impairment template needs alone, and the
+#: success row is removed. No other row moved.
+RULES_HASH_VBOND_DNS_ALARM = "e3caac0e27f0ae5cc6159606a9365435c285cfcb71111b904073de1f3ec11d99"
+RULES_HASH_A3 = RULES_HASH_VBOND_DNS_ALARM
 
 
 def _guard_patterns(node) -> list[str]:

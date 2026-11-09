@@ -144,8 +144,8 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
     # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`)
-    # · 55 since tracker 387 (the Cisco SD-WAN pack's 13 rows).
-    assert len(P.RULES) == 55
+    # · 54 since tracker 387 (the Cisco SD-WAN pack's 12 rows).
+    assert len(P.RULES) == 54
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

@@ -171,7 +171,7 @@ def test_classification_examples_hold():
     assert classify_kind("tls_handshake_fail", CAT) == "normalization_pending"
     assert classify_kind("probe_latency_departure", CAT) == "normalization_pending"
     # True collection gaps stay collection:
-    assert classify_kind("if_crc", CAT) == "collection_pending"
+    assert classify_kind("dns_failure_rate", CAT) == "collection_pending"
     assert classify_kind("config_change", CAT) == "collection_pending"
     # …and the #98 P5 app-edge lane made the LB vocabulary real:
     assert classify_kind("lb_5xx", CAT) == "fully_connected"

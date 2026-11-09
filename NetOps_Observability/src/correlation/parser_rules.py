@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-09-mgmt-audit'
+PARSER_REV = '2026-11-09-vbond-dns-alarm'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -899,47 +899,24 @@ _ROWS: tuple[dict[str, Any], ...] = (
     {'rule_id': 'syslog.sdwan.dns.failed',
      'lane': 'syslog',
      'source': 'syslog',
-     'kind': 'dns_failure_rate',
+     'kind': 'device_alarm',
      'entity_type': 'device',
      'family': None,
      'vendors': ['cisco'],
+     'generic': True,
      'fidelity_status': 'lab_validated',
      'pattern_src': 'DNS (?:lookup|resolution) failed for',
      'guard': {'all': [{'equals_any': ['tag', ['VTRACKER', 'VDAEMON']]}, {'re': ['msg', 'DNS (?:lookup|resolution) failed for', '']}]},
      'severity': 'warn',
      'extract': {'target': {'re': [['msg', ' for (\\S{1,128})', 1, '']]}, 'step': {'re': [['msg', 'DNS (lookup|resolution)', 1, '']]}},
-     'emit': {'metric': 'dns_failure',
+     'emit': {'metric': 'device_alarm',
               'modality': 'control_plane',
               'entity': {'type': 'device', 'id': '{host}'},
-              'native_id': '{host}|dns|{step|?}|{target|?}|{ts_ms}',
+              'native_id': '{host}|alarm|dns_resolution_failed|{step|?}|{target|?}|{ts_ms}',
               'tokens': [{'t': '{host}'}],
-              'attrs': {'target': {'var': 'target'}, 'step': {'var': 'step'}},
-              'kind': 'dns_failure_rate'},
+              'attrs': {'failure': {'const': 'dns_resolution_failed'}, 'target': {'var': 'target'}, 'step': {'var': 'step'}},
+              'kind': 'device_alarm'},
      'markers': [],
-     'generic': False,
-     'shadow': False,
-     'known_benign': False},
-    {'rule_id': 'syslog.sdwan.dns.succeeded',
-     'lane': 'syslog',
-     'source': 'syslog',
-     'kind': 'dns_failure_rate_clear',
-     'entity_type': 'device',
-     'family': None,
-     'vendors': ['cisco'],
-     'fidelity_status': 'lab_validated',
-     'pattern_src': 'DNS (?:lookup succeeded|resolution successful) for',
-     'guard': {'all': [{'equals_any': ['tag', ['VTRACKER', 'VDAEMON']]}, {'re': ['msg', 'DNS (?:lookup succeeded|resolution successful) for', '']}]},
-     'severity': 'info',
-     'extract': {'target': {'re': [['msg', ' for (\\S{1,128})', 1, '']]}, 'step': {'re': [['msg', 'DNS (lookup|resolution)', 1, '']]}},
-     'emit': {'metric': 'dns_failure',
-              'modality': 'control_plane',
-              'entity': {'type': 'device', 'id': '{host}'},
-              'native_id': '{host}|dns|{step|?}|{target|?}|{ts_ms}',
-              'tokens': [{'t': '{host}'}],
-              'attrs': {'target': {'var': 'target'}, 'step': {'var': 'step'}},
-              'kind': 'dns_failure_rate_clear'},
-     'markers': [],
-     'generic': False,
      'shadow': False,
      'known_benign': False},
     {'rule_id': 'syslog.sdwan.control_connection.down',
@@ -1049,7 +1026,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'vendors': ['cisco'],
      'fidelity_status': 'lab_validated',
      'known_benign': True,
-     'benign_reason': 'repeating FTMD interface dump with no state or fault in the text',
+     'benign_reason': 'repeating FTMD interface dump with no state or fault in the text; pending owner review',
      'pattern_src': '-FTMD-3-ERRO-1000003: User ifname = \\S+; kernel if_name= \\S+; encap = \\d+',
      'guard': {'re': ['msg', '-FTMD-3-ERRO-1000003: User ifname = \\S+; kernel if_name= \\S+; encap = \\d+', '']},
      'severity': 'warn',
@@ -2004,6 +1981,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '567960e225d82b2f34e4a7673cf55b7d1a8dd49e7f71f508da4266f9fe58353e'
+BAKED_RULES_HASH = 'e3caac0e27f0ae5cc6159606a9365435c285cfcb71111b904073de1f3ec11d99'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

@@ -211,7 +211,7 @@ tests:
             source: |
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "minor", "wrong severity_native_text")
-  - name: "cisco_sdwan: a vBond lookup failure is a below-floor DNS symptom"
+  - name: "cisco_sdwan: a vBond lookup failure is a below-floor alarm, not a DNS symptom"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -256,7 +256,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.procid, "3137", "wrong procid")
-  - name: "cisco_sdwan: a vBond lookup success is the clear"
+  - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -271,7 +271,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.procid, "3890", "wrong procid")
-  - name: "cisco_sdwan: the resolver success is the clear too"
+  - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
         type: log

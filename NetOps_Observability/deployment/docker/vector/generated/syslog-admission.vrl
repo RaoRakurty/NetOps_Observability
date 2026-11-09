@@ -7,10 +7,10 @@
 # the engine COULD promote, and leaves the field unset otherwise. It
 # never drops, rewrites or reorders anything: the stamp is additive.
 #
-#   rules_hash : d9d433dbaa11f8440a46f20dd9a4c9a8dacb4b400dfa788f80536974e566f71a
-#   v          : d9d433dbaa11
+#   rules_hash : 8056cb293b793dbe9fee4a9c6f6844219f485aebaaced405fb0b43a22c8d46c9
+#   v          : 8056cb293b79
 #   floor      : ALARM_SEVERITY_FLOOR = 4
-#   screen     : 72 literals
+#   screen     : 70 literals
 #
 # Field parity: this runs immediately after `syslog_normalized`, so it
 # reads exactly the document `kafka_syslog` serializes onto
@@ -104,22 +104,22 @@ if cx_pk_n < 99 && cx_sev > cx_pk_floor {
 
 # ── gate 1: the device called it warning-or-worse ───────────────────
 if cx_sev <= 4 {
-  .cx_admission = { "v": "d9d433dbaa11", "by": "severity" }
+  .cx_admission = { "v": "8056cb293b79", "by": "severity" }
 }
 
 # ── gate 2: a known typed symptom marker, at any severity ───────────
 # The haystack is `message + " " + upcase(appname) + " " + facility +
 # " " + event_type`, lower-cased — byte-for-byte the join
 # `syslog_promotable` builds. The alternation below is the screen's
-# 72 literals (longest first, as in the Python tuple); Rust's
+# 70 literals (longest first, as in the Python tuple); Rust's
 # regex compiles an alternation of plain literals into a literal-set
 # matcher, so this is one pass, not 61 substring searches.
 if !exists(.cx_admission) {
   cx_hay = downcase(
     (string(.message) ?? "") + " " + cx_tag + " " +
     (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
-  if match(cx_hay, r'system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |control-connection-state-change|: system cpu usage is above |: system cpu usage is below |unsupported_transceiver|resolution successful|is flapping between|isisadjacencychange|has moved between|bfd-state-change|lookup succeeded|between nve and|duplicate host|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%viptela-|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
-    .cx_admission = { "v": "d9d433dbaa11", "by": "marker" }
+  if match(cx_hay, r'system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |control-connection-state-change|: system cpu usage is above |: system cpu usage is below |unsupported_transceiver|is flapping between|isisadjacencychange|has moved between|bfd-state-change|between nve and|duplicate host|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%viptela-|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
+    .cx_admission = { "v": "8056cb293b79", "by": "marker" }
   }
 }
 

@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-mgmt-audit`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-vbond-dns-alarm`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -19,12 +19,12 @@ engine treats them as such. Fidelity is the catalog's ladder
 
 ## Summary
 
-- **35** typed symptoms (the two severity-floor `device_alarm`
+- **33** typed symptoms (the two severity-floor `device_alarm`
   nets are the safety net, not coverage, and are excluded).
 - **8** of them arrive on **two or more independent sources**
   and can therefore be corroborated across observers.
 - **8** are carried by a typed SNMP-trap rule (3 before the A9 trap audit, 7 after it, 8 since the A9b config-change follow-up).
-- **27** are single-source today — the list below
+- **25** are single-source today — the list below
   says which, and the audit section says why.
 
 ## Matrix
@@ -42,8 +42,6 @@ engine treats them as such. Fidelity is the catalog's ladder
 | `device_resource_anomaly` | `syslog.sdwan.cpu_high.critical`, `syslog.sdwan.cpu_high.warning` | — | — | `cisco` | syslog: lab_validated |
 | `device_resource_anomaly_clear` | `syslog.sdwan.cpu_high.clear`, `syslog.sdwan.cpu_normal.clear` | — | — | `cisco` | syslog: lab_validated |
 | `device_restart` | — | `trap.device.restart`, `trap.device.restart.event_type` | — | `any`, `standard` | trap: code |
-| `dns_failure_rate` | `syslog.sdwan.dns.failed` | — | — | `cisco` | syslog: lab_validated |
-| `dns_failure_rate_clear` | `syslog.sdwan.dns.succeeded` | — | — | `cisco` | syslog: lab_validated |
 | `dom_lane_bias_anomaly` | `syslog.port.dom_lane_bias_anomaly` | — | — | `generic` | syslog: code |
 | `dom_rx_power_low` | `syslog.port.dom_rx_power_low` | — | — | `generic` | syslog: code |
 | `dom_temperature_high` | `syslog.port.dom_temperature_high` | — | — | `generic` | syslog: code |
@@ -115,6 +113,7 @@ waiting for a recovery line.
 
 | Rule | Lane | What it catches |
 |---|---|---|
+| `syslog.sdwan.dns.failed` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sdwan.below_floor` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sdwan.below_floor.iosxe` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.generic.device_alarm` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
