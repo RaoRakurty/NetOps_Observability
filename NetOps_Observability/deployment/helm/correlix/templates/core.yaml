@@ -67,16 +67,15 @@ spec:
             # ── app-state store (tracker 245: postgres is the default) ──
             - {name: STORE_BACKEND, value: {{ .Values.store.backend | quote }}}
             {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}
-            - name: DATABASE_URL
-              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: DATABASE_URL}}
+            # Tracker 384: the same Secret key, mounted as a file below, so the
+            # DSN and its password stay out of this container's environment.
+            - {name: DATABASE_URL_FILE, value: "/run/secrets/postgres/api/database_url"}
             {{- end }}
             - {name: DB_HOST, value: "postgres"}
             - {name: DB_PORT, value: "5432"}
             - {name: DB_NAME, value: "netops"}
             - name: DB_USER
               valueFrom: {secretKeyRef: {name: {{ $secret }}, key: DB_USER}}
-            - name: DB_PASSWORD
-              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: DB_PASSWORD}}
             # ── peers ──
             - {name: REDIS_HOST, value: "redis"}
             - {name: REDIS_PORT, value: "6379"}
@@ -84,8 +83,15 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ $secret }}, key: REDIS_PASSWORD}}
             - {name: BROKER_URLS, value: {{ include "correlix.brokerUrls" $ | quote }}}
             - {name: BUS_BRIDGE_URL, value: "http://vector-aggregator:8692"}
-            - {name: VICTORIA_URL, value: "http://victoria:8428"}
-            - {name: METRICS_URL, value: "http://victoria:8428"}
+            - {name: VICTORIA_URL, value: {{ include "correlix.metricsUrl" $ | quote }}}
+            - {name: METRICS_URL, value: {{ include "correlix.metricsUrl" $ | quote }}}
+            {{- if .Values.vmauth.enabled }}
+            - {name: VICTORIA_AUTH_USER, value: "svc-api"}
+            - {name: VICTORIA_AUTH_PASSWORD_FILE, value: "/run/secrets/vmauth/api/password"}
+            {{- if .Values.tls.enabled }}
+            - {name: TLS_BACKEND_CA_FILE, value: "/tls/ca/ca.crt"}
+            {{- end }}
+            {{- end }}
             - {name: OPENSEARCH_URL, value: "http://opensearch:9200"}
             - {name: CLICKHOUSE_URL, value: "http://clickhouse:8123"}
             - {name: CLICKHOUSE_USER, value: {{ .Values.clickhouse.user | quote }}}
@@ -157,9 +163,32 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /config, readOnly: true}
             - {name: data, mountPath: /data}
+            {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}
+            - {name: postgres-dsn, mountPath: /run/secrets/postgres/api, readOnly: true}
+            {{- end }}
+            {{- if .Values.vmauth.enabled }}
+            - {name: vmauth-cred, mountPath: /run/secrets/vmauth/api, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: mesh-ca, mountPath: /tls/ca, readOnly: true}
+            {{- end }}
+            {{- end }}
       volumes:
         - {name: config, configMap: {name: correlix-config}}
         - {name: data, persistentVolumeClaim: {claimName: api-data}}
+        {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}
+        - name: postgres-dsn
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+            items:
+              - {key: DATABASE_URL, path: database_url}
+        {{- end }}
+        {{- if .Values.vmauth.enabled }}
+{{ include "correlix.vmauthCredVolume" (dict "root" $ "key" "VMAUTH_API_PASSWORD") | indent 8 }}
+        {{- if .Values.tls.enabled }}
+{{ include "correlix.meshCAVolume" $ | indent 8 }}
+        {{- end }}
+        {{- end }}
 {{- end }}
 {{- if .Values.correlation.enabled }}
 ---

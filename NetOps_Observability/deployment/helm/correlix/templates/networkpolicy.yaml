@@ -174,9 +174,34 @@ spec:
   ingress:
     - from:
         - podSelector:
+{{- if .Values.vmauth.enabled }}
+{{/* Tracker 384: every client now presents its identity to vmauth, so its direct
+     path closes. Otherwise a client could still reach the store unauthenticated.
+     The watchdog stays: read-only queries, no vmauth identity of its own. */}}
+{{ include "correlix.compSelector" (dict "components" (list "vmauth" "watchdog")) | indent 12 }}
+{{- else }}
 {{ include "correlix.compSelector" (dict "components" (list "api" "vmalert" "vmauth" "grafana" "gnmic" "prober" "vector-aggregator" "vector-router" "watchdog")) | indent 12 }}
+{{- end }}
       ports:
         - {protocol: TCP, port: 8428}
+{{- if .Values.vmauth.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: correlix-vmauth-ingress
+  labels:
+{{ include "correlix.labels" (dict "root" $ "component" "netpol") | indent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: vmauth}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+{{ include "correlix.compSelector" (dict "components" (list "api" "vmalert" "gnmic" "prober" "vector-aggregator")) | indent 12 }}
+      ports:
+        - {protocol: TCP, port: 8427}
+{{- end }}
 ---
 # ── 5. Application tier ingress ─────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1
