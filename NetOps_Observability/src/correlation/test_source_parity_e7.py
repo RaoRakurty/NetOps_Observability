@@ -34,14 +34,29 @@ BGP session to 192.168.200.34 in VPN 200 goes idle, then active.
     joins the same events against an inventory that also owns the peer's
     address, which is where nms/identity.go rewrites the peer (D5).
 
-Not covered: D1/D2 (above), D3 recoveries (tracker 380; the controller lane
-here relays no recovery), D4 interface spellings (no recorded interface
-event), D6 severity (tracker 381; not compared).
+Not covered by a RECORDED event: D1/D2 (above; synthetic messages below), D3
+recoveries (tracker 380; the controller lane here relays no recovery), D4
+interface spellings (no recorded interface event; synthetic below), D6 severity
+(tracker 381; not compared).
 
 KNOWN_DIVERGENCES is a ratchet: every divergence the harness observes must be
 declared with its owner, and a declared one that no longer reproduces fails
 too (delete it). So a regression on either side of the language boundary, or
 a fix nobody recorded, is a red test — never silence.
+
+P6 PR-E split the ratchet by stage [1] identity canonicalisation
+(CORR_IDENTITY_CANON): KNOWN_DIVERGENCES is what the engine receives with the
+flag OFF (unchanged), KNOWN_DIVERGENCES_ON what it receives with the flag ON —
+every signal pushed through the live window entry (`main.buffer_signal`) with
+the lab's tenant-only inventory. D5 heals on the recorded GOLDEN_PEER events;
+trap_unattributed stays (the sender is in no registry: tracker 371).
+
+IDENTITY_DIVERGENCES / IDENTITY_DIVERGENCES_ON cover D1/D2/D4, which the
+recorded event cannot (its syslog carries no evidence, above). Each case is the
+box's RECORDED syslog hostname (its management address) with a SYNTHETIC
+message through the production parser — the PR-D vectors — set against the
+recorded trap (D1) and the SNMP ifName IOS-XE reports for the same port (D4).
+A recorded transition, when one is captured, replaces the synthetic message.
 """
 from __future__ import annotations
 
@@ -53,10 +68,18 @@ import pytest
 
 import main
 import producers as P
+import signals
+from canon import canonicalize_series, tenant_key
 from controller_events import controller_event_to_signal
 from engine import build_nodes
-from entity_resolver import EntityResolver
-from signals import ORIGIN_DEVICE_ATTR, ModalityClass, set_origin_observer
+from entity_resolver import EntityResolver, identity_resolver_for
+from signals import (
+    ORIGIN_DEVICE_ATTR,
+    ModalityClass,
+    set_identity_canon,
+    set_origin_observer,
+    set_series_admission,
+)
 from trap_collapse import TransitionCollapser
 from verdicts import VerdictTier, assess
 
@@ -91,11 +114,76 @@ KNOWN_DIVERGENCES = {
         "docs/design/P6_CANONICALISATION_PLAN_2026-11-07.md"),
 }
 
+# CORR_IDENTITY_CANON on (with its prerequisites E1 + series admission): D5 heals.
+KNOWN_DIVERGENCES_ON = {
+    "trap_unattributed": KNOWN_DIVERGENCES["trap_unattributed"],
+}
+
+IDENTITY_DIVERGENCES = {
+    "syslog_bgp_binds_the_host": (
+        "D1 (tracker 374): a syslog BGP adjacency binds the HOST while the router's own trap "
+        "binds the session `{device}:{peer}` — one session, two nodes. P6 PR-E"),
+    "syslog_names_the_box_by_its_address": (
+        "D2 (tracker 374): cEDGE-81 logs under its management address 192.168.222.106, the "
+        "trap and the controller name it by inventory id. P6 PR-E"),
+    "interface_spelling_differs": (
+        "D4 (tracker 374): syslog says `GigabitEthernet1`, IF-MIB ifName says `Gi1` — one "
+        "port, two series/nodes. P6 PR-E"),
+}
+IDENTITY_DIVERGENCES_ON: dict[str, str] = {}
+
+# The lab inventory as the Go API exports it for t_lab (entity_resolver.json):
+# cEDGE-81 by id, name and management address, its ports by ifIndex, and the
+# GOLDEN_PEER case's peer box owning the session's remote address.
+LAB_INVENTORY = {
+    "devices": {TENANT: [
+        {"tenant_id": TENANT, "device": DEVICE, "name": "cEDGE-81", "mgmt_ip": CEDGE81_MGMT},
+        {"tenant_id": TENANT, "device": PEER_INVENTORY_ID, "name": "pe-vpn200", "mgmt_ip": PEER},
+    ]},
+    "interface_ips": {},
+    "ifindex": {TENANT: [
+        {"tenant_id": TENANT, "device": DEVICE, "ifindex": "1", "ifname": "Gi1"},
+        {"tenant_id": TENANT, "device": DEVICE, "ifindex": "2", "ifname": "Gi2"},
+    ]},
+}
+
 
 @pytest.fixture(autouse=True)
 def _restore():
+    prev = (signals.origin_observer_enabled(), signals.series_admission_enabled(),
+            signals.identity_canon_requested())
     yield
-    set_origin_observer(False)
+    set_origin_observer(prev[0])
+    set_series_admission(prev[1])
+    set_identity_canon(prev[2])
+
+
+@pytest.fixture
+def lab_inventory(monkeypatch):
+    res = identity_resolver_for(LAB_INVENTORY, TENANT)
+    monkeypatch.setattr(main, "cached_identity_resolver_for",
+                        lambda tenant: res if tenant_key(tenant) == TENANT else
+                        identity_resolver_for({}, tenant))
+    monkeypatch.setattr(main, "IDENTITY_CANON_COUNTS", {})
+
+
+def engine_view(canon: bool):
+    """What the engine's window holds for a lane's signal: `main.buffer_signal`
+    with stage [1] on (its prerequisites too) or off. None stays None."""
+    set_origin_observer(canon)
+    set_series_admission(canon)
+    set_identity_canon(canon)
+    assert main.identity_canon_enabled() is canon
+
+    def view(sig):
+        if sig is None:
+            return None
+        main.WINDOW_BUFFER.clear()
+        main._BUFFERED_ID_ORDER.clear()
+        main._BUFFERED_IDS.clear()
+        main.buffer_signal(sig)
+        return main.WINDOW_BUFFER[-1]
+    return view
 
 
 def controller_events(golden: str = GOLDEN) -> list[dict]:
@@ -130,12 +218,19 @@ def ts(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
-def observed_divergences() -> set[str]:
+def _as_received(sig):
+    return sig
+
+
+def observed_divergences(view=_as_received) -> set[str]:
+    """`view` maps a lane's signal to what the engine holds for it: as produced
+    (default), or through the live window entry with stage [1] on/off
+    (`engine_view`)."""
     seen: set[str] = set()
-    ctl = first_controller_signal()
-    if P.trap_control_signal(dict(first_rfc_trap()), TENANT, INGEST) is None:
+    ctl = view(first_controller_signal())
+    if view(P.trap_control_signal(dict(first_rfc_trap()), TENANT, INGEST)) is None:
         seen.add("trap_unattributed")
-    trap_sig = P.trap_control_signal(joined(first_rfc_trap()), TENANT, INGEST)
+    trap_sig = view(P.trap_control_signal(joined(first_rfc_trap()), TENANT, INGEST))
     if trap_sig is not None and trap_sig.entity_id != ctl.entity_id:
         seen.add("trap_bgp_peer_from_index")
     # tracker 376: every CISCO-BGP4-MIB report of the transition the RFC trap
@@ -145,7 +240,7 @@ def observed_divergences() -> set[str]:
         rfc_up = uptime_cs(first_rfc_trap())
         same = [t for t in traps() if t["trap_oid"].startswith(CISCO_BGP4)
                 and abs(uptime_cs(t) - rfc_up) <= 100]
-        family = [P.trap_control_signal(joined(t), TENANT, INGEST) for t in same]
+        family = [view(P.trap_control_signal(joined(t), TENANT, INGEST)) for t in same]
         want = (trap_sig.entity_id, trap_sig.attrs.get("state"))
         if not same or any(s is None or (s.entity_id, s.attrs.get("state")) != want
                            for s in family):
@@ -157,9 +252,50 @@ def observed_divergences() -> set[str]:
             seen.add("trap_families_multiply_one_transition")
     # D5: the same recorded controller events, joined against an inventory that
     # owns the peer's address. One session must stay one node with the trap's.
-    ctl_peer = controller_event_to_signal(controller_events(GOLDEN_PEER)[0], INGEST)
+    ctl_peer = view(controller_event_to_signal(controller_events(GOLDEN_PEER)[0], INGEST))
     if trap_sig is not None and ctl_peer.entity_id != trap_sig.entity_id:
         seen.add("controller_peer_is_inventory_id")
+    return seen
+
+
+SYSLOG_BGP = f"%BGP-5-ADJCHANGE: neighbor {PEER} vpn vrf 200 Down BGP Notification sent"
+SYSLOG_LINK = "%LINEPROTO-5-UPDOWN: Line protocol on Interface GigabitEthernet1, changed state to down"
+
+
+def recorded_host_syslog(message: str):
+    """A synthetic message under the box's RECORDED syslog hostname, through the
+    production parser (the recorded lines promote nothing — see the docstring)."""
+    host = syslog_lines()[0]["hostname"]
+    sig = P.syslog_control_signal({"appname": message.split(":", 1)[0], "facility": "local7",
+                                   "hostname": host, "message": message,
+                                   "timestamp": "2026-11-01T17:00:01Z"}, TENANT, INGEST)
+    assert sig is not None, message
+    return sig
+
+
+def snmp_series_key(if_name: str, canon: bool) -> str:
+    """The metric lane's series key for an IOS-XE IF-MIB sample of cEDGE-81's port
+    (ifName is the SHORT form there), as `main.handle_metric` keys it."""
+    ev = {"device": DEVICE, "signal_family": "interface", "if_name": if_name, "index": "1",
+          "metric": "device_if_oper_status"}
+    entity_id, _etype, _kp, tokens = main.metric_identity(ev)
+    if not canon:
+        return entity_id
+    return canonicalize_series(ev, entity_id, tokens, main.cached_identity_resolver_for(TENANT),
+                               TENANT).entity_id
+
+
+def observed_identity_divergences(view, canon: bool) -> set[str]:
+    seen: set[str] = set()
+    trap = view(P.trap_control_signal(joined(first_rfc_trap()), TENANT, INGEST))
+    bgp = view(recorded_host_syslog(SYSLOG_BGP))
+    link = view(recorded_host_syslog(SYSLOG_LINK))
+    if bgp.entity_id != trap.entity_id:
+        seen.add("syslog_bgp_binds_the_host")
+    if link.entity_id.split(":", 1)[0] != DEVICE:
+        seen.add("syslog_names_the_box_by_its_address")
+    if link.entity_id.split(":", 1)[1] != snmp_series_key("Gi1", canon).split(":", 1)[1]:
+        seen.add("interface_spelling_differs")
     return seen
 
 
@@ -221,12 +357,44 @@ def test_the_device_syslog_lane_carries_no_evidence_for_the_transition() -> None
 
 # ── the ratchet ──────────────────────────────────────────────────────────────
 
-def test_every_divergence_is_declared_and_every_declaration_still_holds() -> None:
-    seen = observed_divergences()
-    undeclared = seen - set(KNOWN_DIVERGENCES)
-    healed = set(KNOWN_DIVERGENCES) - seen
+def _ratchet(seen: set[str], declared: dict[str, str]) -> None:
+    undeclared = seen - set(declared)
+    healed = set(declared) - seen
     assert not undeclared, f"new divergence between the device and controller paths: {undeclared}"
     assert not healed, f"declared divergence no longer reproduces — delete it: {healed}"
+
+
+def test_every_divergence_is_declared_and_every_declaration_still_holds() -> None:
+    _ratchet(observed_divergences(), KNOWN_DIVERGENCES)
+
+
+@pytest.mark.parametrize("canon,declared", [(False, KNOWN_DIVERGENCES), (True, KNOWN_DIVERGENCES_ON)],
+                         ids=["canon_off", "canon_on"])
+def test_the_ratchet_through_the_window_entry(canon, declared, lab_inventory) -> None:
+    """The same recorded events as the engine's window holds them, stage [1]
+    off (unchanged from the producer view) and on (D5 healed)."""
+    _ratchet(observed_divergences(engine_view(canon)), declared)
+
+
+@pytest.mark.parametrize("canon,declared",
+                         [(False, IDENTITY_DIVERGENCES), (True, IDENTITY_DIVERGENCES_ON)],
+                         ids=["canon_off", "canon_on"])
+def test_the_identity_ratchet_d1_d2_d4(canon, declared, lab_inventory) -> None:
+    _ratchet(observed_identity_divergences(engine_view(canon), canon), declared)
+
+
+def test_with_canon_on_the_session_is_one_node_across_three_lanes(lab_inventory) -> None:
+    """D1 + D2 + D5: the box's syslog (recorded hostname), its own trap and the
+    controller whose peer was rewritten to an inventory id meet on ONE node — and
+    stay ONE witness under E1 (the prerequisite), never a confirmation."""
+    view = engine_view(True)
+    sigs = [view(recorded_host_syslog(SYSLOG_BGP)),
+            view(P.trap_control_signal(joined(first_rfc_trap()), TENANT, INGEST)),
+            view(controller_event_to_signal(controller_events(GOLDEN_PEER)[0], INGEST))]
+    assert {s.entity_id for s in sigs} == {f"{DEVICE}:{PEER}"}
+    assert len(build_nodes(tuple(sigs))) == 1
+    assert {s.attrs[ORIGIN_DEVICE_ATTR] for s in sigs} == {DEVICE}
+    assert assess(sigs).tier is not VerdictTier.CONFIRMED
 
 
 # ── what must hold today ─────────────────────────────────────────────────────
