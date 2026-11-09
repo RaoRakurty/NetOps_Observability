@@ -56,6 +56,13 @@ type metricsCollector struct {
 	// a panicking worker without needing a device that still panics.
 	pollFn func(context.Context, Target) deviceOutcome
 
+	// Last-known interface rows (if_rows_retention.go). ifRows, ifRowsLoaded and
+	// ifRowsLastRetained belong to pollOnce, which is never concurrent with itself.
+	ifRowStore         ifRowStore
+	ifRows             ifRowState
+	ifRowsLoaded       bool
+	ifRowsLastRetained string
+
 	mu     sync.RWMutex
 	status Status
 }
@@ -67,6 +74,9 @@ func NewSNMPMetrics(targets TargetFunc) Collector {
 		targets:  targets,
 		profiles: loadProfiles(),
 		status:   Status{Name: "snmpmetrics", Healthy: true, Kind: "metrics"},
+
+		ifRowStore: valkeyIfRowStore{},
+		ifRows:     newIfRowState(),
 	}
 	c.pollFn = c.pollDevice
 	return c
@@ -139,8 +149,6 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	reachable, samples := 0, 0
 	meBuilt, meSent := 0, 0
 	var lastErr, enrichErr string
-	ifaddr := map[string]map[string]string{}
-	ifindexMap := map[string]map[string]string{}
 	locations := map[string]string{}
 	softwareRevs := map[string]string{}
 	chassisIDs := map[string]ChassisIdentity{}
@@ -161,12 +169,6 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		meBuilt += len(r.events)
 		meSent += forwardMetricEvents(ctx, r.events)
 		if r.id != "" {
-			if len(r.ifaddr) > 0 {
-				ifaddr[r.id] = r.ifaddr
-			}
-			if r.ifindex != nil {
-				ifindexMap[r.id] = r.ifindex
-			}
 			if r.location != "" {
 				locations[r.id] = r.location
 			}
@@ -179,20 +181,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		}
 	}
 
-	// Publish the merged interface-address map (replace; TTL self-expires if the
-	// collector dies). Read by the topology API to enrich BGP-LS links.
-	if len(ifaddr) > 0 {
-		if b, err := json.Marshal(ifaddr); err == nil {
-			redisPublish(ctx, "interface-addrs", ifAddrKey, string(b), 1800)
-		}
-	}
-	// ifIndex → ifName per device, for the C7.1 EntityResolver (flow exporter
-	// in/out ifIndex → device:ifName). Same replace+TTL discipline as ifaddr.
-	if len(ifindexMap) > 0 {
-		if b, err := json.Marshal(ifindexMap); err == nil {
-			redisPublish(ctx, "interface-index", ifIndexKey, string(b), 1800)
-		}
-	}
+	// The interface-address and ifIndex maps: each device's last-known rows, which
+	// is what keeps a device that has stopped answering resolvable.
+	ifRowsNow := c.publishIfRows(ctx, start, targets, results)
 
 	// deviceID → sysLocation, read by the inventory to show the site the device
 	// itself is configured with. Same replace+TTL discipline.
@@ -219,7 +210,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	}
 
 	healthy := cycleHealthy(len(targets), reachable)
-	emitMetrics(ctx, strings.Join([]string{
+	emitMetrics(ctx, strings.Join(append([]string{
 		collectorUpLine("snmpmetrics", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="snmpmetrics"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="snmpmetrics"} %d %d`, reachable, now),
@@ -230,7 +221,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		fmt.Sprintf(`collector_metric_events_built{collector="snmpmetrics"} %d %d`, meBuilt, now),
 		fmt.Sprintf(`collector_metric_events_sent{collector="snmpmetrics"} %d %d`, meSent, now),
 		fmt.Sprintf(`collector_metric_events_failed{collector="snmpmetrics"} %d %d`, meBuilt-meSent, now),
-	}, "\n"))
+	}, ifRowMetricLines(ifRowsNow, now)...), "\n"))
 
 	c.mu.Lock()
 	c.status.LastTick = start.UTC()
@@ -252,17 +243,22 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 // (no shared mutable state during the parallel phase — the echo.go pattern), and
 // pollOnce aggregates serially after; correctness never depends on -race.
 type deviceOutcome struct {
-	id          string
-	lines       []string
-	events      []MetricEvent
-	reach       bool
-	ifaddr      map[string]string // interface IP → ifName
-	ifindex     map[string]string // ifIndex → ifName
-	location    string            // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
-	softwareRev string            // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
-	chassis     *ChassisIdentity  // ENTITY-MIB chassis serial + model (nil = none reported)
-	lastErr     string
-	enrichErr   string
+	id      string
+	lines   []string
+	events  []MetricEvent
+	reach   bool
+	ifaddr  map[string]string // interface IP → ifName
+	ifindex map[string]string // ifIndex → ifName
+	// ifaddrComplete / ifindexComplete: the walk behind the map above finished, so
+	// the map is the device's whole answer and may replace its last-known rows. An
+	// empty map without the flag says nothing about the device.
+	ifaddrComplete  bool
+	ifindexComplete bool
+	location        string           // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
+	softwareRev     string           // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
+	chassis         *ChassisIdentity // ENTITY-MIB chassis serial + model (nil = none reported)
+	lastErr         string
+	enrichErr       string
 }
 
 // pollDevice does ALL SNMP work for one device and stamps its samples with THIS
@@ -309,6 +305,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// (Gi0/1 / ge-0/0/1 / Ethernet1 / ethernet-1/1) and which renumbers on a
 	// reboot or line-card change. The name is the operator-facing identity.
 	var ifNames map[string]string
+	ifNamesOK := false // the name table was read to its end
 	// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
 	// names; empty when the operator configured no interface description.
 	var ifAliases map[string]string
@@ -337,7 +334,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 				}
 				isIface := strings.HasPrefix(m.Name, "device_if_")
 				if isIface && ifNames == nil {
-					ifNames = ifNameMap(dctx, addr, creds)
+					ifNames, ifNamesOK = ifNameMapChecked(dctx, addr, creds)
 					ifAliases = ifAliasMap(dctx, addr, creds)
 				}
 				for idx, v := range rows {
@@ -460,6 +457,11 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 			out.ifaddr = m
 		}
 		out.ifindex = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
+		// An address whose port has no name is left out of m, so without the whole
+		// name table the address walk is not the device's whole answer either.
+		namesAnswered := ifNamesOK && len(ifNames) > 0
+		out.ifindexComplete = namesAnswered
+		out.ifaddrComplete = namesAnswered && err == nil
 	}
 	cancel()
 	out.lines = lines
@@ -543,11 +545,21 @@ func ifAliasMap(ctx context.Context, addr string, creds snmpCreds) map[string]st
 // Best-effort: an unreachable/blank table yields an empty map and the caller
 // falls back to "ifIndex N" rather than dropping the metric.
 func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]string {
+	out, _ := ifNameMapChecked(ctx, addr, creds)
+	return out
+}
+
+// ifNameMapChecked is ifNameMap plus whether the result is the whole table: at least
+// one of the two columns was walked to its end. A walk cut off by the deadline keeps
+// the rows it read, which is enough to label metrics but not to say a port is gone.
+func ifNameMapChecked(ctx context.Context, addr string, creds snmpCreds) (map[string]string, bool) {
 	out := map[string]string{}
 	// sanitizeLabel, not TrimSpace: ifName/ifDescr become the `ifName` LABEL on
 	// every interface series, so an unbounded or control-char-bearing value is a
 	// cardinality/exposition hazard, not cosmetics (caps.go, audit PIPE-MED-11).
+	complete := false
 	if rows, err := snmpWalkColumn(ctx, addr, creds, ifNameOID); err == nil {
+		complete = true
 		for idx, v := range rows {
 			if s := sanitizeLabel(string(v.raw)); s != "" {
 				out[idx] = s
@@ -555,6 +567,7 @@ func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]str
 		}
 	}
 	if descr, err := snmpWalkColumn(ctx, addr, creds, ifDescrOID); err == nil {
+		complete = true
 		for idx, v := range descr {
 			if _, ok := out[idx]; ok {
 				continue
@@ -564,7 +577,7 @@ func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]str
 			}
 		}
 	}
-	return out
+	return out, complete
 }
 
 // valueInt coerces an SNMP value to an integer for metric emission. Counters,
