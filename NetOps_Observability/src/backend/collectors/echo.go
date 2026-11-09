@@ -156,10 +156,7 @@ type echoOutcome struct {
 // never take the process down — H3).
 func (s *wanEcho) probeCircuit(ctx context.Context, tgt EchoTarget, now int64, prober, ts string) echoOutcome {
 	res := s.measure(ctx, tgt)
-	lbl := fmt.Sprintf(
-		`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
-		tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
-		res.method, boolLabel(res.sourceBound))
+	lbl := EchoSeriesLabels(tgt, res.method, res.sourceBound)
 	out := echoOutcome{valid: true, reach: res.recv > 0, failReason: res.failReason}
 	if res.recv > 0 {
 		out.lines = append(out.lines,
@@ -180,6 +177,39 @@ func (s *wanEcho) probeCircuit(ctx context.Context, tgt EchoTarget, now int64, p
 		LossPct: res.lossPct, TS: ts,
 	}
 	return out
+}
+
+// EchoSeriesLabels renders the label set of one circuit's circuit_* series.
+//
+// OWNERSHIP (tracker 337 N-B5). The tenant metric scope (metricsScopeFiltersFor
+// in the API) admits a series for a scoped tenant only through a `device`
+// label in the tenant's device-id set (or a hostname/source NAME on a series
+// with no device label), bound to `tenant_id` empty-or-theirs. The circuit
+// series carried none of those — only `local_device` (a name) and a `tenant`
+// label the scope does not read — so every scoped tenant's own circuit
+// measurements were invisible to it (path metrics, NL queries, the metrics
+// API) while the Global view saw them all.
+//
+// So a circuit whose local device is a known inventory device is stamped with
+// that device's id as `device`, and its tenant as `tenant_id`. The scope is NOT
+// widened: the circuit series is admitted exactly where the local device's own
+// series are, and the tenant_id binding keeps another tenant out even when it
+// owns a device with the same id. A target with no inventory id (an
+// env-configured WAN_ECHO_TARGETS entry, an API older than this field) gets no
+// `device` label and stays platform-only — fail closed. The existing labels are
+// unchanged, so `local_device` grouping and dashboards keep working.
+func EchoSeriesLabels(tgt EchoTarget, method string, sourceBound bool) string {
+	lbl := fmt.Sprintf(
+		`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
+		tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
+		method, boolLabel(sourceBound))
+	if id := strings.TrimSpace(tgt.LocalDeviceID); id != "" {
+		lbl += fmt.Sprintf(`,device=%q`, id)
+		if tenant := strings.ToLower(strings.TrimSpace(tgt.Tenant)); tenant != "" {
+			lbl += fmt.Sprintf(`,tenant_id=%q`, tenant)
+		}
+	}
+	return lbl
 }
 
 func (s *wanEcho) probeAll(ctx context.Context) {

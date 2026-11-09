@@ -46,6 +46,7 @@ import (
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
+	"netops/backend/internal/changesignals"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -265,6 +266,10 @@ type server struct {
 	// capture and the audit middleware (internal/changeledger, Iris N-D2).
 	// nil when it could not be built; both feeds then say so in the log.
 	changeLedger *changeledger.Producer
+	// changeLedgerBridge feeds the same ledger from the engine's durable
+	// change signals: device traps/syslog and cloud audit (Iris N-D2). nil when
+	// it could not be built, which the log says.
+	changeLedgerBridge *changeledger.Bridge
 	// experienceEvents is the bounded producer behind POST /api/dem/events and
 	// /business-events (tracker 254). nil when it could not be built, and the
 	// routes then answer 503 with the reason rather than 202 for events with
@@ -2792,6 +2797,12 @@ func Run() {
 	if srv.changeLedger != nil {
 		cl := srv.changeLedger
 		workers.start("change-ledger", func() { cl.Run(ctx) })
+		if bridge, err := srv.buildChangeLedgerBridge(); err != nil {
+			logError("change.ledger", "the change-ledger signal bridge could not be built — device and cloud changes will NOT appear in the change feed", errf(err))
+		} else {
+			srv.changeLedgerBridge = bridge
+			workers.start("change-ledger-signals", func() { bridge.Run(ctx) })
+		}
 	}
 	// CONFIG-BACKUP-BEGIN — Config Backup & Drift (P3-CFG): capture over the SSH
 	// gateway → sealed, content-addressed version store → drift verdict →
@@ -4946,6 +4957,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.changeLedger != nil {
 		s.changeLedger.Metrics().Write(w)
+	}
+	if s.changeLedgerBridge != nil {
+		s.changeLedgerBridge.Metrics().Write(w)
 	}
 	if s.secMetrics != nil {
 		s.secMetrics.Write(w)
@@ -7882,6 +7896,55 @@ func (s *server) configChangeToLedger(ctx context.Context, ev configstore.NewVer
 		SHA: ev.Version.SHA, PreviousSHA: ev.PreviousSHA, HasPrevious: ev.HasPrevious,
 		CapturedAt: ev.Version.CapturedAt, TriggerKind: kind, TriggerSubject: subject,
 		Drift: ev.Version.Drift, Added: ev.Version.Added, Removed: ev.Version.Removed,
+	})
+}
+
+// readChangeSignals is the change-ledger bridge's SignalReader over ClickHouse
+// (Iris N-D2). The worker spans every tenant, as the ticketing sweeper does; each
+// row keeps its own adjudicated tenant (internal/changesignals).
+func (s *server) readChangeSignals(ctx context.Context, p changeledger.SignalPage) ([]changeledger.SignalChange, error) {
+	sql, err := changesignals.SQL(p)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.chRowsScope(ctx, "__all__", sql, "worker:change-ledger-signals")
+	if err != nil {
+		return nil, err
+	}
+	warn := func(m string, f map[string]any) { logWarn("change.ledger", m, f) }
+	out := make([]changeledger.SignalChange, 0, len(rows))
+	for _, row := range rows {
+		in, err := changesignals.FromRow(row, warn)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s.withDeviceSite(in))
+	}
+	return out, nil
+}
+
+// withDeviceSite prefers the operator's device→site binding over the site the
+// signal carries (owner, 2026-10-18: a manual site wins). The binding is read in
+// the signal's own tenant.
+func (s *server) withDeviceSite(in changeledger.SignalChange) changeledger.SignalChange {
+	if in.Source == changeledger.SignalSourceCloud || s.deviceSites == nil {
+		return in
+	}
+	if b, ok := s.deviceSites.Get(strings.ToLower(strings.TrimSpace(in.Tenant)), false, in.Entity); ok && b.Site != "" {
+		in.Site = b.Site
+	}
+	return in
+}
+
+// buildChangeLedgerBridge wires the bridge over the running producer.
+func (s *server) buildChangeLedgerBridge() (*changeledger.Bridge, error) {
+	if s.changeLedger == nil {
+		return nil, errors.New("the change-ledger producer is not running")
+	}
+	return changeledger.NewBridge(changeledger.BridgeDeps{
+		Producer: s.changeLedger,
+		Read:     s.readChangeSignals,
+		LogWarn:  func(m string, f map[string]any) { logWarn("change.ledger", m, f) },
 	})
 }
 
