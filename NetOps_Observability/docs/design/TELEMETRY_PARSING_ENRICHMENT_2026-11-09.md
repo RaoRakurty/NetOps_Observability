@@ -1,6 +1,6 @@
 # Enterprise-grade parsing and enrichment: final plan
 
-**Date:** 2026-11-09. **Tracker:** row 387. **Status:** plan, with owner decisions in §9 still open.
+**Date:** 2026-11-09. **Tracker:** row 387. **Status:** approved. All owner decisions in §9 are final (2026-11-09).
 
 **Sources merged:** the owner's research (`/var/tmp/Ent-grade-parsing.md`), a Fable research pass over this code base, and live measurements on the lab. Where they disagreed, the code and the lab data decided. §10 records what was adopted and what was not, and why.
 
@@ -91,7 +91,7 @@ Most `confd` lines and 97% of flow rows appear to be caused by polling: ours ove
 ## 5. Design decisions
 
 1. **One catalogue, two executors.** Add vendor grammars to `telemetry-catalog/events.yaml` and generate the Vector Stage B branch, its tests and the engine's severity parsing from them, the way the admission stamp is already generated. This stops the two parsers disagreeing again.
-2. **Keep the flat event format.** OpenSearch templates are `dynamic: false` and the engine reads flat fields, so nesting would mean rewriting both for no RCA gain. Add flat fields using OpenTelemetry and ECS meanings, with a mapping table for export: `event_action`, `event_state` (`raise|clear|point`), `severity_native_text`, `severity_native_code`, `observed_ts`, `mib_module`, `mib_bundle_version`.
+2. **Keep the flat event format.** OpenSearch templates are `dynamic: false` and the engine reads flat fields, so nesting would mean rewriting both for no RCA gain. Add flat fields using OpenTelemetry and ECS meanings, with a mapping table for export: `event_action`, `event_state` (`raise|clear|point`), `severity_native_text`, `severity_native_code`, `observed_ts`, `mib_module`, `mib_bundle_version`, and `parser_confidence` as a level, not a number.
 3. **Three separate ideas stay separate:** native severity, normalized severity, and whether the event raises or clears. A recovery can be `minor` natively and still be a clear.
 4. **No new alarm state machine.** The engine already handles object lifecycle and skips `<kind>_clear` nodes. The lanes only need to emit clears. Tracker 380 owns the device-lane recovery audit.
 5. **Tenant stays channel-derived** (owner decision 2026-11-01). No address-based mapping. Tracker 371 and 373 remain with the collector tier.
@@ -110,7 +110,7 @@ Each item is a separate PR. Rule changes re-pin `BAKED_RULES_HASH`, the admissio
 | 1 | Stop storing community strings; hide stored values on every read path | ingest, API | **In progress** |
 | 2 | Logs page redesign (§7) | UI | **In progress** |
 | 3 | Keep `message_key`; declare trap fields in the template; strip pipeline metadata at the sink after `cx_event_id` is derived | router, storage | Queued |
-| 4 | Add `platform_owned` to `tenant_attribution`; update `TenantEnrichmentMissRateJumped` and its promtool test | router | Queued; D6 |
+| 4 | Add `platform_owned` to `tenant_attribution`; update `TenantEnrichmentMissRateJumped` and its promtool test | router | Queued |
 | 5 | Label flow sampling honestly: `sampling_status` of `reported` or `not_reported_1to1`, no change to totals | router, UI | Queued |
 | 6 | Telemetry Coverage page: rename "Prefilter rejected" and drop its warning colour; warn on high-severity lines that were skipped once PR 8 can see them | UI, engine | Queued |
 
@@ -192,18 +192,45 @@ Defects being fixed: all row text is monospaced at 11.5–12.5px, below the floo
 | PR 7, 8 | Syslog `vendor, facility, event_type, summary, parser_id`; trap names, enums, native severity, `event_state`, typed values |
 | PR 12, 13 | `vendor, model, site, role` on all lanes; interface and device names on flows through the API |
 
-## 9. Owner decisions
+## 9. Owner decisions (approved 2026-11-09, binding)
 
-| # | Decision | Recommendation |
+| # | Decision | Final direction |
 |---|---|---|
-| D1 | Community string: drop it, or keep a keyed fingerprint to answer "same credential?" | **Drop, keep a present/absent flag.** The fingerprint adds a key to manage for little value |
-| D2 | `confd` audit volume: classify and deduplicate only, or also document device-side suppression | **Classify and deduplicate.** A customer guide can follow if storage becomes a complaint |
-| D3 | Viptela severity admission: typed rules plus critical-only, or everything warning and above | **Typed rules plus critical-only**, because of the false-incident risk |
-| D4 | MIB source: pinned `cisco-mibs` fetch, or a software.cisco.com download | **Pinned fetch.** The Cisco download needs a login and cannot be automated |
-| D5 | Raw retention: Kafka 72 h plus stored `message`, or an immutable raw store | **No raw store now**, as it doesn't fit the single-box goal. Add an optional stored-only raw frame for syslog if needed |
-| D6 | Wording for platform-owned devices | **`platform_owned`** in data, "Platform device" in the UI |
-| D7 | Usernames inside audit messages: keep or redact | **Keep for now**, access-controlled, and include in a later PII policy |
-| D8 | Rotate the lab community string, since it was stored in clear | **Rotate.** Treat as exposed |
+| D1 | Community string | Drop it. Store only present/absent. Never expose it in logs, errors or the UI |
+| D2 | `confd` audit noise | Classify and deduplicate; no suppression on devices. Individual audit records are preserved, and the UI groups repeats with occurrence counts |
+| D3 | Viptela severity | Vendor-aware rules. Only qualifying critical events create incidents automatically. Lower-severity telemetry is retained for investigation and correlation |
+| D4 | MIB source | Cisco's official GitHub repo: exact commit pinned, checksums verified, licensing and OID mappings validated before deployment |
+| D5 | Raw storage | No separate raw store in v1. Kafka's 72 hours gives replay, and original payloads are kept beside normalized records where feasible. The forensic limit is documented |
+| D6 | Ownership label | `platform_owned` internally, "Platform device" in the UI, consistent across filters, APIs and dashboards |
+| D7 | Audit usernames | Retained for security attribution, with role-based access, tenant isolation, audit trails, controlled exports and retention limits **now**, not after a later PII policy |
+| D8 | Lab community string | Rotate and treat the old value as compromised. Verify collectors and devices afterwards. Prefer SNMPv3 where supported |
+
+### Implementation rules (owner)
+
+1. **Event ingestion is not incident creation.** A warning or informational event can matter once correlated with another. Ingest relevant events, assign vendor-specific severity, and let correlation and confidence decide incidents.
+2. **Deduplication must not destroy evidence.** Repeated traps, syslog and audit events keep `first_seen`, `last_seen`, `occurrence_count`, device identity and correlation identifiers. Original security audit events stay accessible for their retention period.
+3. **The 72-hour Kafka limit is a deliberate v1 tradeoff,** not a forensic archive. Storage sits behind an interface so durable raw retention can be added later without redesigning parsing.
+
+**Final directive:** a single-box, enterprise-quality enrichment engine. Do not sacrifice parsing correctness, tenant isolation, security or forensic integrity for a simpler deployment; reduce infrastructure complexity instead.
+
+### How the decisions change the plan
+
+- **PR 11 (D2, rule 2):** deduplication is at read time over a stable key, so every stored audit document survives. The Logs page groups repeats with first seen, last seen and count.
+- **PR 8/9 (D3, rule 1):** a typed rule's catalogue severity decides whether a lone event can open an object. Only qualifying critical events carry `crit`; lower ones reach the engine below the open floor, where they can still join a component.
+- **PR 7 (D4):** `FETCH_PINS` URLs name a commit, not a branch. The licence question is resolved in that PR's report: `cisco-mibs` shows no licence file, so nothing is redistributed until it is settled.
+- **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs.
+- **New PR 16 (D7):** audit and close gaps in access, audit trail, export control and retention for syslog carrying usernames, with a §3a test.
+- **PR 4 (D6):** the label change also covers API filters and dashboards.
+
+### Lab rotation order (D8)
+
+Rotating before PR 1 is live would write the new value to OpenSearch in clear as well, so the order is:
+
+1. Deploy PR 1 and confirm new trap documents carry no community value.
+2. On each device, add the new credential alongside the old one, ideally SNMPv3 where supported. Devices are controller-managed, so use the vManage template rather than the CLI.
+3. Update Correlix's per-device credentials and confirm polling and trap attribution. `guardTrapCommunity` drops the device identity on a mismatch, so a wrong value shows up as `inventory_missing` traps.
+4. Remove the old credential from every device and verify again.
+5. Delete the old lab trap indices, which the owner's lab-data rule allows.
 
 ## 10. Owner research: what was adopted
 
@@ -218,12 +245,12 @@ Defects being fixed: all row text is monospaced at 11.5–12.5px, below the floo
 | Syslog header diagnosis | **Adopted**, capture first | §3.3 |
 | Namespaced schema | **Adapted** to flat fields with a mapping | §5.2 |
 | Per-stage status | **Adapted** to `envelope`, `parser`, `enrichment`, `sampling`, tenant | Not all eight stages exist here |
-| HMAC community fingerprint | **Optional** | D1 |
+| HMAC community fingerprint | **Not built** | D1 |
 | Sampling status `ambiguous` | **Replaced** | Semantics are settled, §4 |
 | Tenant by IP or exporter, with confidence | **Rejected** | Conflicts with the 2026-11-01 decision |
-| Immutable raw object store and replay | **Not now** | Single-box goal; D5. Kafka allows re-consumption within retention |
+| Immutable raw object store and replay | **Not in v1** | D5: original payloads kept where feasible, Kafka replay for 72 hours, storage interface left open |
 | New alarm state machine | **Rejected** | Engine already does it, §5.4 |
-| Parser confidence floats | **Rejected** | False precision; nothing consumes them. Use `parser_status` and the fidelity ladder |
+| Parser confidence | **Adapted** to levels | The owner's directive asks for parser confidence. A float would be false precision, so expose levels derived from `parser_status` and the rule's fidelity |
 | IPFIX template registry and fingerprints | **Rejected** | goflow2 owns templates |
 
 ## 11. Still unverified
