@@ -163,3 +163,17 @@ profile, and in a throwaway TLS bring-up with `CORRELIX_UID=1234`.
    container runs as uid 100. PR A runs it as the key's owner until PR C moves it
    to `svc_backup`. `host-hygiene.sh` reads the key on the host as the cron user,
    who is `CORRELIX_UID`, so it keeps working unchanged.
+7. **A hand-run `docker compose up -d api` alone is the wrong upgrade order.** It
+   recreates the api, which tightens every key at boot, while the readers still
+   run without `group_add`. Nothing fails at once, because each reader holds its
+   key in memory, but its next restart or certificate reload fails and the store
+   stays down. The supported paths get the order right: `update.sh` and
+   `install.py` recreate everything in one `compose up`, and `deploy.sh api`
+   recreates any reader without `group_add` first. Recovery from the wrong order
+   is `docker compose up -d` for all services. Proven: old-shape kafka and redis
+   on the tightened tree do not come up.
+8. **The installer's recursive chown of `data/tls` re-owned gotenberg's staged
+   copies** (0400, owned by uid 1001) to the api's uid, and gotenberg could not
+   read them until `gotenberg-tls-init` happened to re-run. Fixed in the
+   installer: after the chown it hands the staged files back to 1001, failing the
+   install if it cannot.
