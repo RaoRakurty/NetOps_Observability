@@ -72,6 +72,11 @@ export type Device = {
   serial_number?: string;
   /** How serial_number was learned: "snmp" | "ssh" | "gnmi" | "manual" ("" = manual). */
   serial_source?: string;
+  /** The site id the device or its controller reports (SD-WAN site-id), and
+   *  who reported it ("device" or the controller, e.g. "vmanage"). Shown beside
+   *  the operator's site, never instead of it. */
+  reported_site_id?: string;
+  reported_site_source?: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */
