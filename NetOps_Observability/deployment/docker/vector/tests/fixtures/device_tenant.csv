@@ -1,3 +1,8 @@
-identity,tenant_id
-spine1,lab
-leaf1,
+identity,tenant_id,device_id,vendor,model,site,role
+spine1,lab,,,,,
+leaf1,,,,,,
+arista-leaf1,lab,arista-leaf1-id,arista,DCS-7050,dc1,leaf
+cisco-edge1,lab,cisco-edge1,cisco,,,
+forti-edge1,lab,forti-edge1-id,fortinet,FG-100F,,
+forti-edge2,lab,forti-edge2-id,fortinet,FG-200F,,
+victim-box,victim,victim-id,cisco,VICTIM-MODEL,victim-site,victim-role

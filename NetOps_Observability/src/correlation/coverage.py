@@ -87,6 +87,28 @@ INTENTIONAL_BLIND: dict[str, dict] = {
                   "its own re-freeze proof.",
         "owner": "correlix", "date_added": "2026-09-06",
     },
+    "device_resource_anomaly_clear": {
+        "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "controller_bfd_down_clear": {
+        "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "controller_control_connection_loss_clear": {
+        "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "bfd_session_flap_clear": {
+        "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
+    "bfd_session_flap": {
+        "reason": "tracker 387 — RFC 7331 session transitions, every vendor. Its one template, "
+                  "sig.ent.wan-edge.bfd-false-failover, ships disabled; turning it on is a stage [6] "
+                  "change of its own. Until then it joins a component as evidence and names nothing",
+        "owner": "correlix", "date_added": "2026-11-09",
+    },
     "bgp_route_churn": {
         "reason": "tracker 184 — %BGP-5-NBR_RESET / %BGP-4-MAXPFX: the session "
                   "is resetting or the prefix table is under pressure, which is "

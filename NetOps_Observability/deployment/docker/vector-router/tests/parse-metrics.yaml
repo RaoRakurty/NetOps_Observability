@@ -1,0 +1,213 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# parse-metrics.yaml: `vector test` proof of the parse-status metrics (tracker 387
+# PR 14). Runs against the shipped vector.yaml plus processors-default.yaml, like
+# storage-labels.yaml; tests/test_vendor_coverage.py runs it. What it pins is the
+# label bound: a label value comes from the catalogue or is `other`, whatever a
+# record on the bus says. Keep every dollar sign out of this file.
+
+tests:
+  - name: "a known syslog parse keeps its labels"
+    inputs:
+      - insert_at: parse_status_labels
+        type: log
+        log_fields:
+          topic: "netops.syslog"
+          vendor: "cisco"
+          parser_id: "cisco_sdwan.v1"
+          parser_status: "parsed"
+          message: "a line"
+          hostname: "edge-1"
+          tenant_id: "acme"
+    outputs:
+      - extract_from: parse_status_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.lane, "syslog")
+              assert_eq!(.vendor, "cisco")
+              assert_eq!(.parser_id, "cisco_sdwan.v1")
+              assert_eq!(.parser_status, "parsed")
+              # The counter's copy carries nothing that could become a label.
+              assert!(!exists(.message))
+              assert!(!exists(.hostname))
+              assert!(!exists(.tenant_id))
+
+  - name: "an unparsed line is counted as what it is"
+    inputs:
+      - insert_at: parse_status_labels
+        type: log
+        log_fields:
+          topic: "netops.syslog"
+          vendor: "unknown"
+          parser_status: "unparsed"
+    outputs:
+      - extract_from: parse_status_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "unknown")
+              assert_eq!(.parser_id, "none")
+              assert_eq!(.parser_status, "unparsed")
+
+  - name: "values outside the catalogue collapse to other, so a forger cannot mint series"
+    inputs:
+      - insert_at: parse_status_labels
+        type: log
+        log_fields:
+          topic: "netops.syslog"
+          vendor: "evil-vendor-12345"
+          parser_id: "evil-parser-12345"
+          parser_status: "evil-status-12345"
+    outputs:
+      - extract_from: parse_status_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "other")
+              assert_eq!(.parser_id, "other")
+              assert_eq!(.parser_status, "other")
+
+  - name: "a record with nothing on it is still counted, not lost"
+    inputs:
+      - insert_at: parse_status_labels
+        type: log
+        log_fields:
+          topic: "netops.syslog"
+    outputs:
+      - extract_from: parse_status_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "unknown")
+              assert_eq!(.parser_id, "none")
+              assert_eq!(.parser_status, "other")
+
+  - name: "a trap keeps its own status vocabulary and its lane"
+    inputs:
+      - insert_at: parse_status_labels
+        type: log
+        log_fields:
+          topic: "netops.snmptrap"
+          vendor: "arista"
+          parser_status: "partially_decoded"
+    outputs:
+      - extract_from: parse_status_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.lane, "snmptrap")
+              assert_eq!(.vendor, "arista")
+              assert_eq!(.parser_id, "none")
+              assert_eq!(.parser_status, "partially_decoded")
+
+  - name: "the counter names the metric and the four labels"
+    inputs:
+      - insert_at: parse_status_metric
+        type: log
+        log_fields:
+          lane: "syslog"
+          vendor: "cisco"
+          parser_id: "ios_style.v1"
+          parser_status: "parsed"
+    outputs:
+      - extract_from: parse_status_metric
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "netops_parse_status_events")
+              assert_eq!(.tags.lane, "syslog")
+              assert_eq!(.tags.vendor, "cisco")
+              assert_eq!(.tags.parser_id, "ios_style.v1")
+              assert_eq!(.tags.parser_status, "parsed")
+
+  - name: "varbinds: a trap with none counts none"
+    inputs:
+      - insert_at: trap_varbind_counts
+        type: log
+        log_fields:
+          host: "10.0.0.1"
+    outputs:
+      - extract_from: trap_varbind_counts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "unknown")
+              assert_eq!(.resolved, 0)
+              assert_eq!(.unresolved, 0)
+
+  - name: "varbinds: each is counted by whether it resolved"
+    inputs:
+      - insert_at: trap_varbind_counts
+        type: vrl
+        source: |
+          .vendor = "cisco"
+          .varbinds = [
+            {"oid": "1.3.6.1.2.1.2.2.1.8.3", "name": "ifOperStatus", "value": "down(2)"},
+            {"oid": "1.3.6.1.4.1.99999.1", "value": "7"},
+            {"oid": "1.3.6.1.4.1.99999.2", "name": "", "value": "8"}
+          ]
+    outputs:
+      - extract_from: trap_varbind_counts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco")
+              assert_eq!(.resolved, 1)
+              assert_eq!(.unresolved, 2)
+              assert!(!exists(.varbinds))
+
+  - name: "flow enrichment: a known exporter with reported sampling and AS numbers"
+    inputs:
+      - insert_at: flow_enrichment_labels
+        type: log
+        log_fields:
+          tenant_registry: "hit"
+          sampling_status: "reported"
+          src_as: 65001
+          dst_as: 0
+          src_addr: "10.0.0.1"
+    outputs:
+      - extract_from: flow_enrichment_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.exporter, "known")
+              assert_eq!(.sampling, "reported")
+              assert_eq!(.as_numbers, "present")
+              assert!(!exists(.src_addr))
+
+  - name: "flow enrichment: the shape the lab measured reads as it is"
+    inputs:
+      - insert_at: flow_enrichment_labels
+        type: log
+        log_fields:
+          tenant_registry: "miss"
+          sampling_status: "not_reported_1to1"
+          src_as: 0
+          dst_as: 0
+    outputs:
+      - extract_from: flow_enrichment_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.exporter, "unknown")
+              assert_eq!(.sampling, "not_reported_1to1")
+              assert_eq!(.as_numbers, "absent")
+
+  - name: "flow enrichment: a forged value cannot mint a series"
+    inputs:
+      - insert_at: flow_enrichment_labels
+        type: log
+        log_fields:
+          tenant_registry: "evil"
+          sampling_status: "evil"
+    outputs:
+      - extract_from: flow_enrichment_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.exporter, "unknown")
+              assert_eq!(.sampling, "other")
+              assert_eq!(.as_numbers, "absent")

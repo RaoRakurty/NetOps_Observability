@@ -497,7 +497,12 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-07-nokia-bgp-ng: trap.bgp.nokia_ng (tracker 377) — TRAP lane only.
     # 2026-11-08-link-cause: link_cause/link_reason on the trap link rules
     # (tracker 378) — TRAP lane only.
-    assert parser_rules.PARSER_REV == "2026-11-08-link-cause", (
+    # 2026-11-09-trap-packs: Cisco SD-WAN and BFD-STD-MIB trap rows (tracker 387)
+    # — TRAP lane only.
+    # 2026-11-09-vbond-dns-alarm: tracker 387, the vendor-pack rows and grammars. They read
+    # pack formats and fixed daemon wordings only; the V1 noise pool has none, and
+    # tests/test_workload_profiles.py pins that it still never classifies.
+    assert parser_rules.PARSER_REV == "2026-11-09-train-c", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

@@ -102,6 +102,14 @@ totals are sound for top talkers and trends and are estimates, not measurements:
 short flows can be missed entirely at an aggressive rate. Do not treat sampled
 byte counts as billing-grade.
 
+Each stored flow also carries `sampling_status`, and the **Flows** page says what it
+found for the window on screen. `reported` means the record carried a rate and its
+counts are scaled by it. `not_reported_1to1` means it carried none, so its counts are
+shown as received. That is correct only if the device is not sampling: a device that
+samples without reporting the rate reads low, and Correlix cannot tell the two apart
+from the record. Check the export configuration on the device. The label never
+changes a total.
+
 ## Result
 
 Records reach the flow analytics within a few minutes. NetFlow v9 and IPFIX are

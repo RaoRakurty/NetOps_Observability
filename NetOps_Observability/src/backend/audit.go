@@ -95,6 +95,14 @@ func newAuditStore(path string) (auditRepo, error) {
 	return store, nil
 }
 
+// Audit methods for reads that carry their own record. They are not HTTP verbs:
+// the POST behind a log search is a read, and the correlation spine must not see
+// it as a change (auditSignalWorthy).
+const (
+	auditMethodLogRead = "LOG_READ"
+	auditMethodConsole = "CONSOLE"
+)
+
 func auditDecision(status int) string {
 	switch {
 	case status == http.StatusUnauthorized, status == http.StatusForbidden, status == http.StatusNotFound:
@@ -125,6 +133,13 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 		denied := auditDecision(rec.status) == "deny"
 		if !mutating && !denied {
 			return // successful reads are not worth recording
+		}
+		// Log search is a read that happens to POST, and its handler writes the
+		// record that matters, with the query and the row count (auditLogSearch).
+		// A second path-only row per search would only bury it. Anything the
+		// handler did not get to record, a refusal or a failure, still lands here.
+		if r.URL.Path == "/api/logs/search" && rec.status < http.StatusBadRequest {
+			return
 		}
 		// Don't recurse on reads of the trail itself.
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/audit") {
@@ -474,7 +489,7 @@ func auditSignalWorthy(e AuditEvent) bool {
 		return false
 	}
 	switch e.Method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	case http.MethodGet, http.MethodHead, http.MethodOptions, auditMethodLogRead, auditMethodConsole:
 		return false
 	}
 	return true

@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# syslog-legacy-grammars.yaml: every grammar that predates vendor packs, pinned on the
+# shipped transform (tracker 387). Hand-written on purpose. These values were read off
+# the pre-pack vector.yaml, and this suite was run against that config before the packs
+# landed, so a green run here means a pack did not move any other vendor's parse.
+#
+# Every case also asserts the pack-only fields are absent, and that the message is
+# untouched. `vendor_source` is the one exception since tracker 387 PR 12: these
+# guesses are format matching like any other, so the record now says so, and a line
+# nothing recognised still carries none. Run by tests/test_syslog_packs.py together with vector.yaml. Keep every
+# dollar sign out of this file: Vector interpolates them in the raw config text.
+
+tests:
+  - name: "Cisco classic %FAC-SEV-MNEMONIC"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "%LINK-3-UPDOWN"
+          severity: "notice"
+          message: "%LINK-3-UPDOWN: Interface GigabitEthernet1, changed state to down"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco")
+              assert_eq!(.parser_id, "ios_style.v1")
+              assert_eq!(.parser_status, "parsed")
+              assert_eq!(.facility, "LINK")
+              assert_eq!(.event_type, "updown")
+              assert_eq!(.summary, "Interface GigabitEthernet1, changed state to down")
+              assert_eq!(.normalized_severity, "error")
+              assert_eq!(.message, "%LINK-3-UPDOWN: Interface GigabitEthernet1, changed state to down")
+              assert!(!exists(.message_original))
+              assert_eq!(.vendor_source, "format")
+              assert!(!exists(.severity_native_text))
+              assert!(!exists(.event_category))
+
+  - name: "Arista EOS, app list wins and the mnemonic still parses"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "Ebra"
+          severity: "notice"
+          message: "%LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed state to up"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "arista")
+              assert_eq!(.parser_id, "ios_style.v1")
+              assert_eq!(.parser_status, "parsed")
+              assert_eq!(.facility, "LINEPROTO")
+              assert_eq!(.event_type, "updown")
+              assert_eq!(.normalized_severity, "notice")
+              assert!(!exists(.message_original))
+              assert_eq!(.vendor_source, "format")
+
+  - name: "Nokia SR Linux pipe format"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "sr_bgp_mgr"
+          severity: "notice"
+          message: "local6|1234|5678|9012|bgp||W: BGP peer 10.0.0.1 moved to Idle"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "nokia")
+              assert_eq!(.parser_id, "srlinux.v1")
+              assert_eq!(.parser_status, "parsed")
+              assert_eq!(.subsystem, "bgp")
+              assert_eq!(.summary, "BGP peer 10.0.0.1 moved to Idle")
+              assert_eq!(.normalized_severity, "warning")
+              assert!(!exists(.message_original))
+              assert_eq!(.vendor_source, "format")
+
+  - name: "Juniper Junos by daemon name, no body grammar"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "rpd"
+          severity: "warning"
+          message: "bgp_recv: peer 10.0.0.1 (External AS 65001): received unexpected EOF"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "juniper")
+              assert_eq!(.parser_status, "unparsed")
+              assert_eq!(.normalized_severity, "warning")
+              assert!(!exists(.parser_id))
+              assert!(!exists(.message_original))
+              assert_eq!(.vendor_source, "format")
+
+  - name: "Juniper structured-data marker in the body"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "mystery"
+          severity: "notice"
+          message: "[junos@2636.1.1.1.2.21 username=\"svc\"] UI_COMMIT"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "juniper")
+              assert_eq!(.parser_status, "unparsed")
+              assert_eq!(.vendor_source, "format")
+
+  - name: "SONiC-style line stays unknown and unparsed"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "bgp"
+          severity: "error"
+          message: "ERR bgp#bgpd[47]: %ADJCHANGE: neighbor 10.0.0.1 Down Interface flap"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "unknown")
+              assert_eq!(.parser_status, "unparsed")
+              assert_eq!(.normalized_severity, "error")
+              assert_eq!(.message, "ERR bgp#bgpd[47]: %ADJCHANGE: neighbor 10.0.0.1 Down Interface flap")
+              assert!(!exists(.parser_id))
+              assert!(!exists(.vendor_source))
+
+  - name: "FortiGate key-value keeps its own branch"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "unknown"
+          severity: "notice"
+          message: "devname=\"fw1\" logid=\"0100026001\" type=\"event\" subtype=\"system\" level=\"warning\" msg=\"x\""
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "fortinet")
+              assert_eq!(.parser_id, "fortios_kv.v1")
+              assert_eq!(.parser_status, "parsed")
+              assert_eq!(.appname, "event/system")
+              assert_eq!(.normalized_severity, "warning")
+              assert_eq!(.vendor_source, "format")

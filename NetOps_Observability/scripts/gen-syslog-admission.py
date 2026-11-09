@@ -71,6 +71,10 @@ from typing import Any
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 CORRELATION_DIR = os.path.join(REPO_ROOT, "src", "correlation")
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+import syslog_pack_vrl as VRLPACK
 
 VECTOR_DIR = os.path.join(REPO_ROOT, "deployment", "docker", "vector")
 VRL_PATH = os.path.join(VECTOR_DIR, "generated", "syslog-admission.vrl")
@@ -110,7 +114,7 @@ assert VRL_TAG_SEV_PATTERN != TAG_SEV_PATTERN, "digit group could not be named"
 # carry no regex metacharacter and no quote. This is a REFUSAL, not an escape:
 # a literal outside this class means the screen grew a shape this generator was
 # never designed for, and silently escaping it would be a guess.
-SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/-]+$")
+SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/%=-]+$")
 
 
 class GenerationError(RuntimeError):
@@ -199,7 +203,14 @@ def check_tag_regex(producers: Any) -> None:
             "re-verify the Rust-regex semantics match Python's) deliberately.")
 
 
-def rules_hash(floor: int, literals: tuple[str, ...] | None) -> str:
+def read_pack_grammars(producers: Any) -> list[dict]:
+    """The severity-bearing vendor-pack rows the Python screen runs, in match order."""
+    return [g for g in producers.SYSLOG_GRAMMARS
+            if g.get("sev_digit") or g.get("sev_word")]
+
+
+def rules_hash(floor: int, literals: tuple[str, ...] | None,
+               grammars: list[dict] | None = None) -> str:
     """sha256 over the SCREEN, not over the rendered text.
 
     Domain-separated, newline-framed, literals sorted (the tuple's longest-first
@@ -215,6 +226,12 @@ def rules_hash(floor: int, literals: tuple[str, ...] | None) -> str:
         h.update(f"literals={len(literals)}\n".encode())
         for lit in sorted(literals):
             h.update(lit.encode() + b"\n")
+    # Order matters here: the first grammar that matches decides the floor.
+    for g in grammars or ():
+        h.update(json.dumps(
+            [g["id"], g.get("vendor"), g["literal"], g["pattern"], g.get("apps"),
+             g.get("sev_digit"), g.get("sev_word"), g.get("sev_map"),
+             g.get("alarm_floor")], sort_keys=True).encode() + b"\n")
     return h.hexdigest()
 
 
@@ -248,9 +265,9 @@ def expected_by(ev: dict, floor: int,
 
 
 def _severity_num(ev: dict, tag: str) -> int | None:
-    """Deferred to `producers.syslog_severity_num` — there is no second copy of
+    """Deferred to `producers.syslog_alarm_num` — there is no second copy of
     the severity derivation in this repo, and there will not be one."""
-    return _PRODUCERS.syslog_severity_num(ev, tag)
+    return _PRODUCERS.syslog_alarm_num(ev, tag)
 
 
 # ── VRL rendering ────────────────────────────────────────────────────────────
@@ -271,8 +288,57 @@ def _vrl_severity_branches(sevmap: dict[str, int], indent: str) -> list[str]:
     return out
 
 
+def _vrl_pack_lines(grammars: list[dict]) -> list[str]:
+    """`_syslog_severity_parts` + the floor of `syslog_alarm_num`, in VRL."""
+    if not grammars:
+        return []
+    out = [
+        "",
+        "# ── vendor-pack severity (producers.syslog_alarm_num) ───────────────",
+        "# The grammars are telemetry-catalog/vendor-packs/*.yaml. A matching row",
+        "# adds the severity the line's own text states, and its alarm floor then",
+        "# decides whether severity alone may admit the line (owner D3).",
+        'cx_pk_msg = string(.message) ?? ""',
+        'cx_pk_app = downcase(string(.appname) ?? "")',
+        'cx_pk_inv = ""',
+        'if (string(.vendor_source) ?? "") == "inventory" {',
+        '  cx_pk_inv = string(.vendor) ?? ""',
+        "}",
+        f"cx_pk_n = {NO_SEVERITY}",
+        f"cx_pk_floor = {NO_SEVERITY}",
+    ]
+    for g in grammars:
+        cond = VRLPACK.match_condition(g, "cx_pk_msg", "cx_pk_app", "cx_pk_inv",
+                                       f"cx_pk_n == {NO_SEVERITY}")
+        out += [
+            f"if {cond} {{",
+            f"  cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'{g['pattern']}')",
+            "  if cx_pk_err == null {",
+            f"    cx_pk_v = {NO_SEVERITY}",
+        ]
+        out += VRLPACK.severity_lines(g, "cx_pk_m", "cx_pk_v", "    ")
+        out += [
+            f"    if cx_pk_v < {NO_SEVERITY} {{",
+            "      cx_pk_n = cx_pk_v",
+            f"      cx_pk_floor = {g['alarm_floor']}",
+            "    }",
+            "  }",
+            "}",
+        ]
+    out += [
+        "if cx_pk_n < cx_sev {",
+        "  cx_sev = cx_pk_n",
+        "}",
+        f"if cx_pk_n < {NO_SEVERITY} && cx_sev > cx_pk_floor {{",
+        f"  cx_sev = {NO_SEVERITY}",
+        "}",
+    ]
+    return out
+
+
 def render_vrl(floor: int, literals: tuple[str, ...] | None,
-               sevmap: dict[str, int], digest: str) -> str:
+               sevmap: dict[str, int], digest: str,
+               grammars: list[dict] | None = None) -> str:
     short = digest[:12]
     screen_state = "UNSCREENABLE" if literals is None else f"{len(literals)} literals"
     lines: list[str] = [
@@ -325,6 +391,9 @@ def render_vrl(floor: int, literals: tuple[str, ...] | None,
         "if cx_tag_sev < cx_sev {",
         "  cx_sev = cx_tag_sev",
         "}",
+    ]
+    lines += _vrl_pack_lines(grammars or [])
+    lines += [
         "",
         "# ── gate 1: the device called it warning-or-worse ───────────────────",
         f"if cx_sev <= {floor} {{",
@@ -460,6 +529,23 @@ def load_fixture_corpus() -> list[dict]:
     return out
 
 
+def load_pack_cases() -> list[tuple[str, dict]]:
+    """Every vendor-pack fixture is an admission case too. The packs are read through
+    the bake, so a fixture a pack declares cannot be missed here."""
+    catalog = os.path.join(REPO_ROOT, "telemetry-catalog")
+    if catalog not in sys.path:
+        sys.path.insert(0, catalog)
+    import bake_rules
+    out: list[tuple[str, dict]] = []
+    for pack in bake_rules.load_packs():
+        for fx in pack["fixtures"]:
+            ev = {k: fx[k] for k in TEST_FIELDS if k in fx}
+            ev.setdefault("hostname", "spine1")
+            ev.setdefault("severity", "notice")
+            out.append((f"pack {pack['pack']}: {fx['name']}", ev))
+    return out
+
+
 def _yaml_str(value: object) -> str:
     """JSON is a YAML subset for scalars — and json.dumps is the escaper we
     already trust everywhere else in this repo."""
@@ -473,6 +559,7 @@ def render_tests(producers: Any, floor: int,
         for i, ev in enumerate(load_fixture_corpus(), 1)
     ]
     cases += list(HAND_CASES)
+    cases += load_pack_cases()
 
     # Decide EVERY case first (and prove the equality) so the header can state
     # the admitted/rejected split — a suite where nothing is rejected would be
@@ -518,7 +605,7 @@ def render_tests(producers: Any, floor: int,
         "#",
         f"#   rules_hash : {digest}",
         (f"#   cases      : {len(cases)} ({len(cases) - len(HAND_CASES)} "
-         f"fixture corpus + {len(HAND_CASES)} hand)"),
+         f"fixture corpus and vendor packs + {len(HAND_CASES)} hand)"),
         (f"#   admitted   : {n_admit} / {len(cases)} "
          f"({len(cases) - n_admit} correctly rejected)"),
         "#",
@@ -580,9 +667,10 @@ def build() -> dict[str, str]:
     floor, literals = read_screen(producers)
     sevmap = read_severity_map(producers)
     check_tag_regex(producers)
-    digest = rules_hash(floor, literals)
+    grammars = read_pack_grammars(producers)
+    digest = rules_hash(floor, literals, grammars)
 
-    vrl = render_vrl(floor, literals, sevmap, digest)
+    vrl = render_vrl(floor, literals, sevmap, digest, grammars)
     tests = render_tests(producers, floor, literals, digest)
     with open(CONFIG_PATH, encoding="utf-8") as fh:
         config = splice_config(fh.read(), render_config_block(vrl))

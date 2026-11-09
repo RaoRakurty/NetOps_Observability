@@ -179,6 +179,9 @@ WHAT IT DOES
     ADVISORY (reported, never fatal)
       Q8  alert-delivery heartbeat is fresh
       Q9  OpenSearch cluster status is present and green/yellow
+      Q10 how much of each lane was actually parsed over the last hour. Reads
+          the VALUE of parser_status (present on 100 % of records even when it
+          says unparsed). Never fatal: the records are stored either way
 
 EXIT CODES
   0  every REQUIRED check PASSED.
@@ -1479,6 +1482,62 @@ elif q9="$(vm_scalar 'max(opensearch_cluster_status)' 2>&1)" && is_num "$q9"; th
 else
   record ADVISORY ADVISORY "Q9 opensearch cluster status" \
     "metric opensearch_cluster_status is ABSENT (${q9:-no series}) — cluster health is UNKNOWN, not green. Advisory only."
+fi
+
+# --- Q10 (ADVISORY): is each lane being understood? --------------------------
+# Tracker 387 PR 14. Reads the VALUE of parser_status: it is present on 100 % of
+# records including when it says `unparsed`, which is how a lane sat 100 % unparsed
+# with every check green. Advisory on purpose, because the records are stored either
+# way and a new vendor with no pack must not fail a deploy. The vmalert rule
+# ParseLaneStuckUnparsed is what watches it afterwards.
+#
+# Prints one line for one lane. Pure, so tests/test_deploy_qualify.py runs the shipped
+# function. Absent never reads as 0 % or as healthy.
+parse_ratio_detail() {  # $1 lane, $2 total, $3 unparsed
+  local lane="$1" total="$2" stuck="$3"
+  if ! num_gt "$total" 0; then
+    printf '%s: no records in the last hour, so nothing to judge' "$lane"
+    return 0
+  fi
+  awk -v lane="$lane" -v t="$total" -v s="$stuck" 'BEGIN {
+    u = (s + 0) / (t + 0)
+    if (u > 1) u = 1
+    printf "%s: %.1f%% parsed of %d records in the last hour", lane, (1 - u) * 100, t
+    if (u >= 0.99) printf " — almost nothing on this lane is being understood; see docs/runbooks/parse-coverage.md"
+  }'
+}
+
+if [ "$METRICS_OK" -eq 0 ]; then
+  record SKIP ADVISORY "Q10 parse ratio per lane" "$VICTORIA_SKIP_REASON"
+else
+  for q10_lane in syslog snmptrap; do
+    q10_total_expr="sum(increase(netops_parse_status_events{lane=\"$q10_lane\"}[1h]))"
+    q10_stuck_expr="sum(increase(netops_parse_status_events{lane=\"$q10_lane\",parser_status=~\"unparsed|raw_only\"}[1h]))"
+    if ! q10_total="$(vm_scalar "$q10_total_expr" 2>&1)" || ! is_num "$q10_total"; then
+      record ADVISORY ADVISORY "Q10 parse ratio ($q10_lane)" \
+        "metric netops_parse_status_events is ABSENT for this lane (${q10_total:-no series}) — the ratio is UNKNOWN, not healthy. Expected on a build that predates it, or a lane with no traffic since the last router restart. Advisory only."
+      continue
+    fi
+    # An EMPTY result is the good answer: no unparsed series exists, which is the
+    # normal state of a healthy lane. Any other failure means we could not look, and
+    # reading that as zero would report a lane as fully parsed on no evidence (§16.1).
+    if ! q10_stuck="$(vm_scalar "$q10_stuck_expr" 2>&1)"; then
+      case "$q10_stuck" in
+        *'empty result set'*) q10_stuck=0 ;;
+        *)
+          record ADVISORY ADVISORY "Q10 parse ratio ($q10_lane)" \
+            "could not read the unparsed count (${q10_stuck:-no diagnostic}) — the ratio is UNKNOWN, not healthy. Advisory only."
+          continue ;;
+      esac
+    fi
+    if ! is_num "$q10_stuck"; then
+      record ADVISORY ADVISORY "Q10 parse ratio ($q10_lane)" \
+        "the unparsed count is not a number ('$q10_stuck') — the ratio is UNKNOWN, not healthy. Advisory only."
+      continue
+    fi
+    record ADVISORY ADVISORY "Q10 parse ratio ($q10_lane)" \
+      "$(parse_ratio_detail "$q10_lane" "$q10_total" "$q10_stuck")"
+  done
 fi
 
 # ===========================================================================

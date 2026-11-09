@@ -110,7 +110,11 @@ func (s *server) handleReportExecutionByID(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !found {
+	// A log export shares this table (kind=export) but is not a report: its
+	// artifact is log lines with their usernames. The listing above already scopes
+	// to reports; without the same rule here reports:read would serve the file by
+	// id, past the explore gate, the export audit and the export retention.
+	if !found || rec.Kind == jobTypeExport {
 		// 404, never 403: a row hidden by tenancy or by the operator-visibility
 		// restriction must be indistinguishable from one that does not exist.
 		writeError(w, http.StatusNotFound, errors.New("execution not found"))

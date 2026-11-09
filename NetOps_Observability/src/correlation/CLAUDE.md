@@ -46,7 +46,7 @@ Size caps (S:37, S:52-55): strings 256/128/512, tokens ≤32, attrs ≤4 KiB.
 |---|---|---|---|
 | netops.metrics | handle_metric M:12389 | metric / device_telemetry; CUSUM episodes `if_/bgp_/igp_state_/device_resource_/cloud_resource_anomaly` | device id · `snmp_poll` |
 | netops.syslog | handle_syslog M:13190 | syslog / control_plane or device_telemetry per rule (parser_rules.py) | event hostname · direct |
-| netops.snmptrap | handle_snmptrap M:12728 | trap / control_plane | device · direct |
+| netops.snmptrap | handle_snmptrap M:12728 | trap / control_plane (CPU/memory threshold rows: device_telemetry, the modality of the episode they land beside) | device · direct |
 | netops.probes (+DEM) | handle_probe M:12661 | probe / active_probe; authority classified M:12597 | vantage |
 | netops.flows | handle_flow M:13346 | flow / passive_flow; CUSUM → `flow_volume_anomaly` | sampler · `flow_export` |
 | netops.controller_events | M:12796 → controller_events.py:120 | controller / **management_plane** | `<source_system>:<integration_id>` · `via_controller` (no instance suffix) |
@@ -55,6 +55,25 @@ Size caps (S:37, S:52-55): strings 256/128/512, tokens ≤32, attrs ≤4 KiB.
 
 **SNMP allowlist.** `rcaMetricFamilies` names 17 metrics; everything else stays in
 VictoriaMetrics only (`collectors/metric_events.go:75-108`).
+
+**Vendor packs (tracker 387, 2026-11-09).** `telemetry-catalog/vendor-packs/*.yaml` is
+one file per vendor: body and envelope grammars, a severity map, rule rows and fixtures.
+`syslog_packs.py` is the engine's executor and names no vendor; the same rows compile into
+the aggregator's Stage B (`scripts/gen-syslog-packs.py`), so the two cannot disagree.
+`syslog_severity_num` also reads the severity a pack grammar finds in the message.
+`syslog_alarm_num` is what the screen and the generic net act on: when a pack grammar
+matched and the severity is past its `alarm_floor`, it returns None, so reading a severity
+never opens an object by itself (owner D3). A line withheld that way with err or worse in
+its own text, that no typed or `known_benign` row took, is counted
+(`corr_syslog_high_severity_no_signal_total{path}`, PR 14), since a rise is a fault nobody
+has a rule for; the count decides nothing. The hash covers the packs: `rules_hash(RULES,
+PACK_DIGEST)`. The VRL's `cx_inventory_vendor` comes from the registry row (PR 12, vendor
+from discovery through the vendor profiles); an inventory vendor narrows the grammars in
+both executors, and `vendor_source` records `inventory` or `format`. Pack rows sit behind the vendor-neutral
+rules and ahead of the generic net. A `known_benign` row counts the line
+(`corr_parser_known_benign_total`), emits nothing and ends the walk; unlike a shadow row it
+is a decision, not a candidate. Stage [1] only: no template, gate or constant moved, so
+ENGINE_SEMVER does not move.
 
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).
@@ -66,13 +85,26 @@ VictoriaMetrics only (`collectors/metric_events.go:75-108`).
   "" becomes "global". On the registry-anchored lanes (syslog, snmptrap, flows) an
   identity the registry does not know is refused (`identity_unattributable`).
   The registry (`device_tenant.csv`, `telemetry_enrichment.go`) has one row per
-  inventory device **id**, **name** and **address**. The id row matters: traps and
+  inventory device **id**, **name** and **address**. `identity` and `tenant_id` are the
+  first two columns and are read by position; the inventory facts after them
+  (`device_id, vendor, model, site, role`, PR 12) are never read here. The id row matters: traps and
   metrics carry the id, e.g. the SNMP scan id `vedge-20-1e95f00f`. Before
   2026-10-25 the id row was missing and those traps were quarantined. An identity
   claimed by two tenants is left out by the writer and dropped by the reader
   (`_tenant_registry`).
   The controller lane calls `verified_tenant` too (since 2026-10-24, unanchored: a
   claim the registry contradicts is quarantined; `handle_controller_event`).
+
+**Trap meaning is data (tracker 387, 2026-11-09).** The Go receiver stamps
+`event_state` (raise|clear|point), `severity_native_text/_code` and typed values from
+`collectors/mibs/packs/*.json`, so no vendor name is in its code. The `trap.sdwan.*`,
+`trap.bfd.*` and `trap.resource.*` rows read those fields. Owner rule "ingestion is
+not incident creation" and D3: a row emits `crit` only for a raise the vendor calls
+critical; everything else is `warn`, below the open floor, and can still join a
+component. `controller_*` and resource recoveries arrive as `<kind>_clear`;
+interface and BGP keep the device lane's `state=up` convention (tracker 380). A BFD
+trap binds `<tloc pair>` without the controller's `@instance`, so it meets vManage's
+report through the device token (rank 7), not as one node.
 
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).

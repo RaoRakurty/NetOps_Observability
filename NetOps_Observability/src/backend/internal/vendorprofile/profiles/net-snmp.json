@@ -4,6 +4,7 @@
   "display_name": "Net-SNMP",
   "notes": "Net-SNMP is a DISTINCT detection identity (its own enterprise number) that reports the same linux_kernel product as the linux vendor. The duplication is deliberate: collapsing them would change what DetectVendor returns.",
   "detection": {
+    "agent_identity": true,
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.8072"
     ],

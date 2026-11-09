@@ -89,6 +89,12 @@ type (
 	Prefilter struct {
 		Passed   int64 `json:"passed"`
 		Rejected int64 `json:"rejected"`
+		// HighSeveritySkipped counts lines whose own text states error severity or
+		// worse that produced no signal: a grammar read it, its alarm floor kept it
+		// from the generic net (owner D3), and no typed or known_benign row took it.
+		// It spans the screen and the classifier, so it is not a subset of Rejected.
+		// A question for a person, not necessarily a fault.
+		HighSeveritySkipped int64 `json:"high_severity_skipped"`
 	}
 
 	// GenericFallback counts signals that fell through to the generic
@@ -111,6 +117,8 @@ type (
 		Prefilter       Prefilter       `json:"prefilter"`
 		GenericFallback GenericFallback `json:"generic_fallback"`
 		Rules           []RuleStat      `json:"rules"`
+		// Vendors is the per-vendor scorecard (vendor_coverage.go).
+		Vendors []VendorScore `json:"vendors"`
 	}
 )
 
@@ -170,6 +178,7 @@ type healthBody struct {
 	Ingest struct {
 		PrefilterPassed   *int64 `json:"syslog_prefilter_passed"`
 		PrefilterRejected *int64 `json:"syslog_prefilter_rejected"`
+		HighSevNoSignal   *int64 `json:"syslog_high_severity_no_signal"`
 	} `json:"ingest"`
 }
 
@@ -214,6 +223,9 @@ func applyHealth(s *snapshot, body []byte) bool {
 	}
 	if h.Ingest.PrefilterRejected != nil {
 		s.preFilter.Rejected = *h.Ingest.PrefilterRejected
+	}
+	if h.Ingest.HighSevNoSignal != nil {
+		s.preFilter.HighSeveritySkipped = *h.Ingest.HighSevNoSignal
 	}
 	p := h.Parser
 	if p == nil {
@@ -438,6 +450,7 @@ func fold(snaps []*snapshot, now time.Time) Stats {
 		}
 		st.Prefilter.Passed += s.preFilter.Passed
 		st.Prefilter.Rejected += s.preFilter.Rejected
+		st.Prefilter.HighSeveritySkipped += s.preFilter.HighSeveritySkipped
 		st.GenericFallback.Syslog += s.generic.Syslog
 		st.GenericFallback.Trap += s.generic.Trap
 		st.WindowLines += s.promoUsed

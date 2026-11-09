@@ -3,6 +3,7 @@
   "vendor": "hp",
   "display_name": "HP",
   "detection": {
+    "inventory_names": ["hpe", "hewlett packard", "hewlett-packard", "hewlett packard enterprise"],
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.11"
     ]

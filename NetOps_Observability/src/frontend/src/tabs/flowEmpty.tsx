@@ -19,6 +19,7 @@ export type FlowCoverage = {
   tcp_flows_with_flags: number;
   flows_with_as: number;
   private_only_flows: number;
+  flows_sampling_reported: number;
   exporters: number;
 };
 
@@ -41,6 +42,7 @@ export function parseCoverage(row: Record<string, unknown> | undefined): FlowCov
     tcp_flows_with_flags: n(row.tcp_flows_with_flags),
     flows_with_as: n(row.flows_with_as),
     private_only_flows: n(row.private_only_flows),
+    flows_sampling_reported: n(row.flows_sampling_reported),
     exporters: n(row.exporters),
   };
 }
@@ -117,12 +119,48 @@ export function fetchCoverage(since: number, ftype: string, filters?: FlowFilter
   return p;
 }
 
+type Q = { since: number; ftype: string; filters: FlowFilters; fkey: string };
+
+/**
+ * What the window's flows say about sampling, in one sentence (tracker 387). It
+ * describes what the exporters reported. Nothing here estimates or multiplies: a
+ * flow with no reported rate is shown as received, which is only right if that
+ * exporter is not sampling, so the sentence says so.
+ */
+export function samplingNote(cov: FlowCoverage | null): string {
+  if (!cov || cov.flows === 0) {
+    return "Counts are scaled by a device's sampling rate when it reports one, and shown as received when it does not.";
+  }
+  const reported = Math.min(cov.flows_sampling_reported, cov.flows);
+  if (reported === 0) {
+    return "These exporters report no sampling rate, so counts are shown as received (1:1). If an exporter is sampling without reporting it, its totals read low.";
+  }
+  if (reported === cov.flows) {
+    return "Every flow here reports a sampling rate, and counts are scaled by it.";
+  }
+  return `${plural(reported, "flow reports", "flows report")} a sampling rate and ${reported === 1 ? "is" : "are"} scaled by it. The other ${fmt(cov.flows - reported)} report none and are shown as received (1:1).`;
+}
+
+/** The Flows tab's sampling sentence, for the window and filters on screen. */
+export function FlowSamplingNote({ q }: { q: Q }) {
+  const [cov, setCov] = useState<FlowCoverage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchCoverage(q.since, q.ftype, q.filters).then((c) => {
+      if (alive) setCov(c);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.since, q.ftype, q.fkey]);
+  return <span data-testid="flow-sampling-note">{samplingNote(cov)}</span>;
+}
+
 /** Test hook: forget cached coverage. */
 export function resetCoverageCache(): void {
   cache.clear();
 }
-
-type Q = { since: number; ftype: string; filters: FlowFilters; fkey: string };
 
 /** Empty-panel body: explains why, or falls back to the onboarding hint. */
 export function FlowEmpty({ q, dim = "generic" }: { q: Q; dim?: FlowDimension }) {

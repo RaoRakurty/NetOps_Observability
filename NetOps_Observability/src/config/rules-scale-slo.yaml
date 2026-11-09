@@ -22,6 +22,8 @@
 #   credential-hygiene             — a service-credential rotation left
 #                                    half-done (warning tier only; tracker 367
 #                                    layer 3, 2026-11-08).
+#   parse-coverage                 — a lane that arrives but is not understood
+#                                    (warning tier only; tracker 387 PR 14).
 #
 # Thresholds are tied to the MEASURED L0/L1 ceilings in
 # docs/scale/CORRELIX_SCALE_TEST_REPORT.md (4 vCPU / 16 GiB rig):
@@ -1241,3 +1243,84 @@ groups:
             --rotate-secret with the same name: it resumes from .env, proves
             the drain and revokes the old password.
           runbook: "docs/runbooks/secret-rotation.md#9-zero-downtime-rotation-of-the-vmauth-credentials"
+
+  # ============================================================================
+  # parse-coverage (tracker 387 PR 14): a lane must never silently sit unparsed
+  # again. The plan exists because syslog was 100 % `unparsed` and nothing noticed:
+  # parser_status was checked for presence, and it is present on every record,
+  # including when its value is `unparsed`. These rules read the value.
+  #
+  # Unparsed is `unparsed` on syslog and `raw_only` on traps. A partly decoded trap
+  # was read, so it does not count. The metric's labels are closed sets
+  # (vector-router: parse_status_labels), so `sum by (lane)` is cheap.
+  #
+  # WARNING tier: parsing is about what we understand, not whether we hold the data.
+  # Records are stored either way, so none of this is one of the four owner-approved
+  # page conditions. METRIC NAME: no `_total`, Vector's exporter appends none.
+  # ============================================================================
+  - name: parse-coverage
+    rules:
+      - alert: ParseLaneStuckUnparsed
+        # A LEVEL, because a lane that was never parsed has nothing to rise from: the
+        # exact shape of the lab's syslog lane. The volume floor keeps a quiet lane
+        # with a handful of odd lines out.
+        expr: |
+          (
+            sum by (lane) (increase(netops_parse_status_events{parser_status=~"unparsed|raw_only"}[1h]))
+            /
+            sum by (lane) (increase(netops_parse_status_events[1h]))
+          ) >= 0.99
+          and
+          sum by (lane) (increase(netops_parse_status_events[1h])) > 200
+        for: 1h
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "the {{ $labels.lane }} lane has been almost entirely unparsed for over an hour ({{ $value | humanizePercentage }})"
+          description: "Records arrive and are stored, but no grammar understands them. Check the vendor on the stored records and the Telemetry coverage page. parser_status being present is not evidence: it is present on every record, including when its value is unparsed. A vendor pack (telemetry-catalog/vendor-packs) or a framing fix is the remedy, not this alert."
+          runbook: "docs/runbooks/parse-coverage.md"
+
+      - alert: ParseUnparsedShareRose
+        # A RISE: a lane that was parsing has stopped. The `or ... * 0` is load-bearing:
+        # a healthy lane has no unparsed series at all in its baseline, and without it
+        # the subtraction would be empty and this rule silent in exactly the case it
+        # exists for.
+        expr: |
+          (
+            sum by (lane) (increase(netops_parse_status_events{parser_status=~"unparsed|raw_only"}[1h]))
+            /
+            sum by (lane) (increase(netops_parse_status_events[1h]))
+          )
+          -
+          (
+            (
+              sum by (lane) (increase(netops_parse_status_events{parser_status=~"unparsed|raw_only"}[6h] offset 1h))
+              or
+              sum by (lane) (increase(netops_parse_status_events[6h] offset 1h)) * 0
+            )
+            /
+            sum by (lane) (increase(netops_parse_status_events[6h] offset 1h))
+          )
+          > 0.25
+          and
+          sum by (lane) (increase(netops_parse_status_events[1h])) > 200
+        for: 20m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "the unparsed share of the {{ $labels.lane }} lane rose sharply against its previous 6 hours"
+          description: "A lane that was parsing has stopped. A grammar, a framing or a software change is the usual cause; a new device type is the other. Read the unparsed lines on the Logs page and the Unrecognized message shapes table on Telemetry coverage."
+          runbook: "docs/runbooks/parse-coverage.md"
+
+      - alert: EngineIgnoredHighSeverityLinesRose
+        # A RISE, not a level. Owner D3 keeps lines below a grammar's alarm floor out of
+        # RCA on purpose, and a device can repeat a benign error every few seconds, so
+        # a steady count is expected. The floor of 50 keeps one chatty hour quiet.
+        expr: |
+          sum(increase(corr_syslog_high_severity_no_signal_total[1h]))
+          >
+          3 * (sum(increase(corr_syslog_high_severity_no_signal_total[6h] offset 1h)) / 6) + 50
+        for: 20m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "far more lines that state a high severity are reaching nothing in the correlation engine than over the last 6 hours"
+          description: "A line that states error severity or worse matched a grammar whose alarm floor keeps it out (owner decision D3), and no typed rule took it. Each is retained and searchable, but none reaches RCA alone. A rise usually means a fault nobody has written a rule for: read them and add a typed or known_benign row."
+          runbook: "docs/runbooks/parse-coverage.md"

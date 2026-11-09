@@ -5617,6 +5617,13 @@ func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate par
 	if !ok {
 		return parsercov.Principal{}, false
 	}
+	// The read and propose lanes hand back raw log lines and templates that keep
+	// any word with no digit in it, a username included (D7), so they need log
+	// access as well. The stats gate is engine counters, not lines.
+	if gate != parsercov.GateStats && !s.roles.Allows(claims.Role, logsReadModule, LevelRead) {
+		writeError(w, http.StatusForbidden, errors.New(logsReadModule+" read permission required"))
+		return parsercov.Principal{}, false
+	}
 	tenant, cross := principalTenant(claims)
 	keys, _ := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
@@ -5646,12 +5653,14 @@ func (s *server) parserCovDeps() parsercov.Deps {
 				envOr("CORRELATION_URL", "http://correlation:8000"),
 				os.Getenv(parsercov.EnvReplicaURLs))
 		},
-		Metrics:    s.parserCovMetrics,
-		Audit:      s.securityAudit,
-		WriteJSON:  writeJSON,
-		WriteError: writeError,
-		LogWarn:    func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
-		MaxLines:   envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
+		// Vendor-level counters only; the router's labels are closed sets.
+		QueryByVendor: func(ctx context.Context, q string) map[string]float64 { return vmQueryBy(ctx, q, "vendor") },
+		Metrics:       s.parserCovMetrics,
+		Audit:         s.securityAudit,
+		WriteJSON:     writeJSON,
+		WriteError:    writeError,
+		LogWarn:       func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
+		MaxLines:      envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
 	}
 }
 

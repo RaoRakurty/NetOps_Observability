@@ -289,3 +289,67 @@ func TestGroundedPromptsAreRedactedBeforeEgress(t *testing.T) {
 		t.Fatalf("mock provider: %v", err)
 	}
 }
+
+// Device syslog names people with no key=value at all (owner decision D7). They
+// stay in the store for security attribution and still never reach a provider
+// (§15 LLM06). One line per vendor shape; "fixture-person" must not survive and
+// the words around it must.
+func TestRedactMasksDeviceSyslogUsernames(t *testing.T) {
+	cases := []struct{ name, in, keeps string }{
+		{"viptela confd audit", "audit user: fixture-person/42 created new session", "created new session"},
+		{"sshd publickey", "Accepted publickey for fixture-person from 10.0.0.9 port 22 ssh2", "Accepted publickey for"},
+		{"sshd password fail", "Failed password for fixture-person from 10.0.0.9 port 22", "from 10.0.0.9"},
+		{"sshd invalid user", "Failed password for invalid user fixture-person from 10.0.0.9", "invalid user"},
+		{"sshd keyboard-interactive", "Accepted keyboard-interactive/pam for fixture-person from 10.0.0.9", "from 10.0.0.9"},
+		{"sshd invalid user line", "Invalid user fixture-person from 10.0.0.9 port 4", "from 10.0.0.9"},
+		{"sshd preauth close", "Connection closed by authenticating user fixture-person 10.0.0.9 port 4", "Connection closed"},
+		{"pam SONiC", "pam_unix(sshd:session): session opened for user fixture-person by (uid=0)", "session opened"},
+		{"cisco dmi", "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User 'fixture-person' authenticated successfully", "authenticated successfully"},
+		{"cisco login", "%SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: fixture-person] [Source: 10.0.0.9]", "Login Success"},
+		{"cisco config", "%SYS-5-CONFIG_I: Configured from console by fixture-person on vty0 (10.0.0.9)", "on vty0"},
+		{"cisco logout", "%SYS-6-LOGOUT: User fixture-person has exited tty session 2", "has exited"},
+		{"juniper login", "UI_LOGIN_EVENT: User 'fixture-person' login, class 'super-user'", "login, class"},
+		{"juniper information", "LOGIN_INFORMATION: User fixture-person logged in from host 10.0.0.9", "logged in from"},
+		{"nokia sros", "User fixture-person from 10.0.0.9 logged in", "logged in"},
+		{"arista aaa", "%AAA-6-EXEC: by user fixture-person on vty3", "on vty3"},
+		{"double quoted", `User "fixture-person" denied`, "denied"},
+		{"sudo", "sudo: USER=fixture-person ; COMMAND=/bin/ls", "COMMAND"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Redact(tc.in)
+			if strings.Contains(got, "fixture-person") {
+				t.Errorf("username survived: %q", got)
+			}
+			if !strings.Contains(got, tc.keeps) {
+				t.Errorf("lost the diagnostic part %q: %q", tc.keeps, got)
+			}
+			if again := Redact(got); again != got {
+				t.Errorf("not idempotent: %q then %q", got, again)
+			}
+		})
+	}
+}
+
+// The filter also runs over prose, so a sentence about users must stay a sentence.
+func TestRedactSparesProseAboutUsers(t *testing.T) {
+	for _, s := range []string{
+		"Check whether user traffic from the site dropped",
+		"The impact for user sessions is limited to one zone",
+		"Impact on user experience from this change",
+		"Some valid user requests may be blocked",
+		"a user is logged in",
+	} {
+		if got := Redact(s); got != s {
+			t.Errorf("mangled prose: %q became %q", s, got)
+		}
+	}
+}
+
+// RedactSecrets runs on the operator's own question and must not touch names.
+func TestRedactSecretsLeavesDeviceUsernamesAlone(t *testing.T) {
+	in := "User 'fixture-person' authenticated"
+	if got := RedactSecrets(in); got != in {
+		t.Errorf("RedactSecrets masked an identifier: %q", got)
+	}
+}

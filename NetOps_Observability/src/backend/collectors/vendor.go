@@ -83,9 +83,7 @@ func detectVendor(ctx context.Context, addr string, creds snmpCreds) (vendor, sy
 	}
 	if d, err := snmpGet(ctx, addr, creds, sysDescrOID); err == nil {
 		sysDescr = d.str()
-		if vendor == "" {
-			vendor = vendorFromDescr(sysDescr)
-		}
+		vendor = vendorFromIdentity(vendor, sysDescr)
 	}
 	return vendor, sysDescr
 }
@@ -114,6 +112,20 @@ func enterpriseOf(arcs []int) (int, bool) {
 func vendorFromDescr(d string) string {
 	v, _ := vendorprofile.Default().VendorForSysDescr(d)
 	return v
+}
+
+// vendorFromIdentity combines the two reads. The enterprise number is
+// authoritative, with one exception carried in the profile data: an enterprise
+// that only names an off-the-shelf SNMP agent can be refined by the sysDescr of a
+// network OS that declares it runs that agent. A plain host keeps its answer.
+func vendorFromIdentity(enterpriseVendor, sysDescr string) string {
+	if enterpriseVendor == "" {
+		return vendorFromDescr(sysDescr)
+	}
+	if v, ok := vendorprofile.Default().VendorRefiningAgent(enterpriseVendor, sysDescr); ok {
+		return v
+	}
+	return enterpriseVendor
 }
 
 // snmpGet issues a single SNMP GET (v2c or v3 per creds) and returns the first

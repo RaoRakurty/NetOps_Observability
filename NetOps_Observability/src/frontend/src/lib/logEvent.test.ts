@@ -514,3 +514,19 @@ describe("one severity authority", () => {
     expect(css).not.toMatch(/\.lf-(crit|err|warn|notice|info|debug)\b/);
   });
 });
+
+describe("ownership wording (tracker 387 D6)", () => {
+  it.each([
+    ["platform_owned", "Platform device"],
+    ["enriched", "Tenant device"],
+    ["unmatched", "Unknown device"],
+  ])("%s reads as %s, and the raw value stays out of the details fields", (outcome, words) => {
+    const ev = toLogEvent({ _index: "netops-syslog-untagged-2026.11.09", _source: { message: "x", tenant_attribution: outcome } });
+    expect(ev.owner).toBe(words);
+    expect(ev.fields.some((f) => f.name === "tenant_attribution")).toBe(false);
+  });
+
+  it("a record with no attribution claims no owner", () => {
+    expect(toLogEvent({ _index: "netops-syslog-untagged-2026.11.09", _source: { message: "x" } }).owner).toBe("");
+  });
+});

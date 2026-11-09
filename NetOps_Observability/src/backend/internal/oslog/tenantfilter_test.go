@@ -222,6 +222,60 @@ func TestTenantFilterVisibility(t *testing.T) {
 	}
 }
 
+// TestTenantFilterIgnoresAttributionLabel is the §3a proof for tracker 387 D6.
+// tenant_attribution moved from "unmatched" to "platform_owned" on a registry hit
+// with no tenant. Access must not move with it: the same document is visible to
+// exactly the same callers under either label, and a label can never pull a
+// tenant-stamped document out of its tenant.
+func TestTenantFilterIgnoresAttributionLabel(t *testing.T) {
+	labels := []string{"platform_owned", "unmatched", "enriched", "producer_stamped", "claim_rejected", ""}
+	retailKeys, retailAddrs := []string{"branch-7"}, []string{"10.9.9.9"}
+
+	cases := []struct {
+		name        string
+		tenant      string
+		keys, addrs []string
+		doc         map[string]any
+		wantVisible bool
+	}{
+		{name: "another tenant does not read a platform device", tenant: "t_retail", keys: retailKeys, addrs: retailAddrs,
+			doc: map[string]any{"tenant_id": "", "tenant_registry": "hit", "host": "provider-edge-1"}},
+		{name: "a tenant with no devices reads none of it", tenant: "t_retail",
+			doc: map[string]any{"tenant_id": "", "tenant_registry": "hit", "host": "provider-edge-1"}},
+		{name: "an unbound caller reads none of it", tenant: "", keys: retailKeys, addrs: retailAddrs,
+			doc: map[string]any{"tenant_id": "", "tenant_registry": "hit", "host": "provider-edge-1"}},
+		{name: "the provider reads the platform's own device", tenant: "global",
+			doc: map[string]any{"tenant_id": "", "tenant_registry": "hit", "host": "provider-edge-1"}, wantVisible: true},
+		{name: "the existing device rule is unchanged", tenant: "t_retail", keys: retailKeys, addrs: retailAddrs,
+			doc: map[string]any{"tenant_id": "", "tenant_registry": "hit", "host": "branch-7"}, wantVisible: true},
+		{name: "a label cannot pull a stamped document out of its tenant", tenant: "t_retail", keys: retailKeys, addrs: retailAddrs,
+			doc: map[string]any{"tenant_id": "t_other", "tenant_registry": "hit", "host": "branch-7"}},
+		{name: "nor hand it to the provider", tenant: "global",
+			doc: map[string]any{"tenant_id": "t_other", "tenant_registry": "hit", "host": "other-1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := TenantFilter(tc.tenant, false, tc.keys, tc.addrs)
+			raw, err := json.Marshal(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "tenant_attribution") {
+				t.Fatalf("the read filter must not name the label: %s", raw)
+			}
+			for _, label := range labels {
+				doc := map[string]any{"tenant_attribution": label}
+				for k, v := range tc.doc {
+					doc[k] = v
+				}
+				if got := matches(t, f, doc); got != tc.wantVisible {
+					t.Errorf("label %q: visible=%v, want %v", label, got, tc.wantVisible)
+				}
+			}
+		})
+	}
+}
+
 func TestTenantFilterCrossIsUnrestricted(t *testing.T) {
 	for _, tenant := range []string{"", "global", "t_retail"} {
 		if f := TenantFilter(tenant, true, []string{"x"}, []string{"10.0.0.1"}); f != nil {

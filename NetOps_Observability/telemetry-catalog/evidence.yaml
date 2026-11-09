@@ -34,7 +34,7 @@ evidence_types:
   - {id: igp_adjacency, title: "IGP adjacency (OSPF / IS-IS)", rca: high,
      engine_kinds: [ospf_adjacency_change, isis_adjacency_change, routing_adjacency_change, igp_state_anomaly]}
   - {id: overlay_tunnel, title: "SD-WAN / IPsec overlay tunnel, BFD session", rca: high,
-     engine_kinds: [controller_bfd_down, controller_tunnel_state, tunnel_down, tunnel_flap, tunnel_degraded]}
+     engine_kinds: [controller_bfd_down, controller_tunnel_state, tunnel_down, tunnel_flap, tunnel_degraded, bfd_session_flap]}
   - {id: control_connection, title: "SD-WAN control connection / OMP", rca: high,
      engine_kinds: [controller_control_connection_loss]}
   - {id: device_reachability, title: "Device reachability", rca: high,
@@ -93,11 +93,8 @@ sources:
     computed_from: syslog_rules
     gaps:
       interface_health: {status: unavailable, detail: "syslog carries state messages, not counters"}
-      overlay_tunnel: {status: collection_pending, detail: "SD-WAN edges log BFD / tunnel state changes; no events.yaml rule maps them", ref: "design §7b E4"}
-      control_connection: {status: collection_pending, detail: "SD-WAN edges log control-connection state changes; no rule maps them", ref: "design §7b E4"}
       device_reachability: {status: unavailable, detail: "a device cannot log its own unreachability"}
       device_restart: {status: collection_pending, detail: "restart / reload messages exist (e.g. %SYS-5-RESTART); restart is mapped from traps only"}
-      device_resource: {status: collection_pending, detail: "CPU / memory threshold messages exist; no rule maps them"}
       config_change: {status: dormant, detail: "syslog.config.change (CONFIG_I / UI_COMMIT) ships shadow: counted, never emitted, until a V2 capacity profile exists", ref: "tracker 220"}
       flow_volume: {status: unavailable, detail: "syslog is not flow export"}
 
@@ -106,10 +103,7 @@ sources:
     computed_from: trap_rules
     gaps:
       interface_health: {status: unavailable, detail: "traps carry state transitions, not counters"}
-      overlay_tunnel: {status: collection_pending, detail: "VIPTELA / CISCO-SDWAN MIBs define BFD state traps; no rule maps them", ref: "design §7b E4"}
-      control_connection: {status: collection_pending, detail: "SD-WAN control-connection traps exist; no rule maps them", ref: "design §7b E4"}
       device_reachability: {status: unavailable, detail: "a device cannot trap its own unreachability"}
-      device_resource: {status: collection_pending, detail: "vendor CPU / memory threshold traps (e.g. CISCO-PROCESS-MIB) not mapped"}
       physical_layer: {status: collection_pending, detail: "transceiver / sensor threshold traps are vendor-specific and not mapped", ref: "#94"}
       flow_volume: {status: unavailable, detail: "traps are not flow export"}
 

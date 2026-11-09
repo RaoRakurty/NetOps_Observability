@@ -25,6 +25,26 @@ func TestEnterpriseOf(t *testing.T) {
 	}
 }
 
+// The enterprise number is authoritative except where the profile data says it
+// only names an agent. Vendor-neutral: the cases below hold because of the profile
+// documents, not because this code knows any of them.
+func TestVendorFromIdentity(t *testing.T) {
+	const sonic = "SONiC Software Version: SONiC.20230531.26 - HwSku: Force10-S6000 - Distribution: Debian 11.9 - Kernel: 5.10.0"
+	for _, c := range []struct{ enterprise, descr, want string }{
+		{"net-snmp", sonic, "sonic"},
+		{"net-snmp", "Linux host 5.15.0-198-generic", "net-snmp"},
+		{"cisco", sonic, "cisco"},
+		{"cisco", "", "cisco"},
+		{"", sonic, "sonic"},
+		{"", "Arista Networks EOS version 4.30", "arista"},
+		{"", "Some unknown widget", ""},
+	} {
+		if got := vendorFromIdentity(c.enterprise, c.descr); got != c.want {
+			t.Errorf("vendorFromIdentity(%q, %q) = %q, want %q", c.enterprise, c.descr, got, c.want)
+		}
+	}
+}
+
 func TestVendorFromDescr(t *testing.T) {
 	cases := map[string]string{
 		"Cisco IOS Software, C3560 Software":       "cisco",

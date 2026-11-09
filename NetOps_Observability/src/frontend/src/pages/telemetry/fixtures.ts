@@ -5,7 +5,47 @@
 // (and any future storybook-style harness) exercise the EXACT contract shape —
 // if the backend contract drifts, tsc breaks here first.
 
-import type { CatalogProposal, ParserStats, UnrecognizedPage } from "../../services/api";
+import type { CatalogProposal, ParserStats, UnrecognizedPage, VendorLaneStats, VendorScore } from "../../services/api";
+
+const emptyLane: VendorLaneStats = { grammars: 0, mib_nodes: 0, mibs: 0, trap_definitions: 0, fixtures: 0, rules: {}, live: { total: 0, read: 0 } };
+
+export const vendorScoresFixture: VendorScore[] = [
+  {
+    vendor: "cisco",
+    display_name: "Cisco",
+    lanes: {
+      syslog: { ...emptyLane, grammars: 5, fixtures: 25, rules: { lab_validated: 12, doc_claimed: 3 }, live: { total: 14000, read: 13944 } },
+      snmptrap: { ...emptyLane, mib_nodes: 700, mibs: 12, trap_definitions: 16, fixtures: 4, rules: { doc_claimed: 6 }, live: { total: 2080, read: 2080 } },
+    },
+  },
+  // In the catalogue with nothing tested, and sending lines: the case this exists for.
+  {
+    vendor: "sonic",
+    display_name: "SONiC",
+    lanes: { syslog: { ...emptyLane, live: { total: 900, read: 0 } }, snmptrap: emptyLane },
+  },
+  // Quiet and untested.
+  {
+    vendor: "extreme",
+    display_name: "Extreme Networks",
+    lanes: { syslog: emptyLane, snmptrap: emptyLane },
+  },
+  {
+    vendor: "standard",
+    display_name: "Any vendor",
+    standard: true,
+    lanes: {
+      syslog: { ...emptyLane, grammars: 9, fixtures: 8, rules: { unrated: 20 }, live: null },
+      snmptrap: { ...emptyLane, mib_nodes: 1500, mibs: 20, fixtures: 10, rules: { unrated: 11 }, live: null },
+    },
+  },
+  {
+    vendor: "unidentified",
+    display_name: "Not identified",
+    unidentified: true,
+    lanes: { syslog: { ...emptyLane, live: { total: 119000, read: 12 } }, snmptrap: emptyLane },
+  },
+];
 
 export const parserStatsFixture: ParserStats = {
   parser_rev: "parser-2026.09.02-a6",
@@ -13,8 +53,9 @@ export const parserStatsFixture: ParserStats = {
   generated_at: "2026-09-02T10:00:00Z",
   promotion_rate: 0.8125,
   window_lines: 240000,
-  prefilter: { passed: 240000, rejected: 18422 },
+  prefilter: { passed: 240000, rejected: 18422, high_severity_skipped: 37 },
   generic_fallback: { syslog: 1204, trap: 87 },
+  vendors: vendorScoresFixture,
   rules: [
     { rule_id: "cisco.ios.link_updown", lane: "syslog", kind: "interface_state", fidelity: "live_validated", hits: 9120, shadow: false },
     { rule_id: "juniper.bgp_peer_down", lane: "syslog", kind: "bgp_state", fidelity: "lab_validated", hits: 431, shadow: false },
@@ -28,6 +69,7 @@ export const parserStatsNoLinesFixture: ParserStats = {
   ...parserStatsFixture,
   promotion_rate: null,
   window_lines: 0,
+  vendors: [],
   prefilter: { passed: 0, rejected: 0 },
   generic_fallback: { syslog: 0, trap: 0 },
 };

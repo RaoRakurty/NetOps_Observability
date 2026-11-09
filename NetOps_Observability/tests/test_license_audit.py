@@ -860,12 +860,15 @@ def test_the_only_open_findings_are_the_two_tracker_rowed_owner_decisions():
                         if str(e.get("status", "")).upper().startswith("OPEN"))
     # The rows that owned the two closed findings, kept so a REOPENED finding is
     # told which tracker row it belongs to instead of only being told "no".
-    known = {"busybox": 238, "connector-vendor-marks": 239}
-    assert open_names == [], (
-        f"the acknowledged-findings queue is {open_names}; both of its entries "
-        f"were ruled on 2026-09-05 and it should now be empty. Close the "
-        f"finding, or — if this is a genuinely new owner question — give it a "
-        f"tracker row and a §4a paragraph and extend this test deliberately.")
+    # tracker-387-mibs is a genuine owner question (2026-11-09, D4): Cisco's MIB
+    # repo grants nothing, and only the owner or counsel can rule on shipping OID
+    # facts derived from it. Row 390 and §4a carry it; remove it here when ruled.
+    known = {"busybox": 238, "connector-vendor-marks": 239, "tracker-387-mibs": 390}
+    assert open_names == ["tracker-387-mibs"], (
+        f"the acknowledged-findings queue is {open_names}; it should hold only "
+        f"tracker-387-mibs. Close the finding, or — if this is a genuinely new "
+        f"owner question — give it a tracker row and a §4a paragraph and extend "
+        f"this test deliberately.")
 
     audit_doc = read(os.path.join(ROOT, "docs", "security",
                                   "LICENSE_AUDIT_2026-09-03.md"))

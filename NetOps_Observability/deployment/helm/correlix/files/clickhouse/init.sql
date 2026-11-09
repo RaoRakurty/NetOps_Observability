@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS netops.flows
     flow_type       LowCardinality(String) DEFAULT 'unknown',  -- netflow | ipfix | sflow
     tenant_id       LowCardinality(String) DEFAULT '',  -- #20: stamped at Vector ingest (device→tenant); '' = global
     exporter_app_id   LowCardinality(String) DEFAULT '',  -- IPFIX/NetFlow v9 IE 95 as "<engine>:<selector>" (RFC 6759); '' = not exported
-    exporter_app_name LowCardinality(String) DEFAULT ''   -- IE 96, validated printable ≤64; '' = not exported (most exporters send names only in an options template)
+    exporter_app_name LowCardinality(String) DEFAULT '',  -- IE 96, validated printable ≤64; '' = not exported (most exporters send names only in an options template)
+    sampling_status   LowCardinality(String) DEFAULT ''   -- reported | not_reported_1to1 (vector-router, from sampling_rate); '' = row older than the column. A label: no total reads it
 )
 ENGINE = MergeTree
 -- #20 Phase 3 — at-rest separation: tenant_id leads the partition key, so each
