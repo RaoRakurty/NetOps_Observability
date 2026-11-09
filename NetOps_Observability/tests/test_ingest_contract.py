@@ -839,6 +839,10 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         # undeclared field is stored and not indexed — no mapping conflict, no
         # rejected doc; tests/test_pipeline_debug_vrl.py pins both halves.
         "cx_parse_trace",
+        # tracker 387: the untouched text when a pack's envelope rule cleaned the
+        # message. Kept for retrieval, never searched; the cleaned `message` is the
+        # searchable one, so indexing this as well would index every line twice.
+        "message_original",
         "vendor", "hostname", "appname", "severity", "facility", "summary",
         "subsystem", "event_type", "normalized_severity", "clock_skew_s",
         "fgt", "app_id", "app_vendor", "app_src", "app_dst", "app_dport",

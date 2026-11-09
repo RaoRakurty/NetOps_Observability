@@ -122,7 +122,7 @@ def _live_screen():
 
 def test_rules_hash_is_stamped_into_every_artifact():
     floor, literals = _live_screen()
-    digest = gen.rules_hash(floor, literals)
+    digest = gen.rules_hash(floor, literals, gen.read_pack_grammars(gen.load_producers()))
     assert digest in _read(VRL_PATH)
     assert digest in _read(TESTS_YAML)
     assert digest[:12] in _read(CONFIG_PATH), (

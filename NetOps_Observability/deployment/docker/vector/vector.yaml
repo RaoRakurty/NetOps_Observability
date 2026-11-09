@@ -559,6 +559,94 @@ transforms:
         }
       }
 
+      # Vendor packs (tracker 387, plan §6a). The grammars are data in
+      # telemetry-catalog/vendor-packs/; the generated block below runs them and
+      # this file's other pack code only applies the result, naming no vendor.
+      #
+      # cx_inventory_vendor is the SEAM for PR 12: set it from the registry row
+      # (`trows[0].vendor`) and it narrows the grammars to that vendor and wins over
+      # every format guess, stamping vendor_source=inventory. Until then it is empty
+      # and vendor stays what it is below: a guess from the message text, recorded as
+      # vendor_source=format on a pack hit.
+      cx_inventory_vendor = ""
+      # >>> BEGIN GENERATED-SYSLOG-PACKS (scripts/gen-syslog-packs.py)
+      # GENERATED from telemetry-catalog/vendor-packs/*.yaml. DO NOT EDIT: change
+      # a pack and re-run scripts/gen-syslog-packs.py; a drift test fails on a
+      # stale copy. Sets cx_pk_* locals plus the envelope rewrite; nothing here
+      # drops or reorders a record.
+      cx_pk_env_done = false
+      cx_pk_raw = string(.message) ?? ""
+      # envelope standard.rfc5424_remnant (lab_validated)
+      if !cx_pk_env_done && contains(cx_pk_raw, " - - ") {
+        cx_pk_e, cx_pk_eerr = parse_regex(cx_pk_raw, r'^(?P<procid>\d{1,10}|-) - - (?P<rest>.*)')
+        if cx_pk_eerr == null {
+          cx_pk_env_done = true
+          .message_original = cx_pk_raw
+          .message = (string(cx_pk_e.rest) ?? "")
+          cx_pk_lift = (string(cx_pk_e.procid) ?? "")
+          if cx_pk_lift != "" && cx_pk_lift != "-" {
+            .procid = cx_pk_lift
+          }
+        }
+      }
+      cx_pk_parser = ""
+      cx_pk_vendor = ""
+      cx_pk_fac = ""
+      cx_pk_et = ""
+      cx_pk_sum = ""
+      cx_pk_ntxt = ""
+      cx_pk_ncode = ""
+      cx_pk_cat = ""
+      cx_pk_sev = 99
+      cx_pk_open = true
+      cx_pk_msg = string(.message) ?? ""
+      cx_pk_app = downcase(.appname)
+      # grammar cisco_sdwan.viptela_notification (lab_validated)
+      if cx_pk_open && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.name) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.level) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # grammar cisco_sdwan.viptela (lab_validated)
+      if cx_pk_open && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.proc) ?? "") + "_" + (string(cx_pk_m.id) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
+          cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # grammar cisco_sdwan.cisco_sdwan (doc_claimed)
+      if cx_pk_open && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.proc) ?? "") + "_" + (string(cx_pk_m.id) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
+          cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # <<< END GENERATED-SYSLOG-PACKS
+
       # Vendor classification from the log signature (heuristic). The
       # authoritative vendor still comes from SNMP sysObjectID at discovery;
       # this labels each log — and any log-only device — by its distinctive
@@ -579,6 +667,13 @@ transforms:
         vendor = "arista"
       } else if match(msg, r'%[A-Z][A-Z0-9_]+-[0-7]-[A-Z0-9_]+') {
         vendor = "cisco"
+      }
+      if cx_inventory_vendor != "" {
+        vendor = cx_inventory_vendor
+        .vendor_source = "inventory"
+      } else if cx_pk_vendor != "" {
+        vendor = cx_pk_vendor
+        .vendor_source = "format"
       }
       .vendor = vendor
 
@@ -653,7 +748,23 @@ transforms:
       # event. parser_status makes coverage observable (no silent failure).
       .parser_status = "unparsed"
       embedded_sev = 99
-      if vendor != "fortinet" {
+      if cx_pk_parser != "" {
+        # A vendor-pack grammar matched. Native severity stays apart from the
+        # normalized one (plan §5.3); a category row gets the stable key the read
+        # path groups repeats by, and nothing is dropped or merged here (owner D2).
+        .parser_id = cx_pk_parser
+        .parser_status = "parsed"
+        if cx_pk_fac != "" { .facility = cx_pk_fac }
+        if cx_pk_et != "" { .event_type = cx_pk_et }
+        if cx_pk_sum != "" { .summary = cx_pk_sum }
+        if cx_pk_ntxt != "" { .severity_native_text = cx_pk_ntxt }
+        if cx_pk_ncode != "" { .severity_native_code = cx_pk_ncode }
+        if cx_pk_cat != "" {
+          .event_category = cx_pk_cat
+          .dedup_key = .hostname + "|" + .appname + "|" + cx_pk_et
+        }
+        embedded_sev = cx_pk_sev
+      } else if vendor != "fortinet" {
         # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
         cm, cmerr = parse_regex(msg, r'%(?P<facility>[A-Z][A-Z0-9_]+)-(?P<sev>[0-7])-(?P<mnemonic>[A-Z0-9_]+):\s*(?P<text>.*)')
         if cmerr == null {
@@ -860,8 +971,8 @@ transforms:
       # the engine COULD promote, and leaves the field unset otherwise. It
       # never drops, rewrites or reorders anything: the stamp is additive.
       #
-      #   rules_hash : 0538afc1b47c3bc4d4d350e5088a4ecf300e8bdc0c8b3a317bb91f2a193209f0
-      #   v          : 0538afc1b47c
+      #   rules_hash : b1b44e78db5d6b977620afbe344a25aedaa234e2edc551997a6f3a425c75d508
+      #   v          : b1b44e78db5d
       #   floor      : ALARM_SEVERITY_FLOOR = 4
       #   screen     : 61 literals
       #
@@ -903,9 +1014,65 @@ transforms:
         cx_sev = cx_tag_sev
       }
 
+      # ── vendor-pack severity (producers.syslog_alarm_num) ───────────────
+      # The grammars are telemetry-catalog/vendor-packs/*.yaml. A matching row
+      # adds the severity the line's own text states, and its alarm floor then
+      # decides whether severity alone may admit the line (owner D3).
+      cx_pk_msg = string(.message) ?? ""
+      cx_pk_app = downcase(string(.appname) ?? "")
+      cx_pk_inv = ""
+      if (string(.vendor_source) ?? "") == "inventory" {
+        cx_pk_inv = string(.vendor) ?? ""
+      }
+      cx_pk_open = true
+      cx_pk_n = 99
+      cx_pk_floor = 99
+      if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_open = false
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_open = false
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_open = false
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_n < cx_sev {
+        cx_sev = cx_pk_n
+      }
+      if !cx_pk_open && cx_sev > cx_pk_floor {
+        cx_sev = 99
+      }
+
       # ── gate 1: the device called it warning-or-worse ───────────────────
       if cx_sev <= 4 {
-        .cx_admission = { "v": "0538afc1b47c", "by": "severity" }
+        .cx_admission = { "v": "b1b44e78db5d", "by": "severity" }
       }
 
       # ── gate 2: a known typed symptom marker, at any severity ───────────
@@ -920,7 +1087,7 @@ transforms:
           (string(.message) ?? "") + " " + cx_tag + " " +
           (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
         if match(cx_hay, r'unsupported_transceiver|is flapping between|isisadjacencychange|has moved between|between nve and|duplicate host|vxlan_mac_move|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
-          .cx_admission = { "v": "0538afc1b47c", "by": "marker" }
+          .cx_admission = { "v": "b1b44e78db5d", "by": "marker" }
         }
       }
 

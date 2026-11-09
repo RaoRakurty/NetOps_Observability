@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Cisco Catalyst SD-WAN (Viptela), the first vendor pack (tracker 387, plan §6a).
+# Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# EVIDENCE. `lab_validated` means the shape was captured on the wire from the lab's
+# vEdges on 2026-11-09 (read-only, 120 s, 1,376 frames) or quoted from a lab line in
+# plan §3.1. Hostnames, usernames and addresses in the fixtures are scrubbed.
+# `doc_claimed` rows cite the document their shape comes from and were never seen
+# live. Cisco's syslog message catalogue was not retrievable.
+#
+# FRAMING SEEN ON THE WIRE. vEdge sends true RFC 5424 with a real PRI
+# (`<187>1 <ts> vEdge-51 FTMD 3875 - - %Viptela-...`). syslog-ng's double parse then
+# resets PRI to 13 (notice) and leaves `3875 - - ` in the message (plan §3.3, fixed by
+# PR 10). The grammars are unanchored, so they read the line before and after that fix.
+pack: cisco_sdwan
+vendor: cisco
+description: Cisco Catalyst SD-WAN edges and controllers.
+
+grammars:
+  # Body shape `Notification: [<date> <time>] <event-name> severity-level:<level> ...`.
+  # The numeric id is shared by every notification, so the event name is the stable
+  # identity here, not the id. The envelope says 6-INFO whatever the event's real level
+  # is, so the native severity is `severity-level`, and it does not lift the normalized
+  # one: the same crossing also arrives as its own %Viptela-...-SYSMGR line. The
+  # optional date is from the Cisco documents; the lab's lines carry none.
+  - id: viptela_notification
+    parser_id: cisco_sdwan.v1
+    literal: '%Viptela-'
+    pattern: '%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)'
+    facility: '{proc}'
+    event_type: '{name}'
+    summary: '{text}'
+    severity: {digit: sev}
+    native_text: level
+    alarm_floor: 2
+    fidelity: lab_validated
+
+  - id: viptela
+    parser_id: cisco_sdwan.v1
+    literal: '%Viptela-'
+    pattern: '%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)'
+    facility: '{proc}'
+    event_type: '{proc}_{id}'
+    summary: '{text}'
+    severity: {digit: sev}
+    native_text: word
+    native_code: sev
+    # D3: only a critical line may alarm on severity alone. Everything else needs a
+    # typed row, which states its own below-floor severity.
+    alarm_floor: 2
+    fidelity: lab_validated
+
+  # IOS-XE SD-WAN edges. NOT seen on the lab: the capture's cEdge lines are all
+  # %DMI-5-AUTH_PASSED. Shape from a public example, so it stays doc_claimed until a
+  # capture promotes it.
+  - id: cisco_sdwan
+    parser_id: cisco_sdwan.v1
+    literal: '%Cisco-SDWAN-'
+    pattern: '%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)'
+    facility: '{proc}'
+    event_type: '{proc}_{id}'
+    summary: '{text}'
+    severity: {digit: sev}
+    native_text: word
+    native_code: sev
+    alarm_floor: 2
+    fidelity: doc_claimed
+    source: 'Cisco Community, "How to check BFD logging in Cisco SDWAN fabric" (`%Cisco-SDWAN-vm5-FTMD-5-NTCE-1000009: BFD-session ...`)'
+
+fixtures:
+  - name: an error line parses and lifts severity
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: FTMD
+    message: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+    expect:
+      vendor: cisco
+      vendor_source: format
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      facility: FTMD
+      event_type: ftmd_1000003
+      summary: 'User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+      severity_native_text: ERRO
+      severity_native_code: '3'
+      normalized_severity: error
+      procid: '3875'
+      message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+      message_original: '3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1'
+    signal: null
+
+  - name: a warning line with a hyphenated host
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%'
+    expect:
+      facility: SYSMGR
+      event_type: sysmgr_200071
+      severity_native_text: WARN
+      severity_native_code: '4'
+      normalized_severity: warning
+    signal: null
+
+  - name: a notice line does not lift above the wire level
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%'
+    expect:
+      event_type: sysmgr_200072
+      severity_native_text: NTCE
+      normalized_severity: notice
+    signal: null
+
+  - name: a critical line lifts to critical
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)'
+    expect:
+      event_type: sysmgr_200069
+      severity_native_text: CRIT
+      severity_native_code: '2'
+      normalized_severity: critical
+    signal: {kind: device_alarm, severity: crit, opens_alone: true}
+
+  - name: a critical line with no typed row still alarms
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: VDAEMON
+    message: '%Viptela-vEdge-1-VDAEMON_0-2-CRIT-999999: synthetic shape of an unknown critical id'
+    expect:
+      facility: VDAEMON_0
+      event_type: vdaemon_0_999999
+      normalized_severity: critical
+    signal: {kind: device_alarm, severity: crit, opens_alone: true}
+
+  - name: a notification takes its identity from the event name
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 90% (critically high)" cpu-user-percentage:"9.18" cpu-system-percentage:"90.82" cpu-idle-percentage:"0.00"'
+    expect:
+      facility: sysmgrd
+      event_type: cpu-usage
+      severity_native_text: critical
+      normalized_severity: notice
+    signal: null
+
+  - name: a controller notification, documented shape
+    fidelity: doc_claimed
+    hostname: Manager01
+    appname: SYSMGR
+    message: '%Viptela-Manager01-sysmgrd-6-INFO-1400002: Notification: system-login-change'
+    expect:
+      event_type: system-login-change
+      normalized_severity: notice
+    signal: null
+
+  - name: the IOS-XE shape parses under the same mechanism
+    fidelity: doc_claimed
+    hostname: cedge-1
+    appname: FTMD
+    message: '%Cisco-SDWAN-vm5-FTMD-4-WARN-1000009: BFD-session synthetic body'
+    expect:
+      vendor: cisco
+      parser_id: cisco_sdwan.v1
+      facility: FTMD
+      event_type: ftmd_1000009
+      severity_native_text: WARN
+      normalized_severity: warning
+    signal: null

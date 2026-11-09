@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from rule_model import Rule, compile_rule, install_fidelity, rules_hash
+from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_hash
 
 #: The catalog file this module was baked from.
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-08-link-cause'
+PARSER_REV = '2026-11-09-vendor-packs'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -32,6 +32,78 @@ CATALOG_EVENT_FIDELITY: dict[str, str] = {'bgp_route_churn': 'doc_claimed',
  'mac_move': 'doc_claimed'}
 
 install_fidelity(CATALOG_EVENT_FIDELITY)
+
+#: Vendor-pack syslog grammars, in MATCH ORDER (telemetry-catalog/vendor-packs/).
+#: Vector's generated branch and `syslog_packs.PackTable` both run these rows.
+SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_sdwan',
+  'vendor': 'cisco',
+  'id': 'cisco_sdwan.viptela_notification',
+  'parser_id': 'cisco_sdwan.v1',
+  'literal': '%Viptela-',
+  'apps': [],
+  'pattern': '%Viptela-(?P<origin>\\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\\d{1,12}):\\s*(?P<text>Notification:.{0,48}?\\b(?P<name>[a-z]+(?:-[a-z]+)+)\\b\\s*(?:severity-level:(?P<level>[a-z]+))?.*)',
+  'facility': '{proc}',
+  'event_type': '{name}',
+  'summary': '{text}',
+  'sev_digit': 'sev',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': 'level',
+  'native_code': '',
+  'alarm_floor': 2,
+  'category': '',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'cisco_sdwan',
+  'vendor': 'cisco',
+  'id': 'cisco_sdwan.viptela',
+  'parser_id': 'cisco_sdwan.v1',
+  'literal': '%Viptela-',
+  'apps': [],
+  'pattern': '%Viptela-(?P<origin>\\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\\d{1,12}):\\s*(?P<text>.*)',
+  'facility': '{proc}',
+  'event_type': '{proc}_{id}',
+  'summary': '{text}',
+  'sev_digit': 'sev',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': 'word',
+  'native_code': 'sev',
+  'alarm_floor': 2,
+  'category': '',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'cisco_sdwan',
+  'vendor': 'cisco',
+  'id': 'cisco_sdwan.cisco_sdwan',
+  'parser_id': 'cisco_sdwan.v1',
+  'literal': '%Cisco-SDWAN-',
+  'apps': [],
+  'pattern': '%Cisco-SDWAN-(?P<origin>\\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\\d{1,12}):\\s*(?P<text>.*)',
+  'facility': '{proc}',
+  'event_type': '{proc}_{id}',
+  'summary': '{text}',
+  'sev_digit': 'sev',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': 'word',
+  'native_code': 'sev',
+  'alarm_floor': 2,
+  'category': '',
+  'fidelity': 'doc_claimed',
+  'source': 'Cisco Community, "How to check BFD logging in Cisco SDWAN fabric" (`%Cisco-SDWAN-vm5-FTMD-5-NTCE-1000009: BFD-session ...`)'})
+
+#: Vendor-pack syslog envelope rules, in match order.
+SYSLOG_ENVELOPES: tuple[dict[str, Any], ...] = ({'pack': 'standard',
+  'id': 'standard.rfc5424_remnant',
+  'literal': ' - - ',
+  'pattern': '^(?P<procid>\\d{1,10}|-) - - (?P<rest>.*)',
+  'message': 'rest',
+  'lift': {'procid': 'procid'},
+  'skip_values': ['-'],
+  'preserve_as': 'message_original',
+  'fidelity': 'lab_validated',
+  'source': ''},)
 
 #: The rule rows, in CLASSIFICATION ORDER. Order is behaviour: the interpreter
 #: walks a lane's rules in sequence, first match wins.
@@ -1408,5 +1480,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735'
-RULES_HASH: str = rules_hash(RULES)
+BAKED_RULES_HASH = '6ee65c7a91d889e221319fc03cef07efd9dabafa33ba9becf899b0918bda96d8'
+PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
+RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

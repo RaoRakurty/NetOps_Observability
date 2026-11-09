@@ -489,7 +489,12 @@ RULES_HASH_NOKIA_NG = "236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f7
 #: locIfReason, so every one replays byte-for-byte; five new entries record the
 #: new outputs (baseline-absent: the frozen code lacks the two keys).
 RULES_HASH_LINK_CAUSE = "57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735"
-RULES_HASH_A3 = RULES_HASH_LINK_CAUSE
+#:
+#: Vendor packs (2026-11-09, tracker 387): the hash now also covers the pack grammars
+#: and envelopes, because they change what the parser emits (severity, alarm floor).
+#: No rule row moved; every earlier corpus entry replays byte-for-byte.
+RULES_HASH_VENDOR_PACKS = "6ee65c7a91d889e221319fc03cef07efd9dabafa33ba9becf899b0918bda96d8"
+RULES_HASH_A3 = RULES_HASH_VENDOR_PACKS
 
 
 def _guard_patterns(node) -> list[str]:
@@ -512,7 +517,7 @@ def test_rules_hash_is_stable_and_matches_the_exported_tag():
     assert P.RULES_HASH == RULES_HASH_A3, (
         "rules_hash moved — a rule changed. If that was intended, re-pin "
         "RULES_HASH_A3 and bump parser_rev in telemetry-catalog/events.yaml.")
-    assert P.rules_hash(RULES) == P.RULES_HASH
+    assert P.rules_hash(RULES, P.PACK_DIGEST) == P.RULES_HASH
     assert P.RULES_HASH_TAG == P.RULES_HASH[:16]
     assert len(P.RULES_HASH) == 64      # sha256 hex
 
@@ -552,7 +557,7 @@ def test_a_catalog_promotion_is_not_a_parser_edit():
     try:
         P.CATALOG_EVENT_FIDELITY.clear()
         P.CATALOG_EVENT_FIDELITY.update(promoted)
-        assert P.rules_hash(RULES) == P.RULES_HASH
+        assert P.rules_hash(RULES, P.PACK_DIGEST) == P.RULES_HASH
     finally:
         P.CATALOG_EVENT_FIDELITY.clear()
         P.CATALOG_EVENT_FIDELITY.update(original)

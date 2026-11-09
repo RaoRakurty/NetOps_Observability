@@ -262,6 +262,21 @@
             "event_type": {
               "type": "keyword"
             },
+            "vendor_source": {
+              "type": "keyword"
+            },
+            "severity_native_text": {
+              "type": "keyword"
+            },
+            "severity_native_code": {
+              "type": "keyword"
+            },
+            "event_category": {
+              "type": "keyword"
+            },
+            "dedup_key": {
+              "type": "keyword"
+            },
             "cx_admission": {
               "type": "object",
               "dynamic": false,

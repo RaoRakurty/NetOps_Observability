@@ -43,7 +43,13 @@ from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
 from episodes import EpisodeDetector, EpisodeEvent
-from parser_rules import BAKED_RULES_HASH, RULES
+from parser_rules import (
+    BAKED_RULES_HASH,
+    PACK_DIGEST,
+    RULES,
+    SYSLOG_ENVELOPES,
+    SYSLOG_GRAMMARS,
+)
 from parser_rules import CATALOG_EVENT_FIDELITY as _CATALOG_EVENT_FIDELITY
 from parser_rules import PARSER_REV as _PARSER_REV
 from regex_screen import pattern_screen
@@ -68,6 +74,7 @@ from signals import (
     Source,
     observer_of,
 )
+from syslog_packs import PackTable
 from timenorm import parse_any_timestamp
 from verdicts import conservative_collection_path
 
@@ -195,12 +202,14 @@ ALARM_SEVERITY_FLOOR = 4  # warning
 
 _TAG_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")  # Cisco %FAC-N-MNEMONIC
 
+# Vendor-pack grammars (telemetry-catalog/vendor-packs/, tracker 387). Immutable after
+# import. The same rows compile into the aggregator's VRL.
+_PACKS = PackTable(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 
-def syslog_severity_num(ev: dict, tag: str) -> int | None:
-    """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
-    the RFC5424/SR-Linux `severity` keyword/char AND the Cisco %FAC-N-MNEMONIC tag
-    digit. None when neither parses (the generic-alarm fallback then abstains: no
-    severity, no guessed alarm)."""
+
+def _syslog_severity_parts(ev: dict, tag: str) -> tuple[int | None, int | None]:
+    """(most-severe number derivable from the event, the alarm floor a matching
+    pack grammar states, else None)."""
     cands: list[int] = []
     sev = str(ev.get("severity") or "").strip().lower()
     if sev in _SEVERITY_NUM:
@@ -208,7 +217,32 @@ def syslog_severity_num(ev: dict, tag: str) -> int | None:
     m = _TAG_SEV_RE.search(tag)
     if m:
         cands.append(int(m.group(1)))
-    return min(cands) if cands else None
+    floor: int | None = None
+    hit = _PACKS.severity_hit(ev, str(ev.get("message") or ""))
+    if hit is not None:
+        cands.append(hit[0])
+        floor = hit[1]
+    return (min(cands) if cands else None), floor
+
+
+def syslog_severity_num(ev: dict, tag: str) -> int | None:
+    """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
+    the RFC5424/SR-Linux `severity` keyword/char, the Cisco %FAC-N-MNEMONIC tag
+    digit, AND the severity a vendor-pack grammar reads from the message. None when
+    none parses (the generic-alarm fallback then abstains: no severity, no guessed
+    alarm)."""
+    return _syslog_severity_parts(ev, tag)[0]
+
+
+def syslog_alarm_num(ev: dict, tag: str) -> int | None:
+    """The severity the anti-firehose gates may act on: `syslog_severity_num`,
+    unless a pack grammar matched the line and that severity is worse-numbered
+    than the grammar's `alarm_floor`. Reading a severity is not a licence to alarm
+    on it (owner D3): such a line reaches the engine only through a typed rule."""
+    n, floor = _syslog_severity_parts(ev, tag)
+    if n is not None and floor is not None and n > floor:
+        return None
+    return n
 
 
 def _severity_from_num(n: int) -> Severity:
@@ -409,7 +443,7 @@ if len(RULES_BY_ID) != len(RULES):                      # pragma: no cover - gua
 # The computed half of provenance. The full digest is the comparison value; the
 # 16-hex prefix is what rides on every signal (64 hex chars per row, times the
 # whole syslog firehose, buys nothing over 64 bits of collision resistance).
-RULES_HASH = rules_hash(RULES)
+RULES_HASH = rules_hash(RULES, PACK_DIGEST)
 RULES_HASH_TAG = RULES_HASH[:16]
 if RULES_HASH != BAKED_RULES_HASH:                      # pragma: no cover - guard
     raise RuntimeError(
@@ -1060,7 +1094,7 @@ def syslog_promotable(ev: dict) -> bool:
         return True
     tag = str(ev.get("appname") or "").upper()
     # The generic device-alarm net (bottom of the chain) fires on severity alone.
-    sev_num = syslog_severity_num(ev, tag)
+    sev_num = syslog_alarm_num(ev, tag)
     if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
         PREFILTER_PASSED += 1
         return True
@@ -1120,8 +1154,9 @@ _MODALITIES: dict[str, ModalityClass] = {
 
 
 def _syslog_sev(ctx: Ctx) -> int | None:
-    """RFC5424/SR-Linux keyword AND the Cisco %FAC-N-MNEMONIC tag digit."""
-    n = syslog_severity_num(ctx.base["ev"], ctx.base["tag"])
+    """RFC5424/SR-Linux keyword, the Cisco %FAC-N-MNEMONIC tag digit and the
+    vendor-pack severity, under the pack's alarm floor."""
+    n = syslog_alarm_num(ctx.base["ev"], ctx.base["tag"])
     return n if (n is not None and n <= ALARM_SEVERITY_FLOOR) else None
 
 

@@ -125,7 +125,8 @@ def test_a_hand_edit_of_the_generated_module_cannot_hide(catalog):
     assert P.RULES_HASH == parser_rules.BAKED_RULES_HASH
     _data, rows = catalog
     runtime = [r for r in rows if r["lane"] in bake.RUNTIME_LANES]
-    assert rules_hash(compile_rule(r) for r in runtime) == P.RULES_HASH
+    assert (rules_hash((compile_rule(r) for r in runtime), parser_rules.PACK_DIGEST)
+            == P.RULES_HASH)
 
 
 def test_the_catalog_only_rows_never_reach_the_runtime(catalog):

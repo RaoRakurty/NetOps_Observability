@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Vendor-neutral grammars (tracker 387, plan §6a layer 1). A pack with `vendor: null`
+# runs after every vendor pack and never stamps a vendor.
+pack: standard
+vendor: null
+description: Grammars that hold for any sender.
+
+envelopes:
+  # STOP-GAP, remove with PR 10. An RFC 5424 frame survives syslog-ng's double parse
+  # with its PROCID, MSGID and SD still at the front of MSG: `2939 - - audit ...` or,
+  # with no procid, `- - - USER ...`. Lift the procid and clean the message; the
+  # untouched text stays in `message_original`. PR 10's framing fix removes the need,
+  # and then this row can be deleted with no code change.
+  #
+  # UNPROVEN: seen only from three vEdges (2026-11-09 capture). It runs on every
+  # vendor's lines, so a genuine message that begins `123 - - ` would be rewritten; it
+  # stays retrievable, but nothing has measured how often that happens.
+  - id: rfc5424_remnant
+    literal: ' - - '
+    pattern: '^(?P<procid>\d{1,10}|-) - - (?P<rest>.*)'
+    message: rest
+    lift: {procid: procid}
+    skip_values: ['-']
+    preserve_as: message_original
+    fidelity: lab_validated
+
+fixtures:
+  - name: the procid is lifted and the original kept
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - something a daemon said'
+    expect:
+      procid: '2939'
+      message: 'something a daemon said'
+      message_original: '2939 - - something a daemon said'
+    signal: null
+
+  - name: a nil procid is not lifted
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '- - - USER PID %CPU %MEM'
+    expect:
+      message: 'USER PID %CPU %MEM'
+      message_original: '- - - USER PID %CPU %MEM'
+    signal: null
+
+  - name: the tokens later in a line are left alone
+    fidelity: lab_validated
+    hostname: spine1
+    appname: app
+    message: 'a line saying 12 - - in the middle'
+    expect:
+      message: 'a line saying 12 - - in the middle'
+    signal: null

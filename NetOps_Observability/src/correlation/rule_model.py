@@ -1219,17 +1219,42 @@ def _canon(node: Any) -> str:
     raise RuleError(f"un-digestable spec node {node!r}")     # pragma: no cover
 
 
-def rules_hash(rules: Iterable[Rule]) -> str:
+#: Keys of a baked pack grammar/envelope that are the catalog's CLAIM about the
+#: grammar, not the grammar (the same split as `Rule.digest_fields`): promoting a
+#: fidelity rung must not read as a parser edit.
+_PACK_CLAIM_KEYS = frozenset({"fidelity", "source"})
+
+
+def pack_digest(
+    grammars: Iterable[Mapping[str, Any]], envelopes: Iterable[Mapping[str, Any]],
+) -> str:
+    """The vendor-pack half of `rules_hash`, "" when no pack exists.
+
+    A pack grammar decides the severity the engine reads and whether a line may
+    alarm on severity alone, so editing one changes what the parser emits even
+    though no rule row moved. Order is identity here too: first match wins.
+    """
+    parts = [
+        _canon({k: v for k, v in row.items() if k not in _PACK_CLAIM_KEYS})
+        for rows in (grammars, envelopes) for row in rows
+    ]
+    return "\x1e".join(parts)
+
+
+def rules_hash(rules: Iterable[Rule], packs: str = "") -> str:
     """sha256 over the ORDERED rule table — the machine's "the rules changed".
 
     Order is part of the identity on purpose: the interpreter evaluates the
     lane's rules in sequence, first match wins, so swapping two rules changes
-    what the parser does even though the set is unchanged.
+    what the parser does even though the set is unchanged. `packs` is
+    `pack_digest(...)`; empty leaves the digest exactly as a rules-only table.
     """
     h = hashlib.sha256()
     for r in rules:
         h.update("\x1f".join(r.digest_fields()).encode("utf-8"))
         h.update(b"\x1e")
+    if packs:
+        h.update(packs.encode("utf-8"))
     return h.hexdigest()
 
 

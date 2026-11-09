@@ -183,6 +183,40 @@ defect is **recorded in the row** rather than hidden in a second grammar, and
 `test_parser_interpreter_a3.py` pins the list of such divergences at exactly
 one, so a new one cannot appear quietly.
 
+## Vendor packs (tracker 387)
+
+A vendor pack is one YAML file in `vendor-packs/`. **Adding a vendor means adding a
+file.** The engine, the bake and the Vector generator name no vendor.
+
+| Key | What it holds |
+|---|---|
+| `pack`, `vendor` | The pack's name and the vendor it stamps. `vendor: null` is a vendor-neutral pack; it runs after every vendor pack and stamps nothing |
+| `grammars` | Body grammars, first match wins: `parser_id`, a `literal` the line must contain, an optional `apps` list, `pattern` with named groups, `{group}` templates for `facility`, `event_type` and `summary`, `severity` (`{digit: group}` or `{word: group}`), `native_text`, `native_code`, `alarm_floor`, `category`, `fidelity`, `source` |
+| `severity_words` | The vendor's severity words to RFC 5424 numbers, for `{word: group}` |
+| `envelopes` | Rewrites of a line's framing: `literal`, `pattern`, the `message` group, `lift` (field to group), `preserve_as` |
+| `rules` | Ordinary rule rows (schema in `events.yaml`), each with its own `fidelity_status`. They run after the vendor-neutral rules and before the generic net |
+| `fixtures` | Lines with the parse (`expect`) and the signal (`signal`) they must produce, each with its fidelity. A pack with no fixtures does not bake |
+| `wanted` | Rows that have no source yet, so the gap is recorded rather than guessed |
+
+**`alarm_floor` is the D3 rule as data.** It is the worst severity at which a line of
+that grammar may alarm on severity alone. A line beyond the floor reaches the engine
+only through a typed row, at the severity the row states. Only `crit` may open an
+object alone from a pack, and `test_vendor_packs.py` enforces it over the table.
+
+**A `doc_claimed` row must cite its `source`,** and the bake refuses it otherwise.
+
+After editing a pack:
+
+```bash
+python3 telemetry-catalog/bake_rules.py && python3 telemetry-catalog/coverage_matrix.py
+python3 scripts/gen-syslog-packs.py && python3 scripts/gen-syslog-admission.py
+cp deployment/docker/vector/generated/syslog-admission.vrl deployment/helm/correlix/files/vector/
+```
+
+`tests/test_syslog_packs.py` runs every fixture on the shipped transform and adds a
+synthetic vendor through a data file alone. The two executors are `src/correlation/syslog_packs.py`
+and the block the generator splices into `syslog_normalized`.
+
 ## Relationship to the runtime
 
 The gnmic canonical lane (`deployment/docker/gnmic/gnmic.yaml`) is a *derived

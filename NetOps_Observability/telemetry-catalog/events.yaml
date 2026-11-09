@@ -35,6 +35,11 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-vendor-packs — tracker 387 (plan §5.1, §6a): the vendor-pack mechanism,
+# with Cisco SD-WAN as the first pack (telemetry-catalog/vendor-packs/). A grammar in a
+# pack reads severity from the message, for the engine and for Vector alike, and states
+# the alarm floor; no row of this file moved. `rules_hash` now covers the packs too.
+#
 # 2026-11-08-link-cause — tracker 378: both trap link rules gain ONE canonical
 # cause attr, `link_cause` (admin | fault | unknown), plus the raw vendor reason
 # as `link_reason`. It answers the question tracker 218 opened: was this down an
@@ -85,7 +90,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-08-link-cause"
+parser_rev: "2026-11-09-vendor-packs"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #

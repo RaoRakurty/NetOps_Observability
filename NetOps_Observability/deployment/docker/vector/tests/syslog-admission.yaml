@@ -8,9 +8,9 @@
 # whose two sides disagree. So a green run here means the VRL and the
 # Python screen admit exactly the same lines.
 #
-#   rules_hash : 0538afc1b47c3bc4d4d350e5088a4ecf300e8bdc0c8b3a317bb91f2a193209f0
-#   cases      : 35 (29 fixture corpus + 6 hand)
-#   admitted   : 27 / 35 (8 correctly rejected)
+#   rules_hash : b1b44e78db5d6b977620afbe344a25aedaa234e2edc551997a6f3a425c75d508
+#   cases      : 46 (40 fixture corpus and vendor packs + 6 hand)
+#   admitted   : 31 / 46 (15 correctly rejected)
 #
 # Run (from the repo root). Keep every dollar sign out of this file:
 # Vector interpolates environment variables in the raw config TEXT,
@@ -44,7 +44,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 02: %BGP-5-ADJCHANGE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -59,7 +59,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 03: %BGP-5-ADJCHANGE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -74,7 +74,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 04: %OSPF-5-ADJCHG"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -89,7 +89,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 05: %LINK-3-UPDOWN"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -104,7 +104,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 06: %LINEPROTO-5-UPDOWN"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -119,7 +119,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 07: %SYS-5-CONFIG_I"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -148,7 +148,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 09: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -163,7 +163,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 10: %SPANTREE-6-INTERFACE_DEL"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -178,7 +178,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 11: %SPANTREE-6-INTERFACE_STATE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -193,7 +193,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 12: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -208,7 +208,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 13: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -223,7 +223,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 14: traffic/forward"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -266,7 +266,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 17: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -323,7 +323,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 21: %BGP-4-MAXPFX"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -338,7 +338,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 22: %BGP-4-MAXPFXEXCEED"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -353,7 +353,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 23: rpd"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -368,7 +368,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 24: %BGP-3-NOTIFICATION"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -383,7 +383,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 25: rpd"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -398,7 +398,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 26: %SPANTREE-5-TOPOTRAP"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -413,7 +413,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 27: %SPANTREE-5-TOPOTRAP"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -428,7 +428,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 28: %SW_MATM-4-MACFLAP_NOTIF"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -443,7 +443,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "fixture 29: %L2FM-4-L2FM_MAC_MOVE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -458,7 +458,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "severity-floor line with no marker admits by severity"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -474,7 +474,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "notice line with a typed marker admits by marker"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -490,7 +490,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "notice line with no marker is not admitted"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -520,7 +520,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
   - name: "no severity anywhere and no marker is not admitted"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -552,4 +552,173 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "0538afc1b47c", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
+  - name: "pack cisco_sdwan: an error line parses and lifts severity"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "3875 - - %Viptela-vEdge-1-FTMD-3-ERRO-1000003: User if_name = ge0/0; kernel if_name= ge0_0; encap = 1"
+          appname: "FTMD"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: a warning line with a hyphenated host"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%"
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: a notice line does not lift above the wire level"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "913 - - %Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%"
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: a critical line lifts to critical"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "913 - - %Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)"
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
+  - name: "pack cisco_sdwan: a critical line with no typed row still alarms"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%Viptela-vEdge-1-VDAEMON_0-2-CRIT-999999: synthetic shape of an unknown critical id"
+          appname: "VDAEMON"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
+  - name: "pack cisco_sdwan: a notification takes its identity from the event name"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 90% (critically high)\" cpu-user-percentage:\"9.18\" cpu-system-percentage:\"90.82\" cpu-idle-percentage:\"0.00\""
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
+  - name: "pack cisco_sdwan: a controller notification, documented shape"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%Viptela-Manager01-sysmgrd-6-INFO-1400002: Notification: system-login-change"
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "Manager01"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "b1b44e78db5d", "wrong rules_hash stamp")
+  - name: "pack cisco_sdwan: the IOS-XE shape parses under the same mechanism"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%Cisco-SDWAN-vm5-FTMD-4-WARN-1000009: BFD-session synthetic body"
+          appname: "FTMD"
+          severity: "notice"
+          hostname: "cedge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack standard: the procid is lifted and the original kept"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "2939 - - something a daemon said"
+          appname: "confd"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack standard: a nil procid is not lifted"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "- - - USER PID %CPU %MEM"
+          appname: "SYSMGR"
+          severity: "notice"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack standard: the tokens later in a line are left alone"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "a line saying 12 - - in the middle"
+          appname: "app"
+          severity: "notice"
+          hostname: "spine1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
