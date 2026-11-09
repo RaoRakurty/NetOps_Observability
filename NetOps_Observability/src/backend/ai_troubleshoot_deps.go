@@ -56,6 +56,7 @@ import (
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
 	"netops/backend/internal/showparse"
@@ -2436,7 +2437,7 @@ func nlqLedgerQuery(q plan.ChangeQuery, limit int) experience.ChangeQuery {
 }
 
 func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.ChangeRow, bool, error) {
-	tenant, _ := principalTenant(h.claims)
+	tenant := changeLedgerTenant(h.claims)
 	limit := q.Limit
 	if limit <= 0 || limit > nlqChangeFetch {
 		limit = nlqChangeFetch
@@ -2645,7 +2646,7 @@ func (h *nlqScope) appSeeds(ctx context.Context) ([]resolve.Named, error) {
 	for _, j := range journeys {
 		values = append(values, j.App)
 	}
-	evs, err := h.s.experienceStore.ListChanges(ctx, tenant, experience.ChangeQuery{Since: time.Now().Add(-nlqAppSeedWindow), Limit: nlqAppSeedFetch})
+	evs, err := h.s.experienceStore.ListChanges(ctx, changeLedgerTenant(h.claims), experience.ChangeQuery{Since: time.Now().Add(-nlqAppSeedWindow), Limit: nlqAppSeedFetch})
 	if err != nil {
 		return nil, err
 	}
@@ -2709,9 +2710,28 @@ func stringSet(xs []string) map[string]bool {
 
 // ---- change APIs (tracker 337 N-D3) -----------------------------------------
 
+// changeLedgerTenant is THE answer to "whose change ledger may this caller read",
+// for every read of the ledger outside the DEM routes (demAuthz refuses the
+// platform tenant outright, for everyone).
+//
+// A tenant reads its own. The Provider's rows (owner decision 2026-11-09) are
+// platform data, so they go to exactly the identity requirePlatformAdmin and
+// requireCrossTenant admit: isPlatformOwner, in the Global view or scoped to
+// Provider. principalTenant alone is not enough, because a NON-owner whose token
+// tenant is "global" (LDAP_DEFAULT_TENANT's default, a binding that reaches it)
+// resolves to the same ("global", false) the owner does. Such a caller, and one
+// with no tenant at all, gets "": no ledger, which the store answers with nothing.
+func changeLedgerTenant(claims jwtClaims) string {
+	tenant, _ := principalTenant(claims)
+	if owner.IsPlatform(tenant) && !isPlatformOwner(claims) {
+		return ""
+	}
+	return tenant
+}
+
 // handleChanges serves /api/changes[/{id}[/diff]] over the change ledger
-// (internal/changeapi). Every read is the caller's own tenant, from the token;
-// the incident anchor and the configuration diff reuse the SAME scoped reads
+// (internal/changeapi). Every read is the ledger changeLedgerTenant names, from
+// the token; the incident anchor and the configuration diff reuse the SAME scoped reads
 // the NL query path and the config-diff tool use.
 func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	if s.experienceStore == nil {
@@ -2738,8 +2758,8 @@ func (s *server) changeAPI() changeapi.Deps {
 			if !ok {
 				return changeapi.Caller{}, false
 			}
-			tenant, cross := principalTenant(claims)
-			return changeapi.Caller{Tenant: tenant, Cross: cross}, true
+			_, cross := principalTenant(claims)
+			return changeapi.Caller{Tenant: changeLedgerTenant(claims), Cross: cross}, true
 		},
 		Incident: func(ctx context.Context, r *http.Request, id string) (changeapi.IncidentScope, error) {
 			claims, _ := userFrom(r.Context()) // Authorize already required a principal

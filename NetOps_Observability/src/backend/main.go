@@ -110,6 +110,7 @@ import (
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -7930,7 +7931,7 @@ func (s *server) withDeviceSite(in changeledger.SignalChange) changeledger.Signa
 	if in.Source == changeledger.SignalSourceCloud || s.deviceSites == nil {
 		return in
 	}
-	if b, ok := s.deviceSites.Get(strings.ToLower(strings.TrimSpace(in.Tenant)), false, in.Entity); ok && b.Site != "" {
+	if b, ok := s.deviceSites.Get(owner.Of(in.Tenant), false, in.Entity); ok && b.Site != "" {
 		in.Site = b.Site
 	}
 	return in

@@ -22,6 +22,12 @@ package changeledger
 // experience layer scores a ledger row as a support-only `change_record`, so a
 // bridged change can corroborate and can never confirm.
 //
+// A PROVIDER-OWNED DEVICE HAS A LEDGER (owner decision 2026-11-09). A signal whose
+// adjudicated tenant is "" or "global" belongs to the platform realm, and is
+// stamped with the one spelling of that owner (internal/owner). Who may read those
+// rows is the composition root's rule, changeLedgerTenant. "*" is a scope, not an
+// owner, and is refused.
+//
 // controller_policy_change is REFUSED on purpose. The Versa Concerto mapping
 // types it by a substring match on "policy", which also catches violations, and
 // no real Concerto sample exists to build the exact allowlist from (plan N-D2c).
@@ -39,6 +45,7 @@ import (
 	"unicode"
 
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/owner"
 )
 
 // Producer names for the bridged signal lanes.
@@ -74,7 +81,7 @@ const (
 
 // SignalChange is one change-shaped signal, as the composition root adapts it
 // from a corr_signals row. Tenant is the row's adjudicated column, never a value
-// from the signal's attributes.
+// from the signal's attributes. Blank and "global" both mean the platform realm.
 type SignalChange struct {
 	Tenant     string
 	SignalID   string
@@ -132,17 +139,16 @@ func signalProducer(source, kind string) (string, bool) {
 }
 
 // SignalChangeEvent builds the change one signal represents. ErrNotAChange covers
-// everything that is not a tenant's recorded change; an error means the signal is
-// unusable. The id is deterministic, so re-reading a signal cannot write a second
+// everything the ledger does not record; an error means the signal is unusable. The id is deterministic, so re-reading a signal cannot write a second
 // row.
 func SignalChangeEvent(in SignalChange, dir Directory) (experience.ChangeEvent, error) {
 	producer, ok := signalProducer(in.Source, in.Kind)
 	if !ok {
 		return experience.ChangeEvent{}, fmt.Errorf("%w: %s/%s is not a change lane", ErrNotAChange, in.Source, in.Kind)
 	}
-	tenant := strings.ToLower(strings.TrimSpace(in.Tenant))
-	if tenant == "" || tenant == "*" || tenant == "global" {
-		return experience.ChangeEvent{}, fmt.Errorf("%w: a signal with no owning tenant belongs to no tenant's ledger", ErrNotAChange)
+	tenant := owner.Of(in.Tenant)
+	if tenant == "*" {
+		return experience.ChangeEvent{}, fmt.Errorf("%w: a wildcard is a scope, not the owner of a change", ErrNotAChange)
 	}
 	if in.Method == junosCommitRequested {
 		return experience.ChangeEvent{}, fmt.Errorf("%w: the commit was requested, not completed", ErrNotAChange)
