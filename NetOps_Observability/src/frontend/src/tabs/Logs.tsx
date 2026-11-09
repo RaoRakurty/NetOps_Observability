@@ -2,11 +2,16 @@
 // Copyright 2026 Correlix
 
 import { fmtDateTime, parseTs } from "../lib/time";
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, OSHit, ExportFmt, LogRetention, LogSampling, LogSearchOpts } from "../services/api";
-import { severityColor, severityRank } from "../theme/severity";
-import { LogTime, LogSource, LogLevel, LogMessage, LogJson } from "../lib/logfmt";
+import { severityLabel, severityRank, severityVar } from "../theme/severity";
+import { LogTime, LogLevel, LogMessage } from "../lib/logfmt";
+import {
+  LogClause, LogEvent, LogSignal, addClause, buildFacets, isIpLike, queryHasClause, removeClause, toLogEvent,
+} from "../lib/logEvent";
 import DataTable, { Column } from "../components/DataTable";
+import { Segmented } from "../components/ui";
+import { LogLineDetailBody } from "./LogDetail";
 import { useWorkspace } from "../context/workspace";
 import { useAuth } from "../hooks/useAuth";
 
@@ -40,12 +45,70 @@ type SignalId = "" | "applogs" | "syslog" | "snmptrap" | "flows" | "firewall";
 
 const SIGNALS: { id: SignalId; label: string }[] = [
   { id: "", label: "All" },
-  { id: "applogs", label: "App logs" },
-  { id: "syslog", label: "Syslog (devices)" },
-  { id: "firewall", label: "Firewall logs" },
-  { id: "snmptrap", label: "SNMP traps" },
+  { id: "syslog", label: "Syslog" },
+  { id: "snmptrap", label: "Traps" },
   { id: "flows", label: "Flows" },
+  { id: "firewall", label: "Firewall" },
+  { id: "applogs", label: "App logs" },
 ];
+
+// A type quick filter switches the Type control instead of adding a clause: the
+// `signal` field is not mapped on the app-log index and holds "netflow" on flow
+// documents, so a `signal:` clause would silently find nothing for those. The Type
+// control picks the index itself, which is always the right answer. A type with no
+// control here (cloud, unknown) is not offered as a filter.
+const SIGNAL_CONTROL: Partial<Record<LogSignal, SignalId>> = {
+  syslog: "syslog", trap: "snmptrap", flow: "flows", app: "applogs",
+};
+
+const STREAM_ROW_HEIGHT = 44;
+const PHONE_ROW_HEIGHT = 92;
+const PHONE_QUERY = "(max-width: 640px)";
+
+// Rows are laid out by the table's own grid tracks, so a phone needs different
+// columns rather than different CSS.
+function useIsPhone(): boolean {
+  return useSyncExternalStore(
+    (notify) => {
+      if (typeof window.matchMedia !== "function") return () => undefined;
+      const mq = window.matchMedia(PHONE_QUERY);
+      mq.addEventListener("change", notify);
+      return () => mq.removeEventListener("change", notify);
+    },
+    () => typeof window.matchMedia === "function" && window.matchMedia(PHONE_QUERY).matches,
+  );
+}
+
+// The title of a row. Addresses are set in mono; a flow's is nothing but addresses.
+function RowTitle({ ev }: { ev: LogEvent }) {
+  const flow = ev.flow;
+  const isTuple = flow && (flow.source.address || flow.destination.address) && ev.title.includes("→");
+  return (
+    <div className="lv-line lv-title-line">
+      {isTuple
+        ? <span className="lv-trunc lv-mono" title={ev.title}>{ev.title}</span>
+        : <LogMessage text={ev.title} highlight="stream" />}
+      {ev.lifecycle && <span className="lv-quiet-chip">{ev.lifecycle}</span>}
+      {ev.chips.filter((c) => c.stream).map((c) => <span key={c.label} className="lv-quiet-chip">{c.label}</span>)}
+    </div>
+  );
+}
+
+function RowDetail({ ev }: { ev: LogEvent }) {
+  if (!ev.detailLine) return null;
+  return (
+    <div className="lv-line lv-detail-line">
+      {ev.flow
+        ? <span className="lv-trunc lv-mono" title={ev.detailLine}>{ev.detailLine}</span>
+        : <LogMessage text={ev.detailLine} highlight="stream" />}
+    </div>
+  );
+}
+
+function DeviceName({ label }: { label: string }) {
+  if (!label) return <span className="lv-none">—</span>;
+  return <span className={`lv-trunc lv-device${isIpLike(label) ? " lv-mono" : ""}`} title={label}>{label}</span>;
+}
 
 // Sample honesty (finder 2026-08-14): the flows signal reads netops-flows-*,
 // which holds the router's 1-in-N OpenSearch sample (ClickHouse keeps the
@@ -95,6 +158,11 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const isPhone = useIsPhone();
+  // A quick filter can fire searches faster than they answer; only the latest may
+  // fill the table.
+  const runSeq = useRef(0);
   const ws = useWorkspace();
   const { user } = useAuth();
   // "App logs" are the platform's own container/API logs — platform-owner only.
@@ -106,6 +174,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   );
 
   const run = async (q = query, m = minutes, sig = signal, sz = size) => {
+    const seq = ++runSeq.current;
     setBusy(true);
     setError(null);
     try {
@@ -125,6 +194,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         signal: backendSignal,
       };
       const r = await api.searchLogs(opts);
+      if (seq !== runSeq.current) return;
       lastRun.current = opts;
       // A result set can be tens of thousands of rows; mapping and committing it
       // is the single most expensive thing this page does. As a transition it
@@ -138,12 +208,13 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       setSampling(r?.sampling ?? (sig === "flows" ? { rate: FLOWS_OS_SAMPLE_RATE } : null));
       setSelected(new Set()); // a new result set invalidates row indices
     } catch (e) {
+      if (seq !== runSeq.current) return;
       setError((e as Error).message);
       setHits([]);
       setTotal(null);
       setSampling(null);
     } finally {
-      setBusy(false);
+      if (seq === runSeq.current) setBusy(false);
     }
   };
 
@@ -189,10 +260,12 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const loadMore = async () => {
     const base = lastRun.current;
     if (!base || loadingMore) return;
+    const seq = runSeq.current;
     setLoadingMore(true);
     setError(null);
     try {
       const r = await api.searchLogs({ ...base, offset: hits.length });
+      if (seq !== runSeq.current) return;
       setHits((h) => h.concat(r?.hits?.hits ?? []));
       setTotal(r?.hits?.total?.value ?? total);
     } catch (e) {
@@ -215,13 +288,11 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 
   const lines = useMemo(() => {
     return hits.map((h, i) => {
-      const src = h._source || {};
-      const ts =
-        src["@timestamp"] || src.timestamp || src.ts || src.time_received_ns || new Date().toISOString();
-      // Prefer the normalized operator summary (traps/syslog now carry it) over
-      // the raw body, so the row reads "Arista Layer-2 FDB trap …" not a raw OID.
-      const message =
-        src.summary || src.message || src.msg || JSON.stringify(src);
+      const ev = toLogEvent(h);
+      const src = ev.raw; // the redacted copy; nothing below can reach a secret
+      // The export columns keep their meaning: what follows is what a downloaded
+      // row has always held. The on-screen row reads the presenter instead.
+      const message = src.summary || src.message || src.msg || JSON.stringify(src);
       // Flow records enter via the collector's stdout, so they carry its
       // container name — show the flow's real source host (src_addr) instead.
       const flowHost = src.src_addr ? String(src.src_addr) : "";
@@ -236,7 +307,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const app = String(src.app_id || src.app || (fgt.app ?? "") || "");
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src };
+      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, ev };
     });
   }, [hits]);
   type Line = (typeof lines)[number];
@@ -255,14 +326,21 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   // dockable Inspector (shell-v2); v1 falls back to an inline detail card.
   const selectLine = (l: Line) => {
     setDetailId(l.id);
-    if (ws.enabled) {
-      ws.openInspector(<LogLineDetailBody line={l} />, {
-        title: l.source,
-        subtitle: `${l.level || "log"} · ${fmtDateTime(l.ts)}`,
+    // The docked Inspector is a fixed-width column of the shell grid and leaves no
+    // room for itself on a phone, so a phone reads the record under the table.
+    if (ws.enabled && !isPhone) {
+      ws.openInspector(<LogLineDetailBody key={l.id} line={l} />, {
+        title: l.ev.deviceLabel || l.source,
+        subtitle: `${severityLabel(l.ev.severity) || l.ev.signalLabel} · ${fmtDateTime(l.ts)}`,
       });
     }
   };
-  const detailLine = !ws.enabled && detailId ? lines.find((l) => l.id === detailId) : undefined;
+  const inlineDetail = !ws.enabled || isPhone;
+  const detailLine = inlineDetail && detailId ? lines.find((l) => l.id === detailId) : undefined;
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (isPhone && detailId) detailRef.current?.scrollIntoView({ block: "start" });
+  }, [isPhone, detailId]);
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
@@ -330,82 +408,116 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
   };
 
-  const columns = useMemo<Column<Line>[]>(() => [
-    {
-      key: "sel", width: 30,
-      header: <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all rows in view" />,
+  // Counted over the rows on screen only, and labelled that way on the page.
+  const facets = useMemo(() => buildFacets(lines.map((l) => l.ev)), [lines]);
+  const toggleClause = (c: LogClause) => {
+    const next = queryHasClause(query, c) ? removeClause(query, c) : addClause(query, c);
+    setQuery(next);
+    run(next, minutes, signal, size);
+  };
+  const hasApp = useMemo(() => lines.some((l) => l.app), [lines]);
+
+  const columns = useMemo<Column<Line>[]>(() => {
+    const select: Column<Line> = {
+      key: "sel", width: 42,
+      header: <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all rows in view" aria-label="Select all rows in view" />,
       render: (l) => (
-        <input type="checkbox" checked={selected.has(l.id)}
+        <input type="checkbox" checked={selected.has(l.id)} aria-label={`Select row: ${l.ev.title}`}
           onClick={(e) => e.stopPropagation()} onChange={() => toggleRow(l.id)} />
       ),
-    },
-    {
-      key: "ts", header: "Time", width: 176, sortable: true,
-      sortValue: (l) => parseTs(l.ts)?.getTime() || 0,
-      render: (l) => <LogTime ts={l.ts} />,
-    },
-    {
-      key: "source", header: "Source", width: 168, sortable: true, text: (l) => l.source,
-      render: (l) => <LogSource source={l.source} />,
-    },
-    {
-      key: "level", header: "Level", width: 100, sortable: true,
-      text: (l) => l.level, sortValue: (l) => severityRank(l.level),
-      render: (l) => <LogLevel level={l.level} />,
-    },
-    {
+    };
+    const sortTime = (l: Line) => parseTs(l.ts)?.getTime() || 0;
+    if (isPhone) {
+      return [select, {
+        key: "ts", header: "Event", sortable: true, sortValue: sortTime,
+        render: (l) => (
+          <div className="lv-phone-cell">
+            <div className="lv-phone-top">
+              {l.ev.severity && <LogLevel level={l.ev.severity} />}
+              <LogTime ts={l.ts} withDate={false} />
+            </div>
+            <RowTitle ev={l.ev} />
+            <div className="lv-line lv-detail-line">
+              <DeviceName label={l.ev.deviceLabel} />
+              <span className="lv-signal">{l.ev.signalLabel}</span>
+            </div>
+            <RowDetail ev={l.ev} />
+          </div>
+        ),
+      }];
+    }
+    return [
+      select,
+      {
+        key: "ts", header: "Time", width: 124, sortable: true, sortValue: sortTime,
+        render: (l) => <LogTime ts={l.ts} stacked />,
+      },
+      {
+        key: "level", header: "Severity", width: 118, sortable: true,
+        text: (l) => l.ev.severity ?? "",
+        sortValue: (l) => (l.ev.severity ? severityRank(l.ev.severity) : 99),
+        render: (l) => (l.ev.severity ? <LogLevel level={l.ev.severity} /> : <span className="lv-none">—</span>),
+      },
+      {
+        key: "signal", header: "Type", width: 76, sortable: true, text: (l) => l.ev.signalLabel,
+        render: (l) => <span className="lv-signal">{l.ev.signalLabel}</span>,
+      },
+      {
+        key: "source", header: "Device", width: 184, sortable: true, text: (l) => l.ev.deviceLabel,
+        render: (l) => (
+          <div className="lv-two">
+            <DeviceName label={l.ev.deviceLabel} />
+            {l.ev.deviceAddress && <span className="lv-trunc lv-addr" title={l.ev.deviceAddress}>{l.ev.deviceAddress}</span>}
+          </div>
+        ),
+      },
       // #81 — the identified application (firewall App-ID / NBAR2 / cloud), the
-      // payoff of the fusion engine: app traffic named, not a raw 5-tuple.
-      key: "app", header: "Application", width: 150, sortable: true, text: (l) => l.app,
-      render: (l) => l.app
-        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12.5, fontWeight: 500, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
-        : <span style={{ color: "var(--muted, #8a94a6)" }}>—</span>,
-    },
-    {
-      key: "message", header: "Message", text: (l) => l.message,
-      render: (l) => <LogMessage text={l.message} />,
-    },
-  ], [selected, allSelected]);
+      // payoff of the fusion engine: app traffic named, not a raw 5-tuple. Only
+      // there when a loaded row has one, so it does not hold a blank column open.
+      ...(hasApp ? [{
+        key: "app", header: "Application", width: 140, sortable: true, text: (l: Line) => l.app,
+        render: (l: Line) => l.app
+          ? <span className="lv-trunc lv-app" title={l.app}>{l.app.replace(/_/g, " · ")}</span>
+          : <span className="lv-none">—</span>,
+      }] : []),
+      {
+        key: "message", header: "Event", text: (l) => `${l.ev.title} ${l.ev.detailLine}`,
+        render: (l) => (
+          <div className="lv-two">
+            <RowTitle ev={l.ev} />
+            <RowDetail ev={l.ev} />
+          </div>
+        ),
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, selected, allSelected, isPhone, hasApp]);
 
   return (
-    <>
+    <div className="lv">
       <div className="card">
-        <div className="xpl-head">
-          <h2>Log search</h2>
-          <span className="xpl-sub">
-            Lucene <code>query_string</code> · e.g. <code>level:error</code>, <code>src_addr:10.0.0.5 AND dst_port:22</code>
-          </span>
+        <div className="lv-head">
+          <h2 className="lv-title">Log search</h2>
+          <button type="button" className="lv-help-btn" aria-label="Search examples" title="Search examples"
+            aria-expanded={helpOpen} aria-controls="lv-help" onClick={() => setHelpOpen((o) => !o)}>
+            ?
+          </button>
         </div>
+        {helpOpen && (
+          <div className="lv-help" id="lv-help" data-testid="logs-search-help">
+            <code>severity:err</code>
+            <code>hostname:"edge-1"</code>
+            <code>src_addr:10.0.0.5 AND dst_port:22</code>
+          </div>
+        )}
         <form className="xpl-bar" onSubmit={(e) => { e.preventDefault(); run(); }}>
           <input
-            className="xpl-q"
+            className="xpl-q lv-mono"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder='*  or  level:error  or  src_addr:10.0.0.5'
+            placeholder="*"
+            aria-label="Search query"
           />
-          <select value={signal} onChange={(e) => setSignal(e.target.value as any)}>
-            {signals.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          {rangeMinutes === undefined && (
-            <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-              {RANGES.map((r) => (
-                <option key={r.minutes} value={r.minutes}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          )}
-          <select value={size} onChange={(e) => setSize(Number(e.target.value))}>
-            {[100, 200, 500, 1000, 5000].map((n) => (
-              <option key={n} value={n}>
-                {n} hits
-              </option>
-            ))}
-          </select>
           <button className="btn-primary" disabled={busy} type="submit">
             {busy ? "Searching…" : "Search"}
           </button>
@@ -413,13 +525,37 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             ★ Save
           </button>
         </form>
+        <div className="lv-filters">
+          <Segmented<SignalId>
+            value={signal}
+            ariaLabel="Log type"
+            options={signals.map((s) => ({ value: s.id, label: s.label }))}
+            onChange={setSignal}
+          />
+          {rangeMinutes === undefined && (
+            <select value={minutes} aria-label="Time range" onChange={(e) => setMinutes(Number(e.target.value))}>
+              {RANGES.map((r) => (
+                <option key={r.minutes} value={r.minutes}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <select value={size} aria-label="Rows to load" onChange={(e) => setSize(Number(e.target.value))}>
+            {[100, 200, 500, 1000, 5000].map((n) => (
+              <option key={n} value={n}>
+                {n} hits
+              </option>
+            ))}
+          </select>
+        </div>
         {/* Retention floor (owner directive: DON'T HIDE how far back logs go). */}
         {retention && (
-          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 10, marginBottom: 0 }}>
+          <p className="lv-meta">
             {retention.total > 0 && retention.oldest ? (
               <>
-                This store holds <strong style={{ color: "var(--fg)" }}>{retention.total.toLocaleString()}</strong> logs —
-                going back to <strong style={{ color: "var(--fg)" }}>{fmtDateTime(retention.oldest)}</strong>
+                This store holds <strong>{retention.total.toLocaleString()}</strong> logs —
+                going back to <strong>{fmtDateTime(retention.oldest)}</strong>
                 {" "}({retention.days < 1 ? "less than a day" : `${retention.days} day${retention.days === 1 ? "" : "s"}`} of history).
                 {(flowsSampled || retention.sampling) &&
                   ` A 1:${retention.sampling?.rate ?? sampleRate} sample — the stream holds ~${retention.sampling?.rate ?? sampleRate}× more.`}
@@ -430,38 +566,38 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </p>
         )}
         {error && (
-          <p style={{ color: "var(--bad)", marginTop: 10, fontSize: 13 }}>
+          <p className="lv-error">
             <strong>Error:</strong> {error}
           </p>
         )}
       </div>
 
       <div className="card">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0 }}>Results</h2>
+        <div className="lv-results-head">
+          <div className="lv-results-count">
+            <h2 className="lv-results-title">Results</h2>
             <span className="fact-line">
               {total !== null && total > lines.length
                 ? `${lines.length.toLocaleString()} of ${total.toLocaleString()} matched`
                 : `${lines.length.toLocaleString()}${total !== null ? " · all matches" : ""}`}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div className="lv-actions">
             {selected.size > 0 && (
               <>
-                <span style={{ color: "var(--muted)", fontSize: 12.5 }}>{selected.size} selected →</span>
+                <span className="lv-actions-label">{selected.size} selected →</span>
                 {EXPORT_FORMATS.map((f) => (
                   <button key={f.id} type="button" className="chip" disabled={exporting} onClick={() => exportSelected(f.id)} title={`Export ${selected.size} selected rows as ${f.label}`}>
                     {f.label}
                   </button>
                 ))}
                 <button type="button" className="chip" onClick={() => setSelected(new Set())}>Clear</button>
-                <span style={{ color: "var(--border)" }}>|</span>
+                <span className="lv-sep">|</span>
               </>
             )}
             {lines.length > 0 && (
               <>
-                <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
+                <span className="lv-actions-label">
                   Export all{total !== null ? ` (${total})` : ""}:
                 </span>
                 {EXPORT_FORMATS.map((f) => (
@@ -476,37 +612,87 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         {/* Sample honesty (owner directive: DON'T HIDE): the flows store is a
             1:N sample, so its "matched"/"total" figures are never exact. */}
         {flowsSampled && lines.length > 0 && (
-          <p data-testid="flows-sampling-note" style={{ color: "var(--warn, #b45309)", fontSize: 12.5, marginTop: 6, marginBottom: 0 }}>
+          <p data-testid="flows-sampling-note" className="lv-flow-sample">
             Flow search reads a 1:{sampleRate} sample — totals are estimates (×{sampleRate}).
             Exact flow analytics live in the Flows tab (unsampled store).
           </p>
         )}
         {exportMsg && (
-          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 6 }}>
+          <p className="lv-meta">
             {exporting ? "⏳ " : ""}
             {exportMsg}
           </p>
+        )}
+        {lines.length > 0 && (
+          <div className="lv-facets" data-testid="logs-facets" role="group" aria-label="Quick filters over the loaded rows">
+            <span className="lv-facets-label">In these {lines.length.toLocaleString()} loaded rows:</span>
+            <span className="lv-facet-group">
+            {facets.severity.map((f) => {
+              const on = queryHasClause(query, f.clause);
+              return (
+                <button key={f.key} type="button" className="lv-facet" aria-pressed={on}
+                  aria-label={`Filter by severity ${severityLabel(f.label)}, ${f.count} in the loaded rows`}
+                  onClick={() => toggleClause(f.clause)}>
+                  <span className="lv-facet-dot" style={{ background: severityVar(f.label) }} aria-hidden="true" />
+                  <span className="lv-facet-name">{severityLabel(f.label)}</span>
+                  <span className="lv-facet-n">{f.count.toLocaleString()}</span>
+                </button>
+              );
+            })}
+            </span>
+            <span className="lv-facet-group">
+            {signal === "" && facets.signal.map((f) => {
+              const target = SIGNAL_CONTROL[f.signal];
+              if (target === undefined || !signals.some((s) => s.id === target)) return null;
+              return (
+                <button key={f.key} type="button" className="lv-facet" aria-pressed={false}
+                  aria-label={`Show only ${f.label}, ${f.count} in the loaded rows`}
+                  onClick={() => setSignal(target)}>
+                  <span className="lv-facet-name">{f.label}</span>
+                  <span className="lv-facet-n">{f.count.toLocaleString()}</span>
+                </button>
+              );
+            })}
+            </span>
+            <span className="lv-facet-group">
+            {facets.device.map((f) => {
+              const on = queryHasClause(query, f.clause);
+              return (
+                <button key={f.key} type="button" className="lv-facet" aria-pressed={on} title={f.label}
+                  aria-label={`Filter by device ${f.label}, ${f.count} in the loaded rows`}
+                  onClick={() => toggleClause(f.clause)}>
+                  <span className={`lv-facet-name${isIpLike(f.label) ? " lv-mono" : ""}`}>{f.label}</span>
+                  <span className="lv-facet-n">{f.count.toLocaleString()}</span>
+                </button>
+              );
+            })}
+            </span>
+          </div>
         )}
         {lines.length === 0 ? (
           <div className="empty">
             {busy ? "Loading…" : "No results. Try widening the time range or relaxing the filter."}
           </div>
         ) : (
-          <DataTable<Line>
-            rows={lines}
-            columns={columns}
-            rowKey={(l) => l.id}
-            height="60vh"
-            ariaLabel="Log results"
-            onRowClick={(l) => selectLine(l)}
-            rowAccent={(l) => severityColor(l.level)}
-            rowClassName={(l) => (detailId === l.id ? "dtv-selected" : "")}
-            empty="No results."
-          />
+          <div className="lv-stream">
+            <DataTable<Line>
+              rows={lines}
+              columns={columns}
+              rowKey={(l) => l.id}
+              height="60vh"
+              rowHeight={isPhone ? PHONE_ROW_HEIGHT : STREAM_ROW_HEIGHT}
+              ariaLabel="Log results"
+              onRowClick={(l) => selectLine(l)}
+              rowAccent={(l) => (l.ev.severity ? severityVar(l.ev.severity) : undefined)}
+              rowClassName={(l) => (detailId === l.id ? "dtv-selected" : "")}
+              rowSelected={(l) => detailId === l.id}
+              empty="No results."
+            />
+          </div>
         )}
         {/* Every truncated list SAYS it's truncated and offers the rest. */}
         {canLoadMore && (
-          <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+          <div className="lv-more">
             <button type="button" className="chip" onClick={loadMore} disabled={loadingMore}
               title="Fetch the next page of this result set">
               {loadingMore
@@ -516,55 +702,21 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </div>
         )}
         {total !== null && total > lines.length && !canLoadMore && lines.length > 0 && (
-          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 8, textAlign: "center" }}>
+          <p className="lv-meta lv-center">
             Interactive paging ends at {(10000).toLocaleString()} rows — use “Export all” above to get the
             full {total.toLocaleString()}-row result set.
           </p>
         )}
         {detailLine && (
-          <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>
-            <LogLineDetailBody line={detailLine} />
+          <div className="lv-inline-detail" ref={detailRef}>
+            <button type="button" className="chip lv-detail-close" onClick={() => setDetailId(null)}>Close</button>
+            <LogLineDetailBody key={detailLine.id} line={detailLine} />
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
-// LogLineDetailBody — the full log document for one result row, rendered in the
-// Inspector (shell-v2) or inline (v1): the headline fields plus the raw source
-// pretty-printed (the value of having OpenSearch behind the search box).
-export function LogLineDetailBody({ line: l }: { line: { ts: string; source: string; level: string; message: string; index: string; raw: Record<string, any> } }) {
-  const lbl = (s: string) => (
-    <div style={{ fontSize: 12.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
-  );
-  const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
-      <span style={{ color: "var(--muted)", minWidth: 72 }}>{k}</span>
-      <span style={{ wordBreak: "break-word" }}>{v}</span>
-    </div>
-  );
-  // Same token vocabulary as the table row — the colour pattern carries through.
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <LogLevel level={l.level} />
-        <LogSource source={l.source} />
-      </div>
-      <div>
-        {row("Time", <LogTime ts={l.ts} />)}
-        {row("Index", <span className="lf-source" style={{ color: "var(--muted)" }}>{l.index}</span>)}
-      </div>
-      <div>
-        {lbl("Message")}
-        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}><LogMessage text={l.message} clamp={false} /></div>
-      </div>
-      <div>
-        {lbl("Document")}
-        <div style={{ padding: 8, background: "var(--surface-2, rgba(127,127,127,.08))", borderRadius: 6, maxHeight: 320, overflow: "auto" }}>
-          <LogJson value={l.raw} />
-        </div>
-      </div>
-    </div>
-  );
-}
+// The details view lives in LogDetail.tsx; it stays importable from here.
+export { LogLineDetailBody };

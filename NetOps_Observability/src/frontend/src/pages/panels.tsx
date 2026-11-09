@@ -342,12 +342,12 @@ function MetricArea({
           grid: { left: 2, right: 8, top: 6, bottom: 2, containLabel: true },
           tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtv(v) },
           legend: { show: false },
-          xAxis: { type: "time", ...axisStyle, ...timeAxisTicks(), axisLabel: { ...timeAxisTicks().axisLabel, fontSize: 11 } },
+          xAxis: { type: "time", ...axisStyle, ...timeAxisTicks(), axisLabel: { ...timeAxisTicks().axisLabel, fontSize: 12.5 } },
           yAxis: {
             type: "value",
             ...axisStyle,
             max: unit === "%" ? 100 : undefined,
-            axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 11, formatter: (v: number) => fmtv(v) },
+            axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 12.5, formatter: (v: number) => fmtv(v) },
           },
           series: echSeries,
         }}
@@ -409,13 +409,13 @@ function TopNBar({
         grid: { left: 4, right: 56, top: 6, bottom: 4, containLabel: true },
         tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v: number) => fmtv(v) },
         xAxis: { type: "value", ...axisStyle, splitLine: { show: false }, axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false } },
-        yAxis: { type: "category", ...axisStyle, data: names, axisTick: { show: false }, axisLine: { show: false }, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 12 } },
+        yAxis: { type: "category", ...axisStyle, data: names, axisTick: { show: false }, axisLine: { show: false }, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 12.5 } },
         series: [
           {
             type: "bar",
             data,
             barWidth: 14,
-            label: { show: true, position: "right", formatter: (p: any) => fmtv(p.value), fontSize: 12, color: cssVar("--fg-muted", "#667085") },
+            label: { show: true, position: "right", formatter: (p: any) => fmtv(p.value), fontSize: 12.5, color: cssVar("--fg-muted", "#667085") },
           },
         ],
       }}
@@ -663,8 +663,8 @@ function WanInterfaces() {
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
           <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
-            aria-label="Filter WAN devices by name" title="Filter WAN devices by name" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
-          <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12 }} onClick={applyPattern}>Apply</button>
+            aria-label="Filter WAN devices by name" title="Filter WAN devices by name" style={{ width: 130, fontSize: 12.5, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
+          <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12.5 }} onClick={applyPattern}>Apply</button>
         </span>
       </div>
       {degraded ? (
@@ -940,7 +940,7 @@ function Donut({ rows, unit, onClick }: { rows: { name: string; value: number }[
       option={{
         ...chartBase,
         tooltip: { ...chartBase.tooltip, trigger: "item", formatter: `{b}: {c}${unit ? " " + unit : ""} ({d}%)` },
-        legend: { ...chartBase.legend, type: "scroll", orient: "vertical", right: 4, top: "center", itemWidth: 9, itemHeight: 9, textStyle: { color: cssVar("--fg-muted", "#667085"), fontSize: 12 } },
+        legend: { ...chartBase.legend, type: "scroll", orient: "vertical", right: 4, top: "center", itemWidth: 9, itemHeight: 9, textStyle: { color: cssVar("--fg-muted", "#667085"), fontSize: 12.5 } },
         series: [{
           type: "pie", radius: ["52%", "76%"], center: ["38%", "50%"],
           avoidLabelOverlap: true, label: { show: false }, labelLine: { show: false },

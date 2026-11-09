@@ -72,11 +72,11 @@ export default function SavedSearches() {
             {items.map((o) => (
               <tr key={o.id}>
                 <td>{o.name}</td>
-                <td style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
                   {o.body?.query ?? "*"}
                 </td>
                 <td>{o.body?.signal || "all"}</td>
-                <td style={{ color: "var(--muted)", fontSize: 12 }}>
+                <td style={{ color: "var(--muted)", fontSize: 12.5 }}>
                   {fmtDateTime(o.updated_at)}
                 </td>
                 <td style={{ textAlign: "right" }}>

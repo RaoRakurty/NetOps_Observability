@@ -460,3 +460,27 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.proto, 58, "older producers' spelling is kept as an alias")
+
+  # ── the v1/v2c community is a credential, in flight or from an old receiver ─
+  - name: "trap: a community still on the bus is deleted at the head of the lane"
+    inputs:
+      - insert_at: snmptrap_tagged
+        type: log
+        log_fields:
+          message: "linkDown 1.3.6.1.6.3.1.1.5.3 ifIndex=3"
+          timestamp: "2026-11-09T02:25:00Z"
+          device: "spine1"
+          hostname: "spine1"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          snmp_version: "v2c"
+          snmp_community: "fabricated-community-7f3a"
+          snmp_community_present: true
+    outputs:
+      - extract_from: snmptrap_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.snmp_community), "the community must not reach a store or the sealed quarantine")
+              assert!(!contains(encode_json(.), "fabricated-community-7f3a"), "the value must be nowhere in the event")
+              assert_eq!(.snmp_community_present, true)

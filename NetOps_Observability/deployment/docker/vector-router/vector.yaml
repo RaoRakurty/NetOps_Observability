@@ -445,6 +445,11 @@ transforms:
       # lane). Restored quarantine events do NOT carry the field (the sealed
       # payload is the pre-envelope event), so re-attribution is unaffected.
       del(.cx_quarantine)
+      # ── a device credential on the bus (2026-11-09) ─────────────────────
+      # The trap receiver no longer publishes the v1/v2c community, but records
+      # from an older receiver stay on the bus for its retention window. Delete
+      # it before the quarantine stage seals the event and before any store sink.
+      del(.snmp_community)
       # ── the other producer-forgeable control marks (2026-08-14) ─────────
       # .cx_drop is minted ONLY by an operator drop_event processor in the
       # generated <lane>_rules chain, which runs AFTER this transform; the

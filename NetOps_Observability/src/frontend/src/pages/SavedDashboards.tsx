@@ -249,7 +249,7 @@ export default function SavedDashboards() {
     <div className="card">
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <h2 style={{ margin: 0 }}>Your dashboards</h2>
-        <span style={{ color: "var(--muted)", fontSize: 12 }}>
+        <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
           composed from live panels · saved to your tenant
         </span>
         <button className="btn btn-sm btn-primary" style={{ marginLeft: "auto" }} onClick={() => setCreating(true)}>

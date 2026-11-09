@@ -3,9 +3,10 @@
 
 import FeatureOffNotice from "../components/FeatureOffNotice";
 import { useEffect, useState } from "react";
-import { vrfTerm } from "../lib/vendorTerms";
+import { GLOBAL_DEFAULT_LABEL, instanceDisplay, vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
 import { operatorError } from "../lib/errors";
+import { fmtDateTime } from "../lib/time";
 import AskIris from "../components/AskIris";
 
 // DeviceNeighbors — the Neighbours tab of the device page. Three live
@@ -48,6 +49,17 @@ const th: React.CSSProperties = { textAlign: "left", fontSize: 12.5, letterSpaci
 const td: React.CSSProperties = { padding: "5px 12px", fontSize: 12.5, borderTop: "1px solid var(--panel-border, var(--border))" };
 const mono: React.CSSProperties = { ...td, fontFamily: "var(--font-mono)" };
 
+/** The tooltip on a neighbour: what this device heard about it (chassis id,
+ *  port description). Only for the direction this device observed. */
+export function neighborDetail(l: TopoLink, local: boolean): string | undefined {
+  if (!local) return undefined;
+  const parts = [
+    l.target_chassis ? `Chassis ${l.target_chassis}` : "",
+    l.target_port_desc ? `Port description: ${l.target_port_desc}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
 export default function DeviceNeighbors({ device }: { device: Device }) {
   const [links, setLinks] = useState<TopoLink[] | null>(null);
   // The adjacency READ failing is not the same fact as this device having no
@@ -84,7 +96,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
 
   useEffect(() => {
     let alive = true;
-    api.topologyLinks()
+    api.topologyLinks(id)
       .then((r) => {
         if (!alive) return;
         setLinks((r?.links ?? []).filter((l) => l.source === id || l.target === id));
@@ -139,7 +151,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
           ? <FeatureOffNotice feature="Neighbor discovery" purpose="Turn on “LLDP neighbors” (and “CDP neighbors” for Cisco devices) to list this device’s neighbors." />
           : <p className="cc-empty" style={{ padding: "0 12px" }}>No neighbor protocol reported one here.</p>) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th></tr></thead>
+            <thead><tr><th style={th}>Local port</th><th style={th}>Neighbor</th><th style={th}>Remote port</th><th style={th}>Protocol</th><th style={th}>Last seen</th></tr></thead>
             <tbody>
               {links.map((l, i) => {
                 const local = l.source === id; const nbr = local ? l.target_name : l.source_name;
@@ -147,9 +159,10 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
                 return (
                   <tr key={i}>
                     <td style={mono}>{(local ? l.local_port : l.remote_port) || "—"}</td>
-                    <td style={td}>{nbr || "—"}</td>
+                    <td style={td} title={neighborDetail(l, local)}>{nbr || "—"}</td>
                     <td style={mono}>{(local ? l.remote_port : l.local_port) || "—"}</td>
                     <td style={td}><span className="badge accent-badge" style={{ fontSize: 12.5 }}>{proto}</span></td>
+                    <td style={td}>{l.last_observed_at ? fmtDateTime(l.last_observed_at) : "—"}</td>
                   </tr>
                 );
               })}
@@ -176,7 +189,9 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
                     <td style={mono}>{peer || "—"}</td>
                     <td style={td}><StateDot color={tone(up)} />{label}</td>
                     <td style={mono}>{remoteAs.get(peerKey(s.metric.vrf, peer)) || s.metric.asn || "—"}</td>
-                    <td style={td}>{s.metric.vrf || (s.metric.vrf === undefined ? "global" : "—")}</td>
+                    <td style={td} title={s.metric.vrf ? instanceDisplay(s.metric.vrf, device.vendor).title : s.metric.vrf === undefined ? "BGP4-MIB reports the default routing table" : undefined}>
+                      {s.metric.vrf ? instanceDisplay(s.metric.vrf, device.vendor).text : s.metric.vrf === undefined ? GLOBAL_DEFAULT_LABEL : "—"}
+                    </td>
                   </tr>
                 );
               })}

@@ -87,7 +87,7 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
           show: true,
           position: "right",
           formatter: (p: { data?: { site?: GeoSite } }) => p.data?.site?.name ?? "",
-          fontSize: 11,
+          fontSize: 12.5,
           color: cssVar("--fg", "#1a2230"),
         },
       },
@@ -458,8 +458,8 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
         <select className="form-input" value={fmt} onChange={(e) => { setFormat(e.target.value as typeof format); setPlan(null); }} style={{ height: 30 }}>
           {formats.map((f) => <option key={f} value={f}>{f.toUpperCase()}</option>)}
         </select>
-        <input type="file" accept=".csv,.json,.geojson" onChange={(e) => onFile(e.target.files?.[0])} style={{ fontSize: 12 }} />
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+        <input type="file" accept=".csv,.json,.geojson" onChange={(e) => onFile(e.target.files?.[0])} style={{ fontSize: 12.5 }} />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
           <input type="checkbox" checked={overwrite} onChange={(e) => { setOverwrite(e.target.checked); setPlan(null); }} />
           Overwrite existing (apply changes, not just new rows)
         </label>
@@ -469,7 +469,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
         className="form-input" value={text} spellCheck={false}
         onChange={(e) => { setText(e.target.value); setPlan(null); }}
         placeholder="…or paste file contents here"
-        style={{ width: "100%", minHeight: 90, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}
+        style={{ width: "100%", minHeight: 90, fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}
       />
       <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
         <button className="dash-btn" disabled={busy} onClick={() => run(true)}>Preview</button>
@@ -481,7 +481,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
         <div style={{ marginTop: 10 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {Object.entries(plan.summary).filter(([, n]) => n > 0).map(([a, n]) => (
-              <span key={a} className="badge" style={{ fontSize: 11, color: ACTION_TONE[a] ?? "var(--fg)" }}>{a}: {n}</span>
+              <span key={a} className="badge" style={{ fontSize: 12.5, color: ACTION_TONE[a] ?? "var(--fg)" }}>{a}: {n}</span>
             ))}
             {Object.values(plan.summary).every((n) => n === 0) && <span className="fact-line">No rows.</span>}
           </div>

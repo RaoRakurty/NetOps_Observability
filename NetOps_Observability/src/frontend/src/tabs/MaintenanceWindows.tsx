@@ -322,7 +322,7 @@ export default function MaintenanceWindows() {
       ) },
     { key: "scope", header: "Scope", width: "18%", text: scopeSummary, render: (w) => scopeSummary(w) },
     { key: "when", header: "When", width: "26%", text: whenSummary,
-      render: (w) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{whenSummary(w)}</span> },
+      render: (w) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{whenSummary(w)}</span> },
     { key: "updated", header: "Updated", width: 156, sortable: true,
       sortValue: (w) => Date.parse(w.updated_at) || 0, render: (w) => fmt(w.updated_at) },
     { key: "actions", header: "", width: 130,

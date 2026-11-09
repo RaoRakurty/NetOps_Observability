@@ -56,6 +56,12 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
 
 ### Security
 
+- **SNMP communities are no longer stored.** The trap receiver published the v1/v2c community as
+  `snmp_community`, so it reached the bus and `netops-snmptrap-*`. It is now compared on receipt and
+  discarded; events carry `snmp_community_present: true` instead. Both Vector tiers delete the field
+  from older records, and log search, every export format and the pipeline debugger strip it from
+  stored documents, which age out with log retention (14 days by default). Treat any community used
+  by a device that sent v1/v2c traps to an earlier build as exposed.
 - **Full TLS/mTLS transport mesh**, enabled by a single question in the installer: ingress TLS,
   nginx→API mTLS, every store hop, Kafka mTLS with an enforced ACL matrix, Vector lanes, and sealed
   CA custody. A workload-identity registry issues an SVID per service, with served-certificate expiry

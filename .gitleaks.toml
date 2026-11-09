@@ -49,6 +49,9 @@ regexes = [
   # credential-shaped string in it. Fabricated throughout — RFC 2606
   # `nas.example.net`, `backupuser:sup3rs3cret`, and this ascending-hex token.
   '''token=abcdef123456''',
+  # Trap community tests (2026-11-09): the fabricated value the receiver, Vector,
+  # read-path and engine tests assert never appears in any output.
+  '''fabricated-community-[0-9a-z]+''',
   # Installer self-healing tests (2026-09-15): doctor's never-print-a-secret
   # sentinels and a recorded compose error naming a bundle image tag.
   '''Sentinel-(DB|JWT|KCID|Admin)-[0-9a-z]+''',

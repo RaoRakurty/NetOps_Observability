@@ -12,6 +12,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -63,6 +64,15 @@ func TestDevicesIncludeWirelessInventoryTenantScoped(t *testing.T) {
 	wlcRow, ok := byID["wlc:"+a.wlcID]
 	if !ok {
 		t.Fatalf("A's controller missing from /api/devices (rows: %s)", body)
+	}
+	// The Neighbors tab on its device page: the row is not in the registry, so an
+	// honest empty list for A, and still 404 for B (#74, §3a).
+	nbrs := "/api/topology/links?device=" + url.QueryEscape("wlc:"+a.wlcID)
+	if st, nb := do(t, srv, "GET", nbrs, a.token, nil); st != 200 || !strings.Contains(string(nb), `"count":0`) {
+		t.Errorf("own wireless row's neighbours = %d %s, want 200 and none", st, nb)
+	}
+	if st, nb := do(t, srv, "GET", nbrs, b.token, nil); st != 404 {
+		t.Errorf("another tenant's wireless row's neighbours = %d %s, want 404", st, nb)
 	}
 	if wlcRow["type"] != "wlc" || wlcRow["source"] != "wireless" {
 		t.Fatalf("controller row mis-typed: type=%v source=%v", wlcRow["type"], wlcRow["source"])

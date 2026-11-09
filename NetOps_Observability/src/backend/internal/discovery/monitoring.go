@@ -192,6 +192,7 @@ func clearMonitoring(d models.Device) models.Device {
 	// DiscoveryStale is stamped by a discovery source (tracker 366); an
 	// operator-written record never carries one, whatever the body said.
 	d.DiscoveryStale = false
+	d.ReportedSiteID, d.ReportedSiteSource = "", ""
 	return d
 }
 

@@ -83,3 +83,28 @@ export const SEVERITY_COLOR: Record<SeverityKey, string> = {
 export function severityColor(raw: string | number | null | undefined): string {
   return SEVERITY_COLOR[severityKey(raw)];
 }
+
+// The CSS token for a severity: what DOM surfaces use, so a level follows the
+// active theme. Logs reads every row accent and chip through this and severityKey,
+// which keeps one level from ever showing two colours.
+export function severityVar(raw: string | number | null | undefined): string {
+  return `var(--sev-${severityKey(raw)})`;
+}
+
+const SYSLOG_NUMERIC = ["Emergency", "Alert", "Critical", "Error", "Warning", "Notice", "Info", "Debug"];
+const LABELS: Record<string, string> = {
+  emerg: "Emergency", emergency: "Emergency", alert: "Alert", crit: "Critical", critical: "Critical",
+  fatal: "Fatal", panic: "Panic", err: "Error", error: "Error", warn: "Warning", warning: "Warning",
+  notice: "Notice", info: "Info", information: "Info", informational: "Info", debug: "Debug",
+  trace: "Trace", verbose: "Verbose", ok: "OK",
+};
+
+// The word an operator reads for a level. It keeps the record's own distinction
+// (emergency and alert both colour as critical, and still say which they were)
+// and shows a spelling it does not know exactly as the record gave it.
+export function severityLabel(raw: string | number | null | undefined): string {
+  if (raw === null || raw === undefined) return "";
+  const s = String(raw).trim();
+  if (/^[0-7]$/.test(s)) return SYSLOG_NUMERIC[Number(s)];
+  return LABELS[s.toLowerCase()] ?? s;
+}
