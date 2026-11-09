@@ -74,7 +74,7 @@ func HarnessFingerprint(tiers TierModels) string {
 
 func liveHarnessInputs(tiers TierModels) harnessInputs {
 	return harnessInputs{
-		systemPrompt:     (&Orchestrator{}).baseSystemPrompt(),
+		systemPrompt:     baseSystemPromptText(),
 		templateVersion:  strconv.Itoa(skillPromptTemplateVersion),
 		fence:            DataNotInstructionsFence(),
 		toolMetas:        canonicalToolMetas(),

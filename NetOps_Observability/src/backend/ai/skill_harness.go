@@ -298,6 +298,9 @@ func newHarnessTurn(set *SkillSet, c SkillCase, env harnessEnv) (*Orchestrator, 
 	var audit []ToolAuditEntry
 	o := &Orchestrator{
 		DS: ds, LLM: llm,
+		// The same egress filter a real turn crosses, so a case proves what a
+		// provider would have been sent.
+		Redactor:     Redact,
 		Flags:        func(string) bool { return true },
 		Troubleshoot: deps,
 		ToolAudit:    func(e ToolAuditEntry) { audit = append(audit, e) },
@@ -570,7 +573,7 @@ func assertRunbookStaysData(f *caseFailures, set *SkillSet, chain []SkillHop, ll
 	// serverOwned is the text the system prompts legitimately hold, which an author
 	// may happen to repeat: it is built without a word the customer wrote.
 	var serverOwned strings.Builder
-	serverOwned.WriteString((&Orchestrator{}).baseSystemPrompt())
+	serverOwned.WriteString(baseSystemPromptText())
 	var runbooks []*Skill
 	for _, h := range chain {
 		hop, ok := set.Get(h.Name)
