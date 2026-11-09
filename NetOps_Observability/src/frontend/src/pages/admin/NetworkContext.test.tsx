@@ -26,6 +26,7 @@ vi.mock("../../services/api", () => ({
     orgContextDraft: (...a: unknown[]) => orgContextDraft(...a),
     orgContextDiscard: (...a: unknown[]) => orgContextDiscard(...a),
     orgContextAct: (...a: unknown[]) => orgContextAct(...a),
+    sourceAuthority: () => Promise.resolve({ order: [], default: [], customized: false, editable: false }),
   },
 }));
 

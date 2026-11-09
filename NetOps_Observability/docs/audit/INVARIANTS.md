@@ -646,3 +646,21 @@ and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
 | Bounded: 50 candidates after an exact-key prefilter, at most 8 fingerprints built per request (written through, closed incidents only), 5 matches | ✅ | **BUILD** — `TestRecallServiceBuildsWithinBudgetAndStores`, `TestRankOrderAndCap` |
 | The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
 | Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |
+
+## 22. Configurable source authority (tracker 337 N-F6, 2026-11-09)
+
+Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
+reorder, Iris never picks silently. Design: `docs/architecture/iris-natural-language-platform.md` §4.2.1.
+
+**PROVEN by tests:** the resolver (default order, tenant override, ties, missing sources, disagreement,
+agreement is not noise) — `internal/srcauthority/resolve_test.go`; isolation over HTTP and through the
+device tool — `source_authority_isolation_test.go`; RLS and the permutation CHECK on a real Postgres —
+`TestSourceAuthorityRLSIsolationPG`; a model that omits the disagreement still produces an answer that
+states it — `TestAgentAnswerAlwaysStatesTheDisagreement`.
+
+**BUILT, NOT PROVEN:** no live multi-source device has been asked about on the lab yet. Whether real
+vManage and SNMP values normalise to agreement (and how often sources really disagree) is measurable from
+`netops_iris_source_authority_total` once deployed.
+
+**NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
+show a different value from the one Iris cites. The collectors and identity deliberately keep that row.
