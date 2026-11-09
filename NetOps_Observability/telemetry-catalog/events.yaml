@@ -35,6 +35,9 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-train-c — both tracker 387 streams together: the trap packs and the syslog
+# vendor packs, each described below. Neither moves the other's lane.
+#
 # 2026-11-09-trap-packs — tracker 387: Cisco SD-WAN traps (now decoded, MIB pinned
 # at one cisco-mibs commit) and standard BFD-STD-MIB reach the engine as the kinds
 # templates and the controller lane use. Only qualifying criticals can open an
@@ -42,6 +45,24 @@ version: 1
 # can still join a component. Trap lane only: no syslog line moves. Two existing
 # rules gain an exclusion, because VIPTELA-TRAPS now decodes by name and would
 # otherwise reach them: the BGP event_type twin and trap.fhrp.state_change.
+#
+# 2026-11-09-vbond-dns-alarm — tracker 387: the pack's vBond DNS failure is `device_alarm`
+# at warn, no longer `dns_failure_rate`, which `sig.ent.internet.dns-impairment` needs
+# alone and which names the ISP as owner. The success line loses its row and emits nothing.
+#
+# 2026-11-09-mgmt-audit — tracker 387 PR 11 (owner D2): pack grammars classify management
+# audit lines (`event_category`, `dedup_key`). No rule row and no severity moved: the
+# hash is unchanged in kind but covers the new grammars, so it moves.
+#
+# 2026-11-09-sdwan-rules — tracker 387 PR 9 (owner D3): the Cisco SD-WAN pack's typed
+# rows (vendor-packs/cisco_sdwan.yaml) and the `known_benign` row form. Every earlier
+# rule keeps its grammar and every pack row sits behind the older rules, so the golden
+# corpus replays byte-for-byte; `rules_hash` moves because the table grew.
+#
+# 2026-11-09-vendor-packs — tracker 387 (plan §5.1, §6a): the vendor-pack mechanism,
+# with Cisco SD-WAN as the first pack (telemetry-catalog/vendor-packs/). A grammar in a
+# pack reads severity from the message, for the engine and for Vector alike, and states
+# the alarm floor; no row of this file moved. `rules_hash` now covers the packs too.
 #
 # 2026-11-08-link-cause — tracker 378: both trap link rules gain ONE canonical
 # cause attr, `link_cause` (admin | fault | unknown), plus the raw vendor reason
@@ -93,7 +114,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-09-trap-packs"
+parser_rev: "2026-11-09-train-c"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -130,6 +151,10 @@ parser_rev: "2026-11-09-trap-packs"
 #   shadow       EVALUATED and COUNTED, emits NOTHING and falls through to the
 #                next rule (A8). How a candidate grammar earns its promotion on
 #                real traffic before it is allowed to produce evidence.
+#   known_benign EVALUATED and COUNTED (`corr_parser_known_benign_total`), emits
+#                NOTHING and ENDS the walk, so the generic net cannot alarm on the
+#                line (tracker 387). Requires `benign_reason`. The record stays in
+#                storage and the rule keeps its screen literals so the count is real.
 #
 # SCREEN CONTRACT (the ingest pre-filter is DERIVED from these — see
 # producers._build_syslog_screen)

@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-trap-packs`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-train-c`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -21,10 +21,10 @@ engine treats them as such. Fidelity is the catalog's ladder
 
 - **35** typed symptoms (the two severity-floor `device_alarm`
   nets are the safety net, not coverage, and are excluded).
-- **8** of them arrive on **two or more independent sources**
+- **15** of them arrive on **two or more independent sources**
   and can therefore be corroborated across observers.
 - **17** are carried by a typed SNMP-trap rule (3 before the A9 trap audit, 7 after it, 17 since the A9b config-change follow-up).
-- **27** are single-source today — the list below
+- **20** are single-source today — the list below
   says which, and the audit section says why.
 
 ## Matrix
@@ -35,14 +35,14 @@ engine treats them as such. Fidelity is the catalog's ladder
 | `bfd_session_flap_clear` | — | `trap.bfd.session.clear` | — | `standard` | trap: doc_claimed |
 | **`bgp_adjacency_change`** | `syslog.bgp.adjacency_change`, `syslog.bgp.notification` | `trap.bgp.adjacency_change`, `trap.bgp.adjacency_change.event_type`, `trap.bgp.cisco_bgp4`, `trap.bgp.nokia_ng`, `trap.sdwan.bgp_peer` | `bgp_state_anomaly` | `any`, `arista`, `cisco`, `juniper`, `nokia`, `standard` | syslog: code · trap: code/doc_claimed |
 | `bgp_route_churn` | `syslog.bgp.route_churn` | — | — | `cisco`, `juniper` | syslog: doc_claimed |
-| `controller_bfd_down` | — | `trap.sdwan.bfd` | — | `cisco` | trap: doc_claimed |
-| `controller_bfd_down_clear` | — | `trap.sdwan.bfd.clear` | — | `cisco` | trap: doc_claimed |
-| `controller_control_connection_loss` | — | `trap.sdwan.control_connection`, `trap.sdwan.omp` | — | `cisco` | trap: doc_claimed |
-| `controller_control_connection_loss_clear` | — | `trap.sdwan.control_connection.clear`, `trap.sdwan.omp.clear` | — | `cisco` | trap: doc_claimed |
-| `device_alarm` | — | `trap.sdwan.omp_tloc_change` | — | `cisco` | trap: doc_claimed |
+| **`controller_bfd_down`** | `syslog.sdwan.bfd.down` | `trap.sdwan.bfd` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
+| **`controller_bfd_down_clear`** | `syslog.sdwan.bfd.up` | `trap.sdwan.bfd.clear` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
+| **`controller_control_connection_loss`** | `syslog.sdwan.control_connection.down` | `trap.sdwan.control_connection`, `trap.sdwan.omp` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
+| **`controller_control_connection_loss_clear`** | `syslog.sdwan.control_connection.up` | `trap.sdwan.control_connection.clear`, `trap.sdwan.omp.clear` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
+| **`device_alarm`** | `syslog.sdwan.ftmd.interface_dump` | `trap.sdwan.omp_tloc_change` | — | `cisco` | syslog: lab_validated · trap: doc_claimed |
 | `device_config_change` | — | `trap.config.change` | — | `cisco`, `juniper`, `nokia` | trap: doc_claimed |
-| `device_resource_anomaly` | — | `trap.resource.cpu_threshold`, `trap.sdwan.cpu_threshold`, `trap.sdwan.memory_threshold` | — | `cisco` | trap: doc_claimed |
-| `device_resource_anomaly_clear` | — | `trap.resource.cpu_threshold.clear`, `trap.sdwan.cpu_threshold.clear`, `trap.sdwan.memory_threshold.clear` | — | `cisco` | trap: doc_claimed/lab_validated |
+| **`device_resource_anomaly`** | `syslog.sdwan.cpu_high.critical`, `syslog.sdwan.cpu_high.warning` | `trap.resource.cpu_threshold`, `trap.sdwan.cpu_threshold`, `trap.sdwan.memory_threshold` | — | `cisco` | syslog: lab_validated · trap: doc_claimed |
+| **`device_resource_anomaly_clear`** | `syslog.sdwan.cpu_high.clear`, `syslog.sdwan.cpu_normal.clear` | `trap.resource.cpu_threshold.clear`, `trap.sdwan.cpu_threshold.clear`, `trap.sdwan.memory_threshold.clear` | — | `cisco` | syslog: lab_validated · trap: doc_claimed/lab_validated |
 | `device_restart` | — | `trap.device.restart`, `trap.device.restart.event_type` | — | `any`, `standard` | trap: code |
 | `dom_lane_bias_anomaly` | `syslog.port.dom_lane_bias_anomaly` | — | — | `generic` | syslog: code |
 | `dom_rx_power_low` | `syslog.port.dom_rx_power_low` | — | — | `generic` | syslog: code |
@@ -115,6 +115,9 @@ waiting for a recovery line.
 
 | Rule | Lane | What it catches |
 |---|---|---|
+| `syslog.sdwan.dns.failed` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
+| `syslog.sdwan.below_floor` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
+| `syslog.sdwan.below_floor.iosxe` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.generic.device_alarm` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `trap.generic.device_alarm` | trap | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 

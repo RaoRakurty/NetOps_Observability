@@ -21,7 +21,7 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 | SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 12/13 | 16 | lab_validated |
 | gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 11/13 | 15 | lab_validated |
 | SNMP polling + traps only | snmp_poll, trap | 10/13 | 8 | lab_validated |
-| Syslog only | syslog | 5/13 | 14 | lab_validated |
+| Syslog only | syslog | 8/13 | 15 | lab_validated |
 | vManage only | vmanage | 11/13 | 8 | lab_validated |
 | vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 19 | lab_validated |
 | Catalyst Center only | catalyst_center | 7/13 | 7 | doc_claimed |
@@ -39,11 +39,11 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 | **interface_health** | ✅ | 💤 | — | — | — | ✅ | ⬜ | ⬜ | ⬜ | ❓ | ⬜ | ⬜ | ❓ | ❓ |
 | **bgp_session** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
 | **igp_adjacency** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
-| **overlay_tunnel** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
-| **control_connection** | ❓ | ❓ | ⬜ | ✅ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
+| **overlay_tunnel** | 🟠 | ⬜ | ✅ | ✅ | — | ✅ | ❓ | ⬜ | ❓ | — | ✅ᵈ | ✅ᵈ | — | ❓ |
+| **control_connection** | ❓ | ❓ | ✅ | ✅ | — | ✅ | — | — | — | — | ❓ | ❓ | — | ❓ |
 | **device_reachability** | 🟠 | ⬜ | — | — | — | ✅ | ✅ᵈ | ✅ᵈ | ❓ | ✅ᵈ | 🟠 | 🟠 | ❓ | ❓ |
 | **device_restart** | 🟠 | ⬜ | ⬜ | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
-| **device_resource** | ✅ | 💤 | ⬜ | ✅ | — | ✅ | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
+| **device_resource** | ✅ | 💤 | ✅ | ✅ | — | ✅ | ⬜ | — | ❓ | ❓ | 🟠 | 🟠 | ❓ | ❓ |
 | **config_change** | ⬜ | ⬜ | 💤 | ✅ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ❓ | ❓ |
 | **l2_control** | ⬜ | ⬜ | ✅ | ✅ | — | ❓ | ❓ | ❓ | ❓ | ❓ | — | — | — | ❓ |
 | **physical_layer** | ⬜ | ⬜ | ✅ | ⬜ | — | ✅ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | ✅ᵈ | — | ❓ |
@@ -113,14 +113,11 @@ Supplies: nothing the engine consumes yet.
 
 ### syslog — Syslog (events.yaml runtime rules)
 
-Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change, bgp_route_churn); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); l2_control (evpn_mac_move, fhrp_state_change, lldp_neighbor_change, mac_flap, stp_topology_change, vtep_state_change); physical_layer (dom_lane_bias_anomaly, dom_rx_power_low, dom_temperature_high, fec_corrected_rate_high, link_down_no_light, link_flap_on_insert, pcs_deskew_fault, pcs_local_fault, pcs_remote_fault, prefec_ber_rising, transceiver_unsupported).
+Supplies: link_state (link_state_change); bgp_session (bgp_adjacency_change, bgp_route_churn); igp_adjacency (isis_adjacency_change, ospf_adjacency_change, routing_adjacency_change); overlay_tunnel (controller_bfd_down); control_connection (controller_control_connection_loss); device_resource (device_resource_anomaly); l2_control (evpn_mac_move, fhrp_state_change, lldp_neighbor_change, mac_flap, stp_topology_change, vtep_state_change); physical_layer (dom_lane_bias_anomaly, dom_rx_power_low, dom_temperature_high, fec_corrected_rate_high, link_down_no_light, link_flap_on_insert, pcs_deskew_fault, pcs_local_fault, pcs_remote_fault, prefec_ber_rising, transceiver_unsupported).
 
 - **interface_health** — unavailable: syslog carries state messages, not counters
-- **overlay_tunnel** ⬜ collection_pending: SD-WAN edges log BFD / tunnel state changes; no events.yaml rule maps them (design §7b E4)
-- **control_connection** ⬜ collection_pending: SD-WAN edges log control-connection state changes; no rule maps them (design §7b E4)
 - **device_reachability** — unavailable: a device cannot log its own unreachability
 - **device_restart** ⬜ collection_pending: restart / reload messages exist (e.g. %SYS-5-RESTART); restart is mapped from traps only
-- **device_resource** ⬜ collection_pending: CPU / memory threshold messages exist; no rule maps them
 - **config_change** 💤 dormant: syslog.config.change (CONFIG_I / UI_COMMIT) ships shadow: counted, never emitted, until a V2 capacity profile exists (tracker 220)
 - **flow_volume** — unavailable: syslog is not flow export
 

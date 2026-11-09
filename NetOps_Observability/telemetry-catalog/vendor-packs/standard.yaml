@@ -1,0 +1,284 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Vendor-neutral grammars (tracker 387, plan §6a layer 1). A pack with `vendor: null`
+# runs after every vendor pack and never stamps a vendor.
+pack: standard
+vendor: null
+description: Grammars that hold for any sender.
+
+envelopes:
+  # STOP-GAP, remove with PR 10. An RFC 5424 frame survives syslog-ng's double parse
+  # with its PROCID, MSGID and SD still at the front of MSG: `2939 - - audit ...` or,
+  # with no procid, `- - - USER ...`. Lift the procid and clean the message; the
+  # untouched text stays in `message_original`. PR 10's framing fix removes the need,
+  # and then this row can be deleted with no code change.
+  #
+  # UNPROVEN: seen only from three vEdges (2026-11-09 capture). It runs on every
+  # vendor's lines, so a genuine message that begins `123 - - ` would be rewritten; it
+  # stays retrievable, but nothing has measured how often that happens.
+  - id: rfc5424_remnant
+    literal: ' - - '
+    pattern: '^(?P<procid>\d{1,10}|-) - - (?P<rest>.*)'
+    message: rest
+    lift: {procid: procid}
+    skip_values: ['-']
+    preserve_as: message_original
+    fidelity: lab_validated
+
+grammars:
+  # Management audit (PR 11, owner D2), vendor-neutral: ConfD and OpenSSH run on many
+  # platforms, so these rows hold for any sender and stamp no vendor. Non-alarm: no
+  # severity, no rule row. `dedup_key` is (device, app, event_type); repeats are grouped
+  # at READ time and every record stays stored. A failed login is deliberately NOT here.
+  - id: confd_session_created
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ created new session via (?P<via>[a-z]+)'
+    event_type: 'audit_session_created_{via}'
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_groups
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ assigned to groups:'
+    event_type: audit_session_groups
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_terminated
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ terminated session'
+    event_type: audit_session_terminated
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_rpc
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ (?:got rpc|get attrs|sending rpc-reply|close-session)'
+    event_type: netconf_rpc
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_session
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ new tcp session'
+    event_type: netconf_session
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_notification
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ sending notification'
+    event_type: netconf_notification
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: sshd_accepted
+    parser_id: standard_mgmt_audit.v1
+    literal: 'Accepted '
+    apps: [sshd]
+    pattern: '^Accepted \S+ for '
+    event_type: ssh_login_accepted
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: sshd_session
+    parser_id: standard_mgmt_audit.v1
+    literal: 'pam_unix(sshd:session): session '
+    apps: [sshd]
+    pattern: 'pam_unix\(sshd:session\): session (?P<state>opened|closed) for '
+    event_type: 'ssh_session_{state}'
+    category: management_audit
+    fidelity: lab_validated
+
+fixtures:
+  - name: the procid is lifted and the original kept
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - something a daemon said'
+    expect:
+      procid: '2939'
+      message: 'something a daemon said'
+      message_original: '2939 - - something a daemon said'
+    signal: null
+
+  - name: a nil procid is not lifted
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    message: '- - - USER PID %CPU %MEM'
+    expect:
+      message: 'USER PID %CPU %MEM'
+      message_original: '- - - USER PID %CPU %MEM'
+    signal: null
+
+  - name: the tokens later in a line are left alone
+    fidelity: lab_validated
+    hostname: spine1
+    appname: app
+    message: 'a line saying 12 - - in the middle'
+    expect:
+      message: 'a line saying 12 - - in the middle'
+    signal: null
+
+  - name: an SNMP poll session opening, with its key
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+    expect:
+      procid: '2939'
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: audit_session_created_snmp
+      event_category: management_audit
+      dedup_key: 'vEdge-1|confd|audit_session_created_snmp'
+      normalized_severity: notice
+      message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+    signal: null
+
+  - name: a NETCONF session opening keeps its own key
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh'
+    expect:
+      event_type: audit_session_created_netconf
+      dedup_key: 'vEdge-1|confd|audit_session_created_netconf'
+    signal: null
+
+  - name: group assignment
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - audit user: svc-user/777134 assigned to groups: basic'
+    expect:
+      event_type: audit_session_groups
+      event_category: management_audit
+    signal: null
+
+  - name: session end
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '2939 - - audit user: svc-user/777134 terminated session (reason: normal)'
+    expect:
+      event_type: audit_session_terminated
+      event_category: management_audit
+    signal: null
+
+  - name: a NETCONF request
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '4220 - - netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id="1"'
+    expect:
+      event_type: netconf_rpc
+      event_category: management_audit
+    signal: null
+
+  - name: a NETCONF reply
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '4220 - - netconf id=987343 sending rpc-reply, attrs: nc:message-id="1"'
+    expect:
+      event_type: netconf_rpc
+    signal: null
+
+  - name: a NETCONF close
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '4220 - - netconf id=987343 close-session attrs: nc:message-id="2"'
+    expect:
+      event_type: netconf_rpc
+    signal: null
+
+  - name: a NETCONF transport session
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '4220 - - netconf id=987344 new tcp session for user svc-user from 192.0.2.1'
+    expect:
+      event_type: netconf_session
+    signal: null
+
+  - name: an outbound NETCONF notification carrying a marker word stays silent
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: '4220 - - netconf id=987345 sending notification {http://viptela.com/system}cpu-usage'
+    expect:
+      event_type: netconf_notification
+    signal: null
+
+  - name: an SSH login accepted
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: '27761 - - Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed'
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      event_type: ssh_login_accepted
+      event_category: management_audit
+      dedup_key: 'vEdge-1|sshd|ssh_login_accepted'
+    signal: null
+
+  - name: an SSH session opened
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: '27761 - - pam_unix(sshd:session): session opened for user svc-user by (uid=0)'
+    expect:
+      event_type: ssh_session_opened
+    signal: null
+
+  - name: an SSH session closed
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: '27761 - - pam_unix(sshd:session): session closed for user svc-user'
+    expect:
+      event_type: ssh_session_closed
+    signal: null
+
+  - name: a rejected password is not audit noise
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: sshd
+    message: '27761 - - Failed password for svc-user from 192.0.2.1 port 35112 ssh2'
+    expect:
+      procid: '27761'
+    signal: null
+
+  - name: the same words from another app are not classified
+    fidelity: doc_claimed
+    hostname: spine1
+    appname: otherd
+    message: 'audit user: svc-user/1 terminated session (reason: normal)'
+    expect: {}
+    signal: null
+
+  - name: Juniper sshd is classified by the neutral row and keeps its vendor guess
+    fidelity: doc_claimed
+    hostname: spine1
+    appname: sshd
+    message: 'Accepted publickey for svc-user from 192.0.2.1 port 2222 ssh2'
+    expect:
+      event_type: ssh_login_accepted
+      event_category: management_audit
+    signal: null

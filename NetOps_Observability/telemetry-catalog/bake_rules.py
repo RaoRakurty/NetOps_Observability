@@ -30,6 +30,7 @@ import argparse
 import copy
 import os
 import pprint
+import re
 import sys
 from typing import Any
 
@@ -37,6 +38,9 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVENTS = os.path.join(HERE, "events.yaml")
+#: One YAML file per vendor pack (README, "Vendor packs"). A new vendor is a new
+#: file here; nothing in the bake, the engine or the Vector generator names one.
+PACKS_DIR = os.path.join(HERE, "vendor-packs")
 TARGET = os.path.abspath(
     os.path.join(HERE, "..", "src", "correlation", "parser_rules.py"))
 
@@ -44,7 +48,14 @@ TARGET = os.path.abspath(
 # guarantees the bake validates against the SAME compiler the runtime uses.
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "src", "correlation")))
 
-from rule_model import LANE_FIELDS, LANE_VARS, RuleError, compile_rule, rules_hash
+from rule_model import (
+    LANE_FIELDS,
+    LANE_VARS,
+    RuleError,
+    compile_rule,
+    pack_digest,
+    rules_hash,
+)
 
 LANES = ("syslog", "port", "trap", "catalog")
 RUNTIME_LANES = ("syslog", "port", "trap")   # what the image actually ships
@@ -59,7 +70,8 @@ FIDELITY_STATUSES = ("doc_claimed", "lab_validated", "live_validated",
 ROW_KEYS = frozenset({
     "rule_id", "lane", "source", "kind", "entity_type", "family", "vendors",
     "markers", "pattern_src", "state", "state_re", "severity", "generic",
-    "shadow", "guard", "extract", "emit", "fidelity_status",
+    "shadow", "guard", "extract", "emit", "fidelity_status", "known_benign",
+    "benign_reason",
 })
 ROW_REQUIRED = ("rule_id", "lane", "source", "kind", "entity_type", "guard", "emit")
 EMIT_KEYS = frozenset({
@@ -166,9 +178,14 @@ def validate_row(row: dict, families: dict, seen: set[str]) -> None:
     if fid is not None and fid not in FIDELITY_STATUSES:
         raise BakeError(
             f"{where}: fidelity_status {fid!r} not on the ladder {FIDELITY_STATUSES}")
-    for k in ("generic", "shadow"):
+    for k in ("generic", "shadow", "known_benign"):
         if k in row and not isinstance(row[k], bool):
             raise BakeError(f"{where}: {k} must be a boolean")
+    if row.get("known_benign"):
+        if not str(row.get("benign_reason") or "").strip():
+            raise BakeError(f"{where}: known_benign must state its benign_reason")
+        if row.get("shadow") or row.get("generic"):
+            raise BakeError(f"{where}: known_benign cannot be shadow or generic")
     for k in ("vendors", "markers"):
         v = row.get(k, [])
         if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
@@ -265,6 +282,7 @@ def normalize_row(row: dict) -> dict:
     out.setdefault("markers", [])
     out.setdefault("generic", False)
     out.setdefault("shadow", False)
+    out.setdefault("known_benign", False)
     emit = out["emit"]
     emit.setdefault("kind", out["kind"])
     # A row's own `kind` is a BAKE-TIME CONSTANT, folded into the templates that
@@ -280,7 +298,232 @@ def normalize_row(row: dict) -> dict:
     return out
 
 
-def load(path: str = EVENTS) -> tuple[dict, list[dict]]:
+# ── vendor packs ─────────────────────────────────────────────────────────────
+
+PACK_KEYS = frozenset({
+    "pack", "vendor", "description", "severity_words", "envelopes", "grammars",
+    "rules", "fixtures", "wanted",
+})
+PACK_REQUIRED = ("pack", "vendor", "fixtures")
+GRAMMAR_KEYS = frozenset({
+    "id", "parser_id", "literal", "apps", "pattern", "facility", "event_type",
+    "summary", "severity", "native_text", "native_code", "alarm_floor",
+    "category", "fidelity", "source",
+})
+GRAMMAR_REQUIRED = ("id", "parser_id", "literal", "pattern", "fidelity")
+ENVELOPE_KEYS = frozenset({
+    "id", "literal", "pattern", "message", "lift", "skip_values", "preserve_as",
+    "fidelity", "source",
+})
+ENVELOPE_REQUIRED = ("id", "literal", "pattern", "message", "preserve_as", "fidelity")
+FIXTURE_KEYS = frozenset({
+    "name", "hostname", "appname", "severity", "message", "expect", "signal",
+    "fidelity",
+})
+FIXTURE_REQUIRED = ("name", "message", "expect", "signal", "fidelity")
+WANTED_KEYS = frozenset({"symptom", "why_absent", "kind"})
+#: Characters a grammar may not contain: a pattern is pasted into `r'…'` VRL, and
+#: Vector interpolates `$` in the raw config text, comments included.
+PACK_FORBIDDEN_CHARS = ("'", "$")
+_TEMPLATE_VAR_RE = re.compile(r"\{(\w+)\}")
+
+
+def _check_pack_pattern(where: str, spec: dict) -> dict[str, int]:
+    """Compile a grammar/envelope pattern; returns its named groups."""
+    pat = str(spec["pattern"])
+    lit = str(spec["literal"])
+    for ch in PACK_FORBIDDEN_CHARS:
+        if ch in pat or ch in lit:
+            raise BakeError(f"{where}: {ch!r} cannot be compiled into VRL soundly")
+    try:
+        groups = dict(re.compile(pat).groupindex)
+    except re.error as exc:
+        raise BakeError(f"{where}: pattern does not compile — {exc}") from exc
+    return groups
+
+
+def _check_group(where: str, name: str, groups: dict[str, int]) -> None:
+    if name not in groups:
+        raise BakeError(f"{where}: names group {name!r}, which the pattern lacks")
+
+
+def _check_fidelity(where: str, spec: dict) -> None:
+    fid = spec.get("fidelity")
+    if fid not in FIDELITY_STATUSES:
+        raise BakeError(f"{where}: fidelity {fid!r} not on the ladder")
+    if fid == "doc_claimed" and not str(spec.get("source") or "").strip():
+        raise BakeError(
+            f"{where}: a doc_claimed row must cite the `source` that documents it")
+
+
+def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
+    where = f"pack {pack['pack']!r} grammar {g.get('id')!r}"
+    unknown = sorted(set(g) - GRAMMAR_KEYS)
+    if unknown:
+        raise BakeError(f"{where}: unknown key(s) {unknown}")
+    for k in GRAMMAR_REQUIRED:
+        if not g.get(k):
+            raise BakeError(f"{where}: missing required key {k!r}")
+    gid = f"{pack['pack']}.{g['id']}"
+    if gid in seen:
+        raise BakeError(f"{where}: duplicate grammar id")
+    seen.add(gid)
+    groups = _check_pack_pattern(where, g)
+    _check_fidelity(where, g)
+    for key in ("facility", "event_type", "summary"):
+        for name in _TEMPLATE_VAR_RE.findall(str(g.get(key) or "")):
+            _check_group(where, name, groups)
+    for key in ("native_text", "native_code"):
+        if g.get(key):
+            _check_group(where, str(g[key]), groups)
+    sev = g.get("severity")
+    sev_digit = sev_word = ""
+    sev_map: dict[str, int] = {}
+    if sev is not None:
+        unknown = sorted(set(sev) - {"digit", "word"})
+        if unknown or len(sev) != 1:
+            raise BakeError(f"{where}: severity takes exactly one of digit | word")
+        if "digit" in sev:
+            sev_digit = str(sev["digit"])
+            _check_group(where, sev_digit, groups)
+        else:
+            sev_word = str(sev["word"])
+            _check_group(where, sev_word, groups)
+            sev_map = dict(pack.get("severity_words") or {})
+            if not sev_map:
+                raise BakeError(f"{where}: severity.word needs pack `severity_words`")
+            for word, num in sev_map.items():
+                if not isinstance(num, int) or not 0 <= num <= 7:
+                    raise BakeError(f"{where}: severity word {word!r} -> {num!r}, not 0..7")
+                if not re.fullmatch(r"[A-Za-z0-9_]+", str(word)):
+                    raise BakeError(f"{where}: severity word {word!r} is not a plain word")
+        floor = g.get("alarm_floor")
+        if not isinstance(floor, int) or not 0 <= floor <= 7:
+            raise BakeError(
+                f"{where}: a severity-bearing grammar must state alarm_floor (0..7): "
+                "the worst embedded severity that may alarm on severity ALONE")
+    elif g.get("alarm_floor") is not None:
+        raise BakeError(f"{where}: alarm_floor without a severity reader")
+    apps = [str(a).lower() for a in (g.get("apps") or [])]
+    if g.get("category") and not g.get("event_type"):
+        raise BakeError(f"{where}: a category row needs event_type (its dedup key)")
+    return {
+        "pack": pack["pack"], "vendor": pack["vendor"] or "", "id": gid,
+        "parser_id": g["parser_id"], "literal": g["literal"], "apps": apps,
+        "pattern": g["pattern"], "facility": g.get("facility") or "",
+        "event_type": g.get("event_type") or "", "summary": g.get("summary") or "",
+        "sev_digit": sev_digit, "sev_word": sev_word, "sev_map": sev_map,
+        "native_text": g.get("native_text") or "",
+        "native_code": g.get("native_code") or "",
+        "alarm_floor": g.get("alarm_floor"), "category": g.get("category") or "",
+        "fidelity": g["fidelity"], "source": g.get("source") or "",
+    }
+
+
+def _bake_envelope(pack: dict, e: dict, seen: set[str]) -> dict:
+    where = f"pack {pack['pack']!r} envelope {e.get('id')!r}"
+    unknown = sorted(set(e) - ENVELOPE_KEYS)
+    if unknown:
+        raise BakeError(f"{where}: unknown key(s) {unknown}")
+    for k in ENVELOPE_REQUIRED:
+        if not e.get(k):
+            raise BakeError(f"{where}: missing required key {k!r}")
+    eid = f"{pack['pack']}.{e['id']}"
+    if eid in seen:
+        raise BakeError(f"{where}: duplicate envelope id")
+    seen.add(eid)
+    groups = _check_pack_pattern(where, e)
+    _check_fidelity(where, e)
+    _check_group(where, str(e["message"]), groups)
+    lift = dict(e.get("lift") or {})
+    for name in lift.values():
+        _check_group(where, str(name), groups)
+    return {
+        "pack": pack["pack"], "id": eid, "literal": e["literal"],
+        "pattern": e["pattern"], "message": e["message"], "lift": lift,
+        "skip_values": list(e.get("skip_values") or []),
+        "preserve_as": e["preserve_as"], "fidelity": e["fidelity"],
+        "source": e.get("source") or "",
+    }
+
+
+def _check_fixture(pack: dict, fx: dict) -> None:
+    where = f"pack {pack['pack']!r} fixture {fx.get('name')!r}"
+    unknown = sorted(set(fx) - FIXTURE_KEYS)
+    if unknown:
+        raise BakeError(f"{where}: unknown key(s) {unknown}")
+    for k in FIXTURE_REQUIRED:
+        if k not in fx:
+            raise BakeError(f"{where}: missing required key {k!r}")
+    if fx["fidelity"] not in FIDELITY_STATUSES:
+        raise BakeError(f"{where}: fidelity {fx['fidelity']!r} not on the ladder")
+
+
+def load_packs(packs_dir: str = PACKS_DIR) -> list[dict]:
+    """Every pack file, validated: vendor packs first (sorted by name), then the
+    vendor-neutral ones (`vendor: null`). First match wins, so a vendor's specific
+    grammar always gets the line before a standard one."""
+    packs: list[dict] = []
+    names: set[str] = set()
+    for fname in sorted(os.listdir(packs_dir)) if os.path.isdir(packs_dir) else ():
+        if not fname.endswith(".yaml"):
+            continue
+        with open(os.path.join(packs_dir, fname), encoding="utf-8") as fh:
+            pack = yaml.safe_load(fh)
+        where = f"pack file {fname!r}"
+        if not isinstance(pack, dict):
+            raise BakeError(f"{where}: not a mapping")
+        unknown = sorted(set(pack) - PACK_KEYS)
+        if unknown:
+            raise BakeError(f"{where}: unknown key(s) {unknown}")
+        for k in PACK_REQUIRED:
+            if k not in pack:
+                raise BakeError(f"{where}: missing required key {k!r}")
+        if pack["pack"] in names:
+            raise BakeError(f"{where}: duplicate pack name {pack['pack']!r}")
+        names.add(pack["pack"])
+        if not pack.get("fixtures"):
+            raise BakeError(f"{where}: a pack with no fixtures proves nothing")
+        for fx in pack["fixtures"]:
+            _check_fixture(pack, fx)
+        for w in pack.get("wanted") or []:
+            if set(w) - WANTED_KEYS:
+                raise BakeError(f"{where}: unknown `wanted` key(s) {sorted(set(w) - WANTED_KEYS)}")
+        packs.append(pack)
+    packs.sort(key=lambda p: (p["vendor"] is None, p["pack"]))
+    return packs
+
+
+def pack_tables(packs: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(grammars, envelopes) in match order, as they are baked."""
+    seen: set[str] = set()
+    grammars = [_bake_grammar(p, g, seen) for p in packs for g in p.get("grammars") or []]
+    envelopes = [_bake_envelope(p, e, seen) for p in packs for e in p.get("envelopes") or []]
+    return grammars, envelopes
+
+
+def _merge_pack_rows(rows: list[dict], packs: list[dict]) -> list[dict]:
+    """A pack's rule rows go immediately BEFORE their lane's generic safety net:
+    after every vendor-neutral rule, so a line that classified before still does,
+    and before the net, so a typed row answers instead of the alarm."""
+    out = list(rows)
+    for pack in packs:
+        for row in pack.get("rules") or []:
+            where = f"pack {pack['pack']!r} rule {row.get('rule_id')!r}"
+            if not row.get("fidelity_status"):
+                raise BakeError(f"{where}: a pack row must state its fidelity_status")
+            # The LAST generic row of the lane is the net: a pack's own below-floor
+            # catch-all is `generic` too, and must stay ahead of it.
+            anchor = next((i for i in range(len(out) - 1, -1, -1)
+                           if out[i].get("lane") == row.get("lane")
+                           and out[i].get("generic")), None)
+            if anchor is None:
+                raise BakeError(f"{where}: lane {row.get('lane')!r} has no generic net")
+            out.insert(anchor, row)
+    return out
+
+
+def load(path: str = EVENTS, packs_dir: str = PACKS_DIR) -> tuple[dict, list[dict]]:
     with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     unknown = sorted(set(data) - TOP_KEYS)
@@ -290,12 +533,16 @@ def load(path: str = EVENTS) -> tuple[dict, list[dict]]:
         raise BakeError("events.yaml: `parser_rev` is required — it is the "
                         "hand-bumped half of every signal's provenance")
     families = data.get("families") or {}
-    rows = data.get("rules") or []
+    packs = load_packs(packs_dir)
+    rows = _merge_pack_rows(data.get("rules") or [], packs)
     seen: set[str] = set()
     for name, fam in families.items():
         validate_family(name, fam)
     for row in rows:
         validate_row(row, families, seen)
+    grammars, envelopes = pack_tables(packs)
+    data["_pack_grammars"] = grammars
+    data["_pack_envelopes"] = envelopes
     return data, [normalize_row(r) for r in rows]
 
 
@@ -319,7 +566,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from rule_model import Rule, compile_rule, install_fidelity, rules_hash
+from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_hash
 
 #: The catalog file this module was baked from.
 SOURCE = "telemetry-catalog/events.yaml"
@@ -335,6 +582,13 @@ CATALOG_EVENT_FIDELITY: dict[str, str] = {fidelity}
 
 install_fidelity(CATALOG_EVENT_FIDELITY)
 
+#: Vendor-pack syslog grammars, in MATCH ORDER (telemetry-catalog/vendor-packs/).
+#: Vector's generated branch and `syslog_packs.PackTable` both run these rows.
+SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = {grammars}
+
+#: Vendor-pack syslog envelope rules, in match order.
+SYSLOG_ENVELOPES: tuple[dict[str, Any], ...] = {envelopes}
+
 #: The rule rows, in CLASSIFICATION ORDER. Order is behaviour: the interpreter
 #: walks a lane's rules in sequence, first match wins.
 _ROWS: tuple[dict[str, Any], ...] = (
@@ -348,7 +602,8 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
 BAKED_RULES_HASH = {baked!r}
-RULES_HASH: str = rules_hash(RULES)
+PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
+RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)
 '''
 
 
@@ -357,10 +612,15 @@ def render(data: dict, rows: list[dict]) -> str:
     fidelity = {n: f["fidelity_status"] for n, f in families.items()
                 if f.get("fidelity_status") is not None}
     runtime = [r for r in rows if r["lane"] in RUNTIME_LANES]
-    baked = rules_hash(compile_rule(r) for r in runtime)
+    grammars = tuple(data.get("_pack_grammars") or ())
+    envelopes = tuple(data.get("_pack_envelopes") or ())
+    baked = rules_hash((compile_rule(r) for r in runtime),
+                       pack_digest(grammars, envelopes))
     parts = [HEADER.format(
         parser_rev=str(data.get("parser_rev") or ""),
         fidelity=pprint.pformat(fidelity, width=76, sort_dicts=False),
+        grammars=pprint.pformat(grammars, width=150, sort_dicts=False),
+        envelopes=pprint.pformat(envelopes, width=150, sort_dicts=False),
     )]
     for row in runtime:
         body = pprint.pformat(row, width=150, sort_dicts=False, indent=1)
@@ -374,9 +634,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if the checked-in module is stale (CI guard)")
     ap.add_argument("--out", default=TARGET)
+    ap.add_argument("--packs-dir", default=PACKS_DIR,
+                    help="vendor-pack directory (a test bakes a synthetic one)")
     args = ap.parse_args(argv)
     try:
-        data, rows = load()
+        data, rows = load(packs_dir=args.packs_dir)
     except BakeError as exc:
         print(f"events.yaml INVALID: {exc}", file=sys.stderr)
         return 2

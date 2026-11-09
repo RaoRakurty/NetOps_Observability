@@ -55,6 +55,21 @@ Size caps (S:37, S:52-55): strings 256/128/512, tokens ≤32, attrs ≤4 KiB.
 **SNMP allowlist.** `rcaMetricFamilies` names 17 metrics; everything else stays in
 VictoriaMetrics only (`collectors/metric_events.go:75-108`).
 
+**Vendor packs (tracker 387, 2026-11-09).** `telemetry-catalog/vendor-packs/*.yaml` is
+one file per vendor: body and envelope grammars, a severity map, rule rows and fixtures.
+`syslog_packs.py` is the engine's executor and names no vendor; the same rows compile into
+the aggregator's Stage B (`scripts/gen-syslog-packs.py`), so the two cannot disagree.
+`syslog_severity_num` also reads the severity a pack grammar finds in the message.
+`syslog_alarm_num` is what the screen and the generic net act on: when a pack grammar
+matched and the severity is past its `alarm_floor`, it returns None, so reading a severity
+never opens an object by itself (owner D3). The hash covers the packs: `rules_hash(RULES,
+PACK_DIGEST)`. The VRL's `cx_inventory_vendor` is the empty seam for PR 12; an inventory
+vendor narrows the grammars in both executors. Pack rows sit behind the vendor-neutral
+rules and ahead of the generic net. A `known_benign` row counts the line
+(`corr_parser_known_benign_total`), emits nothing and ends the walk; unlike a shadow row it
+is a decision, not a candidate. Stage [1] only: no template, gate or constant moved, so
+ENGINE_SEMVER does not move.
+
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).
 - Other lanes (`buffer_signal`): a ts more than 120 s in the future is clamped; a ts
