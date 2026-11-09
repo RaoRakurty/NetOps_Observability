@@ -176,6 +176,32 @@ By market relevance and owner's list, and re-ranked by the unknown trap OIDs and
 
 Only Cisco can be proven on the lab. Every other row ships `doc_claimed`, labelled so in the UI, and it can never be part of the confirming pair when `CORR_FIDELITY_WEIGHTING` is on. A row needs a cited vendor source and a fixture. Promotion needs a real capture. Tracker 249 and the owner's hardware rule still apply, so no device purchase is implied. Containerised network OSes could supply real captures with no hardware; the vendor research reports which are usable.
 
+### Vendor sources and order
+
+Per-vendor formats, MIB sources, licences and capture options are in `docs/design/research/VENDOR_PACK_SOURCES_2026-11-09.md`.
+
+Defects that report found, confirmed against the code:
+
+- **RFC 5424 is not auto-detected.** `core.conf` runs `syslog-parser()` with no flags, and syslog-ng only uses its RFC 5424 parser when `syslog-protocol` is set. Junos structured-data frames, and any other sender using RFC 5424, go through the legacy parser. This is an all-vendor defect, so PR 10 comes first in the vendor order, and its capture decides the fix.
+- **IOS-XR does not parse.** `%ROUTING-BGP-5-MAXPFX :` has four parts and a space before the colon, and fails both the vendor test and the grammar. Nokia SR OS, Comware and Extreme EXOS formats also match nothing.
+- **Arista is mislabelled.** Real agents such as `Rib` are not in the Arista app list, so `Rib: %BGP-3-NOTIFICATION` is labelled Cisco. Inventory-driven vendor (PR 12) fixes this.
+- **Indexed MIBs have silent gaps.** `ARISTA-MLAG-MIB`, `TIMETRA-PORT-MIB` and `TIMETRA-VRTR-MIB` contribute 0 nodes, and `BFD-STD-MIB` and `CISCO-BFD-MIB` are absent.
+- **SONiC:** no vendor profile; it reports the net-snmp enterprise number. Upstream ships no traps today (the report cites an unmerged PR), so SONiC relies on polling, syslog and sFlow. Its rsyslog template puts the severity word where syslog-ng expects the program name.
+- **Flows:** an exporter that samples but reports no rate, reportedly including Nokia SR OS cflowd, reads as 1:1. PR 5's `sampling_status` should later say "vendor known to sample, none reported".
+
+Order after PR 8's mechanism lands: syslog envelope (PR 10), Nokia SR OS, Cisco IOS-XR and missing Cisco MIBs, Juniper, Arista, SONiC, Extreme EXOS, then AOS-CX, Comware, Dell OS10, VOSS, then the third wave. Nokia SR OS goes first because its event tables were verified from vendor documentation.
+
+Applied recommendations (owner directive: proceed on best recommendation):
+
+- **MIBs:** fetch-only, sha256-pinned, commit-pinned where the host allows, never vendored; vendor source first.
+- **Mirrors:** Nokia and Arista are fetched from a LibreNMS commit or an unversioned vendor URL today. D4's official-source rule is met for Cisco; the others stay as they are until the owner decides on portal accounts.
+- **Elastic integrations** (Elastic License 2.0) are a format reference only, never copied. SC4S and napalm-logs (Apache-2.0) may be reused with attribution.
+
+**Open for the owner, nothing blocked meanwhile:**
+
+- Vendor portal accounts for login-gated MIBs. Recommendation: yes for Nokia, Juniper and Extreme, defer Dell, HPE and Huawei. Where there is no account, the vendor gets standard MIBs only, labelled as such.
+- Free network OS images for real captures, software only. SR Linux needs no registration; cEOS and vJunos need accounts. Recommendation: approve, starting with SR Linux, once the host is less loaded. Until then these rows stay `doc_claimed` (tracker 249 is unchanged).
+
 ### Coverage scorecard
 
 PR 14 reports per vendor and per lane: MIBs present, grammar present, rules by fidelity, live parse rate, unknown OIDs. CI ratchets the row count and fixtures, so coverage cannot silently regress. It can be shown on the Telemetry Coverage page.
