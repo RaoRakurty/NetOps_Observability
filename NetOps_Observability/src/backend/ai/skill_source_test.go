@@ -87,7 +87,7 @@ name: acme-change
 layer: path_seam
 version: 1
 kind: mop
-when_to_use: acme wan brownout
+when_to_use: acme change window
 symptom_kinds: acme-wan
 tools: get_rca_verdict
 gather:
@@ -294,8 +294,17 @@ func compiledWithExtra(t *testing.T, extra ...*Skill) *SkillSet {
 func TestMOPIsNeverSelected(t *testing.T) {
 	mop := parseMOP(t)
 	set := compiledWithExtra(t, mop)
-	if m, ok := SelectSkill(set, "acme wan brownout", Plan{Intent: "troubleshoot"}); ok && m.Skill.Name == mop.Name {
+	// A question only the MOP matches: nothing else could win it for the wrong reason.
+	if m, ok := SelectSkill(set, "acme change window", Plan{Intent: "troubleshoot"}); ok && m.Skill.Name == mop.Name {
 		t.Fatal("a MOP was selected")
+	}
+
+	// Nor as the entry-method fallback, however it came to claim that layer.
+	methodMOP := parseMOP(t)
+	methodMOP.Name, methodMOP.Layer = "acme-method-mop", LayerMethod
+	only := &SkillSet{byName: map[string]*Skill{methodMOP.Name: methodMOP}, order: []string{methodMOP.Name}}
+	if m, ok := SelectSkill(only, "the link is down", Plan{Intent: "troubleshoot"}); ok {
+		t.Fatalf("a MOP was selected as the fallback: %+v", m)
 	}
 }
 
@@ -320,10 +329,16 @@ func TestMOPGatherIsNeverInvoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, handled := o.answerSkill(context.Background(), harnessPrincipal(), "acme wan brownout",
+	sink := newRecordingSink()
+	o.Score = sink
+	_, handled := o.answerSkill(context.Background(), harnessPrincipal(), "acme change window",
 		Plan{Intent: "troubleshoot"}, SkillMatch{Skill: mop}, map[string]string{"correlation_id": "case-1"}, nil)
 	if handled {
 		t.Error("a MOP answered a turn")
+	}
+	// Refused at the door: not an investigation that found nothing.
+	if len(sink.invs) != 0 {
+		t.Errorf("a MOP was counted as an investigation: %+v", sink.invs)
 	}
 	if len(*audit) != 0 {
 		t.Errorf("a MOP's gather ran: %+v", *audit)
