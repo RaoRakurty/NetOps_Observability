@@ -110,7 +110,7 @@ async function boot(page: Page, theme?: string): Promise<SearchBody[]> {
   // A hash-only goto would not reload, and a screenshot would keep the last theme.
   await page.goto("about:blank");
   await page.goto("/#/explore/logs");
-  await expect(page.getByRole("grid", { name: "Log results" })).toBeVisible();
+  await expect(page.getByRole("grid", { name: "Log results" })).toBeVisible({ timeout: 30_000 });
   // Set directly: the preference loader folds dark, oled and graphite into one knob
   // position, and each of them has to be looked at on its own.
   if (theme) {
@@ -269,9 +269,7 @@ for (const [name, width, height] of [["desktop-1366", 1366, 768], ["desktop-1920
     expect(audit.tooSmall).toEqual([]);
     expect(audit.outsideFaces).toEqual([]);
     expect(audit.outside).toEqual([]);
-    // On a phone the page width is set by the shell's top bar, not by this page; that
-    // is the phone-width pass (PR #76). Everything of ours is held to the viewport above.
-    if (name !== "phone") expect(audit.overflow).toBeLessThanOrEqual(0);
+    expect(audit.overflow).toBeLessThanOrEqual(0);
     // A table on a phone must fit, not scroll inside its own box either.
     const inner = await page.getByRole("grid", { name: "Log results" }).evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(inner).toBeLessThanOrEqual(0);

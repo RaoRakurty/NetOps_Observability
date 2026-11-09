@@ -6,7 +6,7 @@
 // document itself. Everything shown comes through toLogEvent, so secrets are already
 // replaced, and every value is escaped React text.
 
-import { KeyboardEvent, useId, useMemo, useState } from "react";
+import { Fragment, KeyboardEvent, useId, useMemo, useState } from "react";
 import { FlowView, LogEvent, LogField, LogVarbind, fieldsOf, isIpLike, toLogEvent } from "../lib/logEvent";
 import { LogJson, LogLevel, LogMessage, LogTime } from "../lib/logfmt";
 
@@ -161,12 +161,9 @@ function FlowCard({ flow }: { flow: FlowView }) {
         {flow.outInterface && <><dt>Out interface</dt><dd className="lv-mono">{flow.outInterface}</dd></>}
         {flow.packets && <><dt>Packets</dt><dd className="lv-mono">{flow.packets}</dd></>}
         {flow.bytes && <><dt>Bytes</dt><dd className="lv-mono">{flow.bytes}</dd></>}
-        {flow.sampling.length > 0 && (
-          <>
-            <dt>Sampling reported</dt>
-            <dd className="lv-mono">{flow.sampling.map((s) => `${s.name} ${s.value}`).join(" · ")}</dd>
-          </>
-        )}
+        {flow.sampling.map((s) => (
+          <Fragment key={s.name}><dt>{s.name}</dt><dd>{s.value}</dd></Fragment>
+        ))}
       </dl>
     </section>
   );

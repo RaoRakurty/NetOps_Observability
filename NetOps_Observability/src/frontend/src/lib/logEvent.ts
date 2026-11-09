@@ -65,7 +65,7 @@ export interface FlowView {
   outInterface: string;
   packets: string;
   bytes: string;
-  /** Sampling values exactly as reported, named by their own field. */
+  /** The search-index sample and the exporter's own sampling, labelled apart. */
   sampling: LogField[];
 }
 
@@ -121,9 +121,18 @@ function isCommunityOid(oid: string): boolean {
   return oid === COMMUNITY_OID || oid.startsWith(`${COMMUNITY_OID}.`);
 }
 
+// Names the patterns would catch but which hold no secret: a dedup key, and BGP
+// communities, which are routing data an operator needs to read. Exact names only,
+// so anything unrecognised stays hidden.
+const NOT_SECRET = new Set([
+  "message_key", "__key", "partition_key", "routing_key", "sort_key", "primary_key",
+  "bgp_community", "bgp_communities", "large_communities", "extended_communities",
+]);
+
 export function isSecretName(name: string): boolean {
-  if (SECRET_ANYWHERE.test(name)) return true;
   const snake = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.\-\s]+/g, "_").toLowerCase();
+  if (NOT_SECRET.has(snake)) return false;
+  if (SECRET_ANYWHERE.test(name)) return true;
   return SECRET_WORD.test(snake) || SECRET_JOINED.test(snake);
 }
 
@@ -357,17 +366,25 @@ function protocolName(src: Record<string, any>): string {
   return IANA_PROTO_NAMES[raw] ?? `IP/${raw}`;
 }
 
-function flowViewOf(src: Record<string, any>): FlowView {
-  const sampling: LogField[] = [];
-  for (const [name, path] of [
-    ["sample_rate", "sample_rate"],
-    ["sampling_rate", "sampling_rate"],
-    ["reported_interval", "flow.sampling.reported_interval"],
-    ["status", "flow.sampling.status"],
-  ] as const) {
-    const value = pick(src, path);
-    if (value !== "") sampling.push({ name, value });
+/**
+ * Two different facts that look alike: `sample_rate` is the router keeping 1 record in
+ * N for the search index, and `sampling_rate` is what the exporter reported about its
+ * own sampling (0 means it reported none). No volume is estimated from either.
+ */
+function flowSamplingOf(src: Record<string, any>): LogField[] {
+  const out: LogField[] = [];
+  const kept = pick(src, "sample_rate");
+  if (kept !== "" && kept !== "0") out.push({ name: "Search index keeps", value: `1 in ${kept}` });
+  const reported = pick(src, "sampling_rate");
+  if (reported !== "") {
+    const none = reported === "0";
+    out.push({ name: "Exporter sampling", value: none ? "None reported" : `1 in ${reported}` });
   }
+  return out;
+}
+
+function flowViewOf(src: Record<string, any>): FlowView {
+  const sampling = flowSamplingOf(src);
   return {
     exporter: pick(src, "exporter.address", "sampler_address"),
     exporterName: known(src, "exporter.name", "exporter_name", "device_name"),

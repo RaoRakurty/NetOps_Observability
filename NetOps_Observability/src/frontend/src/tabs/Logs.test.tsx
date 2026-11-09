@@ -332,7 +332,9 @@ describe("record details", () => {
     expect(detail.textContent).toContain("Exporter 10.0.0.1");
     expect(within(detail).getByTestId("flow-strip").textContent).toContain("10.0.0.5:161");
     expect(within(detail).getByTestId("flow-strip").textContent).toContain("10.0.0.9:38204");
-    expect(detail.textContent).toContain("sample_rate 50 · sampling_rate 0");
+    expect(detail.textContent).toContain("Search index keeps1 in 50");
+    expect(detail.textContent).toContain("Exporter samplingNone reported");
+    expect(detail.textContent).not.toContain("sampling_rate");
     expect(detail.textContent).not.toMatch(/estimate/i);
   });
 

@@ -184,7 +184,7 @@ describe("toLogEvent — today's records", () => {
     expect(ev.flow).toMatchObject({
       exporter: "192.168.222.104", protocol: "UDP", inInterface: "1", outInterface: "4",
       bytes: "1,003", packets: "13",
-      sampling: [{ name: "sample_rate", value: "50" }, { name: "sampling_rate", value: "0" }],
+      sampling: [{ name: "Search index keeps", value: "1 in 50" }, { name: "Exporter sampling", value: "None reported" }],
     });
     // Sampling is reported, not interpreted, and traffic is never estimated.
     expect(everyVisibleString(ev)).not.toMatch(/ambiguous|estimated|bps|1:50/);
@@ -279,7 +279,8 @@ describe("toLogEvent — richer fields win when they arrive", () => {
           source: { address: "10.0.0.1", port: 1 }, destination: { address: "10.0.0.2", port: 2 },
           transport: { number: 17, name: "udp" }, ingress: { interface: { index: 7 } },
         },
-        flow: { bytes: { observed: 5 }, packets: { observed: 1 }, sampling: { status: "ambiguous", reported_interval: 50 } },
+        flow: { bytes: { observed: 5 }, packets: { observed: 1 } },
+        sampling_rate: 100,
       },
     });
     expect(fl.title).toBe("10.0.0.1 → 10.0.0.2");
@@ -287,7 +288,7 @@ describe("toLogEvent — richer fields win when they arrive", () => {
     expect(fl.deviceAddress).toBe("10.9.9.9");
     expect(fl.flow?.protocol).toBe("UDP");
     expect(fl.flow?.inInterface).toBe("7");
-    expect(fl.flow?.sampling).toEqual([{ name: "reported_interval", value: "50" }, { name: "status", value: "ambiguous" }]);
+    expect(fl.flow?.sampling).toEqual([{ name: "Exporter sampling", value: "1 in 100" }]);
   });
 });
 
@@ -304,12 +305,12 @@ describe("secrets never leave the presenter", () => {
   it.each([
     "snmp_community", "community", "snmpCommunity", "communities", "password", "user_password",
     "secret", "clientSecret", "token", "access_token", "accessToken", "api_key", "apiKey",
-    "authKey", "private-key", "privKey", "key", "message_key", "Authorization", "credentials",
+    "authKey", "private-key", "privKey", "key", "Authorization", "credentials", "community_string",
   ])("%s is treated as a secret", (name) => {
     expect(isSecretName(name)).toBe(true);
   });
 
-  it.each(["keyword", "monkey", "hostname", "severity", "trap_oid", "authenticated", "message", "tcp_flags", "snmp_user"])(
+  it.each(["keyword", "monkey", "hostname", "severity", "trap_oid", "authenticated", "message", "tcp_flags", "snmp_user", "message_key", "bgp_communities", "bgpCommunities"])(
     "%s is not",
     (name) => {
       expect(isSecretName(name)).toBe(false);
