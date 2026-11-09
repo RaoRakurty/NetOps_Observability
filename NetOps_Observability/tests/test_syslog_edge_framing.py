@@ -346,47 +346,10 @@ def test_a_junos_admin_link_down_cannot_open_an_object(edge: H.Edge) -> None:
     assert not opens_alone(got)
 
 
-_STAGE5_PROBE = textwrap.dedent("""\
-    import json, sys
-    from datetime import datetime, timezone
-    import catalog, engine, producers as P
-    now = datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc)
-    sigs = [s for s in (P.syslog_control_signal({**d, "timestamp": "2026-11-09T09:59:00Z"}, "t1", now)
-                        for d in json.load(sys.stdin)) if s]
-    sigs.sort(key=lambda s: (s.ts, s.signal_id))
-    print(len(engine.run_window(tuple(sigs), catalog.builtin_catalog(), ())))
-""")
-
-
-def _objects_opened(docs: list[dict]) -> int:
-    """The engine's real stage [5] over what the real edge delivered."""
-    proc = subprocess.run(
-        [sys.executable, "-c", _STAGE5_PROBE], input=json.dumps(docs), capture_output=True,
-        text=True, check=False, timeout=120,
-        env={"PYTHONPATH": str(CORRELATION), "PATH": "/usr/bin:/bin"})
-    assert proc.returncode == 0, proc.stderr
-    return int(proc.stdout.strip())
-
-
-IOS_FAULT = (b"<187>25170: Nov  9 09:00:01.123: %LINK-3-UPDOWN: Interface Gi1, changed state to down",
-             b"<189>25171: Nov  9 09:00:02.123: %LINEPROTO-5-UPDOWN: Line protocol on Interface Gi1, changed state to down")
-IOS_SHUTDOWN = (b"<189>25172: Nov  9 09:00:01.123: %LINK-5-CHANGED: Interface Gi1, changed state to administratively down",
-                b"<189>25173: Nov  9 09:00:02.123: %LINEPROTO-5-UPDOWN: Line protocol on Interface Gi1, changed state to down")
-
-
-def test_a_real_ios_link_fault_opens_one_object(edge: H.Edge) -> None:
-    assert _objects_opened([edge.send(f) for f in IOS_FAULT]) == 1
-
-
-def test_an_ios_shutdown_opens_nothing(edge: H.Edge) -> None:
-    """Both of its lines, as the box logs them, through stage [5]."""
-    assert _objects_opened([edge.send(f) for f in IOS_SHUTDOWN]) == 0
-
-
-def test_an_eos_link_fault_still_opens(edge: H.Edge) -> None:
-    doc = edge.send(b"<149>Nov  9 09:00:01 edge01 Ebra: %LINEPROTO-5-UPDOWN: Line protocol on "
-                    b"Interface Ethernet1, changed state to down")
-    assert _objects_opened([doc]) == 1
+# The edge-to-stage-[5] cases (an IOS fault opens one object, an IOS shutdown opens
+# none, an EOS fault still opens, a device five hours behind still correlates) live in
+# src/correlation/test_syslog_edge_stage5_387.py: stage [5] imports pydantic, which
+# this suite's CI job does not install. They drive the same edge harness.
 
 
 @pytest.mark.parametrize("pri", range(8))
@@ -486,32 +449,6 @@ def test_a_zoneless_device_ahead_is_read_at_receive_time_too(edge: H.Edge) -> No
     doc = edge.send(_frame(ZONELESS[2][1], claimed))
     assert doc["ts_source"] == "edge_receive", doc
     assert abs((_ts(doc["timestamp"]) - datetime.now(timezone.utc)).total_seconds()) < RECORD_TOLERANCE_S, doc
-
-
-_WINDOW_PROBE = textwrap.dedent("""\
-    import json, sys
-    from datetime import datetime, timezone
-    import catalog, engine, producers as P
-    now = datetime.now(timezone.utc)
-    sigs = [s for s in (P.syslog_control_signal(dict(d), "t1", now) for d in json.load(sys.stdin)) if s]
-    sigs.sort(key=lambda s: (s.ts, s.signal_id))
-    snaps = engine.run_window(tuple(sigs), catalog.builtin_catalog(), ())
-    print(json.dumps({"signals": len(sigs), "objects": len(snaps)}))
-""")
-
-
-def test_a_device_five_hours_behind_still_correlates_with_a_frame_on_time(edge: H.Edge) -> None:
-    """THE REGRESSION. Each line can open an object alone, so two objects means they never
-    met: the gap between them was five hours. One object means they correlated."""
-    now = datetime.now(timezone.utc)
-    behind = edge.send(_frame(ZONELESS[2][1], now - FIVE_HOURS))
-    on_time = edge.send(f"<186>1 {_iso(now)} r5 chassisd 1 - - a critical line no rule knows".encode())
-    assert behind["hostname"] == on_time["hostname"] == "r5"
-    proc = subprocess.run(
-        [sys.executable, "-c", _WINDOW_PROBE], input=json.dumps([behind, on_time]), capture_output=True,
-        text=True, check=False, timeout=120, env={"PYTHONPATH": str(CORRELATION), "PATH": "/usr/bin:/bin"})
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"signals": 2, "objects": 1}, proc.stdout
 
 
 def test_a_frame_with_no_time_is_not_flagged(edge: H.Edge) -> None:
