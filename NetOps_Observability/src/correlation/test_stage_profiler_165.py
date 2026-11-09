@@ -83,10 +83,10 @@ def test_records_calls_and_time_when_enabled():
 
 def test_shares_sum_to_one_across_stages():
     main.CORR_PROFILE_STAGES = True
-    with main.stage("a"):
-        time.sleep(0.004)
-    with main.stage("b"):
-        time.sleep(0.002)
+    # Recorded directly: sleeping to create a cost difference ranks by the host's
+    # scheduler, and this failed intermittently at load 37 (tracker 387).
+    main.stage_record("a", 0.004)
+    main.stage_record("b", 0.002)
     stages = main.stage_profile()["stages"]
     assert abs(sum(r["share"] for r in stages.values()) - 1.0) < 0.01
     assert stages["a"]["share"] > stages["b"]["share"], "shares must rank by cost"
@@ -94,10 +94,8 @@ def test_shares_sum_to_one_across_stages():
 
 def test_stages_are_ordered_most_expensive_first():
     main.CORR_PROFILE_STAGES = True
-    with main.stage("cheap"):
-        time.sleep(0.001)
-    with main.stage("dear"):
-        time.sleep(0.005)
+    main.stage_record("cheap", 0.001)
+    main.stage_record("dear", 0.005)
     assert next(iter(main.stage_profile()["stages"])) == "dear"
 
 
