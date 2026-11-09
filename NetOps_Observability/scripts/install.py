@@ -2040,16 +2040,18 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     # The app-state role, LAST and right before .env and its file move: from the
     # ALTER until the file changes, a NEW connection from the api is refused
     # (open ones are unaffected). Postgres holds one password per role, so that
-    # window cannot be zero; it can only be short. External database or no
-    # Postgres backend: there is no role here to change, so the value stays.
+    # window cannot be zero; it can only be short. An external database's role
+    # is not ours to change, so a new value would lock the api out: it stays. On
+    # the file backend nothing uses the value yet, so it just changes in .env.
     if "APP_DB_PASSWORD" in new_values:
         v = next(x for x in plan if x.name == "APP_DB_PASSWORD")
         app_user, _, host, dbname = _split_app_dsn(env.get("DATABASE_URL") or "")
-        if app_state_backend(env) != "postgres" or host not in ("postgres", "localhost", "127.0.0.1"):
-            info("APP_DB_PASSWORD kept: this install's app-state store is not the "
-                 "bundled Postgres, so there is no role here to change")
+        uses_postgres = app_state_backend(env) == "postgres"
+        if uses_postgres and host not in ("postgres", "localhost", "127.0.0.1"):
+            info("APP_DB_PASSWORD kept: this install's app-state store is an "
+                 "external database, so there is no role here to change")
             new_values.pop("APP_DB_PASSWORD")
-        elif v.reconcile:
+        elif uses_postgres and v.reconcile:
             done, msg = sr.provision_app_state_role(
                 runner, db_user=env.get("DB_USER", "netops"),
                 db_name=dbname or env.get("DB_NAME", "netops"),

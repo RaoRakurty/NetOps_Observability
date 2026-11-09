@@ -123,6 +123,138 @@ def test_converted_services_hold_no_password_env(path: Path) -> None:
     assert not hits, f"{path.name}: service password still in a container env: {hits}"
 
 
+# ── The ratchet (tracker 384) ───────────────────────────────────────────────
+#
+# Every credential a compose service still declares in its environment, named one
+# by one. A credential that is NOT here fails the build; so does an entry nothing
+# uses any more, so this list can only shrink. docs/runbooks/secret-rotation.md §11
+# says why each remains.
+ENV_CREDENTIALS_REMAINING: dict[str, set[str]] = {
+    "postgres": {"POSTGRES_PASSWORD"},
+    "redis": {"REDISCLI_AUTH"},
+    "keycloak": {"KC_BOOTSTRAP_ADMIN_PASSWORD", "KEYCLOAK_ADMIN_PASSWORD", "KC_DB_PASSWORD"},
+    "gnmic": {"SRL_GNMI_PASS", "EOS_GNMI_PASS"},    # device logins, not service credentials
+    "vector-aggregator": {"INGEST_TOKEN_TRAPS", "INGEST_TOKEN_PROBES", "INGEST_TOKEN_METRICS",
+                          "INGEST_TOKEN_BUS"},
+    "vector-router": {"CLICKHOUSE_PASSWORD", "INGEST_TOKEN"},
+    "clickhouse": {"CLICKHOUSE_PASSWORD"},
+    "correlation": {"CLICKHOUSE_PASSWORD", "CORR_DEBUG_TOKEN"},
+    "api": {"REDIS_PASSWORD", "INGEST_TOKEN", "INGEST_TOKEN_TRAPS", "INGEST_TOKEN_PROBES",
+            "INGEST_TOKEN_METRICS", "INGEST_TOKEN_BUS", "VMALERT_WEBHOOK_TOKEN",
+            "CLICKHOUSE_PASSWORD", "NTFY_ALERT_TOKEN", "PLATFORM_ALERTS_NTFY_TOKEN",
+            "CORR_DEBUG_TOKEN", "NETBOX_TOKEN", "UNIFI_PASSWORD", "PAGERDUTY_KEY", "SMTP_PASS",
+            "TWILIO_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "SERVICENOW_PASSWORD", "JIRA_API_TOKEN",
+            "CONFIG_BACKUP_SSH_PASSWORD", "CONFIG_BACKUP_SSH_KEY", "PCAP_SSH_PASSWORD",
+            "PCAP_SSH_KEY", "PROTOCOL_DIAG_SSH_PASSWORD", "PROTOCOL_DIAG_SSH_KEY",
+            "OIDC_CLIENT_SECRET", "KEYCLOAK_ADMIN_PASSWORD", "COPILOT_API_KEY", "JWT_SECRET",
+            "ENCRYPTION_KEY", "ADMIN_INITIAL_PASSWORD", "ADMIN_RESET_PASSWORD",
+            "REPORT_LINK_SECRET"},
+    "prober": {"INGEST_TOKEN_PROBES", "REDIS_PASSWORD"},
+    "mock-servicenow": {"MOCK_SNOW_PASSWORD", "MOCK_SNOW_TOKEN"},   # test double
+    "mock-nms": {"MOCK_NMS_PASSWORD"},                              # test double
+    "cloud-ingest": {"INGEST_TOKEN_METRICS"},
+    "netbox-postgres": {"POSTGRES_PASSWORD"},
+    "netbox": {"DB_PASSWORD", "REDIS_PASSWORD", "SECRET_KEY", "SUPERUSER_PASSWORD",
+               "SUPERUSER_API_TOKEN"},
+}
+# Interpolated variables whose name ends like a credential's but which are not one.
+NOT_A_CREDENTIAL = {"STORE_PG_ALLOW_RLS_BYPASS", "JIRA_PROJECT_KEY"}
+INTERPOLATED_CREDENTIAL = re.compile(
+    r"\$\{([A-Z0-9_]*(?:PASSWORD|PASS|TOKEN|SECRET|_KEY)|INGEST_TOKEN_[A-Z]+)\b")
+
+
+def _declared_credentials() -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path in COMPOSE_FILES:
+        for svc_name, svc in (load(path).get("services") or {}).items():
+            for key, value in env_of(svc).items():
+                names = set(INTERPOLATED_CREDENTIAL.findall(value)) - NOT_A_CREDENTIAL
+                if names:
+                    found.setdefault(svc_name, set()).add(key)
+    return found
+
+
+def test_no_new_credential_in_a_container_environment() -> None:
+    found = _declared_credentials()
+    new = {s: sorted(keys - ENV_CREDENTIALS_REMAINING.get(s, set()))
+           for s, keys in found.items() if keys - ENV_CREDENTIALS_REMAINING.get(s, set())}
+    assert not new, (
+        f"credential(s) in a container's environment: {new}. Read it from a file rendered "
+        "under data/secrets instead (scripts/install.py SERVICE_SECRETS, tracker 384). "
+        "`docker inspect` shows a declared environment, including on an exited container.")
+
+
+def test_the_remaining_credentials_list_only_shrinks() -> None:
+    found = _declared_credentials()
+    stale = {s: sorted(keys - found.get(s, set()))
+             for s, keys in ENV_CREDENTIALS_REMAINING.items() if keys - found.get(s, set())}
+    assert not stale, f"no longer in the compose files, so remove them from the list: {stale}"
+
+
+def test_no_credential_on_a_container_argv_beyond_the_known_one() -> None:
+    """A flag value is readable in `ps` by anything on the host."""
+    hits = set()
+    for path in COMPOSE_FILES:
+        for svc_name, svc in (load(path).get("services") or {}).items():
+            for field in ("command", "entrypoint"):
+                raw = svc.get(field) or []
+                for arg in ([raw] if isinstance(raw, str) else raw):
+                    for name in INTERPOLATED_CREDENTIAL.findall(str(arg)):
+                        hits.add((svc_name, name))
+    assert hits == {("redis", "REDIS_PASSWORD")}, hits   # valkey --requirepass: see §11
+
+
+# Where a shell-level credential could reach `ps`. Each scan looks for the flag
+# followed by a variable or a command substitution, so a documented literal such
+# as `--user 0:0` or `-u "$(id -u)"` on docker is not what this is about.
+SCRIPT_ROOTS = (ROOT / "scripts", COMPOSE_DIR)
+CURL_USER_FLAG = re.compile(r"\bcurl\b[^\n|;]*\s(?:-u|--user)\s")
+PASSWORD_FLAG = re.compile(r"--password[ =][\"'$]")
+HASH_P_FLAG = re.compile(r"hash\.sh\"?\s+-p\b")
+# Known and not moved. Remove an entry when it is fixed; never add one.
+CURL_USER_ALLOWED = {"validate-rca-ticketing-e2e.sh"}    # the mock ServiceNow's test login
+PASSWORD_FLAG_ALLOWED = {
+    "backup-drill.sh", "restore-drill.sh",   # a scratch server's literal, or a shell variable
+    "secret_rotation.py",                    # clickhouse-client: tracker 388
+    "migrate-tenant-partition.sh",           # clickhouse-client, one-off migration: tracker 388
+    "run.py", "iam_audit.py",                # operator's own login to an audit tool, on its CLI
+}
+
+
+def _operational_scripts() -> list[Path]:
+    out: list[Path] = []
+    for root in SCRIPT_ROOTS:
+        for p in sorted(root.rglob("*")):
+            if p.suffix in (".sh", ".py") and p.is_file():
+                out.append(p)
+    return out
+
+
+def _code(p: Path) -> str:
+    """The script without its comment lines: explaining a leak is not one."""
+    return "\n".join(ln for ln in p.read_text(errors="replace").splitlines()
+                     if not ln.lstrip().startswith("#"))
+
+
+def test_no_script_passes_a_credential_on_a_curl_argv() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if p.name not in CURL_USER_ALLOWED and CURL_USER_FLAG.search(_code(p))]
+    assert not hits, (f"curl -u puts the password in `ps`: {hits}. Send a config on stdin "
+                      "(`curl --config -`), as scripts/overlap_rotation.py does.")
+
+
+def test_no_script_passes_a_credential_on_a_password_flag() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if p.name not in PASSWORD_FLAG_ALLOWED and PASSWORD_FLAG.search(_code(p))]
+    assert not hits, f"a --password flag puts the value in `ps`: {hits}"
+
+
+def test_no_script_hashes_a_password_from_its_argv() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if HASH_P_FLAG.search(_code(p))]
+    assert not hits, f"hash.sh -p puts the value on a java argv; use -env: {hits}"
+
+
 def test_vmauth_reads_the_rendered_config_and_rechecks_it() -> None:
     svc = services("docker-compose.yml")["vmauth"]
     cmd = svc["command"]
@@ -185,8 +317,20 @@ def test_tls_clients_read_their_credential_from_a_mounted_file() -> None:
     assert _secret_mount("vmauth/gnmic") in _mounts(gnmic)
 
 
+def test_api_reads_the_postgres_password_from_a_mounted_file() -> None:
+    """Tracker 384. DATABASE_URL names the role and the driver's own PGPASSFILE
+    names the file; the superuser's password is not in the api at all."""
+    svc = services("docker-compose.yml")["api"]
+    env = env_of(svc)
+    assert env["PGPASSFILE"] == f"/run/secrets/{install.APP_DB_SECRET_REL}/{install.APP_DB_SECRET_FILE}"
+    assert _secret_mount(install.APP_DB_SECRET_REL) in _mounts(svc)
+    assert "DB_PASSWORD" not in env, "the Postgres superuser password: nothing in the api reads it"
+    assert env["DATABASE_URL"] == "${DATABASE_URL:-}", "the value comes from .env, which migrates"
+
+
 def test_every_mounted_secret_is_one_install_renders() -> None:
-    rendered = {s.rel for s in install.SERVICE_SECRETS} | {d.rel for d in install.DERIVED_SECRETS}
+    rendered = ({s.rel for s in install.SERVICE_SECRETS} | {d.rel for d in install.DERIVED_SECRETS}
+                | {install.APP_DB_SECRET_REL})
     mounted = set()
     for path in COMPOSE_FILES:
         mounted |= set(re.findall(r"\.\./\.\./data/secrets/([a-z]+/[a-z-]+):", path.read_text()))

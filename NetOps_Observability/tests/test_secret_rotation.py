@@ -502,19 +502,33 @@ def test_app_role_rotation_failure_keeps_every_copy_on_the_old_value(tmp_path):
     assert app_role_file(env_path).read_text() == f"*:*:*:*:{before['APP_DB_PASSWORD']}\n"
 
 
-@pytest.mark.parametrize("extra", [
-    {"STORE_BACKEND": "file"},
-    {"STORE_BACKEND": "postgres", "DATABASE_URL": "postgres://u@db.example.net:5432/x"},
-], ids=["file-backend", "external-database"])
-def test_app_role_is_not_rotated_where_there_is_no_role_to_change(tmp_path, extra):
+@pytest.mark.parametrize("dsn", [
+    "postgres://u@db.example.net:5432/x",
+    "host=db.example.net user=u password=pw dbname=x",
+], ids=["external-url", "key-value-dsn"])
+def test_app_role_is_not_rotated_on_an_external_database(tmp_path, dsn):
     """A new value here would lock the api out of a database this tool cannot ALTER."""
-    env_path = make_install(tmp_path, started_stores=("postgres",), env_extra=extra)
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "postgres", "DATABASE_URL": dsn})
     before = parse_env(env_path)
     stores = FakeStores(before)
     rotated, failures = run_rotation(env_path, stores, strict=False)
     assert failures == 0
     assert "APP_DB_PASSWORD" not in rotated
     assert parse_env(env_path)["APP_DB_PASSWORD"] == before["APP_DB_PASSWORD"]
+    assert stores.app_role == before["APP_DB_PASSWORD"], "no ALTER ROLE was issued"
+
+
+def test_file_backend_changes_the_value_without_touching_a_role(tmp_path):
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "file"})
+    before = parse_env(env_path)
+    stores = FakeStores(before)
+    _rotated, failures = run_rotation(env_path, stores, strict=False)
+    assert failures == 0
+    assert parse_env(env_path)["APP_DB_PASSWORD"] != before["APP_DB_PASSWORD"]
+    assert stores.app_role == before["APP_DB_PASSWORD"], "no ALTER ROLE on an install not using it"
+    assert not app_role_file(env_path).exists()
 
 
 def test_rotation_preserves_operator_edits_and_backs_the_file_up(tmp_path):
