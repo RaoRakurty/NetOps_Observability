@@ -57,12 +57,12 @@ def severity_lines(row: dict, result: str, target: str, indent: str) -> list[str
 
 
 def match_condition(row: dict, msg_var: str, app_var: str, vendor_var: str,
-                    done_var: str) -> str:
+                    open_cond: str) -> str:
     """The cheap gates, in the order `syslog_packs.Grammar.applies` states them.
 
-    `done_var` closes the chain once a row has matched: first match wins.
+    `open_cond` is true until a row has matched: first match wins.
     """
-    conds = [done_var]
+    conds = [open_cond]
     if row.get("vendor"):
         conds.append(f'({vendor_var} == "" || {vendor_var} == {json.dumps(row["vendor"])})')
     conds.append(f"contains({msg_var}, {json.dumps(row['literal'])})")

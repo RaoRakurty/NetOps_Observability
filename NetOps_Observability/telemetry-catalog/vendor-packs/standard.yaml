@@ -256,7 +256,7 @@ fixtures:
       event_type: ssh_session_closed
     signal: null
 
-  - name: a failed login is not audit noise
+  - name: a rejected password is not audit noise
     fidelity: doc_claimed
     hostname: vEdge-1
     appname: sshd

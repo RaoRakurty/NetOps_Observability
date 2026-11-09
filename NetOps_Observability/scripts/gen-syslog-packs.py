@@ -45,9 +45,8 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-from syslog_packs import PackTable
-
 import syslog_pack_vrl as V
+from syslog_packs import PackTable
 
 BEGIN_MARK = "      # >>> BEGIN GENERATED-SYSLOG-PACKS (scripts/gen-syslog-packs.py)"
 END_MARK = "      # <<< END GENERATED-SYSLOG-PACKS"
@@ -67,14 +66,13 @@ class GenerationError(RuntimeError):
 
 
 def _envelope_lines(rows: list[dict]) -> list[str]:
-    out = ['cx_pk_env_done = false', 'cx_pk_raw = string(.message) ?? ""']
+    out = ['cx_pk_raw = string(.message) ?? ""']
     for e in rows:
         out += [
             f"# envelope {e['id']} ({e['fidelity']})",
-            f"if !cx_pk_env_done && contains(cx_pk_raw, {json.dumps(e['literal'])}) {{",
+            f"if !exists(.{e['preserve_as']}) && contains(cx_pk_raw, {json.dumps(e['literal'])}) {{",
             f"  cx_pk_e, cx_pk_eerr = parse_regex(cx_pk_raw, r'{e['pattern']}')",
             "  if cx_pk_eerr == null {",
-            "    cx_pk_env_done = true",
             f"    .{e['preserve_as']} = cx_pk_raw",
             f"    .message = {V.group_expr('cx_pk_e', e['message'])}",
         ]
@@ -102,19 +100,17 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         'cx_pk_ncode = ""',
         'cx_pk_cat = ""',
         "cx_pk_sev = 99",
-        "cx_pk_open = true",
         'cx_pk_msg = string(.message) ?? ""',
         "cx_pk_app = downcase(.appname)",
     ]
     for g in rows:
         cond = V.match_condition(g, "cx_pk_msg", "cx_pk_app", "cx_inventory_vendor",
-                                 "cx_pk_open")
+                                 'cx_pk_parser == ""')
         out += [
             f"# grammar {g['id']} ({g['fidelity']})",
             f"if {cond} {{",
             f"  cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'{g['pattern']}')",
             "  if cx_pk_merr == null {",
-            "    cx_pk_open = false",
             f"    cx_pk_parser = {json.dumps(g['parser_id'])}",
             f"    cx_pk_vendor = {json.dumps(g['vendor'])}",
         ]
@@ -227,6 +223,10 @@ def render_tests(cases: list[tuple[str, dict, dict]]) -> str:
                 continue
             body.append(f'              assert_eq!(.{key}, {_yaml_str(want[key])}, '
                         f'"wrong {key}")')
+        if not want:
+            # A fixture with nothing to assert claims that no pack has an opinion.
+            body.append('              assert!(!exists(.event_category), "no pack row applies")')
+            body.append('              assert!(!exists(.vendor_source), "no pack row applies")')
     return "\n".join(body) + "\n"
 
 

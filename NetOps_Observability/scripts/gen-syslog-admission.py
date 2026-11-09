@@ -304,13 +304,12 @@ def _vrl_pack_lines(grammars: list[dict]) -> list[str]:
         'if (string(.vendor_source) ?? "") == "inventory" {',
         '  cx_pk_inv = string(.vendor) ?? ""',
         "}",
-        "cx_pk_open = true",
         f"cx_pk_n = {NO_SEVERITY}",
         f"cx_pk_floor = {NO_SEVERITY}",
     ]
     for g in grammars:
         cond = VRLPACK.match_condition(g, "cx_pk_msg", "cx_pk_app", "cx_pk_inv",
-                                       "cx_pk_open")
+                                       f"cx_pk_n == {NO_SEVERITY}")
         out += [
             f"if {cond} {{",
             f"  cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'{g['pattern']}')",
@@ -320,7 +319,6 @@ def _vrl_pack_lines(grammars: list[dict]) -> list[str]:
         out += VRLPACK.severity_lines(g, "cx_pk_m", "cx_pk_v", "    ")
         out += [
             f"    if cx_pk_v < {NO_SEVERITY} {{",
-            "      cx_pk_open = false",
             "      cx_pk_n = cx_pk_v",
             f"      cx_pk_floor = {g['alarm_floor']}",
             "    }",
@@ -331,7 +329,7 @@ def _vrl_pack_lines(grammars: list[dict]) -> list[str]:
         "if cx_pk_n < cx_sev {",
         "  cx_sev = cx_pk_n",
         "}",
-        "if !cx_pk_open && cx_sev > cx_pk_floor {",
+        f"if cx_pk_n < {NO_SEVERITY} && cx_sev > cx_pk_floor {{",
         f"  cx_sev = {NO_SEVERITY}",
         "}",
     ]

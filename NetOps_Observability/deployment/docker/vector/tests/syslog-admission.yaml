@@ -1148,7 +1148,7 @@ tests:
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
               assert_eq!(.cx_admission.v, "d9d433dbaa11", "wrong rules_hash stamp")
-  - name: "pack standard: a failed login is not audit noise"
+  - name: "pack standard: a rejected password is not audit noise"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log

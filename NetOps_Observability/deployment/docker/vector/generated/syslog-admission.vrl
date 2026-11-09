@@ -60,40 +60,36 @@ cx_pk_inv = ""
 if (string(.vendor_source) ?? "") == "inventory" {
   cx_pk_inv = string(.vendor) ?? ""
 }
-cx_pk_open = true
 cx_pk_n = 99
 cx_pk_floor = 99
-if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
   cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)')
   if cx_pk_err == null {
     cx_pk_v = 99
     cx_pk_v = to_int(cx_pk_m.sev) ?? 99
     if cx_pk_v < 99 {
-      cx_pk_open = false
       cx_pk_n = cx_pk_v
       cx_pk_floor = 2
     }
   }
 }
-if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
   cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
   if cx_pk_err == null {
     cx_pk_v = 99
     cx_pk_v = to_int(cx_pk_m.sev) ?? 99
     if cx_pk_v < 99 {
-      cx_pk_open = false
       cx_pk_n = cx_pk_v
       cx_pk_floor = 2
     }
   }
 }
-if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
+if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
   cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
   if cx_pk_err == null {
     cx_pk_v = 99
     cx_pk_v = to_int(cx_pk_m.sev) ?? 99
     if cx_pk_v < 99 {
-      cx_pk_open = false
       cx_pk_n = cx_pk_v
       cx_pk_floor = 2
     }
@@ -102,7 +98,7 @@ if cx_pk_open && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg
 if cx_pk_n < cx_sev {
   cx_sev = cx_pk_n
 }
-if !cx_pk_open && cx_sev > cx_pk_floor {
+if cx_pk_n < 99 && cx_sev > cx_pk_floor {
   cx_sev = 99
 }
 
