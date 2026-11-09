@@ -14,22 +14,22 @@ other cell is a declared gap with its reason.
 
 ## Scorecard per customer profile
 
-Matchable = enabled RCA templates whose every mandatory clause the profile can satisfy (of 103 enabled).
+Matchable = enabled RCA templates whose every mandatory clause the profile can satisfy (of 104 enabled).
 
 | Profile | Sources | Evidence types supplied | Matchable templates | Fidelity |
 |---|---|---|---|---|
-| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 15 | lab_validated |
-| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 14 | lab_validated |
-| SNMP polling + traps only | snmp_poll, trap | 8/13 | 7 | lab_validated |
-| Syslog only | syslog | 5/13 | 14 | lab_validated |
-| vManage only | vmanage | 11/13 | 8 | lab_validated |
-| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 19 | lab_validated |
-| Catalyst Center only | catalyst_center | 7/13 | 7 | doc_claimed |
-| Meraki only | meraki | 7/13 | 7 | doc_claimed |
-| NDFC only | ndfc | 6/13 | 5 | doc_claimed |
-| Prime only | prime | 7/13 | 7 | doc_claimed |
-| Versa Director only | versa_director | 7/13 | 6 | doc_claimed |
-| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 19 | lab_validated |
+| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 10/13 | 16 | lab_validated |
+| gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 8/13 | 15 | lab_validated |
+| SNMP polling + traps only | snmp_poll, trap | 8/13 | 8 | lab_validated |
+| Syslog only | syslog | 5/13 | 15 | lab_validated |
+| vManage only | vmanage | 11/13 | 9 | lab_validated |
+| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 20 | lab_validated |
+| Catalyst Center only | catalyst_center | 7/13 | 8 | doc_claimed |
+| Meraki only | meraki | 7/13 | 8 | doc_claimed |
+| NDFC only | ndfc | 6/13 | 6 | doc_claimed |
+| Prime only | prime | 7/13 | 8 | doc_claimed |
+| Versa Director only | versa_director | 7/13 | 7 | doc_claimed |
+| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 20 | lab_validated |
 
 ## Matrix
 
