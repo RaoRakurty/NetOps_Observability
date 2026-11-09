@@ -106,3 +106,23 @@ func TestFindingsDedupWindowInInitSQL(t *testing.T) {
 			"safely retry an ambiguous findings insert:\n%s", stmt)
 	}
 }
+
+// TestFlowsSamplingStatusColumnConverges pins the additive path for tracker 387:
+// an existing netops.flows gains the column on boot, the statement is safe to
+// re-run, and it only adds. Fresh installs get it from init.sql
+// (tests/test_router_storage_labels.py holds the two together).
+func TestFlowsSamplingStatusColumnConverges(t *testing.T) {
+	const want = "ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS sampling_status LowCardinality(String) DEFAULT ''"
+	n := 0
+	for _, s := range ConvergeStmts() {
+		if strings.HasPrefix(s, want) {
+			n++
+		}
+		if strings.Contains(s, "sampling_status") && !strings.HasPrefix(s, want) {
+			t.Errorf("only the additive ALTER may name sampling_status, got: %s", s)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("converge list carries the sampling_status ALTER %d times, want exactly 1", n)
+	}
+}

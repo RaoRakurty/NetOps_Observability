@@ -218,6 +218,18 @@ def _selfcheck() -> int:
     ])
     check("F-11 registry hit stays 'enriched'",
           out[0].get("tenant_attribution") == "enriched", str(out[0]))
+    # Tracker 387 D6: a hit with no tenant is a platform device, not a miss. The
+    # label changes; the segment that decides the index does not.
+    out = run_transform("router", "syslog_tagged", [
+        {"ts": 1784658034.77, "tenant_id": "", "tenant_registry": "hit"},
+        {"ts": 1784658034.77, "tenant_id": "", "tenant_registry": "miss"},
+    ])
+    check("D6 registry hit + blank tenant is platform_owned",
+          out[0].get("tenant_attribution") == "platform_owned", str(out[0]))
+    check("D6 registry miss stays unmatched",
+          out[1].get("tenant_attribution") == "unmatched", str(out[1]))
+    check("D6 the label does not move the document",
+          out[0].get("tenant_seg") == out[1].get("tenant_seg") == "untagged", str(out))
 
     print("aggregator.syslog_normalized — F-11 registry-MISS discriminator")
     # The CSV distinguishes three shapes the old config conflated:

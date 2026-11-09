@@ -37,7 +37,7 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
-import { FlowEmpty, type FlowDimension } from "./flowEmpty";
+import { FlowEmpty, FlowSamplingNote, type FlowDimension } from "./flowEmpty";
 import { StatStrip, Stat } from "../components/ui";
 import { IANA_PROTO_NAMES } from "../proto";
 
@@ -1211,7 +1211,7 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
             </div>
           )}
           <p className="mini-meta" style={{ margin: "6px 2px 0" }}>
-            Counts are scaled by each device's sampling rate. Filters and the source selector apply to every panel below.
+            <FlowSamplingNote q={q} /> Filters and the source selector apply to every panel below.
           </p>
         </div>
 

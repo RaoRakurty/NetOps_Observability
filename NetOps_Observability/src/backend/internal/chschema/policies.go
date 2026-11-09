@@ -48,6 +48,10 @@ func ConvergeStmts(extra ...[]string) []string {
 		// as tcp_flags: the field lands as soon as the column exists.
 		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS exporter_app_id LowCardinality(String) DEFAULT '' AFTER tenant_id",
 		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS exporter_app_name LowCardinality(String) DEFAULT '' AFTER exporter_app_id",
+		// Tracker 387: what the exporter said about sampling, stamped by
+		// vector-router. Same upgrade path: it lands once the column exists, and
+		// a row older than the column reads ''.
+		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS sampling_status LowCardinality(String) DEFAULT '' AFTER exporter_app_name",
 		// Build-order #8: query-time IP→country enrichment. Lazy ip_trie
 		// dictionary over the operator-supplied CSV (scripts/geoip-prepare.py);
 		// safe to create with the file absent — the Geo endpoints probe and

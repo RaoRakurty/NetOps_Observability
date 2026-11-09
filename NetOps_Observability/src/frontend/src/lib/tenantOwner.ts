@@ -27,6 +27,23 @@ export function ownerOf(tenantId?: string | null): string {
   return t === "" ? PROVIDER_TENANT : t;
 }
 
+/** `tenant_attribution` on a stored record, in words an operator reads (tracker
+ *  387 D6). This is how the record got its owner, never who may read it: access
+ *  stays on tenant_id. An outcome this build does not know is shown as itself. */
+const ATTRIBUTION_LABELS: Record<string, string> = {
+  platform_owned: "Platform device",
+  enriched: "Tenant device",
+  producer_stamped: "Tenant from an authenticated source",
+  unmatched: "Unknown device",
+  claim_rejected: "Tenant claim refused",
+};
+
+export function attributionLabel(outcome?: string | null): string {
+  const o = (outcome ?? "").trim();
+  if (o === "") return "";
+  return Object.prototype.hasOwnProperty.call(ATTRIBUTION_LABELS, o) ? ATTRIBUTION_LABELS[o] : o;
+}
+
 /** Whether two tenant ids name the same owner. */
 export function sameOwner(a?: string | null, b?: string | null): boolean {
   return ownerOf(a) === ownerOf(b);

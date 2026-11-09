@@ -410,6 +410,10 @@ func TestHandleFlowsCoverageScopedSQL(t *testing.T) {
 		"src_as > 0 OR dst_as > 0",
 		"private_only_flows",
 		"uniqExact(sampler_address)",
+		// Tracker 387: rows older than the column read '' and fall back to the
+		// rate itself, so a window spanning the upgrade is not misreported.
+		"sampling_status = 'reported' OR (sampling_status = '' AND sampling_rate > 0)",
+		"AS flows_sampling_reported",
 		"INTERVAL 900 SECOND",
 		"src_addr IN", "'10.1.0.1'", // acme's own scope
 		"sampler_address = '10.1.0.1'",

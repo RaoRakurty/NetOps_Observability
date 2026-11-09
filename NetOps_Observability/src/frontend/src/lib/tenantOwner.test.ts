@@ -6,8 +6,23 @@
 // named before anything happens to it.
 import { describe, it, expect } from "vitest";
 import {
-  actingOwner, confirmText, foreignOwnerNote, isAllTenantsView, ownerOf, sameOwner, tenantLabel, tenantNames,
+  actingOwner, attributionLabel, confirmText, foreignOwnerNote, isAllTenantsView, ownerOf, sameOwner, tenantLabel, tenantNames,
 } from "./tenantOwner";
+
+describe("attributionLabel (tracker 387 D6)", () => {
+  it("calls a registry hit with no tenant a platform device", () => {
+    expect(attributionLabel("platform_owned")).toBe("Platform device");
+  });
+  it("keeps a real registry miss distinct from it", () => {
+    expect(attributionLabel("unmatched")).toBe("Unknown device");
+  });
+  it("shows an outcome it does not know as itself, and nothing for nothing", () => {
+    expect(attributionLabel("some_future_outcome")).toBe("some_future_outcome");
+    expect(attributionLabel("toString")).toBe("toString");
+    expect(attributionLabel(undefined)).toBe("");
+    expect(attributionLabel("  ")).toBe("");
+  });
+});
 
 const NAMES = tenantNames([
   { tenant_id: "global", tenant_name: "Provider", org_id: "global", org_name: "Global", region: "" },

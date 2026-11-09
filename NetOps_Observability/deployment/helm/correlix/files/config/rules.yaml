@@ -2090,6 +2090,12 @@ groups:
         # tenant_id="". From the outside that is indistinguishable from a lab
         # whose devices genuinely have no tenant.
         #
+        # Tracker 387 D6: a registry hit with a blank tenant now counts as
+        # outcome="platform_owned", in the denominator and not the numerator, so
+        # `unmatched` means a device the registry does not know. A platform-only
+        # deployment reads 0 instead of a steady 1.0, and a broken table is a rise
+        # from 0 there too (rules-tests/tenant-enrichment.test.yaml).
+        #
         # So alert on the CHANGE, not the level. A deployment that never
         # matched anything stays silent forever (correct — nothing broke); a
         # deployment whose match rate collapses is a broken enrichment table,
@@ -2118,7 +2124,7 @@ groups:
         labels: { severity: warning, layer: ingest }
         annotations:
           summary: "Tenant enrichment miss rate on {{ $labels.topic }} jumped to {{ $value | humanizePercentage }} above its 6h baseline"
-          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
+          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted, so devices the registry should know are arriving as misses (`tenant_attribution=unmatched`). Platform devices read `platform_owned` and are not misses. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
 
       - alert: TenantAttributionLaneMissing
         # Meta-alert: the rule above is vacuous if the counter stops. An alert
