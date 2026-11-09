@@ -188,7 +188,7 @@ def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict
     return cases
 
 
-def render_tests(cases: list[tuple[str, dict, dict]]) -> str:
+def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> str:
     body = [
         "# SPDX-License-Identifier: Apache-2.0",
         "# Copyright 2026 Correlix",
@@ -230,7 +230,8 @@ def render_tests(cases: list[tuple[str, dict, dict]]) -> str:
         if not want:
             # A fixture with nothing to assert claims that no pack has an opinion.
             body.append('              assert!(!exists(.event_category), "no pack row applies")')
-            body.append('              assert!(!exists(.vendor_source), "no pack row applies")')
+            body.append(f'              assert!(!includes({json.dumps(parser_ids)}, '
+                        '.parser_id), "no pack row applies")')
     return "\n".join(body) + "\n"
 
 
@@ -244,7 +245,8 @@ def build(packs_dir: str, root: str) -> dict[str, str]:
     grammars, envelopes = bake_rules.pack_tables(packs)
     table = PackTable(grammars, envelopes)
     block = render_block(grammars, envelopes)
-    tests = render_tests(decide_fixtures(packs, table))
+    tests = render_tests(decide_fixtures(packs, table),
+                         sorted({g["parser_id"] for g in grammars}))
     _check_no_dollar(block, "the generated block")
     _check_no_dollar(tests, "the generated suite")
     out = {os.path.join(root, TESTS_REL): tests}

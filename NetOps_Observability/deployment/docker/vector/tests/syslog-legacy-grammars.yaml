@@ -7,7 +7,9 @@
 # landed, so a green run here means a pack did not move any other vendor's parse.
 #
 # Every case also asserts the pack-only fields are absent, and that the message is
-# untouched. Run by tests/test_syslog_packs.py together with vector.yaml. Keep every
+# untouched. `vendor_source` is the one exception since tracker 387 PR 12: these
+# guesses are format matching like any other, so the record now says so, and a line
+# nothing recognised still carries none. Run by tests/test_syslog_packs.py together with vector.yaml. Keep every
 # dollar sign out of this file: Vector interpolates them in the raw config text.
 
 tests:
@@ -34,7 +36,7 @@ tests:
               assert_eq!(.normalized_severity, "error")
               assert_eq!(.message, "%LINK-3-UPDOWN: Interface GigabitEthernet1, changed state to down")
               assert!(!exists(.message_original))
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")
               assert!(!exists(.severity_native_text))
               assert!(!exists(.event_category))
 
@@ -58,7 +60,7 @@ tests:
               assert_eq!(.event_type, "updown")
               assert_eq!(.normalized_severity, "notice")
               assert!(!exists(.message_original))
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")
 
   - name: "Nokia SR Linux pipe format"
     inputs:
@@ -80,7 +82,7 @@ tests:
               assert_eq!(.summary, "BGP peer 10.0.0.1 moved to Idle")
               assert_eq!(.normalized_severity, "warning")
               assert!(!exists(.message_original))
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")
 
   - name: "Juniper Junos by daemon name, no body grammar"
     inputs:
@@ -101,7 +103,7 @@ tests:
               assert_eq!(.normalized_severity, "warning")
               assert!(!exists(.parser_id))
               assert!(!exists(.message_original))
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")
 
   - name: "Juniper structured-data marker in the body"
     inputs:
@@ -119,7 +121,7 @@ tests:
             source: |
               assert_eq!(.vendor, "juniper")
               assert_eq!(.parser_status, "unparsed")
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")
 
   - name: "SONiC-style line stays unknown and unparsed"
     inputs:
@@ -160,4 +162,4 @@ tests:
               assert_eq!(.parser_status, "unparsed")
               assert_eq!(.appname, "event/system")
               assert_eq!(.normalized_severity, "warning")
-              assert!(!exists(.vendor_source))
+              assert_eq!(.vendor_source, "format")

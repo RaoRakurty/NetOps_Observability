@@ -75,12 +75,17 @@ secret:
 # ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
 #
-# The Go API exports a CSV (identity,tenant_id) — one row per device name and per
-# management address — to a shared volume; we load it here and stamp .tenant_id
-# onto every event by matching its source-device identity (syslog hostname, flows
-# sampler_address). The file is loaded at config load; it always exists (the
-# stack seeds a header-only CSV), and an empty/missing match yields tenant_id=""
-# (global/platform). See docs/design/multitenant-telemetry-isolation.md.
+# The Go API exports a CSV to a shared volume, one row per device id, name and
+# management address; we load it here and stamp .tenant_id onto every event by
+# matching its source-device identity (syslog hostname, flows sampler_address).
+# The file is loaded at config load; it always exists (the stack seeds a
+# header-only CSV), and an empty/missing match yields tenant_id="" (global/platform).
+# See docs/design/multitenant-telemetry-isolation.md.
+#
+# Tracker 387 PR 12: the same row carries the inventory's facts about the device
+# (device_id, vendor, model, site, role), on the same O(1) lookup and the same
+# reload. A file from before these columns simply reads as "no facts stated"
+# (tests/test_inventory_vendor.py), which is what makes the upgrade order free.
 # ----------------------------------------------------------------------------
 
 enrichment_tables:
@@ -93,6 +98,11 @@ enrichment_tables:
     schema:
       identity: string
       tenant_id: string
+      device_id: string
+      vendor: string
+      model: string
+      site: string
+      role: string
 
 # ----------------------------------------------------------------------------
 # SOURCES
@@ -547,15 +557,26 @@ transforms:
       # does not know at all — TENANT_UNATTRIBUTABLE, quarantined by the
       # router's generated stage when sealing is enabled. The two used to be
       # indistinguishable (both left .tenant_id == "").
+      #
+      # Tracker 387 PR 12: the facts on the row are a claim only the registry may
+      # make, so the wire's copies die here with the tenant's. `vendor_source` above
+      # all: the engine and the admission stamp narrow their grammars on it.
+      del(.vendor_source)
+      del(.device_id)
+      del(.model)
+      del(.site)
+      del(.role)
       .tenant_id = ""
       .tenant_registry = "miss"
       tenant_resolved = ""
+      cx_inv = {}
       if .hostname != "unknown" {
         trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
           .tenant_id = tenant_resolved
           .tenant_registry = "hit"
+          cx_inv = object(trows[0]) ?? {}
         }
       }
 
@@ -563,12 +584,12 @@ transforms:
       # telemetry-catalog/vendor-packs/; the generated block below runs them and
       # this file's other pack code only applies the result, naming no vendor.
       #
-      # cx_inventory_vendor is the SEAM for PR 12: set it from the registry row
-      # (`trows[0].vendor`) and it narrows the grammars to that vendor and wins over
-      # every format guess, stamping vendor_source=inventory. Until then it is empty
-      # and vendor stays what it is below: a guess from the message text, recorded as
-      # vendor_source=format on a pack hit.
-      cx_inventory_vendor = ""
+      # cx_inventory_vendor is what discovery says the device is (sysObjectID, read
+      # through the vendor profiles, telemetry_enrichment.go). It narrows the grammars
+      # to that vendor and wins over every format guess, stamping
+      # vendor_source=inventory. A sender not in inventory, or one the inventory
+      # states no vendor for, falls back to the text below: vendor_source=format.
+      cx_inventory_vendor = string(cx_inv.vendor) ?? ""
       # >>> BEGIN GENERATED-SYSLOG-PACKS (scripts/gen-syslog-packs.py)
       # GENERATED from telemetry-catalog/vendor-packs/*.yaml. DO NOT EDIT: change
       # a pack and re-run scripts/gen-syslog-packs.py; a drift test fails on a
@@ -740,7 +761,9 @@ transforms:
       msg = string(.message) ?? ""
       app = downcase(.appname)
       vendor = "unknown"
+      cx_fortios_format = false
       if match(msg, r'devname=\S+') && match(msg, r'logid=') {
+        cx_fortios_format = true
         vendor = "fortinet"
       } else if match(msg, r',(TRAFFIC|THREAT|SYSTEM|CONFIG|HIPMATCH),') {
         vendor = "paloalto"
@@ -758,8 +781,15 @@ transforms:
       } else if cx_pk_vendor != "" {
         vendor = cx_pk_vendor
         .vendor_source = "format"
+      } else if vendor != "unknown" {
+        .vendor_source = "format"
       }
       .vendor = vendor
+      # The FortiOS body parser below needs the body to BE that format and the
+      # device not to be stated as something else. Vendor alone no longer proves
+      # the first once inventory can say it, and a text match alone no longer
+      # proves the second.
+      cx_parse_fortios = cx_fortios_format && vendor == "fortinet"
 
       # FortiOS parser. FortiGate's "default" log format is space-separated
       # key="value" pairs and carries NO clean RFC hostname — Vector keys it to
@@ -785,7 +815,7 @@ transforms:
       # value would (correctly) get the event refused downstream. When it does
       # not qualify, the name is still captured — it is right there in
       # .fgt.devname — it just does not become the device identity.
-      if vendor == "fortinet" {
+      if cx_parse_fortios {
         kv, kverr = parse_key_value(msg)
         if kverr == null {
           .fgt = kv
@@ -796,6 +826,9 @@ transforms:
                (to_string(drows[0].tenant_id) ?? "") == tenant_resolved {
               .hostname = dn
               .host = dn
+              # The record now names this device, so its facts are this device's.
+              # Same tenant by the check above: never another owner's row.
+              cx_inv = object(drows[0]) ?? {}
             }
           }
           t  = string(kv.type) ?? ""
@@ -825,6 +858,17 @@ transforms:
         }
       }
 
+      # The inventory's facts about the device this record names. Flat, and only
+      # when stated, so an absent field keeps meaning "the inventory does not say".
+      cx_inv_v = string(cx_inv.device_id) ?? ""
+      if cx_inv_v != "" { .device_id = cx_inv_v }
+      cx_inv_v = string(cx_inv.model) ?? ""
+      if cx_inv_v != "" { .model = cx_inv_v }
+      cx_inv_v = string(cx_inv.site) ?? ""
+      if cx_inv_v != "" { .site = cx_inv_v }
+      cx_inv_v = string(cx_inv.role) ?? ""
+      if cx_inv_v != "" { .role = cx_inv_v }
+
       # ── Structured-body parsers (#31): turn the vendor log body into canonical
       # normalized fields (subsystem/facility/event_type/summary + embedded
       # severity) so Events/RCA read structure, not raw text. Infallible: every
@@ -848,7 +892,7 @@ transforms:
           .dedup_key = .hostname + "|" + .appname + "|" + cx_pk_et
         }
         embedded_sev = cx_pk_sev
-      } else if vendor != "fortinet" {
+      } else if !cx_parse_fortios {
         # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
         cm, cmerr = parse_regex(msg, r'%(?P<facility>[A-Z][A-Z0-9_]+)-(?P<sev>[0-7])-(?P<mnemonic>[A-Z0-9_]+):\s*(?P<text>.*)')
         if cmerr == null {
@@ -862,7 +906,11 @@ transforms:
           # Nokia SR Linux: <lvlword>|<pid>|<tid>|<seq>|<subsys>||<S>: <text>
           sm, smerr = parse_regex(msg, r'\w+\|\d+\|\d+\|\d+\|(?P<subsys>[^|]*)\|[^|]*\|(?P<sevchar>[A-Z]):\s*(?P<text>.*)')
           if smerr == null {
-            .vendor = "nokia"
+            # A format guess: it never overrides what the inventory states.
+            if cx_inventory_vendor == "" {
+              .vendor = "nokia"
+              .vendor_source = "format"
+            }
             .subsystem = strip_whitespace(string(sm.subsys) ?? "")
             .summary = strip_whitespace(string(sm.text) ?? "")
             sc = string(sm.sevchar) ?? ""
@@ -951,7 +999,7 @@ transforms:
         }
         # ── the body-parser decision, with the reason a parse did NOT happen ─
         cx_parse_reason = "NO-PARSE:neither %FAC-SEV-MNEMONIC nor the SR-Linux pipe format matched the body"
-        if vendor == "fortinet" {
+        if cx_parse_fortios {
           cx_parse_reason = "NO-PARSE:fortinet-kv branch, parse_key_value FAILED — body left raw"
           if exists(.fgt) {
             cx_parse_reason = "fortinet-kv branch, parsed into .fgt (the structured-body parsers are skipped for this vendor by design)"
@@ -962,6 +1010,7 @@ transforms:
         cx_line = "component=syslog_normalized" +
           " hostname=" + .hostname +
           " vendor=" + vendor +
+          " vendor_source=" + (string(.vendor_source) ?? "-") +
           " tenant_registry=" + .tenant_registry +
           " tenant_id=" + cx_tid +
           " tenant_reason=" + cx_tenant_reason +
@@ -1213,16 +1262,42 @@ transforms:
       if .hostname == "" { .hostname = host }
       key = dev
       if key == "" { key = host }
+      # Tracker 387 PR 12: facts on the row are the registry's to state; see the
+      # syslog lane.
+      del(.vendor_source)
+      del(.device_id)
+      del(.model)
+      del(.site)
+      del(.role)
       # F-11: registry-MISS discriminator — see the syslog lane's note.
       .tenant_id = ""
       .tenant_registry = "miss"
+      cx_inv = {}
       if key != "" {
         trows = find_enrichment_table_records("device_tenant", { "identity": key }) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
           .tenant_registry = "hit"
+          cx_inv = object(trows[0]) ?? {}
         }
       }
+      # Vendor: discovery's answer beats the trap OID's enterprise arc, which names
+      # whose MIB the trap is (a standard trap names nobody).
+      cx_inv_v = string(cx_inv.vendor) ?? ""
+      if cx_inv_v != "" {
+        .vendor = cx_inv_v
+        .vendor_source = "inventory"
+      } else if (string(.vendor) ?? "") != "" {
+        .vendor_source = "format"
+      }
+      cx_inv_v = string(cx_inv.device_id) ?? ""
+      if cx_inv_v != "" { .device_id = cx_inv_v }
+      cx_inv_v = string(cx_inv.model) ?? ""
+      if cx_inv_v != "" { .model = cx_inv_v }
+      cx_inv_v = string(cx_inv.site) ?? ""
+      if cx_inv_v != "" { .site = cx_inv_v }
+      cx_inv_v = string(cx_inv.role) ?? ""
+      if cx_inv_v != "" { .role = cx_inv_v }
       # Scale P0: tenant partition key — see the syslog lane's note.
       .__key = "global"
       if .tenant_id != "" { .__key = .tenant_id }
@@ -1292,7 +1367,7 @@ transforms:
       tgt = string(.target) ?? ""
       .tenant_id = ""
       if tgt != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }
@@ -1312,7 +1387,9 @@ transforms:
       dev = string(.device) ?? ""
       .tenant_id = ""
       if dev != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": dev }) ?? []
+        # select: this is the hottest lane, and it reads only the tenant, so it does
+        # not pay to copy the inventory facts for every sample (387 PR 12).
+        trows = find_enrichment_table_records("device_tenant", { "identity": dev }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }

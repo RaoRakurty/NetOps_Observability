@@ -201,7 +201,7 @@ def test_the_hand_written_stage_b_pack_code_names_no_vendor():
     start = text.index("# Vendor packs (tracker 387")
     end = text.index("# >>> BEGIN GENERATED-SYSLOG-PACKS")
     applier_start = text.index("if cx_pk_parser != \"\" {")
-    applier_end = text.index("} else if vendor != \"fortinet\" {", applier_start)
+    applier_end = text.index("} else if !cx_parse_fortios {", applier_start)
     seam_start = text.index('if cx_inventory_vendor != "" {')
     seam_end = text.index(".vendor = vendor", seam_start)
     for chunk in (text[start:end], text[applier_start:applier_end], text[seam_start:seam_end]):
@@ -333,41 +333,6 @@ def test_a_synthetic_vendor_passes_on_the_real_transform(synthetic):
     _vector_test("synthetic vendor",
                  synthetic["root"] / "deployment/docker/vector/vector.yaml", tests,
                  "syslog-packs.yaml", _cases(tests / "syslog-packs.yaml"))
-
-
-def test_inventory_vendor_wins_over_the_format_guess(synthetic, tmp_path):
-    """The PR 12 seam, exercised by setting the one local it reads."""
-    if not _docker_available():
-        pytest.skip(_SKIP)
-    text = (AGG_DIR / "vector.yaml").read_text(encoding="utf-8")
-    needle = 'cx_inventory_vendor = ""'
-    assert text.count(needle) == 1
-    config = tmp_path / "vector.yaml"
-    config.write_text(text.replace(needle, 'cx_inventory_vendor = "other"'), encoding="utf-8")
-    suites = tmp_path / "tests"
-    suites.mkdir()
-    (suites / "seam.yaml").write_text(textwrap.dedent("""\
-        tests:
-          - name: "an inventory vendor narrows the grammars and names the vendor"
-            inputs:
-              - insert_at: syslog_normalized
-                type: log
-                log_fields:
-                  hostname: "spine1"
-                  appname: "FTMD"
-                  severity: "notice"
-                  message: "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: a line"
-            outputs:
-              - extract_from: syslog_normalized
-                conditions:
-                  - type: vrl
-                    source: |
-                      assert_eq!(.vendor, "other")
-                      assert_eq!(.vendor_source, "inventory")
-                      assert_eq!(.parser_status, "unparsed")
-                      assert!(!exists(.parser_id))
-        """), encoding="utf-8")
-    _vector_test("inventory seam", config, suites, "seam.yaml", 1)
 
 
 def test_the_engine_honours_an_inventory_vendor():

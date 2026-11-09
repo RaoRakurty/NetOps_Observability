@@ -102,9 +102,16 @@ enrichment_tables:
       path: /etc/vector/enrichment/device_tenant.csv
       encoding:
         type: csv
+    # The same file as the aggregator's. Tracker 387 PR 12 added the inventory
+    # facts for the log lanes; the flow lane reads only the tenant today.
     schema:
       identity: string
       tenant_id: string
+      device_id: string
+      vendor: string
+      model: string
+      site: string
+      role: string
 
 sources:
   internal_metrics:
@@ -1019,7 +1026,7 @@ transforms:
       # sealing is on.
       .tenant_registry = "miss"
       if sampler != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
           .tenant_registry = "hit"
@@ -1149,7 +1156,7 @@ transforms:
       sampler = to_string(.sampler_address) ?? ""
       k = ""
       if sampler != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           k = to_string(trows[0].tenant_id) ?? ""
         }

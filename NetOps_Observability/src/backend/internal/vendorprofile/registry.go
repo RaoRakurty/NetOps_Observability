@@ -29,14 +29,20 @@ type Registry struct {
 	vendorIDs  []string // sorted
 	enterprise map[int]string
 	descrRules []descrRule // sysDescr text backstop, ascending rank
-	osParse    map[string]vendorOSParse
-	platRules  []platRule // platform-text resolution, ascending rank
-	vrfTerms   map[string]string
-	vrfSyn     map[string]struct{}
-	hardDisp   map[string]string
-	cliDisp    map[string]string
-	verifyCmds map[string]map[string]string // vendor → check id → command
-	verifyAll  map[string]struct{}          // every declared command, verbatim
+	// inventoryNames is every squashed spelling that names a vendor exactly: its
+	// id, its display name and its inventory_names (InventoryVendorID).
+	inventoryNames map[string]string
+	// agentRefiners is agent vendor → the sysDescr rules that override it,
+	// ascending rank (VendorRefiningAgent).
+	agentRefiners map[string][]descrRule
+	osParse       map[string]vendorOSParse
+	platRules     []platRule // platform-text resolution, ascending rank
+	vrfTerms      map[string]string
+	vrfSyn        map[string]struct{}
+	hardDisp      map[string]string
+	cliDisp       map[string]string
+	verifyCmds    map[string]map[string]string // vendor → check id → command
+	verifyAll     map[string]struct{}          // every declared command, verbatim
 
 	// ── vendor-level consumer bindings ──────────────────────────────────────
 	configCap   map[string]ConfigCapture      // vendor → config-capture binding
@@ -163,6 +169,9 @@ func build(docs []vendorDoc) (*Registry, error) {
 		devTypeText: make(map[string][]string),
 		devTypeVend: make(map[string]string),
 		pcapFamily:  make(map[string]string),
+
+		inventoryNames: make(map[string]string),
+		agentRefiners:  make(map[string][]descrRule),
 	}
 	if err := checkCaptureFamilyClaims(docs); err != nil {
 		return nil, err
@@ -199,6 +208,27 @@ func build(docs []vendorDoc) (*Registry, error) {
 				rank: doc.Detection.SysDescrRank, vendor: doc.Vendor,
 				contains: append([]string(nil), doc.Detection.SysDescrContains...),
 			})
+		}
+		// ── a network OS that reports an off-the-shelf agent's enterprise ────
+		if len(doc.Detection.RefinesAgents) > 0 && len(doc.Detection.SysDescrContains) == 0 {
+			return nil, fmt.Errorf("vendorprofile: vendor %q: refines_agents needs sysdescr_contains to refine with", doc.Vendor)
+		}
+		for _, agent := range doc.Detection.RefinesAgents {
+			r.agentRefiners[agent] = append(r.agentRefiners[agent], descrRule{
+				rank: doc.Detection.SysDescrRank, vendor: doc.Vendor,
+				contains: append([]string(nil), doc.Detection.SysDescrContains...),
+			})
+		}
+		// ── inventory spellings (exact, squashed) ────────────────────────────
+		for _, name := range append([]string{doc.Vendor, doc.DisplayName}, doc.Detection.InventoryNames...) {
+			key := squashID(name)
+			if key == "" {
+				return nil, fmt.Errorf("vendorprofile: vendor %q: inventory name %q has no letters or digits", doc.Vendor, name)
+			}
+			if other, dup := r.inventoryNames[key]; dup && other != doc.Vendor {
+				return nil, fmt.Errorf("vendorprofile: inventory name %q claimed by both %q and %q", name, other, doc.Vendor)
+			}
+			r.inventoryNames[key] = doc.Vendor
 		}
 		// ── dialect ──────────────────────────────────────────────────────────
 		for _, k := range doc.Dialect.VRFTermKeys {
@@ -448,6 +478,13 @@ func build(docs []vendorDoc) (*Registry, error) {
 	sort.Strings(r.order)
 	sort.Strings(r.vendorIDs)
 	sort.Slice(r.descrRules, func(i, j int) bool { return r.descrRules[i].rank < r.descrRules[j].rank })
+	for agent, rules := range r.agentRefiners {
+		rec, known := r.vendors[agent]
+		if !known || !rec.Detection.AgentIdentity {
+			return nil, fmt.Errorf("vendorprofile: refines_agents names %q, which is not an agent_identity vendor", agent)
+		}
+		sort.Slice(rules, func(i, j int) bool { return rules[i].rank < rules[j].rank })
+	}
 	sort.Slice(r.platRules, func(i, j int) bool { return r.platRules[i].rank < r.platRules[j].rank })
 	sort.Strings(r.snmpGenIDs)
 	sort.Strings(r.pcapKeys)
@@ -510,6 +547,8 @@ func (d Detection) clone() Detection {
 	out.PlatformContains = cp(d.PlatformContains)
 	out.SyslogAppNames = cp(d.SyslogAppNames)
 	out.SyslogFacilities = cp(d.SyslogFacilities)
+	out.RefinesAgents = cp(d.RefinesAgents)
+	out.InventoryNames = cp(d.InventoryNames)
 	if d.OSParse != nil {
 		op := *d.OSParse
 		op.SysDescrContainsAny = cp(d.OSParse.SysDescrContainsAny)
@@ -667,6 +706,48 @@ func (r *Registry) VendorForSysDescr(sysDescr string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// VendorRefiningAgent answers: agentVendor came back from sysObjectID, and that
+// enterprise only names an SNMP agent. Does the sysDescr say which network OS is
+// running it? Only a vendor that declares refines_agents for this agent can
+// answer, so a plain host behind the same agent keeps its detection result.
+func (r *Registry) VendorRefiningAgent(agentVendor, sysDescr string) (string, bool) {
+	s := strings.ToLower(sysDescr)
+	for _, rule := range r.agentRefiners[agentVendor] {
+		for _, sub := range rule.contains {
+			if strings.Contains(s, sub) {
+				return rule.vendor, true
+			}
+		}
+	}
+	return "", false
+}
+
+// InventoryVendorID resolves a device's free-form inventory vendor to the vendor
+// id the telemetry catalogue keys its grammars on, or ok=false when the inventory
+// does not state one. An exact spelling (id, display name, inventory_names) wins;
+// otherwise the ranked sysDescr markers read the text, so "Cisco Systems, Inc."
+// resolves and so does anything else a vendor's own markers recognise.
+//
+// An agent identity and the catalogue's vendor-neutral pseudo-vendor resolve to
+// ok=false: neither says who built the box, and a false answer here would narrow
+// the grammars away from the lines the device actually sends. Unknown text is
+// ok=false too, never a guess; the lanes then fall back to format matching and
+// record that they did.
+func (r *Registry) InventoryVendorID(vendor string) (string, bool) {
+	id, ok := r.inventoryNames[squashID(vendor)]
+	if !ok {
+		id, ok = r.VendorForSysDescr(vendor)
+	}
+	if !ok {
+		return "", false
+	}
+	rec, known := r.vendors[id]
+	if !known || rec.Detection.AgentIdentity {
+		return "", false
+	}
+	return id, true
 }
 
 // ResolveOS extracts the OS product + version a sysDescr carries for an ALREADY

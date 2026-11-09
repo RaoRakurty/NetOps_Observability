@@ -301,7 +301,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!exists(.vendor_source), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -673,7 +673,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!exists(.vendor_source), "no pack row applies")
+              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
     inputs:
       - insert_at: syslog_normalized

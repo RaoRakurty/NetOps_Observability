@@ -3,6 +3,7 @@
   "vendor": "f5",
   "display_name": "F5 Networks",
   "detection": {
+    "inventory_names": ["f5 inc"],
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.3375"
     ],

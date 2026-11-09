@@ -265,6 +265,18 @@
             "vendor_source": {
               "type": "keyword"
             },
+            "device_id": {
+              "type": "keyword"
+            },
+            "model": {
+              "type": "keyword"
+            },
+            "site": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
+            },
             "severity_native_text": {
               "type": "keyword"
             },
@@ -561,6 +573,24 @@
             },
             "source_masked": {
               "type": "boolean"
+            },
+            "vendor": {
+              "type": "keyword"
+            },
+            "vendor_source": {
+              "type": "keyword"
+            },
+            "device_id": {
+              "type": "keyword"
+            },
+            "model": {
+              "type": "keyword"
+            },
+            "site": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
             },
             "parser_status": {
               "type": "keyword"

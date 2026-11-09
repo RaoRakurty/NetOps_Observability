@@ -63,8 +63,9 @@ the aggregator's Stage B (`scripts/gen-syslog-packs.py`), so the two cannot disa
 `syslog_alarm_num` is what the screen and the generic net act on: when a pack grammar
 matched and the severity is past its `alarm_floor`, it returns None, so reading a severity
 never opens an object by itself (owner D3). The hash covers the packs: `rules_hash(RULES,
-PACK_DIGEST)`. The VRL's `cx_inventory_vendor` is the empty seam for PR 12; an inventory
-vendor narrows the grammars in both executors. Pack rows sit behind the vendor-neutral
+PACK_DIGEST)`. The VRL's `cx_inventory_vendor` comes from the registry row (PR 12, vendor
+from discovery through the vendor profiles); an inventory vendor narrows the grammars in
+both executors, and `vendor_source` records `inventory` or `format`. Pack rows sit behind the vendor-neutral
 rules and ahead of the generic net. A `known_benign` row counts the line
 (`corr_parser_known_benign_total`), emits nothing and ends the walk; unlike a shadow row it
 is a decision, not a candidate. Stage [1] only: no template, gate or constant moved, so
@@ -80,7 +81,9 @@ ENGINE_SEMVER does not move.
   "" becomes "global". On the registry-anchored lanes (syslog, snmptrap, flows) an
   identity the registry does not know is refused (`identity_unattributable`).
   The registry (`device_tenant.csv`, `telemetry_enrichment.go`) has one row per
-  inventory device **id**, **name** and **address**. The id row matters: traps and
+  inventory device **id**, **name** and **address**. `identity` and `tenant_id` are the
+  first two columns and are read by position; the inventory facts after them
+  (`device_id, vendor, model, site, role`, PR 12) are never read here. The id row matters: traps and
   metrics carry the id, e.g. the SNMP scan id `vedge-20-1e95f00f`. Before
   2026-10-25 the id row was missing and those traps were quarantined. An identity
   claimed by two tenants is left out by the writer and dropped by the reader

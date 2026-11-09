@@ -11,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"netops/backend/internal/devmon"
+	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
 
@@ -45,15 +48,97 @@ import (
 // Reads do NOT depend on this file — they still use the live read-time device
 // matcher (tenancy.go). The exported tag is defense-in-depth groundwork that
 // Phase 2 promotes into database-enforced row policies / DLS.
+//
+// INVENTORY FACTS (tracker 387, telemetry plan §6a layer 2). The same row also
+// carries what the inventory knows about the device behind the identity: device
+// id, vendor, model, site, role. They arrive on the existing O(1) lookup and the
+// existing reload, so the vendor on a syslog line or a trap comes from discovery
+// rather than from a guess at its text. identity and tenant_id stay the FIRST TWO
+// columns: the engine reads them by position (main.py _tenant_registry).
+//
+// A fact can never cross a tenant. Facts are collected per identity and the row is
+// emitted only when the identity has one owner, so an identity two tenants claim
+// is omitted whole, facts included. Facts are never used to attribute anything:
+// the tenant on a record is exactly what it was before these columns existed.
 
 const enrichmentFileName = "device_tenant.csv"
 
-// enrichmentRow is one (identity, tenant) mapping. identity is either a device
-// name or a management address; tenant is the normalized owning tenant ("" for
-// global/unassigned, which is platform-only under the strict model).
+// enrichmentCSVHeader is the file's contract with both readers. New columns go on
+// the END: the engine reads the first two by position.
+var enrichmentCSVHeader = []string{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role"}
+
+// maxEnrichmentCellRunes bounds one fact. It lands on every record of the device,
+// so an inventory field somebody pasted a paragraph into must not ride along.
+const maxEnrichmentCellRunes = 128
+
+// enrichmentRow is one identity's row. Identity is a device id, name or management
+// address; Tenant is the normalized owning tenant ("" for global/unassigned, which
+// is platform-only under the strict model). The rest are inventory facts; "" means
+// the inventory does not state one, or the devices behind the identity disagree.
 type enrichmentRow struct {
 	Identity string
 	Tenant   string
+	DeviceID string
+	Vendor   string
+	Model    string
+	Site     string
+	Role     string
+}
+
+// cleanEnrichmentCell makes one inventory value safe to stamp on telemetry: no
+// control characters, no surrounding space, bounded. Inventory text is written by
+// operators and importers, so it is treated as input like any other (§3).
+func cleanEnrichmentCell(v string) string {
+	v = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, v)
+	v = strings.TrimSpace(v)
+	if r := []rune(v); len(r) > maxEnrichmentCellRunes {
+		v = strings.TrimSpace(string(r[:maxEnrichmentCellRunes]))
+	}
+	return v
+}
+
+// enrichmentSite is the device's site for telemetry, in the precedence the geomap
+// uses: the operator's device-to-site binding, then the inventory's own label. The
+// binding map is the DEVICE'S OWN tenant's, so another tenant's binding on a
+// same-named device is unreachable. The annotation store behind the location editor
+// is deliberately not read here: it is keyed by identity token with no tenant, so
+// reading it could put one tenant's site on another's record.
+func enrichmentSite(d models.Device, bindings map[string]string) string {
+	if slug := sotSiteFor(d, bindings); slug != "" {
+		return slug
+	}
+	return d.Labels["location"]
+}
+
+// identityFacts gathers the facts of every device claiming one identity.
+type identityFacts struct {
+	deviceIDs, vendors, models, sites, roles map[string]bool
+}
+
+func newIdentityFacts() *identityFacts {
+	return &identityFacts{
+		deviceIDs: map[string]bool{}, vendors: map[string]bool{}, models: map[string]bool{},
+		sites: map[string]bool{}, roles: map[string]bool{},
+	}
+}
+
+// soleFact returns the one value the devices behind an identity agree on, or "".
+// A device that states nothing does not disagree: the same box found by two sources
+// often has the vendor on only one of them. Two different values is a conflict,
+// and a conflict is left blank rather than settled by a guess.
+func soleFact(values map[string]bool) string {
+	if len(values) != 1 {
+		return ""
+	}
+	for v := range values {
+		return v
+	}
+	return ""
 }
 
 // buildEnrichmentRows projects the device inventory onto the identity→tenant
@@ -73,17 +158,50 @@ type enrichmentRow struct {
 // Rows are returned sorted by identity for deterministic output (stable file,
 // clean diffs, reproducible tests).
 func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
+	return buildEnrichmentRowsWith(devices, nil)
+}
+
+// buildEnrichmentRowsWith is buildEnrichmentRows with a per-tenant source of the
+// operator's device-to-site bindings. It is called with the device's own tenant
+// only; nil means no bindings are available.
+func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant string) map[string]string) []enrichmentRow {
 	// identity -> set of distinct tenants seen for it.
 	seen := map[string]map[string]bool{}
-	add := func(identity, tenant string) {
+	facts := map[string]*identityFacts{}
+	bindingsByTenant := map[string]map[string]string{}
+	bindingsFor := func(tenant string) map[string]string {
+		if siteBindings == nil {
+			return nil
+		}
+		b, ok := bindingsByTenant[tenant]
+		if !ok {
+			b = siteBindings(tenant)
+			bindingsByTenant[tenant] = b
+		}
+		return b
+	}
+	add := func(identity, tenant string, d models.Device, vendor, site, role string) {
 		if identity == "" {
 			return
 		}
 		if seen[identity] == nil {
 			seen[identity] = map[string]bool{}
+			facts[identity] = newIdentityFacts()
 		}
 		seen[identity][tenant] = true
+		f := facts[identity]
+		for _, c := range []struct {
+			into  map[string]bool
+			value string
+		}{
+			{f.deviceIDs, d.ID}, {f.vendors, vendor}, {f.models, d.Model}, {f.sites, site}, {f.roles, role},
+		} {
+			if v := cleanEnrichmentCell(c.value); v != "" {
+				c.into[v] = true
+			}
+		}
 	}
+	reg := vendorprofile.Default()
 	for _, d := range devices {
 		// A controller-ONLY device is left out: its events already carry the
 		// integration's tenant, and its name/address (a vManage edge reported
@@ -94,9 +212,15 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 			continue
 		}
 		t := deviceTenant(d)
-		add(d.ID, t)
-		add(d.Name, t)
-		add(d.Address, t)
+		vendor, _ := reg.InventoryVendorID(d.Vendor) // "" = the inventory states none
+		site := enrichmentSite(d, bindingsFor(t))
+		role := d.Labels["role"]
+		if role == "" {
+			role = d.Type
+		}
+		add(d.ID, t, d, vendor, site, role)
+		add(d.Name, t, d, vendor, site, role)
+		add(d.Address, t, d, vendor, site, role)
 	}
 
 	rows := make([]enrichmentRow, 0, len(seen))
@@ -104,8 +228,13 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 		if len(tenants) != 1 {
 			continue // ambiguous identity — omit (fail-safe).
 		}
+		f := facts[identity]
 		for t := range tenants {
-			rows = append(rows, enrichmentRow{Identity: identity, Tenant: t})
+			rows = append(rows, enrichmentRow{
+				Identity: identity, Tenant: t,
+				DeviceID: soleFact(f.deviceIDs), Vendor: soleFact(f.vendors), Model: soleFact(f.models),
+				Site: soleFact(f.sites), Role: soleFact(f.roles),
+			})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Identity < rows[j].Identity })
@@ -114,8 +243,8 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 
 // writeEnrichmentCSV atomically writes the rows as a headered CSV to
 // dir/device_tenant.csv (temp file + rename, so a reader never sees a partial
-// file). Header is `identity,tenant_id` — matched by the Vector enrichment
-// table and the correlation loader.
+// file). The header is enrichmentCSVHeader — matched by the Vector enrichment
+// tables and the correlation loader.
 //
 // F-10: it reports whether the file actually CHANGED, and it skips the rename
 // when the bytes are identical to what is already on disk. The Vector-side
@@ -129,11 +258,11 @@ func writeEnrichmentCSV(dir string, rows []enrichmentRow) (bool, error) {
 
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
-	if err := w.Write([]string{"identity", "tenant_id"}); err != nil {
+	if err := w.Write(enrichmentCSVHeader); err != nil {
 		return false, err
 	}
 	for _, r := range rows {
-		if err := w.Write([]string{r.Identity, r.Tenant}); err != nil {
+		if err := w.Write([]string{r.Identity, r.Tenant, r.DeviceID, r.Vendor, r.Model, r.Site, r.Role}); err != nil {
 			return false, err
 		}
 	}
@@ -190,7 +319,7 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 		log.Printf("tenant-enrichment: SNMP inventory not complete yet (scan memory unread and no sweep finished) — %s/%s left as it stands", dir, enrichmentFileName)
 		return false
 	}
-	rows := buildEnrichmentRows(s.discovery.Devices())
+	rows := s.enrichmentRowsFor(s.discovery.Devices())
 	changed, err := writeEnrichmentCSV(dir, rows)
 	if err != nil {
 		log.Printf("tenant-enrichment: write %s: %v", dir, err)
@@ -202,6 +331,15 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 		log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s (changed — vector tiers will reload)", len(rows), dir, enrichmentFileName)
 	}
 	return changed
+}
+
+// enrichmentRowsFor builds the export from the server's stores. Each device's site
+// bindings are read for its own tenant, non-cross, so another tenant's are
+// unreachable however the identity tokens collide.
+func (s *server) enrichmentRowsFor(devices []models.Device) []enrichmentRow {
+	return buildEnrichmentRowsWith(devices, func(tenant string) map[string]string {
+		return s.deviceSites.Assignments(tenant, false)
+	})
 }
 
 // startTenantEnrichment runs the export loop until ctx is cancelled. It is a
