@@ -252,6 +252,68 @@ def test_an_application_field_named_path_survives_on_applogs(tmp_path):
     assert not KAFKA_METADATA & set(doc), doc
 
 
+# ── PR 4 (owner D6): `platform_owned` is a label, never access ────────────────
+
+def _lane_source(name: str) -> str:
+    return _router()["transforms"][name]["source"]
+
+
+@pytest.mark.parametrize("lane", ["applogs_tagged", "syslog_tagged", "snmptrap_tagged",
+                                  "cloudlogs_tagged", "security_tagged", "flows_decoded"])
+def test_every_lane_can_say_platform_owned(lane):
+    assert "platform_owned" in _lane_source(lane), lane
+
+
+@pytest.mark.parametrize("lane", ["syslog_tagged", "flows_decoded"])
+def test_the_storage_scope_is_decided_before_the_label(lane):
+    """§3a. tenant_seg names the index. It is derived first and the label reads
+    it, so no value of the label can move a document into a different scope."""
+    src = _lane_source(lane)
+    assert src.index(".tenant_seg = seg") < src.index('"platform_owned"')
+    between = src[src.index(".tenant_seg = seg"):]
+    assert ".tenant_seg =" not in between[len(".tenant_seg = seg"):], "tenant_seg reassigned after the label"
+    assert ".tenant_id =" not in between, "tenant_id reassigned after the label"
+
+
+def test_the_label_is_never_derived_from_an_address():
+    """Owner decision 2026-11-01: tenant comes from the channel and the registry
+    answer, never from an address match written into this decision."""
+    for lane in ("syslog_tagged", "flows_decoded"):
+        src = _lane_source(lane)
+        i = src.index('"platform_owned"')
+        decision = src[max(0, i - 200):i + 60]
+        for addr in ("source_ip", "sampler_address", ".host", "src_addr"):
+            assert addr not in decision, f"{lane}: label decision reads {addr}"
+
+
+def test_no_read_path_or_policy_keys_on_the_label():
+    """§3a. The API, the ClickHouse policies and the templates' access surfaces
+    must not branch on the attribution label. The one allowed Go reference is the
+    processors' protected-field list, which forbids rewriting it."""
+    allowed = {ROOT / "src/backend/processors/rule.go"}
+    hits = []
+    for path in (ROOT / "src" / "backend").rglob("*.go"):
+        if path.name.endswith("_test.go") or "vendor" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if ("tenant_attribution" in text or "platform_owned" in text) and path not in allowed:
+            hits.append(str(path.relative_to(ROOT)))
+    assert not hits, f"Go code reads the attribution label: {hits}"
+    for sql in (ROOT / "deployment/docker/clickhouse/init.sql",
+                ROOT / "src/backend/internal/chschema/policies.go"):
+        text = sql.read_text(encoding="utf-8")
+        assert "tenant_attribution" not in text and "platform_owned" not in text, sql
+
+
+def test_miss_rate_alert_counts_only_misses():
+    rules = yaml.safe_load((ROOT / "src/config/rules.yaml").read_text(encoding="utf-8"))
+    rule = next(r for g in rules["groups"] for r in g["rules"]
+                if r.get("alert") == "TenantEnrichmentMissRateJumped")
+    assert rule["expr"].count('outcome="unmatched"') == 2, rule["expr"]
+    assert "platform_owned" not in rule["expr"], "the numerator must stay misses only"
+    assert (ROOT / "src/config/rules-tests/tenant-enrichment.test.yaml").is_file()
+
+
 # ── `vector test` over the shipped config ────────────────────────────────────
 
 ENV_STUBS = ["CLICKHOUSE_USER=x", "CLICKHOUSE_PASSWORD=x"]

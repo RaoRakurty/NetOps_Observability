@@ -42,3 +42,160 @@ tests:
               assert_eq!(.message_key, "snmptrap:arista:spine1:1.3.6.1.6.3.1.1.5.3")
               assert_eq!(.cx_event_id, "cxk:netops.snmptrap:2:41")
               assert_eq!(.topic, "netops.snmptrap")
+
+  # ── PR 4 (owner D6): the attribution label, and what it may not change ──────
+  # Each lane is proved twice with the same record, hit and miss, because the §3a
+  # claim is that the label moves and the storage scope does not.
+  - name: "log lane: a registry hit with a blank tenant is platform_owned, in the shared index"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "sshd: session opened"
+          hostname: "leaf1"
+          tenant_id: ""
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "platform_owned")
+              assert_eq!(.tenant_seg, "untagged")
+              assert_eq!(.tenant_id, "")
+
+  - name: "log lane: a registry miss stays unmatched, with the same scope"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "sshd: session opened"
+          hostname: "unknown-box"
+          tenant_id: ""
+          tenant_registry: "miss"
+          topic: "netops.syslog"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "unmatched")
+              assert_eq!(.tenant_seg, "untagged")
+              assert_eq!(.tenant_id, "")
+
+  - name: "log lane: a blank tenant with no registry stamp has no proof of ownership"
+    inputs:
+      - insert_at: applogs_tagged
+        type: log
+        log_fields:
+          message: "started"
+          topic: "netops.applogs"
+    outputs:
+      - extract_from: applogs_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "unmatched")
+
+  - name: "log lane: a tenant's registry hit and an authenticated producer keep their labels"
+    inputs:
+      - insert_at: snmptrap_tagged
+        type: log
+        log_fields:
+          message: "linkDown"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          topic: "netops.snmptrap"
+      - insert_at: cloudlogs_tagged
+        type: log
+        log_fields:
+          message: "s3 access"
+          tenant_id: "lab"
+          topic: "netops.cloudlogs"
+    outputs:
+      - extract_from: snmptrap_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "enriched")
+              assert_eq!(.tenant_seg, "lab")
+      - extract_from: cloudlogs_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "producer_stamped")
+              assert_eq!(.tenant_seg, "lab")
+
+  - name: "log lane: the debugger trace calls a platform device what it is"
+    inputs:
+      - insert_at: syslog_tagged
+        type: log
+        log_fields:
+          message: "cx_synthetic=true cx_debug=01j9x4m2q7v8b3n5k6r0t1y2z3 correlix pipeline debug probe"
+          tenant_id: ""
+          tenant_registry: "hit"
+          topic: "netops.syslog"
+    outputs:
+      - extract_from: syslog_tagged
+        conditions:
+          - type: vrl
+            source: |
+              t = string!(.cx_parse_trace)
+              assert!(contains(t, "tenant_attribution=platform_owned"), t)
+              assert!(contains(t, "attribution_reason=platform device:"), t)
+              assert!(!contains(t, "UNATTRIBUTED"), t)
+
+  - name: "flows: an exporter the registry knows with no tenant is platform_owned"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "leaf1"
+          src_addr: "10.0.0.1"
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_registry, "hit")
+              assert_eq!(.tenant_attribution, "platform_owned")
+              assert_eq!(.tenant_seg, "untagged")
+              assert_eq!(.tenant_id, "")
+
+  - name: "flows: an unknown exporter stays unmatched, with the same scope"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "198.51.100.7"
+          src_addr: "10.0.0.1"
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_registry, "miss")
+              assert_eq!(.tenant_attribution, "unmatched")
+              assert_eq!(.tenant_seg, "untagged")
+              assert_eq!(.tenant_id, "")
+
+  - name: "flows: a tenant claim on a platform exporter is refused, and the refusal wins the label"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "leaf1"
+          tenant_id: "t_forged"
+          src_addr: "10.0.0.1"
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_attribution, "claim_rejected")
+              assert_eq!(.tenant_seg, "untagged")
+              assert_eq!(.tenant_id, "")

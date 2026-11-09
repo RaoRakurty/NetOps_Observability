@@ -545,8 +545,25 @@ transforms:
       # the transport credential, never from a payload hostname. Stamped as
       # its own outcome so "device unknown but tenant authoritative" is
       # never conflated with a registry hit — and never quarantined.
+      #
+      # Tracker 387 D6: a registry HIT with a blank tenant is a device the
+      # inventory knows and no tenant owns, so it reads `platform_owned` and the
+      # UI calls it "Platform device". `unmatched` used to cover it too, which
+      # made a healthy platform device read as a failure and left the miss-rate
+      # alert a steady 1.0 with nothing to rise from. This is a LABEL: tenant_id,
+      # tenant_seg and therefore the index, the read filter and the row policy
+      # are decided above and do not depend on it.
+      #
+      # `unmatched` is everything else: a registry miss, and a blank tenant with
+      # no registry stamp at all (the applogs and cloudlogs lanes, or a producer
+      # that stopped stamping). No hit means no proof of ownership, and only a
+      # hit may claim one. Never derived from an address.
       if seg == "untagged" {
-        .tenant_attribution = "unmatched"
+        if (to_string(.tenant_registry) ?? "") == "hit" {
+          .tenant_attribution = "platform_owned"
+        } else {
+          .tenant_attribution = "unmatched"
+        }
       } else if exists(.tenant_registry) {
         .tenant_attribution = "enriched"
       } else {
@@ -640,8 +657,8 @@ transforms:
         cx_topic = to_string(.topic) ?? "(unknown)"
         # Attribution outcome WITH the reason. "untagged" is the answer that
         # needs one: it is either a genuine platform-owned record or a broken
-        # device→tenant table, and F-11 exists precisely because those two look
-        # identical from the document alone.
+        # device→tenant table. F-11 exists because those two once looked identical
+        # from the document alone; `platform_owned` now separates them.
         cx_attr_reason = "tenant came from an AUTHENTICATED producer (no registry stamp on this lane); the device may be unknown to inventory and that is legitimate"
         if seg == "untagged" {
           cx_attr_reason = "UNATTRIBUTED:tenant_id is empty so this doc goes to the SHARED -untagged- index"
@@ -649,6 +666,9 @@ transforms:
             cx_attr_reason = cx_attr_reason + ", upstream device_tenant registry said " + (to_string(.tenant_registry) ?? "?")
           } else {
             cx_attr_reason = cx_attr_reason + ", and no upstream registry stamp either"
+          }
+          if .tenant_attribution == "platform_owned" {
+            cx_attr_reason = "platform device:the device_tenant registry knows this device and no tenant owns it, so the shared -untagged- index is correct and this is not a miss"
           }
         } else if exists(.tenant_registry) {
           cx_attr_reason = "upstream device_tenant registry hit"
@@ -1008,7 +1028,10 @@ transforms:
       # outcome is stamped so the miss-rate metric separates "no inventory row"
       # from "somebody is writing tenanted flows onto the bus", which is a
       # security event and not an enrichment gap.
-      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
+      #
+      # Tracker 387 D6: same three-way rule as the anchor. A hit with no tenant
+      # is `platform_owned`; only a miss is `unmatched`.
+      .tenant_attribution = if seg != "untagged" { "enriched" } else if .tenant_registry == "hit" { "platform_owned" } else { "unmatched" }
       if claimed_tenant != "" && claimed_tenant != tenant_resolved {
         .tenant_attribution = "claim_rejected"
       }
@@ -1407,9 +1430,10 @@ transforms:
   #
   # Counting the attribution OUTCOME per topic turns that into a number:
   # a miss RATE that jumps to 1.0 on lanes that previously matched is an
-  # enrichment failure, while a lab whose devices genuinely have no tenant
-  # simply reads a steady 1.0 and never alerts (rules.yaml scopes the alert to
-  # a RISE, not to a level). Exported on the existing :9598 exporter that
+  # enrichment failure, while a lab whose devices genuinely have no tenant reads
+  # `platform_owned`, with a miss rate of 0 that a broken table visibly raises
+  # (rules.yaml scopes the alert to a RISE, not to a level, and tracker 387 D6
+  # is what gave a platform-only deployment a rise to see). Exported on the existing :9598 exporter that
   # vmscrape.yml already scrapes — no new service, no new scrape job.
   tenant_attribution_metric:
     type: log_to_metric

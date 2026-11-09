@@ -540,6 +540,17 @@ def test_tenant_attribution_outcome_is_stamped_on_every_lane():
             f"{lane} does not record whether tenant enrichment matched (F-11)"
 
 
+def test_platform_device_is_not_counted_as_a_miss():
+    """Tracker 387 D6: a registry hit with a blank tenant is a platform device.
+    On the shared anchor and on the hand-rolled flows lane alike, and `unmatched`
+    survives for what it means. The hand-rolled lane is the one that drifts."""
+    cfg = vector_cfg("router")
+    for lane in ("syslog_tagged", "snmptrap_tagged", "flows_decoded"):
+        src = cfg["transforms"][lane]["source"]
+        assert "platform_owned" in src, f"{lane} still calls a platform device unmatched"
+        assert "unmatched" in src, f"{lane} lost the outcome for a real registry miss"
+
+
 def test_tenant_attribution_is_exported_as_a_metric():
     cfg = vector_cfg("router")
     metric = cfg["transforms"]["tenant_attribution_metric"]

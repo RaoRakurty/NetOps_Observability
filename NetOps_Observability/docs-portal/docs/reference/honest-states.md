@@ -41,6 +41,7 @@ are the ones the product emits.
 | A device configuration in state `unknown` | `state: "unknown"`, with `last_error` present or absent | With `last_error` set, the last capture failed. With no `last_error` and no row, the device was never captured. | Never rendered green. An unassessed device must not look like a clean one. |
 | An audit total of `-1` | `X-Total-Count: -1`, or `total: -1` in the envelope | A backend could not answer the count. | Not zero. On this surface a zero would read as "no privileged actions occurred". |
 | `GET /api/telemetry/unrecognized` returning `503` | `no admission verdict available for this lane: no document in the last 7 day(s) carries the ingest admission stamp "cx_admission.by"` | Nothing in the window carries the ingest admission stamp, so the engine's admission verdict cannot be read. | Not that every line is recognized. The endpoint refuses to guess rather than answering `200` with an empty list. |
+| A record labelled **Platform device** | `tenant_attribution: platform_owned` | The device registry knows this device and no tenant owns it. | Not a failed lookup, and not a change in who can read the record. Only `tenant_attribution: unmatched` (**Unknown device**) means the registry did not recognise the sender. |
 | A resource id from another tenant returning `404` | An ordinary not-found | You may not see it. The answer is deliberately identical to an absent object. | Not proof that the object does not exist. |
 
 ## The governing rule
