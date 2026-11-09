@@ -65,3 +65,39 @@ export function interfaceExample(vendor?: string): string {
 export function interfaceHint(vendor?: string): string {
   return `Type the interface name exactly as the device reports it — for example ${interfaceExample(vendor)}.`;
 }
+
+/** What the platform shows for the device's DEFAULT routing table. */
+export const GLOBAL_DEFAULT_LABEL = "Global (default)";
+
+/**
+ * Whether an instance name the DEVICE reported is its default (global)
+ * routing table, in that vendor's own vocabulary: "default" everywhere
+ * (Arista, SR Linux, SONiC, OpenConfig, Cisco's BGP default VRF), Junos
+ * "master" / "inet.0", Nokia SR OS "Base". Only a name the device reported is
+ * classified — an interface with NO instance is never assumed to be in the
+ * default table (that inference needs a complete instance walk, ifgroup).
+ */
+export function isDefaultInstance(name: string | undefined, vendor?: string): boolean {
+  const n = (name ?? "").trim().toLowerCase();
+  if (n === "default" || n === "global") return true;
+  switch (canon(vendor ?? "")) {
+    case "juniper": case "junos": case "jnpr":
+      return n === "master" || n === "inet.0";
+    case "nokia": case "sros": case "alcatel": case "alcatellucent":
+      return n === "base";
+    default:
+      return false;
+  }
+}
+
+/**
+ * The display text for a reported instance name: "Global (default)" for the
+ * default table (with the vendor's own word for it as the tooltip), the name
+ * unchanged otherwise.
+ */
+export function instanceDisplay(name: string, vendor?: string): { text: string; title?: string } {
+  if (isDefaultInstance(name, vendor)) {
+    return { text: GLOBAL_DEFAULT_LABEL, title: `The device's default routing table (“${name.trim()}”)` };
+  }
+  return { text: name };
+}
