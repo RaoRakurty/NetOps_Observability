@@ -43,10 +43,19 @@ import (
 // TrapVarbind is one decoded variable-binding (OID + rendered value). Name is the
 // resolved object name (e.g. ifOperStatus) when the OID is well-known, so the UI
 // shows "ifOperStatus=down(2)" instead of a raw 1.3.6.1.2.1.2.2.1.8.x.
+//
+// Raw and OID are never reinterpreted: Value may be decorated, Raw is what the
+// device sent, as the BER renderer read it. Type, Label, Time and Num are added
+// from the MIB index beside them (trap_semantics.go).
 type TrapVarbind struct {
-	OID   string `json:"oid"`
-	Name  string `json:"name,omitempty"`
-	Value string `json:"value"`
+	OID   string   `json:"oid"`
+	Name  string   `json:"name,omitempty"`
+	Value string   `json:"value"`
+	Raw   string   `json:"raw_value,omitempty"`
+	Type  string   `json:"type,omitempty"`       // SYNTAX from the MIB
+	Label string   `json:"enum_label,omitempty"` // the enum name of Raw
+	Time  string   `json:"time,omitempty"`       // a DateAndTime, as RFC 3339
+	Num   *float64 `json:"num,omitempty"`        // a numeric SYNTAX, as a number
 }
 
 // TrapEvent is the normalized, transport-agnostic trap, JSON-emitted to the bus.
@@ -94,6 +103,21 @@ type TrapEvent struct {
 	UptimeSeconds    float64           `json:"sys_uptime_seconds,omitempty"`
 	UptimeHuman      string            `json:"sys_uptime_human,omitempty"`
 	Fields           map[string]string `json:"fields,omitempty"` // extracted typed context (vlan/mac/port…)
+
+	// Semantic envelope (telemetry plan §5.2), filled from the index and the trap
+	// packs by applyTrapSemantics. Severity above stays the normalized one; these
+	// keep the vendor's own words beside it.
+	NativeSeverityText string             `json:"severity_native_text,omitempty"`
+	NativeSeverityCode *int               `json:"severity_native_code,omitempty"`
+	EventState         string             `json:"event_state,omitempty"`          // raise | clear | point
+	EventStateFidelity string             `json:"event_state_fidelity,omitempty"` // evidence behind a raise or clear
+	MIBModule          string             `json:"mib_module,omitempty"`
+	MIBBundleVersion   string             `json:"mib_bundle_version,omitempty"`
+	DeviceEventTime    string             `json:"device_event_time,omitempty"` // the device's clock; Timestamp stays ours
+	Values             map[string]float64 `json:"values,omitempty"`            // typed numeric fields a pack declares
+
+	// Pack-supplied text for deriveEnvelope; the JSON carries the result.
+	semanticSummary, semanticCategory, semanticFamily string
 
 	// agentAddr is the v1 Trap-PDU agent-address — the originating device's OWN
 	// IP, set inside the PDU by the device, so it SURVIVES NAT (unlike the packet
@@ -207,10 +231,14 @@ func familyFor(etype string) (category, family string) {
 // or L2/MAC structure is decodable even if the vendor trap OID itself isn't.
 func deriveEnvelope(ev *TrapEvent) {
 	ev.Vendor = vendorFromOID(ev.TrapOID)
+	applyTrapSemantics(ev, trapSem)
 	decoded := ev.TrapName != "" && ev.TrapName != "enterpriseSpecific"
 	if decoded {
 		ev.EventType = camelToSnake(ev.TrapName)
 		ev.Category, ev.Family = familyFor(ev.EventType)
+		if ev.semanticCategory != "" {
+			ev.Category, ev.Family = ev.semanticCategory, ev.semanticFamily
+		}
 	} else {
 		ev.EventType = "enterprise_specific"
 	}
@@ -278,6 +306,8 @@ func deriveEnvelope(ev *TrapEvent) {
 		}
 		ev.Summary = fmt.Sprintf("%s%s trap for MAC %s on VLAN/FDB %s, bridge port %s",
 			vendorTitle(ev.Vendor), kind, ev.Fields["mac"], ev.Fields["vlan"], ev.Fields["bridge_port"])
+	} else if ev.semanticSummary != "" {
+		ev.Summary = clampRunes(ev.semanticSummary, maxVarbindValueChars)
 	} else if decoded {
 		ev.Summary = strings.TrimSpace(vendorTitle(ev.Vendor) + ev.TrapName)
 	}
@@ -441,8 +471,7 @@ func parseVarbinds(vbList []byte) (out []TrapVarbind, dropped int) {
 			continue
 		}
 		oid := oidString(decodeOID(oidRaw))
-		name, val := resolveVarbind(oid, valStr(valTag, valRaw))
-		out = append(out, TrapVarbind{OID: oid, Name: sanitizeLabel(name), Value: val})
+		out = append(out, decodeVarbind(oid, valStr(valTag, valRaw)))
 	}
 	return out, dropped
 }

@@ -132,3 +132,50 @@ func TestTrapMeta_FromIndex(t *testing.T) {
 		}
 	}
 }
+
+// Tracker 387: the OIDs a vEdge really sends, recorded on the lab (trap 114 and
+// its varbinds, by the instance OID a varbind carries), and the MIB's other trees.
+func TestLookupOID_LiveVEdgeTrapResolves(t *testing.T) {
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.41916.100.2.114":   "viptelaSystemCpuUsage",
+		"1.3.6.1.4.1.41916.100.1.1.0":   "eventTime",
+		"1.3.6.1.4.1.41916.100.1.2.0":   "netconfNotificationSeverity",
+		"1.3.6.1.4.1.41916.100.1.54.0":  "viptelaSystemWarning",
+		"1.3.6.1.4.1.41916.100.1.190.0": "viptelaSystemCpuUserPercentage",
+		"1.3.6.1.4.1.41916.100.1.191.0": "viptelaSystemCpuSystemPercentage",
+		"1.3.6.1.4.1.41916.100.1.192.0": "viptelaSystemCpuIdlePercentage",
+		"1.3.6.1.4.1.9.9.1006.0.1":      "ciscoSdwanSecurityControlConnectionStateChange",
+		"1.3.6.1.4.1.9.9.1002.0.1":      "ciscoSdwanBfdStateChange",
+		"1.3.6.1.2.1.222.0.1":           "bfdSessUp",
+		"1.3.6.1.2.1.222.0.2":           "bfdSessDown",
+	} {
+		if n, _, ok := lookupOID(oid); !ok || n.Name != want {
+			t.Errorf("%s = %q ok=%v, want %s", oid, n.Name, ok, want)
+		}
+	}
+	if name, disp := resolveVarbind("1.3.6.1.4.1.41916.100.1.2.0", "3"); name != "netconfNotificationSeverity" || disp != "minor(3)" {
+		t.Errorf("severity = %q %q", name, disp)
+	}
+	if name, disp := resolveVarbind("1.3.6.1.4.1.41916.100.1.28.0", "5"); name != "viptelaOmpPeerNewState" || disp != "init-in-gr(5)" {
+		t.Errorf("a hyphenated label = %q %q", name, disp)
+	}
+}
+
+// A scalar instance resolves; only .0 and only for a scalar. A column keeps its
+// row index, and .1 on a scalar is no instance at all.
+func TestLookupOID_ScalarInstance(t *testing.T) {
+	n, suffix, ok := lookupOID("1.3.6.1.4.1.41916.100.1.54.0")
+	if !ok || n.Kind != "scalar" || suffix != "0" {
+		t.Fatalf("scalar instance = %+v %q %v", n, suffix, ok)
+	}
+	if _, _, ok := lookupOID("1.3.6.1.4.1.41916.100.1.54.1"); ok {
+		t.Fatal(".1 is not an instance of a scalar")
+	}
+	if _, _, ok := lookupOID("1.3.6.1.4.1.41916.100.2.114.0"); ok {
+		t.Fatal("a notification has no instance")
+	}
+	c, suffix, ok := lookupOID("1.3.6.1.2.1.2.2.1.8.0")
+	if !ok || c.Name != "ifOperStatus" || suffix != "0" {
+		t.Fatalf("a column keeps its index: %+v %q %v", c, suffix, ok)
+	}
+}

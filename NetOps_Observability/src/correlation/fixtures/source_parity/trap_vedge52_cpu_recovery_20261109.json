@@ -1,0 +1,30 @@
+{
+  "_signal": "snmptrap",
+  "timestamp": "2026-11-09T01:35:01.212Z",
+  "host": "192.168.222.102",
+  "device": "vedge-52-749b1687",
+  "snmp_version": "v2c",
+  "trap_oid": "1.3.6.1.4.1.41916.100.2.114",
+  "trap_name": "viptelaSystemCpuUsage",
+  "severity": "info",
+  "authenticated": false,
+  "vendor": "cisco",
+  "event_type": "viptela_system_cpu_usage",
+  "category": "platform_health",
+  "family": "cpu",
+  "summary": "System cpu usage back to normal level",
+  "parser_status": "decoded",
+  "severity_native_text": "minor",
+  "severity_native_code": 3,
+  "event_state": "clear",
+  "event_state_fidelity": "lab_validated",
+  "mib_module": "VIPTELA-TRAPS",
+  "values": {"cpu_user_percent": 12.23, "cpu_system_percent": 7.98, "cpu_idle_percent": 79.79},
+  "varbinds": [
+    {"oid": "1.3.6.1.4.1.41916.100.1.2.0", "name": "netconfNotificationSeverity", "value": "minor(3)", "raw_value": "3", "type": "INTEGER", "enum_label": "minor"},
+    {"oid": "1.3.6.1.4.1.41916.100.1.54.0", "name": "viptelaSystemWarning", "value": "System cpu usage back to normal level", "raw_value": "System cpu usage back to normal level", "type": "OCTET"},
+    {"oid": "1.3.6.1.4.1.41916.100.1.190.0", "name": "viptelaSystemCpuUserPercentage", "value": "12.23", "raw_value": "12.23", "type": "OCTET"},
+    {"oid": "1.3.6.1.4.1.41916.100.1.191.0", "name": "viptelaSystemCpuSystemPercentage", "value": "7.98", "raw_value": "7.98", "type": "OCTET"},
+    {"oid": "1.3.6.1.4.1.41916.100.1.192.0", "name": "viptelaSystemCpuIdlePercentage", "value": "79.79", "raw_value": "79.79", "type": "OCTET"}
+  ]
+}
