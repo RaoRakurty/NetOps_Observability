@@ -164,6 +164,57 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
                    "value": "idle(1)"},
                   {"oid": "1.3.6.1.4.1.9.9.187.1.2.5.1.29.10.0.0.7", "name": "cbgpPeer2PrevState",
                    "value": "established(6)"}])),
+    "trap.sdwan.cpu_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.114", trap_name="viptelaSystemCpuUsage",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System cpu usage back to normal level"}, {"oid": "1.3.6.1.4.1.41916.100.1.190.0", "value": "12.23"}])),
+    "trap.sdwan.cpu_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.114", trap_name="viptelaSystemCpuUsage",
+        event_state="raise", severity_native_text="critical", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System cpu usage is above 90% (critically high)"}, {"oid": "1.3.6.1.4.1.41916.100.1.190.0", "value": "88.10"}])),
+    "trap.sdwan.memory_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.44", trap_name="viptelaSystemMemoryUsage",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System memory usage back to normal level"}, {"oid": "1.3.6.1.4.1.41916.100.1.55.0", "value": "4096"}])),
+    "trap.sdwan.memory_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.44", trap_name="viptelaSystemMemoryUsage",
+        event_state="raise", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System memory usage is above 75%"}, {"oid": "1.3.6.1.4.1.41916.100.1.56.0", "value": "512"}])),
+    "trap.sdwan.control_connection.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.23", trap_name="viptelaSecurityControlConnectionStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.33.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.39.0", "value": "up(0)"}])),
+    "trap.sdwan.control_connection": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.27", trap_name="viptelaSecurityControlNoActiveVsmart",
+        event_state="raise", severity_native_text="critical", varbinds=[])),
+    "trap.sdwan.omp.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.20", trap_name="viptelaOmpOmpPeerStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.27.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.28.0", "value": "up(3)"}])),
+    "trap.sdwan.omp": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.20", trap_name="viptelaOmpOmpPeerStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.27.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.28.0", "value": "down(4)"}])),
+    "trap.sdwan.omp_tloc_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.21", trap_name="viptelaOmpOmpTlocStateChange",
+        event_state="point", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.29.0", "value": "ipv4(1)"}])),
+    "trap.sdwan.bfd.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.4", trap_name="viptelaBfdBfdStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.9.0", "value": "10.255.255.52"}, {"oid": "1.3.6.1.4.1.41916.100.1.10.0", "value": "biz-internet"}, {"oid": "1.3.6.1.4.1.41916.100.1.11.0", "value": "10.255.255.20"}, {"oid": "1.3.6.1.4.1.41916.100.1.12.0", "value": "mpls"}, {"oid": "1.3.6.1.4.1.41916.100.1.13.0", "value": "up(0)"}])),
+    "trap.sdwan.bfd": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.4", trap_name="viptelaBfdBfdStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.9.0", "value": "10.255.255.52"}, {"oid": "1.3.6.1.4.1.41916.100.1.10.0", "value": "biz-internet"}, {"oid": "1.3.6.1.4.1.41916.100.1.11.0", "value": "10.255.255.20"}, {"oid": "1.3.6.1.4.1.41916.100.1.12.0", "value": "mpls"}, {"oid": "1.3.6.1.4.1.41916.100.1.13.0", "value": "down(1)"}])),
+    "trap.sdwan.interface": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.55", trap_name="viptelaVpnInterfaceStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.67.0", "value": "0"}, {"oid": "1.3.6.1.4.1.41916.100.1.73.0", "value": "ge0/1"}, {"oid": "1.3.6.1.4.1.41916.100.1.74.0", "value": "down(1)"}])),
+    "trap.sdwan.bgp_peer": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.54", trap_name="viptelaVpnBgpPeerStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.67.0", "value": "1"}, {"oid": "1.3.6.1.4.1.41916.100.1.68.0", "value": "192.168.200.34"}, {"oid": "1.3.6.1.4.1.41916.100.1.69.0", "value": "active(2)"}])),
+    "trap.resource.cpu_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.109.2.0.2", trap_name="cpmCPUFallingThreshold",
+        varbinds=[])),
+    "trap.resource.cpu_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.109.2.0.1", trap_name="cpmCPURisingThreshold",
+        varbinds=[])),
+    "trap.bfd.session.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.222.0.1", trap_name="bfdSessUp",
+        varbinds=[{"oid": "1.3.6.1.2.1.222.1.2.1.13.4", "name": "bfdSessDiag", "value": "up(4)"}])),
+    "trap.bfd.session": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.222.0.2", trap_name="bfdSessDown",
+        varbinds=[{"oid": "1.3.6.1.2.1.222.1.2.1.13.4", "name": "bfdSessDiag", "value": "down(2)"}])),
     "trap.bgp.nokia_ng": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.6527.3.1.3.14.0.8", trap_name="tBgpNgBackwardTransition",
         varbinds=[{"oid": "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59.1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.9",
@@ -489,7 +540,12 @@ RULES_HASH_NOKIA_NG = "236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f7
 #: locIfReason, so every one replays byte-for-byte; five new entries record the
 #: new outputs (baseline-absent: the frozen code lacks the two keys).
 RULES_HASH_LINK_CAUSE = "57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735"
-RULES_HASH_A3 = RULES_HASH_LINK_CAUSE
+#:
+#: Trap packs (2026-11-09, tracker 387): 17 trap rows, and the BGP event_type rule
+#: excludes VIPTELA-TRAPS. Additive: every earlier corpus entry replays
+#: byte-for-byte; 17 new entries record the new rules' outputs (baseline-absent).
+RULES_HASH_TRAP_PACKS = "9d9f28ca5b30e1288358d5421f37faff70fa6e980ec29b58160e0f3baa477522"
+RULES_HASH_A3 = RULES_HASH_TRAP_PACKS
 
 
 def _guard_patterns(node) -> list[str]:

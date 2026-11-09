@@ -269,6 +269,10 @@ The two that most often get asked for:
   text as `link_reason` — same `omit_empty` contract, identity untouched. See
   the `trap_link_cause` fragment in `events.yaml` for the sources and
   `src/correlation/test_link_cause_378.py`.
+  Tracker 387 (`parser_rev 2026-11-09-trap-packs`) adds the Cisco SD-WAN and
+  BFD-STD-MIB rows. What a trap means comes from data (`collectors/mibs/packs/`), so
+  a new vendor is a pack, not code. Only the CPU recovery is captured; every other
+  row is `doc_claimed`. See `src/correlation/test_trap_packs_387.py`.
 
 ---
 

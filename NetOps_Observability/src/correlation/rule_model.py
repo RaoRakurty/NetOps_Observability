@@ -745,6 +745,19 @@ def _compile_extract_core(spec: Any) -> Extractor:
         # validation is the point: raw index text never becomes an entity id.
         read = _reader(str(arg))
         return lambda c: inet_index_text(read(c))
+    if op == "sorted_join":
+        # A symmetric identity: both ends of one session spell the same id,
+        # whichever reports it. "" unless every part is present and distinct, so
+        # half an identity never becomes an entity id. Byte order, as Go's `<`
+        # (nms/sdwan_tunnel.go CanonicalTunnelID); pinned by a shared fixture.
+        reads = tuple(_reader(str(x)) for x in arg["items"])
+        sep = str(arg["sep"])
+        def _sorted_join(c: Ctx) -> str:
+            parts = [str(read(c)) for read in reads]
+            if not all(parts) or len(set(parts)) != len(parts):
+                return ""
+            return sep.join(sorted(parts))
+        return _sorted_join
     if op == "vbname":
         # First varbind whose MIB-RESOLVED name contains one of these substrings
         # — how a vendor's peer/interface column is found without hardcoding its

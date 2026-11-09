@@ -35,6 +35,14 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-trap-packs — tracker 387: Cisco SD-WAN traps (now decoded, MIB pinned
+# at one cisco-mibs commit) and standard BFD-STD-MIB reach the engine as the kinds
+# templates and the controller lane use. Only qualifying criticals can open an
+# object alone (owner D3); everything else arrives below `severity_open_floor` and
+# can still join a component. Trap lane only: no syslog line moves. Two existing
+# rules gain an exclusion, because VIPTELA-TRAPS now decodes by name and would
+# otherwise reach them: the BGP event_type twin and trap.fhrp.state_change.
+#
 # 2026-11-08-link-cause — tracker 378: both trap link rules gain ONE canonical
 # cause attr, `link_cause` (admin | fault | unknown), plus the raw vendor reason
 # as `link_reason`. It answers the question tracker 218 opened: was this down an
@@ -85,7 +93,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-08-link-cause"
+parser_rev: "2026-11-09-trap-packs"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -1675,6 +1683,604 @@ rules:
         authenticated: {var: authed}
       omit_empty: [bgp_instance]
 
+  # ── trap pack rows (tracker 387, owner D3 and "ingestion is not incident
+  # creation") ─────────────────────────────────────────────────────────────────
+  # One self-contained block, Cisco SD-WAN first. The receiver has already turned
+  # the vendor's objects into `event_state` and `severity_native_text`, from data
+  # (collectors/mibs/packs/*.json), so these rows only say which notifications are
+  # which symptom and which entity they bind to.
+  #
+  # SEVERITY IS THE OPEN GATE. A lone signal opens an object only at `high` or
+  # above (E:104), so a row emits `crit` for a qualifying critical and `warn` for
+  # everything else: a lower event reaches the engine below the floor and can
+  # still join a component. Vendor `major` deliberately stays `warn` here (D3).
+  #
+  # KINDS are the ones templates and the controller lane already use, so a device's
+  # report and vManage's land on the same symptom (nms/vmanage_kinds.go).
+  # `controller_*` and resource recoveries emit `<kind>_clear`, which the engine
+  # skips as a node. Interface and BGP keep the device lane's own convention (the
+  # fault kind with state=up at warn): A4's dwell watch and the transition collapse
+  # read that word, and tracker 380 owns changing it for every rule at once.
+  #
+  # FIDELITY: only the CPU recovery has been captured. Everything else is doc_claimed.
+  - rule_id: trap.sdwan.cpu_threshold.clear
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly_clear
+    entity_type: device
+    family: null
+    fidelity_status: lab_validated
+    vendors: [cisco]
+    severity: info
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.114']}
+        - {eq: ['$event_state', clear]}
+    extract: &sdwan_cpu_extract
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      warning: {vb: ['1.3.6.1.4.1.41916.100.1.54']}
+      cpu_user: {vb: ['1.3.6.1.4.1.41916.100.1.190']}
+      cpu_system: {vb: ['1.3.6.1.4.1.41916.100.1.191']}
+      cpu_idle: {vb: ['1.3.6.1.4.1.41916.100.1.192']}
+    emit:
+      kind: device_resource_anomaly_clear
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_cpu|clear|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: &sdwan_cpu_attrs
+        resource: {const: cpu}
+        state: {var: event_state}
+        severity_native: {var: native}
+        warning: {var: warning}
+        cpu_user_percent: {var: cpu_user}
+        cpu_system_percent: {var: cpu_system}
+        cpu_idle_percent: {var: cpu_idle}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: &sdwan_cpu_omit [severity_native, warning, cpu_user_percent, cpu_system_percent, cpu_idle_percent]
+
+  # The same trap, raising. Modality device_telemetry, the modality of the CUSUM
+  # episode it lands beside on `device:device_resource_anomaly`: one box reporting
+  # its own CPU twice is one observation, and must not read as a second plane.
+  - rule_id: trap.sdwan.cpu_threshold
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.114']}
+        - {eq: ['$event_state', raise]}
+    extract: *sdwan_cpu_extract
+    emit:
+      kind: device_resource_anomaly
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      severity: &native_severity {case: [{when: {eq: ['$native', critical]}, value: crit}], default: warn}
+      native_id: '{device}|trap_cpu|raise|{native|?}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: *sdwan_cpu_attrs
+      omit_empty: *sdwan_cpu_omit
+
+  - rule_id: trap.sdwan.memory_threshold.clear
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly_clear
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: info
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.44']}
+        - {eq: ['$event_state', clear]}
+    extract: &sdwan_mem_extract
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      warning: {vb: ['1.3.6.1.4.1.41916.100.1.54']}
+      total_mb: {vb: ['1.3.6.1.4.1.41916.100.1.55']}
+      free_mb: {vb: ['1.3.6.1.4.1.41916.100.1.56']}
+    emit:
+      kind: device_resource_anomaly_clear
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_memory|clear|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: &sdwan_mem_attrs
+        resource: {const: memory}
+        state: {var: event_state}
+        severity_native: {var: native}
+        warning: {var: warning}
+        total_mb: {var: total_mb}
+        free_mb: {var: free_mb}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: &sdwan_mem_omit [severity_native, warning, total_mb, free_mb]
+
+  - rule_id: trap.sdwan.memory_threshold
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.44']}
+        - {eq: ['$event_state', raise]}
+    extract: *sdwan_mem_extract
+    emit:
+      kind: device_resource_anomaly
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      severity: *native_severity
+      native_id: '{device}|trap_memory|raise|{native|?}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: *sdwan_mem_attrs
+      omit_empty: *sdwan_mem_omit
+
+  # Control connections to vSmart / vManage / vBond, and the fabric-wide "no active
+  # controller" conditions: the one kind the controller lane uses for all of them.
+  # 41916 is Viptela OS (vEdge); 9.9.1006 is IOS XE SD-WAN (cEdge).
+  - rule_id: trap.sdwan.control_connection.clear
+    lane: trap
+    source: trap
+    kind: controller_control_connection_loss_clear
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: info
+    guard:
+      all:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.41916.100.2.23', '1.3.6.1.4.1.9.9.1006.0.1']
+        - {eq: ['$event_state', clear]}
+    extract: &sdwan_control_extract
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      peer_raw: {vb: ['1.3.6.1.4.1.41916.100.1.33', '1.3.6.1.4.1.9.9.1006.2.5']}
+      peer: {re: [['$peer_raw', '^(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:.]*)$', 1, '']]}
+      peer_type: {vb: ['1.3.6.1.4.1.41916.100.1.32', '1.3.6.1.4.1.9.9.1006.2.4']}
+      local_color: {vb: ['1.3.6.1.4.1.41916.100.1.36', '1.3.6.1.4.1.9.9.1006.2.9']}
+      remote_color: {vb: ['1.3.6.1.4.1.41916.100.1.37', '1.3.6.1.4.1.9.9.1006.2.10']}
+    emit:
+      kind: controller_control_connection_loss_clear
+      metric: sdwan_control_connection
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_control|{peer|?}|clear|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs: &sdwan_control_attrs
+        state: {var: event_state}
+        severity_native: {var: native}
+        peer: {var: peer}
+        peer_type: {var: peer_type}
+        local_color: {var: local_color}
+        remote_color: {var: remote_color}
+        trap_oid: {var: oid}
+        trap_name: {var: name}
+        authenticated: {var: authed}
+      omit_empty: &sdwan_control_omit [severity_native, peer, peer_type, local_color, remote_color]
+
+  - rule_id: trap.sdwan.control_connection
+    lane: trap
+    source: trap
+    kind: controller_control_connection_loss
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.41916.100.2.23', '1.3.6.1.4.1.41916.100.2.27',
+               '1.3.6.1.4.1.41916.100.2.28', '1.3.6.1.4.1.9.9.1006.0.1',
+               '1.3.6.1.4.1.9.9.1006.0.5', '1.3.6.1.4.1.9.9.1006.0.6']
+        - {eq: ['$event_state', raise]}
+    extract: *sdwan_control_extract
+    emit:
+      kind: controller_control_connection_loss
+      metric: sdwan_control_connection
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      severity: *native_severity
+      native_id: '{device}|trap_control|{oid}|{peer|?}|raise|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs: *sdwan_control_attrs
+      omit_empty: *sdwan_control_omit
+
+  # OMP state and OMP peers: vManage maps these to the same kind (StateKind omp).
+  - rule_id: trap.sdwan.omp.clear
+    lane: trap
+    source: trap
+    kind: controller_control_connection_loss_clear
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: info
+    guard:
+      all:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.41916.100.2.19', '1.3.6.1.4.1.41916.100.2.20',
+               '1.3.6.1.4.1.9.9.1003.0.2', '1.3.6.1.4.1.9.9.1003.0.3']
+        - {eq: ['$event_state', clear]}
+    extract: &sdwan_omp_extract
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      peer_raw: {vb: ['1.3.6.1.4.1.41916.100.1.27', '1.3.6.1.4.1.9.9.1003.2.5']}
+      peer: {re: [['$peer_raw', '^(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:.]*)$', 1, '']]}
+    emit:
+      kind: controller_control_connection_loss_clear
+      metric: sdwan_omp
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_omp|{oid}|{peer|?}|clear|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs: &sdwan_omp_attrs
+        state: {var: event_state}
+        severity_native: {var: native}
+        peer: {var: peer}
+        trap_oid: {var: oid}
+        trap_name: {var: name}
+        authenticated: {var: authed}
+      omit_empty: &sdwan_omp_omit [severity_native, peer]
+
+  - rule_id: trap.sdwan.omp
+    lane: trap
+    source: trap
+    kind: controller_control_connection_loss
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.41916.100.2.19', '1.3.6.1.4.1.41916.100.2.20',
+               '1.3.6.1.4.1.9.9.1003.0.2', '1.3.6.1.4.1.9.9.1003.0.3']
+        - {eq: ['$event_state', raise]}
+    extract: *sdwan_omp_extract
+    emit:
+      kind: controller_control_connection_loss
+      metric: sdwan_omp
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      severity: *native_severity
+      native_id: '{device}|trap_omp|{oid}|{peer|?}|raise|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs: *sdwan_omp_attrs
+      omit_empty: *sdwan_omp_omit
+
+  # viptelaOmpOmpTlocStateChange carries only its address family: nothing in it
+  # says which TLOC, or which way it moved. So it claims no loss: a named alarm
+  # below the floor, which still joins whatever is failing on this device.
+  - rule_id: trap.sdwan.omp_tloc_change
+    lane: trap
+    source: trap
+    kind: device_alarm
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: warn
+    guard: {eq: [oid, '1.3.6.1.4.1.41916.100.2.21']}
+    extract:
+      native: {ev: [severity_native_text]}
+      address_family: {vb: ['1.3.6.1.4.1.41916.100.1.29']}
+    emit:
+      kind: device_alarm
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_omp_tloc|{address_family|?}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        severity_native: {var: native}
+        address_family: {var: address_family}
+        trap_oid: {var: oid}
+        trap_name: {var: name}
+        authenticated: {var: authed}
+      omit_empty: [severity_native, address_family]
+
+  # BFD. Bound to the tunnel the way vManage binds it (nms/sdwan_tunnel.go): the two
+  # TLOCs sorted, so both ends of one session are ONE node. The trap cannot know
+  # the controller instance the controller lane scopes by (`<id>@<instance>`), so
+  # the two lanes meet through the device token, not as one node. cEdge's
+  # ciscoSdwanBfdStateChange has no row: its varbind arcs move between releases.
+  - rule_id: trap.sdwan.bfd.clear
+    lane: trap
+    source: trap
+    kind: controller_bfd_down_clear
+    entity_type: path
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: info
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.4']}
+        - {eq: ['$event_state', clear]}
+    extract: &sdwan_bfd_extract
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      local_ip_raw: {vb: ['1.3.6.1.4.1.41916.100.1.9']}
+      local_color_raw: {vb: ['1.3.6.1.4.1.41916.100.1.10']}
+      remote_ip_raw: {vb: ['1.3.6.1.4.1.41916.100.1.11']}
+      remote_color_raw: {vb: ['1.3.6.1.4.1.41916.100.1.12']}
+      local_ip: {re: [['$local_ip_raw', &sysip '^((?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d))$', 1, '']]}
+      remote_ip: {re: [['$remote_ip_raw', *sysip, 1, '']]}
+      local_color: {re: [['$local_color_raw', &tloc_color '^\s*([A-Za-z0-9][A-Za-z0-9-]{0,47})\s*$', 1, '']], lower: true}
+      remote_color: {re: [['$remote_color_raw', *tloc_color, 1, '']], lower: true}
+      local_tloc:
+        case:
+          - {when: {all: [{truthy: '$local_ip'}, {truthy: '$local_color'}]}, value: '{local_ip}/{local_color}'}
+          - {when: {always: true}, value: ''}
+      remote_tloc:
+        case:
+          - {when: {all: [{truthy: '$remote_ip'}, {truthy: '$remote_color'}]}, value: '{remote_ip}/{remote_color}'}
+          - {when: {always: true}, value: ''}
+      tunnel: {sorted_join: {items: ['$local_tloc', '$remote_tloc'], sep: '|'}}
+      flap_reason: {vb: ['1.3.6.1.4.1.41916.100.1.164']}
+      tunnel_scheme:
+        case:
+          - {when: {truthy: '$tunnel'}, value: tloc_pair}
+          - {when: {always: true}, value: ''}
+    emit:
+      kind: controller_bfd_down_clear
+      metric: sdwan_bfd
+      modality: control_plane
+      entity:
+        when: {truthy: '$tunnel'}
+        type: path
+        id: '{tunnel}'
+        else: {type: device, id: '{device}'}
+      native_id: '{device}|trap_bfd|{tunnel|?}|clear|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{tunnel}'}]
+      attrs: &sdwan_bfd_attrs
+        state: {var: event_state}
+        severity_native: {var: native}
+        tunnel_id: {var: tunnel}
+        tunnel_scheme: {var: tunnel_scheme}
+        flap_reason: {var: flap_reason}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: &sdwan_bfd_omit [severity_native, tunnel_id, tunnel_scheme, flap_reason]
+
+  - rule_id: trap.sdwan.bfd
+    lane: trap
+    source: trap
+    kind: controller_bfd_down
+    entity_type: path
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.4']}
+        - {eq: ['$event_state', raise]}
+    extract: *sdwan_bfd_extract
+    emit:
+      kind: controller_bfd_down
+      metric: sdwan_bfd
+      modality: control_plane
+      entity:
+        when: {truthy: '$tunnel'}
+        type: path
+        id: '{tunnel}'
+        else: {type: device, id: '{device}'}
+      severity: *native_severity
+      native_id: '{device}|trap_bfd|{tunnel|?}|raise|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{tunnel}'}]
+      attrs: *sdwan_bfd_attrs
+      omit_empty: *sdwan_bfd_omit
+
+  # Interface and BGP: exactly the entity shape and the state word of the standard
+  # link and BGP rules, `device:ifname` and `device:peer`.
+  - rule_id: trap.sdwan.interface
+    lane: trap
+    source: trap
+    kind: link_state_change
+    entity_type: interface
+    family: link_state_change
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.55']}
+        - {not_in: ['$event_state', ['', point]]}
+    extract:
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      iface: {vb: ['1.3.6.1.4.1.41916.100.1.73']}
+      vpn: {vb: ['1.3.6.1.4.1.41916.100.1.67']}
+      state:
+        case:
+          - {when: {eq: ['$event_state', clear]}, value: up}
+          - {when: {always: true}, value: down}
+    emit:
+      kind: link_state_change
+      metric: link_state
+      modality: control_plane
+      entity:
+        when: {truthy: '$iface'}
+        type: interface
+        id: '{device}:{iface}'
+        else: {type: device, id: '{device}'}
+      severity: &native_severity_on_raise
+        case: [{when: {all: [{eq: ['$native', critical]}, {eq: ['$event_state', raise]}]}, value: crit}]
+        default: warn
+      native_id: '{device}|trap_link|{iface|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        interface: {var: iface}
+        state: {var: state}
+        vpn_id: {var: vpn}
+        severity_native: {var: native}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: [vpn_id, severity_native]
+
+  - rule_id: trap.sdwan.bgp_peer
+    lane: trap
+    source: trap
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    guard:
+      all:
+        - {eq: [oid, '1.3.6.1.4.1.41916.100.2.54']}
+        - {not_in: ['$event_state', ['', point]]}
+    extract:
+      event_state: {ev: [event_state]}
+      native: {ev: [severity_native_text]}
+      peer_raw: {vb: ['1.3.6.1.4.1.41916.100.1.68']}
+      peer: {re: [['$peer_raw', '^(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:.]*)$', 1, '']]}
+      vpn: {vb: ['1.3.6.1.4.1.41916.100.1.67']}
+      state:
+        case:
+          - {when: {eq: ['$event_state', clear]}, value: up}
+          - {when: {always: true}, value: down}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity:
+        when: {truthy: '$peer'}
+        type: device
+        id: '{device}:{peer}'
+        else: {type: device, id: '{device}'}
+      severity: *native_severity_on_raise
+      native_id: '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        vpn_id: {var: vpn}
+        severity_native: {var: native}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: [vpn_id, severity_native]
+
+  # RFC 7331, the standard layer: every vendor that implements BFD-STD-MIB at once.
+  # A session is named by its bfdSessTable row, the first index the range states.
+  - rule_id: trap.bfd.session.clear
+    lane: trap
+    source: trap
+    kind: bfd_session_flap_clear
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [standard]
+    severity: info
+    guard: {eq: [oid, '1.3.6.1.2.1.222.0.1']}
+    extract: &bfd_std_extract
+      session_index: {vbindex: ['1.3.6.1.2.1.222.1.2.1.13']}
+      session: {re: [['$session_index', '^(\d+)$', 1, '']]}
+    emit:
+      kind: bfd_session_flap_clear
+      metric: bfd_session
+      modality: control_plane
+      entity: &bfd_std_entity
+        when: {truthy: '$session'}
+        type: device
+        id: '{device}:bfd-{session}'
+        else: {type: device, id: '{device}'}
+      native_id: '{device}|trap_bfd_std|{session|?}|clear|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: &bfd_std_attrs
+        session: {var: session}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+      omit_empty: &bfd_std_omit [session]
+
+  - rule_id: trap.bfd.session
+    lane: trap
+    source: trap
+    kind: bfd_session_flap
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [standard]
+    severity: warn
+    guard: {eq: [oid, '1.3.6.1.2.1.222.0.2']}
+    extract: *bfd_std_extract
+    emit:
+      kind: bfd_session_flap
+      metric: bfd_session
+      modality: control_plane
+      entity: *bfd_std_entity
+      native_id: '{device}|trap_bfd_std|{session|?}|raise|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs: *bfd_std_attrs
+      omit_empty: *bfd_std_omit
+
+  # CPU threshold on other vendors, only where the notification resolves in the
+  # index and a MIB defines it as a threshold: CISCO-PROCESS-MIB (classic IOS, IOS
+  # XE, NX-OS). HOST-RESOURCES-MIB, TIMETRA-SYSTEM-MIB and JUNIPER-MIB define no
+  # CPU-threshold notification in the index, so they have no row.
+  - rule_id: trap.resource.cpu_threshold.clear
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly_clear
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: info
+    guard: {eq: [oid, '1.3.6.1.4.1.9.9.109.2.0.2']}
+    emit:
+      kind: device_resource_anomaly_clear
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_cpu|clear|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        resource: {const: cpu}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+
+  - rule_id: trap.resource.cpu_threshold
+    lane: trap
+    source: trap
+    kind: device_resource_anomaly
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco]
+    severity: warn
+    guard: {eq: [oid, '1.3.6.1.4.1.9.9.109.2.0.1']}
+    emit:
+      kind: device_resource_anomaly
+      metric: device_resource_threshold
+      modality: device_telemetry
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_cpu|raise|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        resource: {const: cpu}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+
   # Vendor BGP/link/restart traps the standard-OID checks miss (e.g. Arista
   # arista_bgp4_v2_backward_transition), classified off the normalized
   # event_type (#32 envelope) — vendor-agnostic, same Signal shapes.
@@ -1696,6 +2302,9 @@ rules:
         # NOT Nokia TIMETRA-BGP-MIB either: `trap.bgp.nokia_ng` owns its session
         # notifications, and its tBgpPeerNg* varbind names contain "peer".
         - {not: {contains: [oid, '1.3.6.1.4.1.6527.3.1.3.14.']}}
+        # NOT VIPTELA-TRAPS: `trap.sdwan.bgp_peer` owns it, and what it declines
+        # (a retry leg, with no state to claim) must not read as a session down.
+        - {not: {contains: [oid, '1.3.6.1.4.1.41916.100.2.']}}
         - any:
             - {contains: [etype, backward]}
             - {contains: [etype, transition]}
@@ -2031,6 +2640,10 @@ rules:
     vendors: [standard, cisco, arista, juniper]
     guard:
       all:
+        # NOT VIPTELA-TRAPS: its VRRP notification now decodes by name and would
+        # land here, where a takeover is `high` and opens an object alone. No pack
+        # row has reviewed it, so under D3 it stays a searchable named trap.
+        - {not: {contains: [oid, '1.3.6.1.4.1.41916.100.2.']}}
         - any:
             - {contains: [etype, hsrp]}
             - {contains: [etype, vrrp]}

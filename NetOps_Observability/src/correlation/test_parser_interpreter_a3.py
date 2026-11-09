@@ -142,8 +142,9 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
-    # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`).
-    assert len(P.RULES) == 42
+    # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`)
+    # · 59 since tracker 387 (the trap-pack block).
+    assert len(P.RULES) == 59
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -400,6 +401,14 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         # link_reason; only the five 378 entries skip — every other link trap
         # in the corpus stays IN the parity run (it carries no reason varbind).
         "trap.link.state_change",
+        # tracker 387: the trap-pack block, rules the frozen code never had.
+        "trap.sdwan.cpu_threshold", "trap.sdwan.cpu_threshold.clear",
+        "trap.sdwan.memory_threshold", "trap.sdwan.memory_threshold.clear",
+        "trap.sdwan.control_connection", "trap.sdwan.control_connection.clear",
+        "trap.sdwan.omp", "trap.sdwan.omp.clear", "trap.sdwan.omp_tloc_change",
+        "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface", "trap.sdwan.bgp_peer",
+        "trap.bfd.session", "trap.bfd.session.clear",
+        "trap.resource.cpu_threshold", "trap.resource.cpu_threshold.clear",
     }
     fired = set()
     for entry in golden:
