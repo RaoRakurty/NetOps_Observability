@@ -234,8 +234,6 @@ func addProto(existing, add string) string {
 	return strings.Join(out, "+")
 }
 
-// LinkSources reports which discovery protocols contributed the returned links,
-// as a stable "+"-joined set (e.g. "bgp_ls+lldp"). Empty set → "none".
 // LinksOfDevice keeps the links with id at either end. Pure.
 func LinksOfDevice(links []TopoLink, id string) []TopoLink {
 	out := make([]TopoLink, 0, len(links))
@@ -247,6 +245,8 @@ func LinksOfDevice(links []TopoLink, id string) []TopoLink {
 	return out
 }
 
+// LinkSources reports which discovery protocols contributed the returned links,
+// as a stable "+"-joined set (e.g. "bgp_ls+lldp"). Empty set → "none".
 func LinkSources(links []TopoLink) string {
 	set := map[string]bool{}
 	for _, l := range links {

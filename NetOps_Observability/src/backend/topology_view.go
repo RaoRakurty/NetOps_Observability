@@ -179,10 +179,12 @@ func (s *server) hideRestrictedLinkEndpoints(claims jwtClaims, links []topoLink)
 
 // linkNamesHiddenDevice reports whether either end of a link identifies a hidden
 // device, by any of the identities a topology endpoint can carry: the device id
-// (resolved end), the display name, and the "ext:<sysname>" alias the normalizer
-// mints for a neighbour it could not resolve.
+// (resolved end), the display name, the "ext:<sysname>" alias the normalizer
+// mints for a neighbour it could not resolve, and the chassis id the link now
+// returns (a neighbour with its own sysname can still announce a hidden device's
+// management address there).
 func linkNamesHiddenDevice(l topoLink, hidden map[string]bool) bool {
-	for _, id := range []string{l.Source, l.Target, l.SourceName, l.TargetName} {
+	for _, id := range []string{l.Source, l.Target, l.SourceName, l.TargetName, l.TargetChassis} {
 		v := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(id, "ext:")))
 		if v != "" && hidden[v] {
 			return true

@@ -77,7 +77,10 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 	// 404, identical to an id that does not exist (§3a: never reveal another
 	// tenant's id).
 	if id := strings.TrimSpace(r.URL.Query().Get("device")); id != "" {
-		if !deviceVisibleIn(devs, id) {
+		// A wireless row the registry does not hold has a device page too, and an
+		// empty neighbour list is the truth for it, not a 404 the tab would show
+		// as an unread list.
+		if !deviceVisibleIn(devs, id) && !deviceVisibleIn(s.deviceVisibilityFor(claims).filter(s.wirelessDeviceRows(r.Context(), claims, devs)), id) {
 			writeError(w, http.StatusNotFound, errors.New("device not found"))
 			return
 		}

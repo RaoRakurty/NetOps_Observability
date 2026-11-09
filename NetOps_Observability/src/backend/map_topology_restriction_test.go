@@ -995,3 +995,35 @@ func TestTopologyLinksDeviceFilterIsTenantScoped(t *testing.T) {
 		t.Errorf("globex-core's external neighbour lost its chassis id: %+v", gx.Links)
 	}
 }
+
+// TestTopologyLinksChassisIDCannotNameAHiddenDevice — the link now returns the
+// neighbour's chassis id. A neighbour announcing an unknown sysname with a
+// restricted tenant's management address as its chassis stays "ext:<sysname>",
+// so the name check alone would hand that address to the operator (§3a).
+func TestTopologyLinksChassisIDCannotNameAHiddenDevice(t *testing.T) {
+	payload, err := json.Marshal([]map[string]any{{
+		"local_device": "globex-core", "local_port": "Et7", "rem_sysname": "mystery-box",
+		"rem_chassis": "10.1.0.1", "rem_port": "Et1", "proto": "lldp", "ts": time.Now().UnixMilli(),
+	}})
+	if err != nil {
+		t.Fatalf("marshal neighbour: %v", err)
+	}
+	fakeTopologyCollector(t, map[string]string{"netops:topology:lldp": string(payload)})
+	f := newRestrictedMapFixture(t)
+
+	var before linksResp
+	f.get(f.s.handleTopologyLinks, "/api/topology/links", f.owner(), &before)
+	if before.Count != 1 {
+		t.Fatalf("unrestricted, the owner should see the neighbour; got %v", sortedKeys(before.endpoints()))
+	}
+
+	f.restrictAcme()
+	w := httptest.NewRecorder()
+	f.s.handleTopologyLinks(w, req(http.MethodGet, "/api/topology/links", "", f.owner()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET links = %d (%s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "10.1.0.1") {
+		t.Errorf("a restricted tenant's management address reached the operator: %s", w.Body.String())
+	}
+}
