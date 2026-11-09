@@ -54,7 +54,7 @@ var textFields = [...]string{"message", "message_original", "structured_data", "
 // ai.RedactSecrets can match, so an ordinary document is not parsed and goes through
 // byte for byte. A false positive costs one parse; RE2 keeps the scan linear.
 var mayHoldSecretText = regexp.MustCompile(
-	`(?i)passw|pwd|secret|communit|token|api[_-]?key|bearer|basic |digest |eyJ|sk-|xox|gh[pousr]_|private key|://`)
+	`(?i)passw|pwd|secret|community|token|api[_-]?key|bearer|basic |digest |eyJ|sk-|xox|gh[pousr]_|private key|://`)
 
 // SourceExcludes is the `_source.excludes` list every document search sends, so
 // the value does not reach this process at all when the store honours it. The
