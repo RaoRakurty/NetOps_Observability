@@ -919,6 +919,11 @@ transforms:
             .parser_status = "parsed"
           }
         }
+      } else if exists(.fgt) {
+        # The key-value body parsed above. Recorded, or every such line reads as
+        # unparsed on the metric that exists to catch unparsed lanes (387 PR 14).
+        .parser_id = "fortios_kv.v1"
+        .parser_status = "parsed"
       }
 
       # Severity reconcile: the body's embedded level overrides the syslog PRI when

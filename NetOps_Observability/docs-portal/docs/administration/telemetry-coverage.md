@@ -58,6 +58,23 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 The capture above is real, from a lab running 40 rules across three lanes: 16 on `syslog`, 12 on `port` and 12 on `trap`.
 
+The same response also carries `vendors`, the rows behind **Coverage by vendor**, and `prefilter.high_severity_skipped`.
+
+### Read coverage by vendor
+
+**Coverage by vendor** has one row per vendor, plus **Any vendor** for what holds for every sender and **Not identified** for records from senders nobody could name.
+
+| Cell | Meaning |
+|---|---|
+| **Not covered yet** | Correlix has no tested sample for this vendor on this kind of data. It never reads as 0%, because nothing has been measured against. |
+| **5 formats, 25 tested** | The log formats it can read, and how many samples prove it. |
+| **1,099 names, 12 tested** | The trap definitions it can name, and how many samples prove it. |
+| **99.6% read of 14,000 lines** | The last 24 hours. A partly decoded trap counts as read. |
+| **No lines yet** | The metric store answered, and this vendor sent nothing. |
+| **No reading** | The metric store did not answer. This says nothing about the vendor. |
+
+The capability cells come from the catalogue the release shipped with. The daily cells come from the live counter `netops_parse_status_events`. Parse alerts and how to respond to them are in the `parse-coverage` runbook.
+
 | Field | What it means |
 | --- | --- |
 | `parser_rev` | The parser revision the correlation engine is running. |

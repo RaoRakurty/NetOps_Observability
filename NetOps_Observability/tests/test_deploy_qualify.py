@@ -469,6 +469,53 @@ def _run_bash(body: str, env: dict | None = None) -> str:
     return res.stdout
 
 
+def _parse_ratio(lane: str, total: str, stuck: str) -> str:
+    src = _script()
+    start = src.index("parse_ratio_detail() {")
+    end = src.index('if [ "$METRICS_OK" -eq 0 ]; then\n  record SKIP ADVISORY "Q10')
+    helpers = ("set -euo pipefail\n"
+               "num_gt() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN { exit !(a + 0 >  b + 0) }'; }\n"
+               + src[start:end])
+    return _run_bash(helpers + f'\nparse_ratio_detail "{lane}" "{total}" "{stuck}"')
+
+
+def test_q10_reads_the_value_of_the_status_per_lane() -> None:
+    out = _parse_ratio("syslog", "1000", "30")
+    assert out.startswith("syslog: 97.0% parsed of 1000 records")
+    assert "understood" not in out
+
+
+def test_q10_calls_a_stuck_lane_what_it_is() -> None:
+    out = _parse_ratio("syslog", "119000", "119000")
+    assert "0.0% parsed of 119000" in out and "almost nothing" in out
+    assert "almost nothing" in _parse_ratio("snmptrap", "1000", "990")
+    assert "almost nothing" not in _parse_ratio("snmptrap", "1000", "989")
+
+
+def test_q10_no_records_is_not_a_percentage() -> None:
+    out = _parse_ratio("snmptrap", "0", "0")
+    assert "no records" in out and "%" not in out
+
+
+def test_q10_is_advisory_and_absent_is_not_healthy() -> None:
+    src = _script()
+    block = src[src.index("# --- Q10 (ADVISORY)"):src.index("# FINAL BLOCK")]
+    assert "record FAIL" not in block, "parse coverage must never fail a deploy"
+    assert "record PASS" not in block, "a reading is reported, not passed"
+    assert "UNKNOWN, not healthy" in block
+    assert "Q10" in src[:src.index("EOF\n}")], "Q10 is not documented in --help"
+
+
+def test_q10_treats_only_an_empty_result_as_no_unparsed_lines() -> None:
+    """A transport failure read as zero would report a lane as fully parsed."""
+    src = _script()
+    block = src[src.index("# --- Q10 (ADVISORY)"):src.index("# FINAL BLOCK")]
+    assert "*'empty result set'*) q10_stuck=0" in block
+    assert "2>/dev/null" not in block, "the reason must be read, not discarded (§16.1)"
+    # The match must keep tracking the message vm_scalar really prints.
+    assert "empty result set" in src[src.index("vm_scalar() {"):src.index("vm_labels() {")]
+
+
 def test_duration_seconds_understands_dockers_since_syntax() -> None:
     out = _run_bash(_source_helpers(
         'for d in 20m 2h 90s 1h30m 10m30s abc 3d ""; do '

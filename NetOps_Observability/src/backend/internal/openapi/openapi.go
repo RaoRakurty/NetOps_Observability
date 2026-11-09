@@ -297,7 +297,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/debug/sessions/{id}", "Telemetry", "One debug session: its manifest, timeline and human stage table, plus the module log files it holds (platform admin)"},
 	{"GET", "/api/debug/sessions/{id}/module/{module}", "Telemetry", "One module's log file from a session, bounded in bytes and lines, with truncation stated rather than silent (platform admin)"},
 	{"GET", "/api/debug/sessions/{id}/bundle", "Telemetry", "Download a session as a redacted, checksummed tar.gz — SHA256SUMS inside the archive and the body's own digest in X-Correlix-Bundle-SHA256 (platform admin)"},
-	{"GET", "/api/admin/parser/stats", "Telemetry", "Parser rule corpus, per-rule hit counts, promotion rate and ingest pre-filter split, summed across the correlation replicas (platform admin)"},
+	{"GET", "/api/admin/parser/stats", "Telemetry", "Parser rule corpus, per-rule hit counts, promotion rate, ingest pre-filter split and the per-vendor coverage scorecard, summed across the correlation replicas (platform admin)"},
 	{"GET", "/api/telemetry/unrecognized", "Telemetry", "Mined templates of the caller's log lines the parser would not admit (days, limit, lane)"},
 	{"POST", "/api/telemetry/unrecognized/{template_id}/propose", "Telemetry", "Draft a telemetry-catalog rule row and fixture for one unrecognized template — returned as text, applied nowhere (alerts:write)"},
 	{"GET", "/api/users", "Identity", "List users (administration:admin)"},

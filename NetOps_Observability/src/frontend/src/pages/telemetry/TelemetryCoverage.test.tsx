@@ -99,6 +99,82 @@ describe("header stats", () => {
   });
 });
 
+describe("coverage by vendor", () => {
+  const cellsOf = async (name: string) => {
+    const table = await screen.findByLabelText("Coverage by vendor");
+    const rowEl = (await within(table).findByText(name)).closest(".dtv-row") as HTMLElement;
+    return rowEl.textContent ?? "";
+  };
+
+  it("reads a vendor with no tested samples as not covered, never as 0%", async () => {
+    render(<TelemetryCoverage />);
+    const sonic = await cellsOf("SONiC");
+    expect(sonic).toContain("Not covered yet");
+    expect(sonic).toContain("900 lines, not covered yet");
+    expect(sonic).not.toContain("0%");
+    const quiet = await cellsOf("Extreme Networks");
+    expect(quiet).toContain("No lines yet");
+    expect(quiet).not.toContain("%");
+  });
+
+  it("states what a covered vendor can read and read today", async () => {
+    render(<TelemetryCoverage />);
+    const cisco = await cellsOf("Cisco");
+    expect(cisco).toContain("5 formats, 25 tested");
+    expect(cisco).toContain("700 names, 4 tested");
+    expect(cisco).toContain("99.6% read of 14,000 lines");
+    expect(cisco).toContain("100% read of 2,080 traps");
+    expect(cisco).toContain("21, 12 proven on a device");
+  });
+
+  it("shows records nobody identified, with their real rate", async () => {
+    render(<TelemetryCoverage />);
+    expect(await cellsOf("Not identified")).toContain("0.0% read of 119,000 lines");
+  });
+
+  it("gives the standards row no live reading: rules hold for senders, they are not one", async () => {
+    render(<TelemetryCoverage />);
+    expect(await cellsOf("Any vendor")).not.toContain("No reading");
+  });
+
+  it("says when the metric store gave no reading rather than showing a number", async () => {
+    parserStats.mockResolvedValue({
+      ...parserStatsFixture,
+      vendors: [{
+        vendor: "cisco", display_name: "Cisco",
+        lanes: {
+          syslog: { grammars: 5, mib_nodes: 0, mibs: 0, trap_definitions: 0, fixtures: 25, rules: {}, live: null },
+          snmptrap: { grammars: 0, mib_nodes: 700, mibs: 12, trap_definitions: 16, fixtures: 4, rules: {}, live: null },
+        },
+      }],
+    });
+    render(<TelemetryCoverage />);
+    const cisco = await cellsOf("Cisco");
+    expect(cisco).toContain("No reading");
+    expect(cisco).not.toContain("%");
+  });
+
+  it("survives an API older than this page", async () => {
+    const { vendors: _gone, ...older } = parserStatsFixture;
+    parserStats.mockResolvedValue(older);
+    render(<TelemetryCoverage />);
+    expect(await screen.findByText("No vendor coverage reported.")).toBeInTheDocument();
+  });
+
+  it("warns on high-severity lines the screen skipped, and only when there are some", async () => {
+    render(<TelemetryCoverage />);
+    expect(await screen.findByText("High severity skipped")).toBeInTheDocument();
+    expect(screen.getByText("37")).toBeInTheDocument();
+  });
+
+  it("is behind the same platform-admin gate as the rest of the section", async () => {
+    parserStats.mockRejectedValue(forbidden());
+    render(<TelemetryCoverage />);
+    expect(await screen.findByText(/platform administrators only/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Coverage by vendor")).toBeNull();
+  });
+});
+
 describe("rules table", () => {
   it("renders one row per rule with a fidelity badge coloured by tier and a shadow chip", async () => {
     const { container } = render(<TelemetryCoverage />);

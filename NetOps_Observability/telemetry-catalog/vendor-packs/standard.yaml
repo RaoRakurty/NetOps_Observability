@@ -156,6 +156,7 @@ fixtures:
     appname: confd
     message: '2939 - - audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh'
     expect:
+      parser_status: parsed
       event_type: audit_session_created_netconf
       dedup_key: 'vEdge-1|confd|audit_session_created_netconf'
     signal: null
@@ -166,6 +167,7 @@ fixtures:
     appname: confd
     message: '2939 - - audit user: svc-user/777134 assigned to groups: basic'
     expect:
+      parser_status: parsed
       event_type: audit_session_groups
       event_category: management_audit
     signal: null
@@ -176,6 +178,7 @@ fixtures:
     appname: confd
     message: '2939 - - audit user: svc-user/777134 terminated session (reason: normal)'
     expect:
+      parser_status: parsed
       event_type: audit_session_terminated
       event_category: management_audit
     signal: null
@@ -186,6 +189,7 @@ fixtures:
     appname: confd
     message: '4220 - - netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id="1"'
     expect:
+      parser_status: parsed
       event_type: netconf_rpc
       event_category: management_audit
     signal: null
@@ -196,6 +200,7 @@ fixtures:
     appname: confd
     message: '4220 - - netconf id=987343 sending rpc-reply, attrs: nc:message-id="1"'
     expect:
+      parser_status: parsed
       event_type: netconf_rpc
     signal: null
 
@@ -205,6 +210,7 @@ fixtures:
     appname: confd
     message: '4220 - - netconf id=987343 close-session attrs: nc:message-id="2"'
     expect:
+      parser_status: parsed
       event_type: netconf_rpc
     signal: null
 
@@ -214,6 +220,7 @@ fixtures:
     appname: confd
     message: '4220 - - netconf id=987344 new tcp session for user svc-user from 192.0.2.1'
     expect:
+      parser_status: parsed
       event_type: netconf_session
     signal: null
 
@@ -223,6 +230,7 @@ fixtures:
     appname: confd
     message: '4220 - - netconf id=987345 sending notification {http://viptela.com/system}cpu-usage'
     expect:
+      parser_status: parsed
       event_type: netconf_notification
     signal: null
 
@@ -232,6 +240,7 @@ fixtures:
     appname: sshd
     message: '27761 - - Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed'
     expect:
+      parser_status: parsed
       parser_id: standard_mgmt_audit.v1
       event_type: ssh_login_accepted
       event_category: management_audit
@@ -244,6 +253,7 @@ fixtures:
     appname: sshd
     message: '27761 - - pam_unix(sshd:session): session opened for user svc-user by (uid=0)'
     expect:
+      parser_status: parsed
       event_type: ssh_session_opened
     signal: null
 
@@ -253,6 +263,7 @@ fixtures:
     appname: sshd
     message: '27761 - - pam_unix(sshd:session): session closed for user svc-user'
     expect:
+      parser_status: parsed
       event_type: ssh_session_closed
     signal: null
 
@@ -279,6 +290,7 @@ fixtures:
     appname: sshd
     message: 'Accepted publickey for svc-user from 192.0.2.1 port 2222 ssh2'
     expect:
+      parser_status: parsed
       event_type: ssh_login_accepted
       event_category: management_audit
     signal: null

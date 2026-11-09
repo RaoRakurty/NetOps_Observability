@@ -1484,6 +1484,136 @@ transforms:
           # away from the lane it actually describes).
           topic: "{{ topic }}"
 
+  # Tracker 387 PR 14: so a lane never silently sits unparsed again. These count
+  # the VALUE of parser_status. Presence proved nothing: it was on 100 % of syslog
+  # records for as long as 100 % of them read `unparsed`, and nothing noticed.
+  # Rules: the parse-coverage group in rules-scale-slo.yaml (warning tier).
+  #
+  # SERIES. vendor is at most 22 values today and parser_id 8, each from the generated
+  # lists below or `other`, so the label product is bounded at 22 x 8 x 6 statuses =
+  # 1056, and the pipeline can reach about 290 of those: a line has one parser and one
+  # status, and a trap has no parser id. A single-vendor deployment holds about ten.
+  # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 12.
+  # No device, tenant or free text can reach a label, so nothing here is
+  # tenant-scoped and every series is safe on the shared exporter.
+  #
+  # A pack adding a vendor or a parser id grows the lists through
+  # scripts/gen-vendor-coverage.py, and tests/test_vendor_coverage.py pins the bound.
+  # >>> BEGIN GENERATED-PARSE-LABELS (scripts/gen-vendor-coverage.py)
+  # GENERATED from the vendor profiles and the catalogue. DO NOT EDIT: re-run
+  # scripts/gen-vendor-coverage.py; a drift test fails on a stale copy.
+  #
+  # Bounded label cardinality by construction: a label value is either in these
+  # lists or it is `other`, whatever a record on the bus claims. No device,
+  # tenant or free-text value can reach a label. See the metrics below for the count.
+  parse_status_labels:
+    type: remap
+    inputs: [syslog_tagged, snmptrap_tagged]
+    source: |
+      cx_lane = "syslog"
+      if (string(.topic) ?? "") == "netops.snmptrap" { cx_lane = "snmptrap" }
+      cx_vendor = string(.vendor) ?? ""
+      if cx_vendor == "" {
+        cx_vendor = "unknown"
+      } else if !includes(["arista", "aruba", "checkpoint", "cisco", "dell", "extreme", "f5", "fortinet", "hp", "huawei", "juniper", "linux", "mikrotik", "net-snmp", "nokia", "paloalto", "ruckus", "sonic", "sophos", "ubiquiti", "unknown"], cx_vendor) {
+        cx_vendor = "other"
+      }
+      cx_parser = string(.parser_id) ?? ""
+      if cx_parser == "" {
+        cx_parser = "none"
+      } else if !includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "fortios_kv.v1", "ios_style.v1", "srlinux.v1", "standard_mgmt_audit.v1"], cx_parser) {
+        cx_parser = "other"
+      }
+      cx_status = string(.parser_status) ?? ""
+      if !includes(["parsed", "unparsed", "decoded", "partially_decoded", "raw_only"], cx_status) { cx_status = "other" }
+      # The stored record is the other branch of this fan-out: this copy keeps only
+      # what the counter reads, so holding it costs nothing.
+      . = { "lane": cx_lane, "vendor": cx_vendor, "parser_id": cx_parser, "parser_status": cx_status }
+
+  trap_varbind_counts:
+    type: remap
+    inputs: [snmptrap_tagged]
+    source: |
+      cx_vendor = string(.vendor) ?? ""
+      if cx_vendor == "" {
+        cx_vendor = "unknown"
+      } else if !includes(["arista", "aruba", "checkpoint", "cisco", "dell", "extreme", "f5", "fortinet", "hp", "huawei", "juniper", "linux", "mikrotik", "net-snmp", "nokia", "paloalto", "ruckus", "sonic", "sophos", "ubiquiti", "unknown"], cx_vendor) {
+        cx_vendor = "other"
+      }
+      cx_resolved = 0
+      cx_unresolved = 0
+      for_each(array(.varbinds) ?? []) -> |_i, vb| {
+        if (string(vb.name) ?? "") != "" {
+          cx_resolved = cx_resolved + 1
+        } else {
+          cx_unresolved = cx_unresolved + 1
+        }
+      }
+      . = { "vendor": cx_vendor, "resolved": cx_resolved, "unresolved": cx_unresolved }
+  # <<< END GENERATED-PARSE-LABELS
+
+  parse_status_metric:
+    type: log_to_metric
+    inputs: [parse_status_labels]
+    metrics:
+      - type: counter
+        field: parser_status
+        name: netops_parse_status_events
+        tags:
+          lane: "{{ lane }}"
+          vendor: "{{ vendor }}"
+          parser_id: "{{ parser_id }}"
+          parser_status: "{{ parser_status }}"
+
+  # How much of what a trap carried we could name: an unresolved varbind is a bare OID
+  # an operator cannot read, and the count ranks which MIB to fetch next (plan §6a).
+  trap_varbind_metric:
+    type: log_to_metric
+    inputs: [trap_varbind_counts]
+    metrics:
+      - type: counter
+        field: resolved
+        increment_by_value: true
+        name: netops_trap_varbinds
+        tags:
+          vendor: "{{ vendor }}"
+          resolution: resolved
+      - type: counter
+        field: unresolved
+        increment_by_value: true
+        name: netops_trap_varbinds
+        tags:
+          vendor: "{{ vendor }}"
+          resolution: unresolved
+
+  # What the flow lane knew about each record, as read off flows_decoded: whether the
+  # exporter is in inventory, what the sampling label says, and whether AS numbers
+  # came through (they were empty on all of the lab's 29,875 rows, plan §2). Interface
+  # and device names arrive at query time (PR 13), so they are not an outcome here.
+  flow_enrichment_labels:
+    type: remap
+    inputs: [flows_decoded]
+    source: |
+      cx_exporter = "unknown"
+      if (string(.tenant_registry) ?? "") == "hit" { cx_exporter = "known" }
+      cx_sampling = string(.sampling_status) ?? ""
+      if !includes(["reported", "not_reported_1to1"], cx_sampling) { cx_sampling = "other" }
+      cx_as = "absent"
+      if (to_int(.src_as) ?? 0) > 0 || (to_int(.dst_as) ?? 0) > 0 { cx_as = "present" }
+      . = { "exporter": cx_exporter, "sampling": cx_sampling, "as_numbers": cx_as }
+
+  flow_enrichment_metric:
+    type: log_to_metric
+    inputs: [flow_enrichment_labels]
+    metrics:
+      - type: counter
+        field: exporter
+        name: netops_flow_enrichment_events
+        tags:
+          exporter: "{{ exporter }}"
+          sampling: "{{ sampling }}"
+          as_numbers: "{{ as_numbers }}"
+
   # Tracker 373: events whose sender address was lost to the Docker bridge
   # gateway (stamped source_masked by the trap receiver, the aggregator's
   # syslog_sender and flows_decoded). Counted per topic only — no device or
@@ -1532,7 +1662,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

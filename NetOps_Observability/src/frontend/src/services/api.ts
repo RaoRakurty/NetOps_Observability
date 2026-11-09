@@ -3374,9 +3374,31 @@ export type ParserStats = {
   // and "0% promoted" are different facts (honest-empty rule).
   promotion_rate: number | null;
   window_lines: number;
-  prefilter: { passed: number; rejected: number };
+  prefilter: { passed: number; rejected: number; high_severity_skipped?: number };
   generic_fallback: { syslog: number; trap: number };
   rules: ParserRuleStat[];
+  // The per-vendor scorecard. Optional: an API older than this page has none.
+  vendors?: VendorScore[];
+};
+
+// One vendor on one lane. `live` null = no reading was available, which is a
+// different fact from { total: 0 } = a reading with no lines (honest-empty rule).
+export type VendorLaneStats = {
+  grammars: number;
+  mib_nodes: number;
+  mibs: number;
+  trap_definitions: number;
+  fixtures: number;
+  rules: Record<string, number>;
+  live: { total: number; read: number } | null;
+};
+
+export type VendorScore = {
+  vendor: string;
+  display_name: string;
+  standard?: boolean;
+  unidentified?: boolean;
+  lanes: { syslog: VendorLaneStats; snmptrap: VendorLaneStats };
 };
 
 export type UnrecognizedItem = {

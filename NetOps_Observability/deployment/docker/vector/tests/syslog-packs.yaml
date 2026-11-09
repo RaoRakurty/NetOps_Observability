@@ -53,6 +53,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "SYSMGR", "wrong facility")
               assert_eq!(.event_type, "sysmgr_200071", "wrong event_type")
               assert_eq!(.severity_native_text, "WARN", "wrong severity_native_text")
@@ -72,6 +73,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "sysmgr_200072", "wrong event_type")
               assert_eq!(.severity_native_text, "NTCE", "wrong severity_native_text")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
@@ -89,6 +91,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "sysmgr_200069", "wrong event_type")
               assert_eq!(.severity_native_text, "CRIT", "wrong severity_native_text")
               assert_eq!(.severity_native_code, "2", "wrong severity_native_code")
@@ -107,6 +110,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "VDAEMON_0", "wrong facility")
               assert_eq!(.event_type, "vdaemon_0_999999", "wrong event_type")
               assert_eq!(.normalized_severity, "critical", "wrong normalized_severity")
@@ -124,6 +128,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "sysmgrd", "wrong facility")
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "critical", "wrong severity_native_text")
@@ -142,6 +147,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "system-login-change", "wrong event_type")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
   - name: "cisco_sdwan: the IOS-XE shape parses under the same mechanism"
@@ -160,6 +166,7 @@ tests:
             source: |
               assert_eq!(.vendor, "cisco", "wrong vendor")
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "FTMD", "wrong facility")
               assert_eq!(.event_type, "ftmd_1000009", "wrong event_type")
               assert_eq!(.severity_native_text, "WARN", "wrong severity_native_text")
@@ -178,6 +185,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "major", "wrong severity_native_text")
   - name: "cisco_sdwan: cpu above 75 percent stays below the floor"
@@ -194,6 +202,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "sysmgr_200070", "wrong event_type")
   - name: "cisco_sdwan: cpu back to normal is a clear"
     inputs:
@@ -209,6 +218,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "minor", "wrong severity_native_text")
   - name: "cisco_sdwan: a vBond lookup failure is a below-floor alarm, not a DNS symptom"
@@ -316,6 +326,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "VDAEMON_0", "wrong facility")
               assert_eq!(.event_type, "vdaemon_0_1000001", "wrong event_type")
   - name: "cisco_sdwan: a control connection coming up is the clear"
@@ -332,6 +343,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "vdaemon_0_1000001", "wrong event_type")
   - name: "cisco_sdwan: a BFD session going down, documented shape"
     inputs:
@@ -347,6 +359,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "ftmd", "wrong facility")
               assert_eq!(.event_type, "bfd-state-change", "wrong event_type")
               assert_eq!(.severity_native_text, "major", "wrong severity_native_text")
@@ -364,6 +377,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "bfd-state-change", "wrong event_type")
   - name: "cisco_sdwan: the same FTMD id with different text is not the benign line"
     inputs:
@@ -379,6 +393,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ftmd_1000003", "wrong event_type")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
   - name: "cisco_sdwan: a cEdge device-management login is audit"
@@ -397,6 +412,7 @@ tests:
             source: |
               assert_eq!(.vendor, "cisco", "wrong vendor")
               assert_eq!(.parser_id, "cisco_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "dmi_auth_passed", "wrong event_type")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
@@ -485,6 +501,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_netconf", "wrong event_type")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_netconf", "wrong dedup_key")
   - name: "standard: group assignment"
@@ -501,6 +518,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: session end"
@@ -517,6 +535,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_terminated", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF request"
@@ -533,6 +552,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF reply"
@@ -549,6 +569,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
   - name: "standard: a NETCONF close"
     inputs:
@@ -564,6 +585,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
   - name: "standard: a NETCONF transport session"
     inputs:
@@ -579,6 +601,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_session", "wrong event_type")
   - name: "standard: an outbound NETCONF notification carrying a marker word stays silent"
     inputs:
@@ -594,6 +617,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_notification", "wrong event_type")
   - name: "standard: an SSH login accepted"
     inputs:
@@ -610,6 +634,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
@@ -627,6 +652,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_opened", "wrong event_type")
   - name: "standard: an SSH session closed"
     inputs:
@@ -642,6 +668,7 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_closed", "wrong event_type")
   - name: "standard: a rejected password is not audit noise"
     inputs:
@@ -688,5 +715,6 @@ tests:
         conditions:
           - type: vrl
             source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")

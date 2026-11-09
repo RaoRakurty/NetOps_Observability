@@ -92,6 +92,10 @@ type Deps struct {
 	// topology is deployment knowledge, so it is injected rather than
 	// discovered here.
 	Replicas func(ctx context.Context) []string
+	// QueryByVendor runs one instant metric query and returns value by the result's
+	// `vendor` label, nil when the store did not answer. Optional: nil means the
+	// scorecard has no live reading, which it says rather than reporting zero.
+	QueryByVendor func(ctx context.Context, promql string) map[string]float64
 	// Metrics counts mining runs and lines scanned.
 	Metrics *Metrics
 	// Audit records an accepted draft. Optional (nil = no audit sink); never
@@ -217,7 +221,20 @@ func (a *API) HandleStats(w http.ResponseWriter, r *http.Request) {
 			"answered": len(snaps), "attempted": len(bases),
 		})
 	}
-	a.d.WriteJSON(w, http.StatusOK, fold(snaps, a.now()))
+	st := fold(snaps, a.now())
+	// The scorecard degrades on its own: a broken embed or an absent metric store
+	// costs that half, and the engine's counters above still answer (§10: said).
+	st.Vendors = []VendorScore{} // never nil: the UI unwraps with Array.isArray
+	if rows, err := embeddedVendorCoverage(); err != nil {
+		a.warn("parser stats: vendor coverage unreadable", map[string]any{"error": err.Error()})
+	} else {
+		live, ok := readLive(ctx, a.d.QueryByVendor)
+		if !ok && a.d.QueryByVendor != nil {
+			a.warn("parser stats: no live parse reading from the metric store", nil)
+		}
+		st.Vendors = vendorScores(rows, live, ok)
+	}
+	a.d.WriteJSON(w, http.StatusOK, st)
 }
 
 // replicaBases resolves the replica list, defensively de-duplicated and

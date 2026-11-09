@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# The syslog body grammars that predate vendor packs and are still hand-written in
+# the aggregator's Stage B (deployment/docker/vector/vector.yaml). Listed as data so
+# the coverage scorecard counts them and the parse-status metric knows their ids;
+# tests/test_vendor_coverage.py fails if this list and the VRL disagree. A grammar
+# leaves this file when it moves into a pack.
+grammars:
+  - parser_id: ios_style.v1
+    description: "%FAC-SEV-MNEMONIC, written by these vendors' classic operating systems"
+    vendors: [cisco, arista]
+  - parser_id: srlinux.v1
+    description: the SR Linux pipe-separated format
+    vendors: [nokia]
+  - parser_id: fortios_kv.v1
+    description: the FortiOS default key=value format
+    vendors: [fortinet]

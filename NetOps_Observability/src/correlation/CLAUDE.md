@@ -62,7 +62,10 @@ the aggregator's Stage B (`scripts/gen-syslog-packs.py`), so the two cannot disa
 `syslog_severity_num` also reads the severity a pack grammar finds in the message.
 `syslog_alarm_num` is what the screen and the generic net act on: when a pack grammar
 matched and the severity is past its `alarm_floor`, it returns None, so reading a severity
-never opens an object by itself (owner D3). The hash covers the packs: `rules_hash(RULES,
+never opens an object by itself (owner D3). A line withheld that way with err or worse in
+its own text, that no typed or `known_benign` row took, is counted
+(`corr_syslog_high_severity_no_signal_total{path}`, PR 14), since a rise is a fault nobody
+has a rule for; the count decides nothing. The hash covers the packs: `rules_hash(RULES,
 PACK_DIGEST)`. The VRL's `cx_inventory_vendor` comes from the registry row (PR 12, vendor
 from discovery through the vendor profiles); an inventory vendor narrows the grammars in
 both executors, and `vendor_source` records `inventory` or `format`. Pack rows sit behind the vendor-neutral

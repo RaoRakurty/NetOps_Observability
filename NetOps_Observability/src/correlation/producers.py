@@ -1072,6 +1072,14 @@ _SYSLOG_SCREEN_LITERALS: tuple[str, ...] | None = None
 
 PREFILTER_REJECTED = 0   # raw syslog lines the screen proved cannot promote
 PREFILTER_PASSED = 0     # raw syslog lines handed to the full classifiers
+# Lines whose own text stated error severity or worse, that a pack grammar's alarm floor
+# kept away from the generic net (owner D3), and that no typed or known_benign row took.
+# They are stored and searchable but reach RCA nowhere, so a rise is a fault nobody has
+# written a rule for. The two paths are one question: a pack's literal usually lets its
+# lines past the screen, so counting rejections alone would never see them. Telemetry
+# only: it decides nothing.
+HIGH_SEVERITY_NO_SIGNAL: dict[str, int] = {"screen": 0, "classifier": 0}
+HIGH_SEVERITY_NUM = 3    # err
 
 
 def prefilter_counts() -> tuple[int, int]:
@@ -1079,10 +1087,39 @@ def prefilter_counts() -> tuple[int, int]:
     return PREFILTER_PASSED, PREFILTER_REJECTED
 
 
+def high_severity_no_signal() -> dict[str, int]:
+    """Exposed as corr_syslog_high_severity_no_signal_total{path}."""
+    return dict(HIGH_SEVERITY_NO_SIGNAL)
+
+
+def _note_high_severity_no_signal(ev: dict, tag: str, sev_num: int | None, path: str) -> None:
+    # `sev_num` None means "no severity at all" or "a grammar withheld it", and only
+    # the second read tells them apart. An ordinary notice has a number and pays
+    # nothing here, which matters on a path that rejects 96 % of the lane.
+    if sev_num is None:
+        stated = syslog_severity_num(ev, tag)
+        if stated is not None and stated <= HIGH_SEVERITY_NUM:
+            HIGH_SEVERITY_NO_SIGNAL[path] += 1
+
+
+def note_classifier_no_signal(ev: dict) -> None:
+    """handle_syslog: a line passed the screen, and no rule emitted or dismissed it."""
+    tag = str(ev.get("appname") or "").upper()
+    _note_high_severity_no_signal(ev, tag, syslog_alarm_num(ev, tag), "classifier")
+
+
+def known_benign_total() -> int:
+    """How many lines a known_benign row has dismissed: handle_syslog compares this
+    around the classifier, because a dismissed line is a decision, not a question."""
+    return sum(KNOWN_BENIGN_HITS.values())
+
+
 def reset_prefilter_counts() -> None:
     """Test hook."""
     global PREFILTER_PASSED, PREFILTER_REJECTED
     PREFILTER_PASSED = PREFILTER_REJECTED = 0
+    for k in HIGH_SEVERITY_NO_SIGNAL:
+        HIGH_SEVERITY_NO_SIGNAL[k] = 0
 
 
 def syslog_promotable(ev: dict) -> bool:
@@ -1119,6 +1156,7 @@ def syslog_promotable(ev: dict) -> bool:
             PREFILTER_PASSED += 1
             return True
     PREFILTER_REJECTED += 1
+    _note_high_severity_no_signal(ev, tag, sev_num, "screen")
     return False
 
 

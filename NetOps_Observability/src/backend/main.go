@@ -5622,12 +5622,14 @@ func (s *server) parserCovDeps() parsercov.Deps {
 				envOr("CORRELATION_URL", "http://correlation:8000"),
 				os.Getenv(parsercov.EnvReplicaURLs))
 		},
-		Metrics:    s.parserCovMetrics,
-		Audit:      s.securityAudit,
-		WriteJSON:  writeJSON,
-		WriteError: writeError,
-		LogWarn:    func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
-		MaxLines:   envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
+		// Vendor-level counters only; the router's labels are closed sets.
+		QueryByVendor: func(ctx context.Context, q string) map[string]float64 { return vmQueryBy(ctx, q, "vendor") },
+		Metrics:       s.parserCovMetrics,
+		Audit:         s.securityAudit,
+		WriteJSON:     writeJSON,
+		WriteError:    writeError,
+		LogWarn:       func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
+		MaxLines:      envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
 	}
 }
 

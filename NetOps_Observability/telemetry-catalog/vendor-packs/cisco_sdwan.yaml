@@ -414,6 +414,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%'
     expect:
+      parser_status: parsed
       facility: SYSMGR
       event_type: sysmgr_200071
       severity_native_text: WARN
@@ -427,6 +428,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%'
     expect:
+      parser_status: parsed
       event_type: sysmgr_200072
       severity_native_text: NTCE
       normalized_severity: notice
@@ -438,6 +440,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)'
     expect:
+      parser_status: parsed
       event_type: sysmgr_200069
       severity_native_text: CRIT
       severity_native_code: '2'
@@ -450,6 +453,7 @@ fixtures:
     appname: VDAEMON
     message: '%Viptela-vEdge-1-VDAEMON_0-2-CRIT-999999: synthetic shape of an unknown critical id'
     expect:
+      parser_status: parsed
       facility: VDAEMON_0
       event_type: vdaemon_0_999999
       normalized_severity: critical
@@ -461,6 +465,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 90% (critically high)" cpu-user-percentage:"9.18" cpu-system-percentage:"90.82" cpu-idle-percentage:"0.00"'
     expect:
+      parser_status: parsed
       facility: sysmgrd
       event_type: cpu-usage
       severity_native_text: critical
@@ -473,6 +478,7 @@ fixtures:
     appname: SYSMGR
     message: '%Viptela-Manager01-sysmgrd-6-INFO-1400002: Notification: system-login-change'
     expect:
+      parser_status: parsed
       event_type: system-login-change
       normalized_severity: notice
     signal: null
@@ -483,6 +489,7 @@ fixtures:
     appname: FTMD
     message: '%Cisco-SDWAN-vm5-FTMD-4-WARN-1000009: BFD-session synthetic body'
     expect:
+      parser_status: parsed
       vendor: cisco
       parser_id: cisco_sdwan.v1
       facility: FTMD
@@ -497,6 +504,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 75%" cpu-user-percentage:"2.11" cpu-system-percentage:"85.26" cpu-idle-percentage:"12.63"'
     expect:
+      parser_status: parsed
       event_type: cpu-usage
       severity_native_text: major
     signal: null
@@ -507,6 +515,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%'
     expect:
+      parser_status: parsed
       event_type: sysmgr_200070
     signal: {rule_id: syslog.sdwan.cpu_high.warning, kind: device_resource_anomaly, severity: warn, opens_alone: false}
 
@@ -516,6 +525,7 @@ fixtures:
     appname: SYSMGR
     message: '913 - - %Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage back to normal level" cpu-user-percentage:"8.29" cpu-system-percentage:"35.75" cpu-idle-percentage:"55.96"'
     expect:
+      parser_status: parsed
       event_type: cpu-usage
       severity_native_text: minor
     signal: {rule_id: syslog.sdwan.cpu_normal.clear, kind: device_resource_anomaly_clear, severity: info, opens_alone: false}
@@ -579,6 +589,7 @@ fixtures:
     appname: VDAEMON
     message: '%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:down peer-type:vsmart peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005'
     expect:
+      parser_status: parsed
       facility: VDAEMON_0
       event_type: vdaemon_0_1000001
     signal: {rule_id: syslog.sdwan.control_connection.down, kind: controller_control_connection_loss, severity: warn, opens_alone: false}
@@ -589,6 +600,7 @@ fixtures:
     appname: VDAEMON
     message: '%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:up peer-type:vmanage peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005'
     expect:
+      parser_status: parsed
       event_type: vdaemon_0_1000001
     signal: {rule_id: syslog.sdwan.control_connection.up, kind: controller_control_connection_loss_clear, severity: info, opens_alone: false}
 
@@ -598,6 +610,7 @@ fixtures:
     appname: FTMD
     message: '%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 local-color:"mpls" remote-color:"biz-internet" new-state:down deleted:"false" flap-reason:timeout'
     expect:
+      parser_status: parsed
       facility: ftmd
       event_type: bfd-state-change
       severity_native_text: major
@@ -609,6 +622,7 @@ fixtures:
     appname: FTMD
     message: '%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:"vEdge-1" system-ip:192.0.2.1 local-color:"mpls" remote-color:"biz-internet" new-state:up deleted:"false" flap-reason:na'
     expect:
+      parser_status: parsed
       event_type: bfd-state-change
     signal: {rule_id: syslog.sdwan.bfd.up, kind: controller_bfd_down_clear, severity: info, opens_alone: false}
 
@@ -618,6 +632,7 @@ fixtures:
     appname: FTMD
     message: '%Viptela-vEdge-1-FTMD-3-ERRO-1000003: forwarding table programming failed'
     expect:
+      parser_status: parsed
       event_type: ftmd_1000003
       normalized_severity: error
     signal: {rule_id: syslog.sdwan.below_floor, kind: device_alarm, severity: warn, opens_alone: false}
@@ -628,6 +643,7 @@ fixtures:
     appname: R0/0
     message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
     expect:
+      parser_status: parsed
       vendor: cisco
       parser_id: cisco_mgmt_audit.v1
       event_type: dmi_auth_passed

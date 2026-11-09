@@ -12,8 +12,10 @@
 //   · a 403 on the platform-admin stats endpoint is a legitimate ANSWER
 //     ("platform-admin only"), not a failure to report as an error.
 //   · an empty unrecognized list always carries a reason, never a blank table.
+//   · a vendor with no tested samples reads "Not covered yet", never 0% parsed.
+//   · no live reading and no lines are different facts, and both differ from 0%.
 
-import type { ParserRuleStat, ParserStats, UnrecognizedPage } from "../../services/api";
+import type { ParserRuleStat, ParserStats, UnrecognizedPage, VendorLaneStats, VendorScore } from "../../services/api";
 
 // ── permissions ─────────────────────────────────────────────────────────────
 
@@ -74,6 +76,64 @@ export function ruleSummary(rows: ParserRuleStat[]): { total: number; shadow: nu
     shadow: rows.filter((r) => r.shadow).length,
     validated: rows.filter((r) => r.fidelity === "lab_validated" || r.fidelity === "live_validated").length,
   };
+}
+
+// ── vendor scorecard ────────────────────────────────────────────────────────
+
+export const NOT_COVERED = "Not covered yet";
+
+/** Defensive unwrap, and an API older than this page simply has no rows. */
+export function vendorRows(stats: ParserStats | null | undefined): VendorScore[] {
+  return Array.isArray(stats?.vendors) ? stats!.vendors! : [];
+}
+
+const VALIDATED = new Set(["lab_validated", "live_validated"]);
+
+const n = (v: number) => v.toLocaleString("en-US");
+const plural = (v: number, one: string, many: string) => `${n(v)} ${v === 1 ? one : many}`;
+
+function ruleCounts(lane: VendorLaneStats): { total: number; proven: number } {
+  const rules = lane.rules ?? {};
+  let total = 0;
+  let proven = 0;
+  for (const [fidelity, count] of Object.entries(rules)) {
+    total += count;
+    if (VALIDATED.has(fidelity)) proven += count;
+  }
+  return { total, proven };
+}
+
+/** What we can read, in words. A lane with no tested sample is not covered,
+ *  whatever else exists for it: a definition nobody has tested is not coverage. */
+export function laneCapability(lane: VendorLaneStats | undefined, kind: "syslog" | "snmptrap"): string {
+  if (!lane || !lane.fixtures) return NOT_COVERED;
+  const tested = `${n(lane.fixtures)} tested`;
+  if (kind === "syslog") return `${plural(lane.grammars, "format", "formats")}, ${tested}`;
+  return `${plural(lane.mib_nodes, "name", "names")}, ${tested}`;
+}
+
+export function ruleSummaryOf(row: VendorScore): string {
+  const a = ruleCounts(row.lanes.syslog);
+  const b = ruleCounts(row.lanes.snmptrap);
+  const total = a.total + b.total;
+  if (total === 0) return "None yet";
+  const proven = a.proven + b.proven;
+  return proven > 0 ? `${n(total)}, ${n(proven)} proven on a device` : `${n(total)}, none proven yet`;
+}
+
+/** What we read today. The order of the checks is the honesty: no reading, then
+ *  no lines, then not covered; a percentage only for a lane that can earn one. */
+export function liveReading(row: VendorScore, kind: "syslog" | "snmptrap"): string {
+  const lane = row.lanes[kind];
+  const unit = kind === "syslog" ? "line" : "trap";
+  if (!lane?.live) return "No reading";
+  const { total, read } = lane.live;
+  if (!total) return `No ${unit}s yet`;
+  const seen = plural(total, unit, `${unit}s`);
+  if (!lane.fixtures && !row.unidentified) return `${seen}, ${NOT_COVERED.toLowerCase()}`;
+  // Rounded down: a lane with one line unread must not read as a clean 100%.
+  const pct = Math.floor(Math.max(0, Math.min(1, read / total)) * 1000) / 10;
+  return `${pct === 100 || read === 0 ? pct.toFixed(0) : pct.toFixed(1)}% read of ${seen}`;
 }
 
 // ── unrecognized shapes ─────────────────────────────────────────────────────

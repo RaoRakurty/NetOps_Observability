@@ -13,20 +13,79 @@ import {
   fidelityRank,
   fidelityTitle,
   isForbidden,
+  laneCapability,
+  liveReading,
+  NOT_COVERED,
   promotionDisplay,
   ruleRows,
   ruleSummary,
+  ruleSummaryOf,
   severityBadgeClass,
   severityLabel,
   unrecognizedItems,
   unrecognizedNote,
+  vendorRows,
 } from "./coverageModel";
+import type { ParserStats, VendorLaneStats, VendorScore } from "../../services/api";
 import {
   parserStatsFixture,
   parserStatsNoLinesFixture,
   unrecognizedFixture,
   unrecognizedNotMinedFixture,
 } from "./fixtures";
+
+describe("vendor scorecard wording", () => {
+  const lane = (over: Partial<VendorLaneStats> = {}): VendorLaneStats => ({
+    grammars: 0, mib_nodes: 0, mibs: 0, trap_definitions: 0, fixtures: 0, rules: {}, live: { total: 0, read: 0 }, ...over,
+  });
+  const row = (syslog: VendorLaneStats, extra: Partial<VendorScore> = {}): VendorScore => ({
+    vendor: "x", display_name: "X", lanes: { syslog, snmptrap: lane() }, ...extra,
+  });
+
+  it("no tested sample is not covered, whatever else exists for the lane", () => {
+    expect(laneCapability(lane(), "syslog")).toBe(NOT_COVERED);
+    expect(laneCapability(lane({ grammars: 3 }), "syslog")).toBe(NOT_COVERED);
+    expect(laneCapability(lane({ mib_nodes: 3061, mibs: 5 }), "snmptrap")).toBe(NOT_COVERED);
+    expect(laneCapability(undefined, "syslog")).toBe(NOT_COVERED);
+  });
+
+  it("states what a lane with tested samples can read", () => {
+    expect(laneCapability(lane({ grammars: 1, fixtures: 1 }), "syslog")).toBe("1 format, 1 tested");
+    expect(laneCapability(lane({ mib_nodes: 1099, fixtures: 12 }), "snmptrap")).toBe("1,099 names, 12 tested");
+  });
+
+  it("keeps no reading, no lines, not covered and a real rate apart", () => {
+    expect(liveReading(row(lane({ fixtures: 3, live: null })), "syslog")).toBe("No reading");
+    expect(liveReading(row(lane({ fixtures: 3 })), "syslog")).toBe("No lines yet");
+    expect(liveReading(row(lane({ fixtures: 3 })), "snmptrap")).toBe("No traps yet");
+    expect(liveReading(row(lane({ live: { total: 900, read: 0 } })), "syslog")).toBe("900 lines, not covered yet");
+    expect(liveReading(row(lane({ fixtures: 3, live: { total: 900, read: 0 } })), "syslog")).toBe("0% read of 900 lines");
+    expect(liveReading(row(lane({ fixtures: 3, live: { total: 1, read: 1 } })), "syslog")).toBe("100% read of 1 line");
+  });
+
+  it("never rounds up to a clean 100%, and never a working lane down to a flat 0%", () => {
+    expect(liveReading(row(lane({ fixtures: 3, live: { total: 10000, read: 9999 } })), "syslog")).toBe("99.9% read of 10,000 lines");
+    expect(liveReading(row(lane({ fixtures: 3, live: { total: 10000, read: 9990 } })), "syslog")).toBe("99.9% read of 10,000 lines");
+    expect(liveReading(row(lane({ fixtures: 3, live: { total: 10000, read: 1 } })), "syslog")).toBe("0.0% read of 10,000 lines");
+  });
+
+  it("an unidentified sender shows its real rate: there is no vendor to be not covered", () => {
+    expect(liveReading(row(lane({ live: { total: 119000, read: 0 } }), { unidentified: true }), "syslog")).toBe("0% read of 119,000 lines");
+  });
+
+  it("counts rules across both lanes and only calls validated ones proven", () => {
+    const r = row(lane({ rules: { lab_validated: 2, doc_claimed: 3 } }));
+    r.lanes.snmptrap = lane({ rules: { live_validated: 1, unrated: 4 } });
+    expect(ruleSummaryOf(r)).toBe("10, 3 proven on a device");
+    expect(ruleSummaryOf(row(lane({ rules: { doc_claimed: 2 } })))).toBe("2, none proven yet");
+    expect(ruleSummaryOf(row(lane()))).toBe("None yet");
+  });
+
+  it("unwraps a missing or malformed list", () => {
+    expect(vendorRows(null)).toEqual([]);
+    expect(vendorRows({ vendors: "nope" } as unknown as ParserStats)).toEqual([]);
+  });
+});
 
 describe("promotionDisplay", () => {
   it("renders a rate as one-decimal percent with the admitted-lines caption", () => {

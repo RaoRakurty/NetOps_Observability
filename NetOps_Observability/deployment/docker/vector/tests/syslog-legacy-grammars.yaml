@@ -56,6 +56,7 @@ tests:
             source: |
               assert_eq!(.vendor, "arista")
               assert_eq!(.parser_id, "ios_style.v1")
+              assert_eq!(.parser_status, "parsed")
               assert_eq!(.facility, "LINEPROTO")
               assert_eq!(.event_type, "updown")
               assert_eq!(.normalized_severity, "notice")
@@ -78,6 +79,7 @@ tests:
             source: |
               assert_eq!(.vendor, "nokia")
               assert_eq!(.parser_id, "srlinux.v1")
+              assert_eq!(.parser_status, "parsed")
               assert_eq!(.subsystem, "bgp")
               assert_eq!(.summary, "BGP peer 10.0.0.1 moved to Idle")
               assert_eq!(.normalized_severity, "warning")
@@ -159,7 +161,8 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.vendor, "fortinet")
-              assert_eq!(.parser_status, "unparsed")
+              assert_eq!(.parser_id, "fortios_kv.v1")
+              assert_eq!(.parser_status, "parsed")
               assert_eq!(.appname, "event/system")
               assert_eq!(.normalized_severity, "warning")
               assert_eq!(.vendor_source, "format")
