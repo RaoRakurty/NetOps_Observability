@@ -645,6 +645,105 @@ transforms:
           cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
         }
       }
+      # grammar cisco_sdwan.iosxe_dmi_auth (lab_validated)
+      if cx_pk_open && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "dmiauthd: User ") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'dmiauthd: User \S+ authenticated successfully')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "cisco_mgmt_audit.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("dmi_auth_passed")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_created (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ created new session via (?P<via>[a-z]+)')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_created_" + (string(cx_pk_m.via) ?? ""))
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_groups (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ assigned to groups:')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_groups")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_terminated (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ terminated session')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_terminated")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_rpc (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ (?:got rpc|get attrs|sending rpc-reply|close-session)')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_rpc")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_session (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ new tcp session')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_session")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_notification (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ sending notification')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_notification")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.sshd_accepted (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "Accepted ") && includes(["sshd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^Accepted \S+ for ')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("ssh_login_accepted")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.sshd_session (lab_validated)
+      if cx_pk_open && contains(cx_pk_msg, "pam_unix(sshd:session): session ") && includes(["sshd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'pam_unix\(sshd:session\): session (?P<state>opened|closed) for ')
+        if cx_pk_merr == null {
+          cx_pk_open = false
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("ssh_session_" + (string(cx_pk_m.state) ?? ""))
+          cx_pk_cat = "management_audit"
+        }
+      }
       # <<< END GENERATED-SYSLOG-PACKS
 
       # Vendor classification from the log signature (heuristic). The

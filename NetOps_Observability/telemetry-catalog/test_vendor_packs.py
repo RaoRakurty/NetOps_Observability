@@ -88,8 +88,10 @@ def test_every_grammar_has_a_fixture_it_decides():
         table = P.PackTable(grammars, [])
         seen = set()
         for fx in pack["fixtures"]:
+            msg, _ = P._PACKS.strip_envelope(fx["message"])
+            app = fx.get("appname", "unknown").lower()
             for g in table.grammars:
-                if g.literal in fx["message"] and g.regex.search(fx["message"]):
+                if g.applies(msg, app, "") and g.regex.search(msg):
                     seen.add(g.grammar_id)
                     break
         assert seen == {g.grammar_id for g in table.grammars}
@@ -167,6 +169,45 @@ def test_every_pack_line_is_recorded_in_the_golden_corpus():
     proc = subprocess.run([sys.executable, os.path.join(HERE, "record_pack_corpus.py"),
                            "--check"], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
+
+
+def _audit(message: str, host: str = "e1", app: str = "confd") -> dict:
+    return P._PACKS.parse({"hostname": host, "appname": app, "severity": "notice",
+                           "message": message})
+
+
+def test_the_dedup_key_groups_repeats_and_nothing_else():
+    """D2: stable over what changes on every poll (session number, source port), and
+    distinct across device, app and event type. It groups at read time; nothing here
+    can drop a record, because a parse only adds fields."""
+    one = _audit("audit user: u/1 terminated session (reason: normal)")
+    two = _audit("audit user: u/2 terminated session (reason: normal)")
+    other_host = _audit("audit user: u/1 terminated session (reason: normal)", host="e2")
+    other_type = _audit("audit user: u/1 assigned to groups: basic")
+    assert one["dedup_key"] == two["dedup_key"] == "e1|confd|audit_session_terminated"
+    assert other_host["dedup_key"] != one["dedup_key"]
+    assert other_type["dedup_key"] != one["dedup_key"]
+
+
+def test_audit_rows_cannot_alarm():
+    """Non-alarm by construction: no severity reader, so no alarm floor to cross, and no
+    typed row. Even a device that sends the line at `err` gets only what it always did."""
+    table = P._PACKS
+    audit = [g for g in table.grammars if g.category]
+    assert audit
+    assert all(not g.reads_severity and g.alarm_floor is None for g in audit)
+    rows = [r for p in B.load_packs() for r in p.get("rules") or []]
+    audit_literals = {g.literal for g in audit}
+    assert not any(lit in str(r.get("pattern_src")) for r in rows for lit in audit_literals)
+
+
+def test_usernames_stay_in_the_message():
+    """D7 is another stream: this one must not redact, and must not add a field that
+    copies a username out of the message."""
+    line = "audit user: svc-user/1 created new session via snmp from 192.0.2.1:1 with udp"
+    parsed = _audit(line)
+    assert "message" not in parsed
+    assert not any("svc-user" in str(v) for v in parsed.values())
 
 
 def test_every_wanted_row_says_why():

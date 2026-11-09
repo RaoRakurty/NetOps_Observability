@@ -528,7 +528,11 @@ RULES_HASH_VENDOR_PACKS = "6ee65c7a91d889e221319fc03cef07efd9dabafa33ba9becf899b
 #: connection and BFD rows, the FTMD known_benign row and the below-floor rows, all behind
 #: the older rules, plus the known_benign digest field. No older rule's grammar moved.
 RULES_HASH_SDWAN_RULES = "60245d18d78bafc2e5232ab7b3292607c8f19a709f6e451b81b559dc0302e883"
-RULES_HASH_A3 = RULES_HASH_SDWAN_RULES
+#:
+#: Management audit grammars (2026-11-09, tracker 387 PR 11): pack rows classify ConfD and
+#: SSH audit lines, non-alarm. No rule row and no severity moved; the hash covers the packs.
+RULES_HASH_MGMT_AUDIT = "567960e225d82b2f34e4a7673cf55b7d1a8dd49e7f71f508da4266f9fe58353e"
+RULES_HASH_A3 = RULES_HASH_MGMT_AUDIT
 
 
 def _guard_patterns(node) -> list[str]:

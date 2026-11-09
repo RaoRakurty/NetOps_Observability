@@ -69,6 +69,21 @@ grammars:
     fidelity: doc_claimed
     source: 'Cisco Community, "How to check BFD logging in Cisco SDWAN fabric" (`%Cisco-SDWAN-vm5-FTMD-5-NTCE-1000009: BFD-session ...`)'
 
+  # Management audit (PR 11, owner D2). Non-alarm: no severity, no rule row. Vector stamps
+  # `event_category` and a stable `dedup_key`; repeats are grouped at READ time and every
+  # record stays stored. Usernames stay in the message (D7 is another stream).
+  #
+  # The cEdge mnemonic never reaches storage today, and this is the part of the line that
+  # survives: wire `%DMI-5-AUTH_PASSED: R0/0: dmiauthd: ...` is stored as app `R0/0`,
+  # `dmiauthd: ...`. PR 10's framing fix moves the app, so the dedup key moves with it.
+  - id: iosxe_dmi_auth
+    parser_id: cisco_mgmt_audit.v1
+    literal: 'dmiauthd: User '
+    pattern: 'dmiauthd: User \S+ authenticated successfully'
+    event_type: dmi_auth_passed
+    category: management_audit
+    fidelity: lab_validated
+
 # Typed rows, in match order. D3: only the critical CPU row may open an object alone.
 # Everything else states `warn` or `info`, below `severity_open_floor`, so it can join
 # a component and cannot start one. E1 still makes a device's own syslog and its SNMP
@@ -607,3 +622,17 @@ fixtures:
       event_type: ftmd_1000003
       normalized_severity: error
     signal: {rule_id: syslog.sdwan.below_floor, kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: a cEdge device-management login is audit
+    fidelity: lab_validated
+    hostname: 192.0.2.10
+    appname: R0/0
+    message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
+    expect:
+      vendor: cisco
+      parser_id: cisco_mgmt_audit.v1
+      event_type: dmi_auth_passed
+      event_category: management_audit
+      dedup_key: '192.0.2.10|R0/0|dmi_auth_passed'
+      normalized_severity: notice
+    signal: null

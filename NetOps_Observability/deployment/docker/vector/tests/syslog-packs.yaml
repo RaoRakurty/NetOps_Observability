@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 25
+# cases: 41
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -379,6 +379,26 @@ tests:
             source: |
               assert_eq!(.event_type, "ftmd_1000003", "wrong event_type")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "cisco_sdwan: a cEdge device-management login is audit"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "192.0.2.10"
+          appname: "R0/0"
+          severity: "notice"
+          message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.event_type, "dmi_auth_passed", "wrong event_type")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
   - name: "standard: the procid is lifted and the original kept"
     inputs:
       - insert_at: syslog_normalized
@@ -427,3 +447,242 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.message, "a line saying 12 - - in the middle", "wrong message")
+  - name: "standard: an SNMP poll session opening, with its key"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "2939 - - audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "audit_session_created_snmp", "wrong event_type")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
+              assert_eq!(.procid, "2939", "wrong procid")
+              assert_eq!(.message, "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
+  - name: "standard: a NETCONF session opening keeps its own key"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "2939 - - audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "audit_session_created_netconf", "wrong event_type")
+              assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_netconf", "wrong dedup_key")
+  - name: "standard: group assignment"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "2939 - - audit user: svc-user/777134 assigned to groups: basic"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "standard: session end"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "2939 - - audit user: svc-user/777134 terminated session (reason: normal)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "audit_session_terminated", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "standard: a NETCONF request"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "4220 - - netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id=\"1\""
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "standard: a NETCONF reply"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "4220 - - netconf id=987343 sending rpc-reply, attrs: nc:message-id=\"1\""
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+  - name: "standard: a NETCONF close"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "4220 - - netconf id=987343 close-session attrs: nc:message-id=\"2\""
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+  - name: "standard: a NETCONF transport session"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "4220 - - netconf id=987344 new tcp session for user svc-user from 192.0.2.1"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "netconf_session", "wrong event_type")
+  - name: "standard: an outbound NETCONF notification carrying a marker word stays silent"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "4220 - - netconf id=987345 sending notification {http://viptela.com/system}cpu-usage"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "netconf_notification", "wrong event_type")
+  - name: "standard: an SSH login accepted"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "notice"
+          message: "27761 - - Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
+  - name: "standard: an SSH session opened"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "notice"
+          message: "27761 - - pam_unix(sshd:session): session opened for user svc-user by (uid=0)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "ssh_session_opened", "wrong event_type")
+  - name: "standard: an SSH session closed"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "notice"
+          message: "27761 - - pam_unix(sshd:session): session closed for user svc-user"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "ssh_session_closed", "wrong event_type")
+  - name: "standard: a failed login is not audit noise"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "sshd"
+          severity: "notice"
+          message: "27761 - - Failed password for svc-user from 192.0.2.1 port 35112 ssh2"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.procid, "27761", "wrong procid")
+  - name: "standard: the same words from another app are not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "otherd"
+          severity: "notice"
+          message: "audit user: svc-user/1 terminated session (reason: normal)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+  - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "spine1"
+          appname: "sshd"
+          severity: "notice"
+          message: "Accepted publickey for svc-user from 192.0.2.1 port 2222 ssh2"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
