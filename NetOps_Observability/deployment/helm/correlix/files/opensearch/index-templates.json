@@ -503,6 +503,9 @@
             "trap_name": {
               "type": "keyword"
             },
+            "snmp_community_present": {
+              "type": "boolean"
+            },
             "snmp_version": {
               "type": "keyword"
             },

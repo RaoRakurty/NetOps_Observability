@@ -354,7 +354,9 @@ def test_no_total_reads_the_label_and_the_scaling_rule_is_unchanged():
     flows = (ROOT / "src/backend/flows.go").read_text(encoding="utf-8")
     assert "bytes * if(sampling_rate = 0, 1, sampling_rate)" in flows
     src = _router()["transforms"]["flows_os_stamped"]["source"]
-    assert src.strip() == ".sample_rate = 50", "the router's sample stamp must not change"
+    assert re.search(r"^\s*\.sample_rate = 50$", src, re.M), "the router's sample stamp must not change"
+    code = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("#"))
+    assert ".bytes" not in code and ".packets" not in code, "the sample path must not touch a counter"
 
 
 # ── `vector test` over the shipped config ────────────────────────────────────

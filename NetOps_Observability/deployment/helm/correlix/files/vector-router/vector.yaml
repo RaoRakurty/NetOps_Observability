@@ -1431,6 +1431,14 @@ transforms:
     inputs: [flows_os_sample]
     source: |
       .sample_rate = 50
+      # The sink's id_key needs this, and the coordinate is stripped from the
+      # stored document, so without it a bulk retry would store a duplicate that
+      # nothing could detect. Same id as the &log_lane anchor; a quarantine restore
+      # keeps its own id. Stamped here, not in flows_decoded, so only the 1:50
+      # OpenSearch sample pays for it.
+      if !exists(.cx_event_id) && exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
 
   # F-11 — make a broken device→tenant enrichment table VISIBLE.
   #

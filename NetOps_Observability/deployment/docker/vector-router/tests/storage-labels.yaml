@@ -14,6 +14,39 @@
 # (../../vector/tests/fixtures/device_tenant.csv).
 
 tests:
+  # ── flows: the sampled OpenSearch path gets a stable id, a restore keeps its own ──
+  - name: "flows sample: the document id comes from the coordinate"
+    inputs:
+      - insert_at: flows_os_stamped
+        type: log
+        log_fields:
+          topic: "netops.flows"
+          partition: 3
+          offset: 42
+    outputs:
+      - extract_from: flows_os_stamped
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_event_id, "cxk:netops.flows:3:42")
+              assert_eq!(.sample_rate, 50)
+
+  - name: "flows sample: a restored document keeps its own id"
+    inputs:
+      - insert_at: flows_os_stamped
+        type: log
+        log_fields:
+          topic: "netops.flows"
+          partition: 3
+          offset: 42
+          cx_event_id: "2b1f3c1e-8c7d-4f7a-9d3e-0c1a2b3c4d5e"
+    outputs:
+      - extract_from: flows_os_stamped
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_event_id, "2b1f3c1e-8c7d-4f7a-9d3e-0c1a2b3c4d5e")
+
   # ── PR 3: the log lane leaves the metadata in place for the stages after it ──
   # The strip happens in the sink's encoder (`encoding.except_fields`), which
   # `vector test` cannot reach; tests/test_router_storage_labels.py proves that
