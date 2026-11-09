@@ -6,6 +6,7 @@ package irisgate
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,5 +104,67 @@ func TestRecordRefusesNonsense(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatal("a refused record must write nothing")
+	}
+}
+
+func TestSplitsAreReportedAndDoNotChangeTheVerdict(t *testing.T) {
+	dir := t.TempDir()
+	if err := RecordTo(dir, "a",
+		Measure{Gate: GateEntity, OK: 80, Total: 80, Split: "dev"},
+		Measure{Gate: GateEntity, OK: 15, Total: 20, Split: "heldout"},
+		Measure{Gate: GateCrossTenant, Total: 40, Split: "dev"},
+		Measure{Gate: GateCrossTenant, Total: 10, Bad: 1, Split: "heldout"},
+		Measure{Gate: GateAudit, OK: 5, Total: 5},
+	); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := Evaluate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Result{}
+	for _, r := range rs {
+		by[r.Bar.Gate] = r
+	}
+	e := by[GateEntity]
+	if e.OK != 95 || e.Total != 100 || e.Pass {
+		t.Errorf("the verdict is judged on both splits together: %+v", e)
+	}
+	if len(e.Sources) != 1 || e.Sources[0] != "a" {
+		t.Errorf("one scorer reporting two splits is one source: %v", e.Sources)
+	}
+	if e.Dev != (SplitCount{OK: 80, Total: 80}) || e.HeldOut != (SplitCount{OK: 15, Total: 20}) {
+		t.Errorf("split counts: dev %+v heldout %+v", e.Dev, e.HeldOut)
+	}
+	if by[GateCrossTenant].Pass {
+		t.Error("a leak in the held-out split must fail the gate")
+	}
+	if a := by[GateAudit]; !a.Pass || a.Dev.Total != 0 || a.HeldOut.Total != 0 {
+		t.Errorf("an untagged measure counts toward the verdict and neither split: %+v", a)
+	}
+	md := Markdown(rs, "report")
+	for _, want := range []string{
+		"| Dev | Held-out |",
+		"| 100.0 % (80/80) | 75.0 % (15/20) |",
+		"| 0 of 40 | 1 of 10 |",
+		"| a | — | — |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestUnknownSplitIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	if RecordTo(dir, "x", Measure{Gate: GateEntity, OK: 1, Total: 1, Split: "test"}) == nil {
+		t.Fatal("RecordTo must refuse an unknown split")
+	}
+	raw := `[{"gate":"entity","ok":1,"total":1,"split":"train"}]`
+	if err := os.WriteFile(filepath.Join(dir, "y.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Evaluate(dir); err == nil {
+		t.Fatal("Evaluate must refuse a report with an unknown split")
 	}
 }

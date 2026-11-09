@@ -43,6 +43,7 @@ import (
 	"time"
 	_ "time/tzdata" // context.tz must load on a host without zoneinfo
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/validate"
@@ -109,8 +110,10 @@ type goldenCase struct {
 	Context     caseContext `json:"context"`
 	Expect      caseExpect  `json:"expect"`
 	Paraphrases []string    `json:"paraphrases"`
-	file        string      // set by the loader
-	raw         []byte      // the case as it appears on disk (re-encoded)
+	// Source is "synthetic" (the default) or "field" (always held out).
+	Source string `json:"source,omitempty"`
+	file   string // set by the loader
+	raw    []byte // the case as it appears on disk (re-encoded)
 }
 
 type caseContext struct {
@@ -471,6 +474,9 @@ func loadCases(t *testing.T) []*goldenCase {
 		for i := range f.Cases {
 			c := &f.Cases[i]
 			c.file = stem
+			if _, err := evalsplit.ParseSource(c.Source); err != nil {
+				t.Errorf("%s: case %s: %v", p, c.ID, err)
+			}
 			if stem != "unsupported" && c.Category != stem {
 				t.Errorf("%s: case %s has category %q", p, c.ID, c.Category)
 			}

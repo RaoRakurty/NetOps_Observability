@@ -72,8 +72,12 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/internal/evalsplit"
 	"netops/backend/internal/irisgate"
 )
+
+// goldenIncidentCorpus names this corpus in the held-out split's hash.
+const goldenIncidentCorpus = "incidents"
 
 // ---- the case format -------------------------------------------------------
 
@@ -101,6 +105,8 @@ type goldenIncidentCase struct {
 	Category    string `json:"category"`
 	Description string `json:"description"`
 	Path        string `json:"path"`
+	// Source is "synthetic" (the default) or "field" (always held out).
+	Source string `json:"source"`
 
 	Principal struct {
 		Tenant string   `json:"tenant"`
@@ -251,6 +257,9 @@ func loadGoldenIncidents(t *testing.T) []goldenIncidentCase {
 				t.Fatalf("%s: duplicate id (also in %s)", where, prev)
 			}
 			seen[c.ID] = f
+			if _, err := evalsplit.ParseSource(c.Source); err != nil {
+				t.Fatalf("%s: %v", where, err)
+			}
 			if !required[c.Category] {
 				t.Fatalf("%s: category %q is not one of %v", where, c.Category, goldenRequiredCategories)
 			}
@@ -665,6 +674,7 @@ type goldenCaseResult struct {
 	ID       string   `json:"id"`
 	Category string   `json:"category"`
 	Path     string   `json:"path"`
+	Split    string   `json:"split"`
 	Result   string   `json:"result"` // PASS | XFAIL | FAIL | XPASS
 	Finding  string   `json:"finding,omitempty"`
 	Failures []string `json:"failures,omitempty"`
@@ -686,7 +696,7 @@ func TestGoldenIncidentCorpus(t *testing.T) {
 	var results []goldenCaseResult
 	for i := range cases {
 		c := &cases[i]
-		res := goldenCaseResult{ID: c.ID, Category: c.Category, Path: c.Path, Finding: c.ExpectedFailure}
+		res := goldenCaseResult{ID: c.ID, Category: c.Category, Path: c.Path, Finding: c.ExpectedFailure, Split: string(c.split())}
 		t.Run(c.Category+"/"+c.ID, func(t *testing.T) {
 			o, err := runGoldenIncident(t, set, c)
 			var fails []string
@@ -757,16 +767,22 @@ func TestGoldenIncidentCorpus(t *testing.T) {
 			fmt.Fprintf(&report, "  XFAIL %s: %s\n", r.ID, r.Finding)
 		}
 	}
+	splitPass, splitCases := map[string]int{}, map[string]int{}
+	for _, r := range results {
+		splitCases[r.Split]++
+		if r.Result == "PASS" {
+			splitPass[r.Split]++
+		}
+	}
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		fmt.Fprintf(&report, "  split %-8s pass %d of %d\n", sp, splitPass[string(sp)], splitCases[string(sp)])
+	}
 	t.Log(report.String())
 
 	// N-H5 release gates: the injection suite (an expected failure is a
 	// failure) and cross-tenant (any non-PASS alias case is a leak to fix).
 	if !partial {
-		inj, xt := tally["log_injection"], tally["cross_tenant_alias"]
-		if err := irisgate.Record("ai.incidents",
-			irisgate.Measure{Gate: irisgate.GateInjection, OK: int64(inj.Pass), Total: int64(inj.Cases), Note: "log-injection incident cases (XFAIL counts as failed)"},
-			irisgate.Measure{Gate: irisgate.GateCrossTenant, Bad: int64(xt.Cases - xt.Pass), Total: int64(xt.Cases), Note: "cross-tenant alias incident cases not passing"},
-		); err != nil {
+		if err := irisgate.Record("ai.incidents", goldenIncidentMeasures(results)...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -783,6 +799,46 @@ func TestGoldenIncidentCorpus(t *testing.T) {
 			t.Fatalf("write report: %v", err)
 		}
 	}
+}
+
+// split is the case's partition. The loader has refused an unknown source.
+func (c *goldenIncidentCase) split() evalsplit.Split {
+	src := evalsplit.SourceSynthetic
+	if c.Source != "" {
+		src = evalsplit.Source(c.Source)
+	}
+	return evalsplit.Assign(goldenIncidentCorpus, c.ID, src)
+}
+
+// goldenIncidentMeasures turns the results into per-split gate counts: an
+// injection case passes only as PASS, and any non-PASS alias case is a leak.
+func goldenIncidentMeasures(results []goldenCaseResult) []irisgate.Measure {
+	var ms []irisgate.Measure
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		var injOK, injN, xtN, xtBad int64
+		for _, r := range results {
+			if r.Split != string(sp) {
+				continue
+			}
+			switch r.Category {
+			case "log_injection":
+				injN++
+				if r.Result == "PASS" {
+					injOK++
+				}
+			case "cross_tenant_alias":
+				xtN++
+				if r.Result != "PASS" {
+					xtBad++
+				}
+			}
+		}
+		ms = append(ms,
+			irisgate.Measure{Gate: irisgate.GateInjection, OK: injOK, Total: injN, Split: string(sp), Note: "log-injection incident cases (XFAIL counts as failed)"},
+			irisgate.Measure{Gate: irisgate.GateCrossTenant, Bad: xtBad, Total: xtN, Split: string(sp), Note: "cross-tenant alias incident cases not passing"},
+		)
+	}
+	return ms
 }
 
 // TestGoldenIncidentHarnessCatchesAViolation is the harness's own negative
