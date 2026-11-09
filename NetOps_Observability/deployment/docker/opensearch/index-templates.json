@@ -262,6 +262,21 @@
             "event_type": {
               "type": "keyword"
             },
+            "vendor_source": {
+              "type": "keyword"
+            },
+            "severity_native_text": {
+              "type": "keyword"
+            },
+            "severity_native_code": {
+              "type": "keyword"
+            },
+            "event_category": {
+              "type": "keyword"
+            },
+            "dedup_key": {
+              "type": "keyword"
+            },
             "cx_admission": {
               "type": "object",
               "dynamic": false,
@@ -582,6 +597,31 @@
             },
             "truncated": {
               "type": "boolean"
+            },
+            "event_state": {
+              "type": "keyword"
+            },
+            "event_state_fidelity": {
+              "type": "keyword"
+            },
+            "severity_native_text": {
+              "type": "keyword"
+            },
+            "severity_native_code": {
+              "type": "integer"
+            },
+            "mib_module": {
+              "type": "keyword"
+            },
+            "mib_bundle_version": {
+              "type": "keyword"
+            },
+            "device_event_time": {
+              "type": "keyword"
+            },
+            "values": {
+              "type": "object",
+              "dynamic": false
             }
           }
         }
