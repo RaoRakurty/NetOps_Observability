@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"netops/backend/reports"
 
 	"netops/backend/internal/logexport"
@@ -91,5 +93,50 @@ func TestExportSubstratePG(t *testing.T) {
 	rec2, _, found2, err := es.Get(ctx, reports.ExecScopeFor("acme", false), execID)
 	if err != nil || !found2 || rec2.Kind != jobTypeExport || rec2.Status != reports.StatusQueued {
 		t.Errorf("EnqueueExport exec wrong: found=%v kind=%q status=%q err=%v", found2, rec2.Kind, rec2.Status, err)
+	}
+
+	// 5) The retention sweep (D7) reads the history as the platform, so it reaches
+	// every tenant's expired exports through FORCE RLS, leaves a fresh one alone
+	// and never touches a report. Finished rows go in by Append, which is the one
+	// write that takes a fire time, then finished by hand: Complete is
+	// lease-guarded and is not what is under test here.
+	now := time.Now().UTC()
+	arts := newIDPArtifacts()
+	for _, row := range []struct {
+		id, tenant, kind string
+		at               time.Time
+	}{
+		{"sweep-old-acme", "acme", jobTypeExport, now.Add(-72 * time.Hour)},
+		{"sweep-old-globex", "globex", jobTypeExport, now.Add(-72 * time.Hour)},
+		{"sweep-fresh", "acme", jobTypeExport, now.Add(-time.Hour)},
+		{"sweep-report", "acme", "report", now.Add(-72 * time.Hour)},
+	} {
+		ref := reports.ArtifactRef{Format: "csv", Key: row.id}
+		arts.files[row.id] = []byte("line")
+		if err := es.Append(ctx, reports.ExecutionRecord{
+			ID: row.id, Kind: row.kind, TenantID: row.tenant, ScheduleID: row.id, JobID: row.id,
+			FireTime: row.at, Status: reports.StatusCompleted,
+		}); err != nil {
+			t.Fatalf("append %s: %v", row.id, err)
+		}
+		refJSON, err := json.Marshal([]reports.ArtifactRef{ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ps.DB().WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE report_executions SET completed_at=$2, artifact_ref=$3 WHERE id=$1`, row.id, row.at, refJSON)
+			return err
+		}); err != nil {
+			t.Fatalf("finish %s: %v", row.id, err)
+		}
+	}
+	sweep := &reportPipeline{execs: es, artifacts: arts}
+	if _, err := sweep.sweepExportArtifacts(ctx, now); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	for id, wantGone := range map[string]bool{"sweep-old-acme": true, "sweep-old-globex": true, "sweep-fresh": false, "sweep-report": false} {
+		if gone := len(arts.files[id]) == 0; gone != wantGone {
+			t.Errorf("%s: removed=%v, want %v", id, gone, wantGone)
+		}
 	}
 }

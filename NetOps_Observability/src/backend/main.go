@@ -5593,6 +5593,13 @@ func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate par
 	if !ok {
 		return parsercov.Principal{}, false
 	}
+	// The read and propose lanes hand back raw log lines and templates that keep
+	// any word with no digit in it, a username included (D7), so they need log
+	// access as well. The stats gate is engine counters, not lines.
+	if gate != parsercov.GateStats && !s.roles.Allows(claims.Role, logsReadModule, LevelRead) {
+		writeError(w, http.StatusForbidden, errors.New(logsReadModule+" read permission required"))
+		return parsercov.Principal{}, false
+	}
 	tenant, cross := principalTenant(claims)
 	keys, _ := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)

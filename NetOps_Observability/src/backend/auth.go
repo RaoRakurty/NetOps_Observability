@@ -1584,6 +1584,23 @@ func clearOSDCookie(w http.ResponseWriter, r *http.Request) {
 // the embedded Source of Truth auto-logs-in as that superuser — no NetBox login
 // screen. Safe because the header is emitted ONLY after the platform-owner check
 // passes, and nginx strips any client-supplied copy.
+// auditRawConsole records that the platform owner is in the raw search console.
+// This gate runs for every asset the console loads, so it records at most once a
+// minute per person. It cannot say what was queried or how many rows came back:
+// the console talks to OpenSearch directly, and on the TLS profile the security
+// plugin's own audit log (security-auditlog-*) holds that detail.
+func (s *server) auditRawConsole(r *http.Request, claims jwtClaims) {
+	if s.audit == nil || s.exportLimiter == nil || !s.exportLimiter.AllowN("osd-console:"+claims.Sub, 1) {
+		return
+	}
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: TenantGlobal, Cross: true, SessionID: claims.Sid,
+		Method: auditMethodConsole, Path: "/search", Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r),
+		Detail: map[string]any{"action": "logs.raw_console"},
+	})
+}
+
 func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(osdCookieName)
 	if err != nil || c.Value == "" {
@@ -1607,6 +1624,9 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("c") == "search" && len(s.tenants.RestrictedIDs()) > 0 {
 		writeError(w, http.StatusForbidden, errors.New("raw search console disabled while operator-restricted tenants exist — use the in-app Logs view"))
 		return
+	}
+	if r.URL.Query().Get("c") == "search" {
+		s.auditRawConsole(r, claims)
 	}
 	w.Header().Set("X-Netbox-User", netboxRemoteUser())
 	// Grafana auto-login: forward the authenticated principal's username so the

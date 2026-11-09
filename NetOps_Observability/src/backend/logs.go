@@ -54,6 +54,10 @@ func logError(component, msg string, fields map[string]any) { applog.Error(compo
 // of the "all" search like flows — reachable only via signal="cloud".
 // ----------------------------------------------------------------------------
 
+// logsReadModule is the RBAC module that gates every read of the log stores:
+// search, retention, the index listing and every export door.
+const logsReadModule = "explore"
+
 type logSearchReq struct {
 	Query  string `json:"query"`
 	From   string `json:"from,omitempty"`
@@ -106,15 +110,18 @@ func flowsSamplingMeta() map[string]any {
 //	denyAll  — the caller is scoped into a restricted tenant: match nothing
 //	forbidden— platform-only signal (applogs) requested by a non-owner
 func (s *server) logsScope(r *http.Request, signal string) (index string, filters, mustNot []any, denyAll, forbidden bool) {
+	// Default-closed (§3a rule 1): a request that reached here with no principal
+	// resolves no index at all. This used to fall through as tenant "", cross
+	// true, the WIDEST read there is; withAuth was the only thing in front of it.
 	claims, authed := userFrom(r.Context())
-	tenant, cross := "", true
-	if authed {
-		tenant, cross = principalTenant(claims)
-		keys, _ := s.visibleDeviceKeys(claims)
-		addrs, _ := s.visibleDeviceAddrs(claims)
-		if f := oslog.TenantFilter(tenant, cross, keys, addrs); f != nil {
-			filters = append(filters, f)
-		}
+	if !authed {
+		return "", nil, nil, false, true
+	}
+	tenant, cross := principalTenant(claims)
+	keys, _ := s.visibleDeviceKeys(claims)
+	addrs, _ := s.visibleDeviceAddrs(claims)
+	if f := oslog.TenantFilter(tenant, cross, keys, addrs); f != nil {
+		filters = append(filters, f)
 	}
 	// App logs are the platform's OWN container/API logs — platform owner only
 	// (identity gate, not the cross flag; see handleLogsSearch's original note).
@@ -197,6 +204,14 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Device syslog carries usernames, retained for security attribution (owner
+	// decision D7, 2026-11-09), so reading it is a permission and not merely
+	// being signed in. explore:read is the module the Logs page lives under and
+	// the one Iris's search_logs already answers to (aiPrincipal "logs:read").
+	claims, ok := s.requirePerm(w, r, logsReadModule, LevelRead)
+	if !ok {
 		return
 	}
 
@@ -321,6 +336,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
+		s.auditLogSearch(r, claims, req, resp.StatusCode, countLogHits(raw))
 		var out map[string]any
 		if json.Unmarshal(raw, &out) == nil {
 			out["sampling"] = flowsSamplingMeta()
@@ -333,9 +349,11 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	counts, err := relayLogSearch(w, resp.Body)
+	if err != nil {
 		log.Printf("logs: copy response: %v", err)
 	}
+	s.auditLogSearch(r, claims, req, resp.StatusCode, counts)
 }
 
 // handleLogsRetention serves GET /api/logs/retention?signal=… — the retention
@@ -348,6 +366,11 @@ func (s *server) handleLogsRetention(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Same gate as the search it describes: the totals and the oldest timestamp
+	// are facts about a store this caller may have no access to.
+	if _, ok := s.requirePerm(w, r, logsReadModule, LevelRead); !ok {
 		return
 	}
 	signal := r.URL.Query().Get("signal")
@@ -431,12 +454,11 @@ func (s *server) handleLogsRetention(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
 	// Scope the index listing to the caller (#20 Phase 3) so a scoped tenant can't
 	// enumerate other tenants' index names / doc counts.
-	var claims jwtClaims
-	tenant, cross := "", true
-	if c, ok := userFrom(r.Context()); ok {
-		claims = c
-		tenant, cross = principalTenant(claims)
+	claims, ok := s.requirePerm(w, r, logsReadModule, LevelRead)
+	if !ok {
+		return
 	}
+	tenant, cross := principalTenant(claims)
 	resp, err := openSearch("GET", "/_cat/indices/"+oslog.TenantCatPattern(tenant, cross)+"?format=json", nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

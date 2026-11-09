@@ -98,6 +98,7 @@ func (p *reportPipeline) Start(ctx context.Context) {
 	for i := 0; i < p.workers; i++ {
 		safeGo("report-worker-"+strconv.Itoa(i), func() { p.runWorker(ctx, i) })
 	}
+	safeGo("export-artifact-sweep", func() { p.runExportArtifactSweep(ctx) })
 	logInfo("reports.pipeline", "async reporting pipeline started",
 		map[string]any{"workers": p.workers, "lease_s": p.lease.Seconds()})
 }

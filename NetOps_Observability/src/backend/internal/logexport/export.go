@@ -53,6 +53,11 @@ type Spec struct {
 	// the operator scoped into a restricted tenant. See operatorTelemetryRestriction.
 	ExcludeTenants []string `json:"exclude_tenants,omitempty"`
 	DenyAll        bool     `json:"deny_all,omitempty"`
+
+	// Who asked and under which execution id, frozen for the audit record the
+	// async worker writes when the file is done (the worker has no request).
+	RequestedBy string `json:"requested_by,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty"`
 }
 
 // Columns is the canonical tabular projection used for csv/xlsx (and for
