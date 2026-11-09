@@ -87,7 +87,16 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # cannot move — CHECKED, not assumed: with ENGINE_SEMVER reverted to 3.1.0 and
 # the new code in place, content_hash is exactly the previous "e8223a77e621d10e"
 # (only the version stamp differs).
-FIXTURE_GOLDEN = "5207b1535b6f8b82"
+#
+# RE-FROZEN, 2026-11-09, tracker 385 (was "5207b1535b6f8b82"). ENGINE_SEMVER went
+# 3.2.0 -> 3.3.0 and the catalog moved (clause attrs/attrs_not/anchor fields, the
+# admin-link-change-induced template, two discriminators). This object carries no
+# link_cause=admin, so its DECISION cannot move, and that was CHECKED by a JSON
+# diff against the blob captured on main before the change: the only differing
+# leaves are `catalog_version` and `engine`. The durable form of that proof is
+# test_admin_link_change_385.py::
+# test_no_link_cause_evidence_is_byte_identical_with_and_without_385.
+FIXTURE_GOLDEN = "c83fd3b4ede97dbe"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

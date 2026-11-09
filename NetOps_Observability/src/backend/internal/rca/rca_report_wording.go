@@ -37,6 +37,7 @@ var sigProblemStatement = map[string]string{
 	"sig.ent.middle-mile.dia-egress-loss":      "The ISP / DIA egress path is dropping packets.",
 	"sig.ent.middle-mile.physical-degradation": "A circuit or optical segment on the provider path is degrading.",
 	"sig.ent.access.local-link-fault":          "A local access link is faulty or flapping.",
+	"sig.ent.access.admin-link-change-induced": "An operator shut down an interface around the time this fault began; the shutdown may be its cause.",
 	"sig.ent.access.uplink-down":               "An access uplink is down, isolating the devices behind it.",
 	"sig.ent.internet.dns-impairment":          "DNS resolution is failing or slow, so services cannot be reached by name.",
 	"sig.ent.lan.link-flap":                    "A LAN link is flapping.",

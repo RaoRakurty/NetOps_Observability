@@ -31,9 +31,11 @@ import json
 import os
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from signals import (
+    CLAUSE_ATTR_KEYS,
+    CLAUSE_ATTR_MAX_LEN,
     CONFIG_CHANGE_KINDS,
     EntityType,
     ModalityClass,
@@ -41,6 +43,9 @@ from signals import (
 )
 
 CATALOG_SCHEMA_VERSION = 1
+
+# tracker 385: bound on one clause's attrs / attrs_not predicate.
+CLAUSE_ATTR_MAX_PAIRS = 4
 
 
 class Clause(BaseModel):
@@ -55,6 +60,20 @@ class Clause(BaseModel):
     min_deviation: float | None = Field(default=None, ge=0)
     role: str | None = None          # topology role (primary/fallback/wan_edge) — scored when ctx known
     optional: bool = False
+    # tracker 385: attrs predicates over signals.CLAUSE_ATTR_KEYS. `attrs`: every
+    # pair must EQUAL (an absent key does not match). `attrs_not`: no pair may
+    # equal (an absent key passes). They only ever make a clause STRICTER, so the
+    # kind index, the structure gate and confirmability stay kind-only supersets.
+    # A dict makes this one clause unhashable through pydantic's frozen __hash__;
+    # nothing hashes a Clause (the caches below are identity-keyed, on purpose).
+    attrs: dict[str, str] | None = None
+    attrs_not: dict[str, str] | None = None
+    # tracker 385: an ANCHOR is the clause that names what the template is ABOUT.
+    # While no signal satisfies it, `scoring.rank` leaves the template out of the
+    # competition altogether: its other clauses are generic evidence and must not
+    # earn it partial coverage, nor may its id occupy a rank tie. Required clauses
+    # only.
+    anchor: bool = False
 
     @field_validator("kind")
     @classmethod
@@ -62,6 +81,29 @@ class Clause(BaseModel):
         if any(not t.strip() for t in v.split("|")):
             raise ValueError(f"empty alternation token in kind {v!r}")
         return v
+
+    @field_validator("attrs", "attrs_not")
+    @classmethod
+    def _attr_predicate_is_closed(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        if v is None:
+            return v
+        if not 1 <= len(v) <= CLAUSE_ATTR_MAX_PAIRS:
+            raise ValueError(f"attrs predicate needs 1..{CLAUSE_ATTR_MAX_PAIRS} pairs, got {len(v)}")
+        unknown = sorted(set(v) - CLAUSE_ATTR_KEYS)
+        if unknown:
+            raise ValueError(f"attrs keys {unknown} are not in CLAUSE_ATTR_KEYS "
+                             f"(a new key must also reach the rank_memo projection)")
+        for key, value in v.items():
+            if not value or value != value.strip() or len(value) > CLAUSE_ATTR_MAX_LEN:
+                raise ValueError(f"attrs value for {key!r} must be non-empty, stripped "
+                                 f"and at most {CLAUSE_ATTR_MAX_LEN} characters")
+        return v
+
+    @model_validator(mode="after")
+    def _anchor_is_required(self) -> Clause:
+        if self.anchor and self.optional:
+            raise ValueError("an anchor clause cannot be optional")
+        return self
 
     def kinds(self) -> frozenset[str]:
         """The alternation tokens of ``kind``, as a set.
@@ -296,6 +338,8 @@ class Template(BaseModel):
     # suspected even when the independence gate passes — confirmation needs
     # fiber-path validation or a human. Non-port templates keep True.
     allow_root_cause_confirmed: bool = True
+    # Why the cap applies, shown to the operator. Empty keeps the physical-family wording.
+    confirm_cap_reason: str = ""
     # Propagation ladder (root→impact), owner directive 2026-07-13: templates
     # whose fault family cascades across layers declare the ladder so the RCA
     # can show HOW one failure causes the next. Optional — most templates omit.
@@ -478,6 +522,25 @@ def _cascade(root_stage: str) -> list[dict]:
     """The family ladder with one rung marked as this template's root."""
     return [{**s, "root": s["stage"] == root_stage} for s in _IPSEC_CASCADE]
 
+
+#: The fault a change-induced incident needs, from ANY source: the template's
+#: original optional list plus the controller and SNMP-episode equivalents.
+#: (routing_adjacency_change is deliberately absent: coverage.INTENTIONAL_BLIND
+#: declares it consumed by no signature.)
+CHANGE_INDUCED_FAULT_KINDS = (
+    "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|"
+    "if_util_high|device_resource_anomaly|controller_bfd_down|controller_tunnel_state|"
+    "controller_control_connection_loss|ospf_adjacency_change|isis_adjacency_change|"
+    "if_metric_anomaly|bgp_state_anomaly|igp_state_anomaly"
+)
+
+# tracker 385: the change-induced sibling for an operator's interface shutdown.
+ADMIN_LINK_CHANGE_TEMPLATE_ID = "sig.ent.access.admin-link-change-induced"
+# The same faults, less igp_state_anomaly: coverage.INTENTIONAL_BLIND declares that
+# kind consumed by no signature, and authoring its consumer is its own change. E5c
+# only escapes this because the static gate reads the flag-off catalog.
+ADMIN_LINK_CHANGE_FAULT_KINDS = "|".join(
+    k for k in CHANGE_INDUCED_FAULT_KINDS.split("|") if k != "igp_state_anomaly")
 
 BUILTIN_TEMPLATES: list[dict] = [
     {
@@ -939,6 +1002,15 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "if_metric_anomaly", "entity_type": "interface"},
         ],
         "required_modalities": ["control_plane", "device_telemetry"],
+        "discriminators": [
+            # tracker 385: an operator's shutdown is a change, not a link fault.
+            # x0.2, not exclude: the look-alike stays visible as ruled out, with
+            # the change-induced sibling forced beside it.
+            {"absent": {"kind": "link_state_change", "entity_type": "interface",
+                        "attrs": {"link_cause": "admin"}},
+             "within_s": 300,
+             "else_prefer": ADMIN_LINK_CHANGE_TEMPLATE_ID},
+        ],
         "direction_expect": "interface(L1/L2) -> device -> service",
         "verdict": {
             "owner": "netops", "layer": "L1/L2",
@@ -1932,6 +2004,13 @@ BUILTIN_TEMPLATES: list[dict] = [
             # Pure routing churn without the L1 oscillation is routing instability.
             {"absent": {"kind": "bgp_path_change"}, "within_s": 300,
              "else_prefer": "sig.ent.middle-mile.physical-degradation"},
+            # tracker 385: an operator's shutdown is not a carrier's loop flap.
+            # Without this the template ties the change-induced sibling at 1.0 and
+            # takes the object (owner: carrier) on a grounded WAN seam.
+            {"absent": {"kind": "link_state_change", "entity_type": "interface",
+                        "attrs": {"link_cause": "admin"}},
+             "within_s": 300,
+             "else_prefer": ADMIN_LINK_CHANGE_TEMPLATE_ID},
         ],
         "direction_expect": "local-loop -> site-uplink -> whole-site",
         "verdict": {
@@ -3131,6 +3210,50 @@ NMS_TEMPLATES: list[dict] = [
         "composition_hints": ("what-changed timeline",),
     },
     {
+        # tracker 385 (owner decision 2026-11-08): a shutdown on the wrong port is
+        # often the root cause, so the evidence stays and is scored AS a change.
+        # Unflagged on purpose: E5c (CORR_CONFIG_CHANGE_FAMILY) is off in
+        # production, and apply_config_change_family leaves this template alone.
+        "id": ADMIN_LINK_CHANGE_TEMPLATE_ID,
+        "title": "Interface shut down by an operator, then a fault",
+        "domain": "ent.access",
+        "seams": ["LAN", "WAN_SDWAN", "DC_FABRIC", "CARRIER_INTERCONNECT"],
+        "requires": [
+            # The anchor: the fault half alone (any BGP drop, any counter anomaly)
+            # says nothing about an operator.
+            {"kind": "link_state_change", "entity_type": "interface",
+             "attrs": {"link_cause": "admin"}, "anchor": True},
+            # attrs_not: the shutdown must not double as its own effect, or a lone
+            # admin trap would score 1.0.
+            {"kind": ADMIN_LINK_CHANGE_FAULT_KINDS, "attrs_not": {"link_cause": "admin"}},
+        ],
+        "required_modalities": ["control_plane"],
+        # Capped at suspected: shutting a port makes its own traffic drop, so the
+        # trap plus an independent SNMP anomaly on that port is what any PLANNED
+        # shutdown looks like. Two observers agreeing says the port went down, not
+        # that the shutdown caused a fault, and the engine does not order them.
+        "allow_root_cause_confirmed": False,
+        "confirm_cap_reason": (
+            "confirmed capped to suspected: a shutdown causes its own traffic drop and the "
+            "engine does not order the change against the fault, so a person must confirm "
+            "it was unintended (allow_root_cause_confirmed=false)"),
+        "verdict": {
+            "owner": "netops", "layer": "Change/Config",
+            "first_steps": [
+                "Find who shut the interface and when, in the change log or the device's AAA accounting",
+                "Decide whether the shutdown was intended: is it in an approved maintenance window, on the right port?",
+                "If it was not intended, bring the interface back up; if it was, confirm the maintenance window covers this fault",
+            ],
+        },
+        "operator_phrase": "An operator shut down this interface shortly before the fault — probable change-induced incident",
+        "manager_phrase": "Someone turned off a network port and a problem appeared around the same time",
+        "blast_radius": "whatever depends on the shut interface",
+        "false_positives": (
+            "the shutdown may be the remediation for the fault rather than its cause — the engine does not order the change against the fault",
+        ),
+        "composition_hints": ("what-changed timeline",),
+    },
+    {
         "id": "sig.ent.campus.controller-device-unreachable",
         "title": "Device unreachable (controller-reported)",
         "domain": "ent.campus",
@@ -3753,17 +3876,6 @@ BUILTIN_TEMPLATES.extend(EXPOSURE_STORY_TEMPLATES)
 # always was, and ON gets its own version (rank_memo keys stay apart).
 
 CHANGE_INDUCED_TEMPLATE_ID = "sig.ent.wan-edge.controller-change-induced"
-
-#: The fault a change-induced incident needs, from ANY source: the template's
-#: original optional list plus the controller and SNMP-episode equivalents.
-#: (routing_adjacency_change is deliberately absent: coverage.INTENTIONAL_BLIND
-#: declares it consumed by no signature.)
-CHANGE_INDUCED_FAULT_KINDS = (
-    "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|"
-    "if_util_high|device_resource_anomaly|controller_bfd_down|controller_tunnel_state|"
-    "controller_control_connection_loss|ospf_adjacency_change|isis_adjacency_change|"
-    "if_metric_anomaly|bgp_state_anomaly|igp_state_anomaly"
-)
 
 
 def _is_change_context(clause: dict) -> bool:
