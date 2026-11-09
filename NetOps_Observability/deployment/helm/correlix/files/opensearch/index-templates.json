@@ -456,7 +456,7 @@
       }
     },
     "netops-snmptrap": {
-      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor.",
+      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor. Tracker 387: the receiver's NormalizedEvent envelope (collectors/snmptrap.go TrapEvent) is declared so traps can be filtered and aggregated by what they mean; each TrapEvent field is either declared here or deliberately listed in tests/test_router_storage_labels.py. A credential is never declared.",
       "index_patterns": [
         "netops-snmptrap-*"
       ],
@@ -539,6 +539,42 @@
               "type": "keyword"
             },
             "source_masked": {
+              "type": "boolean"
+            },
+            "parser_status": {
+              "type": "keyword"
+            },
+            "enrichment_status": {
+              "type": "keyword"
+            },
+            "event_type": {
+              "type": "keyword"
+            },
+            "category": {
+              "type": "keyword"
+            },
+            "family": {
+              "type": "keyword"
+            },
+            "summary": {
+              "type": "text"
+            },
+            "vendor": {
+              "type": "keyword"
+            },
+            "message_key": {
+              "type": "keyword"
+            },
+            "authenticated": {
+              "type": "boolean"
+            },
+            "sys_uptime_seconds": {
+              "type": "double"
+            },
+            "varbinds_dropped": {
+              "type": "integer"
+            },
+            "truncated": {
               "type": "boolean"
             }
           }

@@ -181,6 +181,16 @@ sources:
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
+    # Tracker 387 (PR 3). Vector's kafka source writes the Kafka record KEY into
+    # the event under `key_field`, whose default is `message_key`, OVER whatever
+    # the payload carried. Every producer on this bus keys by tenant, so the trap
+    # receiver's dedup identity (collectors/snmptrap.go, `snmptrap:<vendor>:<who>:
+    # <oid>`) reached storage as the partition key: `message_key: "global"` on
+    # every platform device. The key is routing, not content, and nothing on this
+    # tier reads it. The empty string is Vector's explicit "do not stamp" (proved
+    # against a real broker on 0.40.0: default → "global", "" → the payload's
+    # value). Every kafka source carries this: tests/test_ingest_contract.py.
+    key_field: ""
 
   # Scale P0 — the RAW flow feed from goflow2, consumed only to be re-keyed.
   #
@@ -213,6 +223,7 @@ sources:
     topics: ["netops.flows.raw"]
     group_id: "netops-router-flows-rekey"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_syslog:
     type: kafka
@@ -235,6 +246,7 @@ sources:
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_flows:
     type: kafka
@@ -257,6 +269,7 @@ sources:
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_snmptrap:
     type: kafka
@@ -279,6 +292,7 @@ sources:
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Unified Cloud Logs — tagged raw cloud log lines (cloud_family/cloud_provider/
   # resource_id) produced by the cloud poller (S3/CloudWatch lanes + CloudTrail)
@@ -305,6 +319,7 @@ sources:
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Security evidence (P3-L1) — the generic secbus.EvidenceEvent envelope that
   # every security provider (posture / exposure / signal) produces through
@@ -334,6 +349,7 @@ sources:
     topics: ["netops.security"]
     group_id: "netops-router-security"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # F-03: dead letters produced by the AGGREGATOR tier (which has no storage
   # sink of its own). Already in the flat dead-letter shape, so this lane goes
@@ -361,6 +377,7 @@ sources:
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # DEM experience events (tracker 254) — the first-party RUM / business-event
   # lane. The api validates, stamps the owning tenant from the caller's
@@ -389,6 +406,7 @@ sources:
     topics: ["netops.experience"]
     group_id: "netops-router-experience"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
   # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
@@ -415,6 +433,7 @@ sources:
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
 transforms:
   # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
@@ -1503,6 +1522,20 @@ sinks:
       index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3) — pipeline metadata stops at the sink.
+    # The kafka source stamps topic / partition / offset / headers / source_type
+    # on every event (overwriting any payload field of those names), and they
+    # were stored on every document and shown to operators. They stay on the event
+    # through the whole topology because the pipeline needs them: `.topic`,
+    # `.partition` and `.offset` derive cx_event_id in the &log_lane anchor, and
+    # `.topic` labels the tenant-attribution and masked-source counters. The
+    # sink's encoder is the last step, AFTER Vector has read `id_key` and rendered
+    # the index name, so the coordinate survives as the document _id
+    # (`cxk:<topic>:<partition>:<offset>`), which is the replay locator; nothing
+    # is lost by not storing it twice. Proved against a mock _bulk endpoint by
+    # tests/test_router_sink_metadata.py. `vector tap` still shows all of it.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1552,6 +1585,9 @@ sinks:
       index: "netops-quarantine-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1595,6 +1631,9 @@ sinks:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1645,6 +1684,9 @@ sinks:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # ── #209 — a storage BLOCK must degrade to DELAYED, never to LOST ───────
     # THE DEFECT THIS FIXES (storm-s10, run 09012025x578, 2026-09-01):
     # the host root-fs crossed OpenSearch's flood-stage watermark (95 %; trough
@@ -1810,6 +1852,12 @@ sinks:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    # `path` is the aggregator's http_server stamp on the trap lane (trap_in).
+    # It stays on applogs and cloudlogs, where it can be the producer's own
+    # structured field: evidence, not plumbing.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type, path]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1860,6 +1908,9 @@ sinks:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1915,6 +1966,9 @@ sinks:
       index: "netops-secfindings-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1971,6 +2025,9 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka

@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# storage-labels.yaml — `vector test` proof of what the router tier stamps for
+# storage and for operators (tracker 387). Hand-written; nothing here is
+# generated. Like parse-trace.yaml it declares NO transforms, so it runs against
+# the shipped vector.yaml plus processors-default.yaml, and a config that drifted
+# cannot go green over a copy of itself.
+#
+# tests/test_router_storage_labels.py runs this suite. Keep every dollar sign out
+# of this file: Vector interpolates environment variables in the raw config text.
+#
+# The enrichment fixture is shared with the aggregator suite
+# (../../vector/tests/fixtures/device_tenant.csv).
+
+tests:
+  # ── PR 3: the log lane leaves the metadata in place for the stages after it ──
+  # The strip happens in the sink's encoder (`encoding.except_fields`), which
+  # `vector test` cannot reach; tests/test_router_storage_labels.py proves that
+  # half against a mock _bulk endpoint. What is proved here is the other half:
+  # the anchor derives the document id from the coordinate, leaves the coordinate
+  # for the counters downstream, and does not touch the receiver's dedup key.
+  - name: "log lane: the receiver's message_key survives and the id comes from the coordinate"
+    inputs:
+      - insert_at: snmptrap_tagged
+        type: log
+        log_fields:
+          message: "linkDown on eth0"
+          device: "spine1"
+          tenant_id: "lab"
+          tenant_registry: "hit"
+          message_key: "snmptrap:arista:spine1:1.3.6.1.6.3.1.1.5.3"
+          topic: "netops.snmptrap"
+          partition: 2
+          offset: 41
+          timestamp: "2026-11-09T11:05:07Z"
+    outputs:
+      - extract_from: snmptrap_tagged
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message_key, "snmptrap:arista:spine1:1.3.6.1.6.3.1.1.5.3")
+              assert_eq!(.cx_event_id, "cxk:netops.snmptrap:2:41")
+              assert_eq!(.topic, "netops.snmptrap")
