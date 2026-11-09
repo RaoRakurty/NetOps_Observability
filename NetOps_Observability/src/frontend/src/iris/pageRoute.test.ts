@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { currentPageRoute, withPageContext } from "./pageRoute";
+import { currentPageLabel, currentPageRoute, withPageContext } from "./pageRoute";
 import { NAV } from "../nav";
 
 describe("currentPageRoute — only a real nav leaf is sent", () => {
@@ -62,5 +62,28 @@ describe("withPageContext", () => {
   it("leaves the context untouched when no real page is showing", () => {
     expect(withPageContext(undefined, "#/nope")).toBeUndefined();
     expect(withPageContext({ correlation_id: "x" }, "")).toEqual({ correlation_id: "x" });
+  });
+});
+
+describe("currentPageLabel — the panel's context chip (design §12)", () => {
+  it("names the page in the nav's own words", () => {
+    const s = NAV.find((x) => (x.children?.length ?? 0) > 1)!;
+    const l = s.children![1];
+    const want = l.label === s.label ? s.label : `${s.label} · ${l.label}`;
+    expect(currentPageLabel(`#/${s.id}/${l.id}`)).toBe(want);
+  });
+
+  it("shows nothing for a location that names no real page", () => {
+    expect(currentPageLabel("#/nope")).toBeUndefined();
+    expect(currentPageLabel("")).toBeUndefined();
+    expect(currentPageLabel(`#/${"x".repeat(300)}`)).toBeUndefined();
+  });
+
+  it("labels every leaf of the nav tree", () => {
+    for (const s of NAV) {
+      for (const l of s.children ?? []) {
+        expect(currentPageLabel(`#/${s.id}/${l.id}`), `${s.id}/${l.id}`).toContain(l.label);
+      }
+    }
   });
 });

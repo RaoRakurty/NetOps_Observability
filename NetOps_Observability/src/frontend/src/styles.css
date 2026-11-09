@@ -2352,6 +2352,56 @@ code, kbd, pre, .mono, td.mono {
 .topbar-right .omni-compact { min-width: 120px; }
 .topbar-right .omni-compact input { min-width: 0; }
 .iris-launch { flex: none; }
+/* Below ~1000 px the right cluster is wider than the room left beside the
+   wordmark and its tail runs off-screen. ✦ Iris moves to the FRONT of the
+   cluster there, so it is the item that stays visible (tablet widths). */
+@media (max-width: 1000px) { .topbar-right .iris-launch { order: -1; } }
+
+/* Micro-interactions (design §10). Iris's own hue at low opacity only; no
+   neon, no loop while idle. The global reduced-motion guard already shortens
+   these; the explicit block below removes them outright. */
+.iris-launch { transition: color .14s ease, background-color .14s ease, border-color .14s ease, transform .1s ease; }
+.iris-launch:active { transform: scale(0.97); }
+@keyframes irisThink {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--mod-copilot) 0%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--mod-copilot) 28%, transparent); }
+}
+.iris-launch[data-thinking] svg { border-radius: 50%; animation: irisThink 800ms ease-in-out infinite; }
+.iris-panel[data-thinking] .op-hd-logo { animation: irisThink 800ms ease-in-out infinite; }
+/* Dock: the edge Iris joined lights once, then fades. */
+@keyframes irisEdgeFlash {
+  0% { background: color-mix(in srgb, var(--mod-copilot) 85%, transparent); }
+  100% { background: transparent; }
+}
+.iris-splitter[data-flash]::after { width: 3px; animation: irisEdgeFlash 480ms ease-out 1; }
+/* Resize limit: a neutral, slightly heavier edge while pushed past 380/650. */
+.iris-splitter.at-limit::after,
+.iris-splitter.at-limit:hover::after,
+.iris-splitter.at-limit.dragging::after { width: 3px; background: var(--muted); }
+/* Header actions: a low-opacity surface on hover, 120–160 ms. */
+.iris-panel .op-hd-btn { transition: color .14s ease, background-color .14s ease, border-color .14s ease; }
+/* A pressed-in control (Undock while docked, the open settings/help) hovers too. */
+.iris-panel .op-hd-btn.on:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+/* Context chip (design §12): the page behind the box; fades in when it changes. */
+.iris-context {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 6px 14px; border-bottom: 1px solid var(--panel-border);
+  font-size: var(--fs-sm); color: var(--muted);
+}
+.iris-context-label { flex: none; }
+.iris-context-chip {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 10px; border-radius: 999px; border: 1px solid var(--panel-border);
+  font-size: var(--fs-sm); color: var(--fg);
+  background: color-mix(in srgb, var(--mod-copilot) 8%, transparent);
+  animation: irisCtxIn 180ms var(--iris-ease, ease-out) 1;
+}
+@keyframes irisCtxIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .iris-launch:active { transform: none; }
+  .iris-launch[data-thinking] svg, .iris-panel[data-thinking] .op-hd-logo,
+  .iris-splitter[data-flash]::after, .iris-context-chip { animation: none; }
+}
 
 /* Header: brand + control cluster (New · Split · Settings · Help · Close). */
 .op-hd {

@@ -11,7 +11,7 @@
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useCallback, useEffect, useReducer, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { ShellContext, TIME_RANGES, useShell, type ShellState } from "../context/shell";
 import { askIris } from "./AskIris";
 import IrisLauncher from "./IrisLauncher";
@@ -20,13 +20,12 @@ import {
   DOCK_DEFAULT_W,
   DOCK_MIN_W,
   DOCK_STEP_W,
-  IRIS_STORAGE_KEYS,
-  irisReducer,
+  irisStorageKeys,
   isOpen,
-  loadIrisState,
   saveIrisState,
   type IrisPanelState,
 } from "../iris/panel/irisPanelState";
+import { useIrisPanelState } from "../iris/panel/useIrisPanelState";
 
 const probe = vi.hoisted(() => ({ mounts: 0, unmounts: 0, asks: [] as string[] }));
 
@@ -34,8 +33,10 @@ vi.mock("../tabs/Iris", async () => {
   const { useEffect: useEff } = await import("react");
   const { useShell: useSh } = await import("../context/shell");
   return {
-    default: function OpsisProbe({ controls, ask, onAskHandled }: {
+    default: function OpsisProbe({ controls, context, onBusyChange, ask, onAskHandled }: {
       controls?: ReactNode;
+      context?: ReactNode;
+      onBusyChange?: (busy: boolean) => void;
       ask?: { topic: string; question: string; seq: number } | null;
       onAskHandled?: () => void;
     }) {
@@ -55,6 +56,9 @@ vi.mock("../tabs/Iris", async () => {
             {controls}
             <button type="button" aria-label="Close Iris" onClick={() => setCopilotOpen(false)}>x</button>
           </div>
+          {context}
+          <button type="button" onClick={() => onBusyChange?.(true)}>probe: start thinking</button>
+          <button type="button" onClick={() => onBusyChange?.(false)}>probe: stop thinking</button>
           <textarea className="op-input" aria-label="Question" defaultValue="" />
         </div>
       );
@@ -63,13 +67,15 @@ vi.mock("../tabs/Iris", async () => {
 });
 
 let current: IrisPanelState;
+const OWNER = "t-acme/p-alice";
+const KEYS = irisStorageKeys(OWNER);
 
-function Harness({ initial }: { initial?: IrisPanelState }) {
-  const [iris, dispatch] = useReducer(irisReducer, undefined, () => initial ?? loadIrisState());
+// `initial` is seeded into storage before the first render, then loaded the
+// way App loads it (useIrisPanelState) for `owner`.
+function Harness({ initial, owner = OWNER }: { initial?: IrisPanelState; owner?: string | null }) {
+  useState(() => (initial ? saveIrisState(initial) : false));
+  const [iris, dispatch] = useIrisPanelState(owner);
   current = iris;
-  useEffect(() => {
-    saveIrisState(iris);
-  }, [iris]);
   const setCopilotOpen = useCallback((b: boolean) => dispatch({ type: b ? "open" : "close" }), []);
   const shell: ShellState = {
     range: TIME_RANGES[1], setRange: () => {},
@@ -175,7 +181,7 @@ describe("the Iris panel container", () => {
 
 describe("AskIris", () => {
   it("opens the panel in the preferred mode and hands the ask to the content", () => {
-    render(<Harness initial={{ mode: "closed", lastOpen: "docked", beforeExpand: "floating", width: 520 }} />);
+    render(<Harness initial={{ mode: "closed", lastOpen: "docked", beforeExpand: "floating", width: 520, owner: OWNER }} />);
     act(() => askIris("kpi.confirmed-rca", "Confirmed RCA"));
     expect(current.mode).toBe("docked");
     expect(probe.asks).toEqual(["kpi.confirmed-rca"]);
@@ -293,8 +299,8 @@ describe("docking and the splitter", () => {
     press("Home", sep);
     expect(current.width).toBe(DOCK_MIN_W);
     expect(shellEl().style.getPropertyValue("--iris-dock-w")).toBe(`${DOCK_MIN_W}px`);
-    expect(localStorage.getItem(IRIS_STORAGE_KEYS.width)).toBe(String(DOCK_MIN_W));
-    expect(localStorage.getItem(IRIS_STORAGE_KEYS.lastOpen)).toBe("docked");
+    expect(localStorage.getItem(KEYS.width)).toBe(String(DOCK_MIN_W));
+    expect(localStorage.getItem(KEYS.lastOpen)).toBe("docked");
   });
 
   it("a pointer drag paints without re-rendering and commits once on release", () => {
@@ -324,8 +330,8 @@ describe("docking and the splitter", () => {
   });
 
   it("restores the remembered mode and width on a fresh load, closed", () => {
-    localStorage.setItem(IRIS_STORAGE_KEYS.lastOpen, "docked");
-    localStorage.setItem(IRIS_STORAGE_KEYS.width, "600");
+    localStorage.setItem(KEYS.lastOpen, "docked");
+    localStorage.setItem(KEYS.width, "600");
     render(<Harness />);
     expect(current.mode, "a page load never opens Iris by itself").toBe("closed");
     fireEvent.click(launcher());
@@ -344,7 +350,7 @@ describe("docking and the splitter", () => {
 
   it("a docked preference with no room overlays, keeps the preference, and reserves nothing", () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
-    render(<Harness initial={{ mode: "closed", lastOpen: "docked", beforeExpand: "floating", width: 480 }} />);
+    render(<Harness initial={{ mode: "closed", lastOpen: "docked", beforeExpand: "floating", width: 480, owner: OWNER }} />);
     fireEvent.click(launcher());
     expect(current.mode).toBe("docked");
     expect(panelEl().className).toContain("is-floating");
@@ -362,5 +368,131 @@ describe("docking and the splitter", () => {
       expect(b.getAttribute("title")).toBeTruthy();
     }
     expect(launcher().getAttribute("title")).toBeTruthy();
+  });
+});
+
+describe("per-operator preferences (design §15, CLAUDE.md §3a)", () => {
+  const BOB = "t-globex/p-bob";
+  const BOB_KEYS = irisStorageKeys(BOB);
+
+  it("an account switch in the same tab loads the new operator's layout, closed", () => {
+    saveIrisState({ mode: "closed", lastOpen: "floating", beforeExpand: "floating", width: 600, owner: OWNER });
+    const { rerender } = render(<Harness />);
+    fireEvent.click(launcher());
+    expect(current.mode).toBe("floating");
+    rerender(<Harness owner={BOB} />);
+    expect(current, "Bob starts from the defaults, closed").toMatchObject({ owner: BOB, mode: "closed", lastOpen: "docked", width: DOCK_DEFAULT_W });
+    fireEvent.click(launcher());
+    expect(current.mode).toBe("docked");
+    // Alice's saved layout is untouched by Bob's session, and Bob's is his own.
+    expect(localStorage.getItem(KEYS.lastOpen)).toBe("floating");
+    expect(localStorage.getItem(KEYS.width)).toBe("600");
+    expect(localStorage.getItem(BOB_KEYS.lastOpen)).toBe("docked");
+    rerender(<Harness owner={OWNER} />);
+    fireEvent.click(launcher());
+    expect(current).toMatchObject({ owner: OWNER, mode: "floating", width: 600 });
+  });
+
+  it("signed out, nothing is read or written", () => {
+    saveIrisState({ mode: "closed", lastOpen: "floating", beforeExpand: "floating", width: 600, owner: OWNER });
+    const before = { ...localStorage };
+    render(<Harness owner={null} />);
+    expect(current.lastOpen, "another operator's layout is not loaded").toBe("docked");
+    fireEvent.click(launcher());
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
+    expect({ ...localStorage }).toEqual(before);
+  });
+});
+
+describe("micro-interactions and context (design §10–12)", () => {
+  it("the thinking cue is on only while a question is in flight — on the panel and the header control", () => {
+    render(<Harness />);
+    fireEvent.click(launcher());
+    expect(panelEl().hasAttribute("data-thinking")).toBe(false);
+    expect(launcher().hasAttribute("data-thinking"), "idle: no ambient motion").toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "probe: start thinking" }));
+    expect(panelEl().hasAttribute("data-thinking")).toBe(true);
+    expect(launcher().hasAttribute("data-thinking")).toBe(true);
+    // Closed while the answer is still coming: the control keeps the cue.
+    fireEvent.click(screen.getByRole("button", { name: "Close Iris" }));
+    expect(launcher().hasAttribute("data-thinking")).toBe(true);
+    fireEvent.click(launcher());
+    fireEvent.click(screen.getByRole("button", { name: "probe: stop thinking" }));
+    expect(panelEl().hasAttribute("data-thinking")).toBe(false);
+    expect(launcher().hasAttribute("data-thinking")).toBe(false);
+  });
+
+  it("Dock lights the splitter edge once, then it goes quiet", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Harness />);
+      fireEvent.click(launcher());
+      expect(screen.getByRole("separator").hasAttribute("data-flash"), "opening docked is not a Dock click").toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Undock" }));
+      fireEvent.click(screen.getByRole("button", { name: "Dock" }));
+      expect(screen.getByRole("separator").hasAttribute("data-flash")).toBe(true);
+      act(() => { vi.advanceTimersByTime(600); });
+      expect(screen.getByRole("separator").hasAttribute("data-flash")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the splitter shows a stop at 380 and 650 px, and clears it inside the range", () => {
+    render(<Harness />);
+    fireEvent.click(launcher());
+    const sep = screen.getByRole("separator", { name: "Resize Iris" });
+    press("ArrowLeft", sep);
+    expect(sep.classList.contains("at-limit")).toBe(false);
+    press("Home", sep);
+    expect(sep.classList.contains("at-limit")).toBe(true);
+    press("ArrowLeft", sep);
+    expect(sep.classList.contains("at-limit")).toBe(false);
+    press("End", sep);
+    expect(sep.classList.contains("at-limit")).toBe(true);
+    act(() => { fireEvent.blur(sep); });
+    expect(sep.classList.contains("at-limit")).toBe(false);
+  });
+
+  it("a drag pushed past a limit shows the stop until release", () => {
+    render(<Harness />);
+    fireEvent.click(launcher());
+    const sep = screen.getByRole("separator", { name: "Resize Iris" });
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb: FrameRequestCallback) => frames.push(cb));
+    const flush = () => frames.splice(0).forEach((cb) => cb(0));
+    try {
+      fireEvent.pointerDown(sep, { button: 0, pointerId: 3, clientX: 1000 });
+      fireEvent.pointerMove(sep, { pointerId: 3, clientX: 1050 });
+      flush();
+      expect(sep.classList.contains("at-limit")).toBe(false);
+      fireEvent.pointerMove(sep, { pointerId: 3, clientX: 1400 });
+      flush();
+      expect(sep.classList.contains("at-limit"), "pushed past 380").toBe(true);
+      fireEvent.pointerUp(sep, { pointerId: 3, clientX: 1400 });
+      expect(sep.classList.contains("at-limit")).toBe(false);
+      expect(current.width).toBe(DOCK_MIN_W);
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
+  it("the context chip names the current page and changes with it", () => {
+    window.location.hash = "#/overview/home";
+    render(<Harness />);
+    fireEvent.click(launcher());
+    const chip = () => document.querySelector(".iris-context-chip") as HTMLElement | null;
+    expect(screen.getByText("Current page")).toBeTruthy();
+    const first = chip();
+    expect(first?.textContent).toMatch(/Overview/);
+    // Stable context: the same element (no re-animation) across a mode change.
+    fireEvent.click(screen.getByRole("button", { name: "Undock" }));
+    expect(chip()).toBe(first);
+    act(() => {
+      window.location.hash = "#/no-such/page";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(chip(), "no chip when the location names no real page").toBeNull();
+    window.location.hash = "";
   });
 });

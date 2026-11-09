@@ -20,7 +20,9 @@ import {
   canDock,
   clampWidth,
   dockedWidth,
+  irisOwnerKey,
   irisReducer,
+  irisStorageKeys,
   isOpen,
   loadIrisState,
   presentationFor,
@@ -173,69 +175,133 @@ describe("docked width", () => {
 });
 
 describe("persistence", () => {
-  it("round-trips mode, pre-expand mode and width — and always starts closed", () => {
+  const ALICE = irisOwnerKey({ id: "p-alice", username: "alice", tenant_id: "t-acme" })!;
+  const BOB = irisOwnerKey({ id: "p-bob", username: "bob", tenant_id: "t-globex" })!;
+  const K = irisStorageKeys(ALICE);
+  const owned = (s: IrisPanelState, owner: string | null = ALICE): IrisPanelState => ({ ...s, owner });
+
+  it("round-trips mode, pre-expand mode and width per owner — and always starts closed", () => {
     const store = memStore();
-    const s = irisReducer(run(["open", "dock", "expand"]), { type: "resize", width: 600 });
+    const s = owned(irisReducer(run(["open", "dock", "expand"]), { type: "resize", width: 600 }));
     expect(saveIrisState(s, store)).toBe(true);
-    expect(store.map.get(IRIS_STORAGE_KEYS.lastOpen)).toBe("expanded");
-    expect(store.map.get(IRIS_STORAGE_KEYS.beforeExpand)).toBe("docked");
-    expect(store.map.get(IRIS_STORAGE_KEYS.width)).toBe("600");
-    const back = loadIrisState(store);
-    expect(back).toEqual({ mode: "closed", lastOpen: "expanded", beforeExpand: "docked", width: 600 });
+    expect(store.map.get(K.lastOpen)).toBe("expanded");
+    expect(store.map.get(K.beforeExpand)).toBe("docked");
+    expect(store.map.get(K.width)).toBe("600");
+    const back = loadIrisState(ALICE, store);
+    expect(back).toEqual({ mode: "closed", lastOpen: "expanded", beforeExpand: "docked", width: 600, owner: ALICE });
     expect(irisReducer(back, { type: "open" }).mode).toBe("expanded");
     expect(run(["open", "collapse"], back).mode).toBe("docked");
   });
 
-  it("stores nothing about the conversation", () => {
+  it("stores nothing about the conversation, and nothing under an unscoped key", () => {
     const store = memStore();
-    saveIrisState(run(["open"]), store);
-    expect([...store.map.keys()].sort()).toEqual(Object.values(IRIS_STORAGE_KEYS).sort());
+    saveIrisState(owned(run(["open"])), store);
+    expect([...store.map.keys()].sort()).toEqual(Object.values(K).sort());
     expect([...store.map.keys()].some((k) => k.includes("conversation"))).toBe(false);
+    for (const base of Object.values(IRIS_STORAGE_KEYS)) expect(store.map.has(base), base).toBe(false);
+  });
+
+  it("one operator's layout never reaches another in the same browser", () => {
+    const store = memStore();
+    saveIrisState(owned(irisReducer(run(["open", "undock"]), { type: "resize", width: 620 }), ALICE), store);
+    const bob = loadIrisState(BOB, store);
+    expect(bob).toEqual({ ...INITIAL_IRIS_STATE, owner: BOB });
+    saveIrisState(irisReducer(run(["open", "dock"], bob), { type: "resize", width: 400 }), store);
+    expect(loadIrisState(ALICE, store)).toMatchObject({ lastOpen: "floating", width: 620 });
+    expect(loadIrisState(BOB, store)).toMatchObject({ lastOpen: "docked", width: 400 });
+  });
+
+  it("the same principal name in two tenants is two owners", () => {
+    const a = irisOwnerKey({ id: "p-1", tenant_id: "t-a" });
+    const b = irisOwnerKey({ id: "p-1", tenant_id: "t-b" });
+    expect(a).not.toBe(b);
+  });
+
+  it("an owner string cannot forge another owner's keys", () => {
+    // The owner is URI-encoded, so the "@" separator appears exactly once and
+    // two different owners can never produce the same key.
+    const tricky = irisStorageKeys("t/x@iris.panel.width");
+    const plain = irisStorageKeys("t/x");
+    expect(tricky.width).not.toBe(plain.width);
+    for (const k of [...Object.values(tricky), ...Object.values(plain)]) expect(k.split("@")).toHaveLength(2);
+  });
+
+  it("with nobody signed in, reads nothing and writes nothing", () => {
+    const store = memStore({ [K.lastOpen]: "floating" });
+    expect(irisOwnerKey(null)).toBeNull();
+    expect(irisOwnerKey({ username: "  " })).toBeNull();
+    expect(irisOwnerKey({ username: "legacy" }), "username fallback for an older API").toBe("/legacy");
+    expect(loadIrisState(null, store)).toBe(INITIAL_IRIS_STATE);
+    const before = new Map(store.map);
+    expect(saveIrisState(run(["open", "undock"]), store), "owner null").toBe(false);
+    expect(store.map).toEqual(before);
+  });
+
+  it("hydrate swaps to the new owner's preferences, closed, whatever was open", () => {
+    const open = owned(run(["open", "undock", "expand"]), ALICE);
+    const next = irisReducer(open, { type: "hydrate", state: { ...INITIAL_IRIS_STATE, owner: BOB, lastOpen: "floating", mode: "docked" } });
+    expect(next).toEqual({ ...INITIAL_IRIS_STATE, owner: BOB, lastOpen: "floating" });
+    expect(irisReducer(open, { type: "hydrate", state: INITIAL_IRIS_STATE }), "sign-out resets").toEqual(INITIAL_IRIS_STATE);
   });
 
   it("a browser that saved 'floating' under the pre-2026-10-17 key opens DOCKED (the new default reaches everyone once)", () => {
-    const store = memStore({ "iris.panel.mode": "floating", "iris.panel.beforeExpand": "floating" });
-    const s = loadIrisState(store);
+    const store = memStore({
+      "iris.panel.mode": "floating", "iris.panel.beforeExpand": "floating",
+      [`iris.panel.mode@${encodeURIComponent(ALICE)}`]: "floating",
+    });
+    const s = loadIrisState(ALICE, store);
     expect(s.lastOpen).toBe("docked");
     expect(s.beforeExpand).toBe("docked");
     expect(irisReducer(s, { type: "open" }).mode).toBe("docked");
     // …and a choice made after that is remembered as before.
-    const after = memStore({ [IRIS_STORAGE_KEYS.lastOpen]: "floating" });
-    expect(loadIrisState(after).lastOpen).toBe("floating");
+    const after = memStore({ [K.lastOpen]: "floating" });
+    expect(loadIrisState(ALICE, after).lastOpen).toBe("floating");
   });
 
   it("treats stored values as untrusted input", () => {
     const store = memStore({
-      [IRIS_STORAGE_KEYS.lastOpen]: "left-dock",
-      [IRIS_STORAGE_KEYS.beforeExpand]: "bottom",
-      [IRIS_STORAGE_KEYS.width]: "1e9",
+      [K.lastOpen]: "left-dock",
+      [K.beforeExpand]: "bottom",
+      [K.width]: "1e9",
     });
-    expect(loadIrisState(store)).toEqual(INITIAL_IRIS_STATE);
-    const big = memStore({ [IRIS_STORAGE_KEYS.width]: "9999" });
-    expect(loadIrisState(big).width).toBe(DOCK_MAX_W);
-    const tiny = memStore({ [IRIS_STORAGE_KEYS.width]: "12" });
-    expect(loadIrisState(tiny).width).toBe(DOCK_MIN_W);
-    const junk = memStore({ [IRIS_STORAGE_KEYS.width]: "480px; x" });
-    expect(loadIrisState(junk).width).toBe(DOCK_DEFAULT_W);
+    expect(loadIrisState(ALICE, store)).toEqual({ ...INITIAL_IRIS_STATE, owner: ALICE });
+    const big = memStore({ [K.width]: "9999" });
+    expect(loadIrisState(ALICE, big).width).toBe(DOCK_MAX_W);
+    const tiny = memStore({ [K.width]: "12" });
+    expect(loadIrisState(ALICE, tiny).width).toBe(DOCK_MIN_W);
+    const junk = memStore({ [K.width]: "480px; x" });
+    expect(loadIrisState(ALICE, junk).width).toBe(DOCK_DEFAULT_W);
   });
 
   it("survives storage that throws on every access", () => {
     const blocked = memStore({}, true);
-    expect(loadIrisState(blocked)).toEqual(INITIAL_IRIS_STATE);
-    expect(saveIrisState(run(["open", "dock"]), blocked)).toBe(false);
+    expect(loadIrisState(ALICE, blocked)).toEqual({ ...INITIAL_IRIS_STATE, owner: ALICE });
+    expect(saveIrisState(owned(run(["open", "dock"])), blocked)).toBe(false);
     // null = no storage at all (the property access itself threw).
-    expect(loadIrisState(null)).toEqual(INITIAL_IRIS_STATE);
-    expect(saveIrisState(INITIAL_IRIS_STATE, null)).toBe(false);
+    expect(loadIrisState(ALICE, null)).toEqual({ ...INITIAL_IRIS_STATE, owner: ALICE });
+    expect(saveIrisState(owned(INITIAL_IRIS_STATE), null)).toBe(false);
+  });
+
+  it("survives a localStorage whose property access itself throws", () => {
+    const desc = Object.getOwnPropertyDescriptor(window, "localStorage");
+    Object.defineProperty(window, "localStorage", { configurable: true, get: () => { throw new Error("SecurityError"); } });
+    try {
+      expect(loadIrisState(ALICE)).toEqual({ ...INITIAL_IRIS_STATE, owner: ALICE });
+      expect(saveIrisState(owned(run(["open"])))).toBe(false);
+    } finally {
+      if (desc) Object.defineProperty(window, "localStorage", desc);
+    }
   });
 
   it("uses window.localStorage by default", () => {
     localStorage.clear();
-    saveIrisState(irisReducer(run(["open", "dock"]), { type: "resize", width: 520 }));
-    expect(localStorage.getItem(IRIS_STORAGE_KEYS.lastOpen)).toBe("docked");
-    expect(loadIrisState().width).toBe(520);
+    saveIrisState(owned(irisReducer(run(["open", "dock"]), { type: "resize", width: 520 })));
+    expect(localStorage.getItem(K.lastOpen)).toBe("docked");
+    expect(loadIrisState(ALICE).width).toBe(520);
     localStorage.clear();
   });
 });
+
 
 describe("viewport rules", () => {
   const docked = run(["open", "dock"]);

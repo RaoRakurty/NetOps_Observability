@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { type CSSProperties, ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { type CSSProperties, ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isLocalAccount, userLabel } from "./lib/userLabel";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
@@ -20,7 +20,8 @@ import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import ScopeBadge from "./components/ScopeBadge";
 import IrisPanel from "./components/IrisPanel";
-import { irisReducer, isOpen, loadIrisState, saveIrisState } from "./iris/panel/irisPanelState";
+import { irisOwnerKey, isOpen } from "./iris/panel/irisPanelState";
+import { useIrisPanelState } from "./iris/panel/useIrisPanelState";
 import ElevationRequired from "./components/ElevationRequired";
 import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
@@ -121,13 +122,9 @@ export default function App() {
   // iris/panel/irisPanelState.ts). The shell's `copilotOpen` is DERIVED from it,
   // so every entry point that opens "the assistant" opens this one panel.
   // Starts closed; the remembered mode, docked width and pre-expand mode come
-  // back from localStorage and are written back whenever they change.
-  const [iris, irisDispatch] = useReducer(irisReducer, undefined, () => loadIrisState());
-  useEffect(() => {
-    // false = storage refused the write (private window, blocked site data):
-    // the choice still holds for this page load, there is nothing else to do.
-    saveIrisState(iris);
-  }, [iris.lastOpen, iris.beforeExpand, iris.width]); // eslint-disable-line react-hooks/exhaustive-deps
+  // back from localStorage PER PRINCIPAL (a shared browser never hands one
+  // operator's layout to another) and are written back when they change.
+  const [iris, irisDispatch] = useIrisPanelState(irisOwnerKey(user));
   const copilotOpen = isOpen(iris.mode);
   const setCopilotOpen = useCallback((b: boolean) => irisDispatch({ type: b ? "open" : "close" }), []);
   const [helpOpen, setHelpOpen] = useState(false);

@@ -13,7 +13,10 @@ import Icon from "./Icon";
 //
 // The glyph is the Iris sparkle, never the standalone eye: the BLOGO5 wordmark
 // on the left of this header stays the shell's only brand mark. Quiet by
-// default — no badge, no animation.
+// default — no badge, no animation. A press scales it very slightly (design
+// §10); while Iris is working on a question the panel marks it data-thinking
+// and the sparkle breathes slowly (§1) — never when idle, never under
+// prefers-reduced-motion (styles.css, "✦ Iris").
 export default function IrisLauncher() {
   const { copilotOpen, setCopilotOpen } = useShell();
   return (
