@@ -22,7 +22,7 @@ which to use, and why. The audit that measures adoption is
 
 | Token | Size | Use |
 |---|---|---|
-| `--fs-micro` | 12px | Below the 12.5px floor — being raised (U1); do not use for text |
+| `--fs-micro` | 12.5px | The floor: tiny chips, sort arrows; never body copy |
 | `--fs-meta` | 13px | Secondary text: metadata, captions, table headers |
 | `--fs-sm` | 14px | Dense body: tables, nav, buttons, form labels |
 | `--fs-base` | 15px | Body copy |
@@ -33,6 +33,9 @@ which to use, and why. The audit that measures adoption is
 Families: `--font-ui` (Inter) for UI, `--font-mono` (JetBrains Mono) for
 addresses, ids, versions and code, `--font-display` (Space Grotesk) for KPI
 numerals and brand headings only.
+
+`src/typeFloor.test.ts` keeps the floor: no size below 12.5px in `styles.css` or
+an inline style, except labels drawn at a canvas's zoom.
 
 ## Spacing and shape
 

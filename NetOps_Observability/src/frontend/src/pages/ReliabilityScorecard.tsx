@@ -167,9 +167,9 @@ export default function ReliabilityScorecard() {
     return {
       grid: { left: 8, right: 12, top: 30, bottom: 20, containLabel: true },
       tooltip: { trigger: "axis", valueFormatter: (v: number) => (v == null ? "not measured" : `${v}s`) },
-      legend: { top: 0, textStyle: { color: "var(--fg-muted)", fontSize: 11 } },
-      xAxis: { type: "category", data: phases.map(([, l]) => l), axisLabel: { color: "var(--fg-muted)", fontSize: 11 } },
-      yAxis: { type: "value", name: "seconds", nameTextStyle: { color: "var(--fg-subtle)", fontSize: 10 }, axisLabel: { color: "var(--fg-muted)", fontSize: 10 } },
+      legend: { top: 0, textStyle: { color: "var(--fg-muted)", fontSize: 12.5 } },
+      xAxis: { type: "category", data: phases.map(([, l]) => l), axisLabel: { color: "var(--fg-muted)", fontSize: 12.5 } },
+      yAxis: { type: "value", name: "seconds", nameTextStyle: { color: "var(--fg-subtle)", fontSize: 12.5 }, axisLabel: { color: "var(--fg-muted)", fontSize: 12.5 } },
       series: [
         { name: "p50 (normal)", type: "bar", data: p50, itemStyle: { color: "#6d5dfc", borderRadius: [3, 3, 0, 0] } },
         { name: "p90 (long tail)", type: "bar", data: p90, itemStyle: { color: "#c4bbff", borderRadius: [3, 3, 0, 0] } },
@@ -341,9 +341,9 @@ export default function ReliabilityScorecard() {
               <ReactECharts style={{ height: 200 }} notMerge lazyUpdate option={{
                 grid: { left: 8, right: 12, top: 28, bottom: 22, containLabel: true },
                 tooltip: { trigger: "axis", valueFormatter: (v: number) => (v == null ? "not measured" : `${v}s`) },
-                legend: { top: 0, textStyle: { color: "var(--fg-muted)", fontSize: 11 } },
-                xAxis: { type: "category", data: trend!.x, axisLabel: { color: "var(--fg-muted)", fontSize: 10 } },
-                yAxis: { type: "value", name: "seconds", nameTextStyle: { color: "var(--fg-subtle)", fontSize: 10 }, axisLabel: { color: "var(--fg-muted)", fontSize: 10 } },
+                legend: { top: 0, textStyle: { color: "var(--fg-muted)", fontSize: 12.5 } },
+                xAxis: { type: "category", data: trend!.x, axisLabel: { color: "var(--fg-muted)", fontSize: 12.5 } },
+                yAxis: { type: "value", name: "seconds", nameTextStyle: { color: "var(--fg-subtle)", fontSize: 12.5 }, axisLabel: { color: "var(--fg-muted)", fontSize: 12.5 } },
                 series: [
                   { name: "MTTI p50", type: "line", smooth: true, data: trend!.tti50, itemStyle: { color: "#6d5dfc" }, lineStyle: { width: 2 } },
                   { name: "MTTI p90", type: "line", smooth: true, data: trend!.tti90, itemStyle: { color: "#a99bff" }, lineStyle: { width: 1, type: "dashed" } },

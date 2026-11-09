@@ -84,12 +84,12 @@ function columnsFor(preset: PresetKey): Column<PortRow>[] {
 function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
   const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div style={{ borderTop: "1px solid var(--line)", padding: "10px 0" }}>
-      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{title}</div>
       {children}
     </div>
   );
   const Row = ({ k, v }: { k: string; v?: string | number }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{v === "" || v === undefined ? "—" : v}</span>
     </div>
   );
@@ -98,7 +98,7 @@ function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontWeight: 500 }}>{row.device} · {row.port_name}</div>
-          <div style={{ fontSize: 11, color: "var(--muted)" }}>{dash(row.if_alias)}</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{dash(row.if_alias)}</div>
         </div>
         <button className="op-hd-btn" onClick={onClose} title="Close" style={{ fontSize: 14 }}>×</button>
       </div>
@@ -114,7 +114,7 @@ function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
         <Row k="Serial" v={dash(row.serial_number)} /><Row k="Supported" v={dash(row.supported_status)} />
       </Section>
       <Section title="DDM / DOM">
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>Optical power / temperature / bias stream from the metrics plane once the collectors run on real optics hardware.</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Optical power / temperature / bias stream from the metrics plane once the collectors run on real optics hardware.</div>
       </Section>
       <Section title="RCA Evidence">
         {row.matched_signature ? (
@@ -124,7 +124,7 @@ function Drawer({ row, onClose }: { row: PortRow; onClose: () => void }) {
             <Row k="Health" v={`${row.health} (${row.health_state})`} />
           </>
         ) : (
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>No physical-layer signature attached. Health {row.health} ({row.health_state}).</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>No physical-layer signature attached. Health {row.health} ({row.health_state}).</div>
         )}
       </Section>
     </div>
@@ -159,7 +159,7 @@ export default function PortsWorkbench() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>Interfaces · Ports · Optics</h2>
         {summary && (
-          <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--muted)" }}>
+          <div style={{ display: "flex", gap: 12, fontSize: 12.5, color: "var(--muted)" }}>
             <span>{summary.total_ports} ports</span>
             <span style={{ color: "var(--warn,#f5a623)" }}>{summary.by_state.degraded ?? 0} degraded</span>
             <span style={{ color: "var(--crit,#e5484d)" }}>{summary.by_state.critical ?? 0} critical</span>
@@ -172,7 +172,7 @@ export default function PortsWorkbench() {
       <div style={{ display: "flex", gap: 4, margin: "12px 0" }}>
         {PRESETS.map((p) => (
           <button key={p.key} onClick={() => setPreset(p.key)}
-            className={`dash-btn${preset === p.key ? " accent" : ""}`} style={{ fontSize: 12 }}>{p.label}</button>
+            className={`dash-btn${preset === p.key ? " accent" : ""}`} style={{ fontSize: 12.5 }}>{p.label}</button>
         ))}
       </div>
 
@@ -180,16 +180,16 @@ export default function PortsWorkbench() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <input placeholder="Search device / port / vendor…" value={filter} onChange={(e) => setFilter(e.target.value)}
           style={{ flex: "1 1 240px", minWidth: 200 }} />
-        <select value={seamFilter} onChange={(e) => setSeamFilter(e.target.value)} style={{ fontSize: 12 }}>
+        <select value={seamFilter} onChange={(e) => setSeamFilter(e.target.value)} style={{ fontSize: 12.5 }}>
           <option value="">All seams</option>
           {seams.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: "var(--muted)" }}>
           <input type="checkbox" checked={rcaOnly} onChange={(e) => setRcaOnly(e.target.checked)} /> RCA attached
         </label>
       </div>
 
-      {err && <div style={{ color: "var(--crit,#e5484d)", fontSize: 12, marginBottom: 8 }}>{err}</div>}
+      {err && <div style={{ color: "var(--crit,#e5484d)", fontSize: 12.5, marginBottom: 8 }}>{err}</div>}
 
       <DataTable
         rows={rows}

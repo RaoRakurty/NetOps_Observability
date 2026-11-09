@@ -133,7 +133,7 @@ function DeviceInventory() {
       },
     },
     { key: "name", header: "Device", sortable: true, text: (d) => d.name, render: (d) => d.name },
-    { key: "address", header: "Address", sortable: true, text: (d) => d.address, render: (d) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span> },
+    { key: "address", header: "Address", sortable: true, text: (d) => d.address, render: (d) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{d.address}</span> },
     { key: "vendor", header: "Vendor", sortable: true, text: (d) => d.vendor || "—", render: (d) => d.vendor || "—" },
     { key: "model", header: "Model", sortable: true, text: (d) => d.model || "—", render: (d) => d.model || "—" },
     { key: "source", header: "Source", sortable: true, text: (d) => d.source, render: (d) => d.source },
@@ -142,7 +142,7 @@ function DeviceInventory() {
       key: "act", header: "", width: "150px", render: (d) => (
         <button
           className="btn-ghost"
-          style={{ fontSize: 11, padding: "3px 8px" }}
+          style={{ fontSize: 12.5, padding: "3px 8px" }}
           onClick={() => navigate(`analytics/interface-performance/${encodeURIComponent(d.name)}`)}
           title="Open Interface Performance scoped to this device"
         >
@@ -274,7 +274,7 @@ function TunnelOverlay() {
       </StatStrip>
       <Panel
         title="Tunnels — current state"
-        action={<a href="#/investigate/tunnels" style={{ color: "var(--accent)", fontWeight: 500, fontSize: 12 }}>Full tunnels view →</a>}
+        action={<a href="#/investigate/tunnels" style={{ color: "var(--accent)", fontWeight: 500, fontSize: 12.5 }}>Full tunnels view →</a>}
       >
         <DataTable<Tunnel>
           rows={rows}

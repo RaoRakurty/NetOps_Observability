@@ -198,7 +198,7 @@ function ruleColumns(remove: (name: string) => void): Column<Rule>[] {
     {
       key: "actions", header: "", width: 90, align: "right",
       render: (r) => r.labels?.origin === "ui" ? (
-        <button className="btn-ghost" style={{ fontSize: 11, padding: "2px 8px", color: "var(--bad)" }}
+        <button className="btn-ghost" style={{ fontSize: 12.5, padding: "2px 8px", color: "var(--bad)" }}
           title="Delete this monitor" onClick={() => remove(r.name)}>
           Delete
         </button>

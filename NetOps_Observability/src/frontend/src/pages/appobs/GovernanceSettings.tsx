@@ -112,14 +112,14 @@ export function GovernanceAuditCard() {
         {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
       </p>
       {busy ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Loading…</div>
       ) : denied ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>Visible to tenant admins only.</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>Visible to tenant admins only.</div>
       ) : events.length === 0 ? (
-        <div className="ao-muted" style={{ fontSize: 12 }}>No governance changes recorded yet.</div>
+        <div className="ao-muted" style={{ fontSize: 12.5 }}>No governance changes recorded yet.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table className="ao-kv" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <table className="ao-kv" style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--fg-muted)" }}>
                 <th style={{ padding: "4px 8px" }}>When</th>
@@ -447,7 +447,7 @@ export function RequiredTagsCard() {
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "8px 0" }}>
         {tags.map((t) => (
-          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, padding: "2px 8px", background: "var(--panel-2, rgba(127,127,127,0.06))", border: "1px solid var(--panel-border)", borderRadius: 999 }}>
+          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, padding: "2px 8px", background: "var(--panel-2, rgba(127,127,127,0.06))", border: "1px solid var(--panel-border)", borderRadius: 999 }}>
             <span className="ao-mono">{t}</span>
             <button className="ao-rowaction" aria-label={`Remove required tag ${t}`} disabled={busy || saving}
               onClick={() => remove(t)} style={{ padding: "0 4px" }}>×</button>

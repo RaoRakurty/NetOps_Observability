@@ -30,14 +30,14 @@ function Dot({ on, label }: { on: Tri; label: string }) {
     return (
       <span title={`${label}: query unavailable — coverage unknown`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--warn)" }} />
-        <span style={{ fontSize: 12, color: "var(--warn)" }}>?</span>
+        <span style={{ fontSize: 12.5, color: "var(--warn)" }}>?</span>
       </span>
     );
   }
   return (
     <span title={on ? `${label}: receiving` : `${label}: no data`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: on ? "var(--good)" : "var(--border-strong)" }} />
-      <span style={{ fontSize: 12, color: on ? "var(--fg)" : "var(--fg-subtle)" }}>{on ? "yes" : "—"}</span>
+      <span style={{ fontSize: 12.5, color: on ? "var(--fg)" : "var(--fg-subtle)" }}>{on ? "yes" : "—"}</span>
     </span>
   );
 }
@@ -139,7 +139,7 @@ export default function DataSources() {
 
   const cols = useMemo<Column<Cov>[]>(() => [
     { key: "name", header: "Device", sortable: true, text: (r) => r.device.name, render: (r) => r.device.name },
-    { key: "address", header: "Address", sortable: true, text: (r) => r.device.address, render: (r) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{r.device.address}</span> },
+    { key: "address", header: "Address", sortable: true, text: (r) => r.device.address, render: (r) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{r.device.address}</span> },
     { key: "snmp", header: "SNMP metrics", sortable: true, sortValue: (r) => (r.snmp ? 1 : 0), render: (r) => <Dot on={r.snmp} label="SNMP" /> },
     { key: "flows", header: "Flows", sortable: true, sortValue: (r) => (r.flows ? 1 : 0), render: (r) => <Dot on={r.flows} label="Flows" /> },
     { key: "syslog", header: "Syslog", sortable: true, sortValue: (r) => (r.syslog ? 1 : 0), render: (r) => <Dot on={r.syslog} label="Syslog" /> },

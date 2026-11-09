@@ -560,7 +560,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
           per-investigation (Wave 4 #12: the "Changes near onset" card in the
           investigation drawer); an Overview-level aggregate returns here when
           its feed lands. */}
-      <div className="ao-muted" style={{ fontSize: 12 }}>
+      <div className="ao-muted" style={{ fontSize: 12.5 }}>
         Network impact is not connected on this deployment
       </div>
 

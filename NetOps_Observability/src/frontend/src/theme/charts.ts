@@ -88,7 +88,7 @@ export const chartBase = {
       padding: [8, 12],
       textStyle: { color: cssVar("--fg", "#1a2230"), fontSize: 13 },
       // Richer hover: a crosshair that tracks both axes, plus a soft shadow card.
-      axisPointer: { type: "cross", lineStyle: { color: "rgba(127,137,160,0.45)", width: 1 }, crossStyle: { color: "rgba(127,137,160,0.45)" }, label: { backgroundColor: axisColor(), fontSize: 12 } },
+      axisPointer: { type: "cross", lineStyle: { color: "rgba(127,137,160,0.45)", width: 1 }, crossStyle: { color: "rgba(127,137,160,0.45)" }, label: { backgroundColor: axisColor(), fontSize: 12.5 } },
       extraCssText: "box-shadow:0 8px 28px rgba(16,24,40,0.14); border-radius:8px;",
     };
   },
@@ -103,7 +103,7 @@ export const axisStyle = {
   get axisLine() { return { lineStyle: { color: axisColor() } }; },
   get axisLabel() { return { color: axisColor(), fontSize: 13, hideOverlap: true, margin: 10 }; },
   get axisTick() { return { lineStyle: { color: axisColor() } }; },
-  get nameTextStyle() { return { color: axisColor(), fontSize: 12, fontWeight: 500, padding: [0, 0, 0, 4] }; },
+  get nameTextStyle() { return { color: axisColor(), fontSize: 12.5, fontWeight: 500, padding: [0, 0, 0, 4] }; },
   get splitLine() { return { lineStyle: { color: gridColor() } }; },
 };
 

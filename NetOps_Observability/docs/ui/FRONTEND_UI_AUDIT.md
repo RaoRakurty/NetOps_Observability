@@ -98,7 +98,6 @@ TSX bypass the stylesheet altogether.
 
 | # | Finding | Next step |
 |---|---|---|
-| U1 | Text below the 12.5px floor (≈2,000 elements at 9–12px) and body text (tables) at 12.5px instead of 14px | C2: lift everything to the floor, table/body text to `--fs-sm`, migrate raw sizes to tokens, with before/after shots |
+| U1 | Body text at 12.5px instead of 14px, page by page. C2 lifted everything to the 12.5px floor and table cells to `--fs-sm`; `typeFloor.test.ts` keeps the floor | C3: raise body text to 14px per page, migrate raw sizes to tokens, with before/after shots |
 | U2 | Inline font sizes/colours in TSX (792) | Migrate with each page slice; new code uses tokens (see DESIGN_SYSTEM.md) |
-| U4 | Inventory IP / Status columns truncate | Widen with the C2 table pass |
 | U5 | Raw hex colours (373) and radius spread | C3: map to tokens |
