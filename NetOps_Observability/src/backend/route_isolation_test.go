@@ -107,7 +107,13 @@ var routeIsolationLedger = map[string]string{
 	// another tenant, an as_tenant walk and a malformed id all get 404; the
 	// platform owner reads any tenant's. ai_hypotheses_isolation_test.go.
 	"/api/ai/hypotheses/": "scoped",
-	"/api/alerts":         "scoped",
+	// Iris Incident Replay export (N-H2): administration:read, every read through
+	// the caller's tenant-scoped seams (strict corrRowVisible on the engine's
+	// stored object); another tenant's id and an unknown id are the same 404, an
+	// as_tenant walk is ignored, redacted, nothing written on the server.
+	// iris_replay_export_isolation_test.go.
+	"/api/ai/replay/export/": "scoped",
+	"/api/alerts":            "scoped",
 	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
 	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
 	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy

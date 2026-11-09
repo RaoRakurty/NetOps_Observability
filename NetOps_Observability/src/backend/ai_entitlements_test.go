@@ -52,7 +52,10 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// N-A6 decision ledger: an AUDIT record, gated by administration:admin in
 	// handleAIDecisions. It must stay readable after an AI entitlement lapses —
 	// losing ai.chat must not erase the trail of answers already given.
-	"/api/ai/decisions":            adminPlane,
+	"/api/ai/decisions": adminPlane,
+	// N-H2 replay export: administration:read, like the ledger it compares with.
+	// It is a support and audit read of one incident, not a use of the assistant.
+	"/api/ai/replay/export/":       adminPlane,
 	"/api/copilot/chat":            aientitlement.Chat, // + ai.investigate for the agent loop inside the turn
 	"/api/ai/modules":              aientitlement.Chat,
 	"/api/ai/commands":             aientitlement.Chat,
@@ -331,6 +334,7 @@ var adminPlaneProbes = []aiProbe{
 	{"/api/copilot/config", http.MethodGet, "/api/copilot/config", "", adminPlane},
 	{"/api/ai/decisions", http.MethodGet, "/api/ai/decisions", "", adminPlane},
 	{"/api/ai/source-authority", http.MethodPut, "/api/ai/source-authority", `{"order":["manual","controller","discovered","declared"]}`, adminPlane},
+	{"/api/ai/replay/export/", http.MethodGet, "/api/ai/replay/export/" + probeID, "", adminPlane},
 }
 
 func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
@@ -356,11 +360,12 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
-		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" {
-			// A tenant admin legitimately configures their OWN tenant's key, and
-			// sets their OWN source order (source_authority_isolation_test.go), and
-			// reads their OWN workspace's decision ledger (cross-tenant reads are
-			// pinned by TestDecisionLedgerIsolation).
+		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" || p.route == "/api/ai/replay/export/" {
+			// A tenant admin legitimately configures their OWN tenant's key, sets
+			// their OWN source order (source_authority_isolation_test.go), and
+			// reads their OWN workspace's decision ledger and incidents
+			// (cross-tenant reads are pinned by TestDecisionLedgerIsolation and
+			// iris_replay_export_isolation_test.go).
 			continue
 		}
 		if w := serveAs(h, tenantAdmin, p.method, p.path, p.body); w.Code != http.StatusForbidden {

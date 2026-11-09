@@ -57,6 +57,9 @@
       }
     },
     "model_reply": "Upstream packet loss at isp-gw-1 is confirmed as the cause of the slowdown [hypothesis:ce01eeee:0]. Next: open a ticket with the ISP.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "dia-loss", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "status": "Suspected",
@@ -132,6 +135,9 @@
       }
     },
     "model_reply": "Upstream packet loss at isp-gw-1 is confirmed as the cause of the slowdown [evidence-basis:ce04eeee]. Next: open a ticket with the ISP.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "dia-loss", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "status": "Suspected",
@@ -205,6 +211,9 @@
         }
       }
     },
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_confidence_breakdown"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 1},
     "expect": {
       "required_citations": [
         "confidence:inc-ce02",
@@ -265,6 +274,9 @@
         }
       }
     },
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_causal_chain"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 1},
     "expect": {
       "required_citations": [
         "chain-1:inc-ce03",
