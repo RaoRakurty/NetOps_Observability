@@ -215,8 +215,8 @@ HASH_P_FLAG = re.compile(r"hash\.sh\"?\s+-p\b")
 CURL_USER_ALLOWED = {"validate-rca-ticketing-e2e.sh"}    # the mock ServiceNow's test login
 PASSWORD_FLAG_ALLOWED = {
     "backup-drill.sh", "restore-drill.sh",   # a scratch server's literal, or a shell variable
-    "secret_rotation.py",                    # clickhouse-client: tracker 390
-    "migrate-tenant-partition.sh",           # clickhouse-client, one-off migration: tracker 390
+    "secret_rotation.py",                    # clickhouse-client: tracker 394
+    "migrate-tenant-partition.sh",           # clickhouse-client, one-off migration: tracker 394
     "run.py", "iam_audit.py",                # operator's own login to an audit tool, on its CLI
 }
 
