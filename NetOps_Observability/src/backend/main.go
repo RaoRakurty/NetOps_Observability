@@ -2534,7 +2534,11 @@ func initStoreBackend() error {
 		// larger than the sum of them for a healthy install.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		if err := platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL")); err != nil {
+		dsn, err := platformdb.ResolveDSN(os.Getenv)
+		if err != nil {
+			return err
+		}
+		if err := platformdb.UsePostgres(ctx, dsn); err != nil {
 			return err
 		}
 		logInfo("store", "state backend selected", map[string]any{
@@ -4123,7 +4127,19 @@ func evaluateSecurityPosture() (secprofile.Report, error) {
 	if err != nil {
 		return secprofile.Report{}, err
 	}
-	return secprofile.Evaluate(p, os.Getenv, func(path string) bool {
+	// A DSN mounted as a file (the chart, tracker 384) is still the DSN the
+	// sslmode rule has to see. An unreadable file reads as unset here: the boot
+	// fails on it anyway when the store opens, with the reason.
+	env := func(key string) string {
+		if key == "DATABASE_URL" {
+			if dsn, dsnErr := platformdb.ResolveDSN(os.Getenv); dsnErr == nil {
+				return dsn
+			}
+			return ""
+		}
+		return os.Getenv(key)
+	}
+	return secprofile.Evaluate(p, env, func(path string) bool {
 		_, statErr := os.Stat(path)
 		return statErr == nil
 	}), nil

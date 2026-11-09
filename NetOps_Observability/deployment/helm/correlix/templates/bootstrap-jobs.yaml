@@ -244,9 +244,12 @@ spec:
             - {name: OS_ADMIN_CA, value: "/certs/ca.crt"}
             - {name: OS_ADMIN_CERT, value: "/certs/tls.crt"}
             - {name: OS_ADMIN_KEY, value: "/certs/tls.key"}
-          envFrom:
-            # The six per-identity OpenSearch passwords (OS_API_PASSWORD, …).
-            - secretRef: {name: {{ include "correlix.secretName" $ }}}
+            # The six per-identity OpenSearch passwords, and only those: this used
+            # to take the whole Secret through envFrom (tracker 384).
+            {{- range $k := list "OS_API_PASSWORD" "OS_ROUTER_PASSWORD" "OS_CORRELATION_PASSWORD" "OS_BOOTSTRAP_PASSWORD" "OS_DASHBOARDS_PASSWORD" "OS_AGGREGATOR_PASSWORD" }}
+            - name: {{ $k }}
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: {{ $k }}}}
+            {{- end }}
           resources:
 {{ toYaml .Values.bootstrap.resources | indent 12 }}
           volumeMounts:

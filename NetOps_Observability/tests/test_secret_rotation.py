@@ -103,6 +103,8 @@ class FakeStores:
                    "netbox-postgres": env.get("NETBOX_DB_PASSWORD", "")}
         self.ch_admin = env["CLICKHOUSE_PASSWORD"]
         self.ch_grafana = env.get("GRAFANA_CH_PASSWORD", "")
+        self.app_role = env.get("APP_DB_PASSWORD", "")
+        self.app_role_refuses = False
         self.env = env
         self.reachable = reachable
         self.ch_alterable = ch_alterable
@@ -127,9 +129,17 @@ class FakeStores:
                 if "ALTER USER" in stdin:                    # apply
                     self.pg[service] = stdin.split("PASSWORD '", 1)[1].split("'", 1)[0]
                     return sr.ExecResult(0)
+                if "ALTER ROLE" in stdin:                    # the app-state role
+                    if self.app_role_refuses:
+                        return sr.ExecResult(1, "", "permission denied")
+                    self.app_role = stdin.split("PASSWORD '", 1)[1].split("'", 1)[0]
+                    return sr.ExecResult(0)
                 return sr.ExecResult(0, "1\n")               # local-socket probe
             if argv[:1] == ["sh"]:                           # TCP verify
                 got = self._quoted(stdin, "PGPASSWORD=")
+                if self._quoted(stdin, "-U ") == install.APP_STATE_ROLE:
+                    return sr.ExecResult(0 if got == self.app_role else 2, "",
+                                         "password authentication failed")
                 return sr.ExecResult(0 if got == self.pg[service] else 2, "",
                                      "password authentication failed")
         if service == "clickhouse":
@@ -428,6 +438,97 @@ def test_store_credentials_rotate_and_are_applied_to_the_live_store(tmp_path):
     assert stores.pg["netbox-postgres"] == after["NETBOX_DB_PASSWORD"]
     assert stores.ch_admin == after["CLICKHOUSE_PASSWORD"]
     assert stores.ch_grafana == after["GRAFANA_CH_PASSWORD"]
+
+
+APP_ROLE_DSN = "postgres://netops_app@postgres:5432/netops?sslmode=disable"
+
+
+def app_role_file(env_path: Path) -> Path:
+    root = env_path.parent.parent.parent
+    return root / "data" / "secrets" / "postgres" / "api" / "pgpass"
+
+
+def test_app_role_rotation_changes_the_role_and_its_file_together(tmp_path):
+    """Tracker 384: .env, the live role and the api's file all end up agreeing, so
+    the api's next new connection works with no restart."""
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "postgres", "DATABASE_URL": APP_ROLE_DSN})
+    before = parse_env(env_path)
+    stores = FakeStores(before)
+    rotated, failures = run_rotation(env_path, stores, strict=False)
+    after = parse_env(env_path)
+    assert failures == 0
+    assert "APP_DB_PASSWORD" in rotated
+    assert after["APP_DB_PASSWORD"] != before["APP_DB_PASSWORD"]
+    assert stores.app_role == after["APP_DB_PASSWORD"]
+    assert app_role_file(env_path).read_text() == f"*:*:*:*:{after['APP_DB_PASSWORD']}\n"
+    assert after["DATABASE_URL"] == APP_ROLE_DSN, "the DSN stays credential-free"
+    for _service, argv, _stdin in stores.calls:
+        assert after["APP_DB_PASSWORD"] not in " ".join(argv), "the password reached an argv"
+
+
+def test_app_role_file_follows_before_a_slow_store_recreate(tmp_path):
+    """The window between the ALTER and the file change is what refuses the api's
+    new connections. It must not include ClickHouse's recreate."""
+    env_path = make_install(tmp_path, started_stores=("postgres", "clickhouse"),
+                            env_extra={"STORE_BACKEND": "postgres", "DATABASE_URL": APP_ROLE_DSN})
+    before = parse_env(env_path)
+    stores = FakeStores(before, ch_alterable=False)
+    seen: list[str] = []
+    real = stores.recreate
+
+    def recreate(service, timeout=300):
+        seen.append(app_role_file(env_path).read_text())
+        return real(service, timeout)
+
+    stores.recreate = recreate
+    run_rotation(env_path, stores, strict=False)
+    assert seen, "the fake never recreated clickhouse, so this proved nothing"
+    assert seen[0] == f"*:*:*:*:{parse_env(env_path)['APP_DB_PASSWORD']}\n"
+
+
+def test_app_role_rotation_failure_keeps_every_copy_on_the_old_value(tmp_path):
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "postgres", "DATABASE_URL": APP_ROLE_DSN})
+    before = parse_env(env_path)
+    stores = FakeStores(before)
+    stores.app_role_refuses = True
+    rotated, failures = run_rotation(env_path, stores, strict=False)
+    after = parse_env(env_path)
+    assert failures >= 1
+    assert "APP_DB_PASSWORD" not in rotated
+    assert after["APP_DB_PASSWORD"] == before["APP_DB_PASSWORD"]
+    assert stores.app_role == before["APP_DB_PASSWORD"]
+    assert app_role_file(env_path).read_text() == f"*:*:*:*:{before['APP_DB_PASSWORD']}\n"
+
+
+@pytest.mark.parametrize("dsn", [
+    "postgres://u@db.example.net:5432/x",
+    "host=db.example.net user=u password=pw dbname=x",
+], ids=["external-url", "key-value-dsn"])
+def test_app_role_is_not_rotated_on_an_external_database(tmp_path, dsn):
+    """A new value here would lock the api out of a database this tool cannot ALTER."""
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "postgres", "DATABASE_URL": dsn})
+    before = parse_env(env_path)
+    stores = FakeStores(before)
+    rotated, failures = run_rotation(env_path, stores, strict=False)
+    assert failures == 0
+    assert "APP_DB_PASSWORD" not in rotated
+    assert parse_env(env_path)["APP_DB_PASSWORD"] == before["APP_DB_PASSWORD"]
+    assert stores.app_role == before["APP_DB_PASSWORD"], "no ALTER ROLE was issued"
+
+
+def test_file_backend_changes_the_value_without_touching_a_role(tmp_path):
+    env_path = make_install(tmp_path, started_stores=("postgres",),
+                            env_extra={"STORE_BACKEND": "file"})
+    before = parse_env(env_path)
+    stores = FakeStores(before)
+    _rotated, failures = run_rotation(env_path, stores, strict=False)
+    assert failures == 0
+    assert parse_env(env_path)["APP_DB_PASSWORD"] != before["APP_DB_PASSWORD"]
+    assert stores.app_role == before["APP_DB_PASSWORD"], "no ALTER ROLE on an install not using it"
+    assert not app_role_file(env_path).exists()
 
 
 def test_rotation_preserves_operator_edits_and_backs_the_file_up(tmp_path):

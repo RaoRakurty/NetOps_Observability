@@ -106,6 +106,8 @@ done
 # No .env = no installed stack (a plaintext dev checkout): nothing mounts a
 # credential file, so there is nothing to render — said out loud, not skipped
 # silently. With a .env (every install), a render failure aborts the deploy.
+# Tracker 384: an old-form .env (a password in DATABASE_URL) is moved to its
+# file-backed key first, in the same step. Idempotent; no manual step.
 if [ ! -f "$COMPOSE_DIR/.env" ]; then
   warn "no $COMPOSE_DIR/.env — not an installed stack; service credential files not rendered"
 else
@@ -115,7 +117,9 @@ import importlib.util, pathlib
 spec = importlib.util.spec_from_file_location("install", "scripts/install.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-mod.render_service_secrets(pathlib.Path(".").resolve())
+root = pathlib.Path(".").resolve()
+mod.migrate_env_credentials(root / "deployment" / "docker" / ".env")
+mod.render_service_secrets(root)
 PY
   ); then
     die "rendering service credential files failed — running stack left UNTOUCHED."; exit 1

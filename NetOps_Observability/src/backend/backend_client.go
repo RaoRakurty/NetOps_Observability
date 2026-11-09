@@ -17,6 +17,7 @@ import (
 	"netops/backend/internal/backendauth"
 	"netops/backend/internal/credfile"
 	"netops/backend/internal/dataprotect"
+	"netops/backend/internal/platformdb"
 	"netops/backend/tlsconfig"
 )
 
@@ -187,6 +188,7 @@ func initBackendCredentials() error {
 // writeBackendCredentialMetrics renders the credential gauges for /metrics.
 func writeBackendCredentialMetrics(w io.Writer) {
 	backendauth.WriteMetrics(w, backendCreds.Load())
+	platformdb.WriteCredentialMetrics(w)
 }
 
 // backendHTTPClient returns an *http.Client for an internal-backend call with the

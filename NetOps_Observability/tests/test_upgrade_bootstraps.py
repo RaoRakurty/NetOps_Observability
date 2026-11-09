@@ -289,6 +289,8 @@ _FAKE_DOCKER = """#!/usr/bin/env bash
   printf '%s\\n' "----"
   for a in "$@"; do printf '%s\\n' "$a"; done
 } >> "$ARGV_LOG"
+# What a real `docker compose exec -T` does with its stdin: hand it over.
+cat >> "${ARGV_LOG}.stdin"
 for a in "$@"; do
   case "$a" in
     */_cluster/health) exit 0 ;;
@@ -347,14 +349,88 @@ def test_tls_install_puts_over_https_with_the_cacert_and_svc_bootstrap(tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "https://opensearch:9200/_index_template/netops-secfindings" in argv
     assert "http://localhost:9200" not in argv
-    # Credential forwarded by NAME through the container's environment...
-    assert "--env\nOS_BOOTSTRAP_PASSWORD\n" in argv
-    # ...and expanded inside the container, never on the host's argv (§8).
+    # Tracker 384: the credential travels on stdin as a curl config line — not
+    # on the host's argv, not in the container's environment, not on the argv
+    # of the curl inside the container (`ps` shows that one).
     assert "s3cr3t-not-a-real-password" not in argv
     assert "s3cr3t-not-a-real-password" not in (r.stdout + r.stderr)
-    assert 'svc_bootstrap:$OS_BOOTSTRAP_PASSWORD' in argv
+    assert "--env" not in argv, "no credential through the exec's environment"
+    assert " -u " not in argv and "\n-u\n" not in argv
+    stdin = (tmp_path / "argv.log.stdin").read_text()
+    assert 'user = "svc_bootstrap:s3cr3t-not-a-real-password"\n' in stdin
+    assert "--config /dev/fd/3" in argv
     assert "/usr/share/opensearch/config/tls/ca.pem" in argv
     assert "APPLIED  (1): netops-secfindings" in r.stdout
+
+
+def _in_container_script() -> str:
+    """OS_CURL_IN_CONTAINER, exactly as the script hands it to the container."""
+    src = SCRIPT.read_text()
+    start = src.index("OS_CURL_IN_CONTAINER='") + len("OS_CURL_IN_CONTAINER='")
+    return src[start:src.index("'\n", start)]
+
+
+FAKE_CURL = """#!/usr/bin/env bash
+# Stands in for curl: records argv, the config it was pointed at, and its stdin.
+printf '%s\\n' "$@" > "$OUT.argv"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--config" ]; then cat "$2" > "$OUT.config"; fi
+  shift
+done
+cat > "$OUT.stdin"
+"""
+
+
+@pytest.mark.parametrize("body", ["", '{"index_patterns":["a"],\n "x":"y"}\n'])
+def test_in_container_script_gives_curl_the_config_and_keeps_the_body(tmp_path, body):
+    """The real container-side script under a real sh: curl gets the credential
+    on a file descriptor and stdin holds the request body, byte for byte."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "curl"
+    fake.write_text(FAKE_CURL)
+    fake.chmod(0o755)
+    out = tmp_path / "rec"
+    cfg = 'user = "svc_bootstrap:p$a`w"\n'
+    r = subprocess.run(
+        ["sh", "-c", _in_container_script(), "/ca.pem", "-s", "-X", "PUT", "https://o:9200/x"],
+        input=cfg + body, capture_output=True, text=True, timeout=30,
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "OUT": str(out)})
+    assert r.returncode == 0, r.stderr
+    argv = Path(f"{out}.argv").read_text()
+    assert "svc_bootstrap" not in argv, "the credential reached curl's argv"
+    assert "--cacert\n/ca.pem\n-s\n-X\nPUT\nhttps://o:9200/x\n" in argv
+    # `$a` and the backtick survive literally: the heredoc expands $cx_cfg once
+    # and never re-evaluates what it holds.
+    assert Path(f"{out}.config").read_text() == cfg
+    assert Path(f"{out}.stdin").read_text() == body
+
+
+def test_auth_line_quotes_for_the_curl_config_parser(tmp_path):
+    env = {**os.environ, "OS_BOOTSTRAP_PASSWORD": 'a"b\\c'}
+    fn = SCRIPT.read_text()
+    start = fn.index("os_curl_auth_line() {")
+    r = subprocess.run(["bash", "-c", fn[start:fn.index("\n}\n", start) + 3] + "os_curl_auth_line"],
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == 'user = "svc_bootstrap:a\\"b\\\\c"\n'
+
+
+def test_a_url_with_userinfo_never_reaches_a_host_curl_argv(tmp_path):
+    repo, bindir = _fake_repo(tmp_path, TLS_ENV)
+    probe = tmp_path / "host-curl.log"
+    host_curl = bindir / "curl"
+    host_curl.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" >> {probe}\nexit 0\n')
+    host_curl.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
+           "ARGV_LOG": str(tmp_path / "argv.log"),
+           "OPENSEARCH_URL": "https://u:hunter2@opensearch.example:9200",
+           "OS_READY_ATTEMPTS": "2", "OS_READY_SLEEP": "0"}
+    r = subprocess.run(["bash", str(repo / "scripts" / SCRIPT.name)],
+                       capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not probe.exists() or "hunter2" not in probe.read_text()
+    assert "hunter2" not in (r.stdout + r.stderr)
 
 
 def test_plaintext_install_keeps_the_localhost_path(tmp_path):

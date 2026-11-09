@@ -70,7 +70,7 @@ linters:
         #   collectors/traceroute×2, collectors/poller, collectors/gnmi,
         #   cloud_metrics_series×2, cloud_enrich×2) — the HOST of every sink comes
         #   from a server-configured env var (OPENSEARCH_URL, CORRELATION_URL,
-        #   VICTORIA_URL/METRICS_URL, VM_QUERY_URL, REPORT_PDF_SIDECAR_URL,
+        #   VICTORIA_URL/METRICS_URL, REPORT_PDF_SIDECAR_URL,
         #   PROBE_PATHS_PUSH_URL); no request can redirect it. The only
         #   request-derived path/query components are (a) the correlation id, which
         #   handleCorrelationByID refuses unless isUUIDToken(id), and (b) the

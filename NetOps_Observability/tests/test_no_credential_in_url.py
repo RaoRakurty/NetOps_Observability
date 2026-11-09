@@ -103,11 +103,9 @@ def test_no_compose_value_carries_a_credential_in_a_url(path: Path) -> None:
 
 
 SERVICE_PASSWORD_ENV = re.compile(r"^(VMAUTH_[A-Z]+_PASSWORD|OS_[A-Z]+_PASSWORD)$")
-# Services whose credential moved to a file. OS_* values that still reach
-# OTHER consumers via env (opensearch-dashboards' own OSD settings, the
-# vector-router / aggregator OpenSearch sinks) are out of this row's scope
-# and are not listed here.
+# Services whose credential moved to a file (tracker 367 layer 1, tracker 384).
 CONVERTED = ("vmauth", "api", "prober", "grafana", "gnmic", "vector-aggregator",
+             "vector-router", "opensearch-dashboards", "opensearch-security-init",
              "opensearch-init", "correlation")
 
 
@@ -120,9 +118,141 @@ def test_converted_services_hold_no_password_env(path: Path) -> None:
         for key, value in env_of(svc).items():
             if SERVICE_PASSWORD_ENV.match(key):
                 hits.append(f"{svc_name}.{key}")
-            if re.search(r"\$\{(VMAUTH_[A-Z]+_PASSWORD|OS_(API|BOOTSTRAP|CORRELATION)_PASSWORD)\b", value):
+            if re.search(r"\$\{(VMAUTH_[A-Z]+_PASSWORD|OS_[A-Z]+_PASSWORD)\b", value):
                 hits.append(f"{svc_name}.{key} (interpolates a service password)")
     assert not hits, f"{path.name}: service password still in a container env: {hits}"
+
+
+# ── The ratchet (tracker 384) ───────────────────────────────────────────────
+#
+# Every credential a compose service still declares in its environment, named one
+# by one. A credential that is NOT here fails the build; so does an entry nothing
+# uses any more, so this list can only shrink. docs/runbooks/secret-rotation.md §11
+# says why each remains.
+ENV_CREDENTIALS_REMAINING: dict[str, set[str]] = {
+    "postgres": {"POSTGRES_PASSWORD"},
+    "redis": {"REDISCLI_AUTH"},
+    "keycloak": {"KC_BOOTSTRAP_ADMIN_PASSWORD", "KEYCLOAK_ADMIN_PASSWORD", "KC_DB_PASSWORD"},
+    "gnmic": {"SRL_GNMI_PASS", "EOS_GNMI_PASS"},    # device logins, not service credentials
+    "vector-aggregator": {"INGEST_TOKEN_TRAPS", "INGEST_TOKEN_PROBES", "INGEST_TOKEN_METRICS",
+                          "INGEST_TOKEN_BUS"},
+    "vector-router": {"CLICKHOUSE_PASSWORD", "INGEST_TOKEN"},
+    "clickhouse": {"CLICKHOUSE_PASSWORD"},
+    "correlation": {"CLICKHOUSE_PASSWORD", "CORR_DEBUG_TOKEN"},
+    "api": {"REDIS_PASSWORD", "INGEST_TOKEN", "INGEST_TOKEN_TRAPS", "INGEST_TOKEN_PROBES",
+            "INGEST_TOKEN_METRICS", "INGEST_TOKEN_BUS", "VMALERT_WEBHOOK_TOKEN",
+            "CLICKHOUSE_PASSWORD", "NTFY_ALERT_TOKEN", "PLATFORM_ALERTS_NTFY_TOKEN",
+            "CORR_DEBUG_TOKEN", "NETBOX_TOKEN", "UNIFI_PASSWORD", "PAGERDUTY_KEY", "SMTP_PASS",
+            "TWILIO_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "SERVICENOW_PASSWORD", "JIRA_API_TOKEN",
+            "CONFIG_BACKUP_SSH_PASSWORD", "CONFIG_BACKUP_SSH_KEY", "PCAP_SSH_PASSWORD",
+            "PCAP_SSH_KEY", "PROTOCOL_DIAG_SSH_PASSWORD", "PROTOCOL_DIAG_SSH_KEY",
+            "OIDC_CLIENT_SECRET", "KEYCLOAK_ADMIN_PASSWORD", "COPILOT_API_KEY", "JWT_SECRET",
+            "ENCRYPTION_KEY", "ADMIN_INITIAL_PASSWORD", "ADMIN_RESET_PASSWORD",
+            "REPORT_LINK_SECRET"},
+    "prober": {"INGEST_TOKEN_PROBES", "REDIS_PASSWORD"},
+    "mock-servicenow": {"MOCK_SNOW_PASSWORD", "MOCK_SNOW_TOKEN"},   # test double
+    "mock-nms": {"MOCK_NMS_PASSWORD"},                              # test double
+    "cloud-ingest": {"INGEST_TOKEN_METRICS"},
+    "netbox-postgres": {"POSTGRES_PASSWORD"},
+    "netbox": {"DB_PASSWORD", "REDIS_PASSWORD", "SECRET_KEY", "SUPERUSER_PASSWORD",
+               "SUPERUSER_API_TOKEN"},
+}
+# Interpolated variables whose name ends like a credential's but which are not one.
+NOT_A_CREDENTIAL = {"STORE_PG_ALLOW_RLS_BYPASS", "JIRA_PROJECT_KEY"}
+INTERPOLATED_CREDENTIAL = re.compile(
+    r"\$\{([A-Z0-9_]*(?:PASSWORD|PASS|TOKEN|SECRET|_KEY)|INGEST_TOKEN_[A-Z]+)\b")
+
+
+def _declared_credentials() -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path in COMPOSE_FILES:
+        for svc_name, svc in (load(path).get("services") or {}).items():
+            for key, value in env_of(svc).items():
+                names = set(INTERPOLATED_CREDENTIAL.findall(value)) - NOT_A_CREDENTIAL
+                if names:
+                    found.setdefault(svc_name, set()).add(key)
+    return found
+
+
+def test_no_new_credential_in_a_container_environment() -> None:
+    found = _declared_credentials()
+    new = {s: sorted(keys - ENV_CREDENTIALS_REMAINING.get(s, set()))
+           for s, keys in found.items() if keys - ENV_CREDENTIALS_REMAINING.get(s, set())}
+    assert not new, (
+        f"credential(s) in a container's environment: {new}. Read it from a file rendered "
+        "under data/secrets instead (scripts/install.py SERVICE_SECRETS, tracker 384). "
+        "`docker inspect` shows a declared environment, including on an exited container.")
+
+
+def test_the_remaining_credentials_list_only_shrinks() -> None:
+    found = _declared_credentials()
+    stale = {s: sorted(keys - found.get(s, set()))
+             for s, keys in ENV_CREDENTIALS_REMAINING.items() if keys - found.get(s, set())}
+    assert not stale, f"no longer in the compose files, so remove them from the list: {stale}"
+
+
+def test_no_credential_on_a_container_argv_beyond_the_known_one() -> None:
+    """A flag value is readable in `ps` by anything on the host."""
+    hits = set()
+    for path in COMPOSE_FILES:
+        for svc_name, svc in (load(path).get("services") or {}).items():
+            for field in ("command", "entrypoint"):
+                raw = svc.get(field) or []
+                for arg in ([raw] if isinstance(raw, str) else raw):
+                    for name in INTERPOLATED_CREDENTIAL.findall(str(arg)):
+                        hits.add((svc_name, name))
+    assert hits == {("redis", "REDIS_PASSWORD")}, hits   # valkey --requirepass: see §11
+
+
+# Where a shell-level credential could reach `ps`. Each scan looks for the flag
+# followed by a variable or a command substitution, so a documented literal such
+# as `--user 0:0` or `-u "$(id -u)"` on docker is not what this is about.
+SCRIPT_ROOTS = (ROOT / "scripts", COMPOSE_DIR)
+CURL_USER_FLAG = re.compile(r"\bcurl\b[^\n|;]*\s(?:-u|--user)\s")
+PASSWORD_FLAG = re.compile(r"--password[ =][\"'$]")
+HASH_P_FLAG = re.compile(r"hash\.sh\"?\s+-p\b")
+# Known and not moved. Remove an entry when it is fixed; never add one.
+CURL_USER_ALLOWED = {"validate-rca-ticketing-e2e.sh"}    # the mock ServiceNow's test login
+PASSWORD_FLAG_ALLOWED = {
+    "backup-drill.sh", "restore-drill.sh",   # a scratch server's literal, or a shell variable
+    "secret_rotation.py",                    # clickhouse-client: tracker 390
+    "migrate-tenant-partition.sh",           # clickhouse-client, one-off migration: tracker 390
+    "run.py", "iam_audit.py",                # operator's own login to an audit tool, on its CLI
+}
+
+
+def _operational_scripts() -> list[Path]:
+    out: list[Path] = []
+    for root in SCRIPT_ROOTS:
+        for p in sorted(root.rglob("*")):
+            if p.suffix in (".sh", ".py") and p.is_file():
+                out.append(p)
+    return out
+
+
+def _code(p: Path) -> str:
+    """The script without its comment lines: explaining a leak is not one."""
+    return "\n".join(ln for ln in p.read_text(errors="replace").splitlines()
+                     if not ln.lstrip().startswith("#"))
+
+
+def test_no_script_passes_a_credential_on_a_curl_argv() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if p.name not in CURL_USER_ALLOWED and CURL_USER_FLAG.search(_code(p))]
+    assert not hits, (f"curl -u puts the password in `ps`: {hits}. Send a config on stdin "
+                      "(`curl --config -`), as scripts/overlap_rotation.py does.")
+
+
+def test_no_script_passes_a_credential_on_a_password_flag() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if p.name not in PASSWORD_FLAG_ALLOWED and PASSWORD_FLAG.search(_code(p))]
+    assert not hits, f"a --password flag puts the value in `ps`: {hits}"
+
+
+def test_no_script_hashes_a_password_from_its_argv() -> None:
+    hits = [p.relative_to(ROOT).as_posix() for p in _operational_scripts()
+            if HASH_P_FLAG.search(_code(p))]
+    assert not hits, f"hash.sh -p puts the value on a java argv; use -env: {hits}"
 
 
 def test_vmauth_reads_the_rendered_config_and_rechecks_it() -> None:
@@ -187,8 +317,20 @@ def test_tls_clients_read_their_credential_from_a_mounted_file() -> None:
     assert _secret_mount("vmauth/gnmic") in _mounts(gnmic)
 
 
+def test_api_reads_the_postgres_password_from_a_mounted_file() -> None:
+    """Tracker 384. DATABASE_URL names the role and the driver's own PGPASSFILE
+    names the file; the superuser's password is not in the api at all."""
+    svc = services("docker-compose.yml")["api"]
+    env = env_of(svc)
+    assert env["PGPASSFILE"] == f"/run/secrets/{install.APP_DB_SECRET_REL}/{install.APP_DB_SECRET_FILE}"
+    assert _secret_mount(install.APP_DB_SECRET_REL) in _mounts(svc)
+    assert "DB_PASSWORD" not in env, "the Postgres superuser password: nothing in the api reads it"
+    assert env["DATABASE_URL"] == "${DATABASE_URL:-}", "the value comes from .env, which migrates"
+
+
 def test_every_mounted_secret_is_one_install_renders() -> None:
-    rendered = {s.rel for s in install.SERVICE_SECRETS}
+    rendered = ({s.rel for s in install.SERVICE_SECRETS} | {d.rel for d in install.DERIVED_SECRETS}
+                | {install.APP_DB_SECRET_REL})
     mounted = set()
     for path in COMPOSE_FILES:
         mounted |= set(re.findall(r"\.\./\.\./data/secrets/([a-z]+/[a-z-]+):", path.read_text()))
@@ -202,6 +344,25 @@ def test_grafana_reads_the_password_through_its_file_provider() -> None:
     pw_lines = [ln.strip() for ln in src.splitlines() if "basicAuthPassword" in ln]
     assert pw_lines == ["basicAuthPassword: $__file{/run/secrets/vmauth/grafana/password}"] * 2
     assert "$VMAUTH_GRAFANA_PASSWORD" not in src
+
+
+@pytest.mark.parametrize("rel", ["grafana/provisioning/datasources/datasources.yaml",
+                                 "grafana/datasources-mtls.yaml"])
+def test_grafana_reads_the_clickhouse_password_from_a_file(rel: str) -> None:
+    """Tracker 384: both datasource variants, because either one is what runs."""
+    src = (COMPOSE_DIR / rel).read_text()
+    assert "password: $__file{/run/secrets/clickhouse/grafana/password}" in src
+    assert "GRAFANA_CH_PASSWORD" not in src
+
+
+def test_grafana_holds_no_password_in_its_environment() -> None:
+    svc = services("docker-compose.yml")["grafana"]
+    env = env_of(svc)
+    assert "GRAFANA_CH_PASSWORD" not in env
+    assert "GF_SECURITY_ADMIN_PASSWORD" not in env
+    assert env["GF_SECURITY_ADMIN_PASSWORD__FILE"] == "/run/secrets/grafana/admin/password"
+    assert _secret_mount("clickhouse/grafana") in _mounts(svc)
+    assert _secret_mount("grafana/admin") in _mounts(svc)
 
 
 @pytest.mark.parametrize("name", ["gnmic.yaml", "gnmic-correlation.yaml"])
@@ -223,6 +384,60 @@ def test_vector_sink_resolves_the_password_through_the_secret_backend() -> None:
     auth = cfg["sinks"]["victoria_cloud_metrics"]["auth"]
     assert auth["password"] == "${VMAUTH_VECTOR_PASSWORD_REF:-unused-on-plaintext-victoria}"
     assert "VMAUTH_VECTOR_PASSWORD}" not in (COMPOSE_DIR / "vector" / "vector.yaml").read_text()
+
+
+def test_vector_opensearch_passwords_are_references_to_mounted_files() -> None:
+    """Tracker 384. The variable keeps its name, because a running container
+    must still agree with a newer vector.yaml during a partial deploy, so what
+    is pinned is that its VALUE is a reference and never a password."""
+    tls = services("compose.tls.yml")
+    router, agg = tls["vector-router"], tls["vector-aggregator"]
+    assert env_of(router)["OPENSEARCH_PASSWORD"] == "SECRET[opensearch.router]"
+    assert env_of(agg)["OPENSEARCH_STATS_PASSWORD"] == "SECRET[opensearch.aggregator]"
+    assert _secret_mount("opensearch/router") in _mounts(router)
+    assert _secret_mount("opensearch/aggregator") in _mounts(agg)
+
+    # The reference only resolves if a backend of that name exists and its root
+    # is where the identity directory is mounted.
+    router_cfg = yaml.safe_load((COMPOSE_DIR / "vector-router" / "vector.yaml").read_text())
+    assert router_cfg["secret"]["opensearch"]["command"] == [
+        "/bin/sh", "/etc/vector/shared/cx-secret-exec.sh", "/run/secrets/opensearch"]
+    agg_cfg = yaml.safe_load((COMPOSE_DIR / "vector" / "vector.yaml").read_text())
+    assert agg_cfg["secret"]["opensearch"]["command"] == [
+        "/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/opensearch"]
+    # The router has the script through its ./vector mount.
+    assert "./vector:/etc/vector/shared:ro" in _mounts(services("docker-compose.yml")["vector-router"])
+
+
+def test_dashboards_reads_its_password_from_a_second_config_file() -> None:
+    """Tracker 384. The image's entrypoint turns OPENSEARCH_PASSWORD into
+    `--opensearch.password=<value>` on argv, so the env form is a ps leak too."""
+    svc = services("compose.tls.yml")["opensearch-dashboards"]
+    assert "OPENSEARCH_PASSWORD" not in env_of(svc)
+    secret_cfg = "/run/secrets/opensearch/dashboards/opensearch_dashboards.secret.yml"
+    assert svc["command"][0] == "opensearch-dashboards"
+    assert svc["command"][-2:] == ["--config", secret_cfg]
+    # Naming a --config replaces the default, so the image's own must come first.
+    assert svc["command"][1:3] == [
+        "--config", "/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml"]
+    assert _secret_mount("opensearch/dashboards") in _mounts(svc)
+    d = next(d for d in install.DERIVED_SECRETS if d.rel == "opensearch/dashboards")
+    assert f"/run/secrets/{d.rel}/{d.file}" == secret_cfg
+
+
+def test_security_init_reads_every_identity_from_files_and_hashes_off_argv() -> None:
+    """Tracker 384. An exited one-shot keeps its environment, so `docker inspect`
+    on it used to show all six passwords."""
+    svc = services("docker-compose.yml")["opensearch-security-init"]
+    env = env_of(svc)
+    assert not [k for k in env if SERVICE_PASSWORD_ENV.match(k)]
+    assert env["OS_SECRET_DIR"] == "/run/secrets/opensearch/security-init"
+    assert _secret_mount("opensearch/security-init") in _mounts(svc)
+    src = (COMPOSE_DIR / "opensearch" / "security" / "apply-security.sh").read_text()
+    assert 'hash.sh" -env "$1"' in src
+    assert not re.search(r'hash\.sh"?\s+-p\b', src), "-p puts the password on the java argv"
+    wanted = set(re.findall(r"\bOS_[A-Z]+_PASSWORD\b", src))
+    assert wanted == set(install._OS_IDENTITY_KEYS), "script and renderer disagree on the identities"
 
 
 @pytest.mark.parametrize("rel", ["vector/vector.yaml", "vector-router/vector.yaml"])

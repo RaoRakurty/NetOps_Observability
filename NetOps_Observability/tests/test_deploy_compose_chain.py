@@ -123,3 +123,18 @@ def test_deploy_renders_service_credential_files_before_touching_the_stack() -> 
     assert build != -1 and up != -1, "deploy.sh build/recreate lines moved — update this test"
     assert render < build < up, "credential files must be rendered before the stack is touched"
     assert "running stack left UNTOUCHED" in src[render:build], "a render failure must abort before build"
+
+
+def test_every_routine_path_migrates_an_old_form_env_before_rendering() -> None:
+    """Tracker 384: customers never edit .env, so an old-form DATABASE_URL has to
+    be moved by each path that can restart the api, before it renders."""
+    for script in ("deploy.sh", "update.sh"):
+        src = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+        migrate = src.find("migrate_env_credentials(")
+        render = src.find("render_service_secrets(root)")
+        assert migrate != -1, f"{script} does not migrate an old-form .env"
+        assert migrate < render, f"{script} renders before migrating"
+    install_src = (ROOT / "scripts" / "install.py").read_text(encoding="utf-8")
+    assert install_src.find("migrate_env_credentials(env_path)\n        env = _parse_env(env_path)\n"
+                            "        additions = _env_migration_lines") != -1, \
+        "install.py must move the password before the migration lines could mint one"

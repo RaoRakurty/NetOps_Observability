@@ -57,8 +57,9 @@ Every secret `install.py` generates carries a rotation class in
 | `INGEST_TOKEN` | free | New value in `.env`; every in-stack producer and the Vector ingest sources read it at start. Recreate them together or ingest 401s until you do. |
 | `NETBOX_SECRET_KEY` | free | New value in `.env`. Django re-reads it at boot; **existing NetBox sessions are invalidated**, data is untouched. |
 | `DB_PASSWORD` | alter | `ALTER USER` on the **live** Postgres, verified over TCP with the new password, **before** `.env` is written. |
+| `APP_DB_PASSWORD` | alter | `ALTER ROLE netops_app` on the live Postgres, verified, then `.env` and `data/secrets/postgres/api/pgpass`. No restart: the api re-reads the file for every new connection (§10). Kept when the store is an external database, because that role is not this tool's to change. |
 | `NETBOX_DB_PASSWORD` | alter | Same, against the bundled `netbox-postgres`. |
-| `GRAFANA_CH_PASSWORD` | alter | `CREATE OR ALTER USER grafana` in ClickHouse (still pinned `tenant_scope='' CONST, readonly=2`), verified. |
+| `GRAFANA_CH_PASSWORD` | alter | `CREATE OR ALTER USER grafana` in ClickHouse (still pinned `tenant_scope='' CONST, readonly=2`), verified. Grafana reads the rendered file at start, so recreate it (§7). |
 | `CLICKHOUSE_PASSWORD` | recreate | Tries `ALTER USER`; if the admin user is config-file-defined (`users.d/default-user.xml`, which the image regenerates from the environment at every start) it force-recreates **only** the `clickhouse` service and verifies. On failure the value is rolled back in `.env`. |
 | `ADMIN_INITIAL_PASSWORD` | seeded | **Refused** once `data/api/users.json` exists — the value is inert there. Change the password in the dashboard, or use `scripts/reset-admin.sh` (which deliberately wipes the whole local user store). |
 | `GRAFANA_ADMIN_PASSWORD` | seeded | **Refused** once `data/grafana/grafana.db` exists. Rotate inside Grafana (below). |
@@ -66,7 +67,7 @@ Every secret `install.py` generates carries a rotation class in
 | `NETBOX_SUPERUSER_PASSWORD` | seeded | **Refused** once the NetBox DB exists — NetBox never updates an existing superuser from the environment. |
 | `NETBOX_TOKEN` | seeded | **Refused** once the NetBox DB exists — a new value would make the API present a token NetBox rejects. Mint a replacement in NetBox and paste it in. |
 | `VMAUTH_API_PASSWORD`, `VMAUTH_PROBER_PASSWORD`, `VMAUTH_VMALERT_PASSWORD`, `VMAUTH_GRAFANA_PASSWORD`, `VMAUTH_GNMIC_PASSWORD`, `VMAUTH_VECTOR_PASSWORD` | overlap | `--rotate-app-secrets` swaps them in one step (a short 401 window until vmauth and every client have the new value). **Prefer `--rotate-secret`** (§9): vmauth accepts old and new while the clients move, so no request is refused. |
-| `OS_*_PASSWORD` | free | Re-applied by the `opensearch-init` bootstrap on the next start. **Not** overlap-capable: OpenSearch's internal user store holds one password hash per user (§9). |
+| `OS_*_PASSWORD` | free | Re-applied by the `opensearch-security-init` bootstrap on the next start, from the files under `data/secrets/opensearch/`. **Not** overlap-capable: OpenSearch's internal user store holds one password hash per user (§9). |
 | `KAFKA_CLUSTER_ID` | immutable | Never rotated in place. Requires `--rotate-kafka-cluster-id`, which moves `data/kafka` aside first (see §5). |
 
 **On an install that has never started, every one of these is freely
@@ -291,3 +292,85 @@ overlap would need a second user per service and every client switching its
 user name, and the api reads its user name from the container environment, so
 that would mean a recreate anyway. The `OS_*` passwords stay on the one-step
 path (§2).
+
+---
+
+## 10. The app-state database password
+
+The api connects to Postgres as `netops_app`. Its password is `APP_DB_PASSWORD` in
+`.env`, rendered to `data/secrets/postgres/api/pgpass` and named by `PGPASSFILE`.
+`DATABASE_URL` names the role and carries no password.
+
+```bash
+python3 scripts/install.py --rotate-app-secrets
+```
+
+The steps run in this order: `ALTER ROLE` on the live server and prove the new
+password over TCP, write `.env`, then replace the file.
+
+**No restart, and open connections are not touched.** The api re-reads the file for
+every new connection, and `ALTER ROLE` does not close the ones already open. Pooled
+connections move to the new password as they recycle (at most 30 minutes).
+
+**One short window remains.** A Postgres role holds one password, so this cannot
+overlap the way §9 does. Between `ALTER ROLE` and the file replacement, a **new**
+connection is refused with `password authentication failed`. The steps run next to
+each other, with nothing slow between them, so that is normally a few seconds. It
+is proven to recover by itself (`TestPGRotationReachesTheNextConnectionWithoutARestart`).
+Only a request that needed
+a new connection at that moment sees an error; the next one works, with no action
+needed. `--rotate-secret` refuses this password for the same reason.
+
+**If it goes wrong.** On a failed `ALTER ROLE`, `.env` and the file both keep the
+old password, and the run exits non-zero naming `APP_DB_PASSWORD`. Run it again.
+
+| Check | Healthy |
+|---|---|
+| `netops_postgres_credential_loaded` on the api's `/metrics` | `1`. `0` means no new connection can open. |
+| `netops_postgres_credential_reload_errors_total` | Flat. It rises when the file cannot be read; the last good value stays in use. |
+| Log line `Postgres password file cannot be used` | Absent. |
+| Security posture finding `CRED-001` naming `DATABASE_URL` | Absent. |
+
+An api that has never been able to read the file refuses to open a connection and
+says so in its boot error. It never tries an empty password.
+
+Why not pgx's `PGPASSFILE` alone: the driver reads it once, while parsing the DSN,
+and ignores any read error. That would leave the old password in use until a
+restart. `TestPGPassfileAloneDoesNotSurviveARotation` keeps that premise honest. The
+variable stays set because an api image from before this change, after a rollback,
+still authenticates through the driver's own support.
+
+---
+
+## 11. Where each service credential lives
+
+Everything below is rendered from `.env` under `data/secrets/` (mode 0400, owned by
+the uid that reads it) by `install.py`, `update.sh`, `deploy.sh` and every rotation,
+before anything restarts.
+
+| File | Read by | How |
+|---|---|---|
+| `vmauth/<identity>/password` | api, prober, vmalert, grafana, gnmic, vector | §9 |
+| `vmauth/vmauth/auth.yml` | vmauth | its own config, re-read every 10 s |
+| `opensearch/api/password` | api | re-read on change |
+| `opensearch/bootstrap/password` | opensearch-init | at each run |
+| `opensearch/router/password`, `opensearch/aggregator/password` | vector-router, vector-aggregator | Vector exec backend, at each config load |
+| `opensearch/dashboards/opensearch_dashboards.secret.yml` | opensearch-dashboards | second `--config`, at start |
+| `opensearch/security-init/OS_*_PASSWORD` | opensearch-security-init | at each run, hashed with `hash.sh -env` |
+| `clickhouse/grafana/password` | grafana | `$__file{}` in its provisioning, at start |
+| `grafana/admin/password` | grafana | `GF_SECURITY_ADMIN_PASSWORD__FILE`, at start |
+| `postgres/api/pgpass` | api | §10 |
+
+**Still in a container's environment, and why.** These were not part of this move:
+each needs its own check of what the image supports.
+
+| Value | Where | Why it is still there |
+|---|---|---|
+| `CLICKHOUSE_PASSWORD` | clickhouse, api, correlation, vector-router | Not yet moved. |
+| `REDIS_PASSWORD` | redis (also on its argv as `--requirepass`), api, prober, netbox | Not yet moved. |
+| `DB_PASSWORD` | postgres (`POSTGRES_PASSWORD`), keycloak (`KC_DB_PASSWORD`) | Not yet moved. Removed from the api, which never read it. |
+| `NETBOX_DB_PASSWORD`, `NETBOX_SUPERUSER_PASSWORD`, `NETBOX_TOKEN`, `KEYCLOAK_ADMIN_PASSWORD` | netbox, netbox-postgres, keycloak, api | Optional profiles; not yet moved. |
+| `INGEST_TOKEN*`, `JWT_SECRET`, `ENCRYPTION_KEY`, `ADMIN_INITIAL_PASSWORD`, `CORR_DEBUG_TOKEN`, `VMALERT_WEBHOOK_TOKEN`, integration keys | api and others | Application secrets, not credentials to a platform store; not yet moved. |
+
+`tests/test_no_credential_in_url.py` holds this list in code: a credential that is
+not on it fails the build. Remove an entry when its value moves.

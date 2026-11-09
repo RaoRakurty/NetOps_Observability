@@ -130,6 +130,10 @@ if [[ -n "${OPENSEARCH_URL:-}" ]]; then
         echo "WARNING: OPENSEARCH_URL=$OPENSEARCH_URL is plaintext but this stack runs the TLS variant" >&2
         echo "         (COMPOSE_FILE in $ENV_FILE includes compose.tls.yml)." >&2
         echo "         Ignoring it and using $OS_TLS_URL from inside the container." >&2
+    elif [[ "$OPENSEARCH_URL" == *://*@* ]]; then
+        # A URL with userinfo would put its credential on this host's argv.
+        echo "WARNING: OPENSEARCH_URL carries a credential in its userinfo (value not shown);" >&2
+        echo "         ignoring it and using the opensearch container instead." >&2
     elif curl -sf --max-time 5 "${OPENSEARCH_URL}/_cluster/health" >/dev/null 2>&1; then
         USE_HOST=1
         echo "Using OPENSEARCH_URL=$OPENSEARCH_URL"
@@ -151,27 +155,57 @@ elif [[ $TLS -eq 1 ]]; then
         echo "       mappings. Re-run scripts/install.py (it seeds the SEC-008 credentials)." >&2
         exit 1
     fi
-    export OS_BOOTSTRAP_PASSWORD
 else
     OS_BASE="http://localhost:9200"
     MODE="docker exec opensearch → $OS_BASE (plaintext)"
 fi
 echo "Transport: $MODE"
 
+# Runs INSIDE the opensearch container on a TLS install. The first stdin line
+# is the curl config holding the credential; the rest of stdin is the request
+# body (empty when there is none). The config reaches curl on fd 3 as a heredoc,
+# not `curl -K -`, because stdin is already the body. So the password is on no
+# argv and in no environment (tracker 384: it used to be
+# `curl -u svc_bootstrap:$PW`, readable in `ps` inside the container).
+# `read` takes one byte at a time from a pipe, so it cannot eat into the body.
+# `sh -c 'script' <arg0> <args...>`: the CA path lands in $0, curl's in "$@".
+# Single quotes are intentional: this text is expanded by the container's sh.
+# shellcheck disable=SC2016
+OS_CURL_IN_CONTAINER='IFS= read -r cx_cfg || [ -n "$cx_cfg" ]
+exec curl --config /dev/fd/3 --cacert "$0" "$@" 3<<__CX_CURL_CONFIG__
+$cx_cfg
+__CX_CURL_CONFIG__
+'
+
+# os_curl_auth_line — the one curl config line holding the credential, quoted
+# for curl's config parser. printf is a shell builtin: on no argv either.
+os_curl_auth_line() {
+    local q="${OS_BOOTSTRAP_PASSWORD//\\/\\\\}"
+    q="${q//\"/\\\"}"
+    printf 'user = "svc_bootstrap:%s"\n' "$q"
+}
+
 # os_curl <curl-args...> — one curl against the cluster. A request body, when
-# there is one, arrives on THIS function's stdin (callers pass `-d @-`), which
-# keeps template bodies off argv too.
+# there is one, arrives on THIS function's stdin and the caller passes `-d @-`,
+# which keeps template bodies off argv too. Only then is stdin forwarded: a
+# caller with no body may have inherited a terminal or an open pipe from cron.
 os_curl() {
     if [[ $USE_HOST -eq 1 ]]; then
         curl "$@"
     elif [[ $TLS -eq 1 ]]; then
-        # `sh -c 'script' <arg0> <args...>`: the CA path lands in $0 and the
-        # curl arguments in "$@", while the password is expanded inside the
-        # container from its own environment. Nothing sensitive is on argv.
-        docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T \
-            --env OS_BOOTSTRAP_PASSWORD opensearch \
-            sh -c 'exec curl --cacert "$0" -u "svc_bootstrap:$OS_BOOTSTRAP_PASSWORD" "$@"' \
-            "$OS_TLS_CACERT" "$@"
+        local has_body=0 arg
+        for arg in "$@"; do
+            if [[ "$arg" == "@-" ]]; then
+                has_body=1
+            fi
+        done
+        if [[ $has_body -eq 1 ]]; then
+            { os_curl_auth_line; cat; } | docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T \
+                opensearch sh -c "$OS_CURL_IN_CONTAINER" "$OS_TLS_CACERT" "$@"
+        else
+            os_curl_auth_line | docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T \
+                opensearch sh -c "$OS_CURL_IN_CONTAINER" "$OS_TLS_CACERT" "$@"
+        fi
     else
         docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T opensearch curl "$@"
     fi
