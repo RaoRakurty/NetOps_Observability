@@ -293,8 +293,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"gen-iana-tables: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
-        print(f"gen-iana-tables: {exc}", file=sys.stderr)
-        return 2
+        # A table that cannot be read or written is a failed run, never a pass.
+        raise SystemExit(f"gen-iana-tables: {exc}") from exc
 
 
 if __name__ == "__main__":
