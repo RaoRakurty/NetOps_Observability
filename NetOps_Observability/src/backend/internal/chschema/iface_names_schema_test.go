@@ -83,3 +83,35 @@ func TestIfaceNamesInInitSQL(t *testing.T) {
 		}
 	}
 }
+
+// The ip_asn dictionary converges once, and init.sql (both copies) carries the
+// same FILE source, so a fresh install and an upgrade read the same path.
+func TestIPASNDictionaryConvergesAndInInitSQL(t *testing.T) {
+	n := 0
+	for _, s := range ConvergeStmts() {
+		if s == IPASNDictionaryDDL {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ip_asn dictionary emitted %d times, want 1", n)
+	}
+	for _, want := range []string{"LAYOUT(IP_TRIE())", "user_files/asn/asn.csv", "asn UInt32", "IF NOT EXISTS"} {
+		if !strings.Contains(IPASNDictionaryDDL, want) {
+			t.Errorf("ip_asn DDL lacks %q", want)
+		}
+	}
+	for _, rel := range []string{
+		filepath.Join("deployment", "docker", "clickhouse", "init.sql"),
+		filepath.Join("deployment", "helm", "correlix", "files", "clickhouse", "init.sql"),
+	} {
+		b, err := os.ReadFile(repoFile(t, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := strings.Join(strings.Fields(string(b)), " ")
+		if !strings.Contains(src, "CREATE DICTIONARY IF NOT EXISTS netops.ip_asn ( network String, asn UInt32 ) PRIMARY KEY network SOURCE(FILE(path '/var/lib/clickhouse/user_files/asn/asn.csv' format 'CSVWithNames'))") {
+			t.Errorf("%s does not carry the ip_asn dictionary", rel)
+		}
+	}
+}

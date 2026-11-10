@@ -85,7 +85,7 @@ func TestFlowsCoverageCountsPlatformMonitoring(t *testing.T) {
 	calls := fakeCHScoped(t, `{"meta":[],"data":[],"rows":0}`)
 	s := flowsTestServer(t)
 	s.handleFlowsCoverage(httptest.NewRecorder(), req(http.MethodGet, "/api/flows/coverage", "", superA()))
-	sql := (*calls)[0].sql
+	sql := (*calls)[len(*calls)-1].sql // the coverage scan follows the AS-dataset probe
 	if !strings.Contains(sql, "countIf((src_addr IN ('10.70.245.122') OR dst_addr IN ('10.70.245.122')))") ||
 		!strings.Contains(sql, "1                    AS platform_addresses_configured") {
 		t.Errorf("coverage does not count platform monitoring:\n%s", sql)

@@ -192,6 +192,15 @@
       "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
       "rationale": "These modules decode Nokia IPv6 BGP session traps (tBgpNg*), LLDP neighbour churn and Cisco's link-down reason (locIfReason); the index needs their OIDs, not their text.",
       "status": "DECIDED"
+    },
+    "iptoasn-ip2asn": {
+      "decided": "operator-fetched-at-run-time",
+      "evidence": "scripts/asn-prepare.py fetches https://iptoasn.com/data/ip2asn-combined.tsv.gz (or reads an operator-supplied copy), verifies an operator-pinned sha256 (--sha256) or records the digest it used in asn.csv.source, and writes data/clickhouse/user_files/asn/asn.csv for the netops.ip_asn ip_trie dictionary (tracker 387 PR 13d). iptoasn.com states 'Licensed under Public Domain (PDDL v1.0)' with license https://opendatacommons.org/licenses/pddl/1.0/ in its dataset metadata; both checked 2026-11-10.",
+      "license": "PDDL-1.0",
+      "obligation": "none: PDDL v1.0 dedicates the data to the public domain; attribution is a courtesy",
+      "owner_decision": "none needed (public domain data; never shipped)",
+      "posture": "Fetched by the operator at run time, never committed and never in an image; only the prepared CIDR -> AS number CSV lands in the ClickHouse data volume.",
+      "status": "DECIDED"
     }
   },
   "go": {

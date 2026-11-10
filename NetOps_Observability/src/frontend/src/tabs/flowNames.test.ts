@@ -41,4 +41,10 @@ describe("Flows top-N names (tracker 387 PR 13b)", () => {
     expect(topNDisplay(row({ k: "17/161", label: "snmp", label_basis: "iana_service" }), "service_port", fmt)).toBe("161/udp · SNMP");
     expect(topNDisplay(row({ k: "17/5000", label: "commplex-main", label_basis: "iana_service" }), "service_port", fmt)).toBe("5000/udp · commplex-main");
   });
+
+  it("an AS from the dataset says so; the exporter's own reads plainly", () => {
+    expect(topNDisplay(row({ k: "13335", as_basis: "dataset" }), "dst_as")).toBe("13335 (from the AS dataset)");
+    expect(topNDisplay(row({ k: "15169", as_basis: "exporter" }), "dst_as")).toBe("15169");
+    expect(topNDisplay(row({ k: "15169" }), "src_as")).toBe("15169");
+  });
 });

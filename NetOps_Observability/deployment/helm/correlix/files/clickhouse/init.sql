@@ -91,6 +91,21 @@ SOURCE(FILE(path '/var/lib/clickhouse/user_files/geoip/country.csv' format 'CSVW
 LAYOUT(IP_TRIE())
 LIFETIME(MIN 3600 MAX 7200);
 
+-- Query-time IP → AS number (tracker 387 PR 13d). The operator prepares the
+-- iptoasn dataset with scripts/asn-prepare.py (PDDL-1.0, never shipped). Lazy
+-- like geoip_country: creating it with the file absent is fine, the flows API
+-- probes it and labels every AS as_basis exporter|dataset|absent. The API
+-- bootstrap also creates it (internal/chschema IPASNDictionaryDDL).
+CREATE DICTIONARY IF NOT EXISTS netops.ip_asn
+(
+    network String,
+    asn UInt32
+)
+PRIMARY KEY network
+SOURCE(FILE(path '/var/lib/clickhouse/user_files/asn/asn.csv' format 'CSVWithNames'))
+LAYOUT(IP_TRIE())
+LIFETIME(MIN 3600 MAX 7200);
+
 -- ---------------------------------------------------------------------------
 -- Overlay tunnels (IPsec / SD-WAN / GRE) between devices.
 --

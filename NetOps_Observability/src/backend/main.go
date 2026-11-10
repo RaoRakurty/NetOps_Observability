@@ -572,6 +572,7 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	flowDatasets    *flownames.DatasetWatch              // tracker 387 PR 13d: do ip_asn / geoip_country load
 	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
@@ -1253,6 +1254,7 @@ func newServer() *server {
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		ifaceNames:       flownames.NewExporter(),
+		flowDatasets:     flownames.NewDatasetWatch(),
 		discovery:        d,
 		devStore:         devStore,
 		snmpScan:         snmpScan,
@@ -4824,6 +4826,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.sealMetrics.write(w)
 	}
 	s.ifaceNames.WriteMetrics(w)
+	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
 	}

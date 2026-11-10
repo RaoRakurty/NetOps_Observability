@@ -97,6 +97,9 @@ type flowTopDim struct {
 	iface string
 	// label names the rows from the build-time IANA tables (PR 13b).
 	label flowLabelKind
+	// asn is "src" or "dst" for an AS dimension: the exporter's AS, else the
+	// iptoasn dataset's when it is loaded (PR 13d), with as_basis per row.
+	asn string
 }
 
 // flowLabelKind says which IANA table names a dimension's keys.
@@ -114,8 +117,8 @@ var flowTopDims = map[string]flowTopDim{
 	"out_if":   {expr: "toString(out_if)", nonzero: "out_if", iface: "out_if"},
 	"src_addr": {expr: "src_addr"},
 	"dst_addr": {expr: "dst_addr"},
-	"src_as":   {expr: "toString(src_as)", nonzero: "src_as"},
-	"dst_as":   {expr: "toString(dst_as)", nonzero: "dst_as"},
+	"src_as":   {expr: "toString(src_as)", nonzero: "src_as", asn: "src"},
+	"dst_as":   {expr: "toString(dst_as)", nonzero: "dst_as", asn: "dst"},
 	"src_port": {expr: "toString(src_port)", nonzero: "src_port"},
 	"dst_port": {expr: "toString(dst_port)", nonzero: "dst_port"},
 	"proto":    {expr: "toString(proto)", label: flowLabelProtocol},
@@ -204,6 +207,11 @@ func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
 		s.proxyClickHouse(w, r, flowIfaceTopNSQL(dim.iface, where, limit))
 		return
 	}
+	if dim.asn != "" {
+		base := `ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter
+		s.proxyClickHouse(w, r, flowASNTopNSQL(dim.asn, base, limit, s.asnDictReady()))
+		return
+	}
 	sql := `
 SELECT ` + dim.expr + ` AS k,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
@@ -231,6 +239,51 @@ SELECT ` + dim.expr + ` AS k,
 		row["label"], row["label_basis"] = label, basis
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
+}
+
+// asnDict is the iptoasn ip_trie dictionary (scripts/asn-prepare.py, PR 13d).
+const asnDict = "netops.ip_asn"
+
+// asnDictReady probes the ip_asn dictionary with one lookup. Like geoDictReady,
+// existence says nothing: a FILE dictionary with no file reads FAILED and a
+// dictGet on it throws, so only a successful lookup proves it loads. The AS
+// queries then never reach a broken dictionary.
+func (s *server) asnDictReady() bool {
+	base := envOr("CLICKHOUSE_URL", "")
+	if base == "" {
+		return false
+	}
+	return chExec(base, `SELECT dictGetOrDefault('`+asnDict+`', 'asn', tuple(IPv6StringToNumOrDefault('192.0.2.1')), toUInt32(0))`)
+}
+
+// flowASNExpr is the effective AS of one flow side: the exporter's own when it
+// sent one, else the dataset's for that address (0 = none: private, unrouted or
+// not in the dataset). Without the dataset it is the exporter's alone.
+func flowASNExpr(side string, dataset bool) string {
+	col := side + "_as"
+	if !dataset {
+		return col
+	}
+	return "if(" + col + " > 0, " + col + ", dictGetOrDefault('" + asnDict + "', 'asn', tuple(IPv6StringToNumOrDefault(" + side + "_addr)), toUInt32(0)))"
+}
+
+// flowASNTopNSQL is the AS top-N with as_basis per row: `exporter` when any
+// flow in the group carried the exporter's AS, else `dataset`. Flows with no AS
+// from either are left out, as before; coverage counts them (absent).
+func flowASNTopNSQL(side, where string, limit int, dataset bool) string {
+	eff := flowASNExpr(side, dataset)
+	return `
+SELECT toString(` + eff + `) AS k,
+       if(max(` + side + `_as) > 0, 'exporter', 'dataset') AS as_basis,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ` + where + ` AND ` + eff + ` > 0
+ GROUP BY k
+ ORDER BY bytes_total DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
 }
 
 // flowKeyLabel names one top-N key from the IANA tables. basis is
@@ -360,6 +413,11 @@ func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// AS numbers from the iptoasn dataset (PR 13d), counted only when it loads.
+	datasetAS, datasetReady := "toUInt64(0)", "0"
+	if s.asnDictReady() {
+		datasetAS, datasetReady = "countIf(src_as = 0 AND dst_as = 0 AND ("+flowASNExpr("src", true)+" > 0 OR "+flowASNExpr("dst", true)+" > 0))", "1"
+	}
 	platformCond := platformAddrsFromEnv().SQLCond()
 	platformCount, platformConfigured := "toUInt64(0)", "0"
 	if platformCond != "" {
@@ -381,6 +439,8 @@ SELECT count()                                       AS flows,
        countIf(exporter_app_name != '')              AS flows_with_app_name,
        countIf(sampling_status = 'reported' OR (sampling_status = '' AND sampling_rate > 0)) AS flows_sampling_reported,
        uniqExact(sampler_address)                    AS exporters,
+       ` + datasetAS + `                             AS flows_with_dataset_as,
+       ` + datasetReady + `                          AS asn_dataset_loaded,
        ` + platformCount + `                         AS platform_monitoring_flows,
        ` + platformConfigured + `                    AS platform_addresses_configured
   FROM netops.flows
@@ -1069,6 +1129,15 @@ func (s *server) runIfaceNamesExport(ctx context.Context) {
 			lastCoverage = now
 			if err := s.ifaceNames.MeasureCoverage(cctx, query); err != nil {
 				logWarn("iface-names", "uncovered-exporter count unread", map[string]any{"error": err.Error()})
+			}
+			if s.flowDatasets != nil {
+				prev := s.flowDatasets.Status("asn")
+				if err := s.flowDatasets.Measure(cctx, query); err != nil {
+					logWarn("flows", "flow dataset state unread (ip_asn, geoip_country)", map[string]any{"error": err.Error()})
+				} else if cur := s.flowDatasets.Status("asn"); cur != prev {
+					// A transition is said once; the gauge carries the steady state.
+					logInfo("flows", "AS number dataset (netops.ip_asn) state", map[string]any{"status": cur, "remedy_if_not_loaded": "scripts/asn-prepare.py"})
+				}
 			}
 		}
 		cancel()

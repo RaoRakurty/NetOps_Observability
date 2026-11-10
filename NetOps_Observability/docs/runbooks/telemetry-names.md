@@ -52,3 +52,23 @@ device's own, never derived from the address.
    tracker 387 PR 13a brings the controller's interface addresses, it cannot attribute.
 3. If the device is known by that address, check the community: a mismatch drops the
    identity on purpose (`guardTrapCommunity`).
+
+## AS numbers: the iptoasn dataset
+
+Cisco SD-WAN cflowd (and many exporters) sends no BGP AS elements, so `src_as`/`dst_as`
+read 0. The flows API fills them from the iptoasn.com ip2asn dataset (PDDL-1.0) through the
+`netops.ip_asn` dictionary, and labels each AS row `as_basis`: `exporter` (the exporter's
+own), `dataset`, or absent (the row is left out; coverage counts it). Private and unrouted
+space never gets an AS.
+
+The dataset is fetched by the operator, never shipped:
+
+    sudo python3 scripts/asn-prepare.py --fetch                       # records the sha256 it used
+    sudo python3 scripts/asn-prepare.py --input ip2asn-combined.tsv.gz --sha256 <reviewed digest>
+
+`sudo` because `data/clickhouse/user_files` belongs to the ClickHouse container user. The
+dictionary reloads within two hours. `netops_flow_dataset_status{dataset="asn"}` says where it
+stands: `loaded`, `loaded_empty`, `failed` (no file yet, or a bad one), `not_loaded` (never
+asked for), `absent` (the dictionary does not exist), `unknown` (unread). The same metric
+watches `geoip_country` (`scripts/geoip-prepare.py`), which read `failed` on the lab for its
+whole life with nobody told. Until a dataset loads, the panels read exactly as before.

@@ -22,6 +22,8 @@ export type TopNRow = {
   /** IANA protocol or service name for proto / service_port rows. */
   label?: string;
   label_basis?: string;
+  /** AS rows (tracker 387 PR 13d): the exporter's own AS, or the iptoasn dataset's. */
+  as_basis?: string;
 };
 
 export const IFACE_DIMS = new Set(["in_if", "out_if"]);
@@ -51,6 +53,8 @@ export function topNDisplay(r: TopNRow, by: string, fmtKey?: (k: string) => stri
     return r.exporter ? `${iface} · ${r.exporter}` : iface;
   }
   const base = fmtKey ? fmtKey(r.k) : r.k;
+  // An AS the exporter did not send is the iptoasn dataset's answer, and says so.
+  if ((by === "src_as" || by === "dst_as") && r.as_basis === "dataset") return `${base} (from the AS dataset)`;
   const label = (r.label ?? "").trim();
   if (!label || r.label_basis === "absent") return base;
   if (by === "proto") return `${label} (${r.k})`;
