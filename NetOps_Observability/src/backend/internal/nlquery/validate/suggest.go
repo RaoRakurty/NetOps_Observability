@@ -3,7 +3,11 @@
 
 package validate
 
-import "sort"
+import (
+	"sort"
+
+	"netops/backend/internal/nlquery/lex"
+)
 
 // suggest returns up to 3 candidates within a Damerau–Levenshtein distance of
 // max(2, len/4) of got — preferred candidates first, then by distance, then
@@ -25,7 +29,7 @@ func suggest(got string, candidates []string, preferred map[string]bool) []strin
 			continue
 		}
 		seen[c] = true
-		if d := osaDistance(got, c); d <= limit {
+		if d := lex.Distance(got, c); d <= limit {
 			cs = append(cs, cand{c, d, preferred[c]})
 		}
 	}
@@ -43,31 +47,4 @@ func suggest(got string, candidates []string, preferred map[string]bool) []strin
 		out = append(out, cs[i].s)
 	}
 	return out
-}
-
-// osaDistance is the optimal-string-alignment (restricted Damerau–Levenshtein)
-// distance over bytes — inputs are catalog names and short tokens.
-func osaDistance(a, b string) int {
-	la, lb := len(a), len(b)
-	d := make([][]int, la+1)
-	for i := range d {
-		d[i] = make([]int, lb+1)
-		d[i][0] = i
-	}
-	for j := 0; j <= lb; j++ {
-		d[0][j] = j
-	}
-	for i := 1; i <= la; i++ {
-		for j := 1; j <= lb; j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
-			if i > 1 && j > 1 && a[i-1] == b[j-2] && a[i-2] == b[j-1] {
-				d[i][j] = min(d[i][j], d[i-2][j-2]+1)
-			}
-		}
-	}
-	return d[la][lb]
 }

@@ -26,6 +26,7 @@ import (
 
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/lex"
 	"netops/backend/internal/nlquery/resolve"
 )
 
@@ -73,7 +74,6 @@ type Compiler struct {
 }
 
 var (
-	punctRe  = regexp.MustCompile(`[^a-z0-9:/._@%&' -]+`)
 	actionRe = regexp.MustCompile(`^(?:please\s+|can you\s+|could you\s+|go\s+)?(?:restart|reboot|reload|shut ?down|shutdown|disable|enable|delete|remove|clear|apply|push|rollback|roll back|revert|undo|configure|set|change|modify|update|create|add|fix|bounce|reset|deploy|move|shift|reroute|re-route|fail ?over|block|allow|open a ticket|escalate|install|upgrade|downgrade|kill|stop|start)\b`)
 	injectRe = regexp.MustCompile(`ignore (?:all |the )?(?:previous|prior|above) instructions|system prompt|you are now|disregard (?:your|all) (?:rules|instructions)|developer mode|admin mode|act as|^system\b|\boverride\b|jailbreak`)
 	crossRe  = regexp.MustCompile(`\b(?:all tenants|every tenant|other tenants?|another tenant|tenant [a-z0-9-]+'s|other customers?|every customer'?s?|all customers'?|customers' )`)
@@ -84,16 +84,9 @@ var (
 	perRe    = regexp.MustCompile(`\b(?:per|by|grouped by|group by|broken down by|break down by|for each|each)\s+(site|device|provider|actor|person|type|seam|owner|seam class|state)\b`)
 )
 
-// normalize lower-cases, strips punctuation that carries no meaning here and
-// collapses whitespace.
-func normalize(q string) string {
-	q = strings.ToLower(strings.TrimSpace(q))
-	q = strings.NewReplacer("’", "'", "‘", "'", "“", " ", "”", " ", "?", " ", "!", " ", ",", " ", ";", " ").Replace(q)
-	q = strings.NewReplacer("sd-wan", "sdwan", "sd wan", "sdwan", "'s ", " ", "’s ", " ").Replace(q + " ")
-	q = punctRe.ReplaceAllString(q, " ")
-	q = strings.TrimRight(q, ". ")
-	return strings.Join(strings.Fields(q), " ")
-}
+// normalize is the shared normaliser's reading (lex.Normalize): the grammar,
+// the model compiler and the question router fold text the same way.
+func normalize(q string) string { return lex.Normalize(q).Norm }
 
 // Compile compiles one question.
 func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Result, error) {
@@ -542,6 +535,9 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 		s.e.phrase(g[0])
 	}
 	switch {
+	case len(q.GroupBy) > 0 && !topNRe.MatchString(s.text) && s.perGroupExtreme(m, q):
+		// "worst interface errors per device": the extreme OF each group, not
+		// a ranking of the groups (no number, no "top").
 	case s.e.re(topNRe, s.text) || s.e.re(regexp.MustCompile(`\b(?:top|busiest|highest|worst|most|lowest|best)\b`), s.text):
 		q.Type, q.Limit = ast.MetricTopK, s.topN() // 0 = the validator's default
 		dir := "desc"
@@ -572,6 +568,30 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 		q.Type, q.Predicate = ast.MetricFilter, &ast.Predicate{Op: "gt", Value: 0}
 	}
 	return Result{Intent: "query_metric", AST: q, Entities: refs}, nil
+}
+
+// perGroupExtremeRe is a lone superlative that, next to "per <dimension>",
+// names the aggregation of each group: worst/highest → max, lowest → min.
+var perGroupExtremeRe = regexp.MustCompile(`\b(worst|highest|lowest)\b`)
+
+func (s *state) perGroupExtreme(m *catalog.Metric, q *ast.AST) bool {
+	if regexp.MustCompile(`\b(?:top|which|rank|ranked|busiest|most)\b`).MatchString(s.text) {
+		return false
+	}
+	g := perGroupExtremeRe.FindStringSubmatch(s.text)
+	if g == nil {
+		return false
+	}
+	agg := "max"
+	if g[1] == "lowest" || (g[1] == "worst" && m.Unit == "score") {
+		agg = "min"
+	}
+	if !contains(m.Aggregations, agg) {
+		return false
+	}
+	q.Agg = agg
+	s.e.phrase(g[1])
+	return true
 }
 
 // stateQuestion handles "which interfaces are down" / "which bgp sessions are

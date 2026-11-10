@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/lex"
 	"netops/backend/internal/nlquery/resolve"
 )
 
@@ -42,18 +43,10 @@ var (
 	demonstrRe = regexp.MustCompile(`\b(?:that|this|the same|same)\s+(?:device|router|switch|firewall|box|site|location|branch|office|circuit|link|interface|port|peer|neighbor|provider|carrier|isp|app|application|incident|change|one)s?\b`)
 )
 
-// normalizeQuestion lower-cases and splits the question into tokens, keeping
-// the characters identifiers are made of.
+// normalizeQuestion is the shared identifier-preserving reading (lex.Tokens),
+// joined: the model compiler and the grammar fold text the same way.
 func normalizeQuestion(q string) string {
-	q = strings.ToLower(q)
-	var toks []string
-	for _, t := range tokenSplitRe.Split(q, -1) {
-		t = strings.Trim(t, ".'-")
-		if t != "" {
-			toks = append(toks, t)
-		}
-	}
-	return strings.Join(toks, " ")
+	return strings.Join(lex.Tokens(q), " ")
 }
 
 // precheckReferences refuses a question that points at an earlier turn.

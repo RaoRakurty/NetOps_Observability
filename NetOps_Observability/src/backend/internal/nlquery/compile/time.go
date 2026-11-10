@@ -60,6 +60,11 @@ func parseTime(text string, now time.Time, loc *time.Location) (timePhrase, bool
 			if unit == "h" && n%24 == 0 && n >= 24 && strings.HasPrefix(m[2], "d") {
 				unit = "d"
 			}
+			// "past 60m" is the last hour: whole hours are written in hours,
+			// so the same window always compiles to the same query.
+			if unit == "m" && n%60 == 0 && n >= 60 {
+				n, unit = n/60, "h"
+			}
 			return timePhrase{tr: ast.TimeRange{Kind: ast.TimeRelative, Last: strconv.Itoa(n) + unit}, span: m[0]}, true
 		}
 	}

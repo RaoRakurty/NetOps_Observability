@@ -38,13 +38,13 @@ import (
 // Accuracy floors (ratchet: raise when the measured value rises; never lower).
 const (
 	minQuestionAccuracy   = 0.70
-	minParaphraseAccuracy = 0.36
+	minParaphraseAccuracy = 0.40
 	// Per-metric floors (N-C6). Coverage is reported, not floored: an honesty
 	// fix that turns a wrong compile into "not understood" LOWERS coverage and
 	// raises answered precision, which is the trade this design wants.
 	minEntityPrecision   = 0.88
 	minExecutableRate    = 0.97
-	minAnsweredPrecision = 0.85
+	minAnsweredPrecision = 0.87
 )
 
 // fixtureLookups is tenant A's world as the root would present it.
@@ -274,8 +274,8 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 				m.answeredP.total++
 				if hit {
 					m.answeredP.ok++
-				} else if testing.Verbose() && qi == 0 {
-					t.Logf("WRONG %s %q\n    got  %s\n    want %s", c.ID, question, got, want[0])
+				} else if testing.Verbose() {
+					t.Logf("WRONG %s [%s] %q\n    got  %s\n    want %s", c.ID, c.split(), question, got, want[0])
 				}
 				m.executable.total++
 				if _, vr := validate.Validate(ctx, cat, sc, res.AST); vr.Valid {
@@ -318,7 +318,7 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 						t.Logf("PARA-HIT %s %q", c.ID, question)
 					}
 				} else if testing.Verbose() && res.AST == nil {
-					t.Logf("PARA-UNPARSED %s %q %v", c.ID, question, res.NotUnderstood)
+					t.Logf("PARA-UNPARSED %s [%s] %q %v", c.ID, c.split(), question, res.NotUnderstood)
 				}
 			}
 		}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/nlquery/lex"
 )
 
 // Orchestrator turns a question into a governed, evidence-grounded answer. It is
@@ -235,7 +237,10 @@ var moduleRoutes = []moduleRoute{
 // Plan. P0/P1 uses a deterministic rule classifier (testable, no LLM cost on the
 // hot path); later phases can swap in an LLM classifier behind this same shape.
 func Classify(question string, uiContext map[string]string) Plan {
-	q := strings.ToLower(question)
+	// The shared normaliser (internal/nlquery/lex): the router reads a
+	// question the way the NL grammar does, so a fold or a typo fix there
+	// reaches both arms.
+	q := lex.ClassifierText(question)
 	ent := map[string]string{}
 
 	// Prefer an id the UI handed us (Ask-AI on the RCA page passes the open id).

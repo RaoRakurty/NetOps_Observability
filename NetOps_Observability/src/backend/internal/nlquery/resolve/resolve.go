@@ -46,6 +46,7 @@ import (
 	"unicode"
 
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/lex"
 )
 
 // Resolution methods (closed vocabulary).
@@ -241,6 +242,16 @@ func (r Resolver) deterministic(ctx context.Context, text string, types []string
 			hits = append(hits, Ref{InputText: text, EntityID: a.EntityID, EntityType: a.EntityType, Confidence: confAlias, Method: MethodTenantAlias})
 		}
 	}
+	if len(hits) == 0 {
+		// The same alias written with other separators ("dfw1" for "DFW-1").
+		if sq := squashKey(text); sq != "" {
+			for _, a := range aliases {
+				if allowed(a.EntityType) && lex.Squash(a.Alias) == sq {
+					hits = append(hits, Ref{InputText: text, EntityID: a.EntityID, EntityType: a.EntityType, Confidence: confAlias, Method: MethodTenantAlias})
+				}
+			}
+		}
+	}
 	if len(hits) > 0 {
 		return finish(hits), nil, nil
 	}
@@ -253,6 +264,19 @@ func (r Resolver) deterministic(ctx context.Context, text string, types []string
 	for _, n := range inv {
 		if nameIs(n, norm) {
 			hits = append(hits, Ref{InputText: text, EntityID: n.ID, EntityType: n.Type, Confidence: confInventory, Method: MethodInventoryName})
+		}
+	}
+	if len(hits) == 0 {
+		// The same name written with other separators: "edge1", "EDGE_1" and
+		// "edge 1" all name the device called "edge-1". Two visible names
+		// that differ only in separators are BOTH returned (ambiguous), never
+		// one picked.
+		if sq := squashKey(text); sq != "" {
+			for _, n := range inv {
+				if nameSquashes(n, sq) {
+					hits = append(hits, Ref{InputText: text, EntityID: n.ID, EntityType: n.Type, Confidence: confInventory, Method: MethodInventoryName})
+				}
+			}
 		}
 	}
 	if len(hits) > 0 {
@@ -446,6 +470,29 @@ func (r Resolver) suggest(ctx context.Context, text, norm string, types []string
 	res := finish(hits)
 	res.Disclosure = SuggestionDisclosure
 	return res, nil
+}
+
+// minSquash is the shortest name key the separator-insensitive match uses:
+// below it, different short names collide.
+const minSquash = 3
+
+// squashKey is the separator-insensitive key of text, or "" when it is too
+// short to identify anything or carries no separator-free letters at all.
+func squashKey(text string) string {
+	sq := lex.Squash(text)
+	if len(sq) < minSquash {
+		return ""
+	}
+	return sq
+}
+
+func nameSquashes(n Named, sq string) bool {
+	for _, name := range n.Names {
+		if name != "" && lex.Squash(name) == sq {
+			return true
+		}
+	}
+	return false
 }
 
 func nameIs(n Named, norm string) bool {
