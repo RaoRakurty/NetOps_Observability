@@ -308,8 +308,11 @@ func newSNMPSourceFromStore(store *discoveryConfigStore, creds func() *snmpcred.
 	return discovery.NewSNMPSource(func() discovery.ScanSettings {
 		c := store.effective()
 		return discovery.ScanSettings{
-			Enabled: c.Enabled, Ranges: c.Ranges,
-			Credentials: scanCredentials(creds()), AllowNonPrivate: c.AllowNonPrivate,
+			Enabled: c.Enabled,
+			Scopes: []discovery.ScanScope{{
+				ID: discovery.PlatformScopeID, Ranges: c.Ranges,
+				Credentials: scanCredentials(creds()), AllowNonPrivate: c.AllowNonPrivate,
+			}},
 		}
 	}, known)
 }

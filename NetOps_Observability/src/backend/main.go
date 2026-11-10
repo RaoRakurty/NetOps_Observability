@@ -4907,6 +4907,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// SNMP scan memory (tracker 366): failed writes, whether it was restored,
 	// and how many remembered devices are stale. Nil-safe.
 	s.snmpScan.WriteMetrics(w)
+	// The registry's cross-owner overwrite guard (tenant scan scopes). Nil-safe.
+	s.discovery.WriteMetrics(w)
 	// LICENCE-BEGIN — emitted on every deployment including Community, so
 	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
 	// series. A vanished series must mean a scrape failure, not a state change.
