@@ -104,6 +104,10 @@ type Routed struct {
 	// snapshot may replace what is stored (an incomplete one deletes nothing).
 	Devices         []ControllerDevice
 	DevicesComplete bool
+	// Interfaces are the controller's interface records with their inventory
+	// device resolved (interfaces.go); unresolved ones are kept, counted, and
+	// bridge nothing.
+	Interfaces []ControllerInterface
 }
 
 // Pipeline routes normalized batches: dedupes events, folds state (flap
@@ -154,6 +158,9 @@ func (p *Pipeline) Route(b Batch) Routed {
 	// identities the join resolves to).
 	if b.Devices != nil {
 		out.Devices = ValidateSnapshot(b.Devices)
+	}
+	if len(b.Interfaces) > 0 {
+		out.Interfaces = resolveInterfaces(p.Resolver, p.KeyKind, b.Interfaces)
 	}
 	return out
 }

@@ -1,0 +1,69 @@
+{
+ "_comment": "cEDGE-81's /dataservice/device/interface answer in the vManage 20.6 cEdge wire shape, built from the interface list read live on 2026-11-10 (tracker 387 PR 13a): names, VPNs and addresses only. No ifindex was captured, so none is given. No credential is involved.",
+ "data": [
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "GigabitEthernet2",
+   "ip-address": "192.1.6.2",
+   "vpn-id": "0",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "GigabitEthernet4.100",
+   "ip-address": "12.12.12.2",
+   "vpn-id": "0",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "GigabitEthernet4.200",
+   "ip-address": "14.14.14.2",
+   "vpn-id": "0",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "Sdwan-system-intf",
+   "ip-address": "10.255.255.81",
+   "vpn-id": "0",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "GigabitEthernet1",
+   "ip-address": "192.168.100.33",
+   "vpn-id": "100",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "GigabitEthernet3",
+   "ip-address": "192.168.200.33",
+   "vpn-id": "200",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "Loopback200",
+   "ip-address": "192.168.222.106",
+   "vpn-id": "200",
+   "if-oper-status": "if-oper-state-ready"
+  },
+  {
+   "vdevice-name": "10.255.255.81",
+   "vdevice-host-name": "cEDGE-81",
+   "ifname": "Loopback65528",
+   "ip-address": "192.168.1.1",
+   "vpn-id": "65528",
+   "if-oper-status": "if-oper-state-ready"
+  }
+ ]
+}

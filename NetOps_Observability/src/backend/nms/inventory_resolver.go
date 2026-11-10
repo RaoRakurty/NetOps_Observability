@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"netops/backend/internal/ifbridge"
 	"netops/backend/internal/owner"
 	"strings"
 	"sync/atomic"
@@ -129,25 +130,14 @@ func BuildInventoryIndex(devs []models.Device, sysIPs map[string]map[string]stri
 // answered for is still not proof when every device has it; the walk may simply
 // not have reached the others yet (tracker 387 PR 13c').
 func identifyingIfAddr(ip net.IP, ifName string) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	return !internalLoopback(ifName)
+	// One rule for both halves of the interface bridge (internal/ifbridge).
+	return ifbridge.IdentifyingAddr(ip, ifName)
 }
 
 // internalLoopback reports an interface named as a loopback of an internal VPN
 // (lo65528, Loopback65530, loopback65531): the number is the VPN, and
 // vmInternalVPN draws the line where the controller lane draws it.
-func internalLoopback(ifName string) bool {
-	n := strings.ToLower(strings.TrimSpace(ifName))
-	for _, p := range []string{"loopback", "lo"} {
-		if rest, ok := strings.CutPrefix(n, p); ok && rest != "" && strings.Trim(rest, "0123456789") == "" {
-			return vmInternalVPN(rest)
-		}
-	}
-	return false
-}
+func internalLoopback(ifName string) bool { return ifbridge.InternalLoopback(ifName) }
 
 // AddressOutcome is the result of DeviceForAddress, a closed set.
 type AddressOutcome string
@@ -286,6 +276,34 @@ func (r *InventoryResolver) ResolveDevice(tenant string, kind KeyKind, key, name
 	}
 	id, o := idx.lookup(tenant, kind, key, name)
 	r.count(o)
+	return id, o == resolveMatched
+}
+
+// ResolveDeviceOutcome implements OutcomeResolver: ResolveDevice, saying why
+// a key did not resolve.
+func (r *InventoryResolver) ResolveDeviceOutcome(tenant string, kind KeyKind, key, name string) (string, string) {
+	idx := r.idx.Load()
+	if idx == nil {
+		r.count(resolveNoIndex)
+		return "", string(resolveNoIndex)
+	}
+	id, o := idx.lookup(tenant, kind, key, name)
+	r.count(o)
+	if o != resolveMatched {
+		return "", string(o)
+	}
+	return id, string(o)
+}
+
+// Peek is ResolveDevice without counting: for readers that are not the
+// controller-key join (the inventory facts, tracker 387 PR 13a), so the join's
+// outcome counters keep meaning what they say.
+func (r *InventoryResolver) Peek(tenant string, kind KeyKind, key, name string) (string, bool) {
+	idx := r.idx.Load()
+	if idx == nil {
+		return "", false
+	}
+	id, o := idx.lookup(tenant, kind, key, name)
 	return id, o == resolveMatched
 }
 

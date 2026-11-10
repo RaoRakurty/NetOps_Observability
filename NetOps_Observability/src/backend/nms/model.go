@@ -151,6 +151,9 @@ type Batch struct {
 	// A non-nil slice (even empty) means "this payload WAS an inventory
 	// snapshot"; nil means the payload carried no inventory at all.
 	Devices []ControllerDevice
+	// Interfaces is the controller's per-device interface identity
+	// (interfaces.go) — the sixth class, feeding the interface bridge.
+	Interfaces []ControllerInterface
 }
 
 // DedupeKey computes a stable dedupe key from the identity-bearing parts of an
