@@ -17,12 +17,15 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/platformdb"
 )
 
@@ -209,6 +212,24 @@ func TestDiscoveryScopesMigrationDownUpPG(t *testing.T) {
 	if err := st.Put(ctx, scope(sid(1), "t_a", "10.1.0.0/30")); err != nil {
 		t.Fatal(err)
 	}
+	// The scans' memory: the platform's copy of a box, a customer's copy of the
+	// SAME address (tenant scopes), another customer's device, and a row of
+	// another source. The rollback must remove exactly the customers' SNMP rows:
+	// an older binary keys this memory by address and would let the customer's
+	// copy displace the platform's at restore.
+	found := discovery.NewPGFoundStore(ps.DB())
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	rec := func(tenant, source, addr, id string) discovery.FoundRecord {
+		return discovery.FoundRecord{TenantID: tenant, Source: source, Address: addr, DeviceID: id, Name: id, FirstFound: at, LastAnswered: at}
+	}
+	if err := found.Apply(ctx, []discovery.FoundRecord{
+		rec("", "snmp", "10.70.0.81", "plat-81"),
+		rec("t_a", "snmp", "10.70.0.81", "a-81"),
+		rec("t_b", "snmp", "10.70.0.90", "b-90"),
+		rec("t_a", "other", "10.70.0.91", "a-other"),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
 	down, err := os.ReadFile("../platformdb/migrations/rollback/0067_discovery_scopes.down.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -217,11 +238,29 @@ func TestDiscoveryScopesMigrationDownUpPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Run as the application role (FORCE-RLS applies): the script must widen
+	// its own scope for the delete, and clear it again.
 	if _, err := tx.Exec(ctx, string(down)); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
+	var after string
+	if err := tx.QueryRow(ctx, `SELECT coalesce(current_setting('app.tenant_id', true), '')`).Scan(&after); err != nil || after != "" {
+		t.Fatalf("the rollback must leave app.tenant_id cleared, got %q (%v)", after, err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
+	}
+	left, err := found.Load(ctx, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, r := range left {
+		kept = append(kept, r.DeviceID)
+	}
+	sort.Strings(kept)
+	if got := strings.Join(kept, ","); got != "a-other,plat-81" {
+		t.Fatalf("the rollback must remove exactly the customers' SNMP rows; left %q, want a-other,plat-81", got)
 	}
 	if _, err := st.List(ctx, "", true); err == nil {
 		t.Fatal("the table must be gone after the rollback")

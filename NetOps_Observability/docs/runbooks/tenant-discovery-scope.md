@@ -119,6 +119,23 @@ collected after the move.
 
 ---
 
+## Rolling back
+
+`rollback/0067_discovery_scopes.down.sql` drops every customer scan **and deletes
+the devices they found** from `discovered_devices`, meaning the rows with
+`source = 'snmp'` and a non-empty `tenant_id`. The platform's rows (`tenant_id = ''`) stay.
+
+The deletion is required. A binary older than tenant scopes keys the scan memory by
+address only and, at restore, keeps the most recently answered row of each address.
+Leaving the customers' rows in place would let a customer's copy of a box displace the
+platform's copy.
+
+After a rollback, the customers' scanned devices leave their inventories. If the
+platform copies were already retired (step 4), re-add those addresses to the platform
+scan, or re-apply 0067 and re-create the scans; the devices come back under the same
+ids. The script sets `app.tenant_id = '*'` for its own session, because the table is
+FORCE-RLS, and clears it at the end.
+
 ## Troubleshooting
 
 | Symptom | Cause | What to do |
