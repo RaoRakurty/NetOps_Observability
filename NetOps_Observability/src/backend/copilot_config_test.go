@@ -26,11 +26,11 @@ func TestCopilotConfigEnvFallbackDefaults(t *testing.T) {
 	t.Setenv("COPILOT_MODEL", "")
 	s := copilotTempStore(t)
 	got := s.Get()
-	if got.Provider != "anthropic" {
-		t.Fatalf("default provider = %q, want anthropic", got.Provider)
+	if got.Provider != "gemini" { // owner D6 (2026-11-09): gemini pre-selected
+		t.Fatalf("default provider = %q, want gemini", got.Provider)
 	}
-	if got.Model != "claude-sonnet-4-6" {
-		t.Fatalf("default model = %q, want claude-sonnet-4-6", got.Model)
+	if got.Model != "" { // C1: no model unless COPILOT_MODEL names one
+		t.Fatalf("default model = %q, want empty (the provider's own default applies)", got.Model)
 	}
 
 	t.Setenv("COPILOT_PROVIDER", "OpenAI")
@@ -46,7 +46,7 @@ func TestCopilotConfigEnvFallbackDefaults(t *testing.T) {
 
 // set() normalizes the provider: only the supported set (openai/gemini/
 // anthropic) survives; junk and casing variants collapse to the default
-// "anthropic".
+// "gemini" (owner D6, 2026-11-09).
 func TestCopilotConfigProviderNormalization(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -57,11 +57,11 @@ func TestCopilotConfigProviderNormalization(t *testing.T) {
 		{"  OPENAI  ", "openai"},
 		{"anthropic", "anthropic"},
 		{"Anthropic", "anthropic"},
-		{"", "anthropic"},
+		{"", "gemini"},
 		{"gemini", "gemini"},
 		{"Gemini", "gemini"},
-		{"grok", "anthropic"},
-		{"  ", "anthropic"},
+		{"grok", "gemini"},
+		{"  ", "gemini"},
 	}
 	for _, c := range cases {
 		s := copilotTempStore(t)
@@ -149,7 +149,9 @@ func TestCopilotConfigLoadMissingFileIsClean(t *testing.T) {
 	t.Setenv("COPILOT_MODEL", "")
 	s := newCopilotConfigStore(filepath.Join(t.TempDir(), "does-not-exist.json"), nil)
 	got := s.Get()
-	if got.Provider != "anthropic" || got.Model != "claude-sonnet-4-6" {
+	// D6/C1: gemini, and NO model — the provider chain then uses gemini's own
+	// default rather than a Claude model id.
+	if got.Provider != "gemini" || got.Model != "" {
 		t.Fatalf("missing-file load did not fall back to defaults: %+v", got)
 	}
 }

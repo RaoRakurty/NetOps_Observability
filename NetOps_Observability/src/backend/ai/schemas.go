@@ -77,6 +77,9 @@ type Answer struct {
 	Citations    []Citation           `json:"citations"`
 	Disclaimers  []string             `json:"disclaimers"`
 	Provider     string               `json:"provider,omitempty"` // which LLM answered (audit)
+	// Model is the model name that answered (C6 footnote: "Answered with
+	// <provider> <model>"); empty for an evidence-only answer.
+	Model string `json:"model,omitempty"`
 	// Data is the structured answer of the DATA arm (ModeDataQuery, N-G4): the
 	// compile answer + result set, rendered by the client as data, never prose.
 	Data json.RawMessage `json:"data,omitempty"`
