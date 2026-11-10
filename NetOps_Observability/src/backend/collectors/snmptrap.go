@@ -700,18 +700,23 @@ func ifIndexSuffix(oid, col string) (string, bool) {
 // map; an index is never looked up on another device, and with no device it
 // stays a number.
 func interfaceFor(ev *TrapEvent, names IfNameFunc) {
-	var index, named string
+	var index, named, descr, descrIdx string
 	for _, vb := range ev.Varbinds {
-		if sfx, ok := ifIndexSuffix(vb.OID, oidIfNameXCol); ok && named == "" {
+		// ifName is the operator's port name; ifDescr only stands in for it,
+		// whatever order the agent sent them in.
+		if sfx, ok := ifIndexSuffix(vb.OID, oidIfNameXCol); ok && named == "" && strings.TrimSpace(vb.Value) != "" {
 			named, index = vb.Value, sfx
-		} else if sfx, ok := ifIndexSuffix(vb.OID, oidIfDescrCol); ok && named == "" {
-			named, index = vb.Value, sfx
+		} else if sfx, ok := ifIndexSuffix(vb.OID, oidIfDescrCol); ok && descr == "" {
+			descr, descrIdx = vb.Value, sfx
 		}
 		for _, col := range []string{oidIfIndexCol, oidIfAdminCol, oidIfOperCol} {
 			if sfx, ok := ifIndexSuffix(vb.OID, col); ok && index == "" {
 				index = sfx
 			}
 		}
+	}
+	if named == "" && strings.TrimSpace(descr) != "" {
+		named, index = descr, descrIdx
 	}
 	if named == "" {
 		// A vendor object the MIB index resolved to a name ending in IfName

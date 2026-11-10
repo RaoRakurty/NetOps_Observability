@@ -129,6 +129,20 @@ func TestTrapInterfaceViptelaIfName(t *testing.T) {
 	if got.Interface != "Gi3" || got.InterfaceIndex != "3" || got.InterfaceBasis != InterfaceVarbindName {
 		t.Fatalf("ifName varbind: interface=%q ifindex=%q basis=%q", got.Interface, got.InterfaceIndex, got.InterfaceBasis)
 	}
+	// ifDescr first on the wire, ifName after it: ifName still names the port.
+	both := &TrapEvent{Varbinds: []TrapVarbind{
+		{OID: "1.3.6.1.2.1.2.2.1.2.3", Name: "ifDescr", Value: "GigabitEthernet3"},
+		{OID: "1.3.6.1.2.1.31.1.1.1.1.3", Name: "ifName", Value: "Gi3"},
+	}}
+	interfaceFor(both, nil)
+	if both.Interface != "Gi3" || both.InterfaceIndex != "3" {
+		t.Fatalf("ifName must win over ifDescr: %q/%q", both.Interface, both.InterfaceIndex)
+	}
+	descrOnly := &TrapEvent{Varbinds: []TrapVarbind{{OID: "1.3.6.1.2.1.2.2.1.2.5", Name: "ifDescr", Value: "eth5"}}}
+	interfaceFor(descrOnly, nil)
+	if descrOnly.Interface != "eth5" || descrOnly.InterfaceIndex != "5" || descrOnly.InterfaceBasis != InterfaceVarbindName {
+		t.Fatalf("ifDescr alone: %+v", descrOnly)
+	}
 	none := &TrapEvent{Varbinds: []TrapVarbind{{OID: "1.3.6.1.2.1.1.3.0", Name: "sysUpTime", Value: "1"}}}
 	interfaceFor(none, nil)
 	if none.InterfaceBasis != InterfaceNone || none.Interface != "" {
