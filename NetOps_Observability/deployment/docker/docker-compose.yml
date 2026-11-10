@@ -843,21 +843,29 @@ services:
     logging: *deflog
     profiles: [security]
     restart: "no"
+    # The admin key is 0600 under CORRELIX_UID in a 0700 directory, so this job
+    # runs as that uid and mounts only that directory (2026-11-09). The fixed
+    # gid 1000 is the image's own group: the stock image keeps securityadmin.sh
+    # and its home at 1000:1000 with no access for others, and
+    # opensearch/Dockerfile opens the home to the group. Group 1000 is not the
+    # key's group, so this grants nothing on the key.
+    user: "${CORRELIX_UID:-65532}:1000"
     entrypoint: ["/security/apply-security.sh"]
     environment:
       OS_HOST: opensearch
       OS_PORT: "9200"
       SEC_CONF_SRC: /security
       OS_ADMIN_CA: /certs/ca.pem
-      OS_ADMIN_CERT: /certs/admin/admin.crt
-      OS_ADMIN_KEY: /certs/admin/admin.key
+      OS_ADMIN_CERT: /certs/admin.crt
+      OS_ADMIN_KEY: /certs/admin.key
       # Tracker 384: one file per identity, rendered from .env by
       # scripts/install.py. These six used to be declared here, and an exited
       # one-shot keeps its environment: `docker inspect` on it showed all of them.
+      # They are owned by CORRELIX_UID, the uid this job runs as (2026-11-09).
       OS_SECRET_DIR: /run/secrets/opensearch/security-init
     volumes:
       - ./opensearch/security:/security:ro
-      - ../../data/tls:/certs:ro
+      - ../../data/tls/admin:/certs:ro
       - ../../data/secrets/opensearch/security-init:/run/secrets/opensearch/security-init:ro
     depends_on:
       opensearch:
@@ -2308,7 +2316,8 @@ services:
       TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
       TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
       # File mode for the nginx client SVID key (nginx's uid 101 cannot read a
-      # 0600 key owned by the CA's uid). Dormant when unset (0600 default).
+      # 0600 key owned by the CA's uid; it reads 0640 through group_add in
+      # compose.tls.yml). Dormant when unset (0600 default).
       TLS_NGINX_KEY_MODE: ${TLS_NGINX_KEY_MODE:-}
       TLS_VICTORIA_CERT_DIR: ${TLS_VICTORIA_CERT_DIR:-}
       # SEC-003.3 workload identity registry: when set, the CA mints an SVID
@@ -2316,11 +2325,14 @@ services:
       # at TTL/2). Additive — nothing consumes a cert until that service's
       # own epic mounts it. Registry + guards: src/backend/svid_registry.go.
       TLS_SERVICE_CERT_ROOT: ${TLS_SERVICE_CERT_ROOT:-}
-      # Registry-wide SVID key mode for cross-uid stores, and the SEC-008
-      # securityadmin credential dir (not a workload identity). Both dormant
+      # SVID key mode for the registry rows whose reader holds the api's gid
+      # (KeyGroupRead; "other" bits are refused), and the SEC-008 securityadmin
+      # credential dir (not a workload identity; always 0600). Both dormant
       # when unset.
       TLS_SERVICE_KEY_MODE: ${TLS_SERVICE_KEY_MODE:-}
       TLS_OS_ADMIN_CERT_DIR: ${TLS_OS_ADMIN_CERT_DIR:-}
+      # The mint root, forced to 0700 at every boot. Dormant when unset.
+      TLS_MINT_ROOT: ${TLS_MINT_ROOT:-}
       # Multi-region SPIFFE federation (#18 phase 5): "domA=/a.pem,domB=/b.pem"
       # binds each peer trust DOMAIN to the CA root that anchored its chain.
       # Was parsed+enforced in Go but unreachable from compose (SEC-003.2) —

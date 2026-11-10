@@ -134,7 +134,9 @@ def test_api_and_grafana_follow_correlix_uid(tree):
     rec = ChownRecorder()
     render(tree, make_env(CORRELIX_UID="4242", CORRELIX_GID="4343"), rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
-    assert sorted(owners[(4242, 4343)]) == ["clickhouse/grafana", "grafana/admin", "opensearch/api", "vmauth/api", "vmauth/grafana"]
+    # opensearch/security-init: the security job runs as CORRELIX_UID (2026-11-09).
+    assert sorted(owners[(4242, 4343)]) == sorted(["clickhouse/grafana", "grafana/admin", "opensearch/api",
+                                                   "vmauth/api", "vmauth/grafana", *["opensearch/security-init"] * 6])
 
 
 def test_compose_defaults_when_correlix_uid_unset(tree):
@@ -143,7 +145,7 @@ def test_compose_defaults_when_correlix_uid_unset(tree):
     rec = ChownRecorder()
     render(tree, env, rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
-    assert sorted(owners[(65532, 65532)]) == ["opensearch/api", "vmauth/api"]
+    assert sorted(owners[(65532, 65532)]) == sorted(["opensearch/api", "vmauth/api", *["opensearch/security-init"] * 6])
     assert sorted(owners[(472, 472)]) == ["clickhouse/grafana", "grafana/admin", "vmauth/grafana"]
 
 
@@ -249,7 +251,8 @@ def test_dashboards_config_carries_exactly_the_password(tree):
 
 def test_security_init_gets_one_file_per_identity(tree, monkeypatch):
     monkeypatch.setattr(install, "_OPENSEARCH_IMAGE_OWNER", (4000, 4000))
-    env = make_env()
+    # A uid other than the test's own, so the render has to chown to it.
+    env = make_env(CORRELIX_UID="4242", CORRELIX_GID="4343")
     rec = ChownRecorder()
     render(tree, env, rec)
     base = tree / "data" / "secrets" / "opensearch" / "security-init"
@@ -259,7 +262,14 @@ def test_security_init_gets_one_file_per_identity(tree, monkeypatch):
         assert mode(base / key) == 0o400
     owned = {Path(r).parent.as_posix() for uid, gid, rels in rec.calls
              if (uid, gid) == (4000, 4000) for r in rels}
-    assert owned == {"opensearch/dashboards", "opensearch/security-init"}
+    assert owned == {"opensearch/dashboards"}
+    # 2026-11-09: the security job runs as CORRELIX_UID (it must read the 0600
+    # admin key the api owns), so its six files belong to that uid, not 1000.
+    want = install._compose_user(env, 65532)
+    # The recorder sees the staged temps, ".<KEY>.<pid>.<hex>.tmp".
+    init = {Path(r).name.split(".")[1] for uid, gid, rels in rec.calls if (uid, gid) == want
+            for r in rels if Path(r).parent.as_posix() == "opensearch/security-init"}
+    assert init == set(install._OS_IDENTITY_KEYS)
 
 
 def test_os_passwords_may_use_the_full_printable_alphabet(tree):

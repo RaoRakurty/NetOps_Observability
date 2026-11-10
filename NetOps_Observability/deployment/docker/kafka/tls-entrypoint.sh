@@ -8,10 +8,11 @@
 # different job: Kafka's PEM keystore (ssl.keystore.type=PEM +
 # ssl.keystore.location) requires the private key and certificate chain
 # CONCATENATED IN ONE FILE, while the internal CA mints them split
-# (kafka.key + kafka.crt under /data/tls/services/kafka). No cross-uid
-# problem here — the apache/kafka image runs as appuser (uid 1000) and the
-# registry mints service material world-readable (TLS_SERVICE_KEY_MODE) —
-# so this stages into /tmp, the only dir this uid owns.
+# (kafka.key + kafka.crt under /data/tls/services/kafka). The apache/kafka image
+# runs as appuser (uid 1000), and the key is 0640 under the api's uid and gid:
+# compose.tls.yml gives this container that gid through group_add. A "Permission
+# denied" here means that group_add is missing or CORRELIX_GID changed. This
+# stages into /tmp, the only dir this uid owns.
 #
 # FAIL-CLOSED: only TLS-enabled deployments mount this wrapper; missing cert
 # material means refusing to start, never silently serving plaintext-only.
@@ -22,6 +23,20 @@ set -eu
 SRC="${KAFKA_TLS_SRC:-/certs-src}"
 DST=/tmp/kafka-tls
 
+# A directory this uid cannot enter makes every file below look absent, which
+# would send the operator after the mint instead of the missing group (seen in the
+# 2026-11-09 wrong-order upgrade proof). Name it first.
+if [ -d "$SRC" ] && [ ! -x "$SRC" ]; then
+    echo "tls-entrypoint: FATAL: uid $(id -u) (groups: $(id -G)) cannot enter $SRC." >&2
+    echo "The kafka key directory is 0750 under the api's uid and gid: this container" >&2
+    echo "needs CORRELIX_GID through group_add (compose.tls.yml). Recreate it: docker compose up -d kafka" >&2
+    exit 78 # EX_CONFIG
+fi
+if [ ! -r "$SRC/kafka.key" ] && [ -f "$SRC/kafka.key" ]; then
+    echo "tls-entrypoint: FATAL: $SRC/kafka.key is not readable by uid $(id -u) (groups: $(id -G))." >&2
+    echo "It is 0640 under the api's gid: this container needs CORRELIX_GID through group_add." >&2
+    exit 78 # EX_CONFIG
+fi
 if [ ! -f "$SRC/kafka.crt" ] || [ ! -f "$SRC/kafka.key" ] || [ ! -f "$SRC/ca.pem" ]; then
     echo "tls-entrypoint: FATAL: $SRC/kafka.{crt,key} or ca.pem not found — the api's" >&2
     echo "TLS_SERVICE_CERT_ROOT issuance has not minted the kafka SVID yet." >&2

@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "The reader table: every private key under data/tls, who reads it, and how.",
+    "One source for three checks: the mint (src/backend/tls_ca_custody_test.go), the installer's --verify-custody (scripts/install.py) and the compose shape test (tests/test_tls_key_custody.py).",
+    "Paths are relative to data/tls. A key not listed here is a custody violation.",
+    "how: owner = the reader runs as CORRELIX_UID. group = the reader runs as another uid, or as root without CAP_DAC_OVERRIDE, and holds CORRELIX_GID through group_add. root = the reader is root with Docker's default capabilities, which read a 0600 file of any owner. staged = root copies the key at start into a location owned by the reader. dormant = minted for a later epic, no container mounts it.",
+    "effective is what was verified on the pinned image on 2026-11-09, in compose.tls.yml. Nothing here depends on CORRELIX_UID being 1000."
+  ],
+  "dirs": {
+    ".": "0700",
+    "services": "0700",
+    "admin": "0700",
+    "nginx": "0750",
+    "victoria": "0700"
+  },
+  "keys": [
+    {"path": "api.key", "mode": "0600", "how": "owner", "readers": ["api"], "effective": "CORRELIX_UID, cap_drop ALL"},
+    {"path": "admin/admin.key", "mode": "0600", "how": "owner", "readers": ["opensearch-security-init"], "effective": "CORRELIX_UID:1000"},
+    {"path": "nginx/nginx.key", "mode": "0640", "how": "group", "readers": ["nginx"], "effective": "101:101, cap_drop ALL"},
+    {"path": "victoria/victoria.key", "mode": "0600", "how": "root", "readers": ["victoria"], "effective": "0:0, default caps"},
+    {"path": "services/api/api.key", "mode": "0600", "how": "owner", "readers": ["api"], "effective": "CORRELIX_UID, cap_drop ALL"},
+    {"path": "services/cadvisor/cadvisor.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/clickhouse/clickhouse.key", "mode": "0600", "how": "staged", "readers": ["clickhouse"], "effective": "0:0 wrapper stages for uid 101"},
+    {"path": "services/cloud-ingest/cloud-ingest.key", "mode": "0640", "how": "group", "readers": ["cloud-ingest"], "effective": "1000:1000 (poller)"},
+    {"path": "services/correlation/correlation.key", "mode": "0640", "how": "group", "readers": ["correlation"], "effective": "10001:10001, cap_drop ALL"},
+    {"path": "services/frontend/frontend.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/gnmic/gnmic.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/goflow2/goflow2.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/gotenberg/gotenberg.key", "mode": "0600", "how": "staged", "readers": ["gotenberg-tls-init"], "effective": "0:0, default caps; stages for uid 1001"},
+    {"path": "services/grafana/grafana.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/kafka/kafka.key", "mode": "0640", "how": "group", "readers": ["kafka", "kafka-init"], "effective": "1000:1000 (appuser)"},
+    {"path": "services/kafka-exporter/kafka-exporter.key", "mode": "0600", "how": "root", "readers": ["kafka-exporter"], "effective": "0:0, default caps"},
+    {"path": "services/keycloak/keycloak.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/netbox/netbox.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/netbox-postgres/netbox-postgres.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/nginx/nginx.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted (nginx reads nginx/nginx.key)"},
+    {"path": "services/node-exporter/node-exporter.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/opensearch/opensearch.key", "mode": "0640", "how": "group", "readers": ["opensearch"], "effective": "1000:1000"},
+    {"path": "services/opensearch-dashboards/opensearch-dashboards.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted"},
+    {"path": "services/postgres/postgres.key", "mode": "0600", "how": "staged", "readers": ["postgres"], "effective": "0:0 wrapper stages for uid 70"},
+    {"path": "services/prober/prober.key", "mode": "0640", "how": "group", "readers": ["prober"], "effective": "0:0, cap_drop ALL + NET_RAW, so no DAC override"},
+    {"path": "services/redis/redis.key", "mode": "0640", "how": "group", "readers": ["redis"], "effective": "999:1000, set by user: in compose.tls.yml because the image's root path clears groups"},
+    {"path": "services/syslog-ng/syslog-ng.key", "mode": "0600", "how": "root", "readers": ["syslog-ng"], "effective": "0:0, default caps"},
+    {"path": "services/vector-aggregator/vector-aggregator.key", "mode": "0600", "how": "root", "readers": ["vector-aggregator"], "effective": "0:0, default caps"},
+    {"path": "services/vector-router/vector-router.key", "mode": "0600", "how": "root", "readers": ["vector-router"], "effective": "0:0, default caps"},
+    {"path": "services/victoria/victoria.key", "mode": "0600", "how": "dormant", "readers": [], "effective": "not mounted (victoria reads victoria/victoria.key)"},
+    {"path": "services/vmalert/vmalert.key", "mode": "0600", "how": "root", "readers": ["vmalert"], "effective": "0:0, default caps"},
+    {"path": "services/vmauth/vmauth.key", "mode": "0600", "how": "root", "readers": ["vmauth"], "effective": "0:0, default caps"}
+  ],
+  "staged": [
+    {"path": "services/gotenberg-staged/gotenberg.key", "mode": "0400", "reader": "gotenberg", "owner_uid": 1001, "dir_mode": "0711"}
+  ]
+}

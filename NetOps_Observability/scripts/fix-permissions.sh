@@ -33,7 +33,10 @@ declare -A OWNERS=(
     [clickhouse]="101:101"
     [kafka]="1000:1000"
     [victoria]="1000:1000"
-    # postgres, redis, and api handle their own ownership; not listed
+    # The TLS variant runs valkey directly as this uid, so its image's root path
+    # no longer chowns the data dir at start.
+    [redis]="999:1000"
+    # postgres and api handle their own ownership; not listed
 )
 
 for svc in "${!OWNERS[@]}"; do

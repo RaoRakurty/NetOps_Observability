@@ -656,6 +656,17 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("release-gate.py", "run_process", "8d2ca242"): "the residual OSError of spawning a gate tool (a broken interpreter, ENOMEM, EMFILE): same path — Proc(missing=True) -> a FAIL row carrying the OS error text -> non-zero exit. Catching it is what keeps one unspawnable tool from hiding the fourteen other Decision-8 items",
     ("release-gate.py", "workflow_job_exists", "1cdb4321"): "an unreadable .github/workflows file while verifying that a CI-ONLY row's delegate job still exists: returns False, which turns that row into a FAIL ('nothing is checking it') instead of a reassuring CI-ONLY reference. The unreadable workflow and the deleted job are the same verdict — the promise cannot be verified — so the safe direction is the failing one",
     ("release-gate.py", "check_dependency_lock_npm", "07376830"): "an unreadable or malformed package-lock.json: recorded as a FAIL row naming the file and the parse error ('lockfileVersion' drift and unreadable locks are the same verdict — the lock is not verifiable), so the dependency-lock item fails the release. Continuing to the second lockfile means the report names BOTH broken locks instead of only the first",
+    # ===================================================================
+    # 2026-11-09 — scripts/install.py key custody
+    # (docs/design/OPENSEARCH_ACCESS_2026-11-09.md). None continues as if the
+    # check had passed: each unreadable path becomes a named problem that makes
+    # --verify-custody / --custody-rollback exit 1, or the cautious answer.
+    # ===================================================================
+    ("install.py", "tls_tree_has_keys", "4b3d8e97"): "an unreadable spot under data/tls while asking 'has anything been minted?': answers True, the cautious side. The installer then tightens only the admin directory (never directories under running readers) and the verifier walks the tree, naming whatever it cannot read. Escalating here would fail an install over a question whose safe answer is known",
+    ("install.py", "verify_tls_custody", "4d0edb60"): "a declared key directory --verify-custody cannot stat: appended to the problem list as 'cannot stat ... custody not verified there', which makes cmd_verify_custody exit 1 and the watchdog raise KEY_CUSTODY. Collected rather than raised so one unreadable directory does not hide every other violation",
+    ("install.py", "verify_tls_custody", "75214c46"): "a file under data/tls that cannot be stat'ed (FileNotFoundError, a re-issue's temp renamed mid-walk, is handled separately): a named problem, exit 1, KEY_CUSTODY. Same report-all reasoning",
+    ("install.py", "verify_secret_custody", "e768f163"): "a credential file under data/secrets that cannot be stat'ed: a named problem, exit 1, KEY_CUSTODY. Same report-all reasoning",
+    ("install.py", "relax_custody_for_rollback", "e3dbf16d"): "a chmod the rollback widening could not make: returned to cmd_custody_rollback, which prints each one and exits 1 with the remedy, and install-correlix.sh's rollback then reports that the previous version could not be started. Collected so the operator sees every path at once",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

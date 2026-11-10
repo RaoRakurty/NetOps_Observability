@@ -239,6 +239,7 @@ BACKUP_INTENT_FILE='$BUNDLE_ROOT/data/api/system_backup.json'
 BACKUP_APPLY_SCRIPT='$BUNDLE_SCRIPTS_DIR/apply-backup-config.sh'
 BACKUP_APPLY_STAMP='/etc/correlix/.backup-config.applied'
 TLS_ROTATE_HEARTBEAT='$BUNDLE_SCRIPTS_DIR/rotate-tls.heartbeat'
+CUSTODY_INSTALL_PY='$BUNDLE_SCRIPTS_DIR/install.py'
 EOF
 }
 

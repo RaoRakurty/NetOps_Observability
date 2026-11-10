@@ -689,7 +689,15 @@ os_snapshot_put() {
             OS_CURL_RC=1
             return 1
         fi
-        timeout 1800 docker run --rm --network "$net" -v "$OS_ADMIN_DIR:/certs:ro" "$OS_CURL_IMAGE" \
+        # --user: the admin key is 0600 in a 0700 directory under CORRELIX_UID,
+        # so the curl image's own uid (100) could not read it. Run as its owner.
+        local owner
+        owner=$(stat -c '%u:%g' "$OS_ADMIN_DIR/admin.key" 2>>"$STAGE/opensearch.err") || {
+            echo "opensearch: could not read the owner of $OS_ADMIN_DIR/admin.key" >>"$STAGE/opensearch.err"
+            OS_CURL_RC=1
+            return 1
+        }
+        timeout 1800 docker run --rm --network "$net" --user "$owner" -v "$OS_ADMIN_DIR:/certs:ro" "$OS_CURL_IMAGE" \
             -s --max-time 1750 \
             --cacert /certs/ca.pem --cert /certs/admin.crt --key /certs/admin.key \
             -X PUT "${OPENSEARCH_SNAPSHOT_URL:-https://opensearch:9200}/_snapshot/netops-fs/$snap?wait_for_completion=true" \
