@@ -128,6 +128,7 @@ import (
 	"math"
 	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/aiprovider"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -582,6 +583,8 @@ type server struct {
 	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
 	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
 	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
+	aiBreaker       *aiprovider.Breaker                  // per-(tenant, provider) model circuit breaker (Iris latency 2026-11-10)
+	aiProvCalls     *aiprovider.Metrics                  // netops_ai_provider_call_seconds + breaker gauges
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
@@ -1701,6 +1704,8 @@ func newServer() *server {
 	srv.exportLimiter = ratelimit.New()
 	srv.copilotLimiter = ratelimit.New()
 	srv.aiToolBudget = ai.NewDailyBudget()
+	srv.aiBreaker = aiprovider.NewBreaker(aiBreakerConfig())
+	srv.aiProvCalls = aiprovider.NewMetrics(srv.aiBreaker)
 	engine.OnFire = srv.ingestAlertIncident
 	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
 	// into per-tenant episodes; muted/snoozed episodes pause NOTIFICATIONS only.
@@ -3918,6 +3923,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/contact-points/", s.handleContactPointByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
+	mux.HandleFunc("/api/copilot/config/test", s.handleCopilotConfigTest)
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
@@ -3972,6 +3978,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)
 	mux.HandleFunc("/api/ai/tenant-config", s.handleAITenantConfig)
+	mux.HandleFunc("/api/ai/tenant-config/test", s.handleAITenantConfigTest)
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
@@ -4872,6 +4879,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.nlqQueryLogMetrics.Write(w)                                // Iris query capture + corrections (N-C8); nil-safe
 	s.aiDecisionMetrics.Write(w)                                 // Iris AI decision ledger appends (N-A6); nil-safe
 	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
+	_ = s.aiProvCalls.Write(w)                                   // provider call latency/outcome + breaker state; nil-safe, best-effort
 	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
 	_ = s.srcAuthorityMetrics.Write(w)                           // source-authority resolutions (N-F6); nil-safe, best-effort like the line above
 	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above

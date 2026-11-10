@@ -195,10 +195,13 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// configurable via COPILOT_PROVIDER_CHAIN. Each candidate is tried in order;
 	// on provider error the next is attempted; the first success wins.
 	attempted := false
+	tenant, _ := principalTenant(claims)
 	for _, cand := range s.providerCandidates(claims) {
 		name := cand.name
 		attempted = true
-		text, err := ai.CallProvider(r.Context(), name, cand.key, cand.model, system, msgs)
+		// The shared guard: breaker, one structured failure log, call metrics.
+		c, err := s.callProviderGuarded(r.Context(), tenant, "", cand, system, msgs)
+		text := c.Text
 		if err == nil && strings.TrimSpace(text) != "" {
 			// Strip any doc citation the model INVENTED (an id not among the
 			// retrieved chunks) — same fake-authority guardrail as the grounded
@@ -213,8 +216,8 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// SR-022: the provider's raw error body is logged server-side by
-		// providerDo, never echoed to the client. Fall through to the next.
-		logWarn("copilot", "provider attempt failed, falling through", map[string]any{"provider": name})
+		// providerDo, never echoed to the client; callProviderGuarded logged
+		// the failure's class. Fall through to the next.
 	}
 	// Provider-down fallback (owner decision 2026-07-02): the grounded engine
 	// answers when no LLM can — evidence-only, tenant-scoped, key-free — with a

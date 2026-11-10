@@ -232,6 +232,7 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	r, rec := s.aiDecisionStart(r, claims, req)
 	orch := s.newOrchestrator(r, claims)
 	orch.Trace = trace
+	orch.ModelBudgets = aiModelBudgets() // never block a ready answer on a model
 	var ran nlqRan
 	if conv != nil && orch.NLQuery != nil {
 		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, conv.ID, &ran)
@@ -1312,13 +1313,14 @@ const nlqModelFallbackTier = ai.TierStrong
 
 // nlqModelFallback binds the model fallback (tracker 337 N-C5) to the caller:
 // their own aliases and inventory, and their own provider chain and daily
-// budget through aiLLM. With Iris off, IRIS_NLQ_MODEL_FALLBACK=false, or no
-// provider this caller may use, Model stays nil and the fallback is silently
-// unavailable — the grammar's answer stands, key-free.
+// budget through aiLLM. With Iris off, IRIS_NLQ_MODEL_FALLBACK=false, no
+// provider this caller may use, or every such provider's circuit breaker open
+// (repeated failures, cooling down), Model stays nil and the fallback is
+// skipped without a call — the grammar's answer stands at once, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
 	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims), Examples: s.nlqExamples}
 	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
-		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
+		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.usableProviderCandidates(claims, nlqModelFallbackTier)) == 0 {
 		return f
 	}
 	f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}}
