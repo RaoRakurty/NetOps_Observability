@@ -437,11 +437,22 @@ def test_every_v1_workload_rule_is_code_fidelity():
     qualification leg below would no longer be a null hypothesis."""
     rules = v1_rules()
     assert rules, "no syslog rule classifies the V1 workload's link transitions"
-    assert all(r.fidelity == "code" for r in rules), {
-        r.rule_id: r.fidelity for r in rules if r.fidelity != "code"}
+    # Tracker 387 wave 1: vendor-pack link rows (doc_claimed) also emit the kind. They
+    # sit BEHIND the code-fidelity row in table order and read other vendors' shapes,
+    # so the V1 line (`%LINK-3-UPDOWN`) never reaches them: first match wins. Both
+    # halves of that are asserted here, so the exemption cannot hide a V1 rule.
+    order = [r.rule_id for r in producers.RULES]
+    code_rows = [r for r in rules if r.fidelity == "code"]
+    assert code_rows, "the V1 link line has no code-fidelity rule"
+    first_code = min(order.index(r.rule_id) for r in code_rows)
+    fired = {s.attrs["rule_id"] for s in v1_shaped_window()}
+    for r in rules:
+        if r.fidelity != "code":
+            assert order.index(r.rule_id) > first_code, r.rule_id
+            assert r.rule_id not in fired, r.rule_id
     doc_claimed = {r.rule_id for r in producers.RULES
                    if not S.is_validated_fidelity(r.fidelity)}
-    assert not ({r.rule_id for r in rules} & doc_claimed)
+    assert not (fired & doc_claimed)
 
 
 def v1_shaped_window(n_devices: int = 4) -> list[Signal]:

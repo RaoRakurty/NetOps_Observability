@@ -60,11 +60,11 @@ rules:
     family: null
     vendors: [cisco]
     fidelity_status: doc_claimed
-    pattern_src: '%(?:PKT_INFRA-)?LINK-5-CHANGED ?: Interface \S{1,128}, changed state to administratively down'
+    pattern_src: '%(?:PKT_INFRA-)?LINK-5-CHANGED\s?:\sInterface\s\S{1,128},\schanged\sstate\sto\sadministratively\sdown'
     guard:
       all:
         - {contains: [msg, 'LINK-5-CHANGED']}
-        - {re: [msg, '%(?:PKT_INFRA-)?LINK-5-CHANGED ?: Interface \S{1,128}, changed state to administratively down', 'i']}
+        - {re: [msg, '%(?:PKT_INFRA-)?LINK-5-CHANGED\s?:\sInterface\s\S{1,128},\schanged\sstate\sto\sadministratively\sdown', 'i']}
     severity: warn
     extract:
       ifname: {re: [[msg, 'Interface (\S{1,128}?),', 1, '']]}
@@ -100,11 +100,11 @@ rules:
     family: null
     vendors: [cisco]
     fidelity_status: doc_claimed
-    pattern_src: '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}: Interface \S{1,128} is down \('
+    pattern_src: '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}:\sInterface\s\S{1,128}\sis\sdown\s\('
     guard:
       all:
         - {contains: [msg, 'ETHPORT-']}
-        - {re: [msg, '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}: Interface \S{1,128} is down \(', '']}
+        - {re: [msg, '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}:\sInterface\s\S{1,128}\sis\sdown\s\(', '']}
     severity: warn
     extract:
       ifname: {re: [[msg, 'Interface (\S{1,128}) is down', 1, '']]}
@@ -138,11 +138,11 @@ rules:
     family: null
     vendors: [cisco]
     fidelity_status: doc_claimed
-    pattern_src: '%ETHPORT-\d-IF_UP: Interface \S{1,128} is up'
+    pattern_src: '%ETHPORT-\d-IF_UP:\sInterface\s\S{1,128}\sis\sup'
     guard:
       all:
         - {contains: [msg, 'ETHPORT-']}
-        - {re: [msg, '%ETHPORT-\d-IF_UP: Interface \S{1,128} is up', '']}
+        - {re: [msg, '%ETHPORT-\d-IF_UP:\sInterface\s\S{1,128}\sis\sup', '']}
     severity: warn
     extract:
       ifname: {re: [[msg, 'Interface (\S{1,128}) is up', 1, '']]}

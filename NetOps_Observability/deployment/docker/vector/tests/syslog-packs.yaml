@@ -1240,7 +1240,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "system_2002", "wrong event_type")
-  - name: "nokia_sros: a failed configuration save is major, so it may alarm on its own"
+  - name: "nokia_sros: a configuration save that could not write is major, so it may alarm on its own"
     inputs:
       - insert_at: syslog_normalized
         type: log

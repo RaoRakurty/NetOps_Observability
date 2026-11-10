@@ -377,8 +377,8 @@ rules:
     fidelity_status: lab_validated
     known_benign: true
     benign_reason: the device SNMP agent failing to serve part of interfaceTable to our own poller; no network state in the text; pending owner review
-    pattern_src: 'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp get-response reqid=\d{1,12} \S{1,64} error-status=genErr ix=\d{1,6} .\w{1,16} interface'
-    guard: {re: [msg, 'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp get-response reqid=\d{1,12} \S{1,64} error-status=genErr ix=\d{1,6} .\w{1,16} interface', '']}
+    pattern_src: 'devel-snmpa\sinternal\serror:\stable\s[a-z-]{1,16}:\sinterfaceTable\s.error:\s|devel-snmpa\s.confd_snmpa_instr,table_func,|snmp\sget-response\sreqid=\d{1,12}\s\S{1,64}\serror-status=genErr\six=\d{1,6}\s.\w{1,16}\sinterface'
+    guard: {re: [msg, 'devel-snmpa\sinternal\serror:\stable\s[a-z-]{1,16}:\sinterfaceTable\s.error:\s|devel-snmpa\s.confd_snmpa_instr,table_func,|snmp\sget-response\sreqid=\d{1,12}\s\S{1,64}\serror-status=genErr\six=\d{1,6}\s.\w{1,16}\sinterface', '']}
     severity: warn
     emit:
       metric: device_alarm

@@ -232,11 +232,12 @@ rules:
     family: null
     vendors: [nokia]
     fidelity_status: doc_claimed
-    pattern_src: '-link(?:Down-2004|Up-2005) \[[^\]]{0,512}\]:\s*Interface \S{1,128} is (?:not )?operational'
+    pattern_src: '-link(?:Down-2004|Up-2005)\s\['
     guard:
       all:
         - {contains: [ctoken, 'SNMP']}
-        - {re: [msg, '-link(?:Down-2004|Up-2005) \[[^\]]{0,512}\]:\s*Interface \S{1,128} is (?:not )?operational', '']}
+        - {re: [msg, '-link(?:Down-2004|Up-2005)\s\[', '']}
+        - {re: [msg, '\]:\s*Interface \S{1,128} is (?:not )?operational', '']}
     extract:
       ifname: {re: [[msg, 'Interface (\S{1,128}) is (?:not )?operational', 1, '']]}
       state:
@@ -756,7 +757,7 @@ fixtures:
       event_type: system_2002
     signal: null
 
-  - name: a failed configuration save is major, so it may alarm on its own
+  - name: a configuration save that could not write is major, so it may alarm on its own
     fidelity: doc_claimed
     source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-system.html (ssiSaveConfigFailed 2003, major)'
     hostname: 10.221.38.108

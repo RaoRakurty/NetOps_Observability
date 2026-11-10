@@ -611,7 +611,7 @@ RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a
 #: SD-WAN SNMP-agent poll records (2026-11-10, tracker 387, D2): the vEdge confd agent's
 #: errors while answering our interfaceTable walk become audit-shaped records and one
 #: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar.
-RULES_HASH_SDWAN_SNMP_POLL = "96c1c4a9342bd37d246a6ef7137c0b51ab3214eb27425005e0bce90e042aedaa"
+RULES_HASH_SDWAN_SNMP_POLL = "4844f744669e22ef4294039e31e08e3a15cf3c82c0476390886512d284d0db42"
 RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
 
 

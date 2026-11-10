@@ -965,9 +965,11 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': None,
      'vendors': ['cisco'],
      'fidelity_status': 'doc_claimed',
-     'pattern_src': '%(?:PKT_INFRA-)?LINK-5-CHANGED ?: Interface \\S{1,128}, changed state to administratively down',
+     'pattern_src': '%(?:PKT_INFRA-)?LINK-5-CHANGED\\s?:\\sInterface\\s\\S{1,128},\\schanged\\sstate\\sto\\sadministratively\\sdown',
      'guard': {'all': [{'contains': ['msg', 'LINK-5-CHANGED']},
-                       {'re': ['msg', '%(?:PKT_INFRA-)?LINK-5-CHANGED ?: Interface \\S{1,128}, changed state to administratively down', 'i']}]},
+                       {'re': ['msg',
+                               '%(?:PKT_INFRA-)?LINK-5-CHANGED\\s?:\\sInterface\\s\\S{1,128},\\schanged\\sstate\\sto\\sadministratively\\sdown',
+                               'i']}]},
      'severity': 'warn',
      'extract': {'ifname': {'re': [['msg', 'Interface (\\S{1,128}?),', 1, '']]}, 'state': {'const': 'down'}},
      'emit': {'metric': 'link_state',
@@ -993,8 +995,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': None,
      'vendors': ['cisco'],
      'fidelity_status': 'doc_claimed',
-     'pattern_src': '%ETHPORT-\\d-IF_DOWN_[A-Z_]{1,48}: Interface \\S{1,128} is down \\(',
-     'guard': {'all': [{'contains': ['msg', 'ETHPORT-']}, {'re': ['msg', '%ETHPORT-\\d-IF_DOWN_[A-Z_]{1,48}: Interface \\S{1,128} is down \\(', '']}]},
+     'pattern_src': '%ETHPORT-\\d-IF_DOWN_[A-Z_]{1,48}:\\sInterface\\s\\S{1,128}\\sis\\sdown\\s\\(',
+     'guard': {'all': [{'contains': ['msg', 'ETHPORT-']},
+                       {'re': ['msg', '%ETHPORT-\\d-IF_DOWN_[A-Z_]{1,48}:\\sInterface\\s\\S{1,128}\\sis\\sdown\\s\\(', '']}]},
      'severity': 'warn',
      'extract': {'ifname': {'re': [['msg', 'Interface (\\S{1,128}) is down', 1, '']]},
                  'link_reason': {'re': [['msg', 'is down \\(([^)\\r\\n]{1,64})\\)', 1, '']]},
@@ -1025,8 +1028,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': None,
      'vendors': ['cisco'],
      'fidelity_status': 'doc_claimed',
-     'pattern_src': '%ETHPORT-\\d-IF_UP: Interface \\S{1,128} is up',
-     'guard': {'all': [{'contains': ['msg', 'ETHPORT-']}, {'re': ['msg', '%ETHPORT-\\d-IF_UP: Interface \\S{1,128} is up', '']}]},
+     'pattern_src': '%ETHPORT-\\d-IF_UP:\\sInterface\\s\\S{1,128}\\sis\\sup',
+     'guard': {'all': [{'contains': ['msg', 'ETHPORT-']}, {'re': ['msg', '%ETHPORT-\\d-IF_UP:\\sInterface\\s\\S{1,128}\\sis\\sup', '']}]},
      'severity': 'warn',
      'extract': {'ifname': {'re': [['msg', 'Interface (\\S{1,128}) is up', 1, '']]}, 'state': {'const': 'up'}},
      'emit': {'metric': 'link_state',
@@ -1353,11 +1356,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'known_benign': True,
      'benign_reason': 'the device SNMP agent failing to serve part of interfaceTable to our own poller; no network state in the text; pending owner '
                       'review',
-     'pattern_src': 'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp '
-                    'get-response reqid=\\d{1,12} \\S{1,64} error-status=genErr ix=\\d{1,6} .\\w{1,16} interface',
+     'pattern_src': 'devel-snmpa\\sinternal\\serror:\\stable\\s[a-z-]{1,16}:\\sinterfaceTable\\s.error:\\s|devel-snmpa\\s.confd_snmpa_instr,table_func,|snmp\\sget-response\\sreqid=\\d{1,12}\\s\\S{1,64}\\serror-status=genErr\\six=\\d{1,6}\\s.\\w{1,16}\\sinterface',
      'guard': {'re': ['msg',
-                      'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp '
-                      'get-response reqid=\\d{1,12} \\S{1,64} error-status=genErr ix=\\d{1,6} .\\w{1,16} interface',
+                      'devel-snmpa\\sinternal\\serror:\\stable\\s[a-z-]{1,16}:\\sinterfaceTable\\s.error:\\s|devel-snmpa\\s.confd_snmpa_instr,table_func,|snmp\\sget-response\\sreqid=\\d{1,12}\\s\\S{1,64}\\serror-status=genErr\\six=\\d{1,6}\\s.\\w{1,16}\\sinterface',
                       '']},
      'severity': 'warn',
      'emit': {'metric': 'device_alarm',
@@ -1718,9 +1719,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': None,
      'vendors': ['nokia'],
      'fidelity_status': 'doc_claimed',
-     'pattern_src': '-link(?:Down-2004|Up-2005) \\[[^\\]]{0,512}\\]:\\s*Interface \\S{1,128} is (?:not )?operational',
+     'pattern_src': '-link(?:Down-2004|Up-2005)\\s\\[',
      'guard': {'all': [{'contains': ['ctoken', 'SNMP']},
-                       {'re': ['msg', '-link(?:Down-2004|Up-2005) \\[[^\\]]{0,512}\\]:\\s*Interface \\S{1,128} is (?:not )?operational', '']}]},
+                       {'re': ['msg', '-link(?:Down-2004|Up-2005)\\s\\[', '']},
+                       {'re': ['msg', '\\]:\\s*Interface \\S{1,128} is (?:not )?operational', '']}]},
      'extract': {'ifname': {'re': [['msg', 'Interface (\\S{1,128}) is (?:not )?operational', 1, '']]},
                  'state': {'case': [{'when': {'re': ['msg', ' is not operational', '']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]}},
      'emit': {'metric': 'link_state',
@@ -3401,6 +3403,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '96c1c4a9342bd37d246a6ef7137c0b51ab3214eb27425005e0bce90e042aedaa'
+BAKED_RULES_HASH = '4844f744669e22ef4294039e31e08e3a15cf3c82c0476390886512d284d0db42'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

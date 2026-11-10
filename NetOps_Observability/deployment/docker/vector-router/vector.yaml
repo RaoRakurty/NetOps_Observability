@@ -1503,9 +1503,9 @@ transforms:
   # records for as long as 100 % of them read `unparsed`, and nothing noticed.
   # Rules: the parse-coverage group in rules-scale-slo.yaml (warning tier).
   #
-  # SERIES. vendor is at most 22 values today and parser_id 8, each from the generated
-  # lists below or `other`, so the label product is bounded at 22 x 8 x 6 statuses =
-  # 1056, and the pipeline can reach about 290 of those: a line has one parser and one
+  # SERIES. vendor is at most 22 values today and parser_id 12, each from the generated
+  # lists below or `other`, so the label product is bounded at 22 x 12 x 6 statuses =
+  # 1584, and the pipeline can reach about 380 of those: a line has one parser and one
   # status, and a trap has no parser id. A single-vendor deployment holds about ten.
   # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 12.
   # No device, tenant or free text can reach a label, so nothing here is
