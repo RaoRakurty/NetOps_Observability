@@ -32,9 +32,34 @@ import (
 // trapAddrIndexRefresh is how often the index is rebuilt.
 const trapAddrIndexRefresh = time.Minute
 
-// trapAddrIndex holds the current index for the receiver's callback.
+// trapAddrIndex holds the current index for the receiver's callbacks: the
+// address index (13c') and the per-device ifIndex → name maps (13c), both
+// served from memory so the UDP receive path never waits on a network read.
 type trapAddrIndex struct {
-	idx atomic.Pointer[nms.InventoryIndex]
+	idx   atomic.Pointer[nms.InventoryIndex]
+	ifidx atomic.Pointer[map[string]map[string]string]
+}
+
+// ifName is the collectors.IfNameFunc: ifIndex on ONE device, from that
+// device's own map. Another device's map is never consulted.
+func (t *trapAddrIndex) ifName(deviceID, ifIndex string) (string, bool) {
+	m := t.ifidx.Load()
+	if m == nil {
+		return "", false
+	}
+	n, ok := (*m)[deviceID][ifIndex]
+	return n, ok && n != ""
+}
+
+// refreshIfNames swaps in a new ifIndex snapshot; an unread bridge keeps the
+// last one.
+func (t *trapAddrIndex) refreshIfNames(ctx context.Context, read func(context.Context) (map[string]map[string]string, error)) error {
+	m, err := read(ctx)
+	if err != nil {
+		return err
+	}
+	t.ifidx.Store(&m)
+	return nil
 }
 
 // resolve is the collectors.TrapAddressResolver the receiver calls.
@@ -65,6 +90,7 @@ func (s *server) startTrapAddressIndex(ctx context.Context) {
 	}
 	t := &trapAddrIndex{}
 	s.collectors.SetTrapAddressResolver(t.resolve)
+	s.collectors.SetTrapIfNameResolver(t.ifName)
 	s.workers.start("trap-addr-index", func() {
 		tick := time.NewTicker(trapAddrIndexRefresh)
 		defer tick.Stop()
@@ -72,6 +98,10 @@ func (s *server) startTrapAddressIndex(ctx context.Context) {
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			if err := t.rebuild(rctx, s.discovery.Devices(), collectors.FetchIfAddrMap); err != nil {
 				logWarn("snmptrap", "interface addresses unread: traps from an interface address keep the previous index this cycle",
+					map[string]any{"error": err.Error()})
+			}
+			if err := t.refreshIfNames(rctx, collectors.FetchIfIndexMap); err != nil {
+				logWarn("snmptrap", "ifIndex map unread: trap interfaces keep the previous names this cycle",
 					map[string]any{"error": err.Error()})
 			}
 			cancel()

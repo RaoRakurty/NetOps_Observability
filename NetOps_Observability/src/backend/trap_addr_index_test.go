@@ -46,3 +46,31 @@ func TestTrapAddrIndexRebuild(t *testing.T) {
 		t.Fatal("with no registry yet, management addresses still index")
 	}
 }
+
+// The receiver's ifIndex lookup reads one device's own map and keeps the last
+// snapshot when the bridge is unread.
+func TestTrapIfNameSnapshot(t *testing.T) {
+	ix := &trapAddrIndex{}
+	if _, ok := ix.ifName("vedge-20", "4"); ok {
+		t.Fatal("no snapshot must name nothing")
+	}
+	ok := func(context.Context) (map[string]map[string]string, error) {
+		return map[string]map[string]string{"vedge-20": {"4": "ge0/3"}, "vedge-51": {"2": "ge0/1"}}, nil
+	}
+	if err := ix.refreshIfNames(context.Background(), ok); err != nil {
+		t.Fatal(err)
+	}
+	if n, hit := ix.ifName("vedge-20", "4"); !hit || n != "ge0/3" {
+		t.Fatalf("own index = %q,%v", n, hit)
+	}
+	if _, hit := ix.ifName("vedge-51", "4"); hit {
+		t.Fatal("vedge-20's index named on vedge-51")
+	}
+	bad := func(context.Context) (map[string]map[string]string, error) { return nil, errors.New("down") }
+	if err := ix.refreshIfNames(context.Background(), bad); err == nil {
+		t.Fatal("want error")
+	}
+	if n, hit := ix.ifName("vedge-20", "4"); !hit || n != "ge0/3" {
+		t.Fatal("an unread bridge dropped the last snapshot")
+	}
+}

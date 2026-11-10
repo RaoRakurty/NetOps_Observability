@@ -109,6 +109,9 @@ def test_trap_envelope_fields_are_declared():
         # Tracker 387 PR 13c': which rung named the device. Filterable, so the
         # Logs page and the runbook can group `attribution_basis:none`.
         "attribution_basis": "keyword",
+        # Tracker 387 PR 13c: the affected interface, named through the device's
+        # own ifIndex map, and how it was named.
+        "interface": "keyword", "ifindex": "keyword", "interface_basis": "keyword",
     }
     wrong = {k: props.get(k, {}).get("type") for k, t in expected.items()
              if props.get(k, {}).get("type") != t}

@@ -96,6 +96,16 @@ type TrapEvent struct {
 	// HOW the device was found, never a tenant: the tenant is the device's own.
 	AttributionBasis string `json:"attribution_basis"`
 
+	// The affected interface (tracker 387 PR 13c), from the varbinds:
+	// interface_basis varbind_name (the trap named it: ifName, ifDescr or a
+	// vendor *IfName object), ifindex_map (an IF-MIB index named through the
+	// device's OWN ifIndex map), ifindex_only (an index nothing named; Interface
+	// is then the bare index, the engine's digits-only convention) or none.
+	// Varbinds are never rewritten: these sit beside them.
+	Interface      string `json:"interface,omitempty"`
+	InterfaceIndex string `json:"ifindex,omitempty"`
+	InterfaceBasis string `json:"interface_basis,omitempty"`
+
 	// SourceMasked: the datagram arrived from the Docker bridge gateway, not
 	// from the device (tracker 373, masked_source.go) — Host is NOT the sender,
 	// so attribution from it is impossible. Counted downstream
@@ -652,6 +662,85 @@ type credResolver func(ip string) (Target, bool)
 // never a tenant, and its answer is a claim the trap must still prove.
 type TrapAddressResolver func(ip string) (deviceID string, ok bool)
 
+// IfNameFunc names ifIndex on ONE device from that device's own ifIndex map
+// (collectors.FetchIfIndexMap, served from an in-memory snapshot the api
+// refreshes; never a network read on the receive path).
+type IfNameFunc func(deviceID, ifIndex string) (string, bool)
+
+// Interface bases, the closed set of TrapEvent.InterfaceBasis.
+const (
+	InterfaceVarbindName = "varbind_name"
+	InterfaceIfIndexMap  = "ifindex_map"
+	InterfaceIfIndexOnly = "ifindex_only"
+	InterfaceNone        = "none"
+)
+
+// IF-MIB columns whose instance suffix is the ifIndex (RFC 2863): ifIndex,
+// ifDescr, ifAdminStatus, ifOperStatus, and ifXTable's ifName.
+const (
+	oidIfIndexCol  = "1.3.6.1.2.1.2.2.1.1."
+	oidIfDescrCol  = "1.3.6.1.2.1.2.2.1.2."
+	oidIfAdminCol  = "1.3.6.1.2.1.2.2.1.7."
+	oidIfOperCol   = "1.3.6.1.2.1.2.2.1.8."
+	oidIfNameXCol  = "1.3.6.1.2.1.31.1.1.1.1."
+	maxIfNameChars = 128
+)
+
+// ifIndexSuffix returns the single-arc instance suffix of an IF-MIB column OID.
+func ifIndexSuffix(oid, col string) (string, bool) {
+	rest, ok := strings.CutPrefix(oid, col)
+	if !ok || rest == "" || strings.Trim(rest, "0123456789") != "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// interfaceFor fills the interface fields from the varbinds. A name the trap
+// carries wins; then an IF-MIB index named through the ATTRIBUTED device's own
+// map; an index is never looked up on another device, and with no device it
+// stays a number.
+func interfaceFor(ev *TrapEvent, names IfNameFunc) {
+	var index, named string
+	for _, vb := range ev.Varbinds {
+		if sfx, ok := ifIndexSuffix(vb.OID, oidIfNameXCol); ok && named == "" {
+			named, index = vb.Value, sfx
+		} else if sfx, ok := ifIndexSuffix(vb.OID, oidIfDescrCol); ok && named == "" {
+			named, index = vb.Value, sfx
+		}
+		for _, col := range []string{oidIfIndexCol, oidIfAdminCol, oidIfOperCol} {
+			if sfx, ok := ifIndexSuffix(vb.OID, col); ok && index == "" {
+				index = sfx
+			}
+		}
+	}
+	if named == "" {
+		// A vendor object the MIB index resolved to a name ending in IfName
+		// (a vendor VPN-interface object, for one): the trap names the port itself.
+		for _, vb := range ev.Varbinds {
+			if strings.HasSuffix(strings.ToLower(vb.Name), "ifname") && strings.TrimSpace(vb.Value) != "" {
+				named = vb.Value
+				break
+			}
+		}
+	}
+	named = clampRunes(strings.TrimSpace(named), maxIfNameChars)
+	switch {
+	case named != "":
+		ev.Interface, ev.InterfaceIndex, ev.InterfaceBasis = named, index, InterfaceVarbindName
+	case index != "":
+		ev.InterfaceIndex = index
+		if ev.Device != "" && names != nil {
+			if n, ok := names(ev.Device, index); ok && strings.TrimSpace(n) != "" {
+				ev.Interface, ev.InterfaceBasis = clampRunes(strings.TrimSpace(n), maxIfNameChars), InterfaceIfIndexMap
+				return
+			}
+		}
+		ev.Interface, ev.InterfaceBasis = index, InterfaceIfIndexOnly
+	default:
+		ev.InterfaceBasis = InterfaceNone
+	}
+}
+
 // Attribution bases, the closed set of TrapEvent.AttributionBasis.
 const (
 	AttributionMgmtIP      = "mgmt_ip"
@@ -1053,6 +1142,8 @@ type trapReceiver struct {
 	// addrs is the interface-address rung (tracker 387 PR 13c'); nil until the
 	// api injects it, and then nothing resolves by interface address.
 	addrs atomic.Pointer[TrapAddressResolver]
+	// ifNames names an ifIndex varbind (tracker 387 PR 13c); nil = numbers only.
+	ifNames atomic.Pointer[IfNameFunc]
 
 	mu       sync.RWMutex
 	status   Status
@@ -1135,6 +1226,23 @@ func (r *trapReceiver) SetAddressResolver(fn TrapAddressResolver) {
 		return
 	}
 	r.addrs.Store(&fn)
+}
+
+// SetIfNameResolver installs the ifIndex → name lookup. Safe while running.
+func (r *trapReceiver) SetIfNameResolver(fn IfNameFunc) {
+	if fn == nil {
+		r.ifNames.Store(nil)
+		return
+	}
+	r.ifNames.Store(&fn)
+}
+
+// ifNameFunc is the installed lookup, or nil.
+func (r *trapReceiver) ifNameFunc() IfNameFunc {
+	if p := r.ifNames.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // resolveByInterface maps a source IP to the target of the one device holding
@@ -1266,6 +1374,8 @@ func (r *trapReceiver) decodePacket(pkt []byte, srcIP string) (ev *TrapEvent, er
 			return
 		}
 		r.attributeDevice(ev, srcIP)
+		// Only after attribution: an ifIndex is named on the attributed device.
+		interfaceFor(ev, r.ifNameFunc())
 		// The identity checks are done, so the credential has no further use.
 		// Everything after this point (queue, envelope, trace, forward) holds an
 		// event that cannot leak it, whatever it serializes or formats.

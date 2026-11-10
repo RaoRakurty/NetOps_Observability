@@ -121,6 +121,16 @@ func (p *Pool) SetTrapAddressResolver(fn TrapAddressResolver) {
 	}
 }
 
+// SetTrapIfNameResolver installs the trap receiver's ifIndex → name lookup
+// (tracker 387 PR 13c). Safe at any time.
+func (p *Pool) SetTrapIfNameResolver(fn IfNameFunc) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if r, ok := p.collectors["snmptrap"].(*trapReceiver); ok {
+		r.SetIfNameResolver(fn)
+	}
+}
+
 // Status returns a snapshot of all registered collectors.
 func (p *Pool) Status() []Status {
 	p.mu.RLock()
