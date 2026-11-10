@@ -5,6 +5,7 @@ package oslog
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestParseSeverityCountsAddsUp(t *testing.T) {
 	if r.Counts[0] != (SeverityCount{"severity", "crit", 3}) || r.Counts[2] != (SeverityCount{"level", "error", 10}) {
 		t.Fatalf("counts: %+v", r.Counts)
 	}
-	if err := ParseSeverityCounts([]byte("<html>"), &r); err != ErrNotACount {
+	if err := ParseSeverityCounts([]byte("<html>"), &r); !errors.Is(err, ErrNotACount) {
 		t.Fatalf("a non-JSON answer must be ErrNotACount, got %v", err)
 	}
 }
