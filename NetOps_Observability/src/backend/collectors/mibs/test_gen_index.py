@@ -460,3 +460,55 @@ def test_a_datetime_keeps_its_convention_name(nodes):
 def test_all_the_notifications_of_the_pinned_trap_module_are_indexed(nodes):
     viptela = [n for o, n in nodes.items() if o.startswith("1.3.6.1.4.1.41916.100.2.")]
     assert len(viptela) == 123 and all(n["kind"] == "notification" for n in viptela)
+
+
+# ── tracker 387, trap semantics: table INDEX clauses ─────────────────────────
+
+
+@pytest.mark.parametrize("base,tc,fixed,want", [
+    ("IpAddress", "", None, "ipv4"),
+    ("INTEGER", "InetAddressType", None, "inet_type"),
+    ("OCTET STRING", "InetAddress", None, "inet_address"),
+    ("OCTET STRING", "InetAddressIPv6", None, "fixed:16"),
+    ("OCTET STRING", "MacAddress", None, "fixed:6"),
+    ("Unsigned32", "InetAutonomousSystemNumber", None, "int"),
+    ("OCTET STRING", "", 8, "fixed:8"),
+    ("OCTET", "SnmpAdminString", None, "string"),
+    ("OBJECT IDENTIFIER", "", None, "unknown"),
+    ("BITS", "", None, "unknown"),
+])
+def test_index_token_states_the_suffix_encoding(base, tc, fixed, want):
+    assert gen.index_token(base, tc, fixed) == want
+
+
+def test_a_netsnmp_block_reads_its_convention_and_fixed_size():
+    tc_block = ("  -- FROM\tCISCO-BGP4-MIB\n  -- TEXTUAL CONVENTION InetAddress\n"
+                "  SYNTAX\tOCTET STRING (0..255) \n  DESCRIPTION\t\"INDEX { lies } in prose\"\n")
+    assert gen._td_token(tc_block) == "inet_address"
+    assert gen._td_token("  SYNTAX\tOCTET STRING (6) \n") == "fixed:6"
+    assert gen._td_token("  SYNTAX\tOCTET STRING (4..4) \n") == "fixed:4"
+    assert gen._td_token("  SYNTAX\tIpAddress\n") == "ipv4"
+
+
+def test_a_clause_lands_on_columns_only_and_replaces_a_stale_one():
+    nodes = {"1.2.1": {"name": "c", "kind": "column", "index": ["old"]},
+             "1.2.2": {"name": "s", "kind": "scalar"}}
+    clause = {"index": ["a"], "index_oids": ["1.2.9"], "index_syntax": ["int"]}
+    assert gen.apply_index_clauses(nodes, {"1.2.1": clause, "1.2.2": clause, "9.9": clause}) == 1
+    assert nodes["1.2.1"]["index_syntax"] == ["int"] and nodes["1.2.1"]["index"] == ["a"]
+    assert "index" not in nodes["1.2.2"]
+    assert gen.apply_index_clauses(nodes, {"1.2.1": clause}) == 0  # idempotent
+
+
+def test_the_checked_in_index_carries_every_asserted_clause(nodes):
+    assert gen.validate_index_clauses(nodes) == []
+
+
+def test_every_clause_is_consistent(nodes):
+    for oid, n in nodes.items():
+        if "index_syntax" not in n:
+            continue
+        assert n["kind"] == "column", oid
+        assert len(n["index"]) == len(n["index_oids"]) == len(n["index_syntax"]), oid
+        assert all(re.fullmatch(r"ipv4|int|inet_type|inet_address|string|fixed:\d+|unknown", s)
+                   for s in n["index_syntax"]), (oid, n["index_syntax"])

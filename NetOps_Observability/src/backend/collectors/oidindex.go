@@ -24,13 +24,19 @@ var oidIndexJSON []byte
 // OIDNode is one resolved MIB object/notification (the (name,type,enum,index,
 // module) tuple a decode needs — mirrors gosmi's node model).
 type OIDNode struct {
-	Name         string            `json:"name"`
-	MIB          string            `json:"mib"`
-	Kind         string            `json:"kind"` // "scalar" | "column" | "notification"
-	Type         string            `json:"type,omitempty"`
-	Enum         map[string]string `json:"enum,omitempty"`  // integer value → label
-	Index        []string          `json:"index,omitempty"` // table INDEX clause
-	SeverityHint string            `json:"severity_hint,omitempty"`
+	Name  string            `json:"name"`
+	MIB   string            `json:"mib"`
+	Kind  string            `json:"kind"` // "scalar" | "column" | "notification"
+	Type  string            `json:"type,omitempty"`
+	Enum  map[string]string `json:"enum,omitempty"`  // integer value → label
+	Index []string          `json:"index,omitempty"` // table INDEX clause
+	// The INDEX clause as the receiver decodes it (gen_index.py, tracker 387):
+	// each index object's OID and its instance-suffix encoding, and whether
+	// the last one is IMPLIED. trap_index.go reads these; no table is named.
+	IndexOIDs    []string `json:"index_oids,omitempty"`
+	IndexSyntax  []string `json:"index_syntax,omitempty"`
+	IndexImplied bool     `json:"index_implied,omitempty"`
+	SeverityHint string   `json:"severity_hint,omitempty"`
 }
 
 type oidIndex struct {
