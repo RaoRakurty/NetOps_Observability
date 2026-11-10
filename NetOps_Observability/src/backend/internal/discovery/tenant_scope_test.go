@@ -391,7 +391,7 @@ func TestEachScopeIsRefusedOnItsOwn(t *testing.T) {
 		t.Fatal("a refused tenant scope must not stop the platform scope")
 	}
 	st := statusOf(t, r.src, "scope-retail")
-	if !strings.Contains(st.LastError, "not private") || !strings.Contains(st.LastError, "scope scope-retail") {
+	if !strings.Contains(st.LastError, "not private") || !strings.Contains(st.LastError, "scope scope-retail") || st.BudgetRefused {
 		t.Fatalf("the refusal is the scope's own status: %q", st.LastError)
 	}
 	if plat := statusOf(t, r.src, PlatformScopeID); plat.LastError != "" || plat.Answering != 1 || plat.LastSweep.IsZero() {
@@ -422,8 +422,8 @@ func TestScopesShareOneSweepBudgetPlatformFirst(t *testing.T) {
 	if _, err := r.src.Poll(context.Background()); err != nil {
 		t.Fatalf("the platform scope fits and runs: %v", err)
 	}
-	if st := statusOf(t, r.src, "scope-retail"); !strings.Contains(st.LastError, "more than 4096 addresses") {
-		t.Fatalf("the scope past the shared budget is refused, platform first: %q", st.LastError)
+	if st := statusOf(t, r.src, "scope-retail"); !strings.Contains(st.LastError, "more than 4096 addresses") || !st.BudgetRefused {
+		t.Fatalf("the scope past the shared budget is refused, platform first, and marked as a budget refusal: %+v", st)
 	}
 	if n := len(r.probe.triedWith("10.81.0.1")); n != 0 {
 		t.Fatalf("a refused scope probes nothing (probed %d times)", n)

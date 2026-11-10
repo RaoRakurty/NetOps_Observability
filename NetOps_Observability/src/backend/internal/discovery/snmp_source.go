@@ -89,8 +89,12 @@ type ScopeStatus struct {
 	TenantID  string    `json:"tenant_id"`
 	LastSweep time.Time `json:"last_sweep"`
 	LastError string    `json:"last_error,omitempty"`
-	Answering int       `json:"answering"`
-	Stale     int       `json:"stale"`
+	// BudgetRefused: the last poll refused the scope because the scans
+	// together exceed the shared sweep budget. The error text then describes
+	// OTHER scans' load, so a customer-facing view replaces it.
+	BudgetRefused bool `json:"budget_refused,omitempty"`
+	Answering     int  `json:"answering"`
+	Stale         int  `json:"stale"`
 }
 
 // ScanCredential is one stored SNMP profile, pre-applied to a probe target
@@ -302,6 +306,7 @@ type scopeState struct {
 	ranges    []*net.IPNet // validated; empty when the scope was refused
 	lastSweep time.Time
 	lastErr   string
+	budget    bool // lastErr is the shared-budget refusal
 }
 
 // foundKey is the memory key of addr in tenant's partition.
@@ -472,7 +477,7 @@ func (s *SNMPSource) ScopeStatuses() []ScopeStatus {
 func (s *SNMPSource) scopeStatusesLocked() []ScopeStatus {
 	out := make([]ScopeStatus, 0, len(s.scopes))
 	for id, st := range s.scopes {
-		ss := ScopeStatus{ScopeID: id, TenantID: st.tenant, LastSweep: st.lastSweep, LastError: st.lastErr}
+		ss := ScopeStatus{ScopeID: id, TenantID: st.tenant, LastSweep: st.lastSweep, LastError: st.lastErr, BudgetRefused: st.budget}
 		for k, e := range s.found {
 			if k.TenantID != st.tenant || !inNets(st.ranges, k.Address) {
 				continue
@@ -525,6 +530,7 @@ type scopeRun struct {
 	scope  ScanScope // TenantID normalized (scopeTenant)
 	ranges []string  // validated CIDRs; nil when refused
 	err    error     // why the scope cannot run this sweep; nil = it runs
+	budget bool      // err is the shared-budget refusal
 }
 
 // prepareScopes normalizes, orders and validates the turned-on scopes. Each
@@ -579,6 +585,7 @@ func prepareScopes(cfg ScanSettings) []scopeRun {
 		case len(sc.Credentials) == 0:
 			run.err = fmt.Errorf("discovery sweep refused: %w (a customer's scan tries only that customer's own SNMP profiles)", ErrNoScanCredentials)
 		case budget+hosts > MaxScanHosts:
+			run.budget = true
 			run.err = fmt.Errorf("discovery ranges refused: the scans together would probe more than %d addresses per sweep (one budget for the appliance, the platform scan charged first) — narrow this scan's ranges", MaxScanHosts)
 		default:
 			budget += hosts
@@ -601,7 +608,7 @@ func (s *SNMPSource) syncScopesLocked(runs []scopeRun) {
 			st.lastSweep = prev.lastSweep
 		}
 		if r.err != nil {
-			st.lastErr = r.err.Error()
+			st.lastErr, st.budget = r.err.Error(), r.budget
 		}
 		for _, c := range r.ranges {
 			if _, n, err := net.ParseCIDR(c); err == nil {

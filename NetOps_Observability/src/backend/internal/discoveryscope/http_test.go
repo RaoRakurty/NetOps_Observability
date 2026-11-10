@@ -363,3 +363,44 @@ func TestHandlerRoutingRefusals(t *testing.T) {
 		t.Fatalf("id failure: %d", st)
 	}
 }
+
+// TestACustomerReadLeavesOutPlatformSideDetail: a non-cross read of a scan
+// carries no created_by (the platform's record) and no budget-refusal text
+// (it measures other scans' load); it keeps the "also found by the platform
+// scan" flag, which the owner wants every customer to see.
+func TestACustomerReadLeavesOutPlatformSideDetail(t *testing.T) {
+	h := newHandlerRig(t)
+	_, a := h.create(ownerAll, body("t_a", "10.70.0.80/30"))
+	h.devices = []models.Device{
+		{ID: "a-81", Name: "cEDGE-81", Address: "10.70.0.81", Source: "snmp", TenantID: "t_a"},
+		{ID: "plat-81", Name: "cEDGE-81", Address: "10.70.0.81", Source: "snmp"},
+	}
+	raw := "scope " + a.ID + ": discovery ranges refused: the scans together would probe more than 4096 addresses per sweep (one budget for the appliance, the platform scan charged first) — narrow this scan's ranges"
+	h.statuses = []discovery.ScopeStatus{{ScopeID: a.ID, TenantID: "t_a", LastError: raw, BudgetRefused: true}}
+	for _, c := range []who{userA, ownerAsA} {
+		st, b := h.do(c, http.MethodGet, apiPrefix+"/"+a.ID, nil)
+		got := string(b)
+		if st != http.StatusOK || strings.Contains(got, "created_by") || strings.Contains(got, "sub-global") {
+			t.Fatalf("a non-cross read must not carry created_by: %d %s", st, got)
+		}
+		if strings.Contains(got, "4096") || strings.Contains(got, "platform scan charged") || !strings.Contains(got, budgetRefusedForCustomer) {
+			t.Fatalf("a non-cross read must not carry the budget-refusal detail: %s", got)
+		}
+		if !strings.Contains(got, `"also_found_by_platform":true`) {
+			t.Fatalf("the duplicate flag stays: %s", got)
+		}
+		st, b = h.do(c, http.MethodGet, apiPrefix, nil)
+		if st != http.StatusOK || strings.Contains(string(b), "created_by") || strings.Contains(string(b), "4096 addresses per sweep (") {
+			t.Fatalf("the list must leave them out too: %s", b)
+		}
+	}
+	_, b := h.do(ownerAll, http.MethodGet, apiPrefix+"/"+a.ID, nil)
+	if got := string(b); !strings.Contains(got, `"created_by":"sub-global"`) || !strings.Contains(got, "platform scan charged first") {
+		t.Fatalf("the cross-tenant owner keeps the full detail: %s", got)
+	}
+	// A non-budget refusal is the customer's own problem and is shown as is.
+	h.statuses = []discovery.ScopeStatus{{ScopeID: a.ID, TenantID: "t_a", LastError: "discovery sweep refused: no SNMP profiles to try"}}
+	if _, b := h.do(userA, http.MethodGet, apiPrefix+"/"+a.ID, nil); !strings.Contains(string(b), "no SNMP profiles to try") {
+		t.Fatalf("a customer still sees its own refusal: %s", b)
+	}
+}
