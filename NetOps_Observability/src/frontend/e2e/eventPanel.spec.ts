@@ -73,6 +73,8 @@ async function openRow(page: Page, text: string) {
   }
   await row(page, text).click();
   await expect(panel(page)).toBeVisible();
+  // The panel slides in; measure and capture where it lands, not mid-flight.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));
 }
 
 async function shot(page: Page, name: string) {

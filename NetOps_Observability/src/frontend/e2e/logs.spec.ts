@@ -267,6 +267,8 @@ for (const [name, width, height] of [["desktop-1366", 1366, 768], ["desktop-1920
     await boot(page);
     await rows(page).nth(1).click();
     await expect(detail(page)).toBeVisible();
+    // The panel slides in; measure where it lands, not where it is mid-flight.
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));
     const audit = await typeAudit(page);
     expect(audit.tooSmall).toEqual([]);
     expect(audit.outsideFaces).toEqual([]);
