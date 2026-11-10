@@ -57,6 +57,9 @@ type TrapVarbind struct {
 	Label string   `json:"enum_label,omitempty"` // the enum name of Raw
 	Time  string   `json:"time,omitempty"`       // a DateAndTime, as RFC 3339
 	Num   *float64 `json:"num,omitempty"`        // a numeric SYNTAX, as a number
+	// Decoded is the value as the MIB reads it, where it can: the enum label,
+	// or a DateAndTime rendered as RFC 3339. Empty when nothing more is known.
+	Decoded string `json:"decoded,omitempty"`
 }
 
 // TrapEvent is the normalized, transport-agnostic trap, JSON-emitted to the bus.
@@ -139,8 +142,60 @@ type TrapEvent struct {
 	DeviceEventTime    string             `json:"device_event_time,omitempty"` // the device's clock; Timestamp stays ours
 	Values             map[string]float64 `json:"values,omitempty"`            // typed numeric fields a pack declares
 
+	// Semantic enrichment (tracker 387, trap semantics; trap_enrich.go). Derived
+	// beside the varbinds, never instead of them, and only when it can be filled
+	// truthfully: an absent field means "not known", never a placeholder. The UI
+	// field contract is in trap_enrich.go's header.
+	// The same names the syslog lane uses for the same facts (tracker 387 item 5):
+	// source_ip is the transport sender (= host), event_category the taxonomy
+	// tier-1 (= category), normalized_severity syslog's five-word scale.
+	SourceIP                 string                `json:"source_ip,omitempty"`
+	EventCategory            string                `json:"event_category,omitempty"`
+	NormalizedSeverity       string                `json:"normalized_severity,omitempty"`
+	Title                    string                `json:"title,omitempty"`
+	TitleBasis               string                `json:"title_basis,omitempty"`
+	DeviceName               string                `json:"device_name,omitempty"`
+	NativeSeverity           string                `json:"native_severity,omitempty"`
+	Metrics                  map[string]TrapMetric `json:"metrics,omitempty"`
+	MetricsInvalid           []string              `json:"metrics_invalid,omitempty"`
+	ThresholdReportedPercent *float64              `json:"threshold_reported_percent,omitempty"`
+	ThresholdBasis           string                `json:"threshold_basis,omitempty"`
+	ReceivedTime             string                `json:"received_time,omitempty"`
+	ObservedDelayS           *float64              `json:"observed_delay_s,omitempty"`
+	DelayBasis               string                `json:"delay_basis,omitempty"`
+	DeviceUptimeS            *float64              `json:"device_uptime_s,omitempty"`
+	DeviceUptimeHuman        string                `json:"device_uptime_human,omitempty"`
+	CorrelationKey           string                `json:"correlation_key,omitempty"`
+	EventID                  string                `json:"event_id,omitempty"`
+	LifecycleState           string                `json:"lifecycle_state,omitempty"`
+	LifecycleBasis           string                `json:"lifecycle_basis,omitempty"`
+	RecoveryVerified         bool                  `json:"recovery_verified,omitempty"`
+	AuthModel                string                `json:"auth_model,omitempty"`
+	EventSeverity            string                `json:"event_severity,omitempty"`
+	OpState                  string                `json:"op_state,omitempty"`
+	Impact                   string                `json:"impact,omitempty"`
+	IfAdminStatus            string                `json:"if_admin_status,omitempty"`
+	IfOperStatus             string                `json:"if_oper_status,omitempty"`
+	BGP                      *TrapBGP              `json:"bgp,omitempty"`
+	// One BGP transition's reports (trap_transitions.go). Running values; the
+	// read-time aggregate over transition_id is the final count.
+	TransitionID             string          `json:"transition_id,omitempty"`
+	TransitionSeq            int             `json:"transition_seq,omitempty"`
+	TransitionRepresentative bool            `json:"transition_representative,omitempty"`
+	OccurrenceCount          int             `json:"occurrence_count,omitempty"`
+	FirstSeen                string          `json:"first_seen,omitempty"`
+	LastSeen                 string          `json:"last_seen,omitempty"`
+	Guidance                 *TrapGuidance   `json:"guidance,omitempty"`
+	Enrichment               *TrapEnrichment `json:"enrichment,omitempty"`
+
 	// Pack-supplied text for deriveEnvelope; the JSON carries the result.
 	semanticSummary, semanticCategory, semanticFamily string
+
+	// What the packs said each object means (collectTrapAttrs), and whether a
+	// peer the trap carried failed to decode.
+	attrs           map[string]trapAttr
+	peerFailed      bool
+	attrsProvenance *provenance
 
 	// agentAddr is the v1 Trap-PDU agent-address — the originating device's OWN
 	// IP, set inside the PDU by the device, so it SURVIVES NAT (unlike the packet
@@ -258,8 +313,16 @@ func familyFor(etype string) (category, family string) {
 // agnostic; produces partially_decoded (not raw_only) whenever a standard varbind
 // or L2/MAC structure is decodable even if the vendor trap OID itself isn't.
 func deriveEnvelope(ev *TrapEvent) {
+	deriveEnvelopeWith(ev, nil, time.Now())
+}
+
+// deriveEnvelopeWith is deriveEnvelope with the receiver's per-peer transition
+// memory (nil: each trap stands alone) and the receive time it groups by.
+func deriveEnvelopeWith(ev *TrapEvent, tg *trapTransitions, now time.Time) {
 	ev.Vendor = vendorFromOID(ev.TrapOID)
 	applyTrapSemantics(ev, trapSem)
+	collectTrapAttrs(ev, trapSem)
+	applyTrapEnrichment(ev, trapSem)
 	decoded := ev.TrapName != "" && ev.TrapName != "enterpriseSpecific"
 	if decoded {
 		ev.EventType = camelToSnake(ev.TrapName)
@@ -339,6 +402,21 @@ func deriveEnvelope(ev *TrapEvent) {
 	} else if decoded {
 		ev.Summary = strings.TrimSpace(vendorTitle(ev.Vendor) + ev.TrapName)
 	}
+
+	// The per-peer group needs the prior state the trap evidenced (above), the
+	// family and the device; the title and guidance need the final class, so
+	// they come last.
+	applyTrapUptime(ev)
+	ev.SourceIP, ev.EventCategory, ev.NormalizedSeverity = ev.Host, ev.Category, normalizedSeverity(ev.Severity)
+	ev.EventID = ev.MessageKey
+	ev.CorrelationKey = correlationKey(ev)
+	if tg != nil {
+		tg.observeTransition(ev, now)
+		classifyTrapEvent(ev)
+	}
+	tg.observeLifecycle(ev)
+	applyTrapTitle(ev, trapSem)
+	applyTrapGuidance(ev, trapSem)
 }
 
 // vendorLabel returns a capitalized vendor prefix ("Arista ") or "" for use in
@@ -499,7 +577,7 @@ func parseVarbinds(vbList []byte) (out []TrapVarbind, dropped int) {
 			continue
 		}
 		oid := oidString(decodeOID(oidRaw))
-		out = append(out, decodeVarbind(oid, valStr(valTag, valRaw)))
+		out = append(out, decodeVarbindTag(oid, valStr(valTag, valRaw), valTag))
 	}
 	return out, dropped
 }
@@ -1150,6 +1228,10 @@ type trapReceiver struct {
 	// ifNames names an ifIndex varbind (tracker 387 PR 13c); nil = numbers only.
 	ifNames atomic.Pointer[IfNameFunc]
 
+	// transitions groups one BGP transition's reports and remembers each
+	// peer's last state (tracker 387, trap semantics); forward() uses it.
+	transitions *trapTransitions
+
 	mu       sync.RWMutex
 	status   Status
 	received uint64
@@ -1179,7 +1261,9 @@ func NewTrapReceiver(targets TargetFunc) Collector {
 		targets: targets,
 		masks:   masks,
 		events:  make(chan *TrapEvent, 1024),
-		status:  Status{Name: "snmptrap", Kind: "trap", Healthy: true, LastError: note},
+		// Receive-path memory, bounded (LRU); never read across devices.
+		transitions: newTrapTransitions(transitionMaxPeers),
+		status:      Status{Name: "snmptrap", Kind: "trap", Healthy: true, LastError: note},
 	}
 }
 
@@ -1360,9 +1444,27 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 	}
 	if ev.Device != "" {
 		ev.EnrichmentStatus = "inventory_matched"
+		ev.DeviceName = r.deviceName(ev.Device)
 	} else {
 		ev.EnrichmentStatus = "inventory_missing"
 	}
+}
+
+// deviceName is the inventory's display name for an attributed device id ("" if
+// the inventory names it nothing, or names it only by its id).
+func (r *trapReceiver) deviceName(id string) string {
+	if r.targets == nil || id == "" {
+		return ""
+	}
+	for _, t := range r.targets() {
+		if t.ID == id {
+			if n := strings.TrimSpace(t.Name); n != "" && n != id {
+				return clampRunes(n, maxIfNameChars)
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // decodePacket decodes and attributes ONE datagram, with panic recovery.
@@ -1488,7 +1590,9 @@ func (r *trapReceiver) forwardLoop(ctx context.Context) {
 }
 
 func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *TrapEvent) {
-	deriveEnvelope(ev) // fill the NormalizedEvent envelope (#32) just before emit
+	// Fill the NormalizedEvent envelope (#32) just before emit, with the
+	// receiver's per-peer transition memory.
+	deriveEnvelopeWith(ev, r.transitions, time.Now())
 	// Pipeline-debugger parser decision trace (parsehook.go). Deliberately HERE
 	// and not inside finalizeTrap: the decision path an operator needs includes
 	// the normalisation deriveEnvelope performs (event_type, category, family,

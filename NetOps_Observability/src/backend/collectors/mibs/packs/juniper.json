@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "pack": "juniper",
+  "source": "BGP4-V2-MIB-JUNIPER (Junos): jnxBgpM2PeerTable INDEX { RoutingInstance, LocalAddrType, LocalAddr, RemoteAddrType, RemoteAddr }; the notifications also bind the addresses as values. doc_claimed: no capture.",
+  "objects": {
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.15": {
+      "name": "jnxBgpM2PeerRoutingInstance",
+      "attr": "routing_instance"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.6": {
+      "name": "jnxBgpM2PeerLocalAddrType",
+      "attr": "local_afi"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.7": {
+      "name": "jnxBgpM2PeerLocalAddr",
+      "attr": "local_address"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.10": {
+      "name": "jnxBgpM2PeerRemoteAddrType",
+      "attr": "peer_afi"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.11": {
+      "name": "jnxBgpM2PeerRemoteAddr",
+      "attr": "peer_address"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.13": {
+      "name": "jnxBgpM2PeerRemoteAs",
+      "attr": "peer_as"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.2": {
+      "name": "jnxBgpM2PeerState",
+      "attr": "bgp_state"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.2.2.1.1.1": {
+      "name": "jnxBgpM2PeerLastErrorReceived",
+      "attr": "bgp_last_error"
+    }
+  },
+  "notifications": {},
+  "titles": {
+    "1.3.6.1.4.1.2636.5.1.1.1.0.1": {
+      "name": "jnxBgpM2Established",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.2636.5.1.1.1.0.2": {
+      "name": "jnxBgpM2BackwardTransition",
+      "template": "bgp_transition"
+    }
+  }
+}
