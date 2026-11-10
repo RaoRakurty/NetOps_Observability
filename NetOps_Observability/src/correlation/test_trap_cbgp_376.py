@@ -123,11 +123,17 @@ class CiscoBgp4RuleTest(unittest.TestCase):
     def test_peer2_fsm_change(self):
         self.assertTransition(peer2_trap(7, "6", "5"), "up")
         self.assertTransition(peer2_trap(7, "1", "6"), "down")
-        self.assertTransition(peer2_trap(7, "idle(1)", "openconfirm(5)"), "down")
         self.assertNotAdjacency(peer2_trap(7, "3", "1"))
 
-    def test_peer2_backward_transition_is_down(self):
-        self.assertTransition(peer2_trap(8, "1", "3"), "down")
+    # Tracker 387 (owner 2026-11-10): a backward move of a session that was never
+    # established withdrew nothing. It is not a session failure, so no down.
+    def test_backward_below_established_is_not_a_session_failure(self):
+        self.assertNotAdjacency(peer2_trap(7, "idle(1)", "openconfirm(5)"))
+        self.assertNotAdjacency(peer2_trap(8, "1", "3"))
+        self.assertNotAdjacency(peer1_trap(2, "idle(1)", "3"))
+
+    def test_peer2_backward_transition_from_established_is_down(self):
+        self.assertTransition(peer2_trap(8, "1", "6"), "down")
 
     def test_prefix_threshold_notifications_are_not_adjacency(self):
         for n in (3, 4, 9, 10):
@@ -178,17 +184,20 @@ class InetIndexTextTest(unittest.TestCase):
 class RecordedEventTest(unittest.TestCase):
     """The lab's real transition: six families, one transition."""
 
-    def test_first_transition_six_reports_one_signal(self):
+    def test_first_transition_six_reports(self):
+        """The recorded move is ACTIVE(3) -> IDLE(1): a session that never came up.
+        The four reports that carry the prior state say so and build no down
+        (tracker 387); the two that carry only the new state cannot, in a record
+        from a receiver that predates bgp.transition_class, and collapse to one."""
         col = TransitionCollapser()
         first = [t for t in recorded() if t["timestamp"] < "2026-11-01T17:00:11"]
         self.assertEqual(len(first), 6)
         sigs = [classify(t) for t in first]
-        self.assertTrue(all(s is not None for s in sigs), "every family classifies")
-        self.assertEqual({(s.entity_id, s.attrs["state"]) for s in sigs},
-                         {(f"{DEVICE}:{PEER}", "down")})
-        kept = [s for s in sigs if col.admit(TENANT, s.entity_id, s.attrs["state"], s.ts)]
+        self.assertEqual([s is not None for s in sigs], [True, True, False, False, False, False])
+        kept = [s for s in sigs if s is not None
+                and col.admit(TENANT, s.entity_id, s.attrs["state"], s.ts)]
         self.assertEqual(len(kept), 1)
-        self.assertEqual(col.collapsed, 5)
+        self.assertEqual(col.collapsed, 1)
 
     def test_idle_to_active_retry_is_not_a_signal(self):
         later = [t for t in recorded() if t["timestamp"] >= "2026-11-01T17:00:11"]
@@ -306,9 +315,10 @@ class HandleSnmptrapCollapseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sigs[0]["entity_id"], f"{DEVICE}:{PEER}")
         self.assertEqual(main.TRAPS_RECEIVED, 8)
         self.assertEqual(main.TRAPS_NORMALIZED, 1)
-        self.assertEqual(main.TRAPS_DROPPED, 2)            # the idle→active retry pair
-        self.assertEqual(main.TRAP_TRANSITIONS.collapsed, 5)
-        self.assertEqual(main._health_payload()["ingest"]["traps_collapsed"], 5)
+        # the idle→active retry pair + the four reports that say active→idle
+        self.assertEqual(main.TRAPS_DROPPED, 6)
+        self.assertEqual(main.TRAP_TRANSITIONS.collapsed, 1)
+        self.assertEqual(main._health_payload()["ingest"]["traps_collapsed"], 1)
 
 
 if __name__ == "__main__":
