@@ -72,8 +72,10 @@ func CallTools(ctx context.Context, do DoFunc, name, key, model, system string, 
 		if err != nil {
 			return "", nil, err
 		}
-		endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent?key=" + url.QueryEscape(key)
-		rb, err := do(ctx, endpoint, nil, body, "gemini")
+		// The key travels in the x-goog-api-key header, never the URL (see
+		// llm_transport.go geminiComplete).
+		endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent"
+		rb, err := do(ctx, endpoint, map[string]string{"x-goog-api-key": key}, body, "gemini")
 		if err != nil {
 			return "", nil, err
 		}
