@@ -198,9 +198,10 @@
       "evidence": "scripts/asn-prepare.py fetches https://iptoasn.com/data/ip2asn-combined.tsv.gz (or reads an operator-supplied copy), verifies an operator-pinned sha256 (--sha256) or records the digest it used in asn.csv.source, and writes data/clickhouse/user_files/asn/asn.csv for the netops.ip_asn ip_trie dictionary (tracker 387 PR 13d). iptoasn.com states 'Licensed under Public Domain (PDDL v1.0)' with license https://opendatacommons.org/licenses/pddl/1.0/ in its dataset metadata; both checked 2026-11-10.",
       "license": "PDDL-1.0",
       "obligation": "none: PDDL v1.0 dedicates the data to the public domain; attribution is a courtesy",
-      "owner_decision": "none needed (public domain data; never shipped)",
+      "owner_decision": "DECIDED 2026-11-09 (owner-approved telemetry plan, tracker 387 PR 13d: the iptoasn PDDL dataset, operator-fetched at run time); public domain data that is never shipped, so no further owner decision is needed.",
       "posture": "Fetched by the operator at run time, never committed and never in an image; only the prepared CIDR -> AS number CSV lands in the ClickHouse data volume.",
-      "status": "DECIDED"
+      "status": "DECIDED",
+      "rationale": "AS numbers for flows whose exporter sends none (the lab's cflowd template carries no BGP AS elements; 100% of flows read 0). Decided: the operator fetches the dataset at run time with scripts/asn-prepare.py and it is never committed or baked into an image, so no distribution happens; PDDL-1.0 would allow it anyway. Check: scripts/asn-prepare.py docstring and the asn.csv.source provenance file it writes beside the prepared data."
     }
   },
   "go": {
