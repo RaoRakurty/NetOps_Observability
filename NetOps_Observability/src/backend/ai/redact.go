@@ -82,6 +82,18 @@ var (
 	// spare ordinary English (see below).
 	reSecretCLI = regexp.MustCompile(`(?i)\b(snmp-server community|community-string|enable secret|password|passwd|secret|community|passphrase)\s+(\d\s+)?(` + valueChars + `)`)
 
+	// The community a v1/v2c agent refused, as net-snmp and ConfD log it:
+	// "bad community name: public 127.0.0.1.198.53". Found live 2026-11-10 on
+	// vEdge confd lines: reSecretCLI alone masked the word "name:" and left the
+	// community, so the line LOOKED redacted while the credential survived.
+	reCommunityName = regexp.MustCompile(`(?i)\b(community name:?\s+)` + valueChars)
+
+	// ConfD's audit of a refused SNMP request puts the attempted community in
+	// the user slot: "audit user: public/0 SNMP authentication failed". Only on
+	// an authentication failure is that "user" a credential; a successful SNMP
+	// session names a real account (owner D7: usernames stay).
+	reConfdSNMPAuthUser = regexp.MustCompile(`(?i)\b(audit user:\s*)[^\s/]+(/\d+\s+SNMP authentication failed)`)
+
 	// Inline credentials in a connection string / URL userinfo:
 	// postgres://user:pw@host, https://admin:pw@device/api.
 	reURLCreds = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`)
@@ -179,7 +191,8 @@ var cliSecretStopwords = map[string]bool{
 	"failed": true, "failure": true, "for": true, "from": true, "has": true,
 	"have": true, "hash": true, "hashed": true, "if": true, "in": true,
 	"incorrect": true, "invalid": true, "is": true, "it": true, "length": true,
-	"may": true, "mismatch": true, "must": true, "no": true, "not": true,
+	"may": true, "mismatch": true, "must": true, "name": true, "name:": true,
+	"no": true, "not": true,
 	"of": true, "on": true, "or": true, "policy": true, "required": true,
 	"reset": true, "rotated": true, "rotation": true, "set": true,
 	"should": true, "string": true, "that": true, "the": true, "then": true,
@@ -213,6 +226,8 @@ func RedactSecrets(s string) string {
 	s = reJWT.ReplaceAllString(s, Mask)
 	s = reAuthScheme.ReplaceAllString(s, "${1} "+Mask)
 	s = reVendorKey.ReplaceAllString(s, Mask)
+	s = reCommunityName.ReplaceAllString(s, "${1}"+Mask)
+	s = reConfdSNMPAuthUser.ReplaceAllString(s, "${1}"+Mask+"${2}")
 	s = reSecretKV.ReplaceAllString(s, "${1}${2}"+Mask)
 	s = reSecretCLI.ReplaceAllStringFunc(s, maskCLISecret)
 	s = reURLCreds.ReplaceAllString(s, "${1}"+Mask+":"+Mask+"@")
