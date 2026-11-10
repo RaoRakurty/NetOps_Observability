@@ -1,0 +1,780 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Nokia SR OS (7750 SR, 7250 IXR, 7450 ESS and kin), tracker 387 plan §6a, wave 1.
+# Format: telemetry-catalog/README.md, "Vendor packs". SR Linux is NOT here: its
+# pipe-separated form is the hand-written `srlinux.v1` grammar in vector.yaml.
+#
+# EVIDENCE. No SR OS box is on the lab and no free image exists (research §6), so every
+# row is `doc_claimed`. The line shape and every event name, id, default severity and
+# message format below were read from Nokia's own documentation on 2026-11-09:
+#   wire format  https://infocenter.nokia.com/public/7750SR222R1A/topic/com.nokia.System_Mgmt_Guide/syslog_implemen-ai9exj5x1i.html
+#   event tables https://documentation.nokia.com/sr/22-10/books/log-events/log-<app>.html
+#                (bgp, ospf, isis, snmp, port, chassis, system)
+# A fixture fills a documented `$variable$` with an illustrative value; the shape around
+# it is the document's. The only literal line Nokia prints is the SYSTEM one below.
+#
+# FRAMING ON THE WIRE (research §2.4): RFC 3164, `PRI = facility*8 + severity`, HEADER
+# `MMM DD HH:MM:SS <source IP>`, MSG `<log-prefix>: <seq> <vrtr> <APP>-<SEVERITY>-<Event
+# Name>-<Event ID> [<subject>]: <message>`. The log prefix (default `TMNX`) becomes the
+# program, the source IP the hostname (tests/test_syslog_edge_framing.py).
+#
+# SEVERITY. Nokia's own syslog mapping (same guide): critical -> alert(1), major ->
+# critical(2), minor -> error(3), warning -> warning(4), cleared and indeterminate ->
+# info(6). The device sends that number as PRI; the grammar reads the word too, so a
+# record already on the bus keeps it. `alarm_floor: 2` is the canonical critical line:
+# Nokia's CRITICAL and MAJOR may alarm on severity alone, everything else needs a typed
+# row (owner D3).
+#
+# EVENT TYPE is `<app>_<id>` (`bgp_2039`), as the Cisco SD-WAN pack does, NOT the event
+# name. Nokia names carry words the vendor-neutral rules key on: `bgpEstablished
+# Notification` holds NOTIFICATION, and `syslog.bgp.notification` would read a session
+# coming UP as a teardown. The name stays in the message, where the typed rows read it.
+pack: nokia_sros
+vendor: nokia
+description: Nokia SR OS routers (classic CLI and MD-CLI share the log format).
+
+severity_words:
+  CRITICAL: 1
+  MAJOR: 2
+  MINOR: 3
+  WARNING: 4
+  CLEARED: 6
+  INDETERMINATE: 6
+
+grammars:
+  - id: sros_event
+    parser_id: nokia_sros.v1
+    literal: ']:'
+    pattern: '(?P<seq>\d{1,10}) (?P<vrtr>[A-Za-z][\w-]{0,63}) (?P<app>[A-Z][A-Z0-9_]{0,31})-(?P<word>CRITICAL|MAJOR|MINOR|WARNING|CLEARED|INDETERMINATE)-(?P<name>[A-Za-z][A-Za-z0-9_]{0,63})-(?P<id>\d{1,6}) \[(?P<subject>[^\]]{0,512})\]:\s*(?P<text>.*)'
+    facility: '{app}'
+    event_type: '{app}_{id}'
+    summary: '{text}'
+    severity: {word: word}
+    native_text: word
+    alarm_floor: 2
+    fidelity: doc_claimed
+    source: 'Nokia 7750 SR 22.2.R1 System Management Guide, "Syslog implementation" (format and literal), infocenter.nokia.com'
+
+# Typed rows, in match order. Owner D3: a row emits `crit` only when the line itself
+# states Nokia CRITICAL or MAJOR (canonical critical). Everything else is `warn` or
+# `info`, below `severity_open_floor`: it joins a component and cannot open one. E1 still
+# makes the box's own syslog and its trap one observation: these rows corroborate.
+#
+# Every guard reads `ctoken` first: it carries the grammar's facility (`BGP`, `SNMP`), so
+# the regex runs only on that application's lines.
+rules:
+  # BGP session down: BGP4-MIB and TIMETRA-BGP-MIB backward transitions (both are logged,
+  # depending on the MIB set the router runs). Default severity warning.
+  - rule_id: syslog.sros.bgp.down
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:bgpBackwardTransNotification-2039|tBgpNgBackwardTransition-2020)\s\['
+    guard:
+      all:
+        - {contains: [ctoken, 'BGP']}
+        - {re: [msg, '-(?:bgpBackwardTransNotification-2039|tBgpNgBackwardTransition-2020)\s\[', '']}
+    extract:
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      from_state: {re: [[msg, 'from higher state (\S{1,32}) to lower state', 1, '']]}
+      to_state: {re: [[msg, 'to lower state (\S{1,32})', 1, '']]}
+      reason: {re: [[msg, 'due to event (.{1,64})', 1, '']]}
+      state: {const: down}
+    emit:
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: &sros_crit_if_critical
+        case:
+          - when: {re: [msg, '-(?:CRITICAL|MAJOR)-[A-Za-z]\w{0,63}-\d{1,6} \[', '']}
+            value: crit
+        default: warn
+      native_id: '{host}|bgp_adj|{peer|?}|down|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        from_state: {var: from_state}
+        to_state: {var: to_state}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  - rule_id: syslog.sros.bgp.up
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:bgpEstablishedNotification-2038|tBgpNgEstablished-2019)\s\['
+    guard:
+      all:
+        - {contains: [ctoken, 'BGP']}
+        - {re: [msg, '-(?:bgpEstablishedNotification-2038|tBgpNgEstablished-2019)\s\[', '']}
+    severity: warn
+    extract:
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      state: {const: up}
+    emit:
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|bgp_adj|{peer|?}|up|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        tag: {var: tag}
+
+  # A NOTIFICATION sent or received closes the session (RFC 4271 §6), the same reading as
+  # `syslog.bgp.notification`. `notify` keeps it apart from the transition's identity, so
+  # both reports of one teardown survive.
+  - rule_id: syslog.sros.bgp.notification
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:sendNotification-2005|receiveNotification-2006)\s\['
+    guard:
+      all:
+        - {contains: [ctoken, 'BGP']}
+        - {re: [msg, '-(?:sendNotification-2005|receiveNotification-2006)\s\[', '']}
+    extract:
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      code: {re: [[msg, 'notification: code (\S{1,48})', 1, '']]}
+      subcode: {re: [[msg, 'subcode (\S{1,48})', 1, '']]}
+      direction:
+        case:
+          - {when: {re: [msg, '-sendNotification-2005 \[', '']}, value: sent}
+          - {when: {always: true}, value: received}
+      state: {const: down}
+    emit:
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: *sros_crit_if_critical
+      native_id: '{host}|bgp_adj|notify|{peer|?}|{code|-}|down|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        subtype: {const: notification}
+        direction: {var: direction}
+        code: {var: code}
+        subcode: {var: subcode}
+        tag: {var: tag}
+
+  # OSPF neighbour (non-virtual). The peer is the neighbour ROUTER ID, the first address
+  # after `Neighbor`; the line opens with the local router id, which is not the peer.
+  - rule_id: syslog.sros.ospf.neighbor_state
+    lane: syslog
+    source: syslog
+    kind: ospf_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-tmnxOspfNgNbrStateChange-2042 '
+    guard:
+      all:
+        - {contains: [ctoken, 'OSPF']}
+        - {re: [msg, '-tmnxOspfNgNbrStateChange-2042 ', '']}
+    extract:
+      peer: {re: [[msg, 'Neighbor (\d{1,3}(?:\.\d{1,3}){3})', 1, '']]}
+      nbr_addr: {re: [[msg, ' on (\d{1,3}(?:\.\d{1,3}){3}) router state', 1, '']]}
+      tgt: {re: [[msg, 'router state changed to (\w{1,16})', 1, '']]}
+      state:
+        scan:
+          target: tgt
+          target_order:
+            - [down, '^(?:down|init)$', 'i']
+            - [up, '^full$', 'i']
+          field: msg
+          default: unknown
+    emit:
+      metric: ospf_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: &sros_crit_if_critical_down
+        case:
+          - when:
+              all:
+                - {eq: ['$state', 'down']}
+                - {re: [msg, '-(?:CRITICAL|MAJOR)-[A-Za-z]\w{0,63}-\d{1,6} \[', '']}
+            value: crit
+          - {when: {eq: ['$state', 'unknown']}, value: info}
+        default: warn
+      native_id: '{host}|ospf_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        neighbor_address: {var: nbr_addr}
+        state: {var: state}
+        tag: {var: tag}
+
+  # Interface operational state. The SNMP application's linkDown/linkUp do NOT say why
+  # (Nokia: "check ifAdminStatus"), so no `link_cause`: an operator's shutdown and a
+  # fault read alike here, and the trap or the poll has to tell them apart.
+  - rule_id: syslog.sros.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-link(?:Down-2004|Up-2005) \[[^\]]{0,512}\]:\s*Interface \S{1,128} is (?:not )?operational'
+    guard:
+      all:
+        - {contains: [ctoken, 'SNMP']}
+        - {re: [msg, '-link(?:Down-2004|Up-2005) \[[^\]]{0,512}\]:\s*Interface \S{1,128} is (?:not )?operational', '']}
+    extract:
+      ifname: {re: [[msg, 'Interface (\S{1,128}) is (?:not )?operational', 1, '']]}
+      state:
+        case:
+          - {when: {re: [msg, ' is not operational', '']}, value: down}
+          - {when: {always: true}, value: up}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: *sros_crit_if_critical_down
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {var: tag}
+
+  # Chassis and module failures. Nokia defaults: power supply and fan CRITICAL,
+  # temperature, card and memory allocation MAJOR, so each arrives as `crit` and opens
+  # alone, the way the generic net would open it, but with the component named. The
+  # matching `...Clear`/`...Clr` events are CLEARED (info): they emit nothing.
+  - rule_id: syslog.sros.equipment.failure
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:tmnxEqPhysChassPowerSupInFail-2144|tmnxEqPhysChassPowerSupOutFail-2146|tmnxEqPhysChassisFanFailure-2148|tmnxEnvTempTooHigh-2005|tmnxEqCardFailure-2001|tmnxModuleMallocFailed-2010)\s\['
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'CHASSIS']}
+            - {contains: [ctoken, 'SYSTEM']}
+        - {re: [msg, '-(?:tmnxEqPhysChassPowerSupInFail-2144|tmnxEqPhysChassPowerSupOutFail-2146|tmnxEqPhysChassisFanFailure-2148|tmnxEnvTempTooHigh-2005|tmnxEqCardFailure-2001|tmnxModuleMallocFailed-2010)\s\[', '']}
+    extract:
+      failure:
+        case:
+          - {when: {re: [msg, '-tmnxEqPhysChassPowerSupInFail-2144 \[', '']}, value: power_supply_input_failure}
+          - {when: {re: [msg, '-tmnxEqPhysChassPowerSupOutFail-2146 \[', '']}, value: power_supply_output_failure}
+          - {when: {re: [msg, '-tmnxEqPhysChassisFanFailure-2148 \[', '']}, value: fan_failure}
+          - {when: {re: [msg, '-tmnxEnvTempTooHigh-2005 \[', '']}, value: temperature_high}
+          - {when: {re: [msg, '-tmnxEqCardFailure-2001 \[', '']}, value: card_failure}
+          - {when: {always: true}, value: memory_allocation_failed}
+      component:
+        re:
+          - [msg, '(power supply \S{1,16})', 1, '']
+          - [msg, '(fan \S{1,16})', 1, '']
+          - [msg, '\]:\s*(.{1,64}?): temperature too high', 1, '']
+          - [msg, '\]:\s*Class (.{1,64}?) : failed', 1, '']
+          - [msg, 'from module (\S{1,64}) failed', 1, '']
+      chassis: {re: [[msg, '\bChassis (\d{1,4})', 1, '']]}
+      reason: {re: [[msg, 'failed, reason: (.{1,128})', 1, '']]}
+    emit:
+      metric: device_alarm
+      modality: device_telemetry
+      entity: {type: device, id: '{host}'}
+      severity: *sros_crit_if_critical
+      native_id: '{host}|alarm|{failure}|{chassis|-}|{component|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        failure: {var: failure}
+        component: {var: component}
+        chassis: {var: chassis}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  # Port alarms (default minor). The port is the record's subject; it stays an attr, never
+  # a bare token: `1/1/1` exists on every router in the estate (tracker 168).
+  - rule_id: syslog.sros.port.alarm
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:tmnxEqPortError-2009|tmnxEqPortEtherAlarm-2017|tmnxEqPortEtherLoopDetected-2025)\s\['
+    guard:
+      all:
+        - {contains: [ctoken, 'PORT']}
+        - {re: [msg, '-(?:tmnxEqPortError-2009|tmnxEqPortEtherAlarm-2017|tmnxEqPortEtherLoopDetected-2025)\s\[', '']}
+    extract:
+      failure:
+        case:
+          - {when: {re: [msg, '-tmnxEqPortError-2009 \[', '']}, value: port_error}
+          - {when: {re: [msg, '-tmnxEqPortEtherAlarm-2017 \[', '']}, value: ether_alarm}
+          - {when: {always: true}, value: ether_loop}
+      port: {re: [[msg, ' \[([^\]]{1,64})\]:', 1, '']]}
+      reason:
+        re:
+          - [msg, 'Physical port (.{1,128})', 1, '']
+          - [msg, 'Alarm (.{1,64}) Set', 1, '']
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: *sros_crit_if_critical
+      native_id: '{host}|alarm|{failure}|{port|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        failure: {var: failure}
+        port: {var: port}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  # Configuration change: the "what changed" corroboration, never a fault (info, below
+  # the open floor). SYSTEM tmnxConfigModify/Create/Delete (warning) and the USER
+  # application's CLI configuration audit, cli_config_io (minor). The user who typed
+  # it is not on the line Nokia documents, so it is not guessed.
+  - rule_id: syslog.sros.config.change
+    lane: syslog
+    source: syslog
+    kind: device_config_change
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    pattern_src: '-(?:tmnxConfigModify-2006|tmnxConfigCreate-2007|tmnxConfigDelete-2008|cli_config_io-2011)\s\['
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'SYSTEM']}
+            - {contains: [ctoken, 'USER']}
+        - {re: [msg, '-(?:tmnxConfigModify-2006|tmnxConfigCreate-2007|tmnxConfigDelete-2008|cli_config_io-2011)\s\[', '']}
+    severity: info
+    extract:
+      method:
+        case:
+          - {when: {re: [msg, '-tmnxConfigCreate-2007 \[', '']}, value: create}
+          - {when: {re: [msg, '-tmnxConfigDelete-2008 \[', '']}, value: delete}
+          - {when: {re: [msg, '-cli_config_io-2011 \[', '']}, value: cli}
+          - {when: {always: true}, value: modify}
+      object: {re: [[msg, '\]:\s*(\S{1,128}) (?:configuration modified|managed object)', 1, '']]}
+      source: {re: [[msg, 'User from (\S{1,64}):', 1, '']]}
+      state: {const: changed}
+    emit:
+      metric: device_config_change
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|config_change|{method}|{object|?}|{source|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        method: {var: method}
+        object: {var: object}
+        source: {var: source}
+        state: {var: state}
+        tag: {var: tag}
+
+  # A successful configuration save (warning by default). The change it persists is
+  # tmnxConfigModify, typed above; the save itself states no device state, and on a box
+  # with incremental saves it repeats on every change.
+  - rule_id: syslog.sros.config.saved
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    known_benign: true
+    benign_reason: a configuration file was saved successfully; the change itself is reported by tmnxConfigModify
+    pattern_src: '-(?:ssiSaveConfigSucceeded-2002|ssiSaveIncrementConfigSucceeded-2110|ssiSaveBackgroundConfigSucceeded-2112)\s\['
+    guard:
+      all:
+        - {contains: [ctoken, 'SYSTEM']}
+        - {re: [msg, '-(?:ssiSaveConfigSucceeded-2002|ssiSaveIncrementConfigSucceeded-2110|ssiSaveBackgroundConfigSucceeded-2112)\s\[', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+  # A clear that Nokia logs at minor or above (tmnxEqPortEtherAlarmClear, ...LoopCleared
+  # are minor). It ends an alarm, it is not one: without this row the below-floor net
+  # would file it as a new device alarm. Counted, and the record stays stored.
+  - rule_id: syslog.sros.clear
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    known_benign: true
+    benign_reason: a Nokia clear event logged at minor or above; it ends an alarm and states no new fault
+    pattern_src: '-(?:CRITICAL|MAJOR|MINOR|WARNING)-[A-Za-z]\w{0,58}(?:Clear|Cleared|Clr|Cl)-\d{1,6} \['
+    guard: {re: [msg, '-(?:CRITICAL|MAJOR|MINOR|WARNING)-[A-Za-z]\w{0,58}(?:Clear|Cleared|Clr|Cl)-\d{1,6} \[', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+  # Rule 1, "ingestion is not incident creation": any other minor or warning event of
+  # this grammar reaches the engine at `warn`, so it can join a component. MAJOR and
+  # CRITICAL lines are within the alarm floor, so the generic net takes them at `crit`.
+  - rule_id: syslog.sros.below_floor
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [nokia]
+    generic: true
+    fidelity_status: doc_claimed
+    pattern_src: '\d{1,10} [A-Za-z][\w-]{0,63} [A-Z][A-Z0-9_]{0,31}-(?:MINOR|WARNING)-[A-Za-z]\w{0,63}-\d{1,6} \['
+    guard: {re: [msg, '\d{1,10} [A-Za-z][\w-]{0,63} [A-Z][A-Z0-9_]{0,31}-(?:MINOR|WARNING)-[A-Za-z]\w{0,63}-\d{1,6} \[', '']}
+    severity: warn
+    extract:
+      facility: {re: [[msg, ' ([A-Z][A-Z0-9_]{0,31})-(?:MINOR|WARNING)-', 1, '']]}
+      mnem: {re: [[msg, '-(?:MINOR|WARNING)-([A-Za-z]\w{0,63}-\d{1,6})\s\[', 1, '']]}
+      text: {var: msg, slice: 256}
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|alarm|{facility|?}|{mnem|?}|-|{ts_ms}'
+      content_tag: msg
+      tokens: [{t: '{host}'}]
+      attrs:
+        facility: {var: facility}
+        mnemonic: {var: mnem}
+        tag: {var: tag}
+        text: {var: text}
+
+wanted:
+  - symptom: BFD session down/up (IP BFD)
+    kind: bfd_session_flap
+    why_absent: TIMETRA-BFD 2001/2002 are LSP-BFD only; the IP-BFD event lives under VRTR and its page was not read
+  - symptom: IS-IS adjacency
+    why_absent: not a pack row on purpose; tmnxIsisAdjacencyChange carries ISISADJACENCYCHANGE, which the vendor-neutral syslog.isis.adjacency_change already reads
+  - symptom: CPU and memory utilisation raise and clear
+    kind: device_resource_anomaly
+    why_absent: no CPU or memory threshold event in the SYSTEM or CHASSIS tables read (22.10)
+  - symptom: temperature recovery
+    why_absent: no tmnxEnvTempTooHigh clear event in the part of the CHASSIS table that was readable
+  - symptom: who made a configuration change
+    why_absent: neither tmnxConfigModify nor cli_config_io prints a user name in the documented message
+
+fixtures:
+  # The one literal line Nokia prints, verbatim apart from the elided message.
+  - name: the documented SYSTEM line parses and reads its severity word
+    fidelity: doc_claimed
+    source: 'https://infocenter.nokia.com/public/7750SR222R1A/topic/com.nokia.System_Mgmt_Guide/syslog_implemen-ai9exj5x1i.html (literal; message from log-system.html tmnxStateChange)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '17 Base SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed administrative state: inService, operational state: outOfService'
+    expect:
+      vendor: nokia
+      vendor_source: format
+      parser_id: nokia_sros.v1
+      parser_status: parsed
+      facility: SYSTEM
+      event_type: system_2009
+      summary: 'Status of Card 1 changed administrative state: inService, operational state: outOfService'
+      severity_native_text: WARNING
+      normalized_severity: warning
+    signal: {rule_id: syslog.sros.below_floor, kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: a BGP session moving down is a below-floor adjacency change
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-bgp.html (tBgpNgBackwardTransition 2020, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '18 Base BGP-WARNING-tBgpNgBackwardTransition-2020 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Idle due to event holdTimerExpired'
+    expect:
+      parser_status: parsed
+      facility: BGP
+      event_type: bgp_2020
+      severity_native_text: WARNING
+      normalized_severity: warning
+    signal: {rule_id: syslog.sros.bgp.down, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 192.0.2.2}
+
+  - name: the BGP4-MIB twin of the same transition, set to major by the operator, is critical
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-bgp.html (bgpBackwardTransNotification 2039; severity raised with log event-control)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: crit
+    message: '19 Base BGP-MAJOR-bgpBackwardTransNotification-2039 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Active due to event tcpConnectionFails'
+    expect:
+      parser_status: parsed
+      event_type: bgp_2039
+      severity_native_text: MAJOR
+      normalized_severity: critical
+    signal: {rule_id: syslog.sros.bgp.down, kind: bgp_adjacency_change, severity: crit, opens_alone: true, state: down, peer: 192.0.2.2}
+
+  # The established event carries NOTIFICATION in its name. It must read as up, never as
+  # the teardown `syslog.bgp.notification` would make of it.
+  - name: a BGP session established is up, not a notification teardown
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-bgp.html (bgpEstablishedNotification 2038, minor)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: err
+    message: '20 Base BGP-MINOR-bgpEstablishedNotification-2038 []: (ASN 65001) 192.0.2.2: moved into established state'
+    expect:
+      parser_status: parsed
+      event_type: bgp_2038
+      severity_native_text: MINOR
+    signal: {rule_id: syslog.sros.bgp.up, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: up, peer: 192.0.2.2}
+
+  - name: a received NOTIFICATION closes the session
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-bgp.html (receiveNotification 2006, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '21 Base BGP-WARNING-receiveNotification-2006 []: (ASN 65001) 192.0.2.2: received notification: code CEASE subcode ADMINSHUTDOWN'
+    expect:
+      parser_status: parsed
+      event_type: bgp_2006
+    signal: {rule_id: syslog.sros.bgp.notification, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 192.0.2.2}
+
+  - name: an OSPF neighbour dropping to down names the neighbour router id
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-ospf.html (tmnxOspfNgNbrStateChange 2042, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '22 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to down (event inactivityTimer)'
+    expect:
+      parser_status: parsed
+      facility: OSPF
+      event_type: ospf_2042
+    signal: {rule_id: syslog.sros.ospf.neighbor_state, kind: ospf_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 192.0.2.9}
+
+  - name: an OSPF neighbour in an intermediate state is info
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-ospf.html (tmnxOspfNgNbrStateChange 2042, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '23 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to exchange (event negotiationDone)'
+    expect:
+      parser_status: parsed
+      event_type: ospf_2042
+    signal: {rule_id: syslog.sros.ospf.neighbor_state, kind: ospf_adjacency_change, severity: info, opens_alone: false, state: unknown, peer: 192.0.2.9}
+
+  # Answered by the vendor-neutral IS-IS row, which reads the event name in the message.
+  - name: an IS-IS adjacency change goes to the IS-IS row, and down opens as it does for every vendor
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-isis.html (tmnxIsisAdjacencyChange 2045, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '24 Base ISIS-WARNING-tmnxIsisAdjacencyChange-2045 []: Adjacency status changed to down for interface: 3, for level: l2 LSP-id: 1921.6800.1001.00-00'
+    expect:
+      parser_status: parsed
+      facility: ISIS
+      event_type: isis_2045
+    signal: {kind: isis_adjacency_change, severity: high, opens_alone: true, state: down, peer: 1921.6800.1001}
+
+  - name: an interface that is not operational is a below-floor link change with no cause
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-snmp.html (linkDown 2004, warning); subject value from the Log Events overview console example'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '25 Base SNMP-WARNING-linkDown-2004 [my-interface-abc]: Interface my-interface-abc is not operational'
+    expect:
+      parser_status: parsed
+      facility: SNMP
+      event_type: snmp_2004
+      summary: Interface my-interface-abc is not operational
+    signal: {rule_id: syslog.sros.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: '10.221.38.108:my-interface-abc'}
+
+  - name: an interface operational again is the up side
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-events-overview.html (console example `SNMP #2005 Base my-interface-abc` / `Interface my-interface-abc is operational`)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '26 Base SNMP-WARNING-linkUp-2005 [my-interface-abc]: Interface my-interface-abc is operational'
+    expect:
+      parser_status: parsed
+      event_type: snmp_2005
+    signal: {rule_id: syslog.sros.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: '10.221.38.108:my-interface-abc'}
+
+  - name: a power supply input failure is critical and names the supply
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-chassis.html (tmnxEqPhysChassPowerSupInFail 2144, critical)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: alert
+    message: '27 Base CHASSIS-CRITICAL-tmnxEqPhysChassPowerSupInFail-2144 []: Chassis 1 power supply 2 input failure'
+    expect:
+      parser_status: parsed
+      facility: CHASSIS
+      event_type: chassis_2144
+      severity_native_text: CRITICAL
+      normalized_severity: critical
+    signal: {rule_id: syslog.sros.equipment.failure, kind: device_alarm, severity: crit, opens_alone: true, failure: power_supply_input_failure}
+
+  - name: a fan failure is critical
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-chassis.html (tmnxEqPhysChassisFanFailure 2148, critical)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: alert
+    message: '28 Base CHASSIS-CRITICAL-tmnxEqPhysChassisFanFailure-2148 []: Chassis 1 fan 3 failure'
+    expect:
+      parser_status: parsed
+      event_type: chassis_2148
+    signal: {rule_id: syslog.sros.equipment.failure, kind: device_alarm, severity: crit, opens_alone: true, failure: fan_failure}
+
+  - name: the fan clear is cleared and emits nothing
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-chassis.html (tmnxEqPhysChassisFanFailureClear 2149, cleared)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: info
+    message: '29 Base CHASSIS-CLEARED-tmnxEqPhysChassisFanFailureClear-2149 []: Chassis 1 fan 3 failure cleared'
+    expect:
+      parser_status: parsed
+      event_type: chassis_2149
+      severity_native_text: CLEARED
+      normalized_severity: info
+    signal: null
+
+  - name: a temperature too high is major, so critical
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-chassis.html (tmnxEnvTempTooHigh 2005, major)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: crit
+    message: '30 Base CHASSIS-MAJOR-tmnxEnvTempTooHigh-2005 []: cpm Slot A: temperature too high'
+    expect:
+      parser_status: parsed
+      event_type: chassis_2005
+      severity_native_text: MAJOR
+    signal: {rule_id: syslog.sros.equipment.failure, kind: device_alarm, severity: crit, opens_alone: true, failure: temperature_high}
+
+  - name: a memory allocation failure is major
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-system.html (tmnxModuleMallocFailed 2010, major)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: crit
+    message: '31 Base SYSTEM-MAJOR-tmnxModuleMallocFailed-2010 []: Memory allocation request for 65536 bytes from module BGP failed'
+    expect:
+      parser_status: parsed
+      event_type: system_2010
+    signal: {rule_id: syslog.sros.equipment.failure, kind: device_alarm, severity: crit, opens_alone: true, failure: memory_allocation_failed}
+
+  - name: a port error is a below-floor alarm that keeps the port as an attribute
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-port.html (tmnxEqPortError 2009, minor)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: err
+    message: '32 Base PORT-MINOR-tmnxEqPortError-2009 [1/1/1]: Physical port signal failure'
+    expect:
+      parser_status: parsed
+      facility: PORT
+      event_type: port_2009
+      normalized_severity: error
+    signal: {rule_id: syslog.sros.port.alarm, kind: device_alarm, severity: warn, opens_alone: false, failure: port_error}
+
+  - name: an Ethernet alarm clear at minor is not a new alarm
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-port.html (tmnxEqPortEtherAlarmClear 2018, minor)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: err
+    message: '33 Base PORT-MINOR-tmnxEqPortEtherAlarmClear-2018 [1/1/1]: Alarm remoteFault Cleared'
+    expect:
+      parser_status: parsed
+      event_type: port_2018
+    signal: null
+
+  - name: a configuration modification is a change, at info
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-system.html (tmnxConfigModify 2006, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '34 Base SYSTEM-WARNING-tmnxConfigModify-2006 []: router configuration modified'
+    expect:
+      parser_status: parsed
+      event_type: system_2006
+    signal: {rule_id: syslog.sros.config.change, kind: device_config_change, severity: info, opens_alone: false, state: changed}
+
+  - name: a CLI configuration line is a change from a named source
+    fidelity: doc_claimed
+    source: 'research VENDOR_PACK_SOURCES_2026-11-09 §2.4, USER cli_config_io 2011 minor "User from srcAddr: prompt message" (documentation.nokia.com sample-log-event.html)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: err
+    message: '35 Base USER-MINOR-cli_config_io-2011 [admin]: User from 192.0.2.50: A:pe1>config>router# interface to-core shutdown'
+    expect:
+      parser_status: parsed
+      facility: USER
+      event_type: user_2011
+    signal: {rule_id: syslog.sros.config.change, kind: device_config_change, severity: info, opens_alone: false, state: changed}
+
+  - name: a successful configuration save is counted and emits nothing
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-system.html (ssiSaveConfigSucceeded 2002, warning)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '36 Base SYSTEM-WARNING-ssiSaveConfigSucceeded-2002 []: Configuration file saved to: cf3:/config.cfg'
+    expect:
+      parser_status: parsed
+      event_type: system_2002
+    signal: null
+
+  - name: a failed configuration save is major, so it may alarm on its own
+    fidelity: doc_claimed
+    source: 'https://documentation.nokia.com/sr/22-10/books/log-events/log-system.html (ssiSaveConfigFailed 2003, major)'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: crit
+    message: '37 Base SYSTEM-MAJOR-ssiSaveConfigFailed-2003 []: Configuration file write failed: cf3:/config.cfg media full'
+    expect:
+      parser_status: parsed
+      event_type: system_2003
+      normalized_severity: critical
+    signal: {kind: device_alarm, severity: crit, opens_alone: true}
+
+  - name: the same words with no Nokia frame are not this pack's
+    fidelity: doc_claimed
+    source: 'negative case: the SR OS frame is absent'
+    hostname: edge01
+    appname: otherd
+    severity: notice
+    message: 'BGP-WARNING-tBgpNgBackwardTransition-2020: a sender quoting a Nokia name'
+    expect: {}
+    signal: null

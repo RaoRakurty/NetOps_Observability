@@ -50,8 +50,9 @@ def test_the_lanes_are_the_declared_ones(rows):
     # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since 377 (`trap.bgp.nokia_ng`)
     # · 59 with 387's trap-pack block (13 Cisco SD-WAN, 2 BFD-STD, 2 CISCO-PROCESS)
     # · 71 with 387's syslog pack (the Cisco SD-WAN pack's 12 rows)
-    # · 72 with PR 10's known_benign row for the SSH banner probe.
-    assert len(runtime) == 72, (
+    # · 72 with PR 10's known_benign row for the SSH banner probe
+    # · 93 with 387 §6a wave 1: Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5.
+    assert len(runtime) == 93, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 
@@ -235,7 +236,10 @@ def test_the_two_link_rows_are_the_only_ones_that_drop_an_attr(rows):
                          "trap.sdwan.control_connection", "trap.sdwan.control_connection.clear",
                          "trap.sdwan.omp", "trap.sdwan.omp.clear", "trap.sdwan.omp_tloc_change",
                          "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface",
-                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear"}
+                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear",
+                         # tracker 388: a link UP names no cause, so the key is absent,
+                         # the trap rows' meaning on the syslog twin.
+                         "syslog.junos.link.state_change"}
 
 
 def test_a_pattern_src_must_be_a_live_node_of_its_own_guard(loaded):

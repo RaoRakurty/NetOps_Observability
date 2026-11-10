@@ -35,7 +35,19 @@ def _event(fx: dict) -> dict:
     raw = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
            "severity": fx.get("severity", "notice"), "message": fx["message"],
            "timestamp": "2026-11-09T10:00:00Z"}
-    return {**raw, **P._PACKS.parse(raw)}
+    if "msgid" in fx:
+        raw["msgid"] = fx["msgid"]
+    return _stage_b(raw)
+
+
+def _stage_b(raw: dict) -> dict:
+    """The pack parse plus Stage B's envelope fallback: an RFC 5424 MSGID becomes the
+    event_type when no grammar stated one (vector.yaml, after the body parsers)."""
+    ev = {**raw, **P._PACKS.parse(raw)}
+    mid = str(raw.get("msgid") or "")
+    if mid and mid != "-" and "event_type" not in ev:
+        ev["event_type"] = mid.lower()
+    return ev
 
 
 @pytest.mark.parametrize(("pack", "fx"), _fixtures(),
@@ -59,6 +71,13 @@ def test_the_fixture_gets_its_parse_and_its_signal(pack, fx):
     if "rule_id" in want:
         assert sig.attrs["rule_id"] == want["rule_id"]
         assert sig.attrs["fidelity"] == fx["fidelity"]
+    # The meaning a row reads from the line, by value: a session that came up must not
+    # arrive as down because only its kind and severity were asserted.
+    for key in ("state", "link_cause", "peer", "failure"):
+        if key in want:
+            assert sig.attrs.get(key) == want[key], f"{key}: {sig.attrs.get(key)!r} != {want[key]!r}"
+    if "entity" in want:
+        assert sig.entity_id == want["entity"]
 
 
 @pytest.mark.parametrize(("pack", "fx"), _fixtures(),
@@ -81,17 +100,70 @@ def test_the_alarm_floor_holds_on_the_real_pack():
     assert P.syslog_severity_num(_ev("3"), "SYSMGR") == 3, "read, not hidden"
 
 
+def _severity_values(spec) -> list[str]:
+    """Every severity a row's severity spec can emit."""
+    if spec is None:
+        return []
+    if isinstance(spec, str):
+        return [spec]
+    out = [str(v) for v in (spec.get("by_state") or {}).values()]
+    out += [str(c["value"]) for c in spec.get("case") or ()]
+    if "default" in spec:
+        out.append(str(spec["default"]))
+    return out
+
+
+def _re_nodes(node) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "re" and isinstance(v, list) and len(v) >= 2 and isinstance(v[0], str):
+                out.append((v[0], str(v[1])))
+            else:
+                out.extend(_re_nodes(v))
+    elif isinstance(node, list):
+        for v in node:
+            out.extend(_re_nodes(v))
+    return out
+
+
 def test_only_a_critical_may_open_an_object_alone():
-    """D3, over the table: a pack row emitting high or crit must be a critical row."""
+    """D3, over the table: a pack row never states `high`, and states `crit` only where
+    the line itself must state a critical severity, as a plain row whose pattern needs
+    one or as a case branch that reads the message for it."""
     for pack in B.load_packs():
         for row in pack.get("rules") or []:
-            sev = row.get("severity") or (row.get("emit") or {}).get("severity")
-            if sev == "high":
+            spec = row.get("severity") or (row.get("emit") or {}).get("severity")
+            values = _severity_values(spec)
+            if "high" in values:
                 pytest.fail(f"{row['rule_id']}: `high` opens an object alone and is not critical")
-            if sev == "crit":
+            if "crit" not in values:
+                continue
+            if isinstance(spec, str):
                 assert "[0-2]" in str(row.get("pattern_src")), (
                     f"{row['rule_id']}: emits crit but its pattern does not require a "
                     "critical severity in the line")
+                continue
+            for branch in spec.get("case") or ():
+                if branch["value"] == "crit":
+                    assert any(field == "msg" for field, _ in _re_nodes(branch["when"])), (
+                        f"{row['rule_id']}: a crit branch must read the line's own severity")
+            assert spec.get("default") != "crit", row["rule_id"]
+
+
+@pytest.mark.parametrize(("pack", "fx"), _fixtures(),
+                         ids=[f"{p}:{f['name']}" for p, f in _fixtures()])
+def test_a_pack_row_opens_alone_only_on_a_line_that_states_critical(pack, fx):
+    """The same rule, by value: every fixture a PACK row answers at an opening severity
+    states emerg, alert or crit itself, in its PRI or in its text."""
+    pack_rows = {r["rule_id"] for p in B.load_packs() for r in p.get("rules") or []}
+    ev = _event(fx)
+    sig = P.syslog_control_signal(dict(ev), "t1", datetime.now(timezone.utc))
+    if sig is None or sig.attrs.get("rule_id") not in pack_rows:
+        return
+    if sig.severity.value in OPENS_ALONE:
+        tag = str(ev.get("appname") or "").upper()
+        assert (P.syslog_severity_num(ev, tag) or 7) <= 2, fx["name"]
 
 
 def test_every_grammar_has_a_fixture_it_decides():
@@ -105,7 +177,8 @@ def test_every_grammar_has_a_fixture_it_decides():
             msg, _ = P._PACKS.strip_envelope(fx["message"])
             app = fx.get("appname", "unknown").lower()
             for g in table.grammars:
-                if g.applies(msg, app, "") and g.regex.search(msg):
+                text = g.haystack(msg, fx)
+                if g.applies(text, app, "") and g.regex.search(text):
                     seen.add(g.grammar_id)
                     break
         assert seen == {g.grammar_id for g in table.grammars}
@@ -230,3 +303,57 @@ def test_every_wanted_row_says_why():
     for pack in B.load_packs():
         for w in pack.get("wanted") or []:
             assert w["why_absent"].strip() and w["symptom"].strip()
+
+
+def _gen_syslog_packs():
+    import importlib.util
+    path = os.path.join(HERE, "..", "scripts", "gen-syslog-packs.py")
+    spec = importlib.util.spec_from_file_location("gen_syslog_packs_t", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("gid", [g["id"] for g in B.pack_tables(B.load_packs())[0]])
+def test_every_grammar_is_load_bearing(gid):
+    """Mutation check, permanent: a grammar that stops matching makes generation refuse,
+    because some fixture of its pack states the parse it gave. A grammar no fixture
+    depends on would pass this mutation, and is dead weight or an untested claim."""
+    gen = _gen_syslog_packs()
+    packs = B.load_packs()
+    grammars, envelopes = B.pack_tables(packs)
+    broken = [dict(g, pattern="(?!x)x") if g["id"] == gid else g for g in grammars]
+    with pytest.raises(gen.GenerationError):
+        gen.decide_fixtures(packs, P.PackTable(broken, envelopes))
+
+
+WAVE1_PACKS = ("nokia_sros", "cisco_ios", "juniper_junos")
+
+
+def test_every_wave1_fixture_cites_where_its_line_comes_from():
+    """No captures exist for these vendors, so a fixture is only as good as its source."""
+    for pack in B.load_packs():
+        if pack["pack"] not in WAVE1_PACKS:
+            continue
+        for fx in pack["fixtures"]:
+            assert str(fx.get("source") or "").strip(), f"{pack['pack']}: {fx['name']}"
+            assert fx["fidelity"] == "doc_claimed", f"{pack['pack']}: {fx['name']}"
+        for row in pack.get("rules") or []:
+            assert row["fidelity_status"] == "doc_claimed", row["rule_id"]
+        for g in pack.get("grammars") or []:
+            assert g["fidelity"] == "doc_claimed" and g.get("source"), g["id"]
+
+
+@pytest.mark.parametrize("pack_name", WAVE1_PACKS)
+def test_every_wave1_rule_has_a_fixture_that_reaches_it(pack_name):
+    """A typed row no fixture reaches is a claim nothing tests."""
+    pack = next(p for p in B.load_packs() if p["pack"] == pack_name)
+    reached = {fx["signal"]["rule_id"] for fx in pack["fixtures"]
+               if fx.get("signal") and "rule_id" in fx["signal"]}
+    benign = {r["rule_id"] for r in pack.get("rules") or [] if r.get("known_benign")}
+    P.reset_parser_counters()
+    for fx in pack["fixtures"]:
+        P.syslog_control_signal(dict(_event(fx)), "t1", datetime.now(timezone.utc))
+    hits = {k for k, v in P.parser_stats()["known_benign_hits"].items() if v}
+    rows = {r["rule_id"] for r in pack.get("rules") or []}
+    assert rows - reached - (benign & hits) == set()

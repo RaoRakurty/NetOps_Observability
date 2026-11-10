@@ -1,14 +1,14 @@
 {
-  "catalyst_center_only": 7,
-  "everything": 19,
-  "gnmi_push": 14,
-  "meraki_only": 7,
-  "ndfc_only": 5,
-  "prime_only": 7,
-  "snmp_only": 7,
-  "snmp_push": 15,
-  "syslog_only": 14,
-  "versa_only": 6,
-  "vmanage_only": 8,
-  "vmanage_push": 19
+  "catalyst_center_only": 8,
+  "everything": 20,
+  "gnmi_push": 16,
+  "meraki_only": 8,
+  "ndfc_only": 6,
+  "prime_only": 8,
+  "snmp_only": 9,
+  "snmp_push": 17,
+  "syslog_only": 16,
+  "versa_only": 7,
+  "vmanage_only": 9,
+  "vmanage_push": 20
 }

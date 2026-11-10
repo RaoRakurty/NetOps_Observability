@@ -78,10 +78,10 @@
           "trap_definitions": 16
         },
         "syslog": {
-          "fixtures": 18,
-          "grammars": 5,
+          "fixtures": 21,
+          "grammars": 6,
           "rules": {
-            "doc_claimed": 6,
+            "doc_claimed": 11,
             "lab_validated": 7,
             "unrated": 13
           }
@@ -219,10 +219,10 @@
           "trap_definitions": 0
         },
         "syslog": {
-          "fixtures": 0,
-          "grammars": 0,
+          "fixtures": 11,
+          "grammars": 1,
           "rules": {
-            "doc_claimed": 1,
+            "doc_claimed": 6,
             "unrated": 3
           }
         }
@@ -263,9 +263,10 @@
           "trap_definitions": 0
         },
         "syslog": {
-          "fixtures": 1,
-          "grammars": 1,
+          "fixtures": 22,
+          "grammars": 2,
           "rules": {
+            "doc_claimed": 11,
             "unrated": 2
           }
         }
