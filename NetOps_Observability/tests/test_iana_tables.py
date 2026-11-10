@@ -60,15 +60,15 @@ def test_the_values_flows_show() -> None:
 def test_reduction_keeps_only_number_transport_and_name() -> None:
     gen = _gen()
     csv_body = (
-        "Service Name,Port Number,Transport Protocol,Description,Assignee,Contact,Registration Date,"
-        "Modification Date,Reference,Service Code,Unauthorized Use Reported,Assignment Notes\n"
-        "snmp,161,udp,SNMP,Some Person,mailto:person@example.org,,,,,,\n"
-        "snmp,161,tcp,SNMP,,,,,,,,\n"
-        "dup,161,udp,second name,,,,,,,,\n"
-        "https,443,tcp,http over tls,,,,,,,,\n"
-        "x11,6000-6063,tcp,range,,,,,,,,\n"
-        ",9,udp,unnamed,,,,,,,,\n"
-    ).encode()
+        b"Service Name,Port Number,Transport Protocol,Description,Assignee,Contact,Registration Date,"
+        b"Modification Date,Reference,Service Code,Unauthorized Use Reported,Assignment Notes\n"
+        b"snmp,161,udp,SNMP,Some Person,mailto:person@example.org,,,,,,\n"
+        b"snmp,161,tcp,SNMP,,,,,,,,\n"
+        b"dup,161,udp,second name,,,,,,,,\n"
+        b"https,443,tcp,http over tls,,,,,,,,\n"
+        b"x11,6000-6063,tcp,range,,,,,,,,\n"
+        b",9,udp,unnamed,,,,,,,,\n"
+    )
     rows = gen.service_rows(csv_body)
     assert rows == [(6, 161, "snmp"), (6, 443, "https"), (17, 161, "snmp")]
     rendered = gen.render("services", "ip_protocol\tport\tname", [f"{p}\t{q}\t{n}" for p, q, n in rows])

@@ -115,7 +115,7 @@ def fetch(repin: bool) -> None:
     for name, pin in sorted(PINS.items()):
         req = urllib.request.Request(pin["url"], headers={"User-Agent": "correlix-gen-iana-tables"})
         try:
-            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:  # noqa: S310 (pinned https URL)
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:  # a pinned https URL
                 body = resp.read(MAX_SOURCE_BYTES + 1)
         except OSError as exc:
             raise GenerationError(f"{name}: fetch {pin['url']} failed: {exc}") from exc
