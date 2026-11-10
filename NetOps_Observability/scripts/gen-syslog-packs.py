@@ -112,13 +112,24 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         'cx_pk_msg = string(.message) ?? ""',
         "cx_pk_app = downcase(.appname)",
     ]
+    if any(g.get("with_msgid") for g in rows):
+        # `<MSGID>: <message>` for the rows that read a tag from RFC 5424 MSGID; `-`
+        # is the nil value. Only declared when a row reads it: VRL warns on an unused local.
+        out += [
+            'cx_pk_mid = string(.msgid) ?? ""',
+            "cx_pk_midmsg = cx_pk_msg",
+            'if cx_pk_mid != "" && cx_pk_mid != "-" {',
+            '  cx_pk_midmsg = cx_pk_mid + ": " + cx_pk_msg',
+            "}",
+        ]
     for g in rows:
-        cond = V.match_condition(g, "cx_pk_msg", "cx_pk_app", "cx_inventory_vendor",
+        hay = "cx_pk_midmsg" if g.get("with_msgid") else "cx_pk_msg"
+        cond = V.match_condition(g, hay, "cx_pk_app", "cx_inventory_vendor",
                                  'cx_pk_parser == ""')
         out += [
             f"# grammar {g['id']} ({g['fidelity']})",
             f"if {cond} {{",
-            f"  cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'{g['pattern']}')",
+            f"  cx_pk_m, cx_pk_merr = parse_regex({hay}, r'{g['pattern']}')",
             "  if cx_pk_merr == null {",
             f"    cx_pk_parser = {json.dumps(g['parser_id'])}",
             f"    cx_pk_vendor = {json.dumps(g['vendor'])}",
@@ -205,7 +216,8 @@ def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict
     cases: list[tuple[str, dict, dict]] = []
     for pack in packs:
         for fx in pack["fixtures"]:
-            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message") if k in fx}
+            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid")
+                  if k in fx}
             ev.setdefault("hostname", "spine1")
             ev.setdefault("appname", "unknown")
             ev.setdefault("severity", "notice")
@@ -253,8 +265,9 @@ def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> 
             "        type: log",
             "        log_fields:",
         ]
-        for key in ("hostname", "appname", "severity", "message"):
-            body.append(f"          {key}: {_yaml_str(ev[key])}")
+        for key in ("hostname", "appname", "severity", "message", "msgid"):
+            if key in ev:
+                body.append(f"          {key}: {_yaml_str(ev[key])}")
         body += [
             "    outputs:",
             "      - extract_from: syslog_normalized",

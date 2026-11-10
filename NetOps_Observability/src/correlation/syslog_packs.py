@@ -64,7 +64,7 @@ class Grammar:
     __slots__ = (
         "alarm_floor", "apps", "category", "event_type", "facility", "grammar_id",
         "literal", "native_code", "native_text", "pack", "parser_id", "regex",
-        "sev_digit", "sev_map", "sev_word", "summary", "vendor",
+        "sev_digit", "sev_map", "sev_word", "summary", "vendor", "with_msgid",
     )
 
     def __init__(self, row: Mapping[str, Any]) -> None:
@@ -86,6 +86,16 @@ class Grammar:
         floor = row.get("alarm_floor")
         self.alarm_floor = int(floor) if floor is not None else None
         self.category = str(row.get("category") or "")
+        self.with_msgid = bool(row.get("with_msgid"))
+
+    def haystack(self, msg: str, ev: Mapping[str, Any]) -> str:
+        """The text this row reads: `<MSGID>: <message>` for a `with_msgid` row when the
+        frame carries one (RFC 5424; `-` is its nil value), else the message."""
+        if self.with_msgid:
+            mid = str(ev.get("msgid") or "")
+            if mid and mid != "-":
+                return mid + ": " + msg
+        return msg
 
     @property
     def reads_severity(self) -> bool:
@@ -183,9 +193,10 @@ class PackTable:
         msg, out = self.strip_envelope(str(ev.get("message") or ""))
         app = str(ev.get("appname") or "unknown").lower()
         for g in self.grammars:
-            if not g.applies(msg, app, inventory_vendor):
+            text = g.haystack(msg, ev)
+            if not g.applies(text, app, inventory_vendor):
                 continue
-            m = g.regex.search(msg)
+            m = g.regex.search(text)
             if m is None:
                 continue
             out["parser_id"] = g.parser_id

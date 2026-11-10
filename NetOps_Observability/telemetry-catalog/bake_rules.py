@@ -314,7 +314,7 @@ PACK_REQUIRED = ("pack", "vendor", "fixtures")
 GRAMMAR_KEYS = frozenset({
     "id", "parser_id", "literal", "apps", "pattern", "facility", "event_type",
     "summary", "severity", "native_text", "native_code", "alarm_floor",
-    "category", "fidelity", "source",
+    "category", "fidelity", "source", "with_msgid",
 })
 GRAMMAR_REQUIRED = ("id", "parser_id", "literal", "pattern", "fidelity")
 ENVELOPE_KEYS = frozenset({
@@ -324,7 +324,7 @@ ENVELOPE_KEYS = frozenset({
 ENVELOPE_REQUIRED = ("id", "literal", "pattern", "message", "preserve_as", "fidelity")
 FIXTURE_KEYS = frozenset({
     "name", "hostname", "appname", "severity", "message", "expect", "signal",
-    "fidelity",
+    "fidelity", "msgid", "source",
 })
 FIXTURE_REQUIRED = ("name", "message", "expect", "signal", "fidelity")
 WANTED_KEYS = frozenset({"symptom", "why_absent", "kind"})
@@ -411,6 +411,16 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
     elif g.get("alarm_floor") is not None:
         raise BakeError(f"{where}: alarm_floor without a severity reader")
     apps = [str(a).lower() for a in (g.get("apps") or [])]
+    # `with_msgid`: the row reads `<MSGID>: <message>` when the frame carries an RFC 5424
+    # MSGID, so one grammar states a tag a sender puts in MSGID in one format and at the
+    # head of the message in the other. Severity stays out of it: the admission stamp and
+    # the screen read the message alone, and a severity read from a field they never see
+    # would make the two disagree about a line.
+    with_msgid = g.get("with_msgid", False)
+    if not isinstance(with_msgid, bool):
+        raise BakeError(f"{where}: with_msgid must be a boolean")
+    if with_msgid and sev is not None:
+        raise BakeError(f"{where}: a with_msgid grammar cannot read severity")
     if g.get("category") and not g.get("event_type"):
         raise BakeError(f"{where}: a category row needs event_type (its dedup key)")
     return {
@@ -423,6 +433,7 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
         "native_code": g.get("native_code") or "",
         "alarm_floor": g.get("alarm_floor"), "category": g.get("category") or "",
         "fidelity": g["fidelity"], "source": g.get("source") or "",
+        **({"with_msgid": True} if with_msgid else {}),
     }
 
 

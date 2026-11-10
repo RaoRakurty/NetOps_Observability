@@ -117,8 +117,10 @@ VRL_BODY_SEV_PATTERN = "^" + VRL_TAG_SEV_PATTERN
 # Literals are pasted into a VRL regex alternation and into `r'…'`, so they must
 # carry no regex metacharacter and no quote. This is a REFUSAL, not an escape:
 # a literal outside this class means the screen grew a shape this generator was
-# never designed for, and silently escaping it would be a guess.
-SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/%=-]+$")
+# never designed for, and silently escaping it would be a guess. A comma is admitted
+# (tracker 387, `Interface Gi1, changed state to ...`): outside `{m,n}`, whose braces
+# stay refused, it means nothing to a regex.
+SAFE_LITERAL_RE = re.compile(r"^[a-z0-9_ .:/%=,-]+$")
 
 
 class GenerationError(RuntimeError):
