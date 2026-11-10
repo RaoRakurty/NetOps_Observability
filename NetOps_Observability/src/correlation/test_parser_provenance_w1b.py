@@ -633,7 +633,12 @@ RULES_HASH_TRAP_BGP_CLASSES = "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da
 #: every column and the process basename; its summary reads the pack's `process` label
 #: table, so the labels ride in the hash. dump_id and the typed metrics are presentation.
 RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f"
-RULES_HASH_A3 = RULES_HASH_PROCESS_SNAPSHOT
+#:
+#: SD-WAN DNS success path and ConfD SNMP auth refusal (2026-11-10, tracker 387): three
+#: grammars, no rule row. The vBond `DNS cache expired` and `FQDN ... resolved to` lines
+#: share the lookup's correlation key; the ConfD refusal reads no community.
+RULES_HASH_SDWAN_DNS_SNMP_REFUSAL = "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41"
+RULES_HASH_A3 = RULES_HASH_SDWAN_DNS_SNMP_REFUSAL
 
 
 def _guard_patterns(node) -> list[str]:

@@ -35,6 +35,13 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-10-sdwan-dns-snmpauth — tracker 387, the last unparsed vEdge families after the
+# train #180 deploy: two SD-WAN grammars for the vBond lookup's success path (VTRACKER
+# `DNS cache expired for ...` and `FQDN ... resolved to ...`, the lookup lines' own
+# correlation key) and one neutral ConfD grammar for an SNMP request refused for a bad
+# community (category security_audit; no group reads the community). Grammars only: no
+# rule row, so no signal moved.
+#
 # 2026-11-10-process-snapshot — tracker 387 owner feedback: the SD-WAN SYSMGR `ps` row
 # grammar captures every column and the process basename, and its summary names the
 # process in plain words through the pack's `process` label table (a pack `labels:` key,
@@ -144,7 +151,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-10-process-snapshot
+parser_rev: 2026-11-10-sdwan-dns-snmpauth
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
