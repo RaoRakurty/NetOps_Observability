@@ -2948,6 +2948,8 @@ func Run() {
 	// (tenant, exporter, ifIndex)→ifName rows in netops.iface_names, the table the
 	// flows API names interfaces through (tracker 387 PR 13b).
 	srv.startIfaceNamesExport(ctx)
+	// The SNMP trap receiver's interface-address rung (tracker 387 PR 13c').
+	srv.startTrapAddressIndex(ctx)
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)

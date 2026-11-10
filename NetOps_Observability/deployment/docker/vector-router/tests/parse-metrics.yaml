@@ -220,3 +220,67 @@ tests:
               assert_eq!(.sampling, "other")
               assert_eq!(.as_numbers, "absent")
               assert_eq!(.iface_index, "sentinel")
+
+  - name: "trap attribution: the rung and the tenant outcome, as labels"
+    inputs:
+      - insert_at: trap_attribution_labels
+        type: log
+        log_fields:
+          attribution_basis: "interface_ip"
+          tenant_attribution: "platform_owned"
+          host: "192.168.200.33"
+          device: "cedge-81-11060ae2"
+    outputs:
+      - extract_from: trap_attribution_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.basis, "interface_ip")
+              assert_eq!(.outcome, "platform_owned")
+              assert!(!exists(.host))
+              assert!(!exists(.device))
+
+  - name: "trap attribution: a trap from before the field reads none"
+    inputs:
+      - insert_at: trap_attribution_labels
+        type: log
+        log_fields:
+          tenant_attribution: "unmatched"
+    outputs:
+      - extract_from: trap_attribution_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.basis, "none")
+              assert_eq!(.outcome, "unmatched")
+
+  - name: "trap attribution: a forged value cannot mint a series"
+    inputs:
+      - insert_at: trap_attribution_labels
+        type: log
+        log_fields:
+          attribution_basis: "10.0.0.1"
+          tenant_attribution: "acme"
+    outputs:
+      - extract_from: trap_attribution_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.basis, "other")
+              assert_eq!(.outcome, "other")
+
+  - name: "trap attribution: the counter names the metric and its two labels"
+    inputs:
+      - insert_at: trap_attribution_metric
+        type: log
+        log_fields:
+          basis: "mgmt_ip"
+          outcome: "enriched"
+    outputs:
+      - extract_from: trap_attribution_metric
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "netops_trap_attribution_events")
+              assert_eq!(.tags.basis, "mgmt_ip")
+              assert_eq!(.tags.outcome, "enriched")

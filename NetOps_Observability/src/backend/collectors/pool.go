@@ -110,6 +110,17 @@ func (p *Pool) Start(ctx context.Context) {
 	}
 }
 
+// SetTrapAddressResolver installs the trap receiver's interface-address rung
+// (tracker 387 PR 13c'). The resolver answers a device id, never a tenant;
+// the receiver still proves the device's credential. Safe at any time.
+func (p *Pool) SetTrapAddressResolver(fn TrapAddressResolver) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if r, ok := p.collectors["snmptrap"].(*trapReceiver); ok {
+		r.SetAddressResolver(fn)
+	}
+}
+
 // Status returns a snapshot of all registered collectors.
 func (p *Pool) Status() []Status {
 	p.mu.RLock()

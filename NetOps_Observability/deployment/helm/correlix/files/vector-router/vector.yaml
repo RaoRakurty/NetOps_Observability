@@ -1643,6 +1643,34 @@ transforms:
           as_numbers: "{{ as_numbers }}"
           iface_index: "{{ iface_index }}"
 
+  # Tracker 387 PR 13c': which rung of the trap receiver's ladder named the device
+  # (attribution_basis), against what the tenant attribution then said. On the lab
+  # 85 % of traps were basis none before the interface-address rung. Both labels
+  # are closed sets, anything else reads `other`, so no device, tenant or address
+  # can reach a label: at most 6 x 6 = 36 series. Rule: TrapSourceUnattributedRatioHigh
+  # (rules-scale-slo.yaml, warning tier).
+  trap_attribution_labels:
+    type: remap
+    inputs: [snmptrap_tagged]
+    source: |
+      cx_basis = string(.attribution_basis) ?? ""
+      if cx_basis == "" { cx_basis = "none" }
+      if !includes(["mgmt_ip", "interface_ip", "sysname", "agent_addr", "none"], cx_basis) { cx_basis = "other" }
+      cx_outcome = string(.tenant_attribution) ?? ""
+      if !includes(["enriched", "platform_owned", "unmatched", "producer_stamped", "claim_rejected"], cx_outcome) { cx_outcome = "other" }
+      . = { "basis": cx_basis, "outcome": cx_outcome }
+
+  trap_attribution_metric:
+    type: log_to_metric
+    inputs: [trap_attribution_labels]
+    metrics:
+      - type: counter
+        field: basis
+        name: netops_trap_attribution_events
+        tags:
+          basis: "{{ basis }}"
+          outcome: "{{ outcome }}"
+
   # Tracker 373: events whose sender address was lost to the Docker bridge
   # gateway (stamped source_masked by the trap receiver, the aggregator's
   # syslog_sender and flows_decoded). Counted per topic only — no device or
@@ -1710,7 +1738,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, trap_attribution_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

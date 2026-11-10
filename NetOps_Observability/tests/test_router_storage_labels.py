@@ -106,6 +106,9 @@ def test_trap_envelope_fields_are_declared():
         "summary": "text", "vendor": "keyword", "message_key": "keyword",
         "authenticated": "boolean", "sys_uptime_seconds": "double",
         "varbinds_dropped": "integer", "truncated": "boolean",
+        # Tracker 387 PR 13c': which rung named the device. Filterable, so the
+        # Logs page and the runbook can group `attribution_basis:none`.
+        "attribution_basis": "keyword",
     }
     wrong = {k: props.get(k, {}).get("type") for k, t in expected.items()
              if props.get(k, {}).get("type") != t}
