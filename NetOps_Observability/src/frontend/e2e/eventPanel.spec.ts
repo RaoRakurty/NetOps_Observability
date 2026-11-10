@@ -25,7 +25,28 @@ const SHOTS = process.env.EVENT_SHOTS_DIR ?? "";
 const HITS = [CPU_GOLDEN, BGP_TRANSITION, SYSLOG_FAULT, SYSLOG_AUDIT, SYSLOG_UNPARSED, FLOW_RECORD, CPU_WARNING, CPU_INFO, CPU_RECOVERED, APP_LOG];
 type SearchBody = { query?: string; signal?: string };
 
-// A cold dev server on a busy host can take a while to serve the first page.
+// The owner's screenshots show the local line in US Central; the browser is put on
+// that clock so the Timing card's second line ("(Nov 09, 2026 22:07:27.500 CST)") shows.
+test.use({ timezoneId: "America/Chicago" });
+
+const SEVERITY_COUNTS = {
+  signal: "", total: 7547, unrated: 0, other: 0,
+  counts: [
+    { field: "severity", value: "critical", count: 128 }, { field: "severity", value: "warning", count: 412 },
+    { field: "severity", value: "info", count: 1026 }, { field: "severity", value: "cleared", count: 5981 },
+  ],
+};
+
+// A cold dev server on a busy host can take a while to serve the first page: the
+// first load makes vite pre-bundle and reload. Each worker loads the app once before
+// its first test, so no test spends its own budget on the warm-up.
+test.beforeAll(async ({ browser }, testInfo) => {
+  testInfo.setTimeout(300_000);
+  const page = await browser.newPage();
+  await page.goto(`${testInfo.project.use.baseURL ?? ""}/`, { waitUntil: "load", timeout: 280_000 });
+  await page.waitForLoadState("networkidle", { timeout: 120_000 }).catch(() => undefined);
+  await page.close();
+});
 test.beforeEach(({}, testInfo) => testInfo.setTimeout(Math.max(testInfo.timeout, 120_000)));
 
 async function boot(page: Page, opts: { theme?: string; hash?: string } = {}): Promise<SearchBody[]> {
@@ -39,6 +60,7 @@ async function boot(page: Page, opts: { theme?: string; hash?: string } = {}): P
     if (url.includes("/api/auth/me")) return json(ME);
     if (url.includes("/api/scopes")) return json({ scopes: [{ tenant_id: TENANT, tenant_name: "Provider", region: "us" }], all_tenants: false });
     if (url.includes("/api/logs/retention")) return json({ signal: "", total: 7547, oldest: "2026-10-28T00:00:00Z", days: 13 });
+    if (url.includes("/api/logs/severity-counts")) return json(SEVERITY_COUNTS);
     if (url.includes("/api/metrics/query_range")) return json({ status: "success", data: { resultType: "matrix", result: [] } });
     if (url.includes("/api/logs/search")) {
       const body = route.request().postDataJSON() as SearchBody;
@@ -48,7 +70,7 @@ async function boot(page: Page, opts: { theme?: string; hash?: string } = {}): P
       if (id) return json({ hits: { total: { value: 1 }, hits: HITS.filter((h) => h._id === id) } });
       // The related-records search: the golden trap has no other record yet.
       if (q.startsWith("device_id:")) return json({ hits: { total: { value: 0 }, hits: [] } });
-      return json({ hits: { total: { value: HITS.length }, hits: HITS } });
+      return json({ hits: { total: { value: 7547 }, hits: HITS } });
     }
     return json({});
   });
@@ -142,6 +164,7 @@ test("the critical CPU trap: headline, ring, reported threshold and the decoded 
   }
   await expect(d.getByTestId("event-varbinds")).toContainText("1.3.6.1.4.1.41916.100.1.191.0");
   await expect(d.getByTestId("event-timing")).toContainText("24.413 seconds");
+  await expect(d.getByTestId("event-timing")).toContainText("(Nov 09, 2026 22:07:27.500 CST)");
   await expect(d.getByTestId("event-classification")).toContainText("Yes (hidden)");
   await expect(d.getByTestId("event-identity")).toContainText("cpu:vedge-51-0a0b4db5:device");
   // Nothing the record does not back: no incident status, no acknowledge.
@@ -206,7 +229,7 @@ test("BGP, syslog fault, audit, unparsed and flow records use the same panel", a
   await expect(detail(page).getByTestId("flow-strip")).toContainText("ge0/0 (1)");
 });
 
-for (const theme of ["dark", "light"]) {
+for (const theme of ["dark", "light", "oled", "indigo", "graphite", "white"]) {
   test(`panel text holds AA contrast on the ${theme} theme`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.setViewportSize({ width: 1672, height: 941 });
@@ -246,6 +269,7 @@ test("screenshots", async ({ page }) => {
   for (const theme of ["dark", "light"]) {
     await page.setViewportSize({ width: 1672, height: 941 });
     await boot(page, { theme });
+    await shot(page, `list-${theme}-1672x941`);
     for (const [text, name] of [
       ["CPU utilization reached 100%", "cpu-critical"],
       ["CPU utilization reached 80.1%", "cpu-warning"],
@@ -270,4 +294,18 @@ test("screenshots", async ({ page }) => {
   await boot(page, { theme: "dark" });
   await openRow(page, "CPU utilization reached 100%");
   await shot(page, "panel-cpu-critical-dark-phone");
+});
+
+test("the list: store-counted severity tiles, sub-tabs, filters and numbered pages", async ({ page }) => {
+  await page.setViewportSize({ width: 1672, height: 941 });
+  const searches = await boot(page);
+  const tiles = page.getByTestId("logs-severity-tiles");
+  await expect(tiles.getByRole("button", { name: /^Critical: 128 matching/ })).toBeVisible();
+  await expect(tiles.getByRole("button", { name: /^Healthy: 5,981 matching/ })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Log type" }).getByRole("button", { name: "Events" })).toContainText("Events (7,547)");
+  await expect(page.getByTestId("logs-pager-text")).toContainText("of 7,547 events");
+  await tiles.getByRole("button", { name: /^Critical:/ }).click();
+  await expect.poll(() => searches[searches.length - 1].query ?? "").toContain('"critical"');
+  await page.getByRole("navigation", { name: "Result pages" }).getByRole("button", { name: "Page 2" }).click();
+  await expect(page.getByRole("navigation", { name: "Result pages" }).getByRole("button", { name: "Page 2" })).toHaveAttribute("aria-current", "page");
 });

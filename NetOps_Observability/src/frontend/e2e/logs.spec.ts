@@ -99,6 +99,12 @@ async function boot(page: Page, theme?: string): Promise<SearchBody[]> {
     if (url.includes("/api/auth/me")) return json(ME);
     if (url.includes("/api/scopes")) return json({ scopes: [{ tenant_id: TENANT, tenant_name: "Acme", region: "us" }], all_tenants: false });
     if (url.includes("/api/logs/retention")) return json({ signal: "", total: 48211, oldest: at(13 * 86_400_000), days: 13 });
+    if (url.includes("/api/logs/severity-counts")) {
+      return json({ signal: "", total: 4900, unrated: 700, other: 0, counts: [
+        { field: "severity", value: "crit", count: 700 }, { field: "severity", value: "err", count: 700 },
+        { field: "severity", value: "warning", count: 700 }, { field: "severity", value: "notice", count: 2100 },
+      ] });
+    }
     if (url.includes("/api/logs/search")) {
       const body = route.request().postDataJSON() as SearchBody;
       searches.push(body);
@@ -291,7 +297,7 @@ for (const theme of ["light", "dark", "oled", "indigo", "graphite", "white"]) {
     // Reduced motion also proves that path: a colour transition would be measured mid-flight.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await boot(page, theme);
-    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary");
+    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page");
     expect(results.length).toBeGreaterThan(20);
     const failing = results.filter((r) => r.ratio < 4.5).map((r) => `${r.what} ${r.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
