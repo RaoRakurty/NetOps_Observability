@@ -14,6 +14,7 @@
 
 import { useAuth } from "../hooks/useAuth";
 import SubnetDiscoveryCard from "./SubnetDiscoveryCard";
+import CustomerScans from "./discovery/CustomerScans";
 
 export default function SubnetDiscovery() {
   // Honor the resolved-auth pattern (App.tsx gates the shell on `loading` the
@@ -24,16 +25,28 @@ export default function SubnetDiscovery() {
   if (authLoading) {
     return <div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>;
   }
-  if (user?.platform_admin) return <SubnetDiscoveryCard />;
+  if (user?.platform_admin) {
+    return (
+      <>
+        <SubnetDiscoveryCard />
+        {/* Scans the platform administrator runs FOR a customer (2026-11-10). */}
+        <CustomerScans platformAdmin />
+      </>
+    );
+  }
   return (
-    // Honest tenant state: discovery is real, it just isn't THEIR control.
-    <div className="card" style={{ maxWidth: 760 }}>
-      <h3 style={{ marginTop: 0 }}>Network Scan</h3>
-      <p style={{ color: "var(--muted)", fontSize: 14 }}>
-        Your platform operator runs the network scan. Devices it finds appear in{" "}
-        <a href="#/infrastructure/devices">Devices</a>. The SNMP credentials it uses are in{" "}
-        <a href="#/admin/discovery/snmp">SNMP Profiles</a>.
-      </p>
-    </div>
+    <>
+      {/* Honest tenant state: discovery is real, it just isn't THEIR control. */}
+      <div className="card" style={{ maxWidth: 760, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Network Scan</h3>
+        <p style={{ color: "var(--muted)", fontSize: 14 }}>
+          Your platform operator runs the network scan. Devices it finds appear in{" "}
+          <a href="#/infrastructure/devices">Devices</a>. The SNMP credentials it uses are in{" "}
+          <a href="#/admin/discovery/snmp">SNMP Profiles</a>.
+        </p>
+      </div>
+      {/* The scans run on this customer's network, read-only. */}
+      <CustomerScans platformAdmin={false} />
+    </>
   );
 }

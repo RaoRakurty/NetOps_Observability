@@ -128,6 +128,64 @@ export type DiscoveryConfigEnvelope = {
   config_error?: string;
 };
 
+// Tenant-owned discovery scans (/api/discovery/scopes, 2026-11-10). The
+// platform administrator points a scan at a customer's network on its behalf,
+// with the customer's OWN SNMP profiles; every device it finds is the
+// customer's. Customers read their own scans; only the platform administrator
+// creates, changes or removes one.
+export type DiscoveryScopeFound = {
+  id: string;
+  name: string;
+  address: string;
+  vendor?: string;
+  credential_ref?: string;
+  stale?: boolean;
+  // The platform scan holds a copy of this address: its telemetry is
+  // attributed to nobody until one copy is removed.
+  also_found_by_platform: boolean;
+  // Other customers' devices at the same address (platform administrator only).
+  also_found_by_other_customers?: number;
+};
+export type DiscoveryScopeStatus = {
+  last_sweep?: string;
+  last_error?: string;
+  answering: number;
+  stale: number;
+};
+export type DiscoveryScope = {
+  id: string;
+  tenant_id: string;
+  tenant_name?: string;
+  name: string;
+  ranges: string[];
+  allow_non_private: boolean;
+  credential_refs: string[];
+  enabled: boolean;
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+  status?: DiscoveryScopeStatus;
+  found: DiscoveryScopeFound[];
+  found_total: number;
+};
+export type DiscoveryScopesEnvelope = {
+  scopes: DiscoveryScope[];
+  // The platform's own scan — platform administrator, All tenants / Provider view only.
+  platform?: { id: string; platform: true; ranges: string[]; enabled: boolean; status?: DiscoveryScopeStatus; found_total: number };
+  limits?: { max_hosts: number; per_customer: number; max_credential_refs: number };
+  scanner_view_stale?: boolean;
+};
+// The server refuses unknown fields, so this is the whole body. tenant_id is
+// honoured only for the platform administrator in the All tenants view.
+export type DiscoveryScopeInput = {
+  tenant_id?: string;
+  name: string;
+  ranges: string[];
+  allow_non_private: boolean;
+  credential_refs: string[];
+  enabled: boolean;
+};
+
 export type CollectorStatus = {
   kind?: string; // "protocol" | "discovery"
   name: string;
@@ -5867,6 +5925,13 @@ export const api = {
   discoveryConfig: () => request<DiscoveryConfigEnvelope>("/api/discovery/config"),
   saveDiscoveryConfig: (c: DiscoveryConfigInput) =>
     request<DiscoveryConfigEnvelope>("/api/discovery/config", { method: "PUT", body: JSON.stringify(c) }),
+  discoveryScopes: () => request<DiscoveryScopesEnvelope>("/api/discovery/scopes"),
+  createDiscoveryScope: (s: DiscoveryScopeInput) =>
+    request<DiscoveryScope>("/api/discovery/scopes", { method: "POST", body: JSON.stringify(s) }),
+  updateDiscoveryScope: (id: string, s: DiscoveryScopeInput) =>
+    request<DiscoveryScope>(`/api/discovery/scopes/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(s) }),
+  deleteDiscoveryScope: (id: string) =>
+    request<void>(`/api/discovery/scopes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   alerts: () => request<Alert[]>("/api/alerts"),
   // Alert episodes: grouped firings + triage. Actor is always the signed-in
   // principal (stamped server-side); mute/snooze pause notifications only.
@@ -8950,6 +9015,7 @@ export type SnmpGenResult = {
 export type SNMPCredential = {
   id?: string;
   name: string;
+  tenant_id?: string; // owning tenant; "" / absent = platform-owned
   version: string; // v1 | v2c | v3
   port?: number;
   timeout_ms?: number;
