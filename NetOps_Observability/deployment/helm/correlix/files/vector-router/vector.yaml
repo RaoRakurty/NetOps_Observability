@@ -1535,7 +1535,7 @@ transforms:
       cx_parser = string(.parser_id) ?? ""
       if cx_parser == "" {
         cx_parser = "none"
-      } else if !includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "fortios_kv.v1", "ios_style.v1", "junos.v1", "nokia_sros.v1", "srlinux.v1", "standard_mgmt_audit.v1"], cx_parser) {
+      } else if !includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "fortios_kv.v1", "ios_style.v1", "junos.v1", "nokia_sros.v1", "srlinux.v1", "standard_mgmt_audit.v1"], cx_parser) {
         cx_parser = "other"
       }
       cx_status = string(.parser_status) ?? ""

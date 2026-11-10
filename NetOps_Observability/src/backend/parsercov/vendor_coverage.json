@@ -78,11 +78,11 @@
           "trap_definitions": 16
         },
         "syslog": {
-          "fixtures": 21,
-          "grammars": 6,
+          "fixtures": 30,
+          "grammars": 10,
           "rules": {
             "doc_claimed": 11,
-            "lab_validated": 7,
+            "lab_validated": 8,
             "unrated": 13
           }
         }

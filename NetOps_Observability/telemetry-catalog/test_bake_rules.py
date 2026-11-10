@@ -51,8 +51,9 @@ def test_the_lanes_are_the_declared_ones(rows):
     # · 59 with 387's trap-pack block (13 Cisco SD-WAN, 2 BFD-STD, 2 CISCO-PROCESS)
     # · 71 with 387's syslog pack (the Cisco SD-WAN pack's 12 rows)
     # · 72 with PR 10's known_benign row for the SSH banner probe
-    # · 93 with 387 §6a wave 1: Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5.
-    assert len(runtime) == 93, (
+    # · 93 with 387 §6a wave 1: Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5
+    # · 94 with the SD-WAN SNMP-agent poll-error known_benign row.
+    assert len(runtime) == 94, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 

@@ -85,6 +85,48 @@ grammars:
     category: management_audit
     fidelity: lab_validated
 
+  # vEdge daemons log `<function>[<line>]: <text>` (VTRACKER, VDAEMON; lab capture
+  # 2026-11-09, the lines the DNS rows below read). The function is the only stable name
+  # the line carries, so it is the event type. No severity: PRI is the line's own.
+  - id: vedge_daemon
+    parser_id: cisco_sdwan.v1
+    literal: ']: '
+    apps: [vtracker, vdaemon]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: (?P<text>.*)'
+    event_type: '{func}'
+    summary: '{text}'
+    fidelity: lab_validated
+
+  # Poll-induced management-plane records (PR 11 shape, owner D2). The vEdge confd SNMP
+  # agent logs these while answering OUR poller's interfaceTable walk: about 45 an hour
+  # across the lab's vEdges (measured live 2026-11-10). Non-alarm: no severity, a stable
+  # dedup key; every record stays stored and is grouped at read time. The process tag
+  # they arrive with was not recorded, so no `apps` gate: the literals are the guard.
+  - id: snmpa_table_error
+    parser_id: cisco_sdwan_mgmt_poll.v1
+    literal: 'devel-snmpa internal error: table '
+    pattern: 'devel-snmpa internal error: table (?P<op>[a-z-]{1,16}): (?P<table>\w{1,64}) \(error: (?P<err>\w{1,64})\)'
+    event_type: snmp_agent_table_error
+    summary: 'table {op} {table}: {err}'
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: snmpa_instr_trace
+    parser_id: cisco_sdwan_mgmt_poll.v1
+    literal: 'devel-snmpa {confd_snmpa_instr,'
+    pattern: 'devel-snmpa \{confd_snmpa_instr,(?P<func>\w{1,64}),'
+    event_type: snmp_agent_instr_trace
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: snmp_get_response_error
+    parser_id: cisco_sdwan_mgmt_poll.v1
+    literal: 'snmp get-response reqid='
+    pattern: 'snmp get-response reqid=\d{1,12} \S{1,64} error-status=(?P<status>[A-Za-z]{1,32}) ix=\d{1,6}'
+    event_type: 'snmp_get_response_{status}'
+    category: management_audit
+    fidelity: lab_validated
+
 # Typed rows, in match order. D3: only the critical CPU row may open an object alone.
 # Everything else states `warn` or `info`, below `severity_open_floor`, so it can join
 # a component and cannot start one. E1 still makes a device's own syslog and its SNMP
@@ -319,6 +361,33 @@ rules:
       tokens: [{t: '{host}'}]
       attrs: {}
 
+  # PENDING OWNER REVIEW, as the FTMD row above. The SNMP agent's own error lines while it
+  # answers OUR poll (grammars `snmpa_*`, `snmp_get_response_error`). What they state is
+  # that the agent could not serve part of interfaceTable to Correlix, not a network
+  # fault, and a device may send them at warning or err, where the generic net would turn
+  # every poll cycle into a device alarm. The guard is the whole text shape; the records
+  # stay stored with their dedup key, and `corr_parser_known_benign_total` shows the rate.
+  - rule_id: syslog.sdwan.snmp_agent.poll_error
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: the device SNMP agent failing to serve part of interfaceTable to our own poller; no network state in the text; pending owner review
+    pattern_src: 'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp get-response reqid=\d{1,12} \S{1,64} error-status=genErr ix=\d{1,6} .\w{1,16} interface'
+    guard: {re: [msg, 'devel-snmpa internal error: table [a-z-]{1,16}: interfaceTable .error: |devel-snmpa .confd_snmpa_instr,table_func,|snmp get-response reqid=\d{1,12} \S{1,64} error-status=genErr ix=\d{1,6} .\w{1,16} interface', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
   # Rule 1, "ingestion is not incident creation": any other error or warning of this
   # grammar still reaches the engine, at `warn`, so it can join a component and enrich an
   # undetermined outcome. It matches no signature.
@@ -533,7 +602,10 @@ fixtures:
     hostname: vEdge-1
     appname: VTRACKER
     message: 'dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
-    expect: {}
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: dnsclient_ares_callback
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the same failure from the other daemon
@@ -541,7 +613,10 @@ fixtures:
     hostname: vEdge-1
     appname: VDAEMON
     message: 'dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers'
-    expect: {}
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: dnsclient_ares_callback
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the resolver reports the same failure in its own words
@@ -549,7 +624,10 @@ fixtures:
     hostname: vEdge-1
     appname: VTRACKER
     message: 'monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via '
-    expect: {}
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: monitor_dns_callback
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: a vBond lookup success emits nothing
@@ -557,7 +635,10 @@ fixtures:
     hostname: vEdge-1
     appname: VTRACKER
     message: 'dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none'
-    expect: {}
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: dnsclient_ares_callback
     signal: null
 
   - name: the resolver success emits nothing
@@ -565,7 +646,10 @@ fixtures:
     hostname: vEdge-1
     appname: VTRACKER
     message: 'monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via '
-    expect: {}
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: monitor_dns_callback
     signal: null
 
   - name: the same DNS words from a daemon outside this pack mean nothing
@@ -629,6 +713,60 @@ fixtures:
       event_type: ftmd_1000003
       normalized_severity: error
     signal: {rule_id: syslog.sdwan.below_floor, kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: the SNMP agent failing our interfaceTable walk is a poll record, not an alarm
+    fidelity: lab_validated
+    hostname: vEdge-1
+    severity: err
+    message: 'devel-snmpa internal error: table get-next: interfaceTable (error: non_increasing_index)'
+    expect:
+      vendor: cisco
+      parser_id: cisco_sdwan_mgmt_poll.v1
+      parser_status: parsed
+      event_type: snmp_agent_table_error
+      summary: 'table get-next interfaceTable: non_increasing_index'
+      event_category: management_audit
+      dedup_key: 'vEdge-1|unknown|snmp_agent_table_error'
+      normalized_severity: error
+    signal: null
+
+  - name: the SNMP agent instrumentation trace of the same walk is a poll record
+    fidelity: lab_validated
+    hostname: vEdge-1
+    severity: err
+    message: "devel-snmpa {confd_snmpa_instr,table_func,[{table,interfaceTable},'http://viptela.com/oper-vpn',[int..."
+    expect:
+      parser_id: cisco_sdwan_mgmt_poll.v1
+      parser_status: parsed
+      event_type: snmp_agent_instr_trace
+      event_category: management_audit
+      dedup_key: 'vEdge-1|unknown|snmp_agent_instr_trace'
+    signal: null
+
+  - name: a genErr answer to our poll is a poll record, digits masked
+    fidelity: lab_validated
+    hostname: vEdge-1
+    severity: err
+    message: 'snmp get-response reqid=1234567 192.0.2.1:50123 error-status=genErr ix=1 (Unsigned32 interfaceVpnId.3.)'
+    expect:
+      parser_id: cisco_sdwan_mgmt_poll.v1
+      parser_status: parsed
+      event_type: snmp_get_response_generr
+      event_category: management_audit
+      dedup_key: 'vEdge-1|unknown|snmp_get_response_generr'
+    signal: null
+
+  - name: the same agent failing another table is still a poll record, and keeps its alarm
+    fidelity: doc_claimed
+    source: 'negative case of the known_benign guard: the lab line with another table name'
+    hostname: vEdge-1
+    severity: err
+    message: 'devel-snmpa internal error: table get-next: bfdSessionsTable (error: non_increasing_index)'
+    expect:
+      parser_status: parsed
+      event_type: snmp_agent_table_error
+      event_category: management_audit
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: a cEdge device-management login is audit
     fidelity: lab_validated

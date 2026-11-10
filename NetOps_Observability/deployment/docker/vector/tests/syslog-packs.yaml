@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 90
+# cases: 94
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -87,7 +87,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS administrative down carries the admin cause"
     inputs:
       - insert_at: syslog_normalized
@@ -103,7 +103,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS link failure carries the fault cause"
     inputs:
       - insert_at: syslog_normalized
@@ -119,7 +119,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS port-channel with no members is down with an unknown cause"
     inputs:
       - insert_at: syslog_normalized
@@ -135,7 +135,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS interface up"
     inputs:
       - insert_at: syslog_normalized
@@ -151,7 +151,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS speed change stays a log"
     inputs:
       - insert_at: syslog_normalized
@@ -167,7 +167,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS BFD session down is a below-floor BFD flap"
     inputs:
       - insert_at: syslog_normalized
@@ -183,7 +183,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: the three-part IOS form is not the XR grammar"
     inputs:
       - insert_at: syslog_normalized
@@ -199,7 +199,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: an error line parses and lifts severity"
     inputs:
       - insert_at: syslog_normalized
@@ -421,8 +421,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_normalized
@@ -437,8 +438,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_normalized
@@ -453,8 +455,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
   - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -469,8 +472,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -485,8 +489,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -502,7 +507,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -587,6 +592,83 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ftmd_1000003", "wrong event_type")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "cisco_sdwan: the SNMP agent failing our interfaceTable walk is a poll record, not an alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa internal error: table get-next: interfaceTable (error: non_increasing_index)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
+              assert_eq!(.summary, "table get-next interfaceTable: non_increasing_index", "wrong summary")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_table_error", "wrong dedup_key")
+  - name: "cisco_sdwan: the SNMP agent instrumentation trace of the same walk is a poll record"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa {confd_snmpa_instr,table_func,[{table,interfaceTable},'http://viptela.com/oper-vpn',[int..."
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_instr_trace", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_instr_trace", "wrong dedup_key")
+  - name: "cisco_sdwan: a genErr answer to our poll is a poll record, digits masked"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "snmp get-response reqid=1234567 192.0.2.1:50123 error-status=genErr ix=1 (Unsigned32 interfaceVpnId.3.)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_get_response_generr", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_get_response_generr", "wrong dedup_key")
+  - name: "cisco_sdwan: the same agent failing another table is still a poll record, and keeps its alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa internal error: table get-next: bfdSessionsTable (error: non_increasing_index)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "cisco_sdwan: a cEdge device-management login is audit"
     inputs:
       - insert_at: syslog_normalized
@@ -811,7 +893,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "nokia_sros: the documented SYSTEM line parses and reads its severity word"
     inputs:
       - insert_at: syslog_normalized
@@ -1190,7 +1272,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_normalized
@@ -1425,7 +1507,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: the same words from another app are not classified"
     inputs:
       - insert_at: syslog_normalized
@@ -1441,7 +1523,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
     inputs:
       - insert_at: syslog_normalized
@@ -1494,7 +1576,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a tagged line whose mnemonic is the only severity it states"
     inputs:
       - insert_at: syslog_normalized
@@ -1510,7 +1592,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a mnemonic later in the line sets no severity"
     inputs:
       - insert_at: syslog_normalized
@@ -1526,7 +1608,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a critical line with no pack still opens alone"
     inputs:
       - insert_at: syslog_normalized
@@ -1542,7 +1624,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: an error line with no pack stays below the open floor"
     inputs:
       - insert_at: syslog_normalized
@@ -1558,4 +1640,4 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")

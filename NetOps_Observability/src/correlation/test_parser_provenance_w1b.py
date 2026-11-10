@@ -607,7 +607,12 @@ RULES_HASH_SYSLOG_FRAMING = "d19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc
 #: (+ IOS/NX-OS link cause) and Junos packs, behind every older rule; the IS-IS row reads
 #: an ISIS ADJCHANGE/ADJCHG mnemonic and the link row keeps an XR protocol line at warn.
 RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a996297d4e71df2aef"
-RULES_HASH_A3 = RULES_HASH_VENDOR_PACKS_WAVE1
+#:
+#: SD-WAN SNMP-agent poll records (2026-11-10, tracker 387, D2): the vEdge confd agent's
+#: errors while answering our interfaceTable walk become audit-shaped records and one
+#: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar.
+RULES_HASH_SDWAN_SNMP_POLL = "96c1c4a9342bd37d246a6ef7137c0b51ab3214eb27425005e0bce90e042aedaa"
+RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
 
 
 def _guard_patterns(node) -> list[str]:

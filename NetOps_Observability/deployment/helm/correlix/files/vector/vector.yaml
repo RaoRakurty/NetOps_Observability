@@ -745,6 +745,47 @@ transforms:
           cx_pk_cat = "management_audit"
         }
       }
+      # grammar cisco_sdwan.vedge_daemon (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "]: ") && includes(["vdaemon", "vtracker"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: (?P<text>.*)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase((string(cx_pk_m.func) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+        }
+      }
+      # grammar cisco_sdwan.snmpa_table_error (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "devel-snmpa internal error: table ") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'devel-snmpa internal error: table (?P<op>[a-z-]{1,16}): (?P<table>\w{1,64}) \(error: (?P<err>\w{1,64})\)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan_mgmt_poll.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("snmp_agent_table_error")
+          cx_pk_sum = "table " + (string(cx_pk_m.op) ?? "") + " " + (string(cx_pk_m.table) ?? "") + ": " + (string(cx_pk_m.err) ?? "")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar cisco_sdwan.snmpa_instr_trace (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "devel-snmpa {confd_snmpa_instr,") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'devel-snmpa \{confd_snmpa_instr,(?P<func>\w{1,64}),')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan_mgmt_poll.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("snmp_agent_instr_trace")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar cisco_sdwan.snmp_get_response_error (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "snmp get-response reqid=") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'snmp get-response reqid=\d{1,12} \S{1,64} error-status=(?P<status>[A-Za-z]{1,32}) ix=\d{1,6}')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan_mgmt_poll.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("snmp_get_response_" + (string(cx_pk_m.status) ?? ""))
+          cx_pk_cat = "management_audit"
+        }
+      }
       # grammar juniper_junos.junos_tag (doc_claimed)
       if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "juniper") && contains(cx_pk_midmsg, "_") && includes(["bfdd", "chassisd", "dcd", "eventd", "kmd", "l2cpd", "mgd", "mib2d", "rpd"], cx_pk_app) {
         cx_pk_m, cx_pk_merr = parse_regex(cx_pk_midmsg, r'^(?P<tag>(?P<fac>[A-Z][A-Z0-9]{0,15})_[A-Z0-9_]{1,64}): ?(?P<text>.*)')
