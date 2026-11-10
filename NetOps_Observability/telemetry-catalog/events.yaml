@@ -35,6 +35,12 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-syslog-framing — tracker 387 PR 10: real PRI reaches the engine, so the
+# syslog generic net's err rung moves below the open floor (owner D3) and the SSH banner
+# probe gets a known_benign row first. No typed row reads PRI. One typed row moves: the IOS
+# protocol line (syslog.link.state_change), newly readable, must not open on a shutdown.
+# Trap lane unmoved.
+#
 # 2026-11-09-train-c — both tracker 387 streams together: the trap packs and the syslog
 # vendor packs, each described below. Neither moves the other's lane.
 #
@@ -114,7 +120,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-11-09-train-c"
+parser_rev: 2026-11-09-syslog-framing
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -689,7 +695,23 @@ rules:
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
-      severity: {by_state: {down: high}, default: warn}
+      # Tracker 387 PR 10, the guard on stage [5] (tracker 385). A sender with no process
+      # tag is IOS-format, and there the protocol line is the SECOND of a pair: a fault is
+      # %LINK-3-UPDOWN then %LINEPROTO-5-UPDOWN, a shutdown is %LINK-5-CHANGED then the
+      # very same %LINEPROTO-5-UPDOWN. The first line opens for a fault and is silent for
+      # a shutdown, so a lone protocol line must not open, or every `shutdown` on IOS would
+      # start opening objects the moment framing lets the engine read it. It still joins a
+      # component. EOS logs a tag (`Ebra:`) and only the protocol line, so that stays high.
+      # A protocol-only fault on IOS (a tunnel, a keepalive) does not open alone; it did
+      # not before either, when framing hid the line. Telling it from a shutdown needs both
+      # lines: tracker 388.
+      severity:
+        case:
+          - when: {all: [{eq: [tag, 'UNKNOWN']}, {contains: [ctoken, 'LINEPROTO']}]}
+            value: warn
+          - when: {eq: ['$state', 'down']}
+            value: high
+        default: warn
       native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
       # tracker 168: entity_id is already host:ifname — a BARE local name would
       # weld every device in the estate that owns the same port number.
@@ -1215,7 +1237,13 @@ rules:
         type: interface
         id: '{host}:{ifname}'
         else: {type: device, id: '{host}'}
-      severity: {from_severity_num: true}
+      # Tracker 387, PR 10 (owner D3, "ingestion is not incident creation"). Real PRI now
+      # reaches this net from every vendor; until then syslog-ng reset it to notice, and
+      # the net was silent by accident. A device's err is reason to keep the evidence, not
+      # to open an incident on one unrecognised line: it arrives below
+      # `severity_open_floor`, joins a component if one grounds to it, and a typed row
+      # states `high` where a pack knows better. Emerg, alert and crit still open alone.
+      severity: {from_severity_num: {err: warn}}
       # tracker 198: the MESSAGE TEXT is the discriminator. Without it two
       # DISTINCT unrecognized lines sharing facility+mnemonic(+interface) in one
       # millisecond collapsed onto one signal_id and one was dropped as a

@@ -158,3 +158,78 @@ func TestScrubText(t *testing.T) {
 		t.Errorf("clean text changed: %s", got)
 	}
 }
+
+// A credential a device wrote into a line's text is masked wherever the text is
+// stored, on every door that serves _source. Tracker 387 PR 10 stores it twice more.
+func TestStripSourceMasksCredentialsInTextFields(t *testing.T) {
+	raw := json.RawMessage(`{"hostname":"r1","ts":1234567890123456789,` +
+		`"message":"snmp-server community hunter2 RO",` +
+		`"message_original":"<189>Nov  9 09:00:01 r1 app: snmp-server community hunter2 RO",` +
+		`"structured_data":"[a@1 password=\"hunter2\"]","summary":"password=hunter2"}`)
+	out, err := StripSource(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "hunter2") {
+		t.Fatalf("the credential left in the text: %s", out)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("the masked document is not JSON: %v", err)
+	}
+	if doc["hostname"] != "r1" {
+		t.Fatalf("a field it should not touch moved: %s", out)
+	}
+	if !strings.Contains(string(out), "1234567890123456789") {
+		t.Fatalf("a number lost its precision: %s", out)
+	}
+}
+
+// A username is not a credential here: it stays for security attribution (owner D7).
+func TestStripSourceKeepsUsernames(t *testing.T) {
+	raw := json.RawMessage(`{"message_original":"<189>r1 app: User 'svc-user' authenticated with token auth"}`)
+	out, err := StripSource(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "svc-user") {
+		t.Fatalf("the username must stay in the record: %s", out)
+	}
+}
+
+// The fast path: an ordinary document is not parsed or re-encoded, even with a key
+// order or number form a re-encode would change.
+func TestStripSourcePassesAnOrdinaryDocumentByteForByte(t *testing.T) {
+	raw := json.RawMessage(`{"z":1.0,"a":2,"message":"Interface Gi1, changed state to down","message_original":"<187>x"}`)
+	out, err := StripSource(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(raw) {
+		t.Fatalf("an ordinary document was rewritten: %s", out)
+	}
+}
+
+// A search answer goes through the same masking, hit by hit.
+func TestStripSearchResponseMasksTextFields(t *testing.T) {
+	raw := []byte(`{"took":1,"hits":{"total":{"value":1},"hits":[{"_id":"a","_source":{"message_original":"password=hunter2"}}]}}`)
+	out, err := StripSearchResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "hunter2") {
+		t.Fatalf("the credential reached the search answer: %s", out)
+	}
+}
+
+// The quarantine restore puts a document back in the pipeline: the store keeps the text.
+func TestStripFieldsLeavesTheTextForTheStore(t *testing.T) {
+	doc := map[string]any{TrapCommunityField: "public", "message_original": "password=hunter2"}
+	StripFields(doc)
+	if _, present := doc[TrapCommunityField]; present {
+		t.Fatal("the community survived")
+	}
+	if doc["message_original"] != "password=hunter2" {
+		t.Fatalf("the original must reach the store unchanged: %v", doc)
+	}
+}

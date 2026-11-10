@@ -1012,6 +1012,10 @@ def _compile_severity(spec: Any, fallback: Severity | None) -> Callable[[Ctx], S
     if "from_severity_num" in spec:
         # RFC5424 numeric → the canonical ladder (emerg/alert/crit → CRIT,
         # err → HIGH, warning → WARN; below the floor never reaches here).
+        # `{from_severity_num: {err: <severity>}}` restates the err rung for a lane
+        # where the device's err is not enough to open an object alone (owner D3).
+        opts = spec["from_severity_num"]
+        err_sev = _SEV_BY_NAME[opts["err"]] if isinstance(opts, dict) else Severity.HIGH
         def _num(c: Ctx) -> Severity:
             n = c.sev()
             if n is None:                               # pragma: no cover - guard
@@ -1019,7 +1023,7 @@ def _compile_severity(spec: Any, fallback: Severity | None) -> Callable[[Ctx], S
             if n <= 2:
                 return Severity.CRIT
             if n == 3:
-                return Severity.HIGH
+                return err_sev
             return Severity.WARN
         return _num
     raise RuleError(f"unknown severity spec {spec!r}")

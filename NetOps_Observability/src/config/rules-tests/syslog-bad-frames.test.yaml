@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for SyslogBadFramesRising (rules.yaml, ingest-integrity, tier
+# warning; tracker 387 PR 10). The counter is vector-router's
+# netops_ingest_syslog_bad_frames{reason} (no `_total`: Vector's exporter appends none).
+# Acceptance:
+#   * a sudden rise FIRES, per reason, and a counter new to the store counts as one;
+#   * a single sender that stays bad stops alerting once it is the baseline;
+#   * a trickle below the floor stays SILENT, however long it lasts;
+#   * a counter that is flat stays SILENT.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Six quiet hours, then 60 bad frames a minute, for ever. It fires, then the
+  #    6-hour baseline catches up and it clears. A level rule would still be firing.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_syslog_bad_frames{job="vector-router",reason="malformed_pri"}'
+        values: "0x360 0+60x600"
+    alert_rule_test:
+      - eval_time: 6h5m
+        alertname: SyslogBadFramesRising
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: SyslogBadFramesRising
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+              reason: malformed_pri
+            exp_annotations:
+              summary: "Syslog frames the platform cannot read are rising (malformed_pri)"
+              description: "Over 1.0 frames per second are arriving as malformed_pri, at least three times the last six hours. They are stored with their original text, but they carry no severity the engine can use, so a device sending them is not being read."
+              runbook: "docs/runbooks/syslog-bad-frames.md"
+      - eval_time: 9h
+        alertname: SyslogBadFramesRising
+        exp_alerts: []
+      - eval_time: 15h
+        alertname: SyslogBadFramesRising
+        exp_alerts: []
+
+  # 2) One sender at 1 frame a minute for 12 hours: under the floor from start to finish.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_syslog_bad_frames{job="vector-router",reason="no_pri"}'
+        values: "0+1x720"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: SyslogBadFramesRising
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: SyslogBadFramesRising
+        exp_alerts: []
+
+  # 3) A counter the store has never seen has no baseline: Vector creates it on the
+  #    first bad frame. The rise still fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_syslog_bad_frames{job="vector-router",reason="oversized"}'
+        values: "_x30 0+60x60"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: SyslogBadFramesRising
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+              reason: oversized
+            exp_annotations:
+              summary: "Syslog frames the platform cannot read are rising (oversized)"
+              description: "Over 1.0 frames per second are arriving as oversized, at least three times the last six hours. They are stored with their original text, but they carry no severity the engine can use, so a device sending them is not being read."
+              runbook: "docs/runbooks/syslog-bad-frames.md"
+
+  # 4) A counter that went flat: nothing is arriving.
+  - interval: 1m
+    input_series:
+      - series: 'netops_ingest_syslog_bad_frames{job="vector-router",reason="malformed_5424"}'
+        values: "5000x120"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SyslogBadFramesRising
+        exp_alerts: []

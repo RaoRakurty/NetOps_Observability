@@ -607,7 +607,10 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=etype_,
             entity_id=eid_,
-            severity=P._severity_from_num(sev_num),
+            # Tracker 387 PR 10 (owner D3): an err line arrives below the open floor. The
+            # one edit to this frozen copy since A3: a decided change to what the net emits,
+            # not a parser refactor, so the parity proof must follow it.
+            severity=Severity.WARN if sev_num == 3 else P._severity_from_num(sev_num),
             # tracker 198: the message text is the discriminator — without it two
             # DISTINCT unrecognized lines sharing facility+mnemonic(+interface) in
             # one millisecond collapsed onto one signal_id and one of them was

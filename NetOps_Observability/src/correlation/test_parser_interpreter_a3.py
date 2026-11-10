@@ -144,8 +144,9 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # 38 through A9 · 40 since A9b (`trap.config.change` emits;
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
     # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`)
-    # · 59 with tracker 387's trap-pack block · 71 with its syslog pack (12 rows).
-    assert len(P.RULES) == 71
+    # · 59 with tracker 387's trap-pack block · 71 with its syslog pack (12 rows)
+    # · 72 with PR 10's known_benign row for the SSH banner probe.
+    assert len(P.RULES) == 72
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

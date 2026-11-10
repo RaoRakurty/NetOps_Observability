@@ -75,6 +75,33 @@ rules and ahead of the generic net. A `known_benign` row counts the line
 is a decision, not a candidate. Stage [1] only: no template, gate or constant moved, so
 ENGINE_SEMVER does not move.
 
+**Syslog framing (tracker 387 PR 10, 2026-11-09).** Until then syslog-ng reset PRI to 13 for
+every vendor and read RFC 5424 with its legacy parser, so `ev.severity` was always `notice`
+and the generic net was silent by accident. It is now the device's real severity, and the
+message is clean, with the `%FAC-N-MNEMONIC` at its start (`syslog-ng/core.conf` p_frame).
+Three things changed at stage [1] because of it, nothing else:
+- `syslog_severity_num` also reads the mnemonic digit at the START of the message
+  (`_BODY_SEV_RE`), where the tag used to carry it. Text later in a line is the sender's and
+  states nothing.
+- `syslog.generic.device_alarm` opens alone only on emerg/alert/crit: err arrives as `warn`,
+  below `severity_open_floor`, and joins a component if one grounds to it (owner D3). The
+  trap net keeps err → high: traps were never suppressed, so nothing changed there.
+- `syslog.link.state_change`: a `%LINEPROTO-*-UPDOWN` down line from a sender with no process
+  tag (`appname` `unknown`, IOS-format) is `warn`, because IOS logs the same line after a
+  fault and after a `shutdown`; the first line of the pair says which. `%LINK-3-UPDOWN` opens,
+  and `%LINK-5-CHANGED` emits nothing. EOS logs a tag and only the protocol line, so it stays
+  `high`. No typed row reads PRI.
+`.facility` no longer carries the PRI facility (that is `syslog_facility`): `local` is a screen
+literal, and a fleet on local7 would have passed every line through the prefilter.
+`ev.timestamp` is the device's own time when it can be believed. An RFC 3164 time has no zone
+or year: within `SYSLOG_CLOCK_SKEW_TOLERANCE_S` it stands, which keeps sub-second order; past it
+the aggregator replaces it with the edge's receive time (`ts_source=edge_receive`, the claim in
+`device_timestamp`, `clock_skew_s` stamped), so a device logging local time still correlates. A
+frame with `Z` or an offset keeps its timestamp whatever it says, because it can truly be old:
+re-stamping would fabricate freshness, as `buffer_signal` already reasons, which clamps the
+future and counts the past. So a wrong clock with a stated zone does not correlate, and
+`clock_skew_signal` reports it.
+
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).
 - Other lanes (`buffer_signal`): a ts more than 120 s in the future is clamped; a ts

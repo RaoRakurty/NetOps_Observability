@@ -238,6 +238,22 @@
             "procid": {
               "type": "keyword"
             },
+            "msgid": {
+              "type": "keyword"
+            },
+            "syslog_facility": {
+              "type": "keyword"
+            },
+            "frame_format": {
+              "type": "keyword"
+            },
+            "frame_problem": {
+              "type": "keyword"
+            },
+            "ingested_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
             "severity": {
               "type": "keyword"
             },

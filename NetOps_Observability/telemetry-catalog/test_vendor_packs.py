@@ -205,12 +205,14 @@ def test_the_dedup_key_groups_repeats_and_nothing_else():
 
 def test_audit_rows_cannot_alarm():
     """Non-alarm by construction: no severity reader, so no alarm floor to cross, and no
-    typed row. Even a device that sends the line at `err` gets only what it always did."""
+    typed row that emits (a known_benign row emits nothing: it is how a line a device sends
+    at `err` stays off the generic net). Even a device that sends the line at `err` gets
+    only what it always did."""
     table = P._PACKS
     audit = [g for g in table.grammars if g.category]
     assert audit
     assert all(not g.reads_severity and g.alarm_floor is None for g in audit)
-    rows = [r for p in B.load_packs() for r in p.get("rules") or []]
+    rows = [r for p in B.load_packs() for r in p.get("rules") or [] if not r.get("known_benign")]
     audit_literals = {g.literal for g in audit}
     assert not any(lit in str(r.get("pattern_src")) for r in rows for lit in audit_literals)
 

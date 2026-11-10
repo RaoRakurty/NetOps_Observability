@@ -109,6 +109,10 @@ TAG_SEV_PATTERN = r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+"
 # the one direction the contract forbids.
 VRL_TAG_SEV_PATTERN = TAG_SEV_PATTERN.replace(r"(\d)", r"(?P<d>\d)")
 assert VRL_TAG_SEV_PATTERN != TAG_SEV_PATTERN, "digit group could not be named"
+# `producers._BODY_SEV_RE` is the same mnemonic at the START of the message. Python
+# anchors it with `.match()`; VRL's parse_regex searches, so the copy states the `^`.
+BODY_SEV_PATTERN = TAG_SEV_PATTERN
+VRL_BODY_SEV_PATTERN = "^" + VRL_TAG_SEV_PATTERN
 
 # Literals are pasted into a VRL regex alternation and into `r'…'`, so they must
 # carry no regex metacharacter and no quote. This is a REFUSAL, not an escape:
@@ -201,6 +205,11 @@ def check_tag_regex(producers: Any) -> None:
             f"producers._TAG_SEV_RE changed to {live!r}; the generated VRL "
             f"still compiles {TAG_SEV_PATTERN!r}. Update TAG_SEV_PATTERN (and "
             "re-verify the Rust-regex semantics match Python's) deliberately.")
+    live = producers._BODY_SEV_RE.pattern
+    if live != BODY_SEV_PATTERN:
+        raise GenerationError(
+            f"producers._BODY_SEV_RE changed to {live!r}; the generated VRL still "
+            f"compiles {VRL_BODY_SEV_PATTERN!r}. Update BODY_SEV_PATTERN deliberately.")
 
 
 def read_pack_grammars(producers: Any) -> list[dict]:
@@ -390,6 +399,16 @@ def render_vrl(floor: int, literals: tuple[str, ...] | None,
         "}",
         "if cx_tag_sev < cx_sev {",
         "  cx_sev = cx_tag_sev",
+        "}",
+        "",
+        "# The same mnemonic at the start of the message (producers._BODY_SEV_RE).",
+        f"cx_body_sev = {NO_SEVERITY}",
+        f"cx_m = parse_regex(string(.message) ?? \"\", r'{VRL_BODY_SEV_PATTERN}') ?? {{}}",
+        "if is_string(cx_m.d) {",
+        f"  cx_body_sev = to_int(cx_m.d) ?? {NO_SEVERITY}",
+        "}",
+        "if cx_body_sev < cx_sev {",
+        "  cx_sev = cx_body_sev",
         "}",
     ]
     lines += _vrl_pack_lines(grammars or [])

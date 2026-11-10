@@ -501,7 +501,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
       const app = known(src, "syslog.app_name", "appname");
       const pills: LogField[] = [];
       for (const [name, value] of [
-        ["Facility", known(src, "syslog.facility", "facility")],
+        // The PRI facility, which the aggregator keeps apart. `facility` is a body grammar's
+        // answer (`LINK`, `FTMD`), and is all a record stored before that split has.
+        ["Facility", known(src, "syslog.facility", "syslog_facility", "facility")],
         ["Severity", severity ?? ""],
         ["App", app],
         ["Process", known(src, "syslog.procid", "procid")],

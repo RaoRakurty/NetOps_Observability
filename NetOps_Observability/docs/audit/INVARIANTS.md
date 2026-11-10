@@ -716,3 +716,19 @@ vManage and SNMP values normalise to agreement (and how often sources really dis
 
 **NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
 show a different value from the one Iris cites. The collectors and identity deliberately keep that row.
+
+## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
+
+**Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**
+BUILD: raw frames through the real syslog-ng config and the shipped Vector transforms
+(`tests/test_syslog_edge_framing.py`), and stage [1] without docker
+(`src/correlation/test_syslog_framing_387.py`). Only Cisco SD-WAN has been seen on the wire;
+every other shape is `doc_claimed`.
+
+- One malformed or non-UTF-8 frame cannot stall the lane; each is stored and counted
+  (`netops_ingest_syslog_bad_frames{reason}`). BUILD.
+- A sender's structured data cannot land on an event field. BUILD.
+- The ratified V1 storm mixes classify byte-identically. BUILD, by digest. **NOT measured at
+  scale:** `scripts/scale-miniladder.py` injects to Kafka, so no rig leg has ever exercised
+  syslog-ng or the aggregator's syslog lane. An edge parity leg needs a raw-frame injector.
+

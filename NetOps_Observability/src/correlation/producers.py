@@ -201,6 +201,10 @@ _SEVERITY_NUM: dict[str, int] = {
 ALARM_SEVERITY_FLOOR = 4  # warning
 
 _TAG_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")  # Cisco %FAC-N-MNEMONIC
+# The same mnemonic where a correctly framed line carries it: at the START of the message
+# (`Rib: %BGP-3-NOTIFICATION: ...`, or an IOS line with no process tag). Anchored, because
+# text later in a line is the sender's to write and must not set a severity.
+_BODY_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")
 
 # Vendor-pack grammars (telemetry-catalog/vendor-packs/, tracker 387). Immutable after
 # import. The same rows compile into the aggregator's VRL.
@@ -217,8 +221,12 @@ def _syslog_severity_parts(ev: dict, tag: str) -> tuple[int | None, int | None]:
     m = _TAG_SEV_RE.search(tag)
     if m:
         cands.append(int(m.group(1)))
+    msg = str(ev.get("message") or "")
+    m = _BODY_SEV_RE.match(msg)
+    if m:
+        cands.append(int(m.group(1)))
     floor: int | None = None
-    hit = _PACKS.severity_hit(ev, str(ev.get("message") or ""))
+    hit = _PACKS.severity_hit(ev, msg)
     if hit is not None:
         cands.append(hit[0])
         floor = hit[1]
@@ -227,8 +235,9 @@ def _syslog_severity_parts(ev: dict, tag: str) -> tuple[int | None, int | None]:
 
 def syslog_severity_num(ev: dict, tag: str) -> int | None:
     """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
-    the RFC5424/SR-Linux `severity` keyword/char, the Cisco %FAC-N-MNEMONIC tag
-    digit, AND the severity a vendor-pack grammar reads from the message. None when
+    the RFC5424/SR-Linux `severity` keyword/char, the Cisco %FAC-N-MNEMONIC digit in
+    the tag or at the start of the message, AND the severity a vendor-pack grammar
+    reads from the message. None when
     none parses (the generic-alarm fallback then abstains: no severity, no guessed
     alarm)."""
     return _syslog_severity_parts(ev, tag)[0]
