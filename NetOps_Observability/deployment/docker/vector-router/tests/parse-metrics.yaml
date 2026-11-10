@@ -168,6 +168,8 @@ tests:
           src_as: 65001
           dst_as: 0
           src_addr: "10.0.0.1"
+          in_if: 4
+          out_if: 2
     outputs:
       - extract_from: flow_enrichment_labels
         conditions:
@@ -176,6 +178,7 @@ tests:
               assert_eq!(.exporter, "known")
               assert_eq!(.sampling, "reported")
               assert_eq!(.as_numbers, "present")
+              assert_eq!(.iface_index, "indexed")
               assert!(!exists(.src_addr))
 
   - name: "flow enrichment: the shape the lab measured reads as it is"
@@ -187,6 +190,8 @@ tests:
           sampling_status: "not_reported_1to1"
           src_as: 0
           dst_as: 0
+          in_if: 4294967295
+          out_if: 4
     outputs:
       - extract_from: flow_enrichment_labels
         conditions:
@@ -195,6 +200,7 @@ tests:
               assert_eq!(.exporter, "unknown")
               assert_eq!(.sampling, "not_reported_1to1")
               assert_eq!(.as_numbers, "absent")
+              assert_eq!(.iface_index, "partial")
 
   - name: "flow enrichment: a forged value cannot mint a series"
     inputs:
@@ -203,6 +209,8 @@ tests:
         log_fields:
           tenant_registry: "evil"
           sampling_status: "evil"
+          in_if: "evil"
+          out_if: 0
     outputs:
       - extract_from: flow_enrichment_labels
         conditions:
@@ -211,3 +219,4 @@ tests:
               assert_eq!(.exporter, "unknown")
               assert_eq!(.sampling, "other")
               assert_eq!(.as_numbers, "absent")
+              assert_eq!(.iface_index, "sentinel")
