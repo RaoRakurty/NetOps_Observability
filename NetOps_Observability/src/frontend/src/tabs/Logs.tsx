@@ -11,8 +11,7 @@ import {
 } from "../lib/logEvent";
 import DataTable, { Column } from "../components/DataTable";
 import { Segmented } from "../components/ui";
-import { LogLineDetailBody } from "./LogDetail";
-import { useWorkspace } from "../context/workspace";
+import EventDetailPanel from "../components/event/EventDetailPanel";
 import { useAuth } from "../hooks/useAuth";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
@@ -163,7 +162,6 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   // A quick filter can fire searches faster than they answer; only the latest may
   // fill the table.
   const runSeq = useRef(0);
-  const ws = useWorkspace();
   const { user } = useAuth();
   // "App logs" are the platform's own container/API logs — platform-owner only.
   // Tenant-scoped users don't see the option (the backend also refuses the signal).
@@ -322,25 +320,11 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     });
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(lines.map((l) => l.id)));
 
-  // Row body click (not the export checkbox) opens the full log document in the
-  // dockable Inspector (shell-v2); v1 falls back to an inline detail card.
-  const selectLine = (l: Line) => {
-    setDetailId(l.id);
-    // The docked Inspector is a fixed-width column of the shell grid and leaves no
-    // room for itself on a phone, so a phone reads the record under the table.
-    if (ws.enabled && !isPhone) {
-      ws.openInspector(<LogLineDetailBody key={l.id} line={l} />, {
-        title: l.ev.deviceLabel || l.source,
-        subtitle: `${severityLabel(l.ev.severity) || l.ev.signalLabel} · ${fmtDateTime(l.ts)}`,
-      });
-    }
-  };
-  const inlineDetail = !ws.enabled || isPhone;
-  const detailLine = inlineDetail && detailId ? lines.find((l) => l.id === detailId) : undefined;
-  const detailRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (isPhone && detailId) detailRef.current?.scrollIntoView({ block: "start" });
-  }, [isPhone, detailId]);
+  // Row body click (not the export checkbox) opens the Event Intelligence panel over
+  // the list, in every shell and at every width (full screen on a phone). The panel
+  // reads the same hit the row did, so the redaction and resolved names are shared.
+  const selectLine = (l: Line) => setDetailId(l.id);
+  const detailLine = detailId ? lines.find((l) => l.id === detailId) : undefined;
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
@@ -708,15 +692,13 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </p>
         )}
         {detailLine && (
-          <div className="lv-inline-detail" ref={detailRef}>
-            <button type="button" className="chip lv-detail-close" onClick={() => setDetailId(null)}>Close</button>
-            <LogLineDetailBody key={detailLine.id} line={detailLine} />
-          </div>
+          <EventDetailPanel
+            key={detailLine.id}
+            hit={{ _index: detailLine.index, _id: detailLine.id, _source: detailLine.raw, _resolved: detailLine.resolved }}
+            onClose={() => setDetailId(null)}
+          />
         )}
       </div>
     </div>
   );
 }
-
-// The details view lives in LogDetail.tsx; it stays importable from here.
-export { LogLineDetailBody };
