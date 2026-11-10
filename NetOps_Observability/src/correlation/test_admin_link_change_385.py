@@ -436,7 +436,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 94  # parser_rules.RULES since tracker 387 wave 1 + SD-WAN SNMP-agent poll row
+PINNED_RULE_COUNT = 95  # parser_rules.RULES since tracker 387 wave 2 (SONiC link row)
 
 
 def test_control_digest_frozen_before_the_change():
@@ -474,7 +474,7 @@ def test_the_parser_is_untouched():
     behind every older one; the trap link rows this file protects did not move."""
     assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1"
     assert parser_rules.BAKED_RULES_HASH == (
-        "cefbeeaad8aad30602f755d299f952abbe9f8162f348edad7eca482ec788ad36")
+        "4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282399d")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

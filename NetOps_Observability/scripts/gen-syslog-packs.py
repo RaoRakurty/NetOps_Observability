@@ -116,6 +116,10 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         # The rich event fields (tracker 387, the trap lane's names), merged onto the
         # record by the hand-written code after this block.
         "cx_pk_out = {}",
+        "cx_pk_obs = []",
+        "cx_pk_der = []",
+        "cx_pk_unk = []",
+        'cx_pk_pack = ""',
     ]
     record = None
     if any(_reads_record(g) for g in rows):
@@ -167,6 +171,7 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         out += V.severity_lines(g, "cx_pk_m", "cx_pk_sev", "    ")
         out += _event_model_lines(g, record, "    ")
         out += ["  }", "}"]
+    out += _event_model_epilogue(bool(tables))
     return out
 
 
@@ -191,43 +196,47 @@ def _guidance_tables(rows: list[dict]) -> dict[str, dict]:
 
 
 def _event_model_lines(g: dict, record: dict | None, ind: str) -> list[str]:
-    """syslog_packs._event_model in VRL: the same fields, in the same order."""
-    out = [f"{ind}cx_pk_obs = []", f'{ind}cx_pk_der = ["normalized_severity"]',
-           f"{ind}cx_pk_unk = []", f"{ind}cx_pk_gfl = []"]
-    for name, local in _OBSERVED_LOCALS:
-        out.append(f'{ind}if {local} != "" {{ cx_pk_obs = push(cx_pk_obs, "{name}") }}')
+    """The per-grammar half of syslog_packs._event_model: this row's templates and
+    metrics, each named into observed / derived / unknown in declaration order. The
+    shared half (the line's own fields, guidance, the enrichment object) is the
+    epilogue, written once."""
+    out = [f"{ind}cx_pk_pack = {json.dumps(g['pack'])}"]
     for name, tmpl in (g.get("fields") or {}).items():
         lst = "cx_pk_obs" if field_is_observed(name, tmpl) else "cx_pk_der"
         out += V.template_lines(tmpl, "cx_pk_m", "cx_pk_v", ind, record)
-        out += [f'{ind}if cx_pk_v != "" {{',
-                f"{ind}  cx_pk_out = merge(cx_pk_out, {{{json.dumps(name)}: cx_pk_v}})",
-                f'{ind}  {lst} = push({lst}, "{name}")',
-                f"{ind}}} else {{",
-                f'{ind}  cx_pk_unk = push(cx_pk_unk, "{name}")',
-                f"{ind}}}"]
-    if g.get("category"):
-        out.append(f'{ind}cx_pk_der = push(cx_pk_der, "dedup_key")')
+        out.append(f'{ind}if cx_pk_v != "" {{ cx_pk_out = merge(cx_pk_out, {{{json.dumps(name)}: cx_pk_v}}); '
+                   f'{lst} = push({lst}, "{name}") }} else {{ cx_pk_unk = push(cx_pk_unk, "{name}") }}')
     if g.get("metrics"):
         out.append(f"{ind}cx_pk_met = {{}}")
         for name, group in g["metrics"].items():
-            out += [f'{ind}cx_pk_mf, cx_pk_mferr = to_float({V.group_expr("cx_pk_m", group)})',
-                    f'{ind}if cx_pk_mferr == null && {V.group_expr("cx_pk_m", group)} != "" {{',
-                    f'{ind}  cx_pk_met = merge(cx_pk_met, {{{json.dumps(name)}: {{"value": cx_pk_mf, "basis": "observed"}}}})',
-                    f'{ind}  cx_pk_obs = push(cx_pk_obs, "metrics.{name}")',
-                    f"{ind}}} else {{",
-                    f'{ind}  cx_pk_unk = push(cx_pk_unk, "metrics.{name}")',
-                    f"{ind}}}"]
-        out += [f"{ind}if length(cx_pk_met) > 0 {{",
-                f'{ind}  cx_pk_out = merge(cx_pk_out, {{"metrics": cx_pk_met}})',
-                f"{ind}}}"]
-    if g.get("guidance"):
-        out += [f'{ind}cx_pk_g = get(cx_pk_gt, [{json.dumps(g["pack"] + "|")} + cx_pk_et]) ?? null',
-                f"{ind}if is_object(cx_pk_g) {{",
-                f'{ind}  cx_pk_out = merge(cx_pk_out, {{"guidance": merge(object!(cx_pk_g), {{"basis": "pack_guidance"}})}})',
-                f'{ind}  cx_pk_gfl = push(cx_pk_gfl, "guidance")',
-                f"{ind}}}"]
-    out.append(f'{ind}cx_pk_out = merge(cx_pk_out, {{"enrichment": {{"fields_observed": cx_pk_obs, '
-               f'"fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}}}})')
+            raw = V.group_expr("cx_pk_m", group)
+            out += [f"{ind}cx_pk_mf, cx_pk_mferr = to_float({raw})",
+                    (f'{ind}if cx_pk_mferr == null && {raw} != "" {{ '
+                     f'cx_pk_met = merge(cx_pk_met, {{{json.dumps(name)}: {{"value": cx_pk_mf, "basis": "observed"}}}}); '
+                     f'cx_pk_obs = push(cx_pk_obs, "metrics.{name}") }} else {{ '
+                     f'cx_pk_unk = push(cx_pk_unk, "metrics.{name}") }}')]
+        out.append(f'{ind}if length(cx_pk_met) > 0 {{ cx_pk_out = merge(cx_pk_out, {{"metrics": cx_pk_met}}) }}')
+    return out
+
+
+def _event_model_epilogue(has_guidance: bool) -> list[str]:
+    """Once, after the grammars: the line's own fields first (syslog_packs._OBSERVED_ORDER),
+    pack guidance by `<pack>|<event_type>`, and the enrichment object."""
+    out = ['if cx_pk_parser != "" {', "  cx_pk_base = []"]
+    for name, local in _OBSERVED_LOCALS:
+        out.append(f'  if {local} != "" {{ cx_pk_base = push(cx_pk_base, "{name}") }}')
+    out += ['  cx_pk_derv = append(["normalized_severity"], cx_pk_der)',
+            '  if cx_pk_cat != "" { cx_pk_derv = push(cx_pk_derv, "dedup_key") }',
+            "  cx_pk_gfl = []"]
+    if has_guidance:
+        out += ['  cx_pk_g = get(cx_pk_gt, [cx_pk_pack + "|" + cx_pk_et]) ?? null',
+                "  if is_object(cx_pk_g) {",
+                '    cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})',
+                '    cx_pk_gfl = ["guidance"]',
+                "  }"]
+    out += [('  cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": append(cx_pk_base, cx_pk_obs), '
+             '"fields_derived": cx_pk_derv, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})'),
+            "}"]
     return out
 
 
