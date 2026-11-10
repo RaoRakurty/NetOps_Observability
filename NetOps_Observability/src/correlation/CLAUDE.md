@@ -142,6 +142,16 @@ leaves the inventory or changes tenant, or 7 days after its last completed walk.
 address two devices claimed at once stays claimed by both, so it stays ambiguous.
 Gauge: `collector_if_rows_retained_devices`.
 
+**Trap attribution (tracker 387 PR 13c', 2026-11-10).** The Go receiver names the
+device by management address, then an interface address exactly one device reports
+(`nms.InventoryIndex.DeviceForAddress`; VPN ≥ 65528 loopbacks and shared addresses
+name nobody), then sysName, then v1 agent-addr, each rung only with the device's
+credential proven, and stamps `attribution_basis` (`mgmt_ip|interface_ip|sysname|
+agent_addr|none`). Stage [1]: `handle_snmptrap`'s `device_for_ip(host)` recovery runs
+ONLY for a record without that field (an older receiver); a stamped `none` is a refusal
+and stays unattributed (`ingest.traps_recanon_declined`). The receiver also stamps
+`interface`/`ifindex`/`interface_basis`; `_trap_interface` still reads the varbinds.
+
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).
 - Aggregation plane: aggregation.py:30. OFF in the image (M:2138), ON in compose.

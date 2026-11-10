@@ -905,6 +905,7 @@ DEVICE_TELEMETRY_SIGNALS = 0   # device_telemetry signals written to corr_signal
 TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
 TRAPS_NORMALIZED = 0           # classified into a control_plane signal
 TRAPS_RECANON = 0              # C8: re-attributed to a device via the C7.1 EntityResolver
+TRAPS_RECANON_DECLINED = 0     # 387 PR 13c': the receiver tried every rung with proof; not re-attributed
 TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
 # tracker 376: one BGP session transition reported by several trap families
 # (RFC 4273 + CISCO-BGP4-MIB cbgp* + cbgpPeer2*, up to six traps) is ONE signal.
@@ -13035,7 +13036,7 @@ async def handle_snmptrap(ev: dict) -> None:
     high-value families only. Unclassified traps stay searchable in OpenSearch
     and create NO RCA signal (the anti-noise guardrail). The OpenSearch path is
     untouched — this is an ADDITIONAL evidence lane, not a replacement."""
-    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED, TRAPS_RECANON
+    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED, TRAPS_RECANON, TRAPS_RECANON_DECLINED
     # A record from an older receiver can still carry the v1/v2c community for
     # the bus retention window. Nothing here reads it; removing it means no
     # dead-letter path below can keep it.
@@ -13049,13 +13050,24 @@ async def handle_snmptrap(ev: dict) -> None:
     # INTERFACE IPs, so a trap sourced from a device's interface (not its mgmt IP)
     # still resolves. A NAT-collapsed shared source is ambiguous → stays unresolved
     # (the producer then keeps it searchable but emits no phantom-device RCA signal).
+    #
+    # Tracker 387 PR 13c' (stage [1] normalize): a receiver that stamps
+    # `attribution_basis` has ALREADY tried the management address, a unique
+    # interface address, sysName and the v1 agent-addr, each only with the
+    # device's credential proven (community / verified HMAC). Its "none" is a
+    # refusal, not a gap: re-attributing by address here, with no credential,
+    # would hand a forged trap from a known interface IP the device's identity.
+    # So only a record WITHOUT the field (an older receiver) is recovered here.
     device = str(ev.get("device") or "")
     if not device:
-        recovered = cached_entity_resolver_all().device_for_ip(str(ev.get("host") or ""))
-        if recovered:
-            ev = {**ev, "device": recovered}
-            device = recovered
-            TRAPS_RECANON += 1
+        if str(ev.get("attribution_basis") or "").strip():
+            TRAPS_RECANON_DECLINED += 1
+        else:
+            recovered = cached_entity_resolver_all().device_for_ip(str(ev.get("host") or ""))
+            if recovered:
+                ev = {**ev, "device": recovered}
+                device = recovered
+                TRAPS_RECANON += 1
     # F-11 (D1/D4, INV-F11-10): registry-ANCHORED like syslog and flows — the
     # aggregator stamps the trap tenant SOLELY from the device→tenant registry,
     # and the router's generated quarantine stage seals snmptrap misses. A
@@ -16011,6 +16023,8 @@ def _health_payload() -> dict:
             "traps_received": TRAPS_RECEIVED,
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
+            # 387 PR 13c': the receiver tried every rung with proof, so no recovery by address
+            "traps_recanon_declined": TRAPS_RECANON_DECLINED,
             "traps_dropped": TRAPS_DROPPED,
             # tracker 379: cumulative counters → rates before the episode detector.
             "metrics_counter_seeded": COUNTER_RATES.counts["seed"],

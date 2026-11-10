@@ -1507,7 +1507,7 @@ transforms:
   # lists below or `other`, so the label product is bounded at 22 x 13 x 6 statuses =
   # 1716, and the pipeline can reach about 400 of those: a line has one parser and one
   # status, and a trap has no parser id. A single-vendor deployment holds about ten.
-  # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 12.
+  # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 36.
   # No device, tenant or free text can reach a label, so nothing here is
   # tenant-scoped and every series is safe on the shared exporter.
   #
@@ -1603,7 +1603,11 @@ transforms:
   # What the flow lane knew about each record, as read off flows_decoded: whether the
   # exporter is in inventory, what the sampling label says, and whether AS numbers
   # came through (they were empty on all of the lab's 29,875 rows, plan §2). Interface
-  # and device names arrive at query time (PR 13), so they are not an outcome here.
+  # names arrive at query time (PR 13b), so whether a name RESOLVED is the api's
+  # netops_iface_names_* gauges; what is knowable here is iface_index, the basis a
+  # name could have: `indexed` (both interfaces real), `partial` (one is the IPFIX
+  # "no interface" sentinel, 0 or 4294967295) or `sentinel` (neither can ever be
+  # named). 17.8 % of the lab's in_if were the sentinel (plan §1).
   flow_enrichment_labels:
     type: remap
     inputs: [flows_decoded]
@@ -1614,7 +1618,17 @@ transforms:
       if !includes(["reported", "not_reported_1to1"], cx_sampling) { cx_sampling = "other" }
       cx_as = "absent"
       if (to_int(.src_as) ?? 0) > 0 || (to_int(.dst_as) ?? 0) > 0 { cx_as = "present" }
-      . = { "exporter": cx_exporter, "sampling": cx_sampling, "as_numbers": cx_as }
+      cx_in = to_int(.in_if) ?? 0
+      cx_out = to_int(.out_if) ?? 0
+      cx_in_real = cx_in > 0 && cx_in != 4294967295
+      cx_out_real = cx_out > 0 && cx_out != 4294967295
+      cx_iface = "sentinel"
+      if cx_in_real && cx_out_real {
+        cx_iface = "indexed"
+      } else if cx_in_real || cx_out_real {
+        cx_iface = "partial"
+      }
+      . = { "exporter": cx_exporter, "sampling": cx_sampling, "as_numbers": cx_as, "iface_index": cx_iface }
 
   flow_enrichment_metric:
     type: log_to_metric
@@ -1627,6 +1641,35 @@ transforms:
           exporter: "{{ exporter }}"
           sampling: "{{ sampling }}"
           as_numbers: "{{ as_numbers }}"
+          iface_index: "{{ iface_index }}"
+
+  # Tracker 387 PR 13c': which rung of the trap receiver's ladder named the device
+  # (attribution_basis), against what the tenant attribution then said. On the lab
+  # 85 % of traps were basis none before the interface-address rung. Both labels
+  # are closed sets, anything else reads `other`, so no device, tenant or address
+  # can reach a label: at most 6 x 6 = 36 series. Rule: TrapSourceUnattributedRatioHigh
+  # (rules-scale-slo.yaml, warning tier).
+  trap_attribution_labels:
+    type: remap
+    inputs: [snmptrap_tagged]
+    source: |
+      cx_basis = string(.attribution_basis) ?? ""
+      if cx_basis == "" { cx_basis = "none" }
+      if !includes(["mgmt_ip", "interface_ip", "sysname", "agent_addr", "none"], cx_basis) { cx_basis = "other" }
+      cx_outcome = string(.tenant_attribution) ?? ""
+      if !includes(["enriched", "platform_owned", "unmatched", "producer_stamped", "claim_rejected"], cx_outcome) { cx_outcome = "other" }
+      . = { "basis": cx_basis, "outcome": cx_outcome }
+
+  trap_attribution_metric:
+    type: log_to_metric
+    inputs: [trap_attribution_labels]
+    metrics:
+      - type: counter
+        field: basis
+        name: netops_trap_attribution_events
+        tags:
+          basis: "{{ basis }}"
+          outcome: "{{ outcome }}"
 
   # Tracker 373: events whose sender address was lost to the Docker bridge
   # gateway (stamped source_masked by the trap receiver, the aggregator's
@@ -1695,7 +1738,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, trap_attribution_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

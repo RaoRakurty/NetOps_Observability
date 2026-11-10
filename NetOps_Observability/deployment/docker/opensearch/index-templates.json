@@ -614,6 +614,18 @@
             "enrichment_status": {
               "type": "keyword"
             },
+            "attribution_basis": {
+              "type": "keyword"
+            },
+            "interface": {
+              "type": "keyword"
+            },
+            "ifindex": {
+              "type": "keyword"
+            },
+            "interface_basis": {
+              "type": "keyword"
+            },
             "event_type": {
               "type": "keyword"
             },

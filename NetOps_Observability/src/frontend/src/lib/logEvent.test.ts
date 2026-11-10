@@ -190,6 +190,52 @@ describe("toLogEvent — today's records", () => {
     expect(everyVisibleString(ev)).not.toMatch(/ambiguous|estimated|bps|1:50/);
   });
 
+  it("an interface the API named reads `name (index)`, otherwise the index (tracker 387 PR 13b)", () => {
+    const named = toLogEvent({
+      ...IPFIX_FLOW,
+      _resolved: {
+        in_if_name: "ge0/3", in_if_name_basis: "resolved",
+        out_if_name: "", out_if_name_basis: "absent",
+        service_name: "snmp", service_port: 161,
+      },
+    });
+    expect(named.flow?.inInterfaceLabel).toBe("ge0/3 (1)");
+    expect(named.flow?.outInterfaceLabel).toBe("4");
+    expect(named.flow?.service).toBe("snmp (port 161, likely)");
+    // Without the API's names the index stands alone, and nothing is invented.
+    const bare = toLogEvent(IPFIX_FLOW);
+    expect(bare.flow?.inInterfaceLabel).toBe("1");
+    expect(bare.flow?.service).toBe("");
+    const sentinel = toLogEvent({
+      _index: "netops-flows-x",
+      _source: { src_addr: "1.1.1.1", in_if: 4294967295 },
+      _resolved: { in_if_name: "", in_if_name_basis: "sentinel" },
+    });
+    expect(sentinel.flow?.inInterfaceLabel).toBe("none reported (4294967295)");
+    expect(bare.flow?.platformMonitoring).toBe(false);
+    const own = toLogEvent({ ...IPFIX_FLOW, _resolved: { traffic_class: "platform_monitoring" } });
+    expect(own.flow?.platformMonitoring).toBe(true);
+    // A name without the resolved basis is not shown.
+    const unproven = toLogEvent({ ...IPFIX_FLOW, _resolved: { in_if_name: "ge0/3", in_if_name_basis: "absent" } });
+    expect(unproven.flow?.inInterfaceLabel).toBe("1");
+  });
+
+  it("a trap shows the interface the receiver named, as a pill (tracker 387 PR 13c)", () => {
+    const trap = (f: Record<string, unknown>) =>
+      toLogEvent({ _index: "netops-snmptrap-x", _source: { trap_name: "linkDown", trap_oid: "1.3.6.1.6.3.1.1.5.3", ...f } });
+    const mapped = trap({ interface: "ge0/3", ifindex: "4", interface_basis: "ifindex_map" });
+    expect(mapped.trap?.interface).toBe("ge0/3 (4)");
+    expect(mapped.trap?.interfaceHow).toBe("named from the device's interface table");
+    expect(mapped.chips.find((c) => c.label === "Interface ge0/3 (4)")?.stream).toBe(true);
+    expect(trap({ interface: "4", ifindex: "4", interface_basis: "ifindex_only" }).trap?.interface).toBe("4");
+    expect(trap({ interface: "ge0/1", interface_basis: "varbind_name" }).trap?.interface).toBe("ge0/1");
+    // No basis, or an unknown one, shows nothing: never a guess.
+    const none = trap({ interface: "x", interface_basis: "evil" });
+    expect(none.trap?.interface).toBe("");
+    expect(none.chips.some((c) => c.label.startsWith("Interface"))).toBe(false);
+    expect(trap({}).trap?.interface).toBe("");
+  });
+
   it("names a protocol from the shared table and marks one it cannot name", () => {
     const proto = (p: unknown) => toLogEvent({ _index: "netops-flows-x", _source: { src_addr: "1.1.1.1", proto: p } }).flow?.protocol;
     expect(proto(6)).toBe("TCP");
@@ -524,7 +570,7 @@ describe("one severity authority", () => {
   });
 
   it("shows a spelling it does not know as the record gave it", () => {
-    expect(severityLabel("minor")).toBe("minor");
+    expect(severityLabel("p3-urgent")).toBe("p3-urgent");
     expect(severityLabel(null)).toBe("");
   });
 

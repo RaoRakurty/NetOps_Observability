@@ -4,15 +4,21 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/flownames"
+	"netops/backend/internal/iana"
 	"netops/backend/models"
 )
 
@@ -86,25 +92,83 @@ SELECT ` + srcExpr + ` AS src,
 type flowTopDim struct {
 	expr    string
 	nonzero string
+	// iface names the interface column when the dimension is an ifIndex: the
+	// rows then group per exporter and carry the interface's name (PR 13b).
+	iface string
+	// label names the rows from the build-time IANA tables (PR 13b).
+	label flowLabelKind
+	// asn is "src" or "dst" for an AS dimension: the exporter's AS, else the
+	// iptoasn dataset's when it is loaded (PR 13d), with as_basis per row.
+	asn string
 }
 
+// flowLabelKind says which IANA table names a dimension's keys.
+type flowLabelKind int
+
+const (
+	flowLabelNone flowLabelKind = iota
+	flowLabelProtocol
+	flowLabelService
+)
+
 var flowTopDims = map[string]flowTopDim{
-	"device":   {"sampler_address", ""},
-	"in_if":    {"toString(in_if)", "in_if"},
-	"out_if":   {"toString(out_if)", "out_if"},
-	"src_addr": {"src_addr", ""},
-	"dst_addr": {"dst_addr", ""},
-	"src_as":   {"toString(src_as)", "src_as"},
-	"dst_as":   {"toString(dst_as)", "dst_as"},
-	"src_port": {"toString(src_port)", "src_port"},
-	"dst_port": {"toString(dst_port)", "dst_port"},
-	"proto":    {"toString(proto)", ""},
+	"device":   {expr: "sampler_address"},
+	"in_if":    {expr: "toString(in_if)", nonzero: "in_if", iface: "in_if"},
+	"out_if":   {expr: "toString(out_if)", nonzero: "out_if", iface: "out_if"},
+	"src_addr": {expr: "src_addr"},
+	"dst_addr": {expr: "dst_addr"},
+	"src_as":   {expr: "toString(src_as)", nonzero: "src_as", asn: "src"},
+	"dst_as":   {expr: "toString(dst_as)", nonzero: "dst_as", asn: "dst"},
+	"src_port": {expr: "toString(src_port)", nonzero: "src_port"},
+	"dst_port": {expr: "toString(dst_port)", nonzero: "dst_port"},
+	"proto":    {expr: "toString(proto)", label: flowLabelProtocol},
 	// service_port is the LIKELY service end of a conversation, "<proto>/<port>":
 	// the lower of the two ports, since a client speaks from an ephemeral (high)
 	// port to the service's (low) one. It folds a conversation's two directions —
 	// request (dst_port = service) and reply (src_port = service) — into one row.
 	// A heuristic, and labelled as one wherever it is shown; never an app name.
-	"service_port": {"concat(toString(proto), '/', toString(least(src_port, dst_port)))", "least(src_port, dst_port)"},
+	"service_port": {expr: "concat(toString(proto), '/', toString(least(src_port, dst_port)))", nonzero: "least(src_port, dst_port)", label: flowLabelService},
+}
+
+// flowIfaceTopNSQL is the interface top-N: traffic per (row tenant, exporter,
+// ifIndex), then the interface name LEFT JOINed from netops.iface_names on the
+// ROW's own tenant_id, sampler_address and ifIndex (tracker 387 PR 13b).
+//
+// Isolation: the join key is the row's tenant, so a name can only come from
+// the tenant that owns the row, and the whole statement runs under the
+// caller's tenant_scope, so iface_names' own row policy also drops any other
+// tenant's names. No caller-supplied tenant ever reaches this SQL.
+//
+// Never invents a name: ifIndex 0 and 4294967295 are IPFIX "no interface"
+// sentinels and read basis `sentinel` with no name; an index nobody named
+// reads `absent`. The key stays the bare index, the filter bar's value.
+func flowIfaceTopNSQL(col, where string, limit int) string {
+	return `
+SELECT toString(a.ifx) AS k,
+       a.exporter AS exporter,
+       if(a.ifx IN (0, 4294967295), '', n.ifname) AS ` + col + `_name,
+       multiIf(a.ifx IN (0, 4294967295), 'sentinel', n.ifname != '', 'resolved', 'absent') AS ` + col + `_name_basis,
+       a.bytes_total AS bytes_total,
+       a.packets_total AS packets_total,
+       a.flows AS flows
+  FROM (
+    SELECT tenant_id AS tid, sampler_address AS exporter, ` + col + ` AS ifx,
+           sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+           sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+           count() AS flows
+      FROM netops.flows
+     WHERE ` + where + `
+     GROUP BY tid, exporter, ifx
+     ORDER BY bytes_total DESC
+     LIMIT ` + intToString(limit) + `
+  ) AS a
+  LEFT JOIN (
+    SELECT tenant_id, exporter_addr, ifindex, argMax(ifname, updated) AS ifname
+      FROM netops.iface_names
+     GROUP BY tenant_id, exporter_addr, ifindex
+  ) AS n ON n.tenant_id = a.tid AND n.exporter_addr = a.exporter AND n.ifindex = a.ifx
+ ORDER BY bytes_total DESC
+ FORMAT JSON`
 }
 
 // handleFlowsTopN is the generic top-N-by-dimension endpoint backing the NetFlow
@@ -138,18 +202,116 @@ func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
 	if dim.nonzero != "" {
 		nz = " AND " + dim.nonzero + " > 0"
 	}
+	where := `ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + nz
+	if dim.iface != "" {
+		s.proxyClickHouse(w, r, flowIfaceTopNSQL(dim.iface, where, limit))
+		return
+	}
+	if dim.asn != "" {
+		base := `ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter
+		s.proxyClickHouse(w, r, flowASNTopNSQL(dim.asn, base, limit, s.asnDictReady()))
+		return
+	}
 	sql := `
 SELECT ` + dim.expr + ` AS k,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + nz + `
+ WHERE ` + where + `
  GROUP BY k
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	if dim.label == flowLabelNone {
+		s.proxyClickHouse(w, r, sql)
+		return
+	}
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	names := iana.Default()
+	for _, row := range rows {
+		k, _ := row["k"].(string)
+		label, basis := flowKeyLabel(names, dim.label, k)
+		row["label"], row["label_basis"] = label, basis
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
+}
+
+// asnDict is the iptoasn ip_trie dictionary (scripts/asn-prepare.py, PR 13d).
+const asnDict = "netops.ip_asn"
+
+// asnDictReady probes the ip_asn dictionary with one lookup. Like geoDictReady,
+// existence says nothing: a FILE dictionary with no file reads FAILED and a
+// dictGet on it throws, so only a successful lookup proves it loads. The AS
+// queries then never reach a broken dictionary.
+func (s *server) asnDictReady() bool {
+	base := envOr("CLICKHOUSE_URL", "")
+	if base == "" {
+		return false
+	}
+	return chExec(base, `SELECT dictGetOrDefault('`+asnDict+`', 'asn', tuple(IPv6StringToNumOrDefault('192.0.2.1')), toUInt32(0))`)
+}
+
+// flowASNExpr is the effective AS of one flow side: the exporter's own when it
+// sent one, else the dataset's for that address (0 = none: private, unrouted or
+// not in the dataset). Without the dataset it is the exporter's alone.
+func flowASNExpr(side string, dataset bool) string {
+	col := side + "_as"
+	if !dataset {
+		return col
+	}
+	return "if(" + col + " > 0, " + col + ", dictGetOrDefault('" + asnDict + "', 'asn', tuple(IPv6StringToNumOrDefault(" + side + "_addr)), toUInt32(0)))"
+}
+
+// flowASNTopNSQL is the AS top-N with as_basis per row: `exporter` when any
+// flow in the group carried the exporter's AS, else `dataset`. Flows with no AS
+// from either are left out, as before; coverage counts them (absent).
+func flowASNTopNSQL(side, where string, limit int, dataset bool) string {
+	eff := flowASNExpr(side, dataset)
+	return `
+SELECT toString(` + eff + `) AS k,
+       if(max(` + side + `_as) > 0, 'exporter', 'dataset') AS as_basis,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ` + where + ` AND ` + eff + ` > 0
+ GROUP BY k
+ ORDER BY bytes_total DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+}
+
+// flowKeyLabel names one top-N key from the IANA tables. basis is
+// `iana_protocol`, `iana_service` (a port HEURISTIC: what is usually there,
+// never what the flow carried) or `absent` when the registry names nothing;
+// the label is then empty and the UI shows the number.
+func flowKeyLabel(names iana.Names, kind flowLabelKind, k string) (label, basis string) {
+	switch kind {
+	case flowLabelProtocol:
+		if n, err := strconv.ParseUint(k, 10, 8); err == nil {
+			if v := names.Protocol(uint8(n)); v != "" {
+				return v, "iana_protocol"
+			}
+		}
+	case flowLabelService:
+		p, port, ok := strings.Cut(k, "/")
+		if !ok {
+			break
+		}
+		pn, err1 := strconv.ParseUint(p, 10, 8)
+		qn, err2 := strconv.ParseUint(port, 10, 16)
+		if err1 == nil && err2 == nil {
+			if v := names.Service(uint8(pn), uint16(qn)); v != "" {
+				return v, "iana_service"
+			}
+		}
+	}
+	return "", "absent"
 }
 
 // handleFlowsFanout powers flow-based threat detection: per source address, the
@@ -244,10 +406,22 @@ func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
-	filter, err := flowFilterClause(r)
+	// The coverage counts every row the filter bar selects, platform monitoring
+	// included, and says how many of them the views leave out by default.
+	filter, err := flowFilterCore(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+	// AS numbers from the iptoasn dataset (PR 13d), counted only when it loads.
+	datasetAS, datasetReady := "toUInt64(0)", "0"
+	if s.asnDictReady() {
+		datasetAS, datasetReady = "countIf(src_as = 0 AND dst_as = 0 AND ("+flowASNExpr("src", true)+" > 0 OR "+flowASNExpr("dst", true)+" > 0))", "1"
+	}
+	platformCond := platformAddrsFromEnv().SQLCond()
+	platformCount, platformConfigured := "toUInt64(0)", "0"
+	if platformCond != "" {
+		platformCount, platformConfigured = "countIf("+platformCond+")", "1"
 	}
 	priv := func(col string) string {
 		return "(isIPAddressInRange(" + col + ", '10.0.0.0/8') OR isIPAddressInRange(" + col + ", '172.16.0.0/12')" +
@@ -264,7 +438,11 @@ SELECT count()                                       AS flows,
        countIf(exporter_app_id != '')                AS flows_with_app_id,
        countIf(exporter_app_name != '')              AS flows_with_app_name,
        countIf(sampling_status = 'reported' OR (sampling_status = '' AND sampling_rate > 0)) AS flows_sampling_reported,
-       uniqExact(sampler_address)                    AS exporters
+       uniqExact(sampler_address)                    AS exporters,
+       ` + datasetAS + `                             AS flows_with_dataset_as,
+       ` + datasetReady + `                          AS asn_dataset_loaded,
+       ` + platformCount + `                         AS platform_monitoring_flows,
+       ` + platformConfigured + `                    AS platform_addresses_configured
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  FORMAT JSON`
@@ -362,7 +540,17 @@ SELECT proto,
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	names := iana.Default()
+	for _, row := range rows {
+		label, _ := flowKeyLabel(names, flowLabelProtocol, fmt.Sprint(row["proto"]))
+		row["proto_name"] = label
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
 }
 
 // handleFlowsByType breaks traffic down by flow-protocol family
@@ -500,7 +688,19 @@ func isIPish(s string) bool {
 // filter-bar params: src/dst address + exporter device (allowlisted via isIPish,
 // then quote-escaped) and ingress/egress interface ids (parsed as integers). A
 // malformed value is a 400 (returned error), never silently dropped.
+//
+// It also applies the platform-monitoring exclusion (flownames/platform.go):
+// flows Correlix itself caused are left out unless ?traffic=all.
 func flowFilterClause(r *http.Request) (string, error) {
+	f, err := flowFilterCore(r)
+	if err != nil {
+		return "", err
+	}
+	return f + flowTrafficClassClause(r), nil
+}
+
+// flowFilterCore is the filter bar alone, without the traffic-class exclusion.
+func flowFilterCore(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	var conds []string
 	for _, f := range []struct{ param, col string }{
@@ -829,6 +1029,124 @@ func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status
 		}
 	}
 	return out
+}
+
+// ── Names and traffic class (tracker 387 PR 13; internal/flownames) ──────────
+
+// platformAddrsFromEnv is the live platform-address configuration: the
+// appliance's own sender addresses (CX_PLATFORM_ADDRESSES) and the probers'
+// (PATH_GRAPH_VANTAGE_ADDRESSES). See flownames/platform.go.
+// With neither set, start-up (settlePlatformAddrs) has already written the
+// api's own outbound source address into CX_PLATFORM_ADDRESSES.
+func platformAddrsFromEnv() flownames.PlatformAddrs {
+	return flownames.ParsePlatformAddrs(os.Getenv("CX_PLATFORM_ADDRESSES"), os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"))
+}
+
+// outboundSourceAddr is the source address the kernel picks for off-box
+// traffic: a UDP connect to a documentation address (RFC 5737) sends no packet.
+// "" when there is no route. Bounded: a connect on UDP does not block.
+func outboundSourceAddr() string {
+	d := net.Dialer{Timeout: time.Second}
+	c, err := d.Dial("udp", "192.0.2.1:9")
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = c.Close() }() // best-effort: a UDP socket that never sent
+	if ua, ok := c.LocalAddr().(*net.UDPAddr); ok && !ua.IP.IsLoopback() {
+		return ua.IP.String()
+	}
+	return ""
+}
+
+// settlePlatformAddrs decides ONCE, at start-up, which platform addresses the
+// flows views separate, and logs where they came from so a fallback is never
+// silent. With nothing configured it falls back to the api's own outbound
+// source address and records it in CX_PLATFORM_ADDRESSES, the one place every
+// reader looks: deciding per request would make each view depend on the routing
+// table of the moment.
+func settlePlatformAddrs(outbound func() string) {
+	p, source := flownames.ResolvePlatformAddrs(os.Getenv("CX_PLATFORM_ADDRESSES"), os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"), outbound)
+	fields := map[string]any{"source": source, "addresses": p.IPs()}
+	if source == flownames.PlatformSourceOutbound {
+		if err := os.Setenv("CX_PLATFORM_ADDRESSES", strings.Join(p.IPs(), ",")); err != nil {
+			logError("flows", "could not record the fallback platform address; Correlix's own monitoring traffic is not separated", map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	switch source {
+	case flownames.PlatformSourceOutbound:
+		logWarn("flows", "CX_PLATFORM_ADDRESSES is empty: using the api's own outbound address for Correlix's monitoring traffic; behind Docker NAT devices see the host's address instead, so set CX_PLATFORM_ADDRESSES (the installer does)", fields)
+	case flownames.PlatformSourceNone:
+		logWarn("flows", "no platform address is known: Correlix's own monitoring traffic is not separated in the flows views", fields)
+	default:
+		logInfo("flows", "platform addresses for the flows views", fields)
+	}
+}
+
+// includePlatformTraffic reads the visible toggle: ?traffic=all includes it.
+func includePlatformTraffic(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("traffic")), "all")
+}
+
+// flowTrafficClassClause is the default exclusion the flows views apply:
+// flows Correlix's own pollers caused (traffic_class=platform_monitoring) are
+// left out unless ?traffic=all. Nothing is deleted; unconfigured, nothing is hidden.
+func flowTrafficClassClause(r *http.Request) string {
+	if includePlatformTraffic(r) {
+		return ""
+	}
+	if c := platformAddrsFromEnv().SQLCond(); c != "" {
+		return " AND NOT " + c
+	}
+	return ""
+}
+
+// runIfaceNamesExport keeps netops.iface_names (flownames/names.go) every
+// minute until ctx ends. Blocking: Run starts it through the drain group.
+// No-op without ClickHouse or discovery.
+func (s *server) runIfaceNamesExport(ctx context.Context) {
+	if s.ifaceNames == nil || s.discovery == nil || envOr("CLICKHOUSE_URL", "") == "" {
+		return
+	}
+	write := func(ctx context.Context, rows []map[string]any) error {
+		// One mixed-tenant batch, so the scope is the deliberate "__all__"
+		// (chInsertJSON's contract); each row carries its device's tenant.
+		return chInsertJSON(ctx, "netops.iface_names", "__all__", rows)
+	}
+	query := func(ctx context.Context, sql string) ([]map[string]any, error) {
+		return chSelect(ctx, "__all__", sql, "worker:iface-names")
+	}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	var lastCoverage time.Time
+	for {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		now := time.Now()
+		if err := s.ifaceNames.Cycle(cctx, s.discovery.Devices(), deviceTenant, collectors.FetchIfIndexMap, write, now); err != nil {
+			logWarn("iface-names", "interface-name export failed", map[string]any{"error": err.Error()})
+		}
+		if now.Sub(lastCoverage) >= flownames.CoverageEvery {
+			lastCoverage = now
+			if err := s.ifaceNames.MeasureCoverage(cctx, query); err != nil {
+				logWarn("iface-names", "uncovered-exporter count unread", map[string]any{"error": err.Error()})
+			}
+			if s.flowDatasets != nil {
+				prev := s.flowDatasets.Status("asn")
+				if err := s.flowDatasets.Measure(cctx, query); err != nil {
+					logWarn("flows", "flow dataset state unread (ip_asn, geoip_country)", map[string]any{"error": err.Error()})
+				} else if cur := s.flowDatasets.Status("asn"); cur != prev {
+					// A transition is said once; the gauge carries the steady state.
+					logInfo("flows", "AS number dataset (netops.ip_asn) state", map[string]any{"status": cur, "remedy_if_not_loaded": "scripts/asn-prepare.py"})
+				}
+			}
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // intQuery parses a bounded integer query parameter.

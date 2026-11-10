@@ -478,6 +478,9 @@ export type OSHit = {
   _index: string;
   _id: string;
   _source: Record<string, any>;
+  // Names the API resolved beside a flow document (tracker 387 PR 13b):
+  // in_if_name/_basis, out_if_name/_basis, proto_name, service_name. Not stored.
+  _resolved?: Record<string, any> | null;
 };
 // Sampling disclosure the backend injects on sampled stores (today: the flows
 // signal, whose OpenSearch index holds the router's 1:50 sample — ClickHouse
@@ -501,6 +504,18 @@ export type LogSearchOpts = {
   signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
   // Paging offset ("Load more"); server-clamped to the engine's result window.
   offset?: number;
+};
+
+// Severity counts for a log search (tracker 387): how many records of each STORED
+// severity word match the query in the window, counted by the store over the same
+// tenant-scoped surface the search reads. The UI maps words to tiles itself.
+export type LogSeverityCounts = {
+  signal: string;
+  total: number;
+  counts: { field: "severity" | "level"; value: string; count: number }[];
+  unrated: number;
+  other: number;
+  sampling?: LogSampling;
 };
 
 // Retention floor for the caller's visible log store: exact doc count + oldest
@@ -610,6 +625,9 @@ export type FlowFilters = {
   device?: string; // exporter / sampler IP
   in_if?: string; // ingress interface (SNMP ifIndex)
   out_if?: string; // egress interface
+  // "all" includes the flows Correlix's own pollers caused (tracker 387 PR 13);
+  // unset, the API leaves them out and the coverage says how many.
+  traffic?: string;
 };
 
 // flowQS serializes flow filters (and optional direction) into a query-string
@@ -5976,6 +5994,13 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
+  // Severity counts for the Logs summary tiles (tenant-scoped server-side, the
+  // search's own surface). Same query/signal/window as the search it summarises.
+  logSeverityCounts: (opts: { query: string; signal?: string; from: string; to: string }) => {
+    const p = new URLSearchParams({ query: opts.query, from: opts.from, to: opts.to });
+    if (opts.signal) p.set("signal", opts.signal);
+    return request<LogSeverityCounts>(`/api/logs/severity-counts?${p.toString()}`);
+  },
   // Retention floor: how far back the caller's visible log store goes + exact
   // total stored (tenant-scoped server-side; owner directive: DON'T HIDE).
   logsRetention: (signal = "") =>

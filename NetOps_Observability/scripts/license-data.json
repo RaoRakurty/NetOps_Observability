@@ -192,6 +192,16 @@
       "posture": "Fetched at build time, pinned and verified on every use, never vendored; fail-closed like the Arista pins.",
       "rationale": "These modules decode Nokia IPv6 BGP session traps (tBgpNg*), LLDP neighbour churn and Cisco's link-down reason (locIfReason); the index needs their OIDs, not their text.",
       "status": "DECIDED"
+    },
+    "iptoasn-ip2asn": {
+      "decided": "operator-fetched-at-run-time",
+      "evidence": "scripts/asn-prepare.py fetches https://iptoasn.com/data/ip2asn-combined.tsv.gz (or reads an operator-supplied copy), verifies an operator-pinned sha256 (--sha256) or records the digest it used in asn.csv.source, and writes data/clickhouse/user_files/asn/asn.csv for the netops.ip_asn ip_trie dictionary (tracker 387 PR 13d). iptoasn.com states 'Licensed under Public Domain (PDDL v1.0)' with license https://opendatacommons.org/licenses/pddl/1.0/ in its dataset metadata; both checked 2026-11-10.",
+      "license": "PDDL-1.0",
+      "obligation": "none: PDDL v1.0 dedicates the data to the public domain; attribution is a courtesy",
+      "owner_decision": "DECIDED 2026-11-10 by engineering, not by the owner (tracker 387 PR 13d): the iptoasn dataset is PDDL-1.0 public domain, operator-fetched at run time and never shipped, so it needs no owner licence decision. The owner was told in the session that day; this is not a record of owner approval.",
+      "posture": "Fetched by the operator at run time, never committed and never in an image; only the prepared CIDR -> AS number CSV lands in the ClickHouse data volume.",
+      "status": "DECIDED",
+      "rationale": "AS numbers for flows whose exporter sends none (the lab's cflowd template carries no BGP AS elements; 100% of flows read 0). Decided: the operator fetches the dataset at run time with scripts/asn-prepare.py and it is never committed or baked into an image, so no distribution happens; PDDL-1.0 would allow it anyway. Check: scripts/asn-prepare.py docstring and the asn.csv.source provenance file it writes beside the prepared data."
     }
   },
   "go": {
@@ -4068,6 +4078,17 @@
       "unit": "frontend image (netops-frontend) — SPA bundle",
       "usage": "bundled-runtime",
       "version": "path data, in-tree copy"
+    },
+    "iana-protocol-registries": {
+      "license": "CC0-1.0",
+      "note": "IP protocol keywords and (transport, port) service names reduced from the IANA Protocol Numbers and Service Name and Transport Protocol Port Number registries by scripts/gen-iana-tables.py (sha256-pinned sources, fetch date in each file header; tracker 387 PR 13). IANA and the IETF dedicate the Protocol Registries to the public domain under CC0 1.0 (https://www.iana.org/help/licensing-terms, revised 2021-11-10); no attribution is required. Only the number, transport and name columns are kept: the registry's assignee and contact columns are never copied.",
+      "paths": [
+        "src/backend/internal/iana/protocols.tsv",
+        "src/backend/internal/iana/services.tsv"
+      ],
+      "unit": "api image (netops-api) — embedded in the binary",
+      "usage": "bundled-runtime",
+      "version": "registries fetched 2026-11-09"
     },
     "ietf-rfc-mibs": {
       "license": "BSD-3-Clause",

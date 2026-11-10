@@ -611,6 +611,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/logs/indices":           "scoped",
 	"/api/logs/retention":         "scoped", // retention floor over the SAME logsScope surface as search: tenant index pattern + osTenantFilter + applogs owner gate (logs_retention_test.go)
 	"/api/logs/search":            "scoped",
+	"/api/logs/severity-counts":   "scoped", // Logs summary tiles over the SAME logsScope surface as search (logs_severity_test.go, logs_identity_protection_test.go cross-org)
 	"/api/metrics":                "scoped",
 	"/api/metrics/forecast":       "scoped",
 	"/api/metrics/names":          "scoped",

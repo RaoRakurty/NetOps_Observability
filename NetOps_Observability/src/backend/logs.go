@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"netops/backend/internal/applog"
+	"netops/backend/internal/flownames"
+	"netops/backend/internal/iana"
 
 	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
@@ -372,6 +374,9 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		var out map[string]any
 		if json.Unmarshal(raw, &out) == nil {
 			out["sampling"] = flowsSamplingMeta()
+			// Tracker 387 PR 13b: interface, protocol and service names beside
+			// each stored document, by the document's own tenant.
+			flownames.AnnotateHits(out, s.ifaceNames, iana.Default(), platformAddrsFromEnv())
 			w.WriteHeader(resp.StatusCode)
 			_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 			return
@@ -562,3 +567,117 @@ func openSearch(method, path string, body any) (*http.Response, error) {
 }
 
 // parseTimeFlexible accepts RFC3339, Unix seconds, or Unix nanoseconds.
+
+// ----------------------------------------------------------------------------
+// Severity counts — GET /api/logs/severity-counts (tracker 387, the Logs page's
+// summary tiles). The tiles must say how many records of each severity MATCH the
+// current search, not how many happen to be loaded on screen, so the store
+// counts: one size:0 aggregation (internal/oslog SeverityCountsBody) over
+// EXACTLY the surface the search reads: the same logsScope (tenant index
+// pattern, osTenantFilter, the applogs owner gate, the secfindings refusal,
+// operator restrictions), the same time range and the same query text. Nothing
+// here can count a record the search would not return to the same caller.
+// ----------------------------------------------------------------------------
+
+func (s *server) handleLogsSeverityCounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// The same gate as the search it summarises.
+	claims, ok := s.requirePerm(w, r, logsReadModule, LevelRead)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	signal := q.Get("signal")
+	query := q.Get("query")
+	if len(query) > oslog.SeverityCountsQueryMax {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("query is longer than %d bytes", oslog.SeverityCountsQueryMax))
+		return
+	}
+	end := time.Now().UTC()
+	start := end.Add(-15 * time.Minute)
+	if v := q.Get("from"); v != "" {
+		t, err := oslog.ParseTimeFlexible(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("from is not a time"))
+			return
+		}
+		start = t
+	}
+	if v := q.Get("to"); v != "" {
+		t, err := oslog.ParseTimeFlexible(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("to is not a time"))
+			return
+		}
+		end = t
+	}
+	if end.Before(start) {
+		writeError(w, http.StatusBadRequest, errors.New("to is before from"))
+		return
+	}
+
+	index, scopeFilters, mustNot, denyAll, forbidden := s.logsScope(r, signal)
+	if forbidden {
+		writeError(w, http.StatusForbidden, logsForbiddenErr(signal))
+		return
+	}
+	out := oslog.SeverityCountsResp{Signal: signal, Counts: []oslog.SeverityCount{}}
+	if isFlowsSignal(signal) {
+		out.Sampling = flowsSamplingMeta()
+	}
+	if denyAll {
+		s.auditSeverityCounts(r, claims, signal, query, start, end, http.StatusOK, 0)
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	body := oslog.SeverityCountsBody(query, start, end, scopeFilters, mustNot)
+	resp, err := openSearch("POST", "/"+index+"/_search?ignore_unavailable=true", body)
+	if err != nil {
+		logError("logs", "opensearch severity counts failed", map[string]any{"err": err.Error()})
+		s.auditSeverityCounts(r, claims, signal, query, start, end, http.StatusBadGateway, 0)
+		writeError(w, http.StatusBadGateway, errors.New("the log store could not be counted"))
+		return
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if resp.StatusCode >= 300 {
+		logError("logs", "opensearch severity counts refused", map[string]any{"status": resp.StatusCode})
+		s.auditSeverityCounts(r, claims, signal, query, start, end, http.StatusBadGateway, 0)
+		writeError(w, http.StatusBadGateway, errors.New("the log store refused the count; check the query syntax"))
+		return
+	}
+	if err := oslog.ParseSeverityCounts(raw, &out); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.auditSeverityCounts(r, claims, signal, query, start, end, http.StatusOK, out.Total)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// auditSeverityCounts records the read the way the search records its own: who,
+// which store, what query and window, and how many records were counted. No row
+// is read, so none can reach the trail.
+func (s *server) auditSeverityCounts(r *http.Request, claims jwtClaims, signal, query string, start, end time.Time, status int, matched int64) {
+	if s.audit == nil {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross, SessionID: claims.Sid,
+		Method: auditMethodLogRead, Path: "/api/logs/severity-counts", Status: status, Decision: auditDecision(status),
+		Remote: auditClientIP(r),
+		Detail: map[string]any{
+			"action": "logs.severity_counts", "signal": strings.ToLower(strings.TrimSpace(signal)),
+			"query": auditQueryText(query), "from": start.Format(time.RFC3339), "to": end.Format(time.RFC3339),
+			"matched": matched, "rows": 0,
+		},
+	})
+}
