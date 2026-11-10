@@ -89,7 +89,9 @@ func TestTrapInterfaceMissStaysNumeric(t *testing.T) {
 // Device A's map must never name device B's index, and an unattributed trap's
 // index is never named from anyone's map.
 func TestTrapInterfaceNeverCrossesDevice(t *testing.T) {
-	r := vedgeReceiver(map[string]map[string]string{"vedge-20-1e95f00f": {"4": "ge0/3"}})
+	// The "" entry is a lookup that would answer for no device at all: an
+	// unattributed trap must never reach the lookup to be named by it.
+	r := vedgeReceiver(map[string]map[string]string{"vedge-20-1e95f00f": {"4": "ge0/3"}, "": {"4": "LEAK"}})
 	ev, err := r.decodePacket(buildLinkDown("labcomm", 4), "10.70.245.101") // vedge-51
 	if err != nil {
 		t.Fatal(err)
