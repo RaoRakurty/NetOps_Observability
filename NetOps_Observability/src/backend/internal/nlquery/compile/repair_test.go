@@ -179,3 +179,27 @@ func (l lkWith) Inventory(context.Context, []string) ([]resolve.Named, error) {
 	return l.names, nil
 }
 func (lkWith) Visible(context.Context, string, string) (bool, error) { return false, nil }
+
+// The generated word table: an inflection or an en-GB spelling of a catalog
+// word reads as that word (not a reinterpretation, so no reading); a vendor's
+// VRF word is vocabulary, never "repaired".
+func TestGeneratedVariantsReadAsTheCatalogWord(t *testing.T) {
+	for _, c := range []struct{ variant, plain string }{
+		{"show latencies on edge-1", "show latency on edge-1"},
+		{"interface utilisation on edge-1", "interface utilization on edge-1"},
+	} {
+		v, p := run(t, c.variant, cx), run(t, c.plain, cx)
+		if p.AST == nil || v.AST == nil || v.AST.Hash() != p.AST.Hash() {
+			t.Errorf("%q must compile like %q: %+v vs %+v", c.variant, c.plain, v.AST, p.AST)
+		}
+		if len(v.Readings) != 0 {
+			t.Errorf("%q: a variant is the same word, not a reading: %+v", c.variant, v.Readings)
+		}
+	}
+	voc := Vocabulary(cat)
+	for _, term := range []string{"routing-instance", "vprn", "vrf-lite"} {
+		if !voc.Has(term) {
+			t.Errorf("vendor term %q must be vocabulary", term)
+		}
+	}
+}

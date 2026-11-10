@@ -66,10 +66,24 @@ var grammarWords = []string{
 	"four", "five", "seven", "eight", "nine", "three", "twelve", "fifteen", "twenty", "thirty", "sixty",
 }
 
-// Vocabulary is the grammar's closed vocabulary: the framing words, the
-// grammar's own rule words, the shared core words and every word of every
-// catalog alias, name and enum value. Built from code and the catalog only.
+// Vocabulary is the grammar's closed vocabulary: BaseVocabulary plus every
+// word of the generated word table (its variants and vendor terms are words,
+// never typos).
 func Vocabulary(cat *catalog.Catalog) *lex.Vocab {
+	var table []string
+	for _, e := range cat.WordTable() {
+		table = append(table, e.From)
+	}
+	return lex.NewVocab(baseLists(cat), table)
+}
+
+// BaseVocabulary is the vocabulary the word table is GENERATED against: the
+// framing words, the grammar's own rule words, the shared core words and
+// every word of every catalog alias, name and enum value. Code and catalog
+// only.
+func BaseVocabulary(cat *catalog.Catalog) *lex.Vocab { return lex.NewVocab(baseLists(cat)) }
+
+func baseLists(cat *catalog.Catalog) []string {
 	var framing []string
 	for w := range questionVocab {
 		framing = append(framing, w)
@@ -91,7 +105,33 @@ func Vocabulary(cat *catalog.Catalog) *lex.Vocab {
 			fromCat = append(fromCat, ev.Aliases...)
 		}
 	}
-	return lex.NewVocab(framing, grammarWords, lex.CoreWords(), fromCat)
+	out := append(append(append(framing, grammarWords...), lex.CoreWords()...), fromCat...)
+	return out
+}
+
+// applySynonyms rewrites the generated catalog variants and abbreviations
+// (catalog/synonyms.v1.json) to the catalog word the grammar reads:
+// "latencies" → "latency", "utilisation" → "utilization". A variant is the
+// same word, so it is not disclosed; an abbreviation is a reading and is.
+// Vendor terms stay as typed (vocabulary only). A word the caller's resolver
+// places, or a value word, is never rewritten.
+func applySynonyms(cat *catalog.Catalog, toks []string, keep func(i int, w string) bool) []lex.Reading {
+	table := map[string]catalog.SynonymEntry{}
+	for _, e := range cat.WordTable() {
+		table[e.From] = e
+	}
+	var readings []lex.Reading
+	for i, t := range toks {
+		e, ok := table[t]
+		if !ok || e.Kind == catalog.SynTerm || keep(i, t) {
+			continue
+		}
+		toks[i] = e.To
+		if e.Kind == catalog.SynAbbrev {
+			readings = append(readings, lex.Reading{From: t, To: e.To, Kind: lex.KindSynonym})
+		}
+	}
+	return readings
 }
 
 // repairText corrects the misspelt vocabulary words of a normalised question.
@@ -116,7 +156,10 @@ func (c Compiler) repairText(ctx context.Context, text string) (lex.Repair, erro
 		}
 		return false
 	}
-	rep := Vocabulary(c.Cat).RepairText(text, keep)
+	toks := strings.Fields(text)
+	synReadings := applySynonyms(c.Cat, toks, keep)
+	rep := Vocabulary(c.Cat).RepairText(strings.Join(toks, " "), keep)
+	rep.Readings = append(synReadings, rep.Readings...)
 	return rep, resolveErr
 }
 

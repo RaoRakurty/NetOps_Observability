@@ -284,7 +284,7 @@ var coreWords = []string{
 	"application", "applications", "inventory", "onboarded", "discovered", "monitored", "managed",
 	// measures
 	"latency", "jitter", "loss", "packet", "packets", "errors", "error", "discards", "drops", "utilization",
-	"utilisation", "bandwidth", "throughput", "traffic", "memory", "temperature", "flapping", "flaps", "down",
+	"bandwidth", "throughput", "traffic", "memory", "temperature", "flapping", "flaps", "down",
 	"anomaly", "anomalies", "talkers", "talker", "busiest", "highest", "lowest", "slowest", "average", "maximum",
 	"minimum", "unusual", "abnormal",
 	// modules / product
@@ -305,4 +305,25 @@ func CoreWords() []string { return append([]string(nil), coreWords...) }
 func ClassifierRepair(q string) (string, []Reading) {
 	r := CoreVocab().RepairText(strings.Join(strings.Fields(Fold(q)), " "), nil)
 	return r.Text, r.Readings
+}
+
+// Exact reports a vocabulary word exactly as listed (no inflection).
+func (v *Vocab) Exact(w string) bool { return v.words[w] }
+
+// IsPlainWord reports an ordinary English word that is never repaired.
+func IsPlainWord(w string) bool { return plainWords[w] || plainWords[Singular(w)] }
+
+// Plural is the regular English plural of a word ("latency" → "latencies",
+// "switch" → "switches", "packet" → "packets").
+func Plural(w string) string {
+	n := len(w)
+	switch {
+	case n == 0:
+		return w
+	case strings.HasSuffix(w, "y") && n > 1 && !strings.ContainsRune("aeiou", rune(w[n-2])):
+		return w[:n-1] + "ies"
+	case strings.HasSuffix(w, "s") || strings.HasSuffix(w, "x") || strings.HasSuffix(w, "ch") || strings.HasSuffix(w, "sh"):
+		return w + "es"
+	}
+	return w + "s"
 }

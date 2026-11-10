@@ -98,6 +98,20 @@ func parseTime(text string, now time.Time, loc *time.Location) (timePhrase, bool
 		f, t := from.UTC(), to.UTC()
 		return timePhrase{tr: ast.TimeRange{Kind: ast.TimeAbsolute, From: &f, To: &t}, span: span}, true
 	}
+	// "since midnight / since Monday / since yesterday": from that local
+	// instant until now. The most recent such day is meant (today's when it is
+	// today).
+	if m := sinceRe.FindStringSubmatch(text); m != nil {
+		switch m[1] {
+		case "midnight", "this morning", "today":
+			return abs(midnight, now, m[0])
+		case "yesterday":
+			return abs(midnight.AddDate(0, 0, -1), now, m[0])
+		default:
+			back := (int(local.Weekday()) - int(weekdays[m[1]]) + 7) % 7
+			return abs(midnight.AddDate(0, 0, -back), now, m[0])
+		}
+	}
 	switch {
 	case strings.Contains(text, "right now") || strings.Contains(text, "currently") || hasWord(text, "now"):
 		return timePhrase{tr: ast.TimeRange{Kind: ast.TimeRelative, Last: "5m"}, span: "now"}, true
@@ -115,6 +129,12 @@ func parseTime(text string, now time.Time, loc *time.Location) (timePhrase, bool
 	}
 	return timePhrase{}, false
 }
+
+var (
+	sinceRe  = regexp.MustCompile(`\bsince\s+(midnight|this morning|today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b`)
+	weekdays = map[string]time.Weekday{"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday,
+		"wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday}
+)
 
 func hasWord(text, w string) bool {
 	for _, f := range strings.Fields(text) {

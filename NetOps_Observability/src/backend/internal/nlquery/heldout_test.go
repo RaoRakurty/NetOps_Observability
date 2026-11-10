@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"netops/backend/internal/evalsplit"
+	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/modelc"
 )
 
@@ -243,4 +244,31 @@ func TestCapPerSplit(t *testing.T) {
 			t.Errorf("%+v: got dev %d, held %d", tc, d, h)
 		}
 	}
+}
+
+// TestHeldOutCasesNeverReachTheWordTable extends the leak guard to the
+// generated word table (hybrid NLU plan A3): no entry may be a held-out case,
+// by id or by text, and the guard's own negative control proves the check.
+func TestHeldOutCasesNeverReachTheWordTable(t *testing.T) {
+	held := heldOutCases(loadCases(t))
+	table := catalog.Synonyms()
+	if len(table) == 0 {
+		t.Fatal("the word table did not load — the guard is checking nothing")
+	}
+	for _, l := range wordTableLeaks(held, table) {
+		t.Error(l)
+	}
+	planted := append(append([]catalog.SynonymEntry{}, table...), catalog.SynonymEntry{From: held[0].Texts[0], To: "x", Kind: catalog.SynVariant})
+	if len(wordTableLeaks(held, planted)) == 0 {
+		t.Error("a held-out question planted in the word table was not reported")
+	}
+}
+
+func wordTableLeaks(held []evalsplit.Case, table []catalog.SynonymEntry) []evalsplit.Leak {
+	tuning := make([]evalsplit.Tuning, 0, 2*len(table))
+	for _, e := range table {
+		tuning = append(tuning, evalsplit.Tuning{Where: "catalog/synonyms.v1.json", Text: e.From},
+			evalsplit.Tuning{Where: "catalog/synonyms.v1.json", Text: e.To})
+	}
+	return evalsplit.FindLeaks(held, tuning)
 }

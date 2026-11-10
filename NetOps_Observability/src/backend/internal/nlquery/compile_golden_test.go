@@ -38,13 +38,13 @@ import (
 // Accuracy floors (ratchet: raise when the measured value rises; never lower).
 const (
 	minQuestionAccuracy   = 0.70
-	minParaphraseAccuracy = 0.40
+	minParaphraseAccuracy = 0.43
 	// Per-metric floors (N-C6). Coverage is reported, not floored: an honesty
 	// fix that turns a wrong compile into "not understood" LOWERS coverage and
 	// raises answered precision, which is the trade this design wants.
 	minEntityPrecision   = 0.88
 	minExecutableRate    = 0.97
-	minAnsweredPrecision = 0.87
+	minAnsweredPrecision = 0.875
 )
 
 // fixtureLookups is tenant A's world as the root would present it.
