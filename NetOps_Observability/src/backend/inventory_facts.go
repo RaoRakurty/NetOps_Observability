@@ -251,13 +251,11 @@ func (f *inventoryFacts) setStats(stats map[factStatKey]int) {
 func factStatKeys() []factStatKey {
 	var out []factStatKey
 	for _, fact := range []string{factModel, factSite, factRole} {
-		for _, k := range []factStatKey{
-			{fact, factSourceManual, factStateSet}, {fact, factSourceInventory, factStateSet},
-			{fact, factSourceNMS, factStateSet}, {fact, factSourceNMS, factStateConflict},
-			{fact, factSourceNone, factStateBlank},
-		} {
-			out = append(out, k)
-		}
+		out = append(out,
+			factStatKey{fact, factSourceManual, factStateSet}, factStatKey{fact, factSourceInventory, factStateSet},
+			factStatKey{fact, factSourceNMS, factStateSet}, factStatKey{fact, factSourceNMS, factStateConflict},
+			factStatKey{fact, factSourceNone, factStateBlank},
+		)
 	}
 	return out
 }
