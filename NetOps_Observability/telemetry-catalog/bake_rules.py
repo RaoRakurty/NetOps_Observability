@@ -377,8 +377,27 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
     groups = _check_pack_pattern(where, g)
     _check_fidelity(where, g)
     for key in ("facility", "event_type", "summary"):
-        for name in _TEMPLATE_VAR_RE.findall(str(g.get(key) or "")):
+        tmpl = str(g.get(key) or "")
+        for name in _TEMPLATE_VAR_RE.findall(tmpl):
             _check_group(where, name, groups)
+        # `[ ... ]` is an optional clause (syslog_packs.template_parts): balanced, flat,
+        # and holding at least one group, or it could never drop.
+        depth, has_var = 0, False
+        for tok in re.finditer(r"\{(\w+)\}|\[|\]", tmpl):
+            if tok.group(0) == "[":
+                if depth:
+                    raise BakeError(f"{where}: {key} nests an optional clause")
+                depth, has_var = 1, False
+            elif tok.group(0) == "]":
+                if not depth:
+                    raise BakeError(f"{where}: {key} closes a clause it never opened")
+                if not has_var:
+                    raise BakeError(f"{where}: {key} has a clause with no group to drop on")
+                depth = 0
+            elif depth:
+                has_var = True
+        if depth:
+            raise BakeError(f"{where}: {key} leaves an optional clause open")
     for key in ("native_text", "native_code"):
         if g.get(key):
             _check_group(where, str(g[key]), groups)

@@ -80,8 +80,9 @@ grammars:
   - id: iosxe_dmi_auth
     parser_id: cisco_mgmt_audit.v1
     literal: 'dmiauthd: User '
-    pattern: 'dmiauthd: User \S+ authenticated successfully'
+    pattern: 'dmiauthd: User \W?(?P<user>[\w.@-]{1,64})\W? authenticated successfully(?: from (?P<src>[^\s:]{1,64})(?::\d{1,5})?)?(?: and was authorized for (?P<svc>[\w]{1,16}(?: over [\w]{1,16})?))?'
     event_type: dmi_auth_passed
+    summary: 'Device-management login[ by {user}][ from {src}][ for {svc}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -107,23 +108,25 @@ grammars:
     literal: 'devel-snmpa internal error: table '
     pattern: 'devel-snmpa internal error: table (?P<op>[a-z-]{1,16}): (?P<table>\w{1,64}) \(error: (?P<err>\w{1,64})\)'
     event_type: snmp_agent_table_error
-    summary: 'table {op} {table}: {err}'
+    summary: 'SNMP agent could not serve {table} on {op} ({err}) (poll)'
     category: management_audit
     fidelity: lab_validated
 
   - id: snmpa_instr_trace
     parser_id: cisco_sdwan_mgmt_poll.v1
     literal: 'devel-snmpa {confd_snmpa_instr,'
-    pattern: 'devel-snmpa \{confd_snmpa_instr,(?P<func>\w{1,64}),'
+    pattern: 'devel-snmpa \{confd_snmpa_instr,(?P<func>\w{1,64}),(?:\[\{table,(?P<table>\w{1,64})\})?'
     event_type: snmp_agent_instr_trace
+    summary: 'SNMP agent trace in {func}[ for {table}] (poll)'
     category: management_audit
     fidelity: lab_validated
 
   - id: snmp_get_response_error
     parser_id: cisco_sdwan_mgmt_poll.v1
     literal: 'snmp get-response reqid='
-    pattern: 'snmp get-response reqid=\d{1,12} \S{1,64} error-status=(?P<status>[A-Za-z]{1,32}) ix=\d{1,6}'
+    pattern: 'snmp get-response reqid=\d{1,12} (?P<dst>[^\s:]{1,64})(?::\d{1,5})? error-status=(?P<status>[A-Za-z]{1,32}) ix=\d{1,6}(?: \(\w{1,16} (?P<obj>[A-Za-z][\w-]{0,63}))?'
     event_type: 'snmp_get_response_{status}'
+    summary: 'SNMP answer {status} to {dst}[ on {obj}] (poll)'
     category: management_audit
     fidelity: lab_validated
 
@@ -750,7 +753,7 @@ fixtures:
       parser_id: cisco_sdwan_mgmt_poll.v1
       parser_status: parsed
       event_type: snmp_agent_table_error
-      summary: 'table get-next interfaceTable: non_increasing_index'
+      summary: 'SNMP agent could not serve interfaceTable on get-next (non_increasing_index) (poll)'
       event_category: management_audit
       dedup_key: 'vEdge-1|unknown|snmp_agent_table_error'
       normalized_severity: error
@@ -762,6 +765,7 @@ fixtures:
     severity: err
     message: "devel-snmpa {confd_snmpa_instr,table_func,[{table,interfaceTable},'http://viptela.com/oper-vpn',[int..."
     expect:
+      summary: 'SNMP agent trace in table_func for interfaceTable (poll)'
       parser_id: cisco_sdwan_mgmt_poll.v1
       parser_status: parsed
       event_type: snmp_agent_instr_trace
@@ -775,6 +779,7 @@ fixtures:
     severity: err
     message: 'snmp get-response reqid=1234567 192.0.2.1:50123 error-status=genErr ix=1 (Unsigned32 interfaceVpnId.3.)'
     expect:
+      summary: 'SNMP answer genErr to 192.0.2.1 on interfaceVpnId (poll)'
       parser_id: cisco_sdwan_mgmt_poll.v1
       parser_status: parsed
       event_type: snmp_get_response_generr
@@ -845,6 +850,7 @@ fixtures:
     appname: R0/0
     message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
     expect:
+      summary: 'Device-management login by svc-user from 192.0.2.1 for netconf over ssh'
       parser_status: parsed
       vendor: cisco
       parser_id: cisco_mgmt_audit.v1

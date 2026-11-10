@@ -139,7 +139,7 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         if g["event_type"]:
             out.append(f"    cx_pk_et = downcase({V.template_expr(g['event_type'], 'cx_pk_m')})")
         if g["summary"]:
-            out.append(f"    cx_pk_sum = {V.template_expr(g['summary'], 'cx_pk_m')}")
+            out += V.template_lines(g["summary"], "cx_pk_m", "cx_pk_sum", "    ")
         if g["native_text"]:
             out.append(f"    cx_pk_ntxt = {V.group_expr('cx_pk_m', g['native_text'])}")
         if g["native_code"]:

@@ -612,7 +612,7 @@ RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a
 #: errors while answering our interfaceTable walk become audit-shaped records and one
 #: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar; the
 #: SYSMGR process-table dump and the confd NETCONF action are classified (no rule row).
-RULES_HASH_SDWAN_SNMP_POLL = "4016fcbf1877477905912be40ec32d653805b63414cb6f3920a7ef1d8d4a1ac7"
+RULES_HASH_SDWAN_SNMP_POLL = "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a"
 RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
 
 

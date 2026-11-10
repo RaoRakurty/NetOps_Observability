@@ -385,8 +385,8 @@
           "trap_definitions": 6
         },
         "syslog": {
-          "fixtures": 15,
-          "grammars": 10,
+          "fixtures": 16,
+          "grammars": 12,
           "rules": {
             "lab_validated": 1,
             "unrated": 13

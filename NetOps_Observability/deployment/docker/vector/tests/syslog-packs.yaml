@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 98
+# cases: 99
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -610,7 +610,7 @@ tests:
               assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
-              assert_eq!(.summary, "table get-next interfaceTable: non_increasing_index", "wrong summary")
+              assert_eq!(.summary, "SNMP agent could not serve interfaceTable on get-next (non_increasing_index) (poll)", "wrong summary")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_table_error", "wrong dedup_key")
@@ -631,6 +631,7 @@ tests:
               assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "snmp_agent_instr_trace", "wrong event_type")
+              assert_eq!(.summary, "SNMP agent trace in table_func for interfaceTable (poll)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_instr_trace", "wrong dedup_key")
   - name: "cisco_sdwan: a genErr answer to our poll is a poll record, digits masked"
@@ -650,6 +651,7 @@ tests:
               assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "snmp_get_response_generr", "wrong event_type")
+              assert_eq!(.summary, "SNMP answer genErr to 192.0.2.1 on interfaceVpnId (poll)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_get_response_generr", "wrong dedup_key")
   - name: "cisco_sdwan: the same agent failing another table is still a poll record, and keeps its alarm"
@@ -747,6 +749,7 @@ tests:
               assert_eq!(.parser_id, "cisco_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "dmi_auth_passed", "wrong event_type")
+              assert_eq!(.summary, "Device-management login by svc-user from 192.0.2.1 for netconf over ssh", "wrong summary")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
@@ -1365,6 +1368,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_snmp", "wrong event_type")
+              assert_eq!(.summary, "SNMP session by svc-user from 192.0.2.1 (poll)", "wrong summary")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
@@ -1385,7 +1389,26 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_netconf", "wrong event_type")
+              assert_eq!(.summary, "NETCONF session opened by svc-user from 192.0.2.1", "wrong summary")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_netconf", "wrong dedup_key")
+  - name: "standard: a session from another ConfD northbound interface gets the generic wording"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "audit user: admin/777140 created new session via cli from 192.0.2.7:51234 with ssh"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "audit_session_created_cli", "wrong event_type")
+              assert_eq!(.summary, "Session opened via cli by admin from 192.0.2.7", "wrong summary")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: group assignment"
     inputs:
       - insert_at: syslog_normalized
@@ -1402,6 +1425,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
+              assert_eq!(.summary, "Session of svc-user given groups basic", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: session end"
     inputs:
@@ -1419,6 +1443,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_terminated", "wrong event_type")
+              assert_eq!(.summary, "Session of svc-user closed (normal)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF request"
     inputs:
@@ -1436,6 +1461,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF got rpc get", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF reply"
     inputs:
@@ -1453,6 +1479,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF sending rpc-reply", "wrong summary")
   - name: "standard: a NETCONF close"
     inputs:
       - insert_at: syslog_normalized
@@ -1469,6 +1496,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF close-session", "wrong summary")
   - name: "standard: a NETCONF transport session"
     inputs:
       - insert_at: syslog_normalized
@@ -1485,6 +1513,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_session", "wrong event_type")
+              assert_eq!(.summary, "NETCONF transport session opened for svc-user from 192.0.2.1", "wrong summary")
   - name: "standard: a NETCONF action names the action in its summary, digits masked"
     inputs:
       - insert_at: syslog_normalized
@@ -1502,7 +1531,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_action_clear", "wrong event_type")
-              assert_eq!(.summary, "action clear /viptela-actions:request/interface-stats", "wrong summary")
+              assert_eq!(.summary, "NETCONF action clear on /viptela-actions:request/interface-stats", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|netconf_action_clear", "wrong dedup_key")
   - name: "standard: an outbound NETCONF notification carrying a marker word stays silent"
@@ -1521,6 +1550,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_notification", "wrong event_type")
+              assert_eq!(.summary, "NETCONF notification sent (cpu-usage)", "wrong summary")
   - name: "standard: an SSH login accepted"
     inputs:
       - insert_at: syslog_normalized
@@ -1538,6 +1568,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
+              assert_eq!(.summary, "SSH login accepted for svc-user from 192.0.2.1 (publickey)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
   - name: "standard: an SSH session opened"
@@ -1556,6 +1587,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_opened", "wrong event_type")
+              assert_eq!(.summary, "SSH session opened for svc-user", "wrong summary")
   - name: "standard: an SSH session closed"
     inputs:
       - insert_at: syslog_normalized
@@ -1572,6 +1604,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_closed", "wrong event_type")
+              assert_eq!(.summary, "SSH session closed for svc-user", "wrong summary")
   - name: "standard: a rejected password is not audit noise"
     inputs:
       - insert_at: syslog_normalized
@@ -1638,6 +1671,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_banner_probe", "wrong event_type")
+              assert_eq!(.summary, "SSH connection ended before the banner: Connection closed by remote host", "wrong summary")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_banner_probe", "wrong dedup_key")

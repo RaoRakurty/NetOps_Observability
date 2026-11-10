@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import re
 
-_TEMPLATE_RE = re.compile(r"\{(\w+)\}")
 
 #: A grammar's `{group}` read from a parse_regex result. `string(...) ?? ""` is the
 #: only form that compiles: the two-value parse makes the result's type open.
@@ -25,18 +24,67 @@ def group_expr(result: str, group: str) -> str:
     return f'(string({result}.{group}) ?? "")'
 
 
-def template_expr(template: str, result: str) -> str:
-    """A `{group}` template as a VRL string expression."""
-    parts: list[str] = []
+#: `{group}`, or a `[` / `]` optional-clause bound (syslog_packs.template_parts).
+_TEMPLATE_TOKEN_RE = re.compile(r"\{(\w+)\}|\[|\]")
+
+
+def _template_tokens(template: str) -> list[tuple[str, str]]:
+    """(kind, text) with kind `lit`, `var`, `[` or `]` (syslog_packs.template_parts)."""
+    out: list[tuple[str, str]] = []
     pos = 0
-    for m in _TEMPLATE_RE.finditer(template):
+    for m in _TEMPLATE_TOKEN_RE.finditer(template):
         if m.start() > pos:
-            parts.append(json.dumps(template[pos:m.start()]))
-        parts.append(group_expr(result, m.group(1)))
+            out.append(("lit", template[pos:m.start()]))
+        out.append(("var", m.group(1)) if m.group(1) else (m.group(0), ""))
         pos = m.end()
     if pos < len(template):
-        parts.append(json.dumps(template[pos:]))
-    return " + ".join(parts) if parts else '""'
+        out.append(("lit", template[pos:]))
+    return out
+
+
+def _concat(parts: list[tuple[str, str]], result: str) -> str:
+    exprs = [json.dumps(t) if k == "lit" else group_expr(result, t) for k, t in parts]
+    return " + ".join(exprs) if exprs else '""'
+
+
+def template_expr(template: str, result: str) -> str:
+    """A `{group}` template with no optional clause, as one VRL string expression."""
+    toks = _template_tokens(template)
+    if any(k in "[]" for k, _ in toks):
+        raise ValueError("a template with an optional clause needs template_lines")
+    return _concat(toks, result)
+
+
+def template_lines(template: str, result: str, target: str, indent: str) -> list[str]:
+    """Assign a template to `target` as VRL statements.
+
+    `[ by {user}]` is an optional clause: appended only when every group in it matched
+    (syslog_packs._render states the same rule in Python). VRL 0.40 has no `if` inside
+    an expression, so a template with a clause is built up in statements."""
+    toks = _template_tokens(template)
+    if not any(k in "[]" for k, _ in toks):
+        return [f"{indent}{target} = {_concat(toks, result)}"]
+    out = [f'{indent}{target} = ""']
+    plain: list[tuple[str, str]] = []
+    clause: list[tuple[str, str]] | None = None
+    for kind, text in toks:
+        if kind == "[":
+            if plain:
+                out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+                plain = []
+            clause = []
+        elif kind == "]":
+            body = clause or []
+            cond = " && ".join(f'{group_expr(result, t)} != ""' for k, t in body if k == "var")
+            out += [f"{indent}if {cond} {{",
+                    f"{indent}  {target} = {target} + {_concat(body, result)}",
+                    f"{indent}}}"]
+            clause = None
+        else:
+            (plain if clause is None else clause).append((kind, text))
+    if plain:
+        out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+    return out
 
 
 def severity_lines(row: dict, result: str, target: str, indent: str) -> list[str]:

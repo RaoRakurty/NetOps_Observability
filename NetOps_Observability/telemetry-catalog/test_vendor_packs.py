@@ -296,12 +296,50 @@ def test_audit_rows_cannot_alarm():
 
 
 def test_usernames_stay_in_the_message():
-    """D7 is another stream: this one must not redact, and must not add a field that
-    copies a username out of the message."""
+    """D7: usernames are retained, never redacted here. The human summary (owner, live
+    review 2026-11-10) names the user as the message does, on the same record under the
+    same access; no OTHER field copies it out, and the message itself is untouched."""
     line = "audit user: svc-user/1 created new session via snmp from 192.0.2.1:1 with udp"
     parsed = _audit(line)
     assert "message" not in parsed
-    assert not any("svc-user" in str(v) for v in parsed.values())
+    assert parsed["summary"] == "SNMP session by svc-user from 192.0.2.1 (poll)"
+    assert not any("svc-user" in str(v) for k, v in parsed.items() if k != "summary")
+
+
+def test_every_typed_grammar_renders_a_human_summary():
+    """Owner, live review 2026-11-10: a parsed line with no summary shows raw text. Every
+    pack grammar that types an event states a summary, and every fixture it parses
+    renders a non-empty one."""
+    packs = B.load_packs()
+    grammars, envelopes = B.pack_tables(packs)
+    missing = [g["id"] for g in grammars if g["event_type"] and not g["summary"]]
+    assert not missing, f"grammars with an event type and no summary: {missing}"
+    table = P.PackTable(grammars, envelopes)
+    for pack in packs:
+        for fx in pack["fixtures"]:
+            ev = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
+                  "severity": fx.get("severity", "notice"), "message": fx["message"]}
+            if "msgid" in fx:
+                ev["msgid"] = fx["msgid"]
+            got = table.parse(ev)
+            if got.get("event_type"):
+                assert str(got.get("summary") or "").strip(), fx["name"]
+
+
+@pytest.mark.parametrize(("template", "groups", "want"), [
+    ("SSH login[ for {user}][ from {src}]", {"user": "u", "src": "h"}, "SSH login for u from h"),
+    ("SSH login[ for {user}][ from {src}]", {"user": "u", "src": None}, "SSH login for u"),
+    ("SSH login[ for {user}][ from {src}]", {"user": None, "src": None}, "SSH login"),
+    ("x[ {a} and {b}]", {"a": "1", "b": None}, "x"),
+])
+def test_a_missing_field_drops_its_clause_never_invents_text(template, groups, want):
+    import re as _re
+    names = list(groups)
+    pat = "".join(f"(?P<{n}>{v})?" if v else f"(?P<{n}>z)?" for n, v in groups.items())
+    m = _re.match(pat, "".join(v or "" for v in groups.values()))
+    assert m is not None and names
+    import syslog_packs
+    assert syslog_packs._render(template, m) == want
 
 
 def test_every_wanted_row_says_why():

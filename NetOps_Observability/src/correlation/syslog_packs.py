@@ -118,8 +118,45 @@ class Grammar:
         return None
 
 
+def template_parts(template: str) -> list[tuple[str, str]]:
+    """A template as (kind, text) parts: `lit`, `var`, and `[`/`]` clause bounds.
+
+    `[ by {user}]` is an optional CLAUSE: it renders only when every `{group}` in it
+    matched something, so a field the line did not carry drops its words with it and
+    never leaves `by ` hanging. Clauses do not nest; brackets are template syntax, so a
+    literal bracket cannot be written in a template (a group's value may hold one)."""
+    parts: list[tuple[str, str]] = []
+    pos = 0
+    for tok in re.finditer(r"\{(\w+)\}|\[|\]", template):
+        if tok.start() > pos:
+            parts.append(("lit", template[pos:tok.start()]))
+        parts.append(("var", tok.group(1)) if tok.group(1) else (tok.group(0), ""))
+        pos = tok.end()
+    if pos < len(template):
+        parts.append(("lit", template[pos:]))
+    return parts
+
+
 def _render(template: str, m: re.Match[str]) -> str:
-    return _TEMPLATE_RE.sub(lambda v: m.group(v.group(1)) or "", template)
+    out: list[str] = []
+    clause: list[str] | None = None
+    clause_ok = True
+    for kind, text in template_parts(template):
+        if kind == "[":
+            clause, clause_ok = [], True
+            continue
+        if kind == "]":
+            if clause is not None and clause_ok:
+                out.extend(clause)
+            clause = None
+            continue
+        value = text if kind == "lit" else (m.group(text) or "")
+        if clause is None:
+            out.append(value)
+        else:
+            clause_ok = clause_ok and (kind == "lit" or bool(value))
+            clause.append(value)
+    return "".join(out)
 
 
 def _inventory_vendor(ev: Mapping[str, Any]) -> str:
