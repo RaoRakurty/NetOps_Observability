@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/internal/applog"
+	"netops/backend/internal/iana"
 
 	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
@@ -372,6 +373,9 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		var out map[string]any
 		if json.Unmarshal(raw, &out) == nil {
 			out["sampling"] = flowsSamplingMeta()
+			// Tracker 387 PR 13b: interface, protocol and service names beside
+			// each stored document, by the document's own tenant.
+			annotateFlowHits(out, s.ifaceNames, iana.Default())
 			w.WriteHeader(resp.StatusCode)
 			_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 			return

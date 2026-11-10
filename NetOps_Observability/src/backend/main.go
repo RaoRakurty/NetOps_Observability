@@ -571,6 +571,7 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	ifaceNames      *ifaceNameExporter                   // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -1250,6 +1251,7 @@ func newServer() *server {
 		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
+		ifaceNames:       newIfaceNameExporter(),
 		discovery:        d,
 		devStore:         devStore,
 		snmpScan:         snmpScan,
@@ -2943,6 +2945,9 @@ func Run() {
 	// IP→device + (device,ifIndex)→ifName export for the C7.1 EntityResolver (the
 	// keystone for directed-topology direction sources C7.3–C7.5 + G2 canonicalize).
 	srv.startEntityResolverEnrichment(ctx)
+	// (tenant, exporter, ifIndex)→ifName rows in netops.iface_names, the table the
+	// flows API names interfaces through (tracker 387 PR 13b).
+	srv.startIfaceNamesExport(ctx)
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
@@ -4813,6 +4818,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.sealMetrics != nil {
 		s.sealMetrics.write(w)
 	}
+	s.ifaceNames.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
 	}

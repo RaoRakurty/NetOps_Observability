@@ -5,8 +5,8 @@ package chschema
 
 // chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = ”)
 // rows are shared into every tenant's view. Correct ONLY for the shared
-// telemetry tables (flows, findings, tunnels) whose data model depends on
-// untagged rows. NEVER use it for the correlation family — see
+// telemetry tables (flows, findings, tunnels, and iface_names, which names
+// flow rows) whose data model depends on untagged rows. NEVER use it for the correlation family — see
 // StrictRowPolicyDDL.
 // RowPolicyDDL renders the tenant row-policy DDL for one table.
 func RowPolicyDDL(table string) string {
@@ -104,6 +104,10 @@ func ConvergeStmts(extra ...[]string) []string {
 	// Path Behavior Health V1 hour-of-week baselines (path_health_baselines.go,
 	// lenient policy — see that file for why). Same converge-on-boot contract.
 	stmts = append(stmts, SvcRollupSchemaDDL()...)
+	// Tracker 387 PR 13b: the interface-name table the flows API joins on
+	// (iface_names_schema.go, LENIENT policy like flows). Same converge-on-boot
+	// contract; init.sql carries identical DDL for fresh installs.
+	stmts = append(stmts, IfaceNamesSchemaDDL()...)
 	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.

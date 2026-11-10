@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/iana"
 	"netops/backend/models"
 )
 
@@ -86,25 +87,80 @@ SELECT ` + srcExpr + ` AS src,
 type flowTopDim struct {
 	expr    string
 	nonzero string
+	// iface names the interface column when the dimension is an ifIndex: the
+	// rows then group per exporter and carry the interface's name (PR 13b).
+	iface string
+	// label names the rows from the build-time IANA tables (PR 13b).
+	label flowLabelKind
 }
 
+// flowLabelKind says which IANA table names a dimension's keys.
+type flowLabelKind int
+
+const (
+	flowLabelNone flowLabelKind = iota
+	flowLabelProtocol
+	flowLabelService
+)
+
 var flowTopDims = map[string]flowTopDim{
-	"device":   {"sampler_address", ""},
-	"in_if":    {"toString(in_if)", "in_if"},
-	"out_if":   {"toString(out_if)", "out_if"},
-	"src_addr": {"src_addr", ""},
-	"dst_addr": {"dst_addr", ""},
-	"src_as":   {"toString(src_as)", "src_as"},
-	"dst_as":   {"toString(dst_as)", "dst_as"},
-	"src_port": {"toString(src_port)", "src_port"},
-	"dst_port": {"toString(dst_port)", "dst_port"},
-	"proto":    {"toString(proto)", ""},
+	"device":   {expr: "sampler_address"},
+	"in_if":    {expr: "toString(in_if)", nonzero: "in_if", iface: "in_if"},
+	"out_if":   {expr: "toString(out_if)", nonzero: "out_if", iface: "out_if"},
+	"src_addr": {expr: "src_addr"},
+	"dst_addr": {expr: "dst_addr"},
+	"src_as":   {expr: "toString(src_as)", nonzero: "src_as"},
+	"dst_as":   {expr: "toString(dst_as)", nonzero: "dst_as"},
+	"src_port": {expr: "toString(src_port)", nonzero: "src_port"},
+	"dst_port": {expr: "toString(dst_port)", nonzero: "dst_port"},
+	"proto":    {expr: "toString(proto)", label: flowLabelProtocol},
 	// service_port is the LIKELY service end of a conversation, "<proto>/<port>":
 	// the lower of the two ports, since a client speaks from an ephemeral (high)
 	// port to the service's (low) one. It folds a conversation's two directions —
 	// request (dst_port = service) and reply (src_port = service) — into one row.
 	// A heuristic, and labelled as one wherever it is shown; never an app name.
-	"service_port": {"concat(toString(proto), '/', toString(least(src_port, dst_port)))", "least(src_port, dst_port)"},
+	"service_port": {expr: "concat(toString(proto), '/', toString(least(src_port, dst_port)))", nonzero: "least(src_port, dst_port)", label: flowLabelService},
+}
+
+// flowIfaceTopNSQL is the interface top-N: traffic per (row tenant, exporter,
+// ifIndex), then the interface name LEFT JOINed from netops.iface_names on the
+// ROW's own tenant_id, sampler_address and ifIndex (tracker 387 PR 13b).
+//
+// Isolation: the join key is the row's tenant, so a name can only come from
+// the tenant that owns the row, and the whole statement runs under the
+// caller's tenant_scope, so iface_names' own row policy also drops any other
+// tenant's names. No caller-supplied tenant ever reaches this SQL.
+//
+// Never invents a name: ifIndex 0 and 4294967295 are IPFIX "no interface"
+// sentinels and read basis `sentinel` with no name; an index nobody named
+// reads `absent`. The key stays the bare index, the filter bar's value.
+func flowIfaceTopNSQL(col, where string, limit int) string {
+	return `
+SELECT toString(a.ifx) AS k,
+       a.exporter AS exporter,
+       if(a.ifx IN (0, 4294967295), '', n.ifname) AS ` + col + `_name,
+       multiIf(a.ifx IN (0, 4294967295), 'sentinel', n.ifname != '', 'resolved', 'absent') AS ` + col + `_name_basis,
+       a.bytes_total AS bytes_total,
+       a.packets_total AS packets_total,
+       a.flows AS flows
+  FROM (
+    SELECT tenant_id AS tid, sampler_address AS exporter, ` + col + ` AS ifx,
+           sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+           sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+           count() AS flows
+      FROM netops.flows
+     WHERE ` + where + `
+     GROUP BY tid, exporter, ifx
+     ORDER BY bytes_total DESC
+     LIMIT ` + intToString(limit) + `
+  ) AS a
+  LEFT JOIN (
+    SELECT tenant_id, exporter_addr, ifindex, argMax(ifname, updated) AS ifname
+      FROM netops.iface_names
+     GROUP BY tenant_id, exporter_addr, ifindex
+  ) AS n ON n.tenant_id = a.tid AND n.exporter_addr = a.exporter AND n.ifindex = a.ifx
+ ORDER BY bytes_total DESC
+ FORMAT JSON`
 }
 
 // handleFlowsTopN is the generic top-N-by-dimension endpoint backing the NetFlow
@@ -138,18 +194,66 @@ func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
 	if dim.nonzero != "" {
 		nz = " AND " + dim.nonzero + " > 0"
 	}
+	where := `ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + nz
+	if dim.iface != "" {
+		s.proxyClickHouse(w, r, flowIfaceTopNSQL(dim.iface, where, limit))
+		return
+	}
 	sql := `
 SELECT ` + dim.expr + ` AS k,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + nz + `
+ WHERE ` + where + `
  GROUP BY k
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	if dim.label == flowLabelNone {
+		s.proxyClickHouse(w, r, sql)
+		return
+	}
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	names := iana.Default()
+	for _, row := range rows {
+		k, _ := row["k"].(string)
+		label, basis := flowKeyLabel(names, dim.label, k)
+		row["label"], row["label_basis"] = label, basis
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
+}
+
+// flowKeyLabel names one top-N key from the IANA tables. basis is
+// `iana_protocol`, `iana_service` (a port HEURISTIC: what is usually there,
+// never what the flow carried) or `absent` when the registry names nothing;
+// the label is then empty and the UI shows the number.
+func flowKeyLabel(names iana.Names, kind flowLabelKind, k string) (label, basis string) {
+	switch kind {
+	case flowLabelProtocol:
+		if n, err := strconv.ParseUint(k, 10, 8); err == nil {
+			if v := names.Protocol(uint8(n)); v != "" {
+				return v, "iana_protocol"
+			}
+		}
+	case flowLabelService:
+		p, port, ok := strings.Cut(k, "/")
+		if !ok {
+			break
+		}
+		pn, err1 := strconv.ParseUint(p, 10, 8)
+		qn, err2 := strconv.ParseUint(port, 10, 16)
+		if err1 == nil && err2 == nil {
+			if v := names.Service(uint8(pn), uint16(qn)); v != "" {
+				return v, "iana_service"
+			}
+		}
+	}
+	return "", "absent"
 }
 
 // handleFlowsFanout powers flow-based threat detection: per source address, the
@@ -362,7 +466,17 @@ SELECT proto,
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
-	s.proxyClickHouse(w, r, sql)
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	names := iana.Default()
+	for _, row := range rows {
+		label, _ := flowKeyLabel(names, flowLabelProtocol, fmt.Sprint(row["proto"]))
+		row["proto_name"] = label
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
 }
 
 // handleFlowsByType breaks traffic down by flow-protocol family

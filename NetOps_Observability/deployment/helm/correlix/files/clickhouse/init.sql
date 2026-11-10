@@ -1028,6 +1028,35 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_baselines ON netops.path_baselin
     TO ALL;
 
 -- ---------------------------------------------------------------------------
+-- Interface names for flows (tracker 387 PR 13b, internal/chschema/
+-- iface_names_schema.go is the authority and explains the design). One row per
+-- (tenant, exporter address, ifIndex), written by the API from the SNMP
+-- ifIndex bridge; the flows API LEFT JOINs it on the flow ROW's own tenant_id,
+-- sampler_address and ifIndex, so a name can only come from the tenant that
+-- owns the row. LENIENT policy like netops.flows. The API bootstrap also
+-- creates this, so existing deployments converge without manual SQL.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS netops.iface_names
+(
+    tenant_id     LowCardinality(String) DEFAULT '',
+    device_id     String,
+    exporter_addr String,
+    ifindex       UInt32,
+    ifname        String,
+    ifalias       String DEFAULT '',
+    source        LowCardinality(String) DEFAULT 'snmp',
+    updated       DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated)
+ORDER BY (tenant_id, exporter_addr, ifindex)
+TTL updated + INTERVAL 8 DAY
+SETTINGS index_granularity = 8192;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_iface_names ON netops.iface_names
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
 -- Wireless per-client event tier (#128 Phase 1, docs/Wireslessdesign.md §20).
 --
 -- MIRRORED IN src/backend/wireless_schema.go — the API converges these same
