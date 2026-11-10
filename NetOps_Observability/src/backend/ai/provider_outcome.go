@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/applog"
 )
 
 // Provider outcome classes. Closed set: metric labels and log fields only ever
@@ -198,6 +200,37 @@ func (b StageBudgets) For(tier ModelTier) time.Duration {
 		d = MaxStageBudget
 	}
 	return d
+}
+
+// ModelCallContext bounds ONE model call by its own stage budget, detached from
+// the caller's CANCELLATION but not from the caller's DEADLINE.
+//
+// Found live 2026-11-10 15:33Z: the operator's browser reloaded the page while
+// a skill answer was narrating; the request context was cancelled, and the
+// Gemini call died 0.35 s in with "context canceled" — the answer was ledgered
+// as evidence-only and nothing said why. A narration is a bounded, budgeted
+// unit of work: it now runs to its own budget (8 s fast / 15 s strong) or to an
+// earlier deadline the caller set (a skill turn's 45 s, a tie-break's 5 s),
+// whichever comes first, and a cancelled caller is logged (noteCallerLeft), not
+// silent. The cost of finishing is bounded by the stage budget and metered by
+// the tenant's daily token budget like any other call. Context VALUES (the
+// decision ledger, the model note) are kept.
+func ModelCallContext(parent context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	dl := time.Now().Add(budget)
+	if pd, ok := parent.Deadline(); ok && pd.Before(dl) {
+		dl = pd
+	}
+	return context.WithDeadline(context.WithoutCancel(parent), dl)
+}
+
+// noteCallerLeft logs a model call whose caller was cancelled while it ran:
+// the call itself completed under its own budget (ModelCallContext), and the
+// answer may never reach the operator — which an operator-facing log must say.
+func noteCallerLeft(parent context.Context, tier ModelTier) {
+	if errors.Is(parent.Err(), context.Canceled) {
+		applog.Info("ai.provider", "the request was cancelled while a model call ran; the call finished under its own budget",
+			map[string]any{"tier": string(tier)})
+	}
 }
 
 // FallbackNoteFor is the single footer line an evidence-only answer carries

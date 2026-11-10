@@ -371,7 +371,10 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		NLQuery: s.aiNLQuery(r, claims),
 		// Network context (N-F1): the customer's approved facts, read once per
 		// request, placed before the data fence.
-		OrgContext: func() string { return s.orgContextBlock(r.Context(), claims) },
+		// Read under the narration's own rules (orgContextBlock bounds it to
+		// 3 s): a cancelled request must not strip the network context from a
+		// narration that still runs to its budget.
+		OrgContext: func() string { return s.orgContextBlock(context.WithoutCancel(r.Context()), claims) },
 	}
 }
 
@@ -473,7 +476,13 @@ func (s *server) recordAskTurn(r *http.Request, claims jwtClaims, conv *irisconv
 		turn.ASTHash, turn.QueryID, turn.Rows = ran.rs.ASTHash, ran.rs.QueryID, len(ran.rs.Rows)+len(ran.rs.Series)
 	}
 	tenant, _ := principalTenant(claims)
-	_, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, conv.ID, turn, next)
+	// Detached from the client's cancellation, bounded on its own: an answer
+	// that finished (its narration runs to its own budget, ai.ModelCallContext)
+	// is kept in the conversation even when the browser left first — live
+	// 2026-11-10 15:33Z the append died with "context canceled" on a reload.
+	actx, acancel := context.WithTimeout(context.WithoutCancel(r.Context()), nlqCaptureTimeout)
+	defer acancel()
+	_, err := s.nlqConvos.Append(actx, tenant, claims.Sub, conv.ID, turn, next)
 	switch {
 	case err == nil:
 		ans.ConversationID = conv.ID

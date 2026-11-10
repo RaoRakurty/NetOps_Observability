@@ -168,8 +168,12 @@ func (o *Orchestrator) completeTier(ctx context.Context, tier ModelTier, system 
 	// degrades to it on an error, so the model gets a short per-stage budget and
 	// a slow provider costs the operator at most that long — not the transport's
 	// 60 s ceiling, as the lab measured (a 56 ms tool answer delivered at 82.9 s).
-	ctx, cancel := context.WithTimeout(ctx, o.ModelBudgets.For(tier))
+	// The call honours its OWN budget (and any earlier deadline the caller set),
+	// not the caller's cancellation: see ModelCallContext.
+	parent := ctx
+	ctx, cancel := ModelCallContext(ctx, o.ModelBudgets.For(tier))
 	defer cancel()
+	defer noteCallerLeft(parent, tier)
 	var (
 		text, provider string
 		usage          TokenUsage

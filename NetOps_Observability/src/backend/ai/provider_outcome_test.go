@@ -22,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"netops/backend/internal/applog"
 )
 
 // hangingLLM is a provider that never answers on its own: it returns only when
@@ -255,4 +257,61 @@ func TestClassifyProviderError(t *testing.T) {
 		t.Fatal("ProviderStatusOf")
 	}
 	_ = http.StatusOK
+}
+
+// slowLLM answers after `delay` unless its context ends first.
+type slowLLM struct{ delay time.Duration }
+
+func (s slowLLM) Complete(ctx context.Context, _ string, _ []LLMMessage) (string, string, error) {
+	select {
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	case <-time.After(s.delay):
+		return "narrated", "mock", nil
+	}
+}
+
+// Live 2026-11-10 15:33Z: a page reload cancelled the request and the Gemini
+// narration died 0.35 s in with "context canceled", silently. A narration now
+// runs to its OWN budget regardless of the caller's cancellation, and the
+// cancellation is logged.
+func TestModelCallHonoursItsOwnBudgetNotTheCallersCancel(t *testing.T) {
+	var logged []string
+	restore := applog.SetObserver(func(_, component, msg string, _ map[string]any) {
+		if component == "ai.provider" {
+			logged = append(logged, msg)
+		}
+	})
+	defer restore()
+	o := &Orchestrator{LLM: slowLLM{delay: 150 * time.Millisecond}, ModelBudgets: StageBudgets{Fast: 2 * time.Second}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	text, _, err := o.completeTier(ctx, TierFast, "s", []LLMMessage{{Role: "user", Content: "q"}}, false)
+	if err != nil || text != "narrated" {
+		t.Fatalf("a cancelled caller must not kill the narration: text=%q err=%v", text, err)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "cancelled while a model call ran") {
+		t.Fatalf("the caller's cancellation must be logged, got %v", logged)
+	}
+}
+
+// …but an earlier DEADLINE the caller set (a skill turn, a tie-break) still
+// bounds the call.
+func TestModelCallStillHonoursTheCallersDeadline(t *testing.T) {
+	o := &Orchestrator{LLM: slowLLM{delay: 10 * time.Second}, ModelBudgets: StageBudgets{Fast: 5 * time.Second}}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := o.completeTier(ctx, TierFast, "s", nil, false)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Fatalf("the caller's earlier deadline must bound the call: err=%v after %v", err, time.Since(start))
+	}
+	// And context values survive the detachment (ledger, model note).
+	vctx, n := WithModelNote(context.Background())
+	mctx, mcancel := ModelCallContext(vctx, time.Second)
+	defer mcancel()
+	NoteModelUsed(mctx, "gemini", "m")
+	if n.Model("gemini") != "m" {
+		t.Fatal("ModelCallContext must keep the request's values")
+	}
 }
