@@ -12,7 +12,7 @@
 // the failed cloud read already gets.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import TopologyCanvas from "./TopologyCanvas";
 
 const UNREAD_NOTE =
@@ -28,13 +28,13 @@ vi.mock("../../api/topologyApi", async () => {
   };
 });
 
-async function renderWithDegraded(degraded: string[]) {
+async function renderWithDegraded(degraded: string[], notices: unknown[] = []) {
   const api = await import("../../api/topologyApi");
   vi.mocked(api.fetchTopologyView).mockResolvedValue({
     view: {
       view_id: "v", layout_type: "layered", mode: "explore",
       nodes: [{ id: "spine-1", label: "spine-1", kind: "device", health: "healthy", confidence: 1, resolved: true, evidence: [], metrics: {}, tags: {} }],
-      edges: [], groups: [], overlays: [], degraded,
+      edges: [], groups: [], overlays: [], degraded, notices,
     },
     status: "live",
   } as never);
@@ -47,19 +47,42 @@ describe("a topology view whose adjacency evidence never arrived", () => {
 
   it("still draws, and says the missing links are UNREAD rather than absent", async () => {
     await renderWithDegraded([UNREAD_NOTE]);
-    const banner = await waitFor(() => screen.getByTestId("topo-view-degraded"));
-    // Persistent, and announced: an operator scanning a map during an incident
-    // must not have to hover anything to learn the map is incomplete.
-    expect(banner).toHaveAttribute("role", "alert");
-    expect(banner.textContent).toMatch(/could not be read/i);
-    expect(banner.textContent).toMatch(/does NOT mean/);
+    const chip = await waitFor(() => screen.getByTestId("topo-view-notices"));
+    // Visible without hovering anything (tracker 290: the map must not read as
+    // complete), but polite: a status, never an assertive alert (owner 2026-11-10).
+    expect(chip).toHaveAttribute("role", "status");
+    expect(chip.textContent).toMatch(/could not be read/i);
+    expect(screen.queryByRole("alert")).toBeNull();
     // The canvas itself is still there — the nodes, alerts and health arrived.
     expect(screen.getByLabelText("Group the canvas by")).toBeInTheDocument();
+  });
+
+  it("shows only a short headline, and the why, devices and fix on click", async () => {
+    const headline = "2 SD-WAN edges not matched to SD-WAN Manager";
+    await renderWithDegraded([headline], [{
+      id: "sdwan.tunnels.unmatched", severity: "info", headline,
+      detail: "These edges are known only over SNMP, which does not show SD-WAN tunnels.",
+      action: { label: "Review device matching", path: "/integrations" },
+      devices: ["cEDGE-81", "vEdge-100"],
+    }]);
+    const chip = await waitFor(() => screen.getByTestId("topo-view-notices"));
+    expect(chip.textContent).toContain(headline);
+    expect(chip.textContent).not.toMatch(/known only over SNMP/);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(headline) }));
+    const pop = screen.getByRole("dialog", { name: "Map notices" });
+    expect(pop.textContent).toMatch(/known only over SNMP/);
+    expect(pop.textContent).toContain("cEDGE-81");
+    expect(screen.getByRole("link", { name: /Review device matching/ })).toHaveAttribute("href", "/integrations");
+    // The degraded headline the notice covers is not shown twice.
+    expect(screen.getAllByTestId("topo-notice")).toHaveLength(1);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("says nothing at all when the read was healthy", async () => {
     await renderWithDegraded([]);
     await screen.findByLabelText("Group the canvas by");
-    expect(screen.queryByTestId("topo-view-degraded")).toBeNull();
+    expect(screen.queryByTestId("topo-view-notices")).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -468,7 +469,14 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 	var appended map[string]bool
 	if snap != nil {
 		if age := now.Sub(snap.at); age > 5*time.Minute {
-			view.Degraded = append(view.Degraded, fmt.Sprintf("The SD-WAN overlay is %d minutes old — the background refresh has not run since", int(age.Minutes())))
+			n := topology.Notice{
+				ID:       "sdwan.overlay.stale",
+				Severity: "warning",
+				Headline: fmt.Sprintf("SD-WAN overlay %d min old", int(age.Minutes())),
+				Detail:   "The background refresh has not run since, so tunnels drawn here may be out of date.",
+			}
+			view.Degraded = append(view.Degraded, n.Headline)
+			view.Notices = append(view.Notices, n)
 		}
 		appended = map[string]bool{}
 		present := make(map[string]bool, len(view.Nodes))
@@ -511,12 +519,16 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 	// integration manages gets its tunnels from that integration; an edge
 	// known only over SNMP gets them only if it answers the SD-WAN MIB.
 	managed := make(map[string]bool, len(devs))
+	names := make(map[string]string, len(devs))
+	integrationKnown := false
 	for _, d := range devs {
+		names[d.ID] = d.Name
 		if d.Labels["controller_integration"] != "" {
 			managed[d.ID] = true
+			integrationKnown = true
 		}
 	}
-	missingManaged, missingSNMP := 0, 0
+	var missingManaged, missingSNMP []string
 	for _, f := range facts {
 		if !visible[f.ID] {
 			continue
@@ -528,26 +540,78 @@ func attachSDWANOverlay(view *topology.View, snap *sdwanOverlaySnapshot, facts [
 		if snap != nil && (snap.facts[f.ID] || appended[f.ID]) {
 			continue
 		}
+		name := names[f.ID]
+		if name == "" {
+			name = f.Name
+		}
+		if name == "" {
+			name = f.ID
+		}
 		if managed[f.ID] {
-			missingManaged++
+			missingManaged = append(missingManaged, name)
 		} else {
-			missingSNMP++
+			missingSNMP = append(missingSNMP, name)
 		}
 	}
-	view.Degraded = append(view.Degraded, missingTunnelNotes(missingManaged, missingSNMP)...)
+	for _, n := range missingTunnelNotices(missingManaged, missingSNMP, integrationKnown) {
+		view.Degraded = append(view.Degraded, n.Headline)
+		view.Notices = append(view.Notices, n)
+	}
 }
 
-// missingTunnelNotes words the "edges without tunnels" notes for an operator:
-// what is missing, why, and the one thing that fixes it.
-func missingTunnelNotes(managed, snmpOnly int) []string {
-	var out []string
-	if managed > 0 {
-		out = append(out, fmt.Sprintf(
-			"%d SD-WAN edge(s) have no tunnels drawn yet: their SD-WAN manager integration has not reported their BFD sessions in the last %d minutes. Check the integration's status on the Integrations page", managed, int(ctloverlay.Window.Minutes())))
+// maxNoticeDevices caps the device list a notice carries; the headline keeps
+// the true count.
+const maxNoticeDevices = 20
+
+// missingTunnelNotices words the "edges without tunnels" conditions for an
+// operator: a short headline for the map, and the why, the fix and the devices
+// for the opened notice. integrationKnown says whether the caller's view holds
+// any device an SD-WAN manager integration manages: if it does, an SNMP-only
+// edge is one the integration did not match, and "add an integration" would
+// be the wrong advice.
+func missingTunnelNotices(managed, snmpOnly []string, integrationKnown bool) []topology.Notice {
+	var out []topology.Notice
+	if len(managed) > 0 {
+		out = append(out, topology.Notice{
+			ID:       "sdwan.tunnels.stale",
+			Severity: "warning",
+			Headline: fmt.Sprintf("%s without tunnel data", edgeCount(len(managed))),
+			Detail: fmt.Sprintf("SD-WAN Manager has not reported their BFD sessions in the last %d minutes.",
+				int(ctloverlay.Window.Minutes())),
+			Action:  &topology.NoticeAction{Label: "Check the integration", Path: "/integrations"},
+			Devices: noticeDevices(managed),
+		})
 	}
-	if snmpOnly > 0 {
-		out = append(out, fmt.Sprintf(
-			"%d SD-WAN edge(s) are monitored over SNMP only, and SNMP does not show their tunnels (IOS XE before 17.6.1a has no SD-WAN tables, or the SNMP view hides them). Add an SD-WAN manager integration (for example Catalyst SD-WAN Manager) for these edges to see their tunnels", snmpOnly))
+	if len(snmpOnly) > 0 {
+		n := topology.Notice{Severity: "info", Devices: noticeDevices(snmpOnly)}
+		if integrationKnown {
+			n.ID = "sdwan.tunnels.unmatched"
+			n.Headline = fmt.Sprintf("%s not matched to SD-WAN Manager", edgeCount(len(snmpOnly)))
+			n.Detail = "These edges are known only over SNMP, which does not show SD-WAN tunnels. Match them to the SD-WAN Manager integration to draw their tunnels."
+			n.Action = &topology.NoticeAction{Label: "Review device matching", Path: "/integrations"}
+		} else {
+			n.ID = "sdwan.tunnels.snmp_only"
+			n.Headline = fmt.Sprintf("Tunnels not visible for %s", edgeCount(len(snmpOnly)))
+			n.Detail = "SNMP does not show SD-WAN tunnels on these edges (IOS XE before 17.6.1a, or the SNMP view hides them). An SD-WAN Manager integration reports them."
+			n.Action = &topology.NoticeAction{Label: "Add an integration", Path: "/integrations"}
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func edgeCount(n int) string {
+	if n == 1 {
+		return "1 SD-WAN edge"
+	}
+	return fmt.Sprintf("%d SD-WAN edges", n)
+}
+
+func noticeDevices(names []string) []string {
+	out := append([]string(nil), names...)
+	sort.Strings(out)
+	if len(out) > maxNoticeDevices {
+		out = out[:maxNoticeDevices]
 	}
 	return out
 }

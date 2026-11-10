@@ -64,6 +64,7 @@ function fitPadding(showInventory: boolean): Padding {
 
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
+import ViewNotices from "../../components/ViewNotices";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayoutsMatching } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
@@ -907,23 +908,12 @@ function CanvasInner({
             {CLOUD_READ_FAILED_NOTE}
           </span>
         )}
-        {/* Evidence the PROJECTION could not read (tracker 290). The canvas still
-            draws — the nodes, the alerts and the health overlay arrived and are
-            real — but an empty adjacency set is indistinguishable from the finding
-            "nothing here is next to anything", so the gap is named beside the map
-            rather than drawn as a fact. Same persistent role="alert" treatment as
-            the cloud read above, and it does not appear on a healthy read. */}
-        {(fetched?.degraded ?? []).map((note) => (
-          <span
-            key={note}
-            className="topo-select-label"
-            role="alert"
-            data-testid="topo-view-degraded"
-            style={{ color: "var(--bad)", fontSize: 12 }}
-          >
-            {note}
-          </span>
-        ))}
+        {/* What the view could NOT show (tracker 290 unread evidence, a stale
+            SD-WAN overlay, edges whose tunnels cannot be drawn). Always visible
+            while a condition holds, so the map is never read as complete, but as
+            ONE short chip; the why, the devices and the fix open on click (owner
+            2026-11-10: never pop a paragraph). Absent on a healthy read. */}
+        <ViewNotices notices={fetched?.notices} degraded={fetched?.degraded} />
         <AskIris topic="topo.domain" label="Domain" />
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
