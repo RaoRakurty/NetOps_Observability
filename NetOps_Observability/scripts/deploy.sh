@@ -18,8 +18,32 @@
 #   6. on ANY failure → SELF-HEAL: roll the services back to the previous images
 #                       and confirm the stack is healthy again (safe mode)
 #
-# Usage:  scripts/deploy.sh [service ...]      (default: frontend api)
+# MOUNTED CONFIG (2026-11-10): compose recreates a container only when its image
+# or compose definition changed, so a service whose only change is a bind-mounted
+# config file (vector-aggregator's VRL, syslog-ng's conf, vmalert's rules) kept
+# running the OLD config after a deploy — seen three times on the lab, once for
+# 7 h. After step 3 this script recreates every NAMED service whose mounted config
+# changed and that compose left running, waits for it to be running/healthy, and
+# runs the normal health gate over it. Fingerprints of the last successful deploy
+# live in data/.deploy/config-fingerprints.json (scripts/mounted_config.py holds
+# the rule for which mounts count; scripts/lib/mounted-config.sh the mechanics).
+#   Decision: an explicit service list is a scope the operator chose, so by
+#   default ONLY named services are recreated. Every OTHER running service whose
+#   mounted config changed is WARNED about by name (it still runs the old config)
+#   and keeps its old fingerprint, so the warning repeats until it is applied.
+#   --reload-changed-config recreates those too. (update.sh, the customer path,
+#   always recreates every changed service.) The first deploy with no fingerprint
+#   record recreates nothing extra: it records a baseline and says so.
+#
+# Usage:  scripts/deploy.sh [--reload-changed-config] [service ...]
+#                                              (default services: frontend api)
 #         scripts/deploy.sh api                (backend only — skips dist build)
+#         scripts/deploy.sh --reload-changed-config api
+#                                              (api + every running service whose
+#                                               mounted config changed)
+# Exit:   0 deployed · 1 aborted (stack untouched, or rolled back and healthy)
+#         2 manual intervention required · 3 deployed and healthy, but the
+#         mounted-config fingerprint record could not be written
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,13 +57,35 @@ COMPOSE_DIR="$ROOT/deployment/docker"
 dc() { ( cd "$COMPOSE_DIR" && docker compose "$@" ); }
 PROJECT="netops"                                   # compose project → image prefix
 BASE_URL="${DEPLOY_BASE_URL:-http://localhost:8000}"
-SERVICES=("${@:-}"); [ -z "${SERVICES[*]}" ] && SERVICES=(frontend api)
 
 c_b="\033[1m"; c_r="\033[31m"; c_g="\033[32m"; c_y="\033[33m"; c_0="\033[0m"
 log()  { printf "${c_b}[deploy]${c_0} %s\n" "$*"; }
 warn() { printf "${c_y}[deploy]${c_0} %s\n" "$*"; }
 ok()   { printf "${c_g}[deploy] %s${c_0}\n" "$*"; }
 die()  { printf "${c_r}[deploy] FAIL:${c_0} %s\n" "$*" >&2; }
+
+RELOAD_CHANGED_CONFIG=0
+SERVICES=()
+for arg in "$@"; do
+  case "$arg" in
+    --reload-changed-config) RELOAD_CHANGED_CONFIG=1 ;;
+    -h|--help) sed -n '5,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown flag: $arg (see --help)"; exit 2 ;;
+    *) SERVICES+=("$arg") ;;
+  esac
+done
+[ "${#SERVICES[@]}" -eq 0 ] && SERVICES=(frontend api)
+
+# SC1091: a plain `shellcheck deploy.sh` (no -x) cannot follow the helper; it is
+# checked on its own, and `shellcheck -x` follows it through source-path.
+# shellcheck source-path=SCRIPTDIR source=lib/mounted-config.sh disable=SC1091
+if ! . "$ROOT/scripts/lib/mounted-config.sh"; then
+  die "cannot load $ROOT/scripts/lib/mounted-config.sh — incomplete install tree"; exit 1
+fi
+mc_init "$ROOT" "$COMPOSE_DIR"
+trap mc_cleanup EXIT
+CFG_RELOADED=()   # recreated by this run for a mounted-config change
+CFG_UNAPPLIED=()  # a mounted-config recreate that failed
 
 has() { local x; for x in "${SERVICES[@]}"; do [ "$x" = "$1" ] && return 0; done; return 1; }
 
@@ -68,6 +114,21 @@ rollback() {
       warn "  no prior image recorded for $s (was it running before?)"
     fi
   done
+  # A mounted-config change cannot be rolled back by re-tagging an image: the new
+  # config IS the source tree on disk. Name every such service so nobody reads
+  # "rolled back" as "everything is on the previous build".
+  local unnamed=()
+  for s in "${CFG_RELOADED[@]}" "${CFG_UNAPPLIED[@]}"; do has "$s" || unnamed+=("$s"); done
+  if [ "${#unnamed[@]}" -gt 0 ]; then
+    warn "  NOT rolled back (touched for a mounted-config change; the config on disk is the new one): ${unnamed[*]}"
+  fi
+  if [ "${#CFG_UNAPPLIED[@]}" -gt 0 ]; then
+    if [ "$restored" = 1 ] && wait_health 20; then
+      warn "  the app answers on $BASE_URL again"
+    fi
+    die "MOUNTED CONFIG COULD NOT BE APPLIED to: ${CFG_UNAPPLIED[*]} — they may be down or crash-looping on the new config. Inspect: (cd $COMPOSE_DIR && docker compose ps && docker compose logs --tail 100 ${CFG_UNAPPLIED[*]}); fix or revert those config files, then re-run scripts/deploy.sh ${CFG_UNAPPLIED[*]}. Manual intervention required."
+    exit 2
+  fi
   if [ "$restored" = 1 ] && wait_health 20; then
     die "deploy aborted — STACK ROLLED BACK and healthy on the previous build."
     exit 1
@@ -177,6 +238,13 @@ PY
   fi
 fi
 
+# 2c. snapshot the running containers and fingerprint every service's mounted
+# config, BEFORE the stack is touched (custody_converge may recreate readers).
+# A deploy that cannot tell stale config from fresh aborts here, untouched.
+if ! mc_begin; then
+  die "$MC_ERROR — running stack left UNTOUCHED."; exit 1
+fi
+
 # 3. build ONLY the named services, then recreate ONLY them. `up --build`
 # also rebuilds (and, on a new image, recreates) every dependency with a build
 # section — deploying the api rebuilt secrets-seal from scratch (a ~35-minute
@@ -191,6 +259,43 @@ custody_converge
 log "recreating ${SERVICES[*]} (dependencies left running)…"
 dc up -d --no-deps "${SERVICES[@]}" || rollback "compose up failed"
 
+# 3b. mounted-config reload — see the header. A plan failure is a failure like
+# any other: the deploy cannot vouch for what the services are running.
+if [ "$RELOAD_CHANGED_CONFIG" = 1 ]; then
+  mc_plan || rollback "$MC_ERROR"
+else
+  mc_plan "${SERVICES[@]}" || rollback "$MC_ERROR"
+fi
+if [ "$MC_FIRST_RUN" = 1 ]; then
+  log "mounted config: no fingerprint record yet ($MC_STATE_FILE) — recording a baseline; nothing is recreated for config on this first run"
+fi
+if [ -n "$MC_STATE_PROBLEM" ]; then
+  warn "mounted config: the fingerprint record is unusable ($MC_STATE_PROBLEM) — treating EVERY service with mounted config as changed"
+fi
+if [ "${#MC_BASELINE[@]}" -gt 0 ]; then
+  log "mounted config: first fingerprint recorded for ${MC_BASELINE[*]} (not recreated)"
+fi
+if [ "${#MC_RECREATED[@]}" -gt 0 ]; then
+  log "mounted config changed for ${MC_RECREATED[*]} — already recreated by this deploy"
+fi
+if [ "${#MC_NOT_RUNNING[@]}" -gt 0 ]; then
+  log "mounted config changed for ${MC_NOT_RUNNING[*]} — not running; its next start reads the new config"
+fi
+if [ "${#MC_RESTART[@]}" -gt 0 ]; then
+  warn "recreating ${MC_RESTART[*]} — MOUNTED CONFIG CHANGED and compose left them running on the old one"
+  if ! mc_recreate "${MC_RESTART[@]}"; then
+    CFG_UNAPPLIED=("${MC_RESTART[@]}")
+    rollback "mounted-config reload failed: $MC_ERROR"
+  fi
+  CFG_RELOADED=("${MC_RESTART[@]}")
+  ok "recreated because their mounted config changed: ${CFG_RELOADED[*]}"
+fi
+STALE_MSG=""
+if [ "${#MC_STALE[@]}" -gt 0 ]; then
+  STALE_MSG="MOUNTED CONFIG CHANGED for running service(s) NOT in this deploy: ${MC_STALE[*]} — they are STILL RUNNING THE OLD CONFIG. Apply with: scripts/deploy.sh --reload-changed-config ${SERVICES[*]}   (or: scripts/deploy.sh ${MC_STALE[*]})"
+  warn "$STALE_MSG"
+fi
+
 # 4. health gate
 log "health gate…"
 wait_health 30 || rollback "stack did not become healthy after deploy"
@@ -204,4 +309,14 @@ if [ -n "$BUILT_HASH" ]; then
   ok "freshness verified — serving the just-built bundle ($SERVED)"
 fi
 
-ok "deploy succeeded ✅  (${SERVICES[*]})"
+# 6. record the mounted-config fingerprints — ONLY now, after every gate passed.
+if ! mc_commit; then
+  die "the deploy is LIVE and healthy, but $MC_ERROR. The next deploy compares against the previous record and may recreate config-changed services again."
+  exit 3
+fi
+log "$MC_COMMIT_MSG"
+
+ok "deploy succeeded ✅  (${SERVICES[*]}${CFG_RELOADED[*]:+; recreated for mounted config: ${CFG_RELOADED[*]}})"
+if [ -n "$STALE_MSG" ]; then
+  warn "$STALE_MSG"
+fi

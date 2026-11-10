@@ -22,6 +22,19 @@
 #   --no-backup       skip the pre-upgrade tarball (faster, riskier)
 #   --no-build        skip docker compose build (use existing images)
 #   --yes             skip the confirmation prompt
+#
+# Mounted config (2026-11-10): `docker compose up -d` recreates a container only
+# when its image or compose definition changed, so a service whose only change is
+# a bind-mounted config file (vector VRL, syslog-ng conf, vmalert alert rules)
+# would keep running the OLD config after an upgrade — silently. After the
+# recreate step this script therefore recreates EVERY running service whose
+# mounted config changed and that compose left running, waits until each is
+# running/healthy, and fails loud if one does not come up. There is no opt-out
+# and no scoping on this customer path: an upgrade must leave nothing on old
+# config. The fingerprints of the last successful upgrade/deploy live in
+# data/.deploy/config-fingerprints.json; the first run without that record
+# recreates nothing extra and records a baseline (scripts/mounted_config.py
+# holds the rule for which mounts count).
 
 set -euo pipefail
 
@@ -59,6 +72,13 @@ fail() { echo "[fail ] $*" >&2; exit 1; }
 [[ -f "$COMPOSE_DIR/docker-compose.yml" ]] || fail "docker-compose.yml not found at $COMPOSE_DIR. Are you in the right directory?"
 [[ -f "$ENV_FILE" ]] || fail ".env not found at $ENV_FILE. This script is for UPGRADES; for a first-time install run scripts/install.py."
 
+# SC1091: a plain `shellcheck update.sh` (no -x) cannot follow the helper; it is
+# checked on its own, and `shellcheck -x` follows it through source-path.
+# shellcheck source-path=SCRIPTDIR source=lib/mounted-config.sh disable=SC1091
+. "$ROOT/scripts/lib/mounted-config.sh" || fail "cannot load $ROOT/scripts/lib/mounted-config.sh — the new tree is incomplete"
+mc_init "$ROOT" "$COMPOSE_DIR"
+trap mc_cleanup EXIT
+
 command -v docker >/dev/null || fail "docker missing — install with scripts/bootstrap-ubuntu.sh"
 docker compose version >/dev/null 2>&1 || fail "docker compose v2 plugin missing"
 command -v python3 >/dev/null || fail "python3 missing"
@@ -76,6 +96,7 @@ echo "     then render the service credential files under data/secrets from it"
 [[ $NO_BUILD -eq 0 ]]  && echo "  4) docker compose pull   (refresh pinned images)"
 [[ $NO_BUILD -eq 0 ]]  && echo "  5) docker compose build  (rebuild api / frontend / correlation)"
 echo "  6) docker compose up -d --remove-orphans   (recreate containers)"
+echo "     then recreate any running service whose mounted config changed"
 echo "  7) Run bootstrap-opensearch.sh   (apply new index templates if any)"
 echo
 
@@ -369,8 +390,53 @@ fi
 
 # ---- 6: up -d ---------------------------------------------------------------
 
+# Snapshot the running containers and fingerprint the mounted config BEFORE the
+# recreate, so step 6b can tell which services compose left on their old config.
+# A failure here aborts with the containers untouched.
+step "fingerprinting mounted config"
+if ! mc_begin; then
+    fail "$MC_ERROR — containers left untouched."
+fi
+
 step "recreating containers"
 (cd "$COMPOSE_DIR" && docker compose up -d --remove-orphans)
+
+# ---- 6b: recreate services whose mounted config changed ----------------------
+# See the header. Every changed service is in scope on this path (no names).
+
+step "recreating services whose mounted config changed"
+# shellcheck disable=SC2119 # no service names = every service is in scope
+mc_plan || fail "$MC_ERROR — the upgrade cannot vouch that every service runs its new config. Re-run update.sh."
+if [[ $MC_FIRST_RUN -eq 1 ]]; then
+    info "no fingerprint record yet ($MC_STATE_FILE) — recording a baseline; nothing is recreated for config on this first run"
+fi
+if [[ -n "$MC_STATE_PROBLEM" ]]; then
+    warn "the fingerprint record is unusable ($MC_STATE_PROBLEM) — treating EVERY service with mounted config as changed"
+fi
+if [[ ${#MC_BASELINE[@]} -gt 0 ]]; then
+    info "first fingerprint recorded for ${MC_BASELINE[*]} (not recreated)"
+fi
+if [[ ${#MC_RECREATED[@]} -gt 0 ]]; then
+    info "mounted config changed for ${MC_RECREATED[*]} — already recreated above"
+fi
+if [[ ${#MC_NOT_RUNNING[@]} -gt 0 ]]; then
+    info "mounted config changed for ${MC_NOT_RUNNING[*]} — not running; its next start reads the new config"
+fi
+if [[ ${#MC_STALE[@]} -gt 0 ]]; then
+    # Unreachable without --named; kept so a planner change can never be silent.
+    fail "planner left ${MC_STALE[*]} out of scope on the update path — refusing to finish with them on old config"
+fi
+if [[ ${#MC_RESTART[@]} -gt 0 ]]; then
+    warn "recreating ${MC_RESTART[*]} — their MOUNTED CONFIG changed and compose left them running on the old one"
+    if ! mc_recreate "${MC_RESTART[@]}"; then
+        fail "MOUNTED CONFIG COULD NOT BE APPLIED: $MC_ERROR. ${MC_RESTART[*]} may be down or crash-looping on the new config. Inspect: (cd $COMPOSE_DIR && docker compose ps && docker compose logs --tail 100 ${MC_RESTART[*]}). To go back, use the Rollback steps printed by a successful run: docker compose down, scripts/restore.sh ${BACKUP_DIR}/<backup>, docker compose up -d."
+    fi
+    ok "recreated because their mounted config changed: ${MC_RESTART[*]}"
+else
+    ok "no running service is left on an old mounted config"
+fi
+mc_commit || fail "every service is up on its new config, but $MC_ERROR. The next upgrade compares against the previous record and may recreate config-changed services again."
+info "$MC_COMMIT_MSG"
 
 # ---- 7: bootstrap opensearch ------------------------------------------------
 

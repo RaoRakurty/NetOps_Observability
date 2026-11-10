@@ -508,6 +508,10 @@ def test_an_upgrade_tightens_only_the_admin_dir(tmp_path, monkeypatch):
 FAKE_DOCKER = r'''#!/bin/sh
 echo "$*" >> "$DOCKER_LOG"
 case "$*" in
+  # The mounted-config reload (tests/test_deploy_mounted_config.py): no running
+  # containers, no config mounts — nothing to recreate, no extra --wait call.
+  *"compose ps --format json"*) ;;
+  *"compose config --format json"*) echo '{"services": {}}' ;;
   *"compose config"*) [ "${FAKE_CONFIG_RC:-0}" = 0 ] || { echo "boom: bad compose" >&2; exit 3; }
                       echo "services:"; [ -n "${FAKE_TLS:-}" ] && echo "    group_add:"; exit 0 ;;
   *"compose ps -q kafka"*) echo cid-kafka ;;
@@ -531,7 +535,8 @@ def _deploy(tmp: Path, **env) -> tuple[int, list[str], str]:
     (bindir / "curl").chmod(0o755)
     log = tmp / "docker.log"
     log.touch()
-    run_env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", DOCKER_LOG=str(log), **env)
+    run_env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", DOCKER_LOG=str(log),
+                   CORRELIX_DEPLOY_STATE_DIR=str(tmp / "deploy-state"), **env)
     r = subprocess.run(["bash", str(ROOT / "scripts" / "deploy.sh"), "api"], env=run_env,
                        capture_output=True, text=True, timeout=120, check=False)
     return r.returncode, log.read_text().splitlines(), r.stdout + r.stderr

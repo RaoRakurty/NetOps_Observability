@@ -38,6 +38,10 @@ def _run(tmp_path: Path, healthy: bool, build_fails: bool = False) -> tuple[subp
         f'echo "$PWD|$*" >> "{calls}"\n'
         'case "$*" in\n'
         '  *"ps -q"*) echo cid-1 ;;\n'
+        # The mounted-config reload (tests/test_deploy_mounted_config.py covers
+        # it): no running containers, no config mounts — nothing to recreate.
+        '  *"ps --format json"*) ;;\n'
+        '  *"config --format json"*) echo \'{"services": {}}\' ;;\n'
         '  inspect*) echo sha256:oldimage ;;\n'
         + ('  *"compose build"*) exit 1 ;;\n' if build_fails else '')
         + 'esac\n'
@@ -46,6 +50,8 @@ def _run(tmp_path: Path, healthy: bool, build_fails: bool = False) -> tuple[subp
     _stub(bindir / "sleep", "exit 0\n")  # the health waits must not cost real time
     env = os.environ.copy()
     env["PATH"] = f"{bindir}:{env['PATH']}"
+    # The fingerprint record goes to the test's tmp dir, never the checkout's data/.
+    env["CORRELIX_DEPLOY_STATE_DIR"] = str(tmp_path / "deploy-state")
     # "api" only: skips the real frontend build, which these tests do not exercise.
     r = subprocess.run(["bash", str(SCRIPT), "api"], env=env, capture_output=True,
                        text=True, timeout=120, cwd=tmp_path)
