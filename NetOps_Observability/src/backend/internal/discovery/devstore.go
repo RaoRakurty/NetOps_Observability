@@ -681,6 +681,10 @@ func (s *DevStore) Devices() []models.Device {
 // i.e. the delete was issued against that owner's device. Used for the devices
 // a tenant's discovery scope finds, whose tombstones are all stamped (they did
 // not exist before tracker 175). A hit is recorded like IsSuppressed's.
+// COUPLING: the legacy whole-blob mode reloads every tombstone with tenant ""
+// (load), so a tenant scan device's tombstone would not survive a restart there
+// — safe only because blob mode has no scope store (newDiscoveryScopeRegistry →
+// discoveryscope.Unavailable), so no tenant scan device can exist in it.
 func (s *DevStore) IsSuppressedOwned(tenant, id string) bool {
 	if s == nil {
 		return false

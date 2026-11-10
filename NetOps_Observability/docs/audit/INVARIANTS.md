@@ -766,6 +766,13 @@ Runbook: `docs/runbooks/tenant-discovery-scope.md`.
 - While both copies exist, the shared address and name are left out of `device_tenant.csv` (fail-closed);
   after the platform copy is retired, all of them attribute to the customer
   (`TestTenantScopeSiblingRegistryRowsFailClosedThenMoveToTheTenant`).
+- The platform scan's own PUT respects the shared budget, with the same refusal text
+  (`TestPlatformScanPutHonoursTheSharedBudget`). Two concurrent reloads of the stored scans never put an
+  older set back in force (`TestConcurrentReloadsNeverPublishAStaleSet`). A customer's read carries
+  neither `created_by` nor the budget-refusal detail, but keeps the "also found by the platform scan" flag
+  (`TestACustomerReadLeavesOutPlatformSideDetail`). The 0067 rollback deletes exactly the customers' SNMP
+  rows from `discovered_devices`, running as the RLS-bound application role, so an older binary cannot
+  collapse them over the platform's copy (`TestDiscoveryScopesMigrationDownUpPG`).
 - Isolation through the real router, and on a real Postgres (§6 row above). Mutation-checked: removing the
   overwrite guard, the owner tombstone, the restore key, the per-owner known set, the tenant salt, the body
   tenant rule, the write gate, the profile-owner check or `FORCE ROW LEVEL SECURITY` each fails a test.
