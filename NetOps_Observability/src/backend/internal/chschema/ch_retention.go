@@ -83,6 +83,12 @@ type chRetentionDays struct {
 	// this outage cost" — a question asked months later.
 	ExperienceEvents int // netops.experience_events
 	BusinessEvents   int // netops.business_events
+	// netops.iface_names (tracker 387 PR 13b): not a retention horizon but a
+	// staleness bound. The API re-writes every live name well inside it, so the
+	// TTL only removes names nobody refreshes (a removed device, a gone index).
+	// Fixed, deliberately: no knob, because shortening it below the refresh
+	// cadence would blank live names, and lengthening it keeps dead ones.
+	IfaceNames int
 }
 
 // chRetentionDefaults mirrors deployment/docker/clickhouse/init.sql. Keep the
@@ -108,6 +114,7 @@ func chRetentionDefaults() chRetentionDays {
 		// user reference and are the year-over-year impact denominator.
 		ExperienceEvents: 30,
 		BusinessEvents:   400,
+		IfaceNames:       8,
 	}
 }
 
@@ -149,6 +156,7 @@ func RetentionConfig() chRetentionDays {
 
 		ExperienceEvents: knob("CH_EXPERIENCE_EVENT_RETENTION_DAYS", d.ExperienceEvents),
 		BusinessEvents:   knob("CH_BUSINESS_EVENT_RETENTION_DAYS", d.BusinessEvents),
+		IfaceNames:       d.IfaceNames,
 	}
 }
 
@@ -192,6 +200,7 @@ func chRetentionTables() []chRetentionTable {
 		// Tracker 254 — the DEM experience-event lane (experience_schema.go).
 		{"experience_events", "toDateTime(event_at)", func(d chRetentionDays) int { return d.ExperienceEvents }},
 		{"business_events", "toDateTime(event_at)", func(d chRetentionDays) int { return d.BusinessEvents }},
+		{"iface_names", "updated", func(d chRetentionDays) int { return d.IfaceNames }},
 	}
 }
 

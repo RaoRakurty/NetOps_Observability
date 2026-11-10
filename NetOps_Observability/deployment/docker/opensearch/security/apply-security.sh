@@ -18,10 +18,62 @@
 # leaving the operator believing bootstrap succeeded (§16.1).
 set -eu
 
-SEC_DIR=/usr/share/opensearch/plugins/opensearch-security
+OS_HOME=${OS_HOME:-/usr/share/opensearch}
+SEC_DIR=$OS_HOME/plugins/opensearch-security
 CONF_SRC=${SEC_CONF_SRC:-/security-config}
 WORK=/tmp/netops-security
-export OPENSEARCH_JAVA_HOME="${OPENSEARCH_JAVA_HOME:-/usr/share/opensearch/jdk}"
+export OPENSEARCH_JAVA_HOME="${OPENSEARCH_JAVA_HOME:-$OS_HOME/jdk}"
+ADMIN_CA=${OS_ADMIN_CA:-$OS_HOME/config/tls/ca.pem}
+ADMIN_CERT=${OS_ADMIN_CERT:-$OS_HOME/config/tls/admin.crt}
+ADMIN_KEY=${OS_ADMIN_KEY:-$OS_HOME/config/tls/admin.key}
+# Refuse a certificate this close to expiry: securityadmin takes seconds, and a
+# handshake that fails halfway is a far worse message than this script's.
+ADMIN_CERT_MARGIN_S=60
+
+die() {
+    echo "apply-security: FATAL: $*" >&2
+    exit 78
+}
+
+# The image's home must be enterable by this uid. An image built before the 0750
+# home (opensearch/Dockerfile) refuses every non-1000 uid, and without this check
+# the failure surfaces as "config set missing", which names the wrong thing.
+if [ ! -x "$OS_HOME" ]; then
+    die "uid $(id -u) gid $(id -g) cannot enter $OS_HOME: this image predates the group-readable home. Rebuild it: docker compose build opensearch"
+fi
+
+# The admin material. The api mints it, so "missing" means the api has not run yet.
+for f in "$ADMIN_CA" "$ADMIN_CERT" "$ADMIN_KEY"; do
+    if [ ! -e "$f" ]; then
+        die "$f is missing: the api mints the admin identity at boot and has not done so yet (or this uid cannot enter its directory). Start the api first: docker compose up -d api"
+    fi
+    if [ ! -r "$f" ]; then
+        die "$f is not readable by uid $(id -u): the admin key is 0600 under CORRELIX_UID, so this job must run as CORRELIX_UID. Check CORRELIX_UID in .env against the owner of data/tls/admin"
+    fi
+done
+
+# The api re-issues the admin certificate every TTL/2 while it runs. If the api
+# has been down past the TTL this certificate has expired, and securityadmin
+# would fail with a TLS error that names nothing. No openssl in this image, so
+# the JDK's keytool reads the validity (public fields only; nothing is printed).
+admin_cert_check() {
+    keytool=$OPENSEARCH_JAVA_HOME/bin/keytool
+    printed=$(LC_ALL=C "$keytool" -J-Duser.language=en -J-Duser.country=US \
+            -printcert -file "$ADMIN_CERT" 2>&1) \
+        || die "keytool could not read $ADMIN_CERT (exit $?), so its validity is unknown. The api re-mints it at boot: docker compose up -d api, then re-run this job"
+    not_after=$(printf '%s\n' "$printed" | sed -n 's/^Valid from: .* until: //p' | head -n 1)
+    if [ -z "$not_after" ]; then
+        die "could not find the validity line in keytool's output for $ADMIN_CERT, so its validity is unknown (keytool format changed?)"
+    fi
+    if ! not_after_s=$(date -d "$not_after" +%s 2>/dev/null); then
+        die "could not parse the admin certificate's expiry '$not_after'"
+    fi
+    now_s=$(date +%s)
+    if [ "$not_after_s" -le "$((now_s + ADMIN_CERT_MARGIN_S))" ]; then
+        die "admin certificate $ADMIN_CERT expired or expires within ${ADMIN_CERT_MARGIN_S}s (not after: $not_after). The api re-issues it only while running, so the api was down past its TTL. Start the api first, then re-run this job: docker compose up -d api && docker compose up opensearch-security-init"
+    fi
+}
+admin_cert_check
 
 for v in OS_API_PASSWORD OS_ROUTER_PASSWORD OS_CORRELATION_PASSWORD \
          OS_BOOTSTRAP_PASSWORD OS_DASHBOARDS_PASSWORD OS_AGGREGATOR_PASSWORD; do
@@ -51,7 +103,7 @@ mkdir -p "$WORK"
 # Seed from the plugin's shipped defaults, then overlay ours — so we own
 # exactly three files and inherit the rest, which is also what keeps upgrades
 # cheap (a new default file appears automatically).
-DEFAULTS=/usr/share/opensearch/config/opensearch-security
+DEFAULTS=$OS_HOME/config/opensearch-security
 if [ ! -d "$DEFAULTS" ]; then
     echo "apply-security: FATAL: $DEFAULTS missing — cannot seed the config set" >&2
     exit 78
@@ -124,9 +176,9 @@ echo "apply-security: applying security configuration ..." >&2
 "$SEC_DIR/tools/securityadmin.sh" \
     -cd "$WORK" \
     -icl -nhnv \
-    -cacert "${OS_ADMIN_CA:-/usr/share/opensearch/config/tls/ca.pem}" \
-    -cert "${OS_ADMIN_CERT:-/usr/share/opensearch/config/tls/admin.crt}" \
-    -key "${OS_ADMIN_KEY:-/usr/share/opensearch/config/tls/admin.key}" \
+    -cacert "$ADMIN_CA" \
+    -cert "$ADMIN_CERT" \
+    -key "$ADMIN_KEY" \
     -h "${OS_HOST:-localhost}" -p "${OS_PORT:-9200}"
 
 # Never leave plaintext-derived material behind.

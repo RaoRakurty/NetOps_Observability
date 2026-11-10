@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/safego"
@@ -86,6 +87,24 @@ type TrapEvent struct {
 	// event CARRIES the fact that it was cut (CLAUDE.md §10, no silent failures).
 	VarbindsDropped int  `json:"varbinds_dropped,omitempty"` // varbinds beyond the cap
 	Truncated       bool `json:"truncated,omitempty"`        // any cap applied to this trap
+
+	// AttributionBasis says which rung named Device (tracker 387 PR 13c'), a
+	// closed set: mgmt_ip (the source is a device's management address),
+	// interface_ip (the source is an interface address exactly one device
+	// reports), sysname (the PDU's sysName.0), agent_addr (the v1 agent-addr),
+	// or none. Every rung other than none passed the credential proof. It names
+	// HOW the device was found, never a tenant: the tenant is the device's own.
+	AttributionBasis string `json:"attribution_basis"`
+
+	// The affected interface (tracker 387 PR 13c), from the varbinds:
+	// interface_basis varbind_name (the trap named it: ifName, ifDescr or a
+	// vendor *IfName object), ifindex_map (an IF-MIB index named through the
+	// device's OWN ifIndex map), ifindex_only (an index nothing named; Interface
+	// is then the bare index, the engine's digits-only convention) or none.
+	// Varbinds are never rewritten: these sit beside them.
+	Interface      string `json:"interface,omitempty"`
+	InterfaceIndex string `json:"ifindex,omitempty"`
+	InterfaceBasis string `json:"interface_basis,omitempty"`
 
 	// SourceMasked: the datagram arrived from the Docker bridge gateway, not
 	// from the device (tracker 373, masked_source.go) — Host is NOT the sender,
@@ -637,9 +656,117 @@ func (ev *TrapEvent) setCommunity(raw []byte) {
 // credResolver maps a source IP to its inventory device id and (for v3) creds.
 type credResolver func(ip string) (Target, bool)
 
+// TrapAddressResolver names the ONE inventory device holding ip as an
+// identifying interface address (nms.InventoryIndex.DeviceForAddress, injected
+// by the api through Pool.SetTrapAddressResolver). It returns a device id,
+// never a tenant, and its answer is a claim the trap must still prove.
+type TrapAddressResolver func(ip string) (deviceID string, ok bool)
+
+// IfNameFunc names ifIndex on ONE device from that device's own ifIndex map
+// (collectors.FetchIfIndexMap, served from an in-memory snapshot the api
+// refreshes; never a network read on the receive path).
+type IfNameFunc func(deviceID, ifIndex string) (string, bool)
+
+// Interface bases, the closed set of TrapEvent.InterfaceBasis.
+const (
+	InterfaceVarbindName = "varbind_name"
+	InterfaceIfIndexMap  = "ifindex_map"
+	InterfaceIfIndexOnly = "ifindex_only"
+	InterfaceNone        = "none"
+)
+
+// IF-MIB columns whose instance suffix is the ifIndex (RFC 2863): ifIndex,
+// ifDescr, ifAdminStatus, ifOperStatus, and ifXTable's ifName.
+const (
+	oidIfIndexCol  = "1.3.6.1.2.1.2.2.1.1."
+	oidIfDescrCol  = "1.3.6.1.2.1.2.2.1.2."
+	oidIfAdminCol  = "1.3.6.1.2.1.2.2.1.7."
+	oidIfOperCol   = "1.3.6.1.2.1.2.2.1.8."
+	oidIfNameXCol  = "1.3.6.1.2.1.31.1.1.1.1."
+	maxIfNameChars = 128
+)
+
+// ifIndexSuffix returns the single-arc instance suffix of an IF-MIB column OID.
+func ifIndexSuffix(oid, col string) (string, bool) {
+	rest, ok := strings.CutPrefix(oid, col)
+	if !ok || rest == "" || strings.Trim(rest, "0123456789") != "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// interfaceFor fills the interface fields from the varbinds. A name the trap
+// carries wins; then an IF-MIB index named through the ATTRIBUTED device's own
+// map; an index is never looked up on another device, and with no device it
+// stays a number.
+func interfaceFor(ev *TrapEvent, names IfNameFunc) {
+	var index, named, descr, descrIdx string
+	for _, vb := range ev.Varbinds {
+		// ifName is the operator's port name; ifDescr only stands in for it,
+		// whatever order the agent sent them in.
+		if sfx, ok := ifIndexSuffix(vb.OID, oidIfNameXCol); ok && named == "" && strings.TrimSpace(vb.Value) != "" {
+			named, index = vb.Value, sfx
+		} else if sfx, ok := ifIndexSuffix(vb.OID, oidIfDescrCol); ok && descr == "" {
+			descr, descrIdx = vb.Value, sfx
+		}
+		for _, col := range []string{oidIfIndexCol, oidIfAdminCol, oidIfOperCol} {
+			if sfx, ok := ifIndexSuffix(vb.OID, col); ok && index == "" {
+				index = sfx
+			}
+		}
+	}
+	if named == "" && strings.TrimSpace(descr) != "" {
+		named, index = descr, descrIdx
+	}
+	if named == "" {
+		// A vendor object the MIB index resolved to a name ending in IfName
+		// (a vendor VPN-interface object, for one): the trap names the port itself.
+		for _, vb := range ev.Varbinds {
+			if strings.HasSuffix(strings.ToLower(vb.Name), "ifname") && strings.TrimSpace(vb.Value) != "" {
+				named = vb.Value
+				break
+			}
+		}
+	}
+	named = clampRunes(strings.TrimSpace(named), maxIfNameChars)
+	switch {
+	case named != "":
+		ev.Interface, ev.InterfaceIndex, ev.InterfaceBasis = named, index, InterfaceVarbindName
+	case index != "":
+		ev.InterfaceIndex = index
+		if ev.Device != "" && names != nil {
+			if n, ok := names(ev.Device, index); ok && strings.TrimSpace(n) != "" {
+				ev.Interface, ev.InterfaceBasis = clampRunes(strings.TrimSpace(n), maxIfNameChars), InterfaceIfIndexMap
+				return
+			}
+		}
+		ev.Interface, ev.InterfaceBasis = index, InterfaceIfIndexOnly
+	default:
+		ev.InterfaceBasis = InterfaceNone
+	}
+}
+
+// Attribution bases, the closed set of TrapEvent.AttributionBasis.
+const (
+	AttributionMgmtIP      = "mgmt_ip"
+	AttributionInterfaceIP = "interface_ip"
+	AttributionSysName     = "sysname"
+	AttributionAgentAddr   = "agent_addr"
+	AttributionNone        = "none"
+)
+
 // decodeTrap dispatches an incoming UDP datagram to the right SNMP-version
 // decoder and returns the normalized event. src is the UDP source IP.
 func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, error) {
+	return decodeTrapWith(pkt, srcIP, resolve, resolve)
+}
+
+// decodeTrapWith is decodeTrap with a separate resolver for SNMPv3 USM
+// credentials: a v3 trap can only be verified with its device's keys, so the
+// receiver looks those up by management address and then by a unique interface
+// address (resolveForCreds). Device attribution itself still goes through
+// resolve (management address) here and the ladder in attributeDevice.
+func decodeTrapWith(pkt []byte, srcIP string, resolve, v3creds credResolver) (*TrapEvent, error) {
 	outerTag, body, _, err := readTLV(pkt)
 	if err != nil {
 		return nil, err
@@ -709,7 +836,7 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 
 	case 3: // SNMPv3
 		ev.Version = "v3"
-		return decodeTrapV3(ev, pkt, resolve)
+		return decodeTrapV3(ev, pkt, v3creds)
 
 	default:
 		return nil, fmt.Errorf("snmptrap: unsupported version")
@@ -1017,6 +1144,12 @@ type trapReceiver struct {
 	// (tracker 373); the zero value detects nothing.
 	masks maskedSourceDetector
 
+	// addrs is the interface-address rung (tracker 387 PR 13c'); nil until the
+	// api injects it, and then nothing resolves by interface address.
+	addrs atomic.Pointer[TrapAddressResolver]
+	// ifNames names an ifIndex varbind (tracker 387 PR 13c); nil = numbers only.
+	ifNames atomic.Pointer[IfNameFunc]
+
 	mu       sync.RWMutex
 	status   Status
 	received uint64
@@ -1091,6 +1224,62 @@ func (r *trapReceiver) resolve(ip string) (Target, bool) {
 	return Target{}, false // 0 = unknown source, >1 = ambiguous shared source
 }
 
+// SetAddressResolver installs the interface-address rung. Safe while running.
+func (r *trapReceiver) SetAddressResolver(fn TrapAddressResolver) {
+	if fn == nil {
+		r.addrs.Store(nil)
+		return
+	}
+	r.addrs.Store(&fn)
+}
+
+// SetIfNameResolver installs the ifIndex → name lookup. Safe while running.
+func (r *trapReceiver) SetIfNameResolver(fn IfNameFunc) {
+	if fn == nil {
+		r.ifNames.Store(nil)
+		return
+	}
+	r.ifNames.Store(&fn)
+}
+
+// ifNameFunc is the installed lookup, or nil.
+func (r *trapReceiver) ifNameFunc() IfNameFunc {
+	if p := r.ifNames.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// resolveByInterface maps a source IP to the target of the one device holding
+// it as an identifying interface address. The resolver's answer is only a
+// device id; the Target (and so the credential to prove) comes from inventory.
+func (r *trapReceiver) resolveByInterface(ip string) (Target, bool) {
+	p := r.addrs.Load()
+	if p == nil || r.targets == nil {
+		return Target{}, false
+	}
+	id, ok := (*p)(ip)
+	if !ok || id == "" {
+		return Target{}, false
+	}
+	for _, t := range r.targets() {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return Target{}, false // a device the index knows but inventory no longer does
+}
+
+// resolveForCreds is the v3 credential lookup: management address first, then a
+// unique interface address. Finding keys proves nothing by itself; the HMAC the
+// keys verify is the proof.
+func (r *trapReceiver) resolveForCreds(ip string) (Target, bool) {
+	if t, ok := r.resolve(ip); ok {
+		return t, true
+	}
+	return r.resolveByInterface(ip)
+}
+
 // _trapSysNameOID is sysName.0 (RFC 3418) — the device's OWN configured hostname.
 // When a trap carries it, it identifies the originator BY NAME, independent of the
 // packet source IP, so it survives NAT (the same way syslog recovers the RFC5424
@@ -1122,6 +1311,21 @@ func trapSysName(ev *TrapEvent) string {
 // trap as evidence under its source host, never a guessed device. EnrichmentStatus
 // records the outcome for observability. Idempotent; safe to call once per trap.
 func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
+	if ev.Device != "" && ev.AttributionBasis == "" {
+		// decodeTrap names a device only from the management address, and only
+		// after the credential check for v1/v2c.
+		ev.AttributionBasis = AttributionMgmtIP
+	}
+	// Tracker 387 PR 13c': the source as an interface address exactly one
+	// device reports. Same proof as every other rung: the device's community
+	// (v1/v2c) or a verified HMAC (v3). Address names the device; the tenant
+	// is the device's own, never derived from the address.
+	if ev.Device == "" {
+		if tg, ok := r.resolveByInterface(srcIP); ok && trapIdentityTrusted(ev, tg) {
+			ev.Device = tg.ID
+			ev.AttributionBasis = AttributionInterfaceIP
+		}
+	}
 	if ev.Device == "" && r.targets != nil {
 		// M4: both rescues read attacker-controlled PDU content, so each is
 		// gated on the trap PROVING the claimed device's identity
@@ -1139,6 +1343,7 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 				// the trap must still PROVE the identity (M4 gate below).
 				if (strings.EqualFold(t.Name, sn) || strings.EqualFold(t.ID, sn)) && trapIdentityTrusted(ev, t) {
 					ev.Device = t.ID
+					ev.AttributionBasis = AttributionSysName
 					break
 				}
 			}
@@ -1146,8 +1351,12 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 		if ev.Device == "" && ev.agentAddr != "" && ev.agentAddr != srcIP {
 			if tg, ok := r.resolve(ev.agentAddr); ok && trapIdentityTrusted(ev, tg) {
 				ev.Device = tg.ID
+				ev.AttributionBasis = AttributionAgentAddr
 			}
 		}
+	}
+	if ev.Device == "" {
+		ev.AttributionBasis = AttributionNone
 	}
 	if ev.Device != "" {
 		ev.EnrichmentStatus = "inventory_matched"
@@ -1165,11 +1374,13 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 // counted as a decode error and the receiver keeps listening.
 func (r *trapReceiver) decodePacket(pkt []byte, srcIP string) (ev *TrapEvent, err error) {
 	completed := safego.Run(safego.Stderr, "snmptrap-decode", func() {
-		ev, err = decodeTrap(pkt, srcIP, r.resolve)
+		ev, err = decodeTrapWith(pkt, srcIP, r.resolve, r.resolveForCreds)
 		if err != nil || ev == nil {
 			return
 		}
 		r.attributeDevice(ev, srcIP)
+		// Only after attribution: an ifIndex is named on the attributed device.
+		interfaceFor(ev, r.ifNameFunc())
 		// The identity checks are done, so the credential has no further use.
 		// Everything after this point (queue, envelope, trace, forward) holds an
 		// event that cannot leak it, whatever it serializes or formats.

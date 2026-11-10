@@ -75,8 +75,29 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: \S+ created new session via (?P<via>[a-z]+)'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
     event_type: 'audit_session_created_{via}'
+    summary: 'SNMP session[ by {user}][ from {src}] (poll)'
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_created_netconf
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>netconf)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
+    event_type: 'audit_session_created_{via}'
+    summary: 'NETCONF session opened[ by {user}][ from {src}]'
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_created_other
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>[a-z]+)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
+    event_type: 'audit_session_created_{via}'
+    summary: 'Session opened via {via}[ by {user}][ from {src}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -84,8 +105,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: \S+ assigned to groups:'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? assigned to groups:\s*(?P<groups>\S.{0,127})?'
     event_type: audit_session_groups
+    summary: 'Session[ of {user}] given groups[ {groups}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -93,8 +115,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: \S+ terminated session'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? terminated session(?: \(reason: (?P<reason>[^)]{1,64})\))?'
     event_type: audit_session_terminated
+    summary: 'Session[ of {user}] closed[ ({reason})]'
     category: management_audit
     fidelity: lab_validated
 
@@ -102,8 +125,21 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ (?:got rpc|get attrs|sending rpc-reply|close-session)'
+    pattern: '^netconf id=\d+ (?P<step>got rpc|get attrs|sending rpc-reply|close-session)(?::\s*\{[^}]{0,128}\}(?P<op>[\w-]{1,64}))?'
     event_type: netconf_rpc
+    summary: 'NETCONF {step}[ {op}]'
+    category: management_audit
+    fidelity: lab_validated
+
+  # A NETCONF action (live on vEdges, 2026-11-10): `netconf id=N action name={<ns>}<action>
+  # instance-identifier=<path>`. One key per action, so repeats of one action group.
+  - id: confd_netconf_action
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?'
+    event_type: 'netconf_action_{action}'
+    summary: 'NETCONF action {action}[ on {target}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -111,8 +147,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ new tcp session'
+    pattern: '^netconf id=\d+ new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?'
     event_type: netconf_session
+    summary: 'NETCONF transport session opened[ for {user}][ from {src}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -120,8 +157,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ sending notification'
+    pattern: '^netconf id=\d+ sending notification(?: \{[^}]{0,128}\}(?P<name>[\w-]{1,64}))?'
     event_type: netconf_notification
+    summary: 'NETCONF notification sent[ ({name})]'
     category: management_audit
     fidelity: lab_validated
 
@@ -129,8 +167,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'Accepted '
     apps: [sshd]
-    pattern: '^Accepted \S+ for '
+    pattern: '^Accepted (?P<method>\S{1,32}) for (?P<user>\S{1,64})(?: from (?P<src>\S{1,64}))?'
     event_type: ssh_login_accepted
+    summary: 'SSH login accepted[ for {user}][ from {src}][ ({method})]'
     category: management_audit
     fidelity: lab_validated
 
@@ -138,8 +177,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'kex_exchange_identification: '
     apps: [sshd]
-    pattern: '^error: kex_exchange_identification: '
+    pattern: '^error: kex_exchange_identification: (?P<why>\S.{0,96})?'
     event_type: ssh_banner_probe
+    summary: 'SSH connection ended before the banner[: {why}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -147,8 +187,9 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'pam_unix(sshd:session): session '
     apps: [sshd]
-    pattern: 'pam_unix\(sshd:session\): session (?P<state>opened|closed) for '
+    pattern: 'pam_unix\(sshd:session\): session (?P<state>opened|closed) for (?:user (?P<user>\S{1,64}))?'
     event_type: 'ssh_session_{state}'
+    summary: 'SSH session {state}[ for {user}]'
     category: management_audit
     fidelity: lab_validated
 
@@ -196,6 +237,7 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
     expect:
+      summary: 'SNMP session by svc-user from 192.0.2.1 (poll)'
       parser_id: standard_mgmt_audit.v1
       parser_status: parsed
       event_type: audit_session_created_snmp
@@ -211,9 +253,23 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh'
     expect:
+      summary: 'NETCONF session opened by svc-user from 192.0.2.1'
       parser_status: parsed
       event_type: audit_session_created_netconf
       dedup_key: 'vEdge-1|confd|audit_session_created_netconf'
+    signal: null
+
+  - name: a session from another ConfD northbound interface gets the generic wording
+    fidelity: doc_claimed
+    source: 'ConfD audit log, `audit user: <user>/<usid> created new session via <ctx> from <addr>` with ctx one of cli, webui, netconf, snmp, rest (ConfD User Guide, "The audit log"); not seen on the lab'
+    hostname: vEdge-1
+    appname: confd
+    message: 'audit user: admin/777140 created new session via cli from 192.0.2.7:51234 with ssh'
+    expect:
+      parser_status: parsed
+      event_type: audit_session_created_cli
+      summary: 'Session opened via cli by admin from 192.0.2.7'
+      event_category: management_audit
     signal: null
 
   - name: group assignment
@@ -222,6 +278,7 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777134 assigned to groups: basic'
     expect:
+      summary: 'Session of svc-user given groups basic'
       parser_status: parsed
       event_type: audit_session_groups
       event_category: management_audit
@@ -233,6 +290,7 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777134 terminated session (reason: normal)'
     expect:
+      summary: 'Session of svc-user closed (normal)'
       parser_status: parsed
       event_type: audit_session_terminated
       event_category: management_audit
@@ -244,6 +302,7 @@ fixtures:
     appname: confd
     message: 'netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id="1"'
     expect:
+      summary: 'NETCONF got rpc get'
       parser_status: parsed
       event_type: netconf_rpc
       event_category: management_audit
@@ -255,6 +314,7 @@ fixtures:
     appname: confd
     message: 'netconf id=987343 sending rpc-reply, attrs: nc:message-id="1"'
     expect:
+      summary: 'NETCONF sending rpc-reply'
       parser_status: parsed
       event_type: netconf_rpc
     signal: null
@@ -265,6 +325,7 @@ fixtures:
     appname: confd
     message: 'netconf id=987343 close-session attrs: nc:message-id="2"'
     expect:
+      summary: 'NETCONF close-session'
       parser_status: parsed
       event_type: netconf_rpc
     signal: null
@@ -275,8 +336,23 @@ fixtures:
     appname: confd
     message: 'netconf id=987344 new tcp session for user svc-user from 192.0.2.1'
     expect:
+      summary: 'NETCONF transport session opened for svc-user from 192.0.2.1'
       parser_status: parsed
       event_type: netconf_session
+    signal: null
+
+  - name: a NETCONF action names the action in its summary, digits masked
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: "netconf id=987346 action name={'http://viptela.com/actions'}clear instance-identifier=/viptela-actions:request/interface-stats"
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: netconf_action_clear
+      summary: 'NETCONF action clear on /viptela-actions:request/interface-stats'
+      event_category: management_audit
+      dedup_key: 'vEdge-1|confd|netconf_action_clear'
     signal: null
 
   - name: an outbound NETCONF notification carrying a marker word stays silent
@@ -285,6 +361,7 @@ fixtures:
     appname: confd
     message: 'netconf id=987345 sending notification {http://viptela.com/system}cpu-usage'
     expect:
+      summary: 'NETCONF notification sent (cpu-usage)'
       parser_status: parsed
       event_type: netconf_notification
     signal: null
@@ -295,6 +372,7 @@ fixtures:
     appname: sshd
     message: 'Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed'
     expect:
+      summary: 'SSH login accepted for svc-user from 192.0.2.1 (publickey)'
       parser_status: parsed
       parser_id: standard_mgmt_audit.v1
       event_type: ssh_login_accepted
@@ -308,6 +386,7 @@ fixtures:
     appname: sshd
     message: 'pam_unix(sshd:session): session opened for user svc-user by (uid=0)'
     expect:
+      summary: 'SSH session opened for svc-user'
       parser_status: parsed
       event_type: ssh_session_opened
     signal: null
@@ -318,6 +397,7 @@ fixtures:
     appname: sshd
     message: 'pam_unix(sshd:session): session closed for user svc-user'
     expect:
+      summary: 'SSH session closed for svc-user'
       parser_status: parsed
       event_type: ssh_session_closed
     signal: null
@@ -356,6 +436,7 @@ fixtures:
     severity: err
     message: 'error: kex_exchange_identification: Connection closed by remote host'
     expect:
+      summary: 'SSH connection ended before the banner: Connection closed by remote host'
       parser_id: standard_mgmt_audit.v1
       parser_status: parsed
       event_type: ssh_banner_probe

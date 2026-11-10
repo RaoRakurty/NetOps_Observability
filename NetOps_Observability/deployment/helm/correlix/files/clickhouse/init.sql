@@ -91,6 +91,21 @@ SOURCE(FILE(path '/var/lib/clickhouse/user_files/geoip/country.csv' format 'CSVW
 LAYOUT(IP_TRIE())
 LIFETIME(MIN 3600 MAX 7200);
 
+-- Query-time IP → AS number (tracker 387 PR 13d). The operator prepares the
+-- iptoasn dataset with scripts/asn-prepare.py (PDDL-1.0, never shipped). Lazy
+-- like geoip_country: creating it with the file absent is fine, the flows API
+-- probes it and labels every AS as_basis exporter|dataset|absent. The API
+-- bootstrap also creates it (internal/chschema IPASNDictionaryDDL).
+CREATE DICTIONARY IF NOT EXISTS netops.ip_asn
+(
+    network String,
+    asn UInt32
+)
+PRIMARY KEY network
+SOURCE(FILE(path '/var/lib/clickhouse/user_files/asn/asn.csv' format 'CSVWithNames'))
+LAYOUT(IP_TRIE())
+LIFETIME(MIN 3600 MAX 7200);
+
 -- ---------------------------------------------------------------------------
 -- Overlay tunnels (IPsec / SD-WAN / GRE) between devices.
 --
@@ -1025,6 +1040,35 @@ SETTINGS index_granularity = 8192;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_baselines ON netops.path_baselines
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- Interface names for flows (tracker 387 PR 13b, internal/chschema/
+-- iface_names_schema.go is the authority and explains the design). One row per
+-- (tenant, exporter address, ifIndex), written by the API from the SNMP
+-- ifIndex bridge; the flows API LEFT JOINs it on the flow ROW's own tenant_id,
+-- sampler_address and ifIndex, so a name can only come from the tenant that
+-- owns the row. LENIENT policy like netops.flows. The API bootstrap also
+-- creates this, so existing deployments converge without manual SQL.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS netops.iface_names
+(
+    tenant_id     LowCardinality(String) DEFAULT '',
+    device_id     String,
+    exporter_addr String,
+    ifindex       UInt32,
+    ifname        String,
+    ifalias       String DEFAULT '',
+    source        LowCardinality(String) DEFAULT 'snmp',
+    updated       DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated)
+ORDER BY (tenant_id, exporter_addr, ifindex)
+TTL updated + INTERVAL 8 DAY
+SETTINGS index_granularity = 8192;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_iface_names ON netops.iface_names
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 
 -- ---------------------------------------------------------------------------

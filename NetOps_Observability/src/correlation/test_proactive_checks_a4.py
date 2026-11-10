@@ -505,7 +505,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-09-syslog-framing: tracker 387 PR 10, generic net and IOS protocol line. The
     # V1 noise pool has no err line and no LINEPROTO line, and
     # tests/test_workload_profiles.py pins that it still never classifies.
-    assert parser_rules.PARSER_REV == "2026-11-09-syslog-framing", (
+    # 2026-11-09-vendor-packs-wave1: tracker 387 Nokia SR OS / IOS XR / Junos packs. They
+    # read those vendors' formats only; the V1 noise pool is Cisco IOS three-part lines.
+    assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

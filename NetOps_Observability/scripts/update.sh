@@ -317,6 +317,12 @@ PY
 #
 # Tracker 384: first move any credential still in an old-form .env (a password
 # in DATABASE_URL) to its file-backed key. Idempotent; no manual step.
+#
+# prepare_tls_custody (2026-11-09): brings a stale TLS_SERVICE_KEY_MODE=0644 in
+# .env in line and pre-creates new bind sources. It tightens nothing. The one
+# `compose up` below recreates every reader with group_add; the api tightens the
+# key modes only when it boots, and a reader that restarts either side of that
+# can read its key.
 
 step "rendering service credential files"
 python3 - <<'PY'
@@ -327,6 +333,7 @@ spec.loader.exec_module(mod)
 root = pathlib.Path(".").resolve()
 mod.migrate_env_credentials(root / "deployment" / "docker" / ".env")
 mod.render_service_secrets(root)
+mod.prepare_tls_custody(root)
 PY
 
 # ---- 3: backup --------------------------------------------------------------
@@ -402,6 +409,7 @@ cat <<EOF
   Health:    curl -fs http://localhost:8000/admin/health | jq
   Logs:      cd $COMPOSE_DIR && docker compose logs -f
   Rollback:  cd $COMPOSE_DIR && docker compose down
+             python3 scripts/install.py --custody-rollback   # before going back past 2026-11-09
              bash scripts/restore.sh ${BACKUP_DIR}/<the-backup-you-want>
              cd $COMPOSE_DIR && docker compose up -d
 ==============================================================

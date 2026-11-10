@@ -436,7 +436,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 72  # parser_rules.RULES since tracker 387 PR 10 (SSH banner probe row)
+PINNED_RULE_COUNT = 94  # parser_rules.RULES since tracker 387 wave 1 + SD-WAN SNMP-agent poll row
 
 
 def test_control_digest_frozen_before_the_change():
@@ -469,10 +469,12 @@ def test_the_parser_is_untouched():
     """A later parser change updates these pins: they record that THIS one did not.
     Re-pinned for tracker 387 PR 10, which moved the generic net and the IOS protocol
     line. The admin severity this file protects did not move: a trap link-down stays
-    high (test below), and only the protocol line, which carries no cause, went to warn."""
-    assert parser_rules.PARSER_REV == "2026-11-09-syslog-framing"
+    high (test below), and only the protocol line, which carries no cause, went to warn.
+    Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
+    behind every older one; the trap link rows this file protects did not move."""
+    assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1"
     assert parser_rules.BAKED_RULES_HASH == (
-        "d19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc83da35062cdb4")
+        "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

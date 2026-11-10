@@ -120,12 +120,13 @@ are **not** optional for a release, because `release-gate.yml` runs the whole
 | fresh-install-integrity | `integrity` | the job declares no `name:`, so the check name is the **job id**. Static preflight + real config load |
 | fresh-install-integrity | `ruff (scripts/*.py, blocking)` | job id `scripts-lint` |
 | fresh-install-integrity | `install.py --tls=yes two-phase boot (blocking)` | a real two-phase install on a scratch runner — the slowest check in the repo (~45 min); require it on PRs only if you want every PR to pay for it |
+| fresh-install-integrity | `install.py --tls=yes as a non-root uid 1234 · key custody (blocking)` | job id `tls-install-boot-nonroot` (2026-11-09, `docs/design/OPENSEARCH_ACCESS_2026-11-09.md`): the same TLS install, run by a non-root account with uid 1234 (neither 0, which the sudo leg above uses, nor the lab's 1000), plus `install.py --verify-custody`, admin.key 0600 under 1234 and no key open to other users. The only CI proof of the cross-uid key custody; same ~45-min PR-cost trade-off |
 | fresh-install-integrity | `install.py --tls=yes self-heal · postgres SIGKILL between phases · re-run · stability window (blocking)` | job id `tls-install-selfheal` (2026-09-15, installer self-healing FMEA §5): the same real boot with postgres SIGKILLed between TLS phase A and B, a second install on the same host, and a RestartCount/StartedAt stability window instead of one state sample. Two installs — slower than the single boot (budget 100 min); same PR-cost trade-off |
 | fresh-install-integrity | `helm chart lint · template · kubeconform (blocking)` | job id `helm-chart`; the chart is rendered and schema-validated (Kubernetes 1.30), NOT cluster-proven — tracker 271 carries the cluster leg |
 
 Live as of 2026-09-13: `integrity` **is** required on `main` (it is cheap and it
-is the one check that loads a real config). The other three in this table are
-not, and the ~45-min boot test is the reason.
+is the one check that loads a real config). The others in this table are not,
+and the ~45-min boot tests are the reason.
 
 ### 1.3 Deliberately NOT required — and why
 

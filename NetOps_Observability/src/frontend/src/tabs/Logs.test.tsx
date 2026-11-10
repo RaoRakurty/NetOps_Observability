@@ -11,7 +11,7 @@
 // SAY they are a 1:50 sample and that totals are estimates (×50); exact signals
 // (syslog) stay undisclosed.
 //
-// The event stream: a calm row per record, details behind Summary | Fields | Raw,
+// The event stream: a calm row per record, details in the Event Intelligence panel,
 // quick filters that add a real search clause, and no secret in any of it.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
@@ -20,6 +20,8 @@ import { act, render, screen, cleanup, waitFor, fireEvent, within } from "@testi
 const searchLogs = vi.fn();
 const logsRetention = vi.fn();
 const exportLogRows = vi.fn();
+const logSeverityCounts = vi.fn();
+const exportLogQuery = vi.fn();
 const openInspector = vi.fn();
 let wsEnabled = false;
 
@@ -29,8 +31,11 @@ vi.mock("../services/api", () => ({
     logsRetention: (...a: unknown[]) => logsRetention(...a),
     createSaved: vi.fn(),
     exportLogRows: (...a: unknown[]) => exportLogRows(...a),
-    exportLogQuery: vi.fn(),
+    exportLogQuery: (...a: unknown[]) => exportLogQuery(...a),
+    logSeverityCounts: (...a: unknown[]) => logSeverityCounts(...a),
     exportStatus: vi.fn(),
+    createIncident: vi.fn(),
+    metricsQueryRange: vi.fn().mockResolvedValue({ status: "success", data: { resultType: "matrix", result: [] } }),
   },
 }));
 vi.mock("../context/workspace", () => ({
@@ -107,6 +112,9 @@ beforeEach(() => {
   searchLogs.mockReset();
   logsRetention.mockReset();
   exportLogRows.mockReset();
+  exportLogQuery.mockReset();
+  logSeverityCounts.mockReset();
+  logSeverityCounts.mockResolvedValue({ signal: "", total: 0, counts: [], unrated: 0, other: 0 });
   openInspector.mockReset();
   wsEnabled = false;
 });
@@ -290,38 +298,41 @@ describe("quick filters", () => {
   });
 });
 
-describe("record details", () => {
+describe("record details: the Event Intelligence panel", () => {
   const openFirst = async () => {
     const rows = (await grid()).querySelectorAll(".dtv-row");
     fireEvent.click(rows[0]);
-    return screen.findByTestId("log-detail");
+    return screen.findByTestId("event-detail");
   };
   const tab = (name: string) => screen.getByRole("tab", { name });
 
-  it("leads with a summary, not a JSON dump, and puts pipeline fields behind a closed section", async () => {
+  it("opens as a dialog on the overview, not a JSON dump, with pipeline fields behind a closed section", async () => {
     respond([syslogHit]);
     render(<Logs />);
     const detail = await openFirst();
-    expect(tab("Summary").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
+    expect(tab("Overview").getAttribute("aria-selected")).toBe("true");
     expect(detail.querySelector(".lf-json")).toBeNull();
+    expect(within(detail).getByTestId("event-visual").dataset.kind).toBe("syslog_fault");
     expect(detail.textContent).not.toContain("partition");
 
-    fireEvent.click(tab("Fields"));
+    fireEvent.click(tab("Technical Details"));
     const section = screen.getByTestId("pipeline-details") as HTMLDetailsElement;
     expect(section.open).toBe(false);
     expect(section.textContent).toContain("Pipeline details");
     expect(section.textContent).toContain("partition");
-    const fieldsTable = detail.querySelector("table") as HTMLTableElement;
+    const fieldsTable = within(screen.getByTestId("event-all-fields")).getAllByRole("table")[0];
     expect(fieldsTable.textContent).not.toContain("partition");
     expect(fieldsTable.textContent).toContain("hostname");
   });
 
-  it("a trap shows its values with numeric OIDs set in mono", async () => {
+  it("a trap shows its values with OIDs set in mono", async () => {
     respond([trapHit]);
     render(<Logs />);
     const detail = within(await openFirst());
-    const oid = detail.getByText("1.3.6.1.4.1.41916.100.1.54.0");
-    expect(oid.className).toContain("lv-mono");
+    // OIDs wrap only at their dots (<wbr>), so the cell, not one text node, holds it.
+    const oid = detail.getAllByRole("cell").find((c) => c.textContent === "1.3.6.1.4.1.41916.100.1.54.0");
+    expect(oid?.className).toContain("evd-mono");
     expect(detail.getByText("System cpu usage back to normal level")).toBeTruthy();
   });
 
@@ -338,12 +349,11 @@ describe("record details", () => {
     expect(detail.textContent).not.toMatch(/estimate/i);
   });
 
-  it("a syslog line shows its envelope and message", async () => {
+  it("a syslog line shows its process and message", async () => {
     respond([syslogHit]);
     render(<Logs />);
     const detail = await openFirst();
-    expect(detail.textContent).toContain("App");
-    expect(detail.textContent).toContain("ifmgr");
+    expect(detail.textContent).toContain("Process ifmgr");
     expect(detail.textContent).toContain("changed state to down");
   });
 
@@ -351,40 +361,54 @@ describe("record details", () => {
     respond([syslogHit]);
     render(<Logs />);
     await openFirst();
-    fireEvent.keyDown(tab("Summary"), { key: "ArrowRight" });
-    expect(tab("Fields").getAttribute("aria-selected")).toBe("true");
-    fireEvent.keyDown(tab("Fields"), { key: "End" });
-    expect(tab("Raw").getAttribute("aria-selected")).toBe("true");
-    fireEvent.keyDown(tab("Raw"), { key: "ArrowRight" });
-    expect(tab("Summary").getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(tab("Overview"), { key: "ArrowRight" });
+    expect(tab("Metrics").getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(tab("Metrics"), { key: "End" });
+    expect(tab("Raw Event").getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(tab("Raw Event"), { key: "ArrowRight" });
+    expect(tab("Overview").getAttribute("aria-selected")).toBe("true");
   });
 
-  it("opens in the Inspector under the new shell, titled by device", async () => {
+  it("Esc closes the panel and the close button does too", async () => {
+    respond([syslogHit]);
+    render(<Logs />);
+    await openFirst();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("event-detail")).toBeNull());
+    await openFirst();
+    fireEvent.click(screen.getByRole("button", { name: "Close event details" }));
+    await waitFor(() => expect(screen.queryByTestId("event-detail")).toBeNull());
+  });
+
+  it("opens the same panel under the new shell, not the Inspector", async () => {
     wsEnabled = true;
     respond([syslogHit]);
     render(<Logs />);
-    fireEvent.click((await grid()).querySelectorAll(".dtv-row")[0]);
-    expect(openInspector).toHaveBeenCalledTimes(1);
-    expect(openInspector.mock.calls[0][1].title).toBe("router-01");
+    await openFirst();
+    expect(openInspector).not.toHaveBeenCalled();
+    expect(screen.getByTestId("event-title").textContent).toContain("changed state to down");
   });
 });
 
 describe("secrets", () => {
   const SECRET = "s3cr3t-community";
+  // The panel is a portal on document.body, so the whole document is what is checked.
+  const seen = () => document.body.innerHTML;
 
   it("never reach the page in any tab", async () => {
     respond([trapHit]);
-    const { container } = render(<Logs />);
+    render(<Logs />);
     fireEvent.click((await grid()).querySelectorAll(".dtv-row")[0]);
-    await screen.findByTestId("log-detail");
-    const seen = () => container.innerHTML;
+    await screen.findByTestId("event-detail");
     expect(seen()).not.toContain(SECRET);
-    fireEvent.click(screen.getByRole("tab", { name: "Fields" }));
-    expect(seen()).not.toContain(SECRET);
+    for (const name of ["Metrics", "Timeline", "Technical Details"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      expect(seen()).not.toContain(SECRET);
+    }
     expect(seen()).toContain("snmp_community");
-    fireEvent.click(screen.getByRole("tab", { name: "Raw" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Raw Event" }));
     expect(seen()).not.toContain(SECRET);
-    expect(container.querySelector(".lf-json")?.textContent).toContain('"snmp_community": "hidden"');
+    expect(document.querySelector(".lf-json")?.textContent).toContain('"snmp_community": "hidden"');
   });
 
   it("never reach the clipboard", async () => {
@@ -393,9 +417,9 @@ describe("secrets", () => {
     respond([trapHit]);
     render(<Logs />);
     fireEvent.click((await grid()).querySelectorAll(".dtv-row")[0]);
-    await screen.findByTestId("log-detail");
-    fireEvent.click(screen.getByRole("tab", { name: "Raw" }));
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await screen.findByTestId("event-detail");
+    fireEvent.click(screen.getByRole("tab", { name: "Raw Event" }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy JSON/ }));
     await screen.findByText("Copied");
     expect(writeText.mock.calls[0][0]).not.toContain(SECRET);
     expect(writeText.mock.calls[0][0]).toContain("snmp_community");
@@ -436,13 +460,115 @@ describe("hostile values", () => {
       _source: { timestamp: "2026-08-14T10:00:00Z", hostname: xss, appname: xss, message: xss, extra: xss },
     };
     respond([hit]);
-    const { container } = render(<Logs />);
+    render(<Logs />);
     fireEvent.click((await grid()).querySelectorAll(".dtv-row")[0]);
-    await screen.findByTestId("log-detail");
-    for (const name of ["Summary", "Fields", "Raw"]) {
+    await screen.findByTestId("event-detail");
+    for (const name of ["Overview", "Metrics", "Timeline", "Technical Details", "Raw Event"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
-      expect(container.querySelector("img")).toBeNull();
+      expect(document.querySelector("img")).toBeNull();
     }
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+});
+
+describe("severity tiles, filters and pages (tracker 387)", () => {
+  const SEV = { signal: "", total: 5000, unrated: 12, other: 0, counts: [
+    { field: "severity", value: "crit", count: 128 }, { field: "severity", value: "warning", count: 412 },
+    { field: "severity", value: "notice", count: 1026 }, { field: "level", value: "error", count: 3 },
+  ] };
+
+  it("tiles show the store's counts for every match, not the loaded rows", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    respond([syslogHit, trapHit], 5000);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    expect(within(tiles).getByRole("button", { name: /^Critical: 128 matching/ })).toBeTruthy();
+    expect(within(tiles).getByRole("button", { name: /^Info: 1,026 matching/ })).toBeTruthy();
+    expect(tiles.textContent).toContain("Counted by the store across all 5,000 matching records");
+    expect(tiles.textContent).toContain("12 carry no severity");
+    // The facets keep counting only the loaded rows, and say so.
+    await grid();
+    expect((await screen.findByTestId("logs-facets")).textContent).toContain("In these 2 loaded rows");
+    const call = logSeverityCounts.mock.calls[0][0];
+    expect(call.query).toBe("*");
+    expect(call.from).toBeTruthy();
+  });
+
+  it("no counts endpoint answer, no tiles", async () => {
+    logSeverityCounts.mockRejectedValue(new Error("404"));
+    respond([syslogHit]);
+    render(<Logs />);
+    await grid();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("logs-severity-tiles")).toBeNull();
+  });
+
+  it("a tile narrows the search on the server with the words it counted; the tiles keep their siblings", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    respond([syslogHit]);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    searchLogs.mockClear();
+    logSeverityCounts.mockClear();
+    fireEvent.click(within(tiles).getByRole("button", { name: /^Critical:/ }));
+    await waitFor(() => expect(searchLogs).toHaveBeenCalled());
+    expect(lastQuery().query).toContain('severity:("emerg" OR "emergency" OR "alert" OR "crit" OR "critical"');
+    expect(logSeverityCounts.mock.calls[0][0].query).toBe("*");
+    expect(within(tiles).getByRole("button", { name: /^Critical:/ }).getAttribute("aria-pressed")).toBe("true");
+    // The dropdown shows the same pick.
+    expect((screen.getByRole("combobox", { name: "Severity" }) as HTMLSelectElement).value).toBe("critical");
+  });
+
+  it("type and family dropdowns offer the loaded values and filter on the mapped field, quoted", async () => {
+    const t = { ...trapHit, _source: { ...trapHit._source, event_type: "viptela_system_cpu_usage", family: "cpu" } };
+    respond([t, syslogHit]);
+    render(<Logs />);
+    await grid();
+    const types = screen.getByRole("combobox", { name: "Event type" }) as HTMLSelectElement;
+    expect(types.textContent).toContain("Viptela System CPU Usage · 1 loaded");
+    searchLogs.mockClear();
+    fireEvent.change(screen.getByRole("combobox", { name: "Family" }), { target: { value: "family\u0000cpu" } });
+    await waitFor(() => expect(searchLogs).toHaveBeenCalled());
+    expect(lastQuery().query).toBe('(family:"cpu")');
+  });
+
+  it("the sub-tabs read Events, Logs, Traps; the active one carries the total", async () => {
+    respond([syslogHit], 7547);
+    render(<Logs />);
+    await grid();
+    const tabs = screen.getByRole("group", { name: "Log type" });
+    const events = within(tabs).getByRole("button", { name: "Events" });
+    expect(events.getAttribute("aria-pressed")).toBe("true");
+    expect(events.textContent).toBe("Events (7,547)");
+    fireEvent.click(within(tabs).getByRole("button", { name: "Logs" }));
+    await waitFor(() => expect(lastQuery().signal).toBe("syslog"));
+  });
+
+  it("pages: 'Showing a–b of N events', and a page re-runs the same request with an offset", async () => {
+    respond([syslogHit, trapHit], 7547);
+    render(<Logs />);
+    await grid();
+    expect(screen.getByTestId("logs-pager-text").textContent).toContain("Showing 1–2 of 7,547 events");
+    const nav = screen.getByRole("navigation", { name: "Result pages" });
+    expect(within(nav).getByRole("button", { name: "Page 1" }).getAttribute("aria-current")).toBe("page");
+    const before = lastQuery();
+    searchLogs.mockClear();
+    fireEvent.click(within(nav).getByRole("button", { name: "Page 2" }));
+    await waitFor(() => expect(searchLogs).toHaveBeenCalledTimes(1));
+    expect(lastQuery()).toEqual({ ...before, offset: 200 });
+    await waitFor(() => expect(within(nav).getByRole("button", { name: "Page 2" }).getAttribute("aria-current")).toBe("page"));
+  });
+
+  it("export all carries the same filters as the screen", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    exportLogQuery.mockResolvedValue({ executionId: "", matched: 1 });
+    respond([syslogHit]);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    fireEvent.click(within(tiles).getByRole("button", { name: /^Warning:/ }));
+    await waitFor(() => expect(lastQuery().query).toContain('"warning"'));
+    fireEvent.click(screen.getByTitle("Export the entire result set as CSV"));
+    await waitFor(() => expect(exportLogQuery).toHaveBeenCalled());
+    expect(exportLogQuery.mock.calls[0][0].query).toBe(lastQuery().query);
   });
 });

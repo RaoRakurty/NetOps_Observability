@@ -76,6 +76,56 @@ rollback() {
   exit 2
 }
 
+# ── key custody ordering (2026-11-09) ─────────────────────────────────────────
+# The api applies key modes at every boot, and this script recreates ONLY the
+# named services. On the first deploy after the custody change, recreating the api
+# alone would tighten the keys while every reader still runs without group_add:
+# nothing breaks at once, because they hold their keys in memory, but the next
+# restart or certificate reload of that reader fails, and the store stays down.
+# So the readers are recreated first, while their keys are still readable either
+# way. Only a container with no group_add counts, so this runs once per install.
+# Keep the list equal to the "group" rows of deployment/docker/tls-key-readers.json
+# (tests/test_tls_key_custody.py pins it).
+CUSTODY_READERS=(opensearch kafka redis correlation prober cloud-ingest nginx)
+custody_converge() {
+  has api || return 0
+  local cfg s cid ga stale=()
+  # Fail closed: a config this script cannot render is not evidence of plaintext,
+  # and guessing wrong here is exactly the ordering this function exists for. The
+  # rendered config holds interpolated values, so only its error tail is shown.
+  if ! cfg="$(dc config 2>&1)"; then
+    die "cannot render the compose config to check key custody: $(printf '%s' "$cfg" | tail -n 3) — running stack left UNTOUCHED."
+    exit 1
+  fi
+  case "$cfg" in *"group_add:"*) ;; *) return 0 ;; esac   # plaintext: no group readers
+  for s in "${CUSTODY_READERS[@]}"; do
+    # Same idiom as step 2: a service outside the active profiles has no
+    # container, and `ps -q` erroring on it means the same thing here.
+    cid="$(dc ps -q "$s" 2>/dev/null || true)"
+    [ -n "$cid" ] || continue
+    if ! ga="$(docker inspect -f '{{json .HostConfig.GroupAdd}}' "$cid" 2>&1)"; then
+      die "cannot inspect $s to check its key access ($ga) — running stack left UNTOUCHED."
+      exit 1
+    fi
+    case "$ga" in null|'[]') stale+=("$s") ;; esac
+  done
+  [ "${#stale[@]}" -gt 0 ] || return 0
+  warn "key custody: recreating ${stale[*]} with group access BEFORE the api tightens its keys"
+  local x
+  for x in "${stale[@]}"; do
+    if [ "$x" = opensearch ]; then
+      # opensearch-security-init shares this image and needs its group-readable home.
+      if ! dc build opensearch; then
+        die "opensearch image build failed — running stack left UNTOUCHED."; exit 1
+      fi
+    fi
+  done
+  if ! dc up -d --no-deps --no-build --wait --wait-timeout 300 "${stale[@]}"; then
+    die "could not bring ${stale[*]} up with group access. The api was NOT recreated, so no key was tightened."
+    exit 1
+  fi
+}
+
 log "target services: ${SERVICES[*]}"
 
 # 1. fresh frontend build (fail-fast, BEFORE touching the running stack)
@@ -120,6 +170,7 @@ spec.loader.exec_module(mod)
 root = pathlib.Path(".").resolve()
 mod.migrate_env_credentials(root / "deployment" / "docker" / ".env")
 mod.render_service_secrets(root)
+mod.prepare_tls_custody(root)
 PY
   ); then
     die "rendering service credential files failed — running stack left UNTOUCHED."; exit 1
@@ -136,6 +187,7 @@ log "building ${SERVICES[*]}…"
 if ! dc build "${SERVICES[@]}"; then
   die "image build failed — running stack left UNTOUCHED."; exit 1
 fi
+custody_converge
 log "recreating ${SERVICES[*]} (dependencies left running)…"
 dc up -d --no-deps "${SERVICES[@]}" || rollback "compose up failed"
 

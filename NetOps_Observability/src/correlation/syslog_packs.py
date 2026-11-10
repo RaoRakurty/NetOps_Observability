@@ -64,7 +64,7 @@ class Grammar:
     __slots__ = (
         "alarm_floor", "apps", "category", "event_type", "facility", "grammar_id",
         "literal", "native_code", "native_text", "pack", "parser_id", "regex",
-        "sev_digit", "sev_map", "sev_word", "summary", "vendor",
+        "sev_digit", "sev_map", "sev_word", "summary", "vendor", "with_msgid",
     )
 
     def __init__(self, row: Mapping[str, Any]) -> None:
@@ -86,6 +86,16 @@ class Grammar:
         floor = row.get("alarm_floor")
         self.alarm_floor = int(floor) if floor is not None else None
         self.category = str(row.get("category") or "")
+        self.with_msgid = bool(row.get("with_msgid"))
+
+    def haystack(self, msg: str, ev: Mapping[str, Any]) -> str:
+        """The text this row reads: `<MSGID>: <message>` for a `with_msgid` row when the
+        frame carries one (RFC 5424; `-` is its nil value), else the message."""
+        if self.with_msgid:
+            mid = str(ev.get("msgid") or "")
+            if mid and mid != "-":
+                return mid + ": " + msg
+        return msg
 
     @property
     def reads_severity(self) -> bool:
@@ -108,8 +118,45 @@ class Grammar:
         return None
 
 
+def template_parts(template: str) -> list[tuple[str, str]]:
+    """A template as (kind, text) parts: `lit`, `var`, and `[`/`]` clause bounds.
+
+    `[ by {user}]` is an optional CLAUSE: it renders only when every `{group}` in it
+    matched something, so a field the line did not carry drops its words with it and
+    never leaves `by ` hanging. Clauses do not nest; brackets are template syntax, so a
+    literal bracket cannot be written in a template (a group's value may hold one)."""
+    parts: list[tuple[str, str]] = []
+    pos = 0
+    for tok in re.finditer(r"\{(\w+)\}|\[|\]", template):
+        if tok.start() > pos:
+            parts.append(("lit", template[pos:tok.start()]))
+        parts.append(("var", tok.group(1)) if tok.group(1) else (tok.group(0), ""))
+        pos = tok.end()
+    if pos < len(template):
+        parts.append(("lit", template[pos:]))
+    return parts
+
+
 def _render(template: str, m: re.Match[str]) -> str:
-    return _TEMPLATE_RE.sub(lambda v: m.group(v.group(1)) or "", template)
+    out: list[str] = []
+    clause: list[str] | None = None
+    clause_ok = True
+    for kind, text in template_parts(template):
+        if kind == "[":
+            clause, clause_ok = [], True
+            continue
+        if kind == "]":
+            if clause is not None and clause_ok:
+                out.extend(clause)
+            clause = None
+            continue
+        value = text if kind == "lit" else (m.group(text) or "")
+        if clause is None:
+            out.append(value)
+        else:
+            clause_ok = clause_ok and (kind == "lit" or bool(value))
+            clause.append(value)
+    return "".join(out)
 
 
 def _inventory_vendor(ev: Mapping[str, Any]) -> str:
@@ -183,9 +230,10 @@ class PackTable:
         msg, out = self.strip_envelope(str(ev.get("message") or ""))
         app = str(ev.get("appname") or "unknown").lower()
         for g in self.grammars:
-            if not g.applies(msg, app, inventory_vendor):
+            text = g.haystack(msg, ev)
+            if not g.applies(text, app, inventory_vendor):
                 continue
-            m = g.regex.search(msg)
+            m = g.regex.search(text)
             if m is None:
                 continue
             out["parser_id"] = g.parser_id

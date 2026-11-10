@@ -37,9 +37,10 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
-import { FlowEmpty, FlowSamplingNote, type FlowDimension } from "./flowEmpty";
+import { FlowEmpty, FlowSamplingNote, PlatformTrafficToggle, type FlowDimension } from "./flowEmpty";
 import { StatStrip, Stat } from "../components/ui";
 import { IANA_PROTO_NAMES } from "../proto";
+import { TopNRow, topNDisplay, topNRowId } from "./flowNames";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Layout: a left
 // in-page section nav, a global filter bar (src/dst IP, exporter
@@ -107,7 +108,6 @@ const FLOW_TYPES: { value: string; label: string }[] = [
   { value: "sflow", label: "sFlow" },
 ];
 
-type TopNRow = { k: string; bytes_total: number; packets_total: number; flows: number };
 type TalkerRow = { src: string; dst: string; bytes_total: number; packets_total: number; flows: number };
 type TsRow = { bucket: string; bytes_total: number; packets_total: number };
 type ByTypeRow = { flow_type: string; bytes_total: number; packets_total: number; flows: number; exporters: number };
@@ -157,6 +157,7 @@ function TopNView({
   fmtKey,
   keyHeader = "Name",
   empty,
+  by = "",
 }: {
   title: string;
   rows: TopNRow[];
@@ -164,9 +165,11 @@ function TopNView({
   fmtKey?: (k: string) => string;
   keyHeader?: string;
   empty?: ReactNode;
+  /** The top-N dimension: interface and protocol rows carry the API's names. */
+  by?: string;
 }) {
   const [view, setView] = useState<"bar" | "table">("bar");
-  const label = (k: string) => (fmtKey ? fmtKey(k) : k);
+  const display = (r: TopNRow) => topNDisplay(r, by, fmtKey);
   // App-name enrichment (#81 P3G): only IP-shaped keys are batched to the
   // resolver (ports/devices/countries are skipped client-side).
   const keys = useMemo(() => rows.map((r) => r.k), [rows]);
@@ -175,10 +178,10 @@ function TopNView({
   const cols = useMemo<Column<TopNRow>[]>(
     () => [
       {
-        key: "k", header: keyHeader, width: "42%", sortable: true, text: (r) => label(r.k),
+        key: "k", header: keyHeader, width: "42%", sortable: true, text: (r) => display(r),
         render: (r) => (
           <span>
-            {label(r.k)}
+            {display(r)}
             <AppNameChip app={apps[r.k]} />
           </span>
         ),
@@ -188,7 +191,7 @@ function TopNView({
       { key: "flows", header: "Flows", align: "right", sortable: true, sortValue: (r) => Number(r.flows), render: (r) => fmtNum(r.flows) },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [keyHeader, apps],
+    [keyHeader, apps, by],
   );
 
   return (
@@ -220,20 +223,21 @@ function TopNView({
               axisPointer: { type: "shadow" },
               formatter: (ps: any) => {
                 const p = Array.isArray(ps) ? ps[0] : ps;
-                const key = String(p.name);
+                const row = rows[p.dataIndex as number];
+                const key = row ? row.k : String(p.name);
                 // ECharts inserts this string via innerHTML. Both the row key
                 // (flow endpoints/exporter fields) and the resolved app name
                 // (FortiGate syslog `app=`) are attacker-influenced, so every
                 // dynamic part goes through escapeHtml (stored-XSS, H15).
                 const app = apps[key] ? ` · ${escapeHtml(apps[key].app)}` : "";
-                return `${escapeHtml(label(key))}${app}<br/><b>${fmtBytes(p.value)}</b>`;
+                return `${escapeHtml(row ? display(row) : key)}${app}<br/><b>${fmtBytes(p.value)}</b>`;
               },
             },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBytes(v) } },
             yAxis: {
               type: "category",
               inverse: true,
-              data: rows.map((r) => label(r.k)),
+              data: rows.map((r) => display(r)),
               ...axisStyle,
               splitLine: { show: false },
             },
@@ -250,7 +254,7 @@ function TopNView({
         <DataTable<TopNRow>
           rows={rows}
           columns={cols}
-          rowKey={(r) => r.k}
+          rowKey={(r) => topNRowId(r)}
           height={Math.min(440, 40 + rows.length * 28)}
           ariaLabel={title}
           initialSort={{ key: "bytes", dir: "desc" }}
@@ -301,7 +305,7 @@ function TopNPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [by, q.since, q.ftype, q.fkey, limit]);
 
-  return <TopNView title={title} rows={rows} err={err} fmtKey={fmtKey} keyHeader={keyHeader} empty={<FlowEmpty q={q} dim={dim} />} />;
+  return <TopNView title={title} rows={rows} err={err} fmtKey={fmtKey} keyHeader={keyHeader} by={by} empty={<FlowEmpty q={q} dim={dim} />} />;
 }
 
 // ── Section: Flows (volume timeseries + source presence chips) ────────────────
@@ -1147,7 +1151,12 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
 
   const fkey = JSON.stringify(filters);
   const q: FlowQuery = { since, ftype, filters, fkey, direction };
-  const activeFilters = Object.entries(filters).filter(([, v]) => v);
+  const activeFilters = Object.entries(filters).filter(([k, v]) => v && k !== "traffic");
+  const includePlatform = filters.traffic === "all";
+  const setIncludePlatform = (on: boolean) => {
+    setDraft((d) => ({ ...d, traffic: on ? "all" : undefined }));
+    setFilters((f) => ({ ...f, traffic: on ? "all" : undefined }));
+  };
 
   const setField = (k: keyof FlowFilters, v: string) => setDraft((d) => ({ ...d, [k]: v }));
   const apply = () => {
@@ -1156,8 +1165,10 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
     setFilters(cleaned);
   };
   const clearAll = () => {
-    setDraft(empty);
-    setFilters(empty);
+    // The platform-traffic toggle is a view choice, not a filter: Clear keeps it.
+    const keep: FlowFilters = filters.traffic ? { traffic: filters.traffic } : {};
+    setDraft(keep);
+    setFilters(keep);
   };
 
   return (
@@ -1179,8 +1190,8 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
             <input placeholder="Source IP" value={draft.src ?? ""} onChange={(e) => setField("src", e.target.value)} />
             <input placeholder="Destination IP" value={draft.dst ?? ""} onChange={(e) => setField("dst", e.target.value)} />
             <input placeholder="Device (exporter IP)" value={draft.device ?? ""} onChange={(e) => setField("device", e.target.value)} />
-            <input placeholder="Ingress if (index)" value={draft.in_if ?? ""} onChange={(e) => setField("in_if", e.target.value)} />
-            <input placeholder="Egress if (index)" value={draft.out_if ?? ""} onChange={(e) => setField("out_if", e.target.value)} />
+            <input placeholder="Ingress interface (index)" value={draft.in_if ?? ""} onChange={(e) => setField("in_if", e.target.value)} />
+            <input placeholder="Egress interface (index)" value={draft.out_if ?? ""} onChange={(e) => setField("out_if", e.target.value)} />
             <button className="btn-primary" onClick={apply}>Filter</button>
             {activeFilters.length > 0 && <button className="btn-ghost" onClick={clearAll}>Clear</button>}
           </div>
@@ -1212,6 +1223,9 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
           )}
           <p className="mini-meta" style={{ margin: "6px 2px 0" }}>
             <FlowSamplingNote q={q} /> Filters and the source selector apply to every panel below.
+          </p>
+          <p style={{ margin: "4px 2px 0" }}>
+            <PlatformTrafficToggle q={q} included={includePlatform} onChange={setIncludePlatform} />
           </p>
         </div>
 

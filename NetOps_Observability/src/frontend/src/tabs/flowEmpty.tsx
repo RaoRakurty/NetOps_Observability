@@ -21,6 +21,9 @@ export type FlowCoverage = {
   private_only_flows: number;
   flows_sampling_reported: number;
   exporters: number;
+  /** Flows to or from Correlix's own pollers (tracker 387 PR 13), counted whether shown or not. */
+  platform_monitoring_flows: number;
+  platform_addresses_configured: boolean;
 };
 
 /** What the panel groups by — decides which missing field explains it. */
@@ -44,7 +47,56 @@ export function parseCoverage(row: Record<string, unknown> | undefined): FlowCov
     private_only_flows: n(row.private_only_flows),
     flows_sampling_reported: n(row.flows_sampling_reported),
     exporters: n(row.exporters),
+    platform_monitoring_flows: n(row.platform_monitoring_flows),
+    platform_addresses_configured: n(row.platform_addresses_configured) > 0,
   };
+}
+
+/**
+ * What the platform-monitoring toggle says (tracker 387 PR 13). Correlix's own
+ * polling is real traffic and is never deleted; the views leave it out by default
+ * and say how much they left out. Unconfigured, nothing is separated and the
+ * sentence says that instead of implying the traffic is customer traffic.
+ */
+export function platformTrafficNote(cov: FlowCoverage | null, included: boolean): string {
+  if (!cov) return "";
+  if (!cov.platform_addresses_configured) {
+    return "Correlix's own polling traffic is not separated: the appliance's addresses are not configured.";
+  }
+  const x = cov.platform_monitoring_flows;
+  if (x === 0) return "No flows from Correlix's own polling in this window.";
+  return included
+    ? `Includes ${plural(x, "flow", "flows")} of Correlix's own polling.`
+    : `${plural(x, "flow", "flows")} of Correlix's own polling ${x === 1 ? "is" : "are"} hidden.`;
+}
+
+/** The toggle beside the filter bar, with its count. */
+export function PlatformTrafficToggle({ q, included, onChange }: { q: Q; included: boolean; onChange: (v: boolean) => void }) {
+  const [cov, setCov] = useState<FlowCoverage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchCoverage(q.since, q.ftype, q.filters).then((c) => {
+      if (alive) setCov(c);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.since, q.ftype, q.fkey]);
+  return (
+    <span className="mini-meta" data-testid="platform-traffic">
+      <label style={{ marginRight: 8 }}>
+        <input
+          type="checkbox"
+          checked={included}
+          disabled={!!cov && !cov.platform_addresses_configured}
+          onChange={(e) => onChange(e.target.checked)}
+        />{" "}
+        Show Correlix's own polling
+      </label>
+      {platformTrafficNote(cov, included)}
+    </span>
+  );
 }
 
 const fmt = (x: number) => x.toLocaleString("en-US");

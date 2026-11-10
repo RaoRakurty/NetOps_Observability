@@ -338,6 +338,9 @@ def test_no_pre_378_corpus_output_carries_the_new_keys():
     for row in _golden():
         if row.get("origin") == "378-link-cause":
             continue
+        # Tracker 388: vendor-pack syslog lines that state their own cause.
+        if str(row.get("origin") or "").startswith("pack:"):
+            continue
         for out in row["out"].values():
             if out and "attrs" in out:
                 assert NEW_KEYS.isdisjoint(out["attrs"]), row["ev"]

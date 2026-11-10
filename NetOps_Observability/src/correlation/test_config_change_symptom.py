@@ -215,9 +215,20 @@ def test_the_shadow_row_widens_neither_screen():
     assert rule.shadow and rule.markers
     assert not set(rule.markers) & set(P._CP_GUARD_MARKERS)
     assert not {m.lower() for m in rule.markers} & set(P._SYSLOG_SCREEN_LITERALS or ())
+    # Tracker 387 wave 1: a vendor-pack row that EMITS the kind (Junos
+    # UI_COMMIT_COMPLETED) registers its own marker, so its line is admitted for
+    # that row's sake, not the shadow row's. Every other positive stays rejected.
+    pack_emitting = {r.rule_id for r in P.RULES if r.kind == KIND and not r.shadow
+                     and r.lane == "syslog"}
     for fx in POSITIVE:
         if fx["_lane"] == "syslog":
-            assert not P.syslog_promotable(dict(fx["syslog"])), fx["_case"]
+            ev = dict(fx["syslog"])
+            # As the engine receives it: the aggregator's pack grammars have run.
+            parsed = {**ev, **P._PACKS.parse(ev)}
+            sig = P.syslog_control_signal(parsed, "t1", T0) if pack_emitting else None
+            if sig is not None and sig.attrs.get("rule_id") in pack_emitting:
+                continue
+            assert not P.syslog_promotable(ev), fx["_case"]
 
 
 def test_the_shadow_row_is_counted_and_emits_nothing():
@@ -365,7 +376,11 @@ def test_only_the_trap_observer_emits_the_kind_today():
     workload profile is versioned."""
     emitting = sorted(r.rule_id for r in P.RULES if r.kind == KIND and not r.shadow)
     shadowed = sorted(r.rule_id for r in P.RULES if r.kind == KIND and r.shadow)
-    assert emitting == ["trap.config.change"]
+    # Tracker 387 wave 1: the Nokia SR OS and Junos pack rows speak for their own
+    # vendors' lines; the vendor-neutral syslog row, the one the V1 profile's noise
+    # would reach, stays shadow until the profile is versioned.
+    assert emitting == ["syslog.junos.config.commit_completed", "syslog.sros.config.change",
+                        "trap.config.change"]
     assert shadowed == ["syslog.config.change"]
 
 

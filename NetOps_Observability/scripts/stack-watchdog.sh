@@ -840,6 +840,23 @@ if [ -f "$tls_act_beat" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Key custody (2026-11-09). Every private key and credential file against the
+# reader table: a key that has gone world-readable is silent otherwise, because
+# everything keeps working. CUSTODY_CHECK=0 disables it. CUSTODY_INSTALL_PY: an
+# install-watchdog.sh copy of this script lives in /etc/correlix, away from the
+# bundle, so install-watchdog.sh writes the path here. No installer beside this
+# script means no check, the same convention as the heartbeats above.
+if [ "${CUSTODY_CHECK:-1}" = "1" ]; then
+  custody_py="${CUSTODY_INSTALL_PY:-$SCRIPT_DIR/install.py}"
+  if [ -f "$custody_py" ]; then
+    if ! custody_out=$(timeout 60 python3 "$custody_py" --verify-custody 2>&1); then
+      # tr: one problem per line in the checker's output; this is one alert line.
+      problems+=("KEY_CUSTODY: $(printf '%s' "$custody_out" | tail -n 4 | tr '\n' ' ' | cut -c1-400)")
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # #150 backup-intent applier — the host-side half of the Data Protection GUI.
 #
 # The API stores the operator's backup intent (remote, schedule, retention) to

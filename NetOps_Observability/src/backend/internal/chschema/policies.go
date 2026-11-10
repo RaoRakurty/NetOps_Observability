@@ -3,10 +3,18 @@
 
 package chschema
 
+// IPASNDictionaryDDL is the netops.ip_asn ip_trie dictionary (network → asn).
+const IPASNDictionaryDDL = `CREATE DICTIONARY IF NOT EXISTS netops.ip_asn
+ (network String, asn UInt32)
+ PRIMARY KEY network
+ SOURCE(FILE(path '/var/lib/clickhouse/user_files/asn/asn.csv' format 'CSVWithNames'))
+ LAYOUT(IP_TRIE())
+ LIFETIME(MIN 3600 MAX 7200)`
+
 // chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = ”)
 // rows are shared into every tenant's view. Correct ONLY for the shared
-// telemetry tables (flows, findings, tunnels) whose data model depends on
-// untagged rows. NEVER use it for the correlation family — see
+// telemetry tables (flows, findings, tunnels, and iface_names, which names
+// flow rows) whose data model depends on untagged rows. NEVER use it for the correlation family — see
 // StrictRowPolicyDDL.
 // RowPolicyDDL renders the tenant row-policy DDL for one table.
 func RowPolicyDDL(table string) string {
@@ -62,6 +70,13 @@ func ConvergeStmts(extra ...[]string) []string {
  SOURCE(FILE(path '/var/lib/clickhouse/user_files/geoip/country.csv' format 'CSVWithNames'))
  LAYOUT(IP_TRIE())
  LIFETIME(MIN 3600 MAX 7200)`,
+		// Tracker 387 PR 13d: query-time IP→AS number for flows whose exporter
+		// sent none, from the operator-prepared iptoasn dataset
+		// (scripts/asn-prepare.py, PDDL-1.0). Same lazy FILE contract as
+		// geoip_country: safe to create with the file absent, and the flows API
+		// probes it before use and labels every AS as_basis exporter|dataset|absent,
+		// so a missing file reads absent, never an error. Mirrors init.sql.
+		IPASNDictionaryDDL,
 		RowPolicyDDL("flows"),
 		RowPolicyDDL("findings"),
 		RowPolicyDDL("tunnels"),
@@ -104,6 +119,10 @@ func ConvergeStmts(extra ...[]string) []string {
 	// Path Behavior Health V1 hour-of-week baselines (path_health_baselines.go,
 	// lenient policy — see that file for why). Same converge-on-boot contract.
 	stmts = append(stmts, SvcRollupSchemaDDL()...)
+	// Tracker 387 PR 13b: the interface-name table the flows API joins on
+	// (iface_names_schema.go, LENIENT policy like flows). Same converge-on-boot
+	// contract; init.sql carries identical DDL for fresh installs.
+	stmts = append(stmts, IfaceNamesSchemaDDL()...)
 	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.

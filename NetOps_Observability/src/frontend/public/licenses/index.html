@@ -92,6 +92,11 @@ which keeps its own licences and its own obligations.</p>
 <tr><td><code>grafana/grafana</code></td><td>11.2.0</td><td>AGPL-3.0-only</td><td>AGPL-3.0-only per upstream package.json + LICENSING.md (relicensed from Apache-2.0 at v9.0). Shipped UNMODIFIED as a separate container; no Correlix code links to or derives from it. AGPL §13 network clause applies to Grafana's own UI, which we neither modify nor proxy-rebrand.</td></tr>
 <tr><td><code>prom/node-exporter</code></td><td>v1.8.2</td><td>Apache-2.0</td><td>BusyBox base.</td></tr>
 </table></div>
+<h2 id="api-image-netops-api-embedded-in-the-binary">api image (netops-api) — embedded in the binary</h2>
+<div class="tw"><table>
+<tr><th>Component</th><th>Version</th><th>Licence</th><th>Notes</th></tr>
+<tr><td><code>iana-protocol-registries</code></td><td>registries fetched 2026-11-09</td><td>CC0-1.0</td><td>IP protocol keywords and (transport, port) service names reduced from the IANA Protocol Numbers and Service Name and Transport Protocol Port Number registries by scripts/gen-iana-tables.py (sha256-pinned sources, fetch date in each file header; tracker 387 PR 13). IANA and the IETF dedicate the Protocol Registries to the public domain under CC0 1.0 (https://www.iana.org/help/licensing-terms, revised 2021-11-10); no attribution is required. Only the number, transport and name columns are kept: the registry's assignee and contact columns are never copied.</td></tr>
+</table></div>
 <h2 id="api-image-netops-api-netops-prober">api image (netops-api, netops-prober)</h2>
 <div class="tw"><table>
 <tr><th>Component</th><th>Version</th><th>Licence</th><th>Notes</th></tr>
@@ -99,11 +104,11 @@ which keeps its own licences and its own obligations.</p>
 <tr><td><code>github.com/jackc/pgservicefile</code></td><td>v0.0.0-20240606120523-5a60cdf6a761</td><td>MIT</td><td>statically linked into the Go binaries; must be permissive</td></tr>
 <tr><td><code>github.com/jackc/pgx/v5</code></td><td>v5.9.2</td><td>MIT</td><td>statically linked into the Go binaries; must be permissive</td></tr>
 <tr><td><code>github.com/jackc/puddle/v2</code></td><td>v2.2.2</td><td>MIT</td><td>statically linked into the Go binaries; must be permissive</td></tr>
-<tr><td><code>golang.org/x/crypto</code></td><td>v0.57.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
-<tr><td><code>golang.org/x/net</code></td><td>v0.60.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
-<tr><td><code>golang.org/x/sync</code></td><td>v0.23.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
-<tr><td><code>golang.org/x/sys</code></td><td>v0.48.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
-<tr><td><code>golang.org/x/text</code></td><td>v0.42.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
+<tr><td><code>golang.org/x/crypto</code></td><td>v0.58.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
+<tr><td><code>golang.org/x/net</code></td><td>v0.62.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
+<tr><td><code>golang.org/x/sync</code></td><td>v0.24.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
+<tr><td><code>golang.org/x/sys</code></td><td>v0.49.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
+<tr><td><code>golang.org/x/text</code></td><td>v0.43.0</td><td>BSD-3-Clause</td><td>statically linked into the Go binaries; must be permissive</td></tr>
 </table></div>
 <h2 id="api-image-netops-api-netops-prober-runtime-base">api image (netops-api, netops-prober) runtime base</h2>
 <div class="tw"><table>

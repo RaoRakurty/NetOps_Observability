@@ -5,13 +5,201 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 45
+# cases: 99
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
 # tests/test_syslog_packs.py runs it together with vector.yaml.
 
 tests:
+  - name: "cisco_ios: an XR link fault parses and is typed as IOS would type it"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "gw2.acy1"
+          appname: "ifmgr"
+          severity: "err"
+          message: "%PKT_INFRA-LINK-3-UPDOWN : Interface TenGigE0/2/0/4, changed state to Down"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.vendor_source, "format", "wrong vendor_source")
+              assert_eq!(.parser_id, "cisco_iosxr.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "PKT_INFRA-LINK", "wrong facility")
+              assert_eq!(.event_type, "updown", "wrong event_type")
+              assert_eq!(.summary, "Interface TenGigE0/2/0/4, changed state to Down", "wrong summary")
+              assert_eq!(.severity_native_code, "3", "wrong severity_native_code")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "cisco_ios: an XR prefix-limit warning is BGP churn, not a session down"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "bgp"
+          severity: "notice"
+          message: "%ROUTING-BGP-5-MAXPFX : No. of IPv4 Unicast prefixes received from 1.2.3.4 has reached 94106, max 125000"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "ROUTING-BGP", "wrong facility")
+              assert_eq!(.event_type, "maxpfx", "wrong event_type")
+              assert_eq!(.severity_native_code, "5", "wrong severity_native_code")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+  - name: "cisco_ios: an XR error no row types reaches the engine below the floor"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "gw2.acy1"
+          appname: "envmon"
+          severity: "err"
+          message: "%PLATFORM-ENVMON-3-EXAMPLE : an illustrative error text"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "PLATFORM-ENVMON", "wrong facility")
+              assert_eq!(.event_type, "example", "wrong event_type")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "cisco_ios: an IOS shutdown line carries the admin cause and cannot open"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "r1"
+          appname: "unknown"
+          severity: "notice"
+          message: "%LINK-5-CHANGED: Interface FastEthernet0/0, changed state to administratively down"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS administrative down carries the admin cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%ETHPORT-5-IF_DOWN_ADMIN_DOWN: Interface Ethernet1/1 is down (Administratively down)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS link failure carries the fault cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%ETHPORT-5-IF_DOWN_LINK_FAILURE: Interface Ethernet1/5 is down (Link failure)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS port-channel with no members is down with an unknown cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%ETHPORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN: Interface port-channel100 is down (No operational members)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS interface up"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%ETHPORT-5-IF_UP: Interface Ethernet1/5 is up in mode access"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS speed change stays a log"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%ETHPORT-5-SPEED: Interface Ethernet1/5, operational speed changed to 10 Gbps"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: an NX-OS BFD session down is a below-floor BFD flap"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "sw01.pdx01"
+          appname: "unknown"
+          severity: "notice"
+          message: "%BFD-5-SESSION_STATE_DOWN: BFD session 1090519041 to neighbor 192.0.2.6 on interface Ethernet1/5 has gone down. Reason: Control Detection Time Expired."
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_ios: the three-part IOS form is not the XR grammar"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "r1"
+          appname: "unknown"
+          severity: "notice"
+          message: "%SYS-5-CONFIG_I: Configured from console by admin on vty0"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: an error line parses and lifts severity"
     inputs:
       - insert_at: syslog_normalized
@@ -233,8 +421,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_normalized
@@ -249,8 +438,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_normalized
@@ -265,8 +455,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
   - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -281,8 +472,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
   - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -297,8 +489,9 @@ tests:
         conditions:
           - type: vrl
             source: |
-              assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -314,7 +507,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -399,6 +592,145 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ftmd_1000003", "wrong event_type")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "cisco_sdwan: the SNMP agent failing our interfaceTable walk is a poll record, not an alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa internal error: table get-next: interfaceTable (error: non_increasing_index)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
+              assert_eq!(.summary, "SNMP agent could not serve interfaceTable on get-next (non_increasing_index) (poll)", "wrong summary")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_table_error", "wrong dedup_key")
+  - name: "cisco_sdwan: the SNMP agent instrumentation trace of the same walk is a poll record"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa {confd_snmpa_instr,table_func,[{table,interfaceTable},'http://viptela.com/oper-vpn',[int..."
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_instr_trace", "wrong event_type")
+              assert_eq!(.summary, "SNMP agent trace in table_func for interfaceTable (poll)", "wrong summary")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_agent_instr_trace", "wrong dedup_key")
+  - name: "cisco_sdwan: a genErr answer to our poll is a poll record, digits masked"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "snmp get-response reqid=1234567 192.0.2.1:50123 error-status=genErr ix=1 (Unsigned32 interfaceVpnId.3.)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_mgmt_poll.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_get_response_generr", "wrong event_type")
+              assert_eq!(.summary, "SNMP answer genErr to 192.0.2.1 on interfaceVpnId (poll)", "wrong summary")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|unknown|snmp_get_response_generr", "wrong dedup_key")
+  - name: "cisco_sdwan: the same agent failing another table is still a poll record, and keeps its alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "unknown"
+          severity: "err"
+          message: "devel-snmpa internal error: table get-next: bfdSessionsTable (error: non_increasing_index)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "cisco_sdwan: a process-table header is a diagnostic dump, not an alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "process table header", "wrong summary")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+  - name: "cisco_sdwan: a process-table row keeps its command and load, digits masked"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root      1234  2.5  1.2 123456 23456 ?      Sl   Oct09   1:23 /usr/sbin/ftmd -f"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "/usr/sbin/ftmd -f cpu 2.5% mem 1.2%", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+  - name: "cisco_sdwan: a kernel-thread row is the same dump"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root        12  0.0  0.0      0     0 ?        S    Oct09   0:00 [kworker/0:1]"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "[kworker/0:1] cpu 0.0% mem 0.0%", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
   - name: "cisco_sdwan: a cEdge device-management login is audit"
     inputs:
       - insert_at: syslog_normalized
@@ -417,9 +749,593 @@ tests:
               assert_eq!(.parser_id, "cisco_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "dmi_auth_passed", "wrong event_type")
+              assert_eq!(.summary, "Device-management login by svc-user from 192.0.2.1 for netconf over ssh", "wrong summary")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
+  - name: "juniper_junos: a structured-data frame takes its tag from MSGID"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "router1"
+          appname: "mgd"
+          severity: "notice"
+          message: "User 'regress' exiting configuration mode"
+          msgid: "UI_DBASE_LOGOUT_EVENT"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "juniper", "wrong vendor")
+              assert_eq!(.vendor_source, "format", "wrong vendor_source")
+              assert_eq!(.parser_id, "junos.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "UI", "wrong facility")
+              assert_eq!(.event_type, "ui_dbase_logout_event", "wrong event_type")
+              assert_eq!(.summary, "User 'regress' exiting configuration mode", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+  - name: "juniper_junos: a BGP session leaving Established is a below-floor down"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "Branch1"
+          appname: "rpd"
+          severity: "warning"
+          message: "RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 10.1.1.1 (External AS 1111) changed state from Established to Idle (event HoldTime) (instance master)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "RPD", "wrong facility")
+              assert_eq!(.event_type, "rpd_bgp_neighbor_state_changed", "wrong event_type")
+              assert_eq!(.summary, "BGP peer 10.1.1.1 (External AS 1111) changed state from Established to Idle (event HoldTime) (instance master)", "wrong summary")
+              assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+  - name: "juniper_junos: a BGP session that never came up states no transition"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "rpd"
+          severity: "warning"
+          message: "RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 1.1.1.1 (External AS 2222) changed state from Connect to Idle (event Stop) (instance master)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "rpd_bgp_neighbor_state_changed", "wrong event_type")
+  - name: "juniper_junos: an OSPF neighbour down names the neighbour and the logical interface"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "rpd"
+          severity: "notice"
+          message: "RPD_OSPF_NBRDOWN: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Full to Down due to InActiveTimer (event reason: BFD session timed out and neighbor was declared dead)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "rpd_ospf_nbrdown", "wrong event_type")
+  - name: "juniper_junos: an OSPF neighbour on its way up states no adjacency yet"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "rpd"
+          severity: "notice"
+          message: "RPD_OSPF_NBRUP: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Init to ExStart due to 2WayRcvd (event reason: exchange start)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "rpd_ospf_nbrup", "wrong event_type")
+  - name: "juniper_junos: an IS-IS adjacency lost names the neighbour system"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "junos.test.env"
+          appname: "rpd"
+          severity: "notice"
+          message: "RPD_ISIS_ADJDOWN: IS-IS lost L2 adjacency to second.junos.device on ge-0/0/1.0, reason: Aged Out: 1521033590.3"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "rpd_isis_adjdown", "wrong event_type")
+  - name: "juniper_junos: an IS-IS adjacency formed is the up side"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "junos.test.env"
+          appname: "rpd"
+          severity: "info"
+          message: "RPD_ISIS_ADJUP: IS-IS new L2 adjacency to second.junos.device on ge-0/0/1.0"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "rpd_isis_adjup", "wrong event_type")
+  - name: "juniper_junos: a link down with the port administratively down is an admin change"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "mib2d"
+          severity: "warning"
+          message: "SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus down(2), ifOperStatus down(2), ifName xe-0/0/0"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "SNMP", "wrong facility")
+              assert_eq!(.event_type, "snmp_trap_link_down", "wrong event_type")
+  - name: "juniper_junos: a link down with the port administratively up names no cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "mib2d"
+          severity: "warning"
+          message: "SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus up(1), ifOperStatus down(2), ifName xe-0/0/0"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_trap_link_down", "wrong event_type")
+  - name: "juniper_junos: a link up"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "mib2d"
+          severity: "info"
+          message: "SNMP_TRAP_LINK_UP: ifIndex 502, ifAdminStatus up(1), ifOperStatus up(1), ifName xe-0/0/0"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_trap_link_up", "wrong event_type")
+  - name: "juniper_junos: a completed commit is a change, at info"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vmx01"
+          appname: "mgd"
+          severity: "notice"
+          message: "UI_COMMIT_COMPLETED: commit complete"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "UI", "wrong facility")
+              assert_eq!(.event_type, "ui_commit_completed", "wrong event_type")
+  - name: "juniper_junos: a tag-shaped line from a program that is not a Junos daemon is not claimed"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "host1"
+          appname: "otherd"
+          severity: "notice"
+          message: "SOME_TAG: a line from another program"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "nokia_sros: the documented SYSTEM line parses and reads its severity word"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "17 Base SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed administrative state: inService, operational state: outOfService"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "nokia", "wrong vendor")
+              assert_eq!(.vendor_source, "format", "wrong vendor_source")
+              assert_eq!(.parser_id, "nokia_sros.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "SYSTEM", "wrong facility")
+              assert_eq!(.event_type, "system_2009", "wrong event_type")
+              assert_eq!(.summary, "Status of Card 1 changed administrative state: inService, operational state: outOfService", "wrong summary")
+              assert_eq!(.severity_native_text, "WARNING", "wrong severity_native_text")
+              assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+  - name: "nokia_sros: a BGP session moving down is a below-floor adjacency change"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "18 Base BGP-WARNING-tBgpNgBackwardTransition-2020 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Idle due to event holdTimerExpired"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "BGP", "wrong facility")
+              assert_eq!(.event_type, "bgp_2020", "wrong event_type")
+              assert_eq!(.severity_native_text, "WARNING", "wrong severity_native_text")
+              assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+  - name: "nokia_sros: the BGP4-MIB twin of the same transition, set to major by the operator, is critical"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "crit"
+          message: "19 Base BGP-MAJOR-bgpBackwardTransNotification-2039 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Active due to event tcpConnectionFails"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "bgp_2039", "wrong event_type")
+              assert_eq!(.severity_native_text, "MAJOR", "wrong severity_native_text")
+              assert_eq!(.normalized_severity, "critical", "wrong normalized_severity")
+  - name: "nokia_sros: a BGP session established is up, not a notification teardown"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "err"
+          message: "20 Base BGP-MINOR-bgpEstablishedNotification-2038 []: (ASN 65001) 192.0.2.2: moved into established state"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "bgp_2038", "wrong event_type")
+              assert_eq!(.severity_native_text, "MINOR", "wrong severity_native_text")
+  - name: "nokia_sros: a received NOTIFICATION closes the session"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "21 Base BGP-WARNING-receiveNotification-2006 []: (ASN 65001) 192.0.2.2: received notification: code CEASE subcode ADMINSHUTDOWN"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "bgp_2006", "wrong event_type")
+  - name: "nokia_sros: an OSPF neighbour dropping to down names the neighbour router id"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "22 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to down (event inactivityTimer)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "OSPF", "wrong facility")
+              assert_eq!(.event_type, "ospf_2042", "wrong event_type")
+  - name: "nokia_sros: an OSPF neighbour in an intermediate state is info"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "23 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to exchange (event negotiationDone)"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ospf_2042", "wrong event_type")
+  - name: "nokia_sros: an IS-IS adjacency change goes to the IS-IS row, and down opens as it does for every vendor"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "24 Base ISIS-WARNING-tmnxIsisAdjacencyChange-2045 []: Adjacency status changed to down for interface: 3, for level: l2 LSP-id: 1921.6800.1001.00-00"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "ISIS", "wrong facility")
+              assert_eq!(.event_type, "isis_2045", "wrong event_type")
+  - name: "nokia_sros: an interface that is not operational is a below-floor link change with no cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "25 Base SNMP-WARNING-linkDown-2004 [my-interface-abc]: Interface my-interface-abc is not operational"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "SNMP", "wrong facility")
+              assert_eq!(.event_type, "snmp_2004", "wrong event_type")
+              assert_eq!(.summary, "Interface my-interface-abc is not operational", "wrong summary")
+  - name: "nokia_sros: an interface operational again is the up side"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "26 Base SNMP-WARNING-linkUp-2005 [my-interface-abc]: Interface my-interface-abc is operational"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_2005", "wrong event_type")
+  - name: "nokia_sros: a power supply input failure is critical and names the supply"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "alert"
+          message: "27 Base CHASSIS-CRITICAL-tmnxEqPhysChassPowerSupInFail-2144 []: Chassis 1 power supply 2 input failure"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "CHASSIS", "wrong facility")
+              assert_eq!(.event_type, "chassis_2144", "wrong event_type")
+              assert_eq!(.severity_native_text, "CRITICAL", "wrong severity_native_text")
+              assert_eq!(.normalized_severity, "critical", "wrong normalized_severity")
+  - name: "nokia_sros: a fan failure is critical"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "alert"
+          message: "28 Base CHASSIS-CRITICAL-tmnxEqPhysChassisFanFailure-2148 []: Chassis 1 fan 3 failure"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "chassis_2148", "wrong event_type")
+  - name: "nokia_sros: the fan clear is cleared and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "info"
+          message: "29 Base CHASSIS-CLEARED-tmnxEqPhysChassisFanFailureClear-2149 []: Chassis 1 fan 3 failure cleared"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "chassis_2149", "wrong event_type")
+              assert_eq!(.severity_native_text, "CLEARED", "wrong severity_native_text")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+  - name: "nokia_sros: a temperature too high is major, so critical"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "crit"
+          message: "30 Base CHASSIS-MAJOR-tmnxEnvTempTooHigh-2005 []: cpm Slot A: temperature too high"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "chassis_2005", "wrong event_type")
+              assert_eq!(.severity_native_text, "MAJOR", "wrong severity_native_text")
+  - name: "nokia_sros: a memory allocation failure is major"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "crit"
+          message: "31 Base SYSTEM-MAJOR-tmnxModuleMallocFailed-2010 []: Memory allocation request for 65536 bytes from module BGP failed"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "system_2010", "wrong event_type")
+  - name: "nokia_sros: a port error is a below-floor alarm that keeps the port as an attribute"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "err"
+          message: "32 Base PORT-MINOR-tmnxEqPortError-2009 [1/1/1]: Physical port signal failure"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "PORT", "wrong facility")
+              assert_eq!(.event_type, "port_2009", "wrong event_type")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+  - name: "nokia_sros: an Ethernet alarm clear at minor is not a new alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "err"
+          message: "33 Base PORT-MINOR-tmnxEqPortEtherAlarmClear-2018 [1/1/1]: Alarm remoteFault Cleared"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "port_2018", "wrong event_type")
+  - name: "nokia_sros: a configuration modification is a change, at info"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "34 Base SYSTEM-WARNING-tmnxConfigModify-2006 []: router configuration modified"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "system_2006", "wrong event_type")
+  - name: "nokia_sros: a CLI configuration line is a change from a named source"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "err"
+          message: "35 Base USER-MINOR-cli_config_io-2011 [admin]: User from 192.0.2.50: A:pe1>config>router# interface to-core shutdown"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "USER", "wrong facility")
+              assert_eq!(.event_type, "user_2011", "wrong event_type")
+  - name: "nokia_sros: a successful configuration save is counted and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "36 Base SYSTEM-WARNING-ssiSaveConfigSucceeded-2002 []: Configuration file saved to: cf3:/config.cfg"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "system_2002", "wrong event_type")
+  - name: "nokia_sros: a configuration save that could not write is major, so it may alarm on its own"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "crit"
+          message: "37 Base SYSTEM-MAJOR-ssiSaveConfigFailed-2003 []: Configuration file write failed: cf3:/config.cfg media full"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "system_2003", "wrong event_type")
+              assert_eq!(.normalized_severity, "critical", "wrong normalized_severity")
+  - name: "nokia_sros: the same words with no Nokia frame are not this pack's"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "edge01"
+          appname: "otherd"
+          severity: "notice"
+          message: "BGP-WARNING-tBgpNgBackwardTransition-2020: a sender quoting a Nokia name"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_normalized
@@ -452,6 +1368,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_snmp", "wrong event_type")
+              assert_eq!(.summary, "SNMP session by svc-user from 192.0.2.1 (poll)", "wrong summary")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
@@ -472,7 +1389,26 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_netconf", "wrong event_type")
+              assert_eq!(.summary, "NETCONF session opened by svc-user from 192.0.2.1", "wrong summary")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_netconf", "wrong dedup_key")
+  - name: "standard: a session from another ConfD northbound interface gets the generic wording"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "audit user: admin/777140 created new session via cli from 192.0.2.7:51234 with ssh"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "audit_session_created_cli", "wrong event_type")
+              assert_eq!(.summary, "Session opened via cli by admin from 192.0.2.7", "wrong summary")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: group assignment"
     inputs:
       - insert_at: syslog_normalized
@@ -489,6 +1425,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
+              assert_eq!(.summary, "Session of svc-user given groups basic", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: session end"
     inputs:
@@ -506,6 +1443,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_terminated", "wrong event_type")
+              assert_eq!(.summary, "Session of svc-user closed (normal)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF request"
     inputs:
@@ -523,6 +1461,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF got rpc get", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
   - name: "standard: a NETCONF reply"
     inputs:
@@ -540,6 +1479,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF sending rpc-reply", "wrong summary")
   - name: "standard: a NETCONF close"
     inputs:
       - insert_at: syslog_normalized
@@ -556,6 +1496,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_rpc", "wrong event_type")
+              assert_eq!(.summary, "NETCONF close-session", "wrong summary")
   - name: "standard: a NETCONF transport session"
     inputs:
       - insert_at: syslog_normalized
@@ -572,6 +1513,27 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_session", "wrong event_type")
+              assert_eq!(.summary, "NETCONF transport session opened for svc-user from 192.0.2.1", "wrong summary")
+  - name: "standard: a NETCONF action names the action in its summary, digits masked"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "notice"
+          message: "netconf id=987346 action name={'http://viptela.com/actions'}clear instance-identifier=/viptela-actions:request/interface-stats"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "netconf_action_clear", "wrong event_type")
+              assert_eq!(.summary, "NETCONF action clear on /viptela-actions:request/interface-stats", "wrong summary")
+              assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|confd|netconf_action_clear", "wrong dedup_key")
   - name: "standard: an outbound NETCONF notification carrying a marker word stays silent"
     inputs:
       - insert_at: syslog_normalized
@@ -588,6 +1550,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_notification", "wrong event_type")
+              assert_eq!(.summary, "NETCONF notification sent (cpu-usage)", "wrong summary")
   - name: "standard: an SSH login accepted"
     inputs:
       - insert_at: syslog_normalized
@@ -605,6 +1568,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_login_accepted", "wrong event_type")
+              assert_eq!(.summary, "SSH login accepted for svc-user from 192.0.2.1 (publickey)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
   - name: "standard: an SSH session opened"
@@ -623,6 +1587,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_opened", "wrong event_type")
+              assert_eq!(.summary, "SSH session opened for svc-user", "wrong summary")
   - name: "standard: an SSH session closed"
     inputs:
       - insert_at: syslog_normalized
@@ -639,6 +1604,7 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_session_closed", "wrong event_type")
+              assert_eq!(.summary, "SSH session closed for svc-user", "wrong summary")
   - name: "standard: a rejected password is not audit noise"
     inputs:
       - insert_at: syslog_normalized
@@ -654,7 +1620,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: the same words from another app are not classified"
     inputs:
       - insert_at: syslog_normalized
@@ -670,7 +1636,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
     inputs:
       - insert_at: syslog_normalized
@@ -705,6 +1671,7 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "ssh_banner_probe", "wrong event_type")
+              assert_eq!(.summary, "SSH connection ended before the banner: Connection closed by remote host", "wrong summary")
               assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_banner_probe", "wrong dedup_key")
@@ -723,7 +1690,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a tagged line whose mnemonic is the only severity it states"
     inputs:
       - insert_at: syslog_normalized
@@ -739,7 +1706,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a mnemonic later in the line sets no severity"
     inputs:
       - insert_at: syslog_normalized
@@ -755,7 +1722,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a critical line with no pack still opens alone"
     inputs:
       - insert_at: syslog_normalized
@@ -771,7 +1738,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: an error line with no pack stays below the open floor"
     inputs:
       - insert_at: syslog_normalized
@@ -787,4 +1754,4 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")

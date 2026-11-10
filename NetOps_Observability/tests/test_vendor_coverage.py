@@ -133,11 +133,14 @@ def test_every_grammar_has_a_fixture_asserting_a_real_parse(gen):
             # The line the grammars see, after any envelope row has run on it.
             ev = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
                   "severity": fx.get("severity", "notice"), "message": fx["message"]}
+            if "msgid" in fx:
+                ev["msgid"] = fx["msgid"]
             msg = table.parse(ev).get("message", fx["message"])
             app = str(ev["appname"]).lower()
             # The grammar the executor would pick for this line, first match wins.
             for g in table.grammars:
-                if g.applies(msg, app, "") and g.regex.search(msg):
+                text = g.haystack(msg, ev)
+                if g.applies(text, app, "") and g.regex.search(text):
                     proved.add(g.grammar_id)
                     break
     every = {g.grammar_id for g in table.grammars}

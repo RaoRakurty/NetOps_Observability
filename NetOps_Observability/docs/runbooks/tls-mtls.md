@@ -182,13 +182,63 @@ docker compose exec postgres psql -U "$DB_USER" \
 
 Every network session should show TLSv1.3 — keycloak (sso profile) included.
 
+## 4a. Key custody — who may read which private key (2026-11-09)
+
+Until 2026-11-09 every TLS install minted every service key, and the OpenSearch
+admin key, world-readable (`TLS_SERVICE_KEY_MODE=0644`). Now:
+
+- **Every key is 0600 under the api's uid** (`CORRELIX_UID`), except the readers
+  that cannot read that: nginx, opensearch, kafka and kafka-init, redis,
+  correlation, prober and cloud-ingest. Their keys are 0640 and they hold
+  `CORRELIX_GID` through `group_add` in `compose.tls.yml`. The table of record,
+  with each reader's verified uid, is `deployment/docker/tls-key-readers.json`.
+- **The admin key** is 0600 in a 0700 `data/tls/admin`, whatever any variable
+  says. Only `opensearch-security-init` mounts it, running as `CORRELIX_UID`.
+- `data/tls` and `data/tls/services` are 0700, and a service mounts its own key
+  directory, never the tree.
+- The api refuses to boot when `TLS_SERVICE_KEY_MODE` or `TLS_NGINX_KEY_MODE`
+  carries any bit beyond 0640, unless `ALLOW_DEV_SECRETS=true` (dev only).
+
+**Check it:** `python3 scripts/install.py --verify-custody` compares every key
+and every credential file under `data/secrets` with the table. It prints modes
+and names only, and exits 1 on any problem. The stack watchdog runs it every
+minute (`KEY_CUSTODY` problem; `CUSTODY_CHECK=0` turns it off).
+
+**Upgrade order is the risk.** The api re-applies key modes at every boot, and a
+reader without `group_add` cannot read a 0640 key: it fails at its next start or
+certificate reload, and the store stays down. So the readers must carry
+`group_add` before the new api boots:
+
+- `scripts/update.sh` and `install.py` do it in one `compose up`, which recreates
+  the readers and the api together. Either order works while the keys are still
+  0644, and after the api tightens them the readers already hold the group.
+- `scripts/deploy.sh api` recreates any reader that lacks `group_add` first, and
+  only then the api.
+- A hand-run `docker compose up -d api` alone is the wrong order. If a store then
+  logs `Permission denied` on its key, run `docker compose up -d` (all services).
+
+**Rollback to a release from before 2026-11-09:** that release has no
+`group_add` and cannot read the tightened tree, and its api cannot repair it,
+because redis and postgres must be healthy before the api starts. Stop the stack,
+then widen the tree back before starting the old release:
+
+```bash
+docker compose down
+python3 scripts/install.py --custody-rollback   # keys 0644, directories 0755
+```
+
+`install-correlix.sh`'s automatic upgrade rollback runs this step itself when the
+previous version predates key custody. The next upgrade tightens again.
+
 ## 5. Triage — symptom → diagnosis → action
 
 | Symptom | Likely cause | Action |
 |---|---|---|
 | api refuses to start, log says `secret custody` / unseal | swtpm sidecar down or state damaged | `security/secret-unseal-failure.md` — do NOT unset `SEAL_PROVIDER` |
 | api refuses to start with posture findings | config violates a fail-closed rule | read the finding's `remedy` field; fix the named control, never the validator |
-| a store container exits 78 at start | TLS variant active, SVID material missing/unreadable | confirm the mint (`ls data/tls/services/<svc>/`), ownership (65532), then recreate |
+| a store container exits 78 at start | TLS variant active, SVID material missing/unreadable | confirm the mint (`ls data/tls/services/<svc>/`), ownership (`CORRELIX_UID`), then recreate |
+| a store logs `Permission denied` on its key after an upgrade | the api tightened the keys before that reader was recreated with `group_add` (§4a) | `docker compose up -d`; then `python3 scripts/install.py --verify-custody` |
+| api refuses to start: `TLS_SERVICE_KEY_MODE "0644" refused` | an `.env` from before 2026-11-09 reached the api | `bash scripts/update.sh` (it rewrites the value), or set both key modes to `0640` in `.env` |
 | `vector-router` exits 78 naming `cxseal.*`/`cxmac.*` | sealing key fetch failing (custody or router identity) | `security/quarantine-operations.md` §7 |
 | every client of ONE store starts failing at once | that store serves an expired cert (2026-08-05 class) — check `TLSServedCert*` alerts | reload/restart that service, then `rotate-tls-services.sh --check` |
 | handshake refused with `certificate required` / `bad certificate` | caller has no client cert, or an identity not in the server's allowlist; the api counts these in `netops_tls_identity_rejected_total` | verify the caller presents the RIGHT SVID (`openssl s_client` + the workloadid registry), not just *a* cert |

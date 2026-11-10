@@ -10,9 +10,13 @@ import {
   LogClause, LogEvent, LogSignal, addClause, buildFacets, isIpLike, queryHasClause, removeClause, toLogEvent,
 } from "../lib/logEvent";
 import DataTable, { Column } from "../components/DataTable";
-import { Segmented } from "../components/ui";
-import { LogLineDetailBody } from "./LogDetail";
-import { useWorkspace } from "../context/workspace";
+import EventDetailPanel from "../components/event/EventDetailPanel";
+import EvIcon from "../components/event/EvIcon";
+import {
+  SEVERITY_GROUPS, SeverityGroup, SeverityTiles, fieldClause, optionsFrom, pager, severityGroupClause, tilesFrom, withClauses,
+} from "../lib/logFilters";
+import { humanize } from "../lib/eventModel";
+import { SEVERITY_TONES } from "../theme/severity";
 import { useAuth } from "../hooks/useAuth";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
@@ -43,9 +47,10 @@ const RANGES: { label: string; minutes: number }[] = [
 
 type SignalId = "" | "applogs" | "syslog" | "snmptrap" | "flows" | "firewall";
 
+// Sub-tabs (owner screenshot A): Events is every store, Logs is device syslog.
 const SIGNALS: { id: SignalId; label: string }[] = [
-  { id: "", label: "All" },
-  { id: "syslog", label: "Syslog" },
+  { id: "", label: "Events" },
+  { id: "syslog", label: "Logs" },
   { id: "snmptrap", label: "Traps" },
   { id: "flows", label: "Flows" },
   { id: "firewall", label: "Firewall" },
@@ -145,10 +150,19 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const [hits, setHits] = useState<OSHit[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  // The exact request the current result set came from — "Load more" re-issues
-  // it with an offset so the appended page belongs to the SAME window/query.
+  // The exact request the current result set came from — a page change re-issues
+  // it with an offset so every page belongs to the SAME window and query.
   const lastRun = useRef<LogSearchOpts | null>(null);
+  const [page, setPage] = useState(1);
+  // The dropdown filters. Each becomes a quoted clause AND-ed onto the query on the
+  // server; `typePick`/`familyPick` hold "field\u0000value".
+  const [sevGroup, setSevGroup] = useState<SeverityGroup | "">("");
+  const [typePick, setTypePick] = useState("");
+  const [familyPick, setFamilyPick] = useState("");
+  // Severity counts across EVERY matching record, counted by the store.
+  const [tiles, setTiles] = useState<SeverityTiles | null>(null);
+  const filtersRef = useRef({ sevGroup, typePick, familyPick });
+  filtersRef.current = { sevGroup, typePick, familyPick };
   // Retention floor: how far back the visible store goes + exact total stored.
   const [retention, setRetention] = useState<LogRetention | null>(null);
   // Sampling disclosure from the last search response (flows: 1:50 sample).
@@ -163,7 +177,6 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   // A quick filter can fire searches faster than they answer; only the latest may
   // fill the table.
   const runSeq = useRef(0);
-  const ws = useWorkspace();
   const { user } = useAuth();
   // "App logs" are the platform's own container/API logs — platform-owner only.
   // Tenant-scoped users don't see the option (the backend also refuses the signal).
@@ -173,29 +186,33 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     [platform],
   );
 
-  const run = async (q = query, m = minutes, sig = signal, sz = size) => {
+  const run = async (q = query, m = minutes, sig = signal, sz = size, pg = 1) => {
     const seq = ++runSeq.current;
     setBusy(true);
     setError(null);
     try {
       const end = new Date();
       const start = new Date(end.getTime() - m * 60_000);
-      // "Firewall (all vendors)" is a syslog query with a vendor-agnostic narrowing
-      // filter applied — combine it with whatever the operator typed.
       const backendSignal = sig === "firewall" ? "syslog" : sig;
-      const effQuery = sig === "firewall"
-        ? (q && q.trim() && q.trim() !== "*" ? `(${q}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
-        : q;
+      const { all, withoutSeverity } = effectiveQueries(q, sig);
       const opts: LogSearchOpts = {
-        query: effQuery,
+        query: all,
         from: start.toISOString(),
         to: end.toISOString(),
         size: sz,
         signal: backendSignal,
+        ...(pg > 1 ? { offset: (pg - 1) * sz } : {}),
       };
+      // The tiles count every match for the query without the severity pick, so a
+      // tile still shows its siblings while one is selected. A count that fails
+      // hides the tiles rather than guessing them from the loaded rows.
+      api.logSeverityCounts({ query: withoutSeverity, signal: backendSignal, from: opts.from!, to: opts.to! })
+        .then((c) => { if (seq === runSeq.current) setTiles(tilesFrom(c)); })
+        .catch(() => { if (seq === runSeq.current) setTiles(null); });
       const r = await api.searchLogs(opts);
       if (seq !== runSeq.current) return;
       lastRun.current = opts;
+      setPage(pg);
       // A result set can be tens of thousands of rows; mapping and committing it
       // is the single most expensive thing this page does. As a transition it
       // yields to the operator's next keystroke or click instead of blocking it.
@@ -216,6 +233,22 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     } finally {
       if (seq === runSeq.current) setBusy(false);
     }
+  };
+
+  // The query as the server runs it: the operator's words, the Firewall narrowing,
+  // then each dropdown as its own quoted clause.
+  const effectiveQueries = (q: string, sig: SignalId) => {
+    const base = sig === "firewall"
+      ? (q && q.trim() && q.trim() !== "*" ? `(${q}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
+      : q;
+    const f = filtersRef.current;
+    const pick = (v: string) => {
+      const [field, value] = v.split("\u0000");
+      return field && value ? fieldClause(field, value) : "";
+    };
+    const others = [pick(f.typePick), pick(f.familyPick)];
+    const sev = f.sevGroup ? severityGroupClause(f.sevGroup, sig) : "";
+    return { all: withClauses(base, [sev, ...others]), withoutSeverity: withClauses(base, others) };
   };
 
   // React to the global search query / time range: re-run with the
@@ -239,7 +272,13 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
     run(query, minutes, signal, size);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signal, size]);
+  }, [signal, size, sevGroup, typePick, familyPick]);
+
+  // A store that has no such field cannot keep a pick made on another store.
+  useEffect(() => {
+    setTypePick("");
+    setFamilyPick("");
+  }, [signal]);
 
   // Retention floor (owner directive: "how long back can I go?"). Re-read when
   // the signal changes — each signal is its own store with its own retention.
@@ -252,26 +291,28 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     return () => { alive = false; };
   }, [signal]);
 
-  // "Load more" — append the next page of the SAME result set (same query +
-  // frozen time window) via the server-bounded offset. OpenSearch's paging
-  // window ends at 10k rows; past that the export path serves the full set.
-  const OS_PAGE_WINDOW = 10000;
-  const canLoadMore = total !== null && hits.length < total && hits.length < OS_PAGE_WINDOW && !!lastRun.current;
-  const loadMore = async () => {
+  // Numbered pages through hits.total: each page re-issues the SAME request (query,
+  // frozen window, filters) with an offset. OpenSearch pages only inside its
+  // 10,000-row window; past it the export serves the full set, and the pager says so.
+  const goPage = async (pg: number) => {
     const base = lastRun.current;
-    if (!base || loadingMore) return;
-    const seq = runSeq.current;
-    setLoadingMore(true);
+    if (!base) return;
+    const seq = ++runSeq.current;
+    setBusy(true);
     setError(null);
     try {
-      const r = await api.searchLogs({ ...base, offset: hits.length });
+      const opts = { ...base, offset: pg > 1 ? (pg - 1) * (base.size ?? size) : undefined };
+      const r = await api.searchLogs(opts);
       if (seq !== runSeq.current) return;
-      setHits((h) => h.concat(r?.hits?.hits ?? []));
+      lastRun.current = opts;
+      startTransition(() => setHits(r?.hits?.hits ?? []));
       setTotal(r?.hits?.total?.value ?? total);
+      setPage(pg);
+      setSelected(new Set());
     } catch (e) {
-      setError((e as Error).message);
+      if (seq === runSeq.current) setError((e as Error).message);
     } finally {
-      setLoadingMore(false);
+      if (seq === runSeq.current) setBusy(false);
     }
   };
 
@@ -307,7 +348,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const app = String(src.app_id || src.app || (fgt.app ?? "") || "");
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, ev };
+      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, resolved: h._resolved ?? null, ev };
     });
   }, [hits]);
   type Line = (typeof lines)[number];
@@ -322,25 +363,11 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     });
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(lines.map((l) => l.id)));
 
-  // Row body click (not the export checkbox) opens the full log document in the
-  // dockable Inspector (shell-v2); v1 falls back to an inline detail card.
-  const selectLine = (l: Line) => {
-    setDetailId(l.id);
-    // The docked Inspector is a fixed-width column of the shell grid and leaves no
-    // room for itself on a phone, so a phone reads the record under the table.
-    if (ws.enabled && !isPhone) {
-      ws.openInspector(<LogLineDetailBody key={l.id} line={l} />, {
-        title: l.ev.deviceLabel || l.source,
-        subtitle: `${severityLabel(l.ev.severity) || l.ev.signalLabel} · ${fmtDateTime(l.ts)}`,
-      });
-    }
-  };
-  const inlineDetail = !ws.enabled || isPhone;
-  const detailLine = inlineDetail && detailId ? lines.find((l) => l.id === detailId) : undefined;
-  const detailRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (isPhone && detailId) detailRef.current?.scrollIntoView({ block: "start" });
-  }, [isPhone, detailId]);
+  // Row body click (not the export checkbox) opens the Event Intelligence panel over
+  // the list, in every shell and at every width (full screen on a phone). The panel
+  // reads the same hit the row did, so the redaction and resolved names are shared.
+  const selectLine = (l: Line) => setDetailId(l.id);
+  const detailLine = detailId ? lines.find((l) => l.id === detailId) : undefined;
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
@@ -373,11 +400,10 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     try {
       const end = new Date();
       const start = new Date(end.getTime() - minutes * 60_000);
-      // Mirror run()'s "firewall" translation so an export matches the on-screen view.
+      // The same query run() sends (Firewall narrowing and every dropdown filter), so
+      // an export matches the on-screen view.
       const backendSignal = signal === "firewall" ? "syslog" : signal;
-      const effQuery = signal === "firewall"
-        ? (query && query.trim() && query.trim() !== "*" ? `(${query}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
-        : query;
+      const effQuery = effectiveQueries(query, signal).all;
       const { executionId, matched } = await api.exportLogQuery({
         format,
         query: effQuery,
@@ -416,6 +442,35 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     run(next, minutes, signal, size);
   };
   const hasApp = useMemo(() => lines.some((l) => l.app), [lines]);
+
+  // Dropdown options come from the loaded rows and say so; picking one narrows on
+  // the server with a quoted clause over a field that store maps (event_type on
+  // syslog and traps; family on traps, event_category on syslog).
+  const pickOptions = (fieldsBySignal: (sig: string) => string[]) => {
+    const vals: string[] = [];
+    for (const l of lines) {
+      const sig = l.ev.signal === "trap" ? "snmptrap" : l.ev.signal;
+      for (const f of fieldsBySignal(sig)) {
+        const v = typeof l.raw[f] === "string" ? l.raw[f].trim() : "";
+        if (v) vals.push(`${f}\u0000${v}`);
+      }
+    }
+    return optionsFrom(vals).map((o) => {
+      const [, v] = o.value.split("\u0000");
+      return { key: o.value, label: `${humanize(v)} · ${o.count.toLocaleString()} loaded` };
+    });
+  };
+  const typeOptions = useMemo(
+    () => pickOptions((sig) => (sig === "syslog" || sig === "snmptrap" ? ["event_type"] : [])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lines],
+  );
+  const familyOptions = useMemo(
+    () => pickOptions((sig) => (sig === "snmptrap" ? ["family"] : sig === "syslog" ? ["event_category"] : [])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lines],
+  );
+  const pg = total !== null ? pager(total, lastRun.current?.size ?? size, page, lines.length) : null;
 
   const columns = useMemo<Column<Line>[]>(() => {
     const select: Column<Line> = {
@@ -525,13 +580,41 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             ★ Save
           </button>
         </form>
+        {tiles && (
+          <div className="lv-tiles-wrap" data-testid="logs-severity-tiles">
+            <div className="lv-tiles" role="group" aria-label="Severity across every matching record">
+              {tiles.tiles.map((t) => {
+                const on = sevGroup === t.id;
+                return (
+                  <button key={t.id} type="button" className={`lv-tile lv-tile-${t.tone}`} aria-pressed={on}
+                    aria-label={`${t.label}: ${t.count.toLocaleString()} matching. ${on ? "Showing only these; press to show all" : "Press to show only these"}`}
+                    onClick={() => setSevGroup(on ? "" : t.id)}>
+                    <span className="lv-tile-ico" aria-hidden="true"><EvIcon name={SEVERITY_TONES[t.tone].icon} size={20} /></span>
+                    <span className="lv-tile-txt">
+                      <span className="lv-tile-n">{t.count.toLocaleString()}</span>
+                      <span className="lv-tile-k">{t.label}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="lv-tiles-note">
+              Counted by the store across all {tiles.total.toLocaleString()} matching records
+              {tiles.unrated > 0 && `; ${tiles.unrated.toLocaleString()} carry no severity`}
+              {tiles.other > 0 && `; ${tiles.other.toLocaleString()} use other words`}
+              {tiles.sampled && `; a 1:${sampleRate} sample`}.
+            </p>
+          </div>
+        )}
+        <div className="lv-subtabs" role="group" aria-label="Log type">
+          {signals.map((o) => (
+            <button key={o.id} type="button" className="lv-subtab" aria-pressed={signal === o.id} onClick={() => setSignal(o.id)}>
+              {o.label}
+              {signal === o.id && total !== null && <span className="lv-subtab-n" aria-hidden="true"> ({total.toLocaleString()})</span>}
+            </button>
+          ))}
+        </div>
         <div className="lv-filters">
-          <Segmented<SignalId>
-            value={signal}
-            ariaLabel="Log type"
-            options={signals.map((s) => ({ value: s.id, label: s.label }))}
-            onChange={setSignal}
-          />
           {rangeMinutes === undefined && (
             <select value={minutes} aria-label="Time range" onChange={(e) => setMinutes(Number(e.target.value))}>
               {RANGES.map((r) => (
@@ -541,10 +624,26 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
               ))}
             </select>
           )}
-          <select value={size} aria-label="Rows to load" onChange={(e) => setSize(Number(e.target.value))}>
-            {[100, 200, 500, 1000, 5000].map((n) => (
+          <select value={sevGroup} aria-label="Severity" onChange={(e) => setSevGroup(e.target.value as SeverityGroup | "")}>
+            <option value="">All Severities</option>
+            {SEVERITY_GROUPS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
+          </select>
+          {typeOptions.length > 0 || typePick ? (
+            <select value={typePick} aria-label="Event type" onChange={(e) => setTypePick(e.target.value)}>
+              <option value="">All Types</option>
+              {typeOptions.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          ) : null}
+          {familyOptions.length > 0 || familyPick ? (
+            <select value={familyPick} aria-label="Family" onChange={(e) => setFamilyPick(e.target.value)}>
+              <option value="">All Families</option>
+              {familyOptions.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          ) : null}
+          <select value={size} aria-label="Rows per page" onChange={(e) => setSize(Number(e.target.value))}>
+            {[10, 50, 100, 200, 500, 1000].map((n) => (
               <option key={n} value={n}>
-                {n} hits
+                {n} per page
               </option>
             ))}
           </select>
@@ -691,32 +790,43 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           </div>
         )}
         {/* Every truncated list SAYS it's truncated and offers the rest. */}
-        {canLoadMore && (
-          <div className="lv-more">
-            <button type="button" className="chip" onClick={loadMore} disabled={loadingMore}
-              title="Fetch the next page of this result set">
-              {loadingMore
-                ? "Loading…"
-                : `Load ${Math.min(size, (total ?? 0) - hits.length).toLocaleString()} more (${hits.length.toLocaleString()} of ${(total ?? 0).toLocaleString()} loaded)`}
-            </button>
-          </div>
+        {/* Numbered pages over the exact total. Every truncated list SAYS so. */}
+        {pg && pg.total > 0 && lines.length > 0 && (
+          <nav className="lv-pager" aria-label="Result pages">
+            <span className="lv-pager-txt" data-testid="logs-pager-text">
+              Showing {pg.first.toLocaleString()}–{pg.last.toLocaleString()} of {pg.total.toLocaleString()} {pg.total === 1 ? "event" : "events"}
+              {flowsSampled && " (sampled)"}
+            </span>
+            {pg.pages > 1 && (
+              <span className="lv-pages">
+                <button type="button" className="lv-page" disabled={busy || pg.page <= 1} aria-label="Previous page" onClick={() => goPage(pg.page - 1)}>‹</button>
+                {pg.items.map((n, i) => (n === null
+                  ? <span key={`gap${i}`} className="lv-page-gap" aria-hidden="true">…</span>
+                  : (
+                    <button key={n} type="button" className="lv-page" aria-current={n === pg.page ? "page" : undefined}
+                      aria-label={`Page ${n}`} disabled={busy && n !== pg.page} onClick={() => n !== pg.page && goPage(n)}>
+                      {n.toLocaleString()}
+                    </button>
+                  )))}
+                <button type="button" className="lv-page" disabled={busy || pg.page >= pg.pages} aria-label="Next page" onClick={() => goPage(pg.page + 1)}>›</button>
+              </span>
+            )}
+          </nav>
         )}
-        {total !== null && total > lines.length && !canLoadMore && lines.length > 0 && (
+        {pg?.capped && lines.length > 0 && (
           <p className="lv-meta lv-center">
-            Interactive paging ends at {(10000).toLocaleString()} rows — use “Export all” above to get the
-            full {total.toLocaleString()}-row result set.
+            Pages reach the first {(10000).toLocaleString()} records — use “Export all” above to get the
+            full {pg.total.toLocaleString()}-record result set.
           </p>
         )}
         {detailLine && (
-          <div className="lv-inline-detail" ref={detailRef}>
-            <button type="button" className="chip lv-detail-close" onClick={() => setDetailId(null)}>Close</button>
-            <LogLineDetailBody key={detailLine.id} line={detailLine} />
-          </div>
+          <EventDetailPanel
+            key={detailLine.id}
+            hit={{ _index: detailLine.index, _id: detailLine.id, _source: detailLine.raw, _resolved: detailLine.resolved }}
+            onClose={() => setDetailId(null)}
+          />
         )}
       </div>
     </div>
   );
 }
-
-// The details view lives in LogDetail.tsx; it stays importable from here.
-export { LogLineDetailBody };

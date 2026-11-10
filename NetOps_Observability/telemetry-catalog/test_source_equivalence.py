@@ -25,6 +25,7 @@ import os
 
 import pytest
 
+import bake_rules as B
 import source_equivalence as S
 
 
@@ -169,9 +170,17 @@ def test_shadow_rows_supply_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_syslog_config_change_is_declared_dormant(model: dict, analysis: dict) -> None:
+    """The vendor-neutral row stays shadow (tracker 220); since tracker 387 wave 1 the
+    supply comes only from vendor-pack rows, which are doc_claimed."""
     syslog = next(src for src in model["sources"] if src["id"] == "syslog")
-    assert syslog["gaps"]["config_change"]["status"] == "dormant"
-    assert "device_config_change" not in S.rule_kinds("syslog")
+    assert "config_change" not in syslog["gaps"]
+    _, rows = B.load()
+    emitting = [r for r in rows if r["kind"] == "device_config_change"
+                and r["source"] == "syslog" and not r.get("shadow")]
+    assert emitting and all(r["rule_id"].startswith(("syslog.sros.", "syslog.junos."))
+                            for r in emitting)
+    assert all(r.get("fidelity_status") == "doc_claimed" for r in emitting)
+    assert next(r for r in rows if r["rule_id"] == "syslog.config.change")["shadow"] is True
 
 
 def test_single_source_device_profiles_are_scored(analysis: dict) -> None:

@@ -103,8 +103,8 @@ func BuildInventoryIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		if !ok {
 			continue // an address of a device no longer in inventory
 		}
-		for ip := range ips {
-			if p := net.ParseIP(ip); p != nil {
+		for ip, ifName := range ips {
+			if p := net.ParseIP(ip); p != nil && identifyingIfAddr(p, ifName) {
 				addKey(idx.addr, t, p.String(), dev)
 			}
 		}
@@ -119,6 +119,78 @@ func BuildInventoryIndex(devs []models.Device, sysIPs map[string]map[string]stri
 		}
 	}
 	return idx
+}
+
+// identifyingIfAddr reports whether an interface address can name its device.
+// Never: loopback, link-local, unspecified or multicast addresses (the same on
+// every box or not an address of one), and the SD-WAN system loopbacks of the
+// internal VPNs (65528 and up), which reuse one address on every device: on the
+// lab 192.168.1.1 is Loopback65528 on three cEdges. An address only ONE device
+// answered for is still not proof when every device has it; the walk may simply
+// not have reached the others yet (tracker 387 PR 13c').
+func identifyingIfAddr(ip net.IP, ifName string) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	return !internalLoopback(ifName)
+}
+
+// internalLoopback reports an interface named as a loopback of an internal VPN
+// (lo65528, Loopback65530, loopback65531): the number is the VPN, and
+// vmInternalVPN draws the line where the controller lane draws it.
+func internalLoopback(ifName string) bool {
+	n := strings.ToLower(strings.TrimSpace(ifName))
+	for _, p := range []string{"loopback", "lo"} {
+		if rest, ok := strings.CutPrefix(n, p); ok && rest != "" && strings.Trim(rest, "0123456789") == "" {
+			return vmInternalVPN(rest)
+		}
+	}
+	return false
+}
+
+// AddressOutcome is the result of DeviceForAddress, a closed set.
+type AddressOutcome string
+
+const (
+	AddressMatched   AddressOutcome = "matched"
+	AddressNoMatch   AddressOutcome = "no_match"
+	AddressAmbiguous AddressOutcome = "ambiguous"
+)
+
+// DeviceForAddress names the ONE inventory device that holds ip as its
+// management address or as an identifying interface address, across every
+// tenant: the SNMP trap receiver asks it before it knows any tenant (tenant is
+// the channel, never the address). An address two devices claim, in one tenant
+// or in two, names nobody. The answer is a device id, never a tenant: the
+// caller reads the tenant from that device, and must still prove the device's
+// credential before trusting the answer.
+func (idx *InventoryIndex) DeviceForAddress(ip string) (string, AddressOutcome) {
+	if idx == nil {
+		return "", AddressNoMatch
+	}
+	p := net.ParseIP(strings.TrimSpace(ip))
+	if p == nil {
+		return "", AddressNoMatch
+	}
+	key := p.String()
+	found := ""
+	for _, m := range idx.addr {
+		dev, ok := m[key]
+		switch {
+		case !ok:
+			continue
+		case dev == "":
+			return "", AddressAmbiguous
+		case found != "" && found != dev:
+			return "", AddressAmbiguous
+		}
+		found = dev
+	}
+	if found == "" {
+		return "", AddressNoMatch
+	}
+	return found, AddressMatched
 }
 
 // resolveOutcome is the result class counted in the resolver metric.

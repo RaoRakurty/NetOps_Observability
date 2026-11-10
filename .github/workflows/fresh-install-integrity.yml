@@ -256,6 +256,146 @@ jobs:
           sudo test -s data/tls/ca.pem || { echo "::error::mesh CA missing"; missing=1; }
           exit "$missing"
 
+  # Layer 3a′ — key custody under a customer-shaped uid (2026-11-09,
+  # docs/design/OPENSEARCH_ACCESS_2026-11-09.md). The leg above installs under
+  # sudo, so CORRELIX_UID=0: the api is root, root reads every key, and the
+  # whole cross-uid custody model (0600 keys owned by the api, 0640 + group_add
+  # for the eight readers that cannot read that, securityadmin as the key's
+  # owner) is never exercised. The lab's uid is 1000, which also hides it,
+  # because opensearch and kafka run as 1000. This leg installs as a dedicated
+  # NON-ROOT user with uid 1234 — neither 0 nor 1000 — in the docker group,
+  # exactly as a customer's installer runs. Same TLS install and the same
+  # assertions as the leg above, plus the custody checks. No new install path.
+  tls-install-boot-nonroot:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for install-boot: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.install-boot != 'false' }}
+    name: install.py --tls=yes as a non-root uid 1234 · key custody (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CX_USER: cxinstall
+      CX_UID: '1234'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: build web assets the images bake in
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/src/frontend && npm ci --no-audit --no-fund && npm run build)
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
+
+      # A real account (uid 1234, its own group, member of docker) owning its
+      # own copy of the tree: the installer writes .env and data/ as itself,
+      # and every chown it needs to a service uid goes through its docker
+      # helper container, as on a customer host. node_modules stays behind —
+      # the images bake in the built assets, never the dependency trees.
+      - name: create the non-root installer account and its copy of the tree
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --uid "$CX_UID" --user-group "$CX_USER"
+          sudo usermod -aG docker "$CX_USER"
+          sudo rsync -a --exclude node_modules NetOps_Observability/ "/home/$CX_USER/NetOps_Observability/"
+          sudo chown -R "$CX_USER:$CX_USER" "/home/$CX_USER/NetOps_Observability"
+          sudo -u "$CX_USER" -H id
+          sudo -u "$CX_USER" -H docker version --format '{{.Server.Version}}'
+
+      - name: install.py --tls=yes as uid 1234 (phase A mint -> phase B fail-closed mesh)
+        run: |
+          set -euo pipefail
+          cd "/home/$CX_USER/NetOps_Observability"
+          # GIT_SHA: the copy has no .git, and install.py would otherwise
+          # stamp the images "unknown".
+          sudo -u "$CX_USER" -H env PYTHONUNBUFFERED=1 GIT_SHA="${{ github.sha }}" \
+            python3 scripts/install.py --tls=yes
+
+      - name: failure diagnostics (compose state + logs + modes)
+        if: failure()
+        run: |
+          cd "/home/$CX_USER/NetOps_Observability/deployment/docker"
+          echo "=== docker compose ps -a ==="; sudo docker compose ps -a || true
+          echo "=== api log (the mint owner) ==="; sudo docker compose logs api --tail 120 || true
+          echo "=== security bootstrap ==="; sudo docker compose logs opensearch-security-init --tail 60 || true
+          echo "=== key readers ==="; sudo docker compose logs --tail 30 opensearch kafka redis nginx correlation || true
+          echo "=== docker compose logs (tail) ==="; sudo docker compose logs --tail 40 || true
+          echo "=== data/tls modes and owners (names only) ==="
+          sudo find ../../data/tls -printf '%m %u:%g %p\n' 2>&1 | head -120 || true
+          df -h / || true
+
+      - name: assert the installer ran as uid 1234 and the api runs as it
+        run: |
+          set -euo pipefail
+          cd "/home/$CX_USER/NetOps_Observability/deployment/docker"
+          uid=$(sudo grep -oP '^CORRELIX_UID=\K.*' .env)
+          [ "$uid" = "$CX_UID" ] || { echo "::error::CORRELIX_UID=$uid, want $CX_UID"; exit 1; }
+          user=$(sudo docker inspect -f '{{.Config.User}}' "$(sudo docker compose ps -q api)")
+          case "$user" in "$CX_UID":*) echo "api runs as $user" ;;
+            *) echo "::error::api runs as '$user', want $CX_UID:*"; exit 1 ;; esac
+
+      - name: assert the mesh stayed up (no crash-loops behind exit 0)
+        run: |
+          set -euo pipefail
+          cd "/home/$CX_USER/NetOps_Observability/deployment/docker"
+          sleep 20   # give a would-be crash-looper time to show its state
+          ps_out=$(sudo docker compose ps -a --format '{{.Name}} {{.State}} {{.ExitCode}}')
+          echo "$ps_out"
+          # restarting = crash-loop; exited non-zero = a service died, which
+          # includes opensearch-security-init failing securityadmin as uid 1234.
+          bad=$(echo "$ps_out" | awk '$2 == "restarting" || ($2 == "exited" && $3 != "0")' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::services unhealthy after the non-root TLS boot:"; echo "$bad"
+            exit 1
+          fi
+
+      - name: assert the TLS ingress SERVES (nginx reads its 0640 key through group_add)
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --max-time 30 --retry 6 --retry-delay 10 \
+            --cacert "/home/$CX_USER/NetOps_Observability/deployment/docker/nginx/certs/fullchain.pem" \
+            https://localhost/admin/health
+          echo "TLS ingress healthy"
+
+      - name: assert the SEC-007 Kafka ACL matrix is live (kafka read its 0640 key)
+        run: |
+          set -euo pipefail
+          cd "/home/$CX_USER/NetOps_Observability/deployment/docker"
+          out=$(sudo docker compose exec -T kafka /opt/kafka/bin/kafka-acls.sh \
+            --bootstrap-server kafka:9094 \
+            --command-config /tmp/kafka-tls/admin.properties \
+            --list --topic netops.deadletter)
+          echo "$out"
+          echo "$out" | grep -q 'CN=spiffe://netops/ns/default/sa/vector-router' \
+            || { echo "::error::vector-router grant missing on netops.deadletter"; exit 1; }
+
+      # The custody contract itself, read back independently of install.py's
+      # exit code: every key and secret file against the reader table, run as
+      # the installer account the watchdog would run as. Modes and names only.
+      - name: assert key custody matches the reader table (install.py --verify-custody)
+        run: |
+          set -euo pipefail
+          cd "/home/$CX_USER/NetOps_Observability"
+          sudo -u "$CX_USER" -H python3 scripts/install.py --verify-custody
+          # ...and the two facts this leg exists for, stated directly:
+          sudo stat -c '%a %u %n' data/tls data/tls/admin data/tls/admin/admin.key \
+            data/tls/services/kafka/kafka.key data/tls/services/vmauth/vmauth.key
+          [ "$(sudo stat -c '%a %u' data/tls/admin/admin.key)" = "600 $CX_UID" ] \
+            || { echo "::error::admin.key is not 0600 under uid $CX_UID"; exit 1; }
+          if sudo find data/tls -name '*.key' -perm /o=rwx | grep -q .; then
+            echo "::error::a key under data/tls is open to other users:"
+            sudo find data/tls -name '*.key' -perm /o=rwx -printf '%m %p\n'
+            exit 1
+          fi
+
   # Layer 3b — installer self-healing (docs/design/INSTALLER_SELF_HEALING_FMEA_
   # 2026-09-15.md §3.7 T1/T2, §4.7, §5 "CI real boot"). The leg above boots
   # once, on a fast disk, and samples container state once — the FMEA's §1.3
@@ -507,7 +647,7 @@ jobs:
   ci-gate:
     name: ci-gate (fresh-install-integrity)
     if: always()
-    needs: [plan, scripts-lint, integrity, tls-install-boot, tls-install-selfheal, helm-chart]
+    needs: [plan, scripts-lint, integrity, tls-install-boot, tls-install-boot-nonroot, tls-install-selfheal, helm-chart]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -515,4 +655,4 @@ jobs:
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
-          jobs: scripts-lint=always integrity=always tls-install-boot=install-boot tls-install-selfheal=install-boot helm-chart=always
+          jobs: scripts-lint=always integrity=always tls-install-boot=install-boot tls-install-boot-nonroot=install-boot tls-install-selfheal=install-boot helm-chart=always

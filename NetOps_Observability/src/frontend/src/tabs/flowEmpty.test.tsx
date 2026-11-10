@@ -3,11 +3,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { flowEmptyReason, parseCoverage, FlowEmpty, FlowSamplingNote, samplingNote, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
+import { flowEmptyReason, parseCoverage, platformTrafficNote, FlowEmpty, FlowSamplingNote, samplingNote, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
 import { api } from "../services/api";
 
 const cov = (o: Partial<FlowCoverage>): FlowCoverage => ({
-  flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, flows_sampling_reported: 0, exporters: 0, ...o,
+  flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, flows_sampling_reported: 0, exporters: 0,
+  platform_monitoring_flows: 0, platform_addresses_configured: false, ...o,
 });
 
 describe("flowEmptyReason — an empty panel says why", () => {
@@ -107,5 +108,22 @@ describe("FlowEmpty", () => {
     render(<><FlowEmpty q={q} dim="as" /><FlowEmpty q={q} dim="tcp_flags" /></>);
     await screen.findAllByText("No flow records in this window.");
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("platformTrafficNote — Correlix's own polling is hidden out loud (tracker 387 PR 13)", () => {
+  const base = parseCoverage({ flows: 100, platform_monitoring_flows: "52", platform_addresses_configured: 1 })!;
+  it("says how many flows the views leave out, and that they are included when shown", () => {
+    expect(platformTrafficNote(base, false)).toBe("52 flows of Correlix's own polling are hidden.");
+    expect(platformTrafficNote(base, true)).toBe("Includes 52 flows of Correlix's own polling.");
+    expect(platformTrafficNote({ ...base, platform_monitoring_flows: 1 }, false)).toBe("1 flow of Correlix's own polling is hidden.");
+  });
+  it("an unconfigured appliance separates nothing and says so", () => {
+    const off = parseCoverage({ flows: 100, platform_monitoring_flows: 0, platform_addresses_configured: 0 })!;
+    expect(off.platform_addresses_configured).toBe(false);
+    expect(platformTrafficNote(off, false)).toMatch(/not separated/);
+  });
+  it("no coverage, no claim", () => {
+    expect(platformTrafficNote(null, false)).toBe("");
   });
 });

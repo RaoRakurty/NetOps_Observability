@@ -374,9 +374,19 @@ def test_the_kind_is_emitted_and_named_by_real_templates():
     kind legitimate rather than a repeat of that mistake."""
     assert KIND in P.EMITTED_KINDS
     emitting = [r.rule_id for r in P.RULES if r.kind == KIND and not r.shadow]
-    assert emitting == ["trap.config.change"], (
-        f"{KIND} reaches production through {emitting} — if the syslog row was "
-        "promoted, the V1 workload profile must have been versioned with it")
+    # Tracker 387 wave 1: vendor-pack rows (Nokia SR OS, Junos) emit it from syslog.
+    # The vendor-neutral syslog.config.change stays shadow: promoting IT would
+    # re-classify the V1 workload profile, whose noise is %SYS-5-CONFIG_I.
+    assert "syslog.config.change" not in emitting, (
+        "the vendor-neutral syslog row was promoted: the V1 workload profile must have "
+        "been versioned with it")
+    assert set(emitting) == {"trap.config.change", "syslog.sros.config.change",
+                             "syslog.junos.config.commit_completed"}, emitting
+    v1_noise = {"hostname": "r1", "appname": "unknown", "severity": "info",
+                "timestamp": "2026-11-09T10:00:00Z", "facility": "SYS", "event_type": "config_i",
+                "message": "%SYS-5-CONFIG_I: Configured from console by admin on vty0"}
+    assert P.syslog_control_signal(v1_noise, "t1", datetime.now(timezone.utc)) is None, (
+        "a syslog row now classifies the V1 profile's noise line")
     naming = _templates_naming_the_kind()
     assert len(naming) >= 4, f"only {sorted(t for t, _ in naming)} consume {KIND}"
     for template_id, every_clause_optional in naming:

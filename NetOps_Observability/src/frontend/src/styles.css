@@ -125,13 +125,23 @@
   --glass-scrim: rgba(17, 24, 39, 0.22);            /* gentle, non-grey dim */
 
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
-  --sev-critical: #f43f5e;  --sev-critical-bg: rgba(244, 63, 94, 0.10);
-  --sev-error:    #f97316;  --sev-error-bg:    rgba(249, 115, 22, 0.10);
-  --sev-warning:  #d97706;  --sev-warning-bg:  rgba(217, 119, 6, 0.12);
-  --sev-notice:   #8b5cf6;  --sev-notice-bg:   rgba(139, 92, 246, 0.10);
-  --sev-info:     #2563eb;  --sev-info-bg:     rgba(37, 99, 235, 0.10);
-  --sev-debug:    #64748b;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
-  --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
+  /* THE severity → tone map (theme/severity.ts SEVERITY_TONES, owner 2026-11-10).
+     Light theme: deep cuts of the owner's hues, so accent text clears 4.5:1 on white.
+     -solid/-on are a solid pill and the text that holds AA on it (same in every theme). */
+  --sev-critical: #DC2626;  --sev-critical-bg: rgba(220, 38, 38, 0.10);
+  --sev-error:    #C2410C;  --sev-error-bg:    rgba(194, 65, 12, 0.10);
+  --sev-warning:  #B45309;  --sev-warning-bg:  rgba(245, 158, 11, 0.14);
+  --sev-notice:   #0369A1;  --sev-notice-bg:   rgba(56, 189, 248, 0.14);
+  --sev-info:     #2F7A7A;  --sev-info-bg:     rgba(95, 179, 179, 0.16);
+  --sev-debug:    #5B6779;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
+  --sev-ok:       #15803D;  --sev-ok-bg:       rgba(34, 197, 94, 0.12);
+  --sev-critical-solid: #DC2626; --sev-critical-on: #FFFFFF;
+  --sev-error-solid:    #C2410C; --sev-error-on:    #FFFFFF;
+  --sev-warning-solid:  #F59E0B; --sev-warning-on:  #1A1203;
+  --sev-notice-solid:   #38BDF8; --sev-notice-on:   #04141D;
+  --sev-info-solid:     #5FB3B3; --sev-info-on:     #061515;
+  --sev-debug-solid:    #94A3B8; --sev-debug-on:    #0B1220;
+  --sev-ok-solid:       #22C55E; --sev-ok-on:       #04140A;
 
   /* ----- Design tokens (Phase 0) — reference these instead of hardcoding ----- */
   /* Type scale: dense but legible. Dense NOC tools run a 13–14px body in
@@ -964,7 +974,7 @@ code, kbd, pre, .mono, td.mono {
 
 /* ===== Logs page (tabs/Logs.tsx, tabs/LogDetail.tsx) ===== */
 /* Form controls do not inherit a face by default, and would render in the browser's. */
-.lv button, .lv select, .lv input, .lv-det button { font-family: var(--font-ui); }
+.lv button, .lv select, .lv input { font-family: var(--font-ui); }
 .lv input.lv-mono { font-family: var(--font-mono); }
 .lv .lv-title { margin: 0; font-family: var(--font-display); font-size: var(--fs-md); font-weight: 600; color: var(--fg); }
 .lv .lv-results-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
@@ -998,13 +1008,54 @@ code, kbd, pre, .mono, td.mono {
 .lv-flow-sample { color: color-mix(in srgb, var(--sev-warning) 58%, var(--fg)); font-size: var(--fs-meta); margin: 6px 0 0; }
 .lv-more { display: flex; justify-content: center; margin-top: var(--sp-2); }
 .lv-center { text-align: center; }
-.lv-inline-detail { position: relative; margin-top: var(--sp-3); border-top: 1px solid var(--border); padding-top: var(--sp-3); scroll-margin-top: var(--sp-3); }
-.lv-detail-close { position: absolute; right: 0; top: var(--sp-3); z-index: 1; }
 .lv-results-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); }
 .lv-results-count { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
 .lv-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .lv-actions-label { color: var(--fg-muted); font-size: var(--fs-meta); }
 .lv-sep { color: var(--border); }
+
+/* Severity tiles (tracker 387, owner screenshot A): counted by the store across every
+   match, re-tinted by the one severity map, icon and word beside every number. */
+.lv-tiles-wrap { margin: var(--sp-3) 0 0; }
+.lv-tiles { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.lv-tile {
+  display: inline-flex; align-items: center; gap: 10px; min-width: 132px; padding: 8px 14px 8px 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--fg); font-family: var(--font-ui);
+}
+.lv-tile:hover { border-color: var(--border-strong); }
+.lv-tile[aria-pressed="true"] { border-color: var(--lt-tone); box-shadow: inset 0 0 0 1px var(--lt-tone); background: var(--lt-bg); }
+.lv-tile-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--lt-bg); color: var(--lt-tone); flex: none; }
+.lv-tile-txt { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; }
+.lv-tile-n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--fg); }
+.lv-tile-k { font-size: var(--fs-sm); color: var(--fg-muted); }
+.lv-tile-critical { --lt-tone: var(--sev-critical); --lt-bg: var(--sev-critical-bg); }
+.lv-tile-error { --lt-tone: var(--sev-error); --lt-bg: var(--sev-error-bg); }
+.lv-tile-warning { --lt-tone: var(--sev-warning); --lt-bg: var(--sev-warning-bg); }
+.lv-tile-info { --lt-tone: var(--sev-info); --lt-bg: var(--sev-info-bg); }
+.lv-tile-ok { --lt-tone: var(--sev-ok); --lt-bg: var(--sev-ok-bg); }
+.lv-tiles-note { margin: 6px 0 0; color: var(--fg-muted); font-size: var(--fs-meta); }
+/* Sub-tabs: Events (N) · Logs · Traps · … */
+.lv-subtabs { display: flex; gap: 4px; margin-top: var(--sp-3); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.lv-subtab {
+  padding: 8px 14px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer;
+  color: var(--fg-muted); font-size: 15px; white-space: nowrap;
+}
+.lv-subtab:hover { color: var(--fg); }
+/* --accent alone is too deep on OLED; mixed toward --fg it holds AA on every theme. */
+.lv-subtab[aria-pressed="true"] { color: color-mix(in srgb, var(--accent) 55%, var(--fg)); border-bottom-color: var(--accent-bright); font-weight: 600; }
+.lv-subtab-n { font-variant-numeric: tabular-nums; }
+/* Pager: "Showing 1–200 of 7,547 events" and numbered pages over the exact total. */
+.lv-pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.lv-pager-txt { color: var(--fg-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.lv-pages { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.lv-page {
+  min-width: 34px; height: 32px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.lv-page:hover:not(:disabled) { border-color: var(--accent); }
+.lv-page[aria-current="page"] { background: var(--accent-soft); border-color: var(--accent); font-weight: 700; }
+.lv-page:disabled { opacity: .55; cursor: default; }
+.lv-page-gap { color: var(--fg-muted); padding: 0 4px; }
 
 /* Quick filters: counted over the rows on screen, and labelled as such. */
 .lv-facets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--sp-2); margin: var(--sp-2) 0; }
@@ -1049,52 +1100,9 @@ code, kbd, pre, .mono, td.mono {
 .lv-phone-top .lf-time-ms { display: none; }
 .lv-phone-cell { display: flex; flex-direction: column; gap: 2px; width: 100%; min-width: 0; }
 
-/* Details: Summary | Fields | Raw */
-.lv-det { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
-.lv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
-.lv-tab {
-  padding: 7px 12px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: transparent;
-  color: var(--fg-muted); font-size: var(--fs-sm); cursor: pointer;
-}
-.lv-tab:hover { color: var(--fg); }
-.lv-tab[aria-selected="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
-.lv-panel { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
-.lv-det-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); line-height: 1.35; overflow-wrap: anywhere; }
-.lv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.lv-kv { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 6px var(--sp-3); margin: 0; font-size: var(--fs-sm); }
-.lv-kv dt { color: var(--fg-muted); }
-.lv-kv dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
-.lv-kv dd .lf-time { white-space: normal; }
-.lv-card { container-type: inline-size; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); min-width: 0; }
-.lv-card-title { margin: 0 0 var(--sp-2); font-size: 16px; font-weight: 600; color: var(--fg); }
-.lv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
-.lv-pills + .lv-message { margin-top: var(--sp-2); }
-.lv-pill { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: var(--fs-meta); color: var(--fg); }
-.lv-pill-k { color: var(--fg-muted); margin-right: 5px; }
-.lv-message { margin: 0; font-size: var(--fs-sm); color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
-.lv-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-sm); }
-.lv-table th { text-align: left; font-weight: 500; font-size: var(--fs-meta); color: var(--fg-muted); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); text-transform: none; letter-spacing: 0; background: transparent; }
-.lv-table td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); color: var(--fg); overflow-wrap: anywhere; vertical-align: top; }
-.lv-table tr:last-child td { border-bottom: 0; }
-.lv-table th:first-child { width: 36%; }
-.lv-table-oid th:first-child { width: 58%; }
-.lv-table .lv-mono { font-size: var(--fs-meta); }
-.lv-exporter { font-size: var(--fs-sm); color: var(--fg-muted); margin: 0 0 var(--sp-2); }
-.lv-exporter .lv-mono { color: var(--fg); }
-.lv-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
-.lv-end { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); min-width: 0; }
-.lv-end-k { display: block; color: var(--fg-muted); font-size: var(--fs-meta); }
-.lv-end-v { display: block; color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-sm); overflow-wrap: anywhere; }
-.lv-arrow { display: flex; flex-direction: column; align-items: center; color: var(--fg-muted); font-size: var(--fs-meta); }
-.lv-arrow-glyph { color: var(--fg-subtle); font-size: 16px; line-height: 1; }
-.lv-copy-row { display: flex; align-items: center; gap: var(--sp-2); }
-.lv-copy-state { color: var(--fg-muted); font-size: var(--fs-meta); }
-.lv-raw { padding: var(--sp-2); background: var(--surface-2); border-radius: var(--radius-md); max-height: 60vh; overflow: auto; }
-.lv-pipeline summary { cursor: pointer; color: var(--fg-muted); font-size: var(--fs-sm); padding: 4px 0; }
-.lv-pipeline summary:hover { color: var(--fg); }
+/* The record details moved to the Event Intelligence panel (components/event/event.css). */
 
-.lv button:focus-visible, .lv select:focus-visible, .lv input:focus-visible, .lv summary:focus-visible,
-.lv-det button:focus-visible, .lv-det summary:focus-visible, .lv-det [role="tabpanel"]:focus-visible {
+.lv button:focus-visible, .lv select:focus-visible, .lv input:focus-visible, .lv summary:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1105,13 +1113,6 @@ code, kbd, pre, .mono, td.mono {
   /* One swipeable strip, so the filters do not push the rows off the first screen. */
   .lv-facets { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
   .lv-facets-label, .lv-facet { flex: none; }
-}
-/* The strip reads across when there is room for a whole address and port, and stacks
-   when there is not, measured against the card so the Inspector's width counts. */
-@container (max-width: 460px) {
-  .lv-strip { grid-template-columns: minmax(0, 1fr); }
-  .lv-arrow { flex-direction: row; gap: var(--sp-2); justify-content: center; }
-  .lv-arrow-glyph { transform: rotate(90deg); }
 }
 
 /* ===== Device detail page (DeviceDetailPage) — full-screen tabbed drill-down ===== */
@@ -3481,14 +3482,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --glass-tint-b: rgba(16, 185, 129, 0.14);
   --glass-scrim: rgba(4, 8, 16, 0.60);
 
-  /* Severity hues stay vivid; lift the translucent fills for the darker canvas. */
-  --sev-critical-bg: rgba(244, 80, 107, 0.18);
-  --sev-error-bg:    rgba(251, 146, 60, 0.18);
-  --sev-warning-bg:  rgba(251, 191, 36, 0.18);
-  --sev-notice-bg:   rgba(167, 139, 250, 0.18);
-  --sev-info-bg:     rgba(96, 165, 250, 0.18);
-  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
-  --sev-ok-bg:       rgba(52, 211, 153, 0.18);
+  /* The owner's palette on the dark canvas (theme/severity.ts SEVERITY_TONES), with
+     the translucent fills lifted for the darker surfaces. */
+  --sev-critical: #EF4444;  --sev-critical-bg: rgba(239, 68, 68, 0.18);
+  --sev-error:    #F97316;  --sev-error-bg:    rgba(249, 115, 22, 0.18);
+  --sev-warning:  #F59E0B;  --sev-warning-bg:  rgba(245, 158, 11, 0.18);
+  --sev-notice:   #38BDF8;  --sev-notice-bg:   rgba(56, 189, 248, 0.18);
+  --sev-info:     #5FB3B3;  --sev-info-bg:     rgba(95, 179, 179, 0.18);
+  --sev-debug:    #94A3B8;  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
+  --sev-ok:       #22C55E;  --sev-ok-bg:       rgba(34, 197, 94, 0.18);
 
   /* Brighter indigo accent — reserved for true signal (active/focus). */
   --accent: #a5b4fc;
@@ -3536,6 +3538,16 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --ack:  #8957e5;
   --viz-1:#4c8dff; --viz-2:#3fb6b2; --viz-3:#e2a03f;
   --viz-4:#c76fe0; --viz-5:#6fcf97; --viz-6:#f2785c;
+}
+:root[data-theme="oled"] {
+  /* oled is outside the first dark block, so it takes the owner's dark severity hues here. */
+  --sev-critical: #EF4444;  --sev-critical-bg: rgba(239, 68, 68, 0.18);
+  --sev-error:    #F97316;  --sev-error-bg:    rgba(249, 115, 22, 0.18);
+  --sev-warning:  #F59E0B;  --sev-warning-bg:  rgba(245, 158, 11, 0.18);
+  --sev-notice:   #38BDF8;  --sev-notice-bg:   rgba(56, 189, 248, 0.18);
+  --sev-info:     #5FB3B3;  --sev-info-bg:     rgba(95, 179, 179, 0.18);
+  --sev-debug:    #94A3B8;  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
+  --sev-ok:       #22C55E;  --sev-ok-bg:       rgba(34, 197, 94, 0.18);
 }
 :root[data-theme="oled"] {
   -webkit-font-smoothing: antialiased;

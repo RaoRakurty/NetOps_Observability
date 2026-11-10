@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/flownames"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -572,6 +573,8 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
+	flowDatasets    *flownames.DatasetWatch              // tracker 387 PR 13d: do ip_asn / geoip_country load
+	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -1251,6 +1254,8 @@ func newServer() *server {
 		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
+		ifaceNames:       flownames.NewExporter(),
+		flowDatasets:     flownames.NewDatasetWatch(),
 		discovery:        d,
 		devStore:         devStore,
 		snmpScan:         snmpScan,
@@ -2944,6 +2949,13 @@ func Run() {
 	// IP→device + (device,ifIndex)→ifName export for the C7.1 EntityResolver (the
 	// keystone for directed-topology direction sources C7.3–C7.5 + G2 canonicalize).
 	srv.startEntityResolverEnrichment(ctx)
+	// (tenant, exporter, ifIndex)→ifName rows in netops.iface_names, the table the
+	// flows API names interfaces through (tracker 387 PR 13b).
+	settlePlatformAddrs(outboundSourceAddr)
+	srv.workers.start("iface-names-export", func() { srv.runIfaceNamesExport(ctx) })
+	// The SNMP trap receiver's interface-address rung and ifIndex names
+	// (tracker 387 PR 13c', 13c).
+	srv.workers.start("trap-addr-index", func() { srv.runTrapAddressIndex(ctx) })
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
@@ -3658,7 +3670,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
-	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention)    // retention floor: oldest visible log + exact total (tenant-scoped)
+	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention) // retention floor: oldest visible log + exact total (tenant-scoped)
+	// Logs summary tiles: severity counts over the search's own logsScope surface (tracker 387).
+	mux.HandleFunc("/api/logs/severity-counts", s.handleLogsSeverityCounts)
 	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)
 	mux.HandleFunc("/api/logs/export/rows", s.handleLogsExportRows) // Mode A: selected/loaded rows
 	mux.HandleFunc("/api/exports/view/", s.handleExportView)        // token-authenticated (public)
@@ -4814,6 +4828,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.sealMetrics != nil {
 		s.sealMetrics.write(w)
 	}
+	s.ifaceNames.WriteMetrics(w)
+	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
 	}

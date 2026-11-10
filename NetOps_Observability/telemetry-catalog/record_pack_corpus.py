@@ -67,7 +67,13 @@ def engine_event(fx: dict) -> dict:
     raw = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
            "severity": fx.get("severity", "notice"), "message": fx["message"],
            "timestamp": TS}
-    return {**raw, **P._PACKS.parse(raw)}
+    if "msgid" in fx:
+        raw["msgid"] = fx["msgid"]
+    ev = {**raw, **P._PACKS.parse(raw)}
+    # Stage B's envelope fallback: MSGID is the event_type when no grammar stated one.
+    if fx.get("msgid") and fx["msgid"] != "-" and "event_type" not in ev:
+        ev["event_type"] = str(fx["msgid"]).lower()
+    return ev
 
 
 def entry_for(pack: str, fx: dict) -> dict | None:

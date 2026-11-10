@@ -33,6 +33,12 @@ distributed and carries no notice obligation.
 | `grafana/grafana` | 11.2.0 | AGPL-3.0-only | AGPL-3.0-only per upstream package.json + LICENSING.md (relicensed from Apache-2.0 at v9.0). Shipped UNMODIFIED as a separate container; no Correlix code links to or derives from it. AGPL §13 network clause applies to Grafana's own UI, which we neither modify nor proxy-rebrand. |
 | `prom/node-exporter` | v1.8.2 | Apache-2.0 | BusyBox base. |
 
+## api image (netops-api) — embedded in the binary
+
+| Component | Version | Licence | Notes |
+|---|---|---|---|
+| `iana-protocol-registries` | registries fetched 2026-11-09 | CC0-1.0 | IP protocol keywords and (transport, port) service names reduced from the IANA Protocol Numbers and Service Name and Transport Protocol Port Number registries by scripts/gen-iana-tables.py (sha256-pinned sources, fetch date in each file header; tracker 387 PR 13). IANA and the IETF dedicate the Protocol Registries to the public domain under CC0 1.0 (https://www.iana.org/help/licensing-terms, revised 2021-11-10); no attribution is required. Only the number, transport and name columns are kept: the registry's assignee and contact columns are never copied. |
+
 ## api image (netops-api, netops-prober)
 
 | Component | Version | Licence | Notes |

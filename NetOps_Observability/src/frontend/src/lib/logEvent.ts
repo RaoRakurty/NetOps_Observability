@@ -64,6 +64,17 @@ export interface FlowView {
   protocol: string;
   inInterface: string;
   outInterface: string;
+  /**
+   * The interface as an operator reads it: `ge0/3 (4)` when the API named the
+   * index (tracker 387 PR 13b), `4` when it could not, and `none reported (0)` for
+   * the IPFIX "no interface" sentinels. Never a name the API did not give.
+   */
+  inInterfaceLabel: string;
+  outInterfaceLabel: string;
+  /** The likely service on the lower port, from the IANA registry: a heuristic. */
+  service: string;
+  /** A flow to or from Correlix's own pollers (traffic_class=platform_monitoring). */
+  platformMonitoring: boolean;
   packets: string;
   bytes: string;
   /** The search-index sample and the exporter's own sampling, labelled apart. */
@@ -100,7 +111,12 @@ export interface LogEvent {
   flow?: FlowView;
   syslog?: SyslogView;
   /** Trap identity, kept apart so the details view can set it in mono. */
-  trap?: { oid: string; uptime: string };
+  /**
+   * `interface` is the receiver's port, as an operator reads it (tracker 387 PR 13c):
+   * `ge0/3 (4)` when named, `4` when only the index is known; `interfaceHow` says
+   * how it was named. Empty when the trap is about no interface.
+   */
+  trap?: { oid: string; uptime: string; interface: string; interfaceHow: string };
   message: string;
   pipeline: Record<string, unknown>;
   raw: Record<string, any>;
@@ -129,8 +145,15 @@ function isCommunityOid(oid: string): boolean {
 // so anything unrecognised stays hidden.
 const NOT_SECRET = new Set([
   "message_key", "__key", "partition_key", "routing_key", "sort_key", "primary_key",
+  // Event identity (tracker 387): the alarm's correlation key and the syslog dedup key
+  // are ids an operator copies, not credentials.
+  "correlation_key", "dedup_key",
   "bgp_community", "bgp_communities", "large_communities", "extended_communities",
 ]);
+
+// Names that would read as secrets but are booleans by contract ("a community was
+// present"). Shown only while they ARE booleans: any other value is hidden.
+const BOOLEAN_ONLY = new Set(["snmp_community_present"]);
 
 export function isSecretName(name: string): boolean {
   const snake = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.\-\s]+/g, "_").toLowerCase();
@@ -171,7 +194,8 @@ export function redactSecrets<T>(value: T, depth = 0): T {
     );
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rec)) {
-      out[k] = isSecretName(k) || (labelled && k === "value") ? HIDDEN : redactSecrets(v, depth + 1);
+      if (BOOLEAN_ONLY.has(k)) out[k] = typeof v === "boolean" ? v : HIDDEN;
+      else out[k] = isSecretName(k) || (labelled && k === "value") ? HIDDEN : redactSecrets(v, depth + 1);
     }
     return out as T;
   }
@@ -183,14 +207,14 @@ export function redactSecrets<T>(value: T, depth = 0): T {
 /** Values a pipeline writes when it knows nothing. They read as noise, so they read as nothing. */
 const PLACEHOLDER = /^(?:|-|unknown|n\/?a|none|null|undefined)$/i;
 
-function scalar(v: unknown): string {
+export function scalar(v: unknown): string {
   if (typeof v === "string") return v.trim();
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   if (typeof v === "boolean") return String(v);
   return "";
 }
 
-function lookup(src: Record<string, any>, path: string): unknown {
+export function lookup(src: Record<string, any>, path: string): unknown {
   if (path in src) return src[path];
   let cur: any = src;
   for (const part of path.split(".")) {
@@ -201,7 +225,7 @@ function lookup(src: Record<string, any>, path: string): unknown {
 }
 
 /** First scalar value among `paths`; a nested path and a literal dotted key both resolve. */
-function pick(src: Record<string, any>, ...paths: string[]): string {
+export function pick(src: Record<string, any>, ...paths: string[]): string {
   for (const p of paths) {
     const s = scalar(lookup(src, p));
     if (s !== "") return s;
@@ -210,7 +234,7 @@ function pick(src: Record<string, any>, ...paths: string[]): string {
 }
 
 /** Same, but `unknown`-style placeholders do not count as a value. */
-function known(src: Record<string, any>, ...paths: string[]): string {
+export function known(src: Record<string, any>, ...paths: string[]): string {
   for (const p of paths) {
     const s = scalar(lookup(src, p));
     if (!PLACEHOLDER.test(s)) return s;
@@ -386,16 +410,49 @@ function flowSamplingOf(src: Record<string, any>): LogField[] {
   return out;
 }
 
-function flowViewOf(src: Record<string, any>): FlowView {
+/** How the receiver named a trap's interface, in plain words. */
+const TRAP_INTERFACE_HOW: Record<string, string> = {
+  varbind_name: "named in the trap",
+  ifindex_map: "named from the device's interface table",
+  ifindex_only: "index only, not named",
+};
+
+/** A trap's interface: the receiver's name beside the index, or the index alone. */
+function trapInterfaceOf(src: Record<string, any>): { label: string; how: string } {
+  const basis = pick(src, "interface_basis");
+  const name = pick(src, "interface");
+  const index = pick(src, "ifindex");
+  if (!name || basis === "none" || !(basis in TRAP_INTERFACE_HOW)) return { label: "", how: "" };
+  const label = basis === "ifindex_only" || !index || index === name ? name : `${name} (${index})`;
+  return { label, how: TRAP_INTERFACE_HOW[basis] };
+}
+
+/** One interface as shown: the API's name beside the index, or the index alone. */
+function interfaceLabel(index: string, name: unknown, basis: unknown): string {
+  if (index === "") return "";
+  if (basis === "sentinel") return `none reported (${index})`;
+  const n = typeof name === "string" ? name.trim() : "";
+  return basis === "resolved" && n ? `${n} (${index})` : index;
+}
+
+function flowViewOf(src: Record<string, any>, resolved: Record<string, any>): FlowView {
   const sampling = flowSamplingOf(src);
+  const inIdx = pick(src, "network.ingress.interface.index", "in_if");
+  const outIdx = pick(src, "network.egress.interface.index", "out_if");
+  const svcName = typeof resolved.service_name === "string" ? resolved.service_name : "";
+  const svcPort = resolved.service_port !== undefined ? String(resolved.service_port) : "";
   return {
     exporter: pick(src, "exporter.address", "sampler_address"),
     exporterName: known(src, "exporter.name", "exporter_name", "device_name"),
     source: endpoint(src, "source", "src_addr", "src_port"),
     destination: endpoint(src, "destination", "dst_addr", "dst_port"),
     protocol: protocolName(src),
-    inInterface: pick(src, "network.ingress.interface.index", "in_if"),
-    outInterface: pick(src, "network.egress.interface.index", "out_if"),
+    inInterface: inIdx,
+    outInterface: outIdx,
+    inInterfaceLabel: interfaceLabel(inIdx, resolved.in_if_name, resolved.in_if_name_basis),
+    outInterfaceLabel: interfaceLabel(outIdx, resolved.out_if_name, resolved.out_if_name_basis),
+    service: svcName && svcPort ? `${svcName} (port ${svcPort}, likely)` : "",
+    platformMonitoring: resolved.traffic_class === "platform_monitoring",
     packets: count(pick(src, "flow.packets.observed", "packets")),
     bytes: count(pick(src, "flow.bytes.observed", "bytes")),
     sampling,
@@ -423,6 +480,8 @@ export interface LogHit {
   _index?: string;
   _id?: string;
   _source?: Record<string, any> | null;
+  /** Names the API resolved beside the stored document (tracker 387 PR 13b). Never stored. */
+  _resolved?: Record<string, any> | null;
 }
 
 export function toLogEvent(hit: LogHit): LogEvent {
@@ -438,7 +497,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
   }
   if (index) pipeline._index = index;
 
-  const summary = pick(src, "summary", "event.summary");
+  // The enrichment's headline (tracker 387 `title`) leads when a record has one; the
+  // parser's summary is next. Both are the record's own words.
+  const summary = known(src, "title") || pick(src, "summary", "event.summary");
   const eventMessage = pick(src, "event.message");
   const message = eventMessage || pick(src, "message", "msg");
   const parserStatus = pick(src, "parser.status", "parser_status");
@@ -472,7 +533,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
       const oid = pick(src, "trap_oid");
       const uptime = pick(src, "sys_uptime_human");
       varbinds = varbindsOf(src);
-      trap = { oid, uptime };
+      const iface = trapInterfaceOf(src);
+      trap = { oid, uptime, interface: iface.label, interfaceHow: iface.how };
+      if (iface.label) addChip({ label: `Interface ${iface.label}`, stream: true });
       const undecoded = name.toLowerCase() === "enterprisespecific";
       if (undecoded) addChip({ label: NOT_DECODED, stream: true });
       else addChip(parserChip(parserStatus));
@@ -486,7 +549,7 @@ export function toLogEvent(hit: LogHit): LogEvent {
       break;
     }
     case "flow": {
-      flow = flowViewOf(src);
+      flow = flowViewOf(src, (redactSecrets(hit._resolved ?? {}) as Record<string, any>) ?? {});
       deviceLabel = flow.exporterName || flow.exporter;
       deviceAddress = flow.exporter;
       title = summary || (flow.source.address || flow.destination.address
