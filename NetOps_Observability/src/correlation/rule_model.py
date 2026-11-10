@@ -795,15 +795,21 @@ def _compile_extract_core(spec: Any) -> Extractor:
         return _pick
     if op == "ev":
         # Raw event keys, in preference order — the bus may carry a field under
-        # several spellings. `base["ev"]` is the untrusted event dict itself.
-        keys = tuple(str(k) for k in arg)
+        # several spellings. `base["ev"]` is the untrusted event dict itself. A
+        # dotted key walks a nested object the receiver wrote (`bgp.peer_address`,
+        # tracker 387); a step that is not an object answers "".
+        keys = tuple(tuple(str(k).split(".")) for k in arg)
         def _ev(c: Ctx) -> str:
             ev = c.base["ev"]
-            for k in keys:
-                if k in ev:
-                    v = ev[k]
-                    if v:
-                        return str(v)
+            for path in keys:
+                v: Any = ev
+                for step in path:
+                    if not isinstance(v, dict) or step not in v:
+                        v = None
+                        break
+                    v = v[step]
+                if v and not isinstance(v, (dict, list)):
+                    return str(v)
             return ""
         return _ev
     if op == "re":

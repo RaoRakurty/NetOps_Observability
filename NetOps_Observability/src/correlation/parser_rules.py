@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-09-vendor-packs-wave1'
+PARSER_REV = '2026-11-10-trap-bgp-classes'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -2578,8 +2578,14 @@ _ROWS: tuple[dict[str, Any], ...] = (
                  'fsm_from': {'re': [['$from_raw', '^\\D*([0-6])\\)?\\s*$', 1, '']]},
                  'move': {'template': '{fsm_from|?}>{fsm_to|?}'},
                  'established': {'bool': {'any': [{'eq': ['oid', '1.3.6.1.4.1.9.9.187.0.5']}, {'eq': ['$fsm_to', '6']}]}},
-                 'backward': {'bool': {'any': [{'equals_any': ['oid', ['1.3.6.1.4.1.9.9.187.0.2', '1.3.6.1.4.1.9.9.187.0.6', '1.3.6.1.4.1.9.9.187.0.8']]},
-                                               {'re': ['$move', '^(?:6>[1-5]|5>[1-4]|4>[1-3]|3>[12]|2>1)$']}]}},
+                 'tclass': {'ev': ['bgp.transition_class']},
+                 'backward': {'bool': {'any': [{'all': [{'equals_any': ['oid',
+                                                                        ['1.3.6.1.4.1.9.9.187.0.2',
+                                                                         '1.3.6.1.4.1.9.9.187.0.6',
+                                                                         '1.3.6.1.4.1.9.9.187.0.8']]},
+                                                        {'equals_any': ['$fsm_from', ['', '6']]},
+                                                        {'not_in': ['$tclass', ['never_established', 'progressing']]}]},
+                                               {'re': ['$move', '^6>[1-5]$']}]}},
                  'state': {'case': [{'when': {'var_true': 'established'}, 'value': 'up'}, {'when': {'always': True}, 'value': 'down'}]}},
      'emit': {'kind': 'bgp_adjacency_change',
               'metric': 'bgp_adjacency',
@@ -3083,8 +3089,11 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': 'bgp_adjacency_change',
      'fidelity_status': 'doc_claimed',
      'vendors': ['cisco'],
-     'guard': {'all': [{'eq': ['oid', '1.3.6.1.4.1.41916.100.2.54']}, {'not_in': ['$event_state', ['', 'point']]}]},
-     'extract': {'event_state': {'ev': ['event_state']},
+     'guard': {'all': [{'eq': ['oid', '1.3.6.1.4.1.41916.100.2.54']},
+                       {'not_in': ['$event_state', ['', 'point']]},
+                       {'any': [{'eq': ['$event_state', 'clear']}, {'not_in': ['$tclass', ['never_established', 'progressing']]}]}]},
+     'extract': {'tclass': {'ev': ['bgp.transition_class']},
+                 'event_state': {'ev': ['event_state']},
                  'native': {'ev': ['severity_native_text']},
                  'peer_raw': {'vb': ['1.3.6.1.4.1.41916.100.1.68']},
                  'peer': {'re': [['$peer_raw', '^(\\d{1,3}(?:\\.\\d{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:.]*)$', 1, '']]},
@@ -3219,7 +3228,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
                  'peer_index': {'vbindex': ['1.3.6.1.2.1.15.3.1.2', '1.3.6.1.2.1.15.3.1.14']},
                  'peer': {'alt': [{'vb': ['1.3.6.1.2.1.15.3.1.7']},
                                   {'re': [['$peer_index', '^(\\d{1,3}(?:\\.\\d{1,3}){3})$', 1, '']]},
-                                  {'vbname': ['peerremoteaddr', 'peeraddr', 'remoteaddr', 'peer']}]}},
+                                  {'ev': ['bgp.peer_address']},
+                                  {'vbname': ['peerremoteaddr', 'peeraddr', 'remoteaddr']}]}},
      'emit': {'kind': 'bgp_adjacency_change',
               'metric': 'bgp_adjacency',
               'modality': 'control_plane',
@@ -3572,6 +3582,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282399d'
+BAKED_RULES_HASH = '69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

@@ -622,7 +622,13 @@ RULES_HASH_SYSLOG_EVENTS = "cefbeeaad8aad30602f755d299f952abbe9f8162f348edad7eca
 #:
 #: SONiC (2026-11-10, tracker 387 wave 2): the orchagent interface line, one link row.
 RULES_HASH_SONIC = "4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282399d"
-RULES_HASH_A3 = RULES_HASH_SONIC
+#:
+#: Trap BGP classes (2026-11-10, tracker 387 trap semantics): cisco_bgp4 backward is
+#: 6>[1-5] or a backward notification with no/established prior state and no
+#: never_established/progressing class; sdwan.bgp_peer gated on the class; the event_type
+#: BGP row reads bgp.peer_address instead of the varbind-name scan.
+RULES_HASH_TRAP_BGP_CLASSES = "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342"
+RULES_HASH_A3 = RULES_HASH_TRAP_BGP_CLASSES
 
 
 def _guard_patterns(node) -> list[str]:

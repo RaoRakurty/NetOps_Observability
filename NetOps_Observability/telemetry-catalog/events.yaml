@@ -35,6 +35,15 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-10-trap-bgp-classes — tracker 387 trap semantics: trap.bgp.cisco_bgp4 calls
+# only a move out of established (6>[1-5]) backward, and the backward notifications only
+# when the trap names no prior state or established and the receiver's
+# `bgp.transition_class` is not never_established / progressing; trap.sdwan.bgp_peer is
+# gated on the same class; trap.bgp.adjacency_change.event_type reads the receiver's
+# `bgp.peer_address` ahead of the varbind-name scan, which no longer matches a bare "peer". The `ev` extraction
+# walks a dotted path. Also on this revision: the SONiC pack (wave 2) and the syslog
+# event model (presentation only, outside the hash).
+#
 # 2026-11-09-vendor-packs-wave1 — tracker 387 §6a wave 1: the Nokia SR OS, Cisco IOS XR
 # (+ IOS/NX-OS link cause, tracker 388) and Juniper Junos packs, and `with_msgid` grammars
 # (a Junos structured-data tag lives in MSGID). Pack rows sit behind every older rule.
@@ -128,7 +137,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-09-vendor-packs-wave1
+parser_rev: 2026-11-10-trap-bgp-classes
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -1676,14 +1685,25 @@ rules:
           any:
             - {eq: [oid, '1.3.6.1.4.1.9.9.187.0.5']}   # cbgpPeer2EstablishedNotification
             - {eq: ['$fsm_to', '6']}
+      # Tracker 387 trap semantics (owner 2026-11-10): only an ESTABLISHED session
+      # going down is a session failure. A move between the lower states (5>4, 3>1)
+      # is a neighbour that never connected: it stays a searchable named alarm. The
+      # backward-transition notifications count when the trap names no prior state
+      # or names established, and the receiver's class (`bgp.transition_class`)
+      # does not say the session was never established or is still progressing.
+      # The same rule producers.py states in code on the trap-semantics branch.
+      tclass: {ev: [bgp.transition_class]}
       backward:
         bool:
           any:
-            # cbgpBackwardTransition, cbgpPeer2BackwardTransNotification,
-            # cbgpPeer2BackwardTransition
-            - {equals_any: [oid, ['1.3.6.1.4.1.9.9.187.0.2', '1.3.6.1.4.1.9.9.187.0.6',
-                                  '1.3.6.1.4.1.9.9.187.0.8']]}
-            - {re: ['$move', '^(?:6>[1-5]|5>[1-4]|4>[1-3]|3>[12]|2>1)$']}
+            - all:
+                # cbgpBackwardTransition, cbgpPeer2BackwardTransNotification,
+                # cbgpPeer2BackwardTransition
+                - {equals_any: [oid, ['1.3.6.1.4.1.9.9.187.0.2', '1.3.6.1.4.1.9.9.187.0.6',
+                                      '1.3.6.1.4.1.9.9.187.0.8']]}
+                - {equals_any: ['$fsm_from', ['', '6']]}
+                - {not_in: ['$tclass', [never_established, progressing]]}
+            - {re: ['$move', '^6>[1-5]$']}
       state:
         case:
           - {when: {var_true: established}, value: up}
@@ -2224,11 +2244,17 @@ rules:
     family: bgp_adjacency_change
     fidelity_status: doc_claimed
     vendors: [cisco]
+    # Tracker 387 trap semantics: a raise the receiver classes as never established
+    # or progressing is a neighbour that cannot connect, not a session lost.
     guard:
       all:
         - {eq: [oid, '1.3.6.1.4.1.41916.100.2.54']}
         - {not_in: ['$event_state', ['', point]]}
+        - any:
+            - {eq: ['$event_state', clear]}
+            - {not_in: ['$tclass', [never_established, progressing]]}
     extract:
+      tclass: {ev: [bgp.transition_class]}
       event_state: {ev: [event_state]}
       native: {ev: [severity_native_text]}
       peer_raw: {vb: ['1.3.6.1.4.1.41916.100.1.68']}
@@ -2405,7 +2431,15 @@ rules:
           # also matches bgpPeerState / bgpPeerLastError, whose VALUES
           # ("idle(1)", "0x0000") are not a peer.
           - {re: [['$peer_index', '^(\d{1,3}(?:\.\d{1,3}){3})$', 1, '']]}
-          - {vbname: [peerremoteaddr, peeraddr, remoteaddr, peer]}
+          # Tracker 387: the receiver names the peer (`bgp.peer_address`, from the
+          # vendor's own index/varbind tables), ahead of any name scan. The bare
+          # `peer` substring is gone: it took the first varbind whose name held
+          # "peer", a state or an error code as often as an address. The address
+          # names stay as the last resort until every receiver stamps
+          # bgp.peer_address (the trap-semantics branch), so a vendor trap that names
+          # its peer column keeps its session identity meanwhile.
+          - {ev: [bgp.peer_address]}
+          - {vbname: [peerremoteaddr, peeraddr, remoteaddr]}
     emit:
       kind: bgp_adjacency_change
       metric: bgp_adjacency

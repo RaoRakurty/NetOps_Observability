@@ -472,9 +472,9 @@ def test_the_parser_is_untouched():
     high (test below), and only the protocol line, which carries no cause, went to warn.
     Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
     behind every older one; the trap link rows this file protects did not move."""
-    assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1"
+    assert parser_rules.PARSER_REV == "2026-11-10-trap-bgp-classes"
     assert parser_rules.BAKED_RULES_HASH == (
-        "4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282399d")
+        "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

@@ -507,7 +507,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # tests/test_workload_profiles.py pins that it still never classifies.
     # 2026-11-09-vendor-packs-wave1: tracker 387 Nokia SR OS / IOS XR / Junos packs. They
     # read those vendors' formats only; the V1 noise pool is Cisco IOS three-part lines.
-    assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1", (
+    # 2026-11-10-trap-bgp-classes: tracker 387 trap BGP classes (TRAP lane) and the SONiC
+    # pack; the V1 noise pool has neither.
+    assert parser_rules.PARSER_REV == "2026-11-10-trap-bgp-classes", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-vendor-packs-wave1`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-10-trap-bgp-classes`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
