@@ -319,6 +319,10 @@ tests:
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "critical", "wrong severity_native_text")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.title, "System cpu usage is above 90% (critically high) on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "cpu:vEdge-1", "wrong correlation_key")
+              assert_eq!(.metrics, {"cpu_idle_percent": {"basis": "observed", "value": 0.0}, "cpu_system_percent": {"basis": "observed", "value": 90.82}, "cpu_user_percent": {"basis": "observed", "value": 9.18}}, "wrong metrics")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key"], "fields_guidance": ["guidance"], "fields_observed": ["facility", "event_type", "summary", "severity_native_text", "metrics.cpu_user_percent", "metrics.cpu_system_percent", "metrics.cpu_idle_percent"], "unknown": []}, "wrong enrichment")
   - name: "cisco_sdwan: a controller notification, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -423,7 +427,11 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_failed", "wrong event_type")
+              assert_eq!(.title, "DNS lookup failed for vbond.example.net on vEdge-1 (Timeout while contacting DNS servers)", "wrong title")
+              assert_eq!(.correlation_key, "dns:vEdge-1:vbond.example.net", "wrong correlation_key")
+              assert_eq!(.guidance, {"basis": "pack_guidance", "impact": ["The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.", "Existing control and data-plane sessions keep running until they need the orchestrator again."], "next_checks": ["Check the DNS servers configured in VPN 0 and that the transport interface can reach them.", "Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).", "Run show control connections and show control local-properties to see whether the edge is still attached."]}, "wrong guidance")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key"], "fields_guidance": ["guidance"], "fields_observed": ["event_type", "summary"], "unknown": []}, "wrong enrichment")
   - name: "cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_normalized
@@ -440,7 +448,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_failed", "wrong event_type")
   - name: "cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_normalized
@@ -457,7 +465,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_resolution_failed", "wrong event_type")
   - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -474,7 +482,8 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_succeeded", "wrong event_type")
+              assert_eq!(.title, "DNS lookup succeeded for vbond.example.net on vEdge-1", "wrong title")
   - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -491,7 +500,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_resolution_successful", "wrong event_type")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -712,6 +721,8 @@ tests:
               assert_eq!(.summary, "/usr/sbin/ftmd -f cpu 2.5% mem 1.2%", "wrong summary")
               assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "Process /usr/sbin/ftmd -f on vEdge-1", "wrong title")
+              assert_eq!(.metrics, {"process_cpu_percent": {"basis": "observed", "value": 2.5}, "process_mem_percent": {"basis": "observed", "value": 1.2}}, "wrong metrics")
   - name: "cisco_sdwan: a kernel-thread row is the same dump"
     inputs:
       - insert_at: syslog_normalized
@@ -753,6 +764,10 @@ tests:
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "login_accepted", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:41424", "wrong audit_source")
+              assert_eq!(.audit_via, "netconf over ssh", "wrong audit_via")
   - name: "juniper_junos: a structured-data frame takes its tag from MSGID"
     inputs:
       - insert_at: syslog_normalized
@@ -1373,6 +1388,14 @@ tests:
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
               assert_eq!(.message, "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
+              assert_eq!(.title, "SNMP session on vEdge-1 by svc-user from 192.0.2.1 (poll)", "wrong title")
+              assert_eq!(.correlation_key, "audit:vEdge-1:snmp:777134", "wrong correlation_key")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "session_created", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:59169", "wrong audit_source")
+              assert_eq!(.audit_via, "snmp", "wrong audit_via")
+              assert_eq!(.session_id, "777134", "wrong session_id")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "audit_action", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "audit_user", "audit_source", "audit_via", "session_id"], "unknown": []}, "wrong enrichment")
   - name: "standard: a NETCONF session opening keeps its own key"
     inputs:
       - insert_at: syslog_normalized
@@ -1427,6 +1450,10 @@ tests:
               assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
               assert_eq!(.summary, "Session of svc-user given groups basic", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "groups_assigned", "wrong audit_action")
+              assert_eq!(.session_id, "777134", "wrong session_id")
+              assert_eq!(.audit_groups, "basic", "wrong audit_groups")
   - name: "standard: session end"
     inputs:
       - insert_at: syslog_normalized
@@ -1514,6 +1541,10 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_session", "wrong event_type")
               assert_eq!(.summary, "NETCONF transport session opened for svc-user from 192.0.2.1", "wrong summary")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_source, "192.0.2.1", "wrong audit_source")
+              assert_eq!(.audit_via, "netconf", "wrong audit_via")
+              assert_eq!(.session_id, "987344", "wrong session_id")
   - name: "standard: a NETCONF action names the action in its summary, digits masked"
     inputs:
       - insert_at: syslog_normalized
@@ -1571,6 +1602,11 @@ tests:
               assert_eq!(.summary, "SSH login accepted for svc-user from 192.0.2.1 (publickey)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
+              assert_eq!(.title, "SSH login accepted on vEdge-1 for svc-user from 192.0.2.1", "wrong title")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "login_accepted", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:35112", "wrong audit_source")
+              assert_eq!(.audit_via, "ssh", "wrong audit_via")
   - name: "standard: an SSH session opened"
     inputs:
       - insert_at: syslog_normalized

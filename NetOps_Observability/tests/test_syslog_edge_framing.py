@@ -154,7 +154,9 @@ FRAMES = [
         "message": "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via "
                    "none, reason: Timeout while contacting DNS servers",
         "parser_id": "cisco_sdwan.v1", "parser_status": "parsed",
-        "event_type": "dnsclient_ares_callback", "vendor": "cisco"}),
+        "event_type": "dns_lookup_failed", "vendor": "cisco",
+        "title": "DNS lookup failed for vbond.example.net on vEdge-1 (Timeout while contacting DNS servers)",
+        "correlation_key": "dns:vEdge-1:vbond.example.net"}),
     ("vEdge sshd", SSHD_KEX, {
         "frame_format": "rfc5424", "hostname": "vEdge-1", "appname": "sshd", "procid": 27761,
         "severity": "err", "syslog_facility": "auth",

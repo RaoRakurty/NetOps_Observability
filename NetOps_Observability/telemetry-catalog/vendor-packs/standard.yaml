@@ -75,60 +75,103 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?'
     event_type: 'audit_session_created_{via}'
     summary: 'SNMP session[ by {user}][ from {src}] (poll)'
     category: management_audit
+    fields:
+      title: 'SNMP session on {host}[ by {user}][ from {src}] (poll)'
+      correlation_key: 'audit:{device}:{via}[:{usid}]'
+      audit_user: '{user}'
+      audit_action: 'session_created'
+      audit_source: '{src}[:{port}]'
+      audit_via: '{via}'
+      session_id: '{usid}'
     fidelity: lab_validated
 
   - id: confd_session_created_netconf
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>netconf)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>netconf)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?'
     event_type: 'audit_session_created_{via}'
     summary: 'NETCONF session opened[ by {user}][ from {src}]'
     category: management_audit
+    fields:
+      title: 'NETCONF session opened on {host}[ by {user}][ from {src}]'
+      correlation_key: 'audit:{device}:{via}[:{usid}]'
+      audit_user: '{user}'
+      audit_action: 'session_created'
+      audit_source: '{src}[:{port}]'
+      audit_via: '{via}'
+      session_id: '{usid}'
     fidelity: lab_validated
 
   - id: confd_session_created_other
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>[a-z]+)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>[a-z]+)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?'
     event_type: 'audit_session_created_{via}'
     summary: 'Session opened via {via}[ by {user}][ from {src}]'
     category: management_audit
+    fields:
+      title: 'Session opened via {via} on {host}[ by {user}][ from {src}]'
+      correlation_key: 'audit:{device}:{via}[:{usid}]'
+      audit_user: '{user}'
+      audit_action: 'session_created'
+      audit_source: '{src}[:{port}]'
+      audit_via: '{via}'
+      session_id: '{usid}'
     fidelity: lab_validated
 
   - id: confd_session_groups
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? assigned to groups:\s*(?P<groups>\S.{0,127})?'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? assigned to groups:\s*(?P<groups>\S.{0,127})?'
     event_type: audit_session_groups
     summary: 'Session[ of {user}] given groups[ {groups}]'
     category: management_audit
+    fields:
+      title: 'Session groups assigned on {host}[ to {user}]'
+      correlation_key: 'audit:{device}:groups[:{usid}]'
+      audit_user: '{user}'
+      audit_action: 'groups_assigned'
+      session_id: '{usid}'
+      audit_groups: '{groups}'
     fidelity: lab_validated
 
   - id: confd_session_terminated
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? terminated session(?: \(reason: (?P<reason>[^)]{1,64})\))?'
+    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? terminated session(?: \(reason: (?P<reason>[^)]{1,64})\))?'
     event_type: audit_session_terminated
     summary: 'Session[ of {user}] closed[ ({reason})]'
     category: management_audit
+    fields:
+      title: 'Session closed on {host}[ for {user}][ ({reason})]'
+      correlation_key: 'audit:{device}:terminated[:{usid}]'
+      audit_user: '{user}'
+      audit_action: 'session_terminated'
+      session_id: '{usid}'
     fidelity: lab_validated
 
   - id: confd_netconf_rpc
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ (?P<step>got rpc|get attrs|sending rpc-reply|close-session)(?::\s*\{[^}]{0,128}\}(?P<op>[\w-]{1,64}))?'
+    pattern: '^netconf id=(?P<sid>\d+) (?P<step>got rpc|get attrs|sending rpc-reply|close-session)(?::\s*\{[^}]{0,128}\}(?P<op>[\w-]{1,64}))?'
     event_type: netconf_rpc
     summary: 'NETCONF {step}[ {op}]'
     category: management_audit
+    fields:
+      title: 'NETCONF {step} on {host}[: {op}]'
+      correlation_key: 'netconf:{device}:{sid}'
+      audit_action: 'rpc'
+      audit_via: 'netconf'
+      session_id: '{sid}'
     fidelity: lab_validated
 
   # A NETCONF action (live on vEdges, 2026-11-10): `netconf id=N action name={<ns>}<action>
@@ -137,40 +180,67 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?'
+    pattern: '^netconf id=(?P<sid>\d+) action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?'
     event_type: 'netconf_action_{action}'
     summary: 'NETCONF action {action}[ on {target}]'
     category: management_audit
+    fields:
+      title: 'NETCONF action {action} on {host}'
+      correlation_key: 'netconf:{device}:{sid}'
+      audit_action: 'action_{action}'
+      audit_via: 'netconf'
+      session_id: '{sid}'
     fidelity: lab_validated
 
   - id: confd_netconf_session
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?'
+    pattern: '^netconf id=(?P<sid>\d+) new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?'
     event_type: netconf_session
     summary: 'NETCONF transport session opened[ for {user}][ from {src}]'
     category: management_audit
+    fields:
+      title: 'NETCONF transport session on {host}[ for {user}][ from {src}]'
+      correlation_key: 'netconf:{device}:{sid}'
+      audit_user: '{user}'
+      audit_action: 'session_created'
+      audit_source: '{src}'
+      audit_via: 'netconf'
+      session_id: '{sid}'
     fidelity: lab_validated
 
   - id: confd_netconf_notification
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=\d+ sending notification(?: \{[^}]{0,128}\}(?P<name>[\w-]{1,64}))?'
+    pattern: '^netconf id=(?P<sid>\d+) sending notification(?: \{[^}]{0,128}\}(?P<name>[\w-]{1,64}))?'
     event_type: netconf_notification
     summary: 'NETCONF notification sent[ ({name})]'
     category: management_audit
+    fields:
+      title: 'NETCONF notification sent by {host}[ ({name})]'
+      correlation_key: 'netconf:{device}:{sid}'
+      audit_action: 'notification'
+      audit_via: 'netconf'
+      session_id: '{sid}'
     fidelity: lab_validated
 
   - id: sshd_accepted
     parser_id: standard_mgmt_audit.v1
     literal: 'Accepted '
     apps: [sshd]
-    pattern: '^Accepted (?P<method>\S{1,32}) for (?P<user>\S{1,64})(?: from (?P<src>\S{1,64}))?'
+    pattern: '^Accepted (?P<method>\S{1,32}) for (?P<user>\S{1,64})(?: from (?P<src>\S{1,64}))?(?: port (?P<port>\d{1,5}))?'
     event_type: ssh_login_accepted
     summary: 'SSH login accepted[ for {user}][ from {src}][ ({method})]'
     category: management_audit
+    fields:
+      title: 'SSH login accepted on {host}[ for {user}][ from {src}]'
+      correlation_key: 'audit:{device}:ssh:{user}'
+      audit_user: '{user}'
+      audit_action: 'login_accepted'
+      audit_source: '{src}[:{port}]'
+      audit_via: 'ssh'
     fidelity: lab_validated
 
   - id: sshd_banner_probe
@@ -181,6 +251,11 @@ grammars:
     event_type: ssh_banner_probe
     summary: 'SSH connection ended before the banner[: {why}]'
     category: management_audit
+    fields:
+      title: 'SSH connection ended before the banner on {host}'
+      correlation_key: 'audit:{device}:ssh_probe'
+      audit_action: 'banner_probe'
+      audit_via: 'ssh'
     fidelity: lab_validated
 
   - id: sshd_session
@@ -191,6 +266,12 @@ grammars:
     event_type: 'ssh_session_{state}'
     summary: 'SSH session {state}[ for {user}]'
     category: management_audit
+    fields:
+      title: 'SSH session {state} on {host}[ for {user}]'
+      correlation_key: 'audit:{device}:ssh:{user}'
+      audit_user: '{user}'
+      audit_action: 'session_{state}'
+      audit_via: 'ssh'
     fidelity: lab_validated
 
 rules:
@@ -237,6 +318,18 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
     expect:
+      title: 'SNMP session on vEdge-1 by svc-user from 192.0.2.1 (poll)'
+      correlation_key: 'audit:vEdge-1:snmp:777134'
+      audit_user: svc-user
+      audit_action: session_created
+      audit_source: '192.0.2.1:59169'
+      audit_via: snmp
+      session_id: '777134'
+      enrichment:
+        fields_observed: [event_type, summary, audit_user, audit_source, audit_via, session_id]
+        fields_derived: [normalized_severity, title, correlation_key, audit_action, dedup_key]
+        fields_guidance: []
+        unknown: []
       summary: 'SNMP session by svc-user from 192.0.2.1 (poll)'
       parser_id: standard_mgmt_audit.v1
       parser_status: parsed
@@ -278,6 +371,10 @@ fixtures:
     appname: confd
     message: 'audit user: svc-user/777134 assigned to groups: basic'
     expect:
+      audit_user: svc-user
+      audit_action: groups_assigned
+      session_id: '777134'
+      audit_groups: basic
       summary: 'Session of svc-user given groups basic'
       parser_status: parsed
       event_type: audit_session_groups
@@ -336,6 +433,10 @@ fixtures:
     appname: confd
     message: 'netconf id=987344 new tcp session for user svc-user from 192.0.2.1'
     expect:
+      audit_user: svc-user
+      audit_source: 192.0.2.1
+      audit_via: netconf
+      session_id: '987344'
       summary: 'NETCONF transport session opened for svc-user from 192.0.2.1'
       parser_status: parsed
       event_type: netconf_session
@@ -372,6 +473,11 @@ fixtures:
     appname: sshd
     message: 'Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed'
     expect:
+      title: 'SSH login accepted on vEdge-1 for svc-user from 192.0.2.1'
+      audit_user: svc-user
+      audit_action: login_accepted
+      audit_source: '192.0.2.1:35112'
+      audit_via: ssh
       summary: 'SSH login accepted for svc-user from 192.0.2.1 (publickey)'
       parser_status: parsed
       parser_id: standard_mgmt_audit.v1

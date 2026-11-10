@@ -31,6 +31,7 @@ so a test can replay real lines without a running Vector.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -62,9 +63,9 @@ class Grammar:
     """One baked body grammar, compiled once at import."""
 
     __slots__ = (
-        "alarm_floor", "apps", "category", "event_type", "facility", "grammar_id",
-        "literal", "native_code", "native_text", "pack", "parser_id", "regex",
-        "sev_digit", "sev_map", "sev_word", "summary", "vendor", "with_msgid",
+        "alarm_floor", "apps", "category", "event_type", "facility", "fields", "grammar_id",
+        "guidance", "literal", "metrics", "native_code", "native_text", "pack", "parser_id",
+        "regex", "sev_digit", "sev_map", "sev_word", "summary", "vendor", "with_msgid",
     )
 
     def __init__(self, row: Mapping[str, Any]) -> None:
@@ -87,6 +88,9 @@ class Grammar:
         self.alarm_floor = int(floor) if floor is not None else None
         self.category = str(row.get("category") or "")
         self.with_msgid = bool(row.get("with_msgid"))
+        self.fields: dict[str, str] = dict(row.get("fields") or {})
+        self.metrics: dict[str, str] = dict(row.get("metrics") or {})
+        self.guidance: dict[str, Any] = dict(row.get("guidance") or {})
 
     def haystack(self, msg: str, ev: Mapping[str, Any]) -> str:
         """The text this row reads: `<MSGID>: <message>` for a `with_msgid` row when the
@@ -137,7 +141,8 @@ def template_parts(template: str) -> list[tuple[str, str]]:
     return parts
 
 
-def _render(template: str, m: re.Match[str]) -> str:
+def _render(template: str, m: re.Match[str], record: Mapping[str, str] | None = None) -> str:
+    """`record` answers the reserved names (`host`, `device`) a template may read."""
     out: list[str] = []
     clause: list[str] | None = None
     clause_ok = True
@@ -150,7 +155,12 @@ def _render(template: str, m: re.Match[str]) -> str:
                 out.extend(clause)
             clause = None
             continue
-        value = text if kind == "lit" else (m.group(text) or "")
+        if kind == "lit":
+            value = text
+        elif record is not None and text in record:
+            value = record[text]
+        else:
+            value = m.group(text) or ""
         if clause is None:
             out.append(value)
         else:
@@ -165,6 +175,69 @@ def _inventory_vendor(ev: Mapping[str, Any]) -> str:
     if ev.get("vendor_source") == "inventory":
         return str(ev.get("vendor") or "")
     return ""
+
+
+#: The line-derived fields a pack hit may set, in the order `enrichment` lists them.
+_OBSERVED_ORDER = ("facility", "event_type", "summary", "severity_native_text",
+                   "severity_native_code")
+#: Template fields that are derived from the line and the record, not read from it.
+_DERIVED_FIELDS = frozenset({"title", "correlation_key"})
+
+
+def field_is_observed(name: str, template: str) -> bool:
+    """Read from the line: the template names a regex group. A title or correlation key,
+    or a constant the matching row states (`audit_action: login_accepted`), is derived."""
+    if name in _DERIVED_FIELDS:
+        return False
+    return any(kind == "var" and text not in ("host", "device")
+               for kind, text in template_parts(template))
+
+
+def _metric_value(raw: str) -> float | None:
+    try:
+        v = float(raw)
+    except ValueError:
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _event_model(g: Grammar, m: re.Match[str], ev: Mapping[str, Any], out: dict[str, Any]) -> None:
+    """The rich event fields (tracker 387; the trap lane's names): templates, metrics,
+    pack guidance and the provenance of each field. Stage B writes the same, generated
+    from the same rows."""
+    host = str(ev.get("hostname") or "unknown")
+    record = {"host": host, "device": str(ev.get("device_id") or "") or host}
+    observed = [k for k in _OBSERVED_ORDER if out.get(k)]
+    derived = ["normalized_severity"]
+    unknown: list[str] = []
+    for name, tmpl in g.fields.items():
+        value = _render(tmpl, m, record)
+        if value:
+            out[name] = value
+            (observed if field_is_observed(name, tmpl) else derived).append(name)
+        else:
+            unknown.append(name)
+    if out.get("dedup_key"):
+        derived.append("dedup_key")
+    metrics: dict[str, dict[str, Any]] = {}
+    for name, group in g.metrics.items():
+        v = _metric_value(m.group(group) or "")
+        if v is None:
+            unknown.append(f"metrics.{name}")
+        else:
+            metrics[name] = {"value": v, "basis": "observed"}
+            observed.append(f"metrics.{name}")
+    if metrics:
+        out["metrics"] = metrics
+    fields_guidance: list[str] = []
+    guide = g.guidance.get(str(out.get("event_type") or ""))
+    if guide:
+        out["guidance"] = {"impact": list(guide["impact"]),
+                           "next_checks": list(guide["next_checks"]),
+                           "basis": "pack_guidance"}
+        fields_guidance.append("guidance")
+    out["enrichment"] = {"fields_observed": observed, "fields_derived": derived,
+                         "fields_guidance": fields_guidance, "unknown": unknown}
 
 
 class PackTable:
@@ -262,5 +335,6 @@ class PackTable:
             pri = _PRI_RANK.get(str(ev.get("severity") or "info").lower(), 6)
             eff = pri if embedded is None or embedded >= pri else embedded
             out["normalized_severity"] = normalized_label(eff)
+            _event_model(g, m, ev, out)
             return out
         return out

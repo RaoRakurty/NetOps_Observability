@@ -676,6 +676,13 @@ transforms:
       cx_pk_sev = 99
       cx_pk_msg = string(.message) ?? ""
       cx_pk_app = downcase(.appname)
+      cx_pk_out = {}
+      cx_pk_host = string(.hostname) ?? "unknown"
+      cx_pk_device = string(cx_inv.device_id) ?? ""
+      if cx_pk_device == "" {
+        cx_pk_device = cx_pk_host
+      }
+      cx_pk_gt = {"cisco_ios|adjchange": {"impact": ["A routing adjacency changed state; routes through it are withdrawn while it is down."], "next_checks": ["Run show bgp neighbor, show ospf neighbor or show isis adjacency for the neighbour named in the line."]}, "cisco_ios|adjchg": {"impact": ["A routing adjacency changed state; routes through it are withdrawn while it is down."], "next_checks": ["Run show bgp neighbor, show ospf neighbor or show isis adjacency for the neighbour named in the line."]}, "cisco_ios|updown": {"impact": ["An interface or its line protocol changed state; services and adjacencies over it stop or move."], "next_checks": ["Run show interfaces for the interface named in the line and check whether it was shut administratively.", "Check the optics and the far end of the link."]}, "cisco_sdwan|bfd-state-change": {"impact": ["A BFD session between two TLOCs changed state; traffic over that tunnel is moved to other paths or dropped."], "next_checks": ["Run show bfd sessions and show bfd history for the colours named in the line.", "Check the underlay between the two TLOCs (loss, latency, NAT) and the remote site's own BFD view."]}, "cisco_sdwan|bgp-peer-state-change": {"impact": ["A routing adjacency changed state; prefixes learned through it are withdrawn while it is down."], "next_checks": ["Run show bgp neighbor or show ospf neighbor for the peer named in the line.", "Check reachability to the peer and the interface it runs over."]}, "cisco_sdwan|control-connection-state-change": {"impact": ["A control connection to a vSmart, vBond or vManage changed state; while it is down the edge gets no new policy or routes from that controller."], "next_checks": ["Run show control connections and show control connections-history for the last error.", "Check the transport (TLOC) the connection runs over, and certificates and clock on the edge."]}, "cisco_sdwan|cpu-usage": {"impact": ["CPU on the edge crossed a threshold; control-plane work (BFD, OMP, control connections) can be delayed when it stays high."], "next_checks": ["Run show system status and look at the process table logged with the crossing for the top consumer.", "Check whether BFD or control-connection flaps line up with the high CPU."]}, "cisco_sdwan|dns_lookup_failed": {"impact": ["The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.", "Existing control and data-plane sessions keep running until they need the orchestrator again."], "next_checks": ["Check the DNS servers configured in VPN 0 and that the transport interface can reach them.", "Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).", "Run show control connections and show control local-properties to see whether the edge is still attached."]}, "cisco_sdwan|dns_resolution_failed": {"impact": ["The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.", "Existing control and data-plane sessions keep running until they need the orchestrator again."], "next_checks": ["Check the DNS servers configured in VPN 0 and that the transport interface can reach them.", "Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).", "Run show control connections and show control local-properties to see whether the edge is still attached."]}, "cisco_sdwan|interface-admin-state-change": {"impact": ["An interface changed state; tunnels and services using it move or stop."], "next_checks": ["Run show interface for the named interface and check whether it was shut administratively.", "Check the physical link and the neighbour on the other end."]}, "cisco_sdwan|interface-state-change": {"impact": ["An interface changed state; tunnels and services using it move or stop."], "next_checks": ["Run show interface for the named interface and check whether it was shut administratively.", "Check the physical link and the neighbour on the other end."]}, "cisco_sdwan|omp-peer-state-change": {"impact": ["An OMP peering changed state; routes and TLOCs learned from that peer are withdrawn while it is down."], "next_checks": ["Run show omp peers and show omp summary.", "Check the control connection to the vSmart that carries the OMP session."]}, "cisco_sdwan|omp-state-change": {"impact": ["An OMP peering changed state; routes and TLOCs learned from that peer are withdrawn while it is down."], "next_checks": ["Run show omp peers and show omp summary.", "Check the control connection to the vSmart that carries the OMP session."]}, "cisco_sdwan|ospf-neighbor-state-change": {"impact": ["A routing adjacency changed state; prefixes learned through it are withdrawn while it is down."], "next_checks": ["Run show bgp neighbor or show ospf neighbor for the peer named in the line.", "Check reachability to the peer and the interface it runs over."]}, "cisco_sdwan|sysmgr_200069": {"impact": ["CPU on the edge crossed a threshold; control-plane work (BFD, OMP, control connections) can be delayed when it stays high."], "next_checks": ["Run show system status and look at the process table logged with the crossing for the top consumer.", "Check whether BFD or control-connection flaps line up with the high CPU."]}, "cisco_sdwan|sysmgr_200070": {"impact": ["CPU on the edge crossed a threshold; control-plane work (BFD, OMP, control connections) can be delayed when it stays high."], "next_checks": ["Run show system status and look at the process table logged with the crossing for the top consumer.", "Check whether BFD or control-connection flaps line up with the high CPU."]}, "cisco_sdwan|sysmgr_200071": {"impact": ["CPU on the edge crossed a threshold; control-plane work (BFD, OMP, control connections) can be delayed when it stays high."], "next_checks": ["Run show system status and look at the process table logged with the crossing for the top consumer.", "Check whether BFD or control-connection flaps line up with the high CPU."]}, "juniper_junos|rpd_bgp_neighbor_state_changed": {"impact": ["A BGP session changed state; leaving Established withdraws the routes learned from that peer."], "next_checks": ["Run show bgp neighbor for the peer and read the last error and the event named in the line.", "Check reachability to the peer and the interface it runs over."]}, "juniper_junos|rpd_isis_adjdown": {"impact": ["An IS-IS adjacency was lost; routes through it are recalculated."], "next_checks": ["Run show isis adjacency and show isis interface for the interface named in the line."]}, "juniper_junos|rpd_ospf_nbrdown": {"impact": ["An OSPF neighbour went down; routes through it are recalculated."], "next_checks": ["Run show ospf neighbor and show ospf interface for the logical interface named in the line.", "Check the reason the line gives (dead timer, BFD) and the link itself."]}, "juniper_junos|snmp_trap_link_down": {"impact": ["An interface went down; services and adjacencies over it stop or move."], "next_checks": ["Run show interfaces for the interface and check ifAdminStatus in the line, which says whether it was shut administratively.", "Check the optics and the far end of the link."]}, "nokia_sros|bgp_2005": {"impact": ["A BGP session left Established or was closed by a NOTIFICATION; routes learned from that peer are withdrawn."], "next_checks": ["Run show router bgp neighbor for the peer and read the last error and the event that moved it.", "Check reachability to the peer and the interface or LSP it runs over."]}, "nokia_sros|bgp_2006": {"impact": ["A BGP session left Established or was closed by a NOTIFICATION; routes learned from that peer are withdrawn."], "next_checks": ["Run show router bgp neighbor for the peer and read the last error and the event that moved it.", "Check reachability to the peer and the interface or LSP it runs over."]}, "nokia_sros|bgp_2020": {"impact": ["A BGP session left Established or was closed by a NOTIFICATION; routes learned from that peer are withdrawn."], "next_checks": ["Run show router bgp neighbor for the peer and read the last error and the event that moved it.", "Check reachability to the peer and the interface or LSP it runs over."]}, "nokia_sros|bgp_2039": {"impact": ["A BGP session left Established or was closed by a NOTIFICATION; routes learned from that peer are withdrawn."], "next_checks": ["Run show router bgp neighbor for the peer and read the last error and the event that moved it.", "Check reachability to the peer and the interface or LSP it runs over."]}, "nokia_sros|chassis_2001": {"impact": ["A chassis component failed or overheated; the router may lose redundancy or shut cards down."], "next_checks": ["Run show chassis environment and show chassis power-supply (or show card for a card failure).", "Check the room temperature and airflow, and plan a replacement of the failed part."]}, "nokia_sros|chassis_2005": {"impact": ["A chassis component failed or overheated; the router may lose redundancy or shut cards down."], "next_checks": ["Run show chassis environment and show chassis power-supply (or show card for a card failure).", "Check the room temperature and airflow, and plan a replacement of the failed part."]}, "nokia_sros|chassis_2144": {"impact": ["A chassis component failed or overheated; the router may lose redundancy or shut cards down."], "next_checks": ["Run show chassis environment and show chassis power-supply (or show card for a card failure).", "Check the room temperature and airflow, and plan a replacement of the failed part."]}, "nokia_sros|chassis_2146": {"impact": ["A chassis component failed or overheated; the router may lose redundancy or shut cards down."], "next_checks": ["Run show chassis environment and show chassis power-supply (or show card for a card failure).", "Check the room temperature and airflow, and plan a replacement of the failed part."]}, "nokia_sros|chassis_2148": {"impact": ["A chassis component failed or overheated; the router may lose redundancy or shut cards down."], "next_checks": ["Run show chassis environment and show chassis power-supply (or show card for a card failure).", "Check the room temperature and airflow, and plan a replacement of the failed part."]}, "nokia_sros|ospf_2042": {"impact": ["An OSPF neighbour changed state; routes through it are recalculated."], "next_checks": ["Run show router ospf neighbor and show router ospf interface for the neighbour.", "Check the link to the neighbour and matching timers, area and MTU."]}, "nokia_sros|snmp_2004": {"impact": ["An interface stopped being operational; services and adjacencies over it stop or move."], "next_checks": ["Run show router interface and show port for the interface, and check whether it was shut administratively.", "Check the optics and the far end of the link."]}, "nokia_sros|system_2010": {"impact": ["A software module could not allocate memory; protocols in that module may fail."], "next_checks": ["Run show system memory-pools and look for the module named in the line."]}}
       cx_pk_mid = string(.msgid) ?? ""
       cx_pk_midmsg = cx_pk_msg
       if cx_pk_mid != "" && cx_pk_mid != "-" {
@@ -692,6 +699,102 @@ transforms:
           cx_pk_sum = (string(cx_pk_m.text) ?? "")
           cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
           cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.cat) ?? "") + "-" + (string(cx_pk_m.grp) ?? "") + "-" + (string(cx_pk_m.code) ?? "") + " on " + cx_pk_host + ": " + (string(cx_pk_m.text) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = (string(cx_pk_m.grp) ?? "") + ":" + cx_pk_device + ":" + (string(cx_pk_m.code) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_ios|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
+        }
+      }
+      # grammar cisco_sdwan.viptela_cpu_notification (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "cpu-user-percentage:\"") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>cpu-usage)\b\s*severity-level:(?P<level>[a-z]+) .{0,200}?warning:"(?P<warning>[^"]{0,160})" cpu-user-percentage:"(?P<user>[0-9.]{1,8})" cpu-system-percentage:"(?P<system>[0-9.]{1,8})" cpu-idle-percentage:"(?P<idle>[0-9.]{1,8})".*)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.name) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.level) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.warning) ?? "") + " on " + cx_pk_host
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "cpu:" + cx_pk_device
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_met = {}
+          cx_pk_mf, cx_pk_mferr = to_float((string(cx_pk_m.user) ?? ""))
+          if cx_pk_mferr == null && (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_met = merge(cx_pk_met, {"cpu_user_percent": {"value": cx_pk_mf, "basis": "observed"}})
+            cx_pk_obs = push(cx_pk_obs, "metrics.cpu_user_percent")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "metrics.cpu_user_percent")
+          }
+          cx_pk_mf, cx_pk_mferr = to_float((string(cx_pk_m.system) ?? ""))
+          if cx_pk_mferr == null && (string(cx_pk_m.system) ?? "") != "" {
+            cx_pk_met = merge(cx_pk_met, {"cpu_system_percent": {"value": cx_pk_mf, "basis": "observed"}})
+            cx_pk_obs = push(cx_pk_obs, "metrics.cpu_system_percent")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "metrics.cpu_system_percent")
+          }
+          cx_pk_mf, cx_pk_mferr = to_float((string(cx_pk_m.idle) ?? ""))
+          if cx_pk_mferr == null && (string(cx_pk_m.idle) ?? "") != "" {
+            cx_pk_met = merge(cx_pk_met, {"cpu_idle_percent": {"value": cx_pk_mf, "basis": "observed"}})
+            cx_pk_obs = push(cx_pk_obs, "metrics.cpu_idle_percent")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "metrics.cpu_idle_percent")
+          }
+          if length(cx_pk_met) > 0 {
+            cx_pk_out = merge(cx_pk_out, {"metrics": cx_pk_met})
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.viptela_notification (lab_validated)
@@ -705,6 +808,39 @@ transforms:
           cx_pk_sum = (string(cx_pk_m.text) ?? "")
           cx_pk_ntxt = (string(cx_pk_m.level) ?? "")
           cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.name) ?? "") + " on " + cx_pk_host
+          if (string(cx_pk_m.level) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " (severity " + (string(cx_pk_m.level) ?? "") + ")"
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = (string(cx_pk_m.name) ?? "") + ":" + cx_pk_device
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.viptela (lab_validated)
@@ -719,6 +855,35 @@ transforms:
           cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
           cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
           cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.proc) ?? "") + " on " + cx_pk_host + ": " + (string(cx_pk_m.text) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = (string(cx_pk_m.proc) ?? "") + ":" + cx_pk_device + ":" + (string(cx_pk_m.id) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.cisco_sdwan (doc_claimed)
@@ -733,11 +898,40 @@ transforms:
           cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
           cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
           cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.proc) ?? "") + " on " + cx_pk_host + ": " + (string(cx_pk_m.text) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = (string(cx_pk_m.proc) ?? "") + ":" + cx_pk_device + ":" + (string(cx_pk_m.id) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.iosxe_dmi_auth (lab_validated)
       if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "dmiauthd: User ") {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'dmiauthd: User \W?(?P<user>[\w.@-]{1,64})\W? authenticated successfully(?: from (?P<src>[^\s:]{1,64})(?::\d{1,5})?)?(?: and was authorized for (?P<svc>[\w]{1,16}(?: over [\w]{1,16})?))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'dmiauthd: User \W?(?P<user>[\w.@-]{1,64})\W? authenticated successfully(?: from (?P<src>[^\s:]{1,64})(?::(?P<port>\d{1,5}))?)?(?: and was authorized for (?P<svc>[\w]{1,16}(?: over [\w]{1,16})?))?')
         if cx_pk_merr == null {
           cx_pk_parser = "cisco_mgmt_audit.v1"
           cx_pk_vendor = "cisco"
@@ -754,16 +948,125 @@ transforms:
             cx_pk_sum = cx_pk_sum + " for " + (string(cx_pk_m.svc) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "Device-management login on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " by " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "audit:" + cx_pk_device + ":dmi:" + (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "login_accepted"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.src) ?? "")
+          if (string(cx_pk_m.port) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.port) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = (string(cx_pk_m.svc) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
-      # grammar cisco_sdwan.vedge_daemon (lab_validated)
-      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "]: ") && includes(["vdaemon", "vtracker"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: (?P<text>.*)')
+      # grammar cisco_sdwan.vedge_dns (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "]: DNS ") && includes(["vdaemon", "vtracker"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: DNS (?P<step>lookup|resolution) (?P<outcome>failed|succeeded|successful) for (?:\d{1,3}/)?(?P<target>[^\s,]{1,253})(?: via (?P<via>[^\s,]{0,64}))?(?:,? reason: (?P<reason>.{1,128}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "cisco_sdwan.v1"
           cx_pk_vendor = "cisco"
-          cx_pk_et = downcase((string(cx_pk_m.func) ?? ""))
-          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_et = downcase("dns_" + (string(cx_pk_m.step) ?? "") + "_" + (string(cx_pk_m.outcome) ?? ""))
+          cx_pk_sum = ""
+          cx_pk_sum = cx_pk_sum + "DNS " + (string(cx_pk_m.step) ?? "") + " " + (string(cx_pk_m.outcome) ?? "") + " for " + (string(cx_pk_m.target) ?? "")
+          if (string(cx_pk_m.via) ?? "") != "" {
+            cx_pk_sum = cx_pk_sum + " via " + (string(cx_pk_m.via) ?? "")
+          }
+          if (string(cx_pk_m.reason) ?? "") != "" {
+            cx_pk_sum = cx_pk_sum + " (" + (string(cx_pk_m.reason) ?? "") + ")"
+          }
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "DNS " + (string(cx_pk_m.step) ?? "") + " " + (string(cx_pk_m.outcome) ?? "") + " for " + (string(cx_pk_m.target) ?? "") + " on " + cx_pk_host
+          if (string(cx_pk_m.reason) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " (" + (string(cx_pk_m.reason) ?? "") + ")"
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "dns:" + cx_pk_device + ":" + (string(cx_pk_m.target) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.snmpa_table_error (lab_validated)
@@ -775,6 +1078,36 @@ transforms:
           cx_pk_et = downcase("snmp_agent_table_error")
           cx_pk_sum = "SNMP agent could not serve " + (string(cx_pk_m.table) ?? "") + " on " + (string(cx_pk_m.op) ?? "") + " (" + (string(cx_pk_m.err) ?? "") + ") (poll)"
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = "SNMP agent could not serve " + (string(cx_pk_m.table) ?? "") + " on " + cx_pk_host + " (poll)"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "snmp_agent:" + cx_pk_device + ":" + (string(cx_pk_m.table) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.snmpa_instr_trace (lab_validated)
@@ -791,6 +1124,45 @@ transforms:
           }
           cx_pk_sum = cx_pk_sum + " (poll)"
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "SNMP agent trace on " + cx_pk_host
+          if (string(cx_pk_m.table) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " for " + (string(cx_pk_m.table) ?? "")
+          }
+          cx_pk_v = cx_pk_v + " (poll)"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "snmp_agent:" + cx_pk_device
+          if (string(cx_pk_m.table) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.table) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.snmp_get_response_error (lab_validated)
@@ -807,6 +1179,44 @@ transforms:
           }
           cx_pk_sum = cx_pk_sum + " (poll)"
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "SNMP " + (string(cx_pk_m.status) ?? "") + " answering our poll on " + cx_pk_host
+          if (string(cx_pk_m.obj) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " (" + (string(cx_pk_m.obj) ?? "") + ")"
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "snmp_agent:" + cx_pk_device
+          if (string(cx_pk_m.obj) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.obj) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.sysmgr_ps_header (lab_validated)
@@ -818,6 +1228,36 @@ transforms:
           cx_pk_et = downcase("process_table")
           cx_pk_sum = "process table header"
           cx_pk_cat = "diagnostic_dump"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = "Process table on " + cx_pk_host
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "process_table:" + cx_pk_device
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar cisco_sdwan.sysmgr_ps_row (lab_validated)
@@ -829,6 +1269,54 @@ transforms:
           cx_pk_et = downcase("process_table")
           cx_pk_sum = (string(cx_pk_m.cmd) ?? "") + " cpu " + (string(cx_pk_m.cpu) ?? "") + "% mem " + (string(cx_pk_m.mem) ?? "") + "%"
           cx_pk_cat = "diagnostic_dump"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = "Process " + (string(cx_pk_m.cmd) ?? "") + " on " + cx_pk_host
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "process_table:" + cx_pk_device
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_met = {}
+          cx_pk_mf, cx_pk_mferr = to_float((string(cx_pk_m.cpu) ?? ""))
+          if cx_pk_mferr == null && (string(cx_pk_m.cpu) ?? "") != "" {
+            cx_pk_met = merge(cx_pk_met, {"process_cpu_percent": {"value": cx_pk_mf, "basis": "observed"}})
+            cx_pk_obs = push(cx_pk_obs, "metrics.process_cpu_percent")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "metrics.process_cpu_percent")
+          }
+          cx_pk_mf, cx_pk_mferr = to_float((string(cx_pk_m.mem) ?? ""))
+          if cx_pk_mferr == null && (string(cx_pk_m.mem) ?? "") != "" {
+            cx_pk_met = merge(cx_pk_met, {"process_mem_percent": {"value": cx_pk_mf, "basis": "observed"}})
+            cx_pk_obs = push(cx_pk_obs, "metrics.process_mem_percent")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "metrics.process_mem_percent")
+          }
+          if length(cx_pk_met) > 0 {
+            cx_pk_out = merge(cx_pk_out, {"metrics": cx_pk_met})
+          }
+          cx_pk_g = get(cx_pk_gt, ["cisco_sdwan|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar juniper_junos.junos_tag (doc_claimed)
@@ -840,6 +1328,35 @@ transforms:
           cx_pk_fac = (string(cx_pk_m.fac) ?? "")
           cx_pk_et = downcase((string(cx_pk_m.tag) ?? ""))
           cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.tag) ?? "") + " on " + cx_pk_host + ": " + (string(cx_pk_m.text) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = (string(cx_pk_m.tag) ?? "") + ":" + cx_pk_device
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["juniper_junos|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar nokia_sros.sros_event (doc_claimed)
@@ -866,11 +1383,44 @@ transforms:
           } else if cx_pk_word == "WARNING" {
             cx_pk_sev = 4
           }
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = (string(cx_pk_m.app) ?? "") + " " + (string(cx_pk_m.name) ?? "") + " on " + cx_pk_host + ": " + (string(cx_pk_m.text) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.app) ?? "") + ":" + cx_pk_device + ":" + (string(cx_pk_m.name) ?? "")
+          if (string(cx_pk_m.subject) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.subject) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_g = get(cx_pk_gt, ["nokia_sros|" + cx_pk_et]) ?? null
+          if is_object(cx_pk_g) {
+            cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})
+            cx_pk_gfl = push(cx_pk_gfl, "guidance")
+          }
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_session_created (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -885,11 +1435,87 @@ transforms:
           }
           cx_pk_sum = cx_pk_sum + " (poll)"
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "SNMP session on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " by " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          cx_pk_v = cx_pk_v + " (poll)"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "audit:" + cx_pk_device + ":" + (string(cx_pk_m.via) ?? "")
+          if (string(cx_pk_m.usid) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.usid) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_created"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.src) ?? "")
+          if (string(cx_pk_m.port) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.port) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = (string(cx_pk_m.via) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.usid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_session_created_netconf (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>netconf)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>netconf)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -903,11 +1529,86 @@ transforms:
             cx_pk_sum = cx_pk_sum + " from " + (string(cx_pk_m.src) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "NETCONF session opened on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " by " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "audit:" + cx_pk_device + ":" + (string(cx_pk_m.via) ?? "")
+          if (string(cx_pk_m.usid) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.usid) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_created"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.src) ?? "")
+          if (string(cx_pk_m.port) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.port) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = (string(cx_pk_m.via) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.usid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_session_created_other (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? created new session via (?P<via>[a-z]+)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::\d{1,5})?)?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>[a-z]+)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -921,11 +1622,86 @@ transforms:
             cx_pk_sum = cx_pk_sum + " from " + (string(cx_pk_m.src) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "Session opened via " + (string(cx_pk_m.via) ?? "") + " on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " by " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "audit:" + cx_pk_device + ":" + (string(cx_pk_m.via) ?? "")
+          if (string(cx_pk_m.usid) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.usid) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_created"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.src) ?? "")
+          if (string(cx_pk_m.port) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.port) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = (string(cx_pk_m.via) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.usid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_session_groups (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? assigned to groups:\s*(?P<groups>\S.{0,127})?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? assigned to groups:\s*(?P<groups>\S.{0,127})?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -940,11 +1716,72 @@ transforms:
             cx_pk_sum = cx_pk_sum + " " + (string(cx_pk_m.groups) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "Session groups assigned on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " to " + (string(cx_pk_m.user) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "audit:" + cx_pk_device + ":groups"
+          if (string(cx_pk_m.usid) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.usid) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "groups_assigned"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = (string(cx_pk_m.usid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_v = (string(cx_pk_m.groups) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_groups": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_groups")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_groups")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_session_terminated (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/\d{1,12})? terminated session(?: \(reason: (?P<reason>[^)]{1,64})\))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? terminated session(?: \(reason: (?P<reason>[^)]{1,64})\))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -959,11 +1796,68 @@ transforms:
             cx_pk_sum = cx_pk_sum + " (" + (string(cx_pk_m.reason) ?? "") + ")"
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "Session closed on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " for " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.reason) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " (" + (string(cx_pk_m.reason) ?? "") + ")"
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "audit:" + cx_pk_device + ":terminated"
+          if (string(cx_pk_m.usid) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.usid) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_terminated"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = (string(cx_pk_m.usid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_netconf_rpc (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ (?P<step>got rpc|get attrs|sending rpc-reply|close-session)(?::\s*\{[^}]{0,128}\}(?P<op>[\w-]{1,64}))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=(?P<sid>\d+) (?P<step>got rpc|get attrs|sending rpc-reply|close-session)(?::\s*\{[^}]{0,128}\}(?P<op>[\w-]{1,64}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -974,11 +1868,61 @@ transforms:
             cx_pk_sum = cx_pk_sum + " " + (string(cx_pk_m.op) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "NETCONF " + (string(cx_pk_m.step) ?? "") + " on " + cx_pk_host
+          if (string(cx_pk_m.op) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ": " + (string(cx_pk_m.op) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "netconf:" + cx_pk_device + ":" + (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = "rpc"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = "netconf"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_netconf_action (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=(?P<sid>\d+) action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -989,11 +1933,57 @@ transforms:
             cx_pk_sum = cx_pk_sum + " on " + (string(cx_pk_m.target) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = "NETCONF action " + (string(cx_pk_m.action) ?? "") + " on " + cx_pk_host
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "netconf:" + cx_pk_device + ":" + (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = "action_" + (string(cx_pk_m.action) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = "netconf"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_netconf_session (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=(?P<sid>\d+) new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -1007,11 +1997,78 @@ transforms:
             cx_pk_sum = cx_pk_sum + " from " + (string(cx_pk_m.src) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "NETCONF transport session on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " for " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "netconf:" + cx_pk_device + ":" + (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_created"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = (string(cx_pk_m.src) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = "netconf"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.confd_netconf_notification (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ sending notification(?: \{[^}]{0,128}\}(?P<name>[\w-]{1,64}))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=(?P<sid>\d+) sending notification(?: \{[^}]{0,128}\}(?P<name>[\w-]{1,64}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -1022,11 +2079,61 @@ transforms:
             cx_pk_sum = cx_pk_sum + " (" + (string(cx_pk_m.name) ?? "") + ")"
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "NETCONF notification sent by " + cx_pk_host
+          if (string(cx_pk_m.name) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " (" + (string(cx_pk_m.name) ?? "") + ")"
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "netconf:" + cx_pk_device + ":" + (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = "notification"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = "netconf"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_v = (string(cx_pk_m.sid) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"session_id": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "session_id")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "session_id")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.sshd_accepted (lab_validated)
       if cx_pk_parser == "" && contains(cx_pk_msg, "Accepted ") && includes(["sshd"], cx_pk_app) {
-        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^Accepted (?P<method>\S{1,32}) for (?P<user>\S{1,64})(?: from (?P<src>\S{1,64}))?')
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^Accepted (?P<method>\S{1,32}) for (?P<user>\S{1,64})(?: from (?P<src>\S{1,64}))?(?: port (?P<port>\d{1,5}))?')
         if cx_pk_merr == null {
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
@@ -1043,6 +2150,70 @@ transforms:
             cx_pk_sum = cx_pk_sum + " (" + (string(cx_pk_m.method) ?? "") + ")"
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "SSH login accepted on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " for " + (string(cx_pk_m.user) ?? "")
+          }
+          if (string(cx_pk_m.src) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " from " + (string(cx_pk_m.src) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "audit:" + cx_pk_device + ":ssh:" + (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "login_accepted"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + (string(cx_pk_m.src) ?? "")
+          if (string(cx_pk_m.port) ?? "") != "" {
+            cx_pk_v = cx_pk_v + ":" + (string(cx_pk_m.port) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_source": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_source")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_source")
+          }
+          cx_pk_v = "ssh"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.sshd_banner_probe (lab_validated)
@@ -1058,6 +2229,45 @@ transforms:
             cx_pk_sum = cx_pk_sum + ": " + (string(cx_pk_m.why) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = "SSH connection ended before the banner on " + cx_pk_host
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "audit:" + cx_pk_device + ":ssh_probe"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = "banner_probe"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = "ssh"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # grammar standard.sshd_session (lab_validated)
@@ -1073,6 +2283,56 @@ transforms:
             cx_pk_sum = cx_pk_sum + " for " + (string(cx_pk_m.user) ?? "")
           }
           cx_pk_cat = "management_audit"
+          cx_pk_obs = []
+          cx_pk_der = ["normalized_severity"]
+          cx_pk_unk = []
+          cx_pk_gfl = []
+          if cx_pk_fac != "" { cx_pk_obs = push(cx_pk_obs, "facility") }
+          if cx_pk_et != "" { cx_pk_obs = push(cx_pk_obs, "event_type") }
+          if cx_pk_sum != "" { cx_pk_obs = push(cx_pk_obs, "summary") }
+          if cx_pk_ntxt != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_text") }
+          if cx_pk_ncode != "" { cx_pk_obs = push(cx_pk_obs, "severity_native_code") }
+          cx_pk_v = ""
+          cx_pk_v = cx_pk_v + "SSH session " + (string(cx_pk_m.state) ?? "") + " on " + cx_pk_host
+          if (string(cx_pk_m.user) ?? "") != "" {
+            cx_pk_v = cx_pk_v + " for " + (string(cx_pk_m.user) ?? "")
+          }
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"title": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "title")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "title")
+          }
+          cx_pk_v = "audit:" + cx_pk_device + ":ssh:" + (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"correlation_key": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "correlation_key")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "correlation_key")
+          }
+          cx_pk_v = (string(cx_pk_m.user) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_user": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_user")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_user")
+          }
+          cx_pk_v = "session_" + (string(cx_pk_m.state) ?? "")
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_action": cx_pk_v})
+            cx_pk_obs = push(cx_pk_obs, "audit_action")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_action")
+          }
+          cx_pk_v = "ssh"
+          if cx_pk_v != "" {
+            cx_pk_out = merge(cx_pk_out, {"audit_via": cx_pk_v})
+            cx_pk_der = push(cx_pk_der, "audit_via")
+          } else {
+            cx_pk_unk = push(cx_pk_unk, "audit_via")
+          }
+          cx_pk_der = push(cx_pk_der, "dedup_key")
+          cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": cx_pk_obs, "fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})
         }
       }
       # <<< END GENERATED-SYSLOG-PACKS
@@ -1216,6 +2476,9 @@ transforms:
           .event_category = cx_pk_cat
           .dedup_key = .hostname + "|" + .appname + "|" + cx_pk_et
         }
+        # The rich event fields the pack states (tracker 387, the trap lane's names):
+        # title, correlation_key, the typed audit fields, metrics, guidance, enrichment.
+        . = merge(., cx_pk_out)
         embedded_sev = cx_pk_sev
       } else if !cx_parse_fortios {
         # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
@@ -1445,8 +2708,8 @@ transforms:
       # the engine COULD promote, and leaves the field unset otherwise. It
       # never drops, rewrites or reorders anything: the stamp is additive.
       #
-      #   rules_hash : 693abb9e46a3b334b6baeae15ff6ec9c309a91fed358010a890bfa3d204b7aee
-      #   v          : 693abb9e46a3
+      #   rules_hash : 9cf4e1594eda686b33a19dda3e90664433e8a12a1f7e9bbfaf156094495a8809
+      #   v          : 9cf4e1594eda
       #   floor      : ALARM_SEVERITY_FLOOR = 4
       #   screen     : 111 literals
       #
@@ -1512,6 +2775,17 @@ transforms:
       cx_pk_floor = 99
       if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, " : ") {
         cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'^%(?P<cat>[A-Z][A-Z0-9_]{0,31})-(?P<grp>[A-Z][A-Z0-9_]{0,31})-(?P<sev>[0-7])-(?P<code>[A-Z][A-Z0-9_]{0,63}) : (?P<text>.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "cpu-user-percentage:\"") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>cpu-usage)\b\s*severity-level:(?P<level>[a-z]+) .{0,200}?warning:"(?P<warning>[^"]{0,160})" cpu-user-percentage:"(?P<user>[0-9.]{1,8})" cpu-system-percentage:"(?P<system>[0-9.]{1,8})" cpu-idle-percentage:"(?P<idle>[0-9.]{1,8})".*)')
         if cx_pk_err == null {
           cx_pk_v = 99
           cx_pk_v = to_int(cx_pk_m.sev) ?? 99
@@ -1587,7 +2861,7 @@ transforms:
 
       # ── gate 1: the device called it warning-or-worse ───────────────────
       if cx_sev <= 4 {
-        .cx_admission = { "v": "693abb9e46a3", "by": "severity" }
+        .cx_admission = { "v": "9cf4e1594eda", "by": "severity" }
       }
 
       # ── gate 2: a known typed symptom marker, at any severity ───────────
@@ -1602,7 +2876,7 @@ transforms:
           (string(.message) ?? "") + " " + cx_tag + " " +
           (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
         if match(cx_hay, r'ssisavebackgroundconfigsucceeded-2112|system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |error: kex_exchange_identification: |ssisaveincrementconfigsucceeded-2110|tmnxeqphyschasspowersupoutfail-2146|tmnxeqphyschasspowersupinfail-2144|-session_state_down: bfd session |bgpbackwardtransnotification-2039|tmnxeqphyschassisfanfailure-2148|tmnxeqportetherloopdetected-2025|-tmnxospfngnbrstatechange-2042 |bgpestablishednotification-2038|control-connection-state-change|confd_snmpa_instr,table_func,|tbgpngbackwardtransition-2020|: system cpu usage is above |: system cpu usage is below |ssisaveconfigsucceeded-2002|tmnxmodulemallocfailed-2010|tmnxeqportetheralarm-2017|receivenotification-2006|tmnxenvtemptoohigh-2005|unsupported_transceiver|tbgpngestablished-2019|tmnxeqcardfailure-2001|sendnotification-2005|tmnxconfigcreate-2007|tmnxconfigdelete-2008|tmnxconfigmodify-2006|tmnxeqporterror-2009|changed state from |error-status=generr|is flapping between|isisadjacencychange|state changed from |ui_commit_completed|cli_config_io-2011|has moved between|administratively|bfd-state-change|between nve and| adjacency to |duplicate host|ifadminstatus |interfacetable|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%ethport-|%viptela-|adjchange|bias_high|corrected|down-2004|nbr_reset|qualified|temp_high|threshold|critical|dup_host|mac_move|spantree|macflap|standby|up-2005|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|major|minor|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep| : |ber|hmm|los|nve|pre') {
-          .cx_admission = { "v": "693abb9e46a3", "by": "marker" }
+          .cx_admission = { "v": "9cf4e1594eda", "by": "marker" }
         }
       }
 

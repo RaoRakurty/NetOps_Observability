@@ -26,6 +26,28 @@ grammars:
   # is, so the native severity is `severity-level`, and it does not lift the normalized
   # one: the same crossing also arrives as its own %Viptela-...-SYSMGR line. The
   # optional date is from the Cisco documents; the lab's lines carry none.
+  # The cpu-usage notification carries the three CPU percentages and the crossing's
+  # wording (lab capture). Same parse as the generic notification row below, plus the
+  # numbers as metrics (the trap lane's names) and the wording as the title.
+  - id: viptela_cpu_notification
+    parser_id: cisco_sdwan.v1
+    literal: 'cpu-user-percentage:"'
+    pattern: '%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>cpu-usage)\b\s*severity-level:(?P<level>[a-z]+) .{0,200}?warning:"(?P<warning>[^"]{0,160})" cpu-user-percentage:"(?P<user>[0-9.]{1,8})" cpu-system-percentage:"(?P<system>[0-9.]{1,8})" cpu-idle-percentage:"(?P<idle>[0-9.]{1,8})".*)'
+    facility: '{proc}'
+    event_type: '{name}'
+    summary: '{text}'
+    severity: {digit: sev}
+    native_text: level
+    alarm_floor: 2
+    fields:
+      title: '{warning} on {host}'
+      correlation_key: 'cpu:{device}'
+    metrics:
+      cpu_user_percent: user
+      cpu_system_percent: system
+      cpu_idle_percent: idle
+    fidelity: lab_validated
+
   - id: viptela_notification
     parser_id: cisco_sdwan.v1
     literal: '%Viptela-'
@@ -36,6 +58,9 @@ grammars:
     severity: {digit: sev}
     native_text: level
     alarm_floor: 2
+    fields:
+      title: '{name} on {host}[ (severity {level})]'
+      correlation_key: '{name}:{device}'
     fidelity: lab_validated
 
   - id: viptela
@@ -51,6 +76,9 @@ grammars:
     # D3: only a critical line may alarm on severity alone. Everything else needs a
     # typed row, which states its own below-floor severity.
     alarm_floor: 2
+    fields:
+      title: '{proc} on {host}: {text}'
+      correlation_key: '{proc}:{device}:{id}'
     fidelity: lab_validated
 
   # IOS-XE SD-WAN edges. NOT seen on the lab: the capture's cEdge lines are all
@@ -68,6 +96,9 @@ grammars:
     native_text: word
     native_code: sev
     alarm_floor: 2
+    fields:
+      title: '{proc} on {host}: {text}'
+      correlation_key: '{proc}:{device}:{id}'
     fidelity: doc_claimed
     source: 'Cisco Community, "How to check BFD logging in Cisco SDWAN fabric" (`%Cisco-SDWAN-vm5-FTMD-5-NTCE-1000009: BFD-session ...`)'
 
@@ -80,22 +111,34 @@ grammars:
   - id: iosxe_dmi_auth
     parser_id: cisco_mgmt_audit.v1
     literal: 'dmiauthd: User '
-    pattern: 'dmiauthd: User \W?(?P<user>[\w.@-]{1,64})\W? authenticated successfully(?: from (?P<src>[^\s:]{1,64})(?::\d{1,5})?)?(?: and was authorized for (?P<svc>[\w]{1,16}(?: over [\w]{1,16})?))?'
+    pattern: 'dmiauthd: User \W?(?P<user>[\w.@-]{1,64})\W? authenticated successfully(?: from (?P<src>[^\s:]{1,64})(?::(?P<port>\d{1,5}))?)?(?: and was authorized for (?P<svc>[\w]{1,16}(?: over [\w]{1,16})?))?'
     event_type: dmi_auth_passed
     summary: 'Device-management login[ by {user}][ from {src}][ for {svc}]'
     category: management_audit
+    fields:
+      title: 'Device-management login on {host}[ by {user}][ from {src}]'
+      correlation_key: 'audit:{device}:dmi:{user}'
+      audit_user: '{user}'
+      audit_action: 'login_accepted'
+      audit_source: '{src}[:{port}]'
+      audit_via: '{svc}'
     fidelity: lab_validated
 
-  # vEdge daemons log `<function>[<line>]: <text>` (VTRACKER, VDAEMON; lab capture
-  # 2026-11-09, the lines the DNS rows below read). The function is the only stable name
-  # the line carries, so it is the event type. No severity: PRI is the line's own.
-  - id: vedge_daemon
+  # The vBond DNS lines the DNS rows read (lab capture 2026-11-09, VTRACKER/VDAEMON,
+  # `<function>[<line>]: DNS ...`). Their own event type, so a failure and a success never
+  # share guidance. No severity: PRI is the line's own. The generic `<function>[<line>]:`
+  # row of wave 1 is gone: the lab shows no other line of that shape, and a grammar no
+  # fixture decides is a claim nothing tests.
+  - id: vedge_dns
     parser_id: cisco_sdwan.v1
-    literal: ']: '
+    literal: ']: DNS '
     apps: [vtracker, vdaemon]
-    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: (?P<text>.*)'
-    event_type: '{func}'
-    summary: '{text}'
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: DNS (?P<step>lookup|resolution) (?P<outcome>failed|succeeded|successful) for (?:\d{1,3}/)?(?P<target>[^\s,]{1,253})(?: via (?P<via>[^\s,]{0,64}))?(?:,? reason: (?P<reason>.{1,128}))?'
+    event_type: 'dns_{step}_{outcome}'
+    summary: 'DNS {step} {outcome} for {target}[ via {via}][ ({reason})]'
+    fields:
+      title: 'DNS {step} {outcome} for {target} on {host}[ ({reason})]'
+      correlation_key: 'dns:{device}:{target}'
     fidelity: lab_validated
 
   # Poll-induced management-plane records (PR 11 shape, owner D2). The vEdge confd SNMP
@@ -110,6 +153,9 @@ grammars:
     event_type: snmp_agent_table_error
     summary: 'SNMP agent could not serve {table} on {op} ({err}) (poll)'
     category: management_audit
+    fields:
+      title: 'SNMP agent could not serve {table} on {host} (poll)'
+      correlation_key: 'snmp_agent:{device}:{table}'
     fidelity: lab_validated
 
   - id: snmpa_instr_trace
@@ -119,6 +165,9 @@ grammars:
     event_type: snmp_agent_instr_trace
     summary: 'SNMP agent trace in {func}[ for {table}] (poll)'
     category: management_audit
+    fields:
+      title: 'SNMP agent trace on {host}[ for {table}] (poll)'
+      correlation_key: 'snmp_agent:{device}[:{table}]'
     fidelity: lab_validated
 
   - id: snmp_get_response_error
@@ -128,6 +177,9 @@ grammars:
     event_type: 'snmp_get_response_{status}'
     summary: 'SNMP answer {status} to {dst}[ on {obj}] (poll)'
     category: management_audit
+    fields:
+      title: 'SNMP {status} answering our poll on {host}[ ({obj})]'
+      correlation_key: 'snmp_agent:{device}[:{obj}]'
     fidelity: lab_validated
 
   # vEdge SYSMGR process-table dumps (live, 2026-11-10): with each cpu-usage event the
@@ -144,6 +196,9 @@ grammars:
     event_type: process_table
     summary: process table header
     category: diagnostic_dump
+    fields:
+      title: 'Process table on {host}'
+      correlation_key: 'process_table:{device}'
     fidelity: lab_validated
 
   - id: sysmgr_ps_row
@@ -154,6 +209,12 @@ grammars:
     event_type: process_table
     summary: '{cmd} cpu {cpu}% mem {mem}%'
     category: diagnostic_dump
+    fields:
+      title: 'Process {cmd} on {host}'
+      correlation_key: 'process_table:{device}'
+    metrics:
+      process_cpu_percent: cpu
+      process_mem_percent: mem
     fidelity: lab_validated
 
 # Typed rows, in match order. D3: only the critical CPU row may open an object alone.
@@ -566,6 +627,17 @@ fixtures:
       event_type: cpu-usage
       severity_native_text: critical
       normalized_severity: notice
+      title: 'System cpu usage is above 90% (critically high) on vEdge-1'
+      correlation_key: 'cpu:vEdge-1'
+      metrics:
+        cpu_user_percent: {value: 9.18, basis: observed}
+        cpu_system_percent: {value: 90.82, basis: observed}
+        cpu_idle_percent: {value: 0.0, basis: observed}
+      enrichment:
+        fields_observed: [facility, event_type, summary, severity_native_text, metrics.cpu_user_percent, metrics.cpu_system_percent, metrics.cpu_idle_percent]
+        fields_derived: [normalized_severity, title, correlation_key]
+        fields_guidance: [guidance]
+        unknown: []
     signal: null
 
   - name: a controller notification, documented shape
@@ -634,7 +706,23 @@ fixtures:
     expect:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
-      event_type: dnsclient_ares_callback
+      event_type: dns_lookup_failed
+      title: 'DNS lookup failed for vbond.example.net on vEdge-1 (Timeout while contacting DNS servers)'
+      correlation_key: 'dns:vEdge-1:vbond.example.net'
+      guidance:
+        impact:
+          - The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.
+          - Existing control and data-plane sessions keep running until they need the orchestrator again.
+        next_checks:
+          - Check the DNS servers configured in VPN 0 and that the transport interface can reach them.
+          - Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).
+          - Run show control connections and show control local-properties to see whether the edge is still attached.
+        basis: pack_guidance
+      enrichment:
+        fields_observed: [event_type, summary]
+        fields_derived: [normalized_severity, title, correlation_key]
+        fields_guidance: [guidance]
+        unknown: []
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the same failure from the other daemon
@@ -645,7 +733,7 @@ fixtures:
     expect:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
-      event_type: dnsclient_ares_callback
+      event_type: dns_lookup_failed
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: the resolver reports the same failure in its own words
@@ -656,7 +744,7 @@ fixtures:
     expect:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
-      event_type: monitor_dns_callback
+      event_type: dns_resolution_failed
     signal: {rule_id: syslog.sdwan.dns.failed, kind: device_alarm, severity: warn, opens_alone: false}
 
   - name: a vBond lookup success emits nothing
@@ -667,7 +755,8 @@ fixtures:
     expect:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
-      event_type: dnsclient_ares_callback
+      event_type: dns_lookup_succeeded
+      title: 'DNS lookup succeeded for vbond.example.net on vEdge-1'
     signal: null
 
   - name: the resolver success emits nothing
@@ -678,7 +767,7 @@ fixtures:
     expect:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
-      event_type: monitor_dns_callback
+      event_type: dns_resolution_successful
     signal: null
 
   - name: the same DNS words from a daemon outside this pack mean nothing
@@ -828,6 +917,10 @@ fixtures:
       summary: '/usr/sbin/ftmd -f cpu 2.5% mem 1.2%'
       event_category: diagnostic_dump
       dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'Process /usr/sbin/ftmd -f on vEdge-1'
+      metrics:
+        process_cpu_percent: {value: 2.5, basis: observed}
+        process_mem_percent: {value: 1.2, basis: observed}
     signal: null
 
   - name: a kernel-thread row is the same dump
@@ -850,6 +943,10 @@ fixtures:
     appname: R0/0
     message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
     expect:
+      audit_user: svc-user
+      audit_action: login_accepted
+      audit_source: '192.0.2.1:41424'
+      audit_via: netconf over ssh
       summary: 'Device-management login by svc-user from 192.0.2.1 for netconf over ssh'
       parser_status: parsed
       vendor: cisco
@@ -859,3 +956,52 @@ fixtures:
       dedup_key: '192.0.2.10|R0/0|dmi_auth_passed'
       normalized_severity: notice
     signal: null
+
+# What an operator checks first for each fault family (tracker 387 event model; on the
+# record as `guidance` with `basis: pack_guidance`). Advice, never evidence: it moves no
+# signal and no verdict. Commands are the vEdge / cEdge SD-WAN CLI.
+guidance:
+  - event_types: [dns_lookup_failed, dns_resolution_failed]
+    impact:
+      - The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.
+      - Existing control and data-plane sessions keep running until they need the orchestrator again.
+    next_checks:
+      - Check the DNS servers configured in VPN 0 and that the transport interface can reach them.
+      - Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).
+      - Run show control connections and show control local-properties to see whether the edge is still attached.
+  - event_types: [control-connection-state-change]
+    impact:
+      - A control connection to a vSmart, vBond or vManage changed state; while it is down the edge gets no new policy or routes from that controller.
+    next_checks:
+      - Run show control connections and show control connections-history for the last error.
+      - Check the transport (TLOC) the connection runs over, and certificates and clock on the edge.
+  - event_types: [bfd-state-change]
+    impact:
+      - A BFD session between two TLOCs changed state; traffic over that tunnel is moved to other paths or dropped.
+    next_checks:
+      - Run show bfd sessions and show bfd history for the colours named in the line.
+      - Check the underlay between the two TLOCs (loss, latency, NAT) and the remote site's own BFD view.
+  - event_types: [omp-peer-state-change, omp-state-change]
+    impact:
+      - An OMP peering changed state; routes and TLOCs learned from that peer are withdrawn while it is down.
+    next_checks:
+      - Run show omp peers and show omp summary.
+      - Check the control connection to the vSmart that carries the OMP session.
+  - event_types: [interface-state-change, interface-admin-state-change]
+    impact:
+      - An interface changed state; tunnels and services using it move or stop.
+    next_checks:
+      - Run show interface for the named interface and check whether it was shut administratively.
+      - Check the physical link and the neighbour on the other end.
+  - event_types: [bgp-peer-state-change, ospf-neighbor-state-change]
+    impact:
+      - A routing adjacency changed state; prefixes learned through it are withdrawn while it is down.
+    next_checks:
+      - Run show bgp neighbor or show ospf neighbor for the peer named in the line.
+      - Check reachability to the peer and the interface it runs over.
+  - event_types: [cpu-usage, sysmgr_200069, sysmgr_200070, sysmgr_200071]
+    impact:
+      - CPU on the edge crossed a threshold; control-plane work (BFD, OMP, control connections) can be delayed when it stays high.
+    next_checks:
+      - Run show system status and look at the process table logged with the crossing for the top consumer.
+      - Check whether BFD or control-connection flaps line up with the high CPU.

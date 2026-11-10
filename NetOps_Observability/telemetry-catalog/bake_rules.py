@@ -302,7 +302,7 @@ def normalize_row(row: dict) -> dict:
 
 PACK_KEYS = frozenset({
     "pack", "vendor", "description", "severity_words", "edge_shapes", "envelopes",
-    "grammars", "rules", "fixtures", "wanted",
+    "grammars", "rules", "fixtures", "wanted", "guidance",
 })
 #: A frame shape normalised at the edge, before syslog-ng's legacy parser runs. `match`
 #: is anchored at the PRI, so it costs one failed anchor on any other frame.
@@ -314,8 +314,20 @@ PACK_REQUIRED = ("pack", "vendor", "fixtures")
 GRAMMAR_KEYS = frozenset({
     "id", "parser_id", "literal", "apps", "pattern", "facility", "event_type",
     "summary", "severity", "native_text", "native_code", "alarm_floor",
-    "category", "fidelity", "source", "with_msgid",
+    "category", "fidelity", "source", "with_msgid", "fields", "metrics",
 })
+#: The event-model fields a grammar may state as templates (tracker 387, the rich event
+#: model shared with the trap lane: same names, same meaning). Strings only; `metrics`
+#: and `guidance` are their own keys.
+EVENT_FIELDS = (
+    "title", "correlation_key", "audit_user", "audit_action", "audit_source",
+    "audit_via", "session_id", "audit_groups",
+)
+#: Template names that read the record, not the line: the sender's hostname and the
+#: inventory device id (the hostname when the registry states none).
+RESERVED_TEMPLATE_VARS = frozenset({"host", "device"})
+_METRIC_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+GUIDANCE_KEYS = frozenset({"event_types", "impact", "next_checks"})
 GRAMMAR_REQUIRED = ("id", "parser_id", "literal", "pattern", "fidelity")
 ENVELOPE_KEYS = frozenset({
     "id", "literal", "pattern", "message", "lift", "skip_values", "preserve_as",
@@ -377,27 +389,23 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
     groups = _check_pack_pattern(where, g)
     _check_fidelity(where, g)
     for key in ("facility", "event_type", "summary"):
-        tmpl = str(g.get(key) or "")
-        for name in _TEMPLATE_VAR_RE.findall(tmpl):
-            _check_group(where, name, groups)
-        # `[ ... ]` is an optional clause (syslog_packs.template_parts): balanced, flat,
-        # and holding at least one group, or it could never drop.
-        depth, has_var = 0, False
-        for tok in re.finditer(r"\{(\w+)\}|\[|\]", tmpl):
-            if tok.group(0) == "[":
-                if depth:
-                    raise BakeError(f"{where}: {key} nests an optional clause")
-                depth, has_var = 1, False
-            elif tok.group(0) == "]":
-                if not depth:
-                    raise BakeError(f"{where}: {key} closes a clause it never opened")
-                if not has_var:
-                    raise BakeError(f"{where}: {key} has a clause with no group to drop on")
-                depth = 0
-            elif depth:
-                has_var = True
-        if depth:
-            raise BakeError(f"{where}: {key} leaves an optional clause open")
+        _check_template(where, key, str(g.get(key) or ""), groups, reserved=False)
+    fields = g.get("fields") or {}
+    if not isinstance(fields, dict):
+        raise BakeError(f"{where}: fields must be a mapping")
+    for name, tmpl in fields.items():
+        if name not in EVENT_FIELDS:
+            raise BakeError(f"{where}: field {name!r} is not one of {EVENT_FIELDS}")
+        if not isinstance(tmpl, str) or not tmpl.strip():
+            raise BakeError(f"{where}: field {name!r} needs a template")
+        _check_template(where, name, tmpl, groups, reserved=True)
+    metrics = g.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        raise BakeError(f"{where}: metrics must be a mapping of name to group")
+    for name, group in metrics.items():
+        if not _METRIC_NAME_RE.fullmatch(str(name)):
+            raise BakeError(f"{where}: metric name {name!r} is not snake_case")
+        _check_group(where, str(group), groups)
     for key in ("native_text", "native_code"):
         if g.get(key):
             _check_group(where, str(g[key]), groups)
@@ -453,7 +461,64 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
         "alarm_floor": g.get("alarm_floor"), "category": g.get("category") or "",
         "fidelity": g["fidelity"], "source": g.get("source") or "",
         **({"with_msgid": True} if with_msgid else {}),
+        **({"fields": dict(fields)} if fields else {}),
+        **({"metrics": {str(k): str(v) for k, v in metrics.items()}} if metrics else {}),
+        **({"guidance": guidance_table(pack)} if pack.get("guidance") else {}),
     }
+
+
+def _check_template(where: str, key: str, tmpl: str, groups: dict[str, int],
+                    reserved: bool) -> None:
+    """Groups exist (or are a reserved record name), and `[ ... ]` optional clauses are
+    balanced, flat, and hold a group to drop on (syslog_packs.template_parts)."""
+    if "$" in tmpl:
+        raise BakeError(f"{where}: {key} carries a dollar sign: Vector would interpolate it")
+    for name in _TEMPLATE_VAR_RE.findall(tmpl):
+        if reserved and name in RESERVED_TEMPLATE_VARS:
+            continue
+        _check_group(where, name, groups)
+    depth, has_var = 0, False
+    for tok in re.finditer(r"\{(\w+)\}|\[|\]", tmpl):
+        if tok.group(0) == "[":
+            if depth:
+                raise BakeError(f"{where}: {key} nests an optional clause")
+            depth, has_var = 1, False
+        elif tok.group(0) == "]":
+            if not depth:
+                raise BakeError(f"{where}: {key} closes a clause it never opened")
+            if not has_var:
+                raise BakeError(f"{where}: {key} has a clause with no group to drop on")
+            depth = 0
+        elif depth:
+            has_var = True
+    if depth:
+        raise BakeError(f"{where}: {key} leaves an optional clause open")
+
+
+def guidance_table(pack: dict) -> dict[str, dict]:
+    """event_type -> {impact, next_checks}: what an operator checks first for a fault
+    family, stated by the pack (`basis: pack_guidance` on the record). Text only: it
+    never moves a signal, so it stays out of PACK_DIGEST."""
+    where = f"pack {pack['pack']!r} guidance"
+    out: dict[str, dict] = {}
+    for entry in pack.get("guidance") or []:
+        unknown = sorted(set(entry) - GUIDANCE_KEYS)
+        if unknown:
+            raise BakeError(f"{where}: unknown key(s) {unknown}")
+        ets = entry.get("event_types") or []
+        impact = [str(x) for x in entry.get("impact") or []]
+        checks = [str(x) for x in entry.get("next_checks") or []]
+        if not ets or not impact or not checks:
+            raise BakeError(f"{where}: an entry needs event_types, impact and next_checks")
+        for text in impact + checks:
+            if "$" in text or "\n" in text:
+                raise BakeError(f"{where}: {text[:40]!r} carries a dollar sign or newline")
+        for et in ets:
+            et = str(et)
+            if et != et.lower() or et in out:
+                raise BakeError(f"{where}: event type {et!r} is not lower case or repeats")
+            out[et] = {"impact": impact, "next_checks": checks}
+    return out
 
 
 def _bake_envelope(pack: dict, e: dict, seen: set[str]) -> dict:
@@ -682,12 +747,24 @@ RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)
 '''
 
 
+#: Grammar keys only the aggregator's Stage B reads: the rich event model.
+PRESENTATION_KEYS = frozenset({"fields", "metrics", "guidance"})
+
+
+def engine_grammar_rows(grammars: Any) -> tuple[dict, ...]:
+    """The grammar rows as the engine needs them: no event-model presentation."""
+    return tuple({k: v for k, v in g.items() if k not in PRESENTATION_KEYS} for g in grammars)
+
+
 def render(data: dict, rows: list[dict]) -> str:
     families = data.get("families") or {}
     fidelity = {n: f["fidelity_status"] for n, f in families.items()
                 if f.get("fidelity_status") is not None}
     runtime = [r for r in rows if r["lane"] in RUNTIME_LANES]
-    grammars = tuple(data.get("_pack_grammars") or ())
+    # The engine never writes the event model (title, metrics, guidance: Stage B does), so
+    # its module carries the grammar rows without them. They are outside the digest either
+    # way (rule_model._PACK_CLAIM_KEYS); `engine_grammar_rows` keeps the image small.
+    grammars = engine_grammar_rows(data.get("_pack_grammars") or ())
     envelopes = tuple(data.get("_pack_envelopes") or ())
     baked = rules_hash((compile_rule(r) for r in runtime),
                        pack_digest(grammars, envelopes))

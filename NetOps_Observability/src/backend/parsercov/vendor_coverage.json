@@ -79,7 +79,7 @@
         },
         "syslog": {
           "fixtures": 33,
-          "grammars": 12,
+          "grammars": 13,
           "rules": {
             "doc_claimed": 11,
             "lab_validated": 8,

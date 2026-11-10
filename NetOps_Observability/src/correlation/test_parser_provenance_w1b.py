@@ -613,7 +613,13 @@ RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a
 #: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar; the
 #: SYSMGR process-table dump and the confd NETCONF action are classified (no rule row).
 RULES_HASH_SDWAN_SNMP_POLL = "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a"
-RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
+#:
+#: Syslog event model (2026-11-10, tracker 387): two grammars join the SD-WAN pack (the
+#: cpu-usage notification with its CPU numbers, the vBond DNS lines with their own event
+#: types), the generic vEdge daemon grammar leaves, and audit grammars capture the session
+#: id and port. Titles, metrics and guidance are presentation and stay out of the hash.
+RULES_HASH_SYSLOG_EVENTS = "cefbeeaad8aad30602f755d299f952abbe9f8162f348edad7eca482ec788ad36"
+RULES_HASH_A3 = RULES_HASH_SYSLOG_EVENTS
 
 
 def _guard_patterns(node) -> list[str]:

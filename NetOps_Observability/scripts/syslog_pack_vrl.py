@@ -42,8 +42,17 @@ def _template_tokens(template: str) -> list[tuple[str, str]]:
     return out
 
 
-def _concat(parts: list[tuple[str, str]], result: str) -> str:
-    exprs = [json.dumps(t) if k == "lit" else group_expr(result, t) for k, t in parts]
+def _var_expr(result: str, name: str, record: dict[str, str] | None) -> str:
+    """A template name: a record name (`host`, `device`) when `record` maps it, else the
+    regex group of that name."""
+    if record and name in record:
+        return record[name]
+    return group_expr(result, name)
+
+
+def _concat(parts: list[tuple[str, str]], result: str,
+            record: dict[str, str] | None = None) -> str:
+    exprs = [json.dumps(t) if k == "lit" else _var_expr(result, t, record) for k, t in parts]
     return " + ".join(exprs) if exprs else '""'
 
 
@@ -55,7 +64,8 @@ def template_expr(template: str, result: str) -> str:
     return _concat(toks, result)
 
 
-def template_lines(template: str, result: str, target: str, indent: str) -> list[str]:
+def template_lines(template: str, result: str, target: str, indent: str,
+                   record: dict[str, str] | None = None) -> list[str]:
     """Assign a template to `target` as VRL statements.
 
     `[ by {user}]` is an optional clause: appended only when every group in it matched
@@ -63,27 +73,28 @@ def template_lines(template: str, result: str, target: str, indent: str) -> list
     an expression, so a template with a clause is built up in statements."""
     toks = _template_tokens(template)
     if not any(k in "[]" for k, _ in toks):
-        return [f"{indent}{target} = {_concat(toks, result)}"]
+        return [f"{indent}{target} = {_concat(toks, result, record)}"]
     out = [f'{indent}{target} = ""']
     plain: list[tuple[str, str]] = []
     clause: list[tuple[str, str]] | None = None
     for kind, text in toks:
         if kind == "[":
             if plain:
-                out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+                out.append(f"{indent}{target} = {target} + {_concat(plain, result, record)}")
                 plain = []
             clause = []
         elif kind == "]":
             body = clause or []
-            cond = " && ".join(f'{group_expr(result, t)} != ""' for k, t in body if k == "var")
+            cond = " && ".join(f'{_var_expr(result, t, record)} != ""'
+                               for k, t in body if k == "var")
             out += [f"{indent}if {cond} {{",
-                    f"{indent}  {target} = {target} + {_concat(body, result)}",
+                    f"{indent}  {target} = {target} + {_concat(body, result, record)}",
                     f"{indent}}}"]
             clause = None
         else:
             (plain if clause is None else clause).append((kind, text))
     if plain:
-        out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+        out.append(f"{indent}{target} = {target} + {_concat(plain, result, record)}")
     return out
 
 

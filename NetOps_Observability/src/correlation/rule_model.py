@@ -1244,7 +1244,10 @@ def _canon(node: Any) -> str:
 #: Keys of a baked pack grammar/envelope that are the catalog's CLAIM about the
 #: grammar, not the grammar (the same split as `Rule.digest_fields`): promoting a
 #: fidelity rung must not read as a parser edit.
-_PACK_CLAIM_KEYS = frozenset({"fidelity", "source"})
+#: Keys that describe a pack row for people and never move what the parser emits: its
+#: evidence claim, and the event-model presentation (title and other templates, metrics,
+#: guidance, tracker 387). Outside the digest, so writing them re-pins nothing.
+_PACK_CLAIM_KEYS = frozenset({"fidelity", "source", "fields", "metrics", "guidance"})
 
 
 def pack_digest(

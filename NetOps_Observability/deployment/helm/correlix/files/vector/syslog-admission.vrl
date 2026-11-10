@@ -7,8 +7,8 @@
 # the engine COULD promote, and leaves the field unset otherwise. It
 # never drops, rewrites or reorders anything: the stamp is additive.
 #
-#   rules_hash : 693abb9e46a3b334b6baeae15ff6ec9c309a91fed358010a890bfa3d204b7aee
-#   v          : 693abb9e46a3
+#   rules_hash : 9cf4e1594eda686b33a19dda3e90664433e8a12a1f7e9bbfaf156094495a8809
+#   v          : 9cf4e1594eda
 #   floor      : ALARM_SEVERITY_FLOOR = 4
 #   screen     : 111 literals
 #
@@ -74,6 +74,17 @@ cx_pk_n = 99
 cx_pk_floor = 99
 if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, " : ") {
   cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'^%(?P<cat>[A-Z][A-Z0-9_]{0,31})-(?P<grp>[A-Z][A-Z0-9_]{0,31})-(?P<sev>[0-7])-(?P<code>[A-Z][A-Z0-9_]{0,63}) : (?P<text>.*)')
+  if cx_pk_err == null {
+    cx_pk_v = 99
+    cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+    if cx_pk_v < 99 {
+      cx_pk_n = cx_pk_v
+      cx_pk_floor = 2
+    }
+  }
+}
+if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "cpu-user-percentage:\"") {
+  cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>cpu-usage)\b\s*severity-level:(?P<level>[a-z]+) .{0,200}?warning:"(?P<warning>[^"]{0,160})" cpu-user-percentage:"(?P<user>[0-9.]{1,8})" cpu-system-percentage:"(?P<system>[0-9.]{1,8})" cpu-idle-percentage:"(?P<idle>[0-9.]{1,8})".*)')
   if cx_pk_err == null {
     cx_pk_v = 99
     cx_pk_v = to_int(cx_pk_m.sev) ?? 99
@@ -149,7 +160,7 @@ if cx_pk_n < 99 && cx_sev > cx_pk_floor {
 
 # ── gate 1: the device called it warning-or-worse ───────────────────
 if cx_sev <= 4 {
-  .cx_admission = { "v": "693abb9e46a3", "by": "severity" }
+  .cx_admission = { "v": "9cf4e1594eda", "by": "severity" }
 }
 
 # ── gate 2: a known typed symptom marker, at any severity ───────────
@@ -164,7 +175,7 @@ if !exists(.cx_admission) {
     (string(.message) ?? "") + " " + cx_tag + " " +
     (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
   if match(cx_hay, r'ssisavebackgroundconfigsucceeded-2112|system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |error: kex_exchange_identification: |ssisaveincrementconfigsucceeded-2110|tmnxeqphyschasspowersupoutfail-2146|tmnxeqphyschasspowersupinfail-2144|-session_state_down: bfd session |bgpbackwardtransnotification-2039|tmnxeqphyschassisfanfailure-2148|tmnxeqportetherloopdetected-2025|-tmnxospfngnbrstatechange-2042 |bgpestablishednotification-2038|control-connection-state-change|confd_snmpa_instr,table_func,|tbgpngbackwardtransition-2020|: system cpu usage is above |: system cpu usage is below |ssisaveconfigsucceeded-2002|tmnxmodulemallocfailed-2010|tmnxeqportetheralarm-2017|receivenotification-2006|tmnxenvtemptoohigh-2005|unsupported_transceiver|tbgpngestablished-2019|tmnxeqcardfailure-2001|sendnotification-2005|tmnxconfigcreate-2007|tmnxconfigdelete-2008|tmnxconfigmodify-2006|tmnxeqporterror-2009|changed state from |error-status=generr|is flapping between|isisadjacencychange|state changed from |ui_commit_completed|cli_config_io-2011|has moved between|administratively|bfd-state-change|between nve and| adjacency to |duplicate host|ifadminstatus |interfacetable|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%ethport-|%viptela-|adjchange|bias_high|corrected|down-2004|nbr_reset|qualified|temp_high|threshold|critical|dup_host|mac_move|spantree|macflap|standby|up-2005|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|major|minor|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep| : |ber|hmm|los|nve|pre') {
-    .cx_admission = { "v": "693abb9e46a3", "by": "marker" }
+    .cx_admission = { "v": "9cf4e1594eda", "by": "marker" }
   }
 }
 

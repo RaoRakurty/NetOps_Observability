@@ -47,7 +47,7 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-from syslog_packs import PackTable
+from syslog_packs import PackTable, field_is_observed
 
 import syslog_pack_vrl as V
 
@@ -65,7 +65,9 @@ EDGE_CONFIG_RELS = ("deployment/docker/syslog-ng/core.conf",
 ASSERTED = ("vendor", "vendor_source", "parser_id", "parser_status", "facility",
             "event_type", "summary", "severity_native_text", "severity_native_code",
             "normalized_severity", "event_category", "dedup_key", "procid", "message",
-            "message_original")
+            "message_original", "title", "correlation_key", "audit_user", "audit_action",
+            "audit_source", "audit_via", "session_id", "audit_groups", "metrics",
+            "guidance", "enrichment")
 
 
 class GenerationError(RuntimeError):
@@ -111,7 +113,23 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         "cx_pk_sev = 99",
         'cx_pk_msg = string(.message) ?? ""',
         "cx_pk_app = downcase(.appname)",
+        # The rich event fields (tracker 387, the trap lane's names), merged onto the
+        # record by the hand-written code after this block.
+        "cx_pk_out = {}",
     ]
+    record = None
+    if any(_reads_record(g) for g in rows):
+        record = {"host": "cx_pk_host", "device": "cx_pk_device"}
+        out += [
+            'cx_pk_host = string(.hostname) ?? "unknown"',
+            'cx_pk_device = string(cx_inv.device_id) ?? ""',
+            'if cx_pk_device == "" {',
+            "  cx_pk_device = cx_pk_host",
+            "}",
+        ]
+    tables = _guidance_tables(rows)
+    if tables:
+        out.append(f"cx_pk_gt = {json.dumps(tables, sort_keys=True)}")
     if any(g.get("with_msgid") for g in rows):
         # `<MSGID>: <message>` for the rows that read a tag from RFC 5424 MSGID; `-`
         # is the nil value. Only declared when a row reads it: VRL warns on an unused local.
@@ -147,7 +165,69 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         if g["category"]:
             out.append(f"    cx_pk_cat = {json.dumps(g['category'])}")
         out += V.severity_lines(g, "cx_pk_m", "cx_pk_sev", "    ")
+        out += _event_model_lines(g, record, "    ")
         out += ["  }", "}"]
+    return out
+
+
+#: syslog_packs._OBSERVED_ORDER, as the locals that hold each value here.
+_OBSERVED_LOCALS = (("facility", "cx_pk_fac"), ("event_type", "cx_pk_et"),
+                    ("summary", "cx_pk_sum"), ("severity_native_text", "cx_pk_ntxt"),
+                    ("severity_native_code", "cx_pk_ncode"))
+_DERIVED_FIELDS = ("title", "correlation_key")
+
+
+def _reads_record(g: dict) -> bool:
+    return any(re.search(r"\{(?:host|device)\}", t) for t in (g.get("fields") or {}).values())
+
+
+def _guidance_tables(rows: list[dict]) -> dict[str, dict]:
+    """`<pack>|<event_type>` -> guidance, one literal for every pack that states any."""
+    out: dict[str, dict] = {}
+    for g in rows:
+        for et, guide in (g.get("guidance") or {}).items():
+            out[f"{g['pack']}|{et}"] = guide
+    return out
+
+
+def _event_model_lines(g: dict, record: dict | None, ind: str) -> list[str]:
+    """syslog_packs._event_model in VRL: the same fields, in the same order."""
+    out = [f"{ind}cx_pk_obs = []", f'{ind}cx_pk_der = ["normalized_severity"]',
+           f"{ind}cx_pk_unk = []", f"{ind}cx_pk_gfl = []"]
+    for name, local in _OBSERVED_LOCALS:
+        out.append(f'{ind}if {local} != "" {{ cx_pk_obs = push(cx_pk_obs, "{name}") }}')
+    for name, tmpl in (g.get("fields") or {}).items():
+        lst = "cx_pk_obs" if field_is_observed(name, tmpl) else "cx_pk_der"
+        out += V.template_lines(tmpl, "cx_pk_m", "cx_pk_v", ind, record)
+        out += [f'{ind}if cx_pk_v != "" {{',
+                f"{ind}  cx_pk_out = merge(cx_pk_out, {{{json.dumps(name)}: cx_pk_v}})",
+                f'{ind}  {lst} = push({lst}, "{name}")',
+                f"{ind}}} else {{",
+                f'{ind}  cx_pk_unk = push(cx_pk_unk, "{name}")',
+                f"{ind}}}"]
+    if g.get("category"):
+        out.append(f'{ind}cx_pk_der = push(cx_pk_der, "dedup_key")')
+    if g.get("metrics"):
+        out.append(f"{ind}cx_pk_met = {{}}")
+        for name, group in g["metrics"].items():
+            out += [f'{ind}cx_pk_mf, cx_pk_mferr = to_float({V.group_expr("cx_pk_m", group)})',
+                    f'{ind}if cx_pk_mferr == null && {V.group_expr("cx_pk_m", group)} != "" {{',
+                    f'{ind}  cx_pk_met = merge(cx_pk_met, {{{json.dumps(name)}: {{"value": cx_pk_mf, "basis": "observed"}}}})',
+                    f'{ind}  cx_pk_obs = push(cx_pk_obs, "metrics.{name}")',
+                    f"{ind}}} else {{",
+                    f'{ind}  cx_pk_unk = push(cx_pk_unk, "metrics.{name}")',
+                    f"{ind}}}"]
+        out += [f"{ind}if length(cx_pk_met) > 0 {{",
+                f'{ind}  cx_pk_out = merge(cx_pk_out, {{"metrics": cx_pk_met}})',
+                f"{ind}}}"]
+    if g.get("guidance"):
+        out += [f'{ind}cx_pk_g = get(cx_pk_gt, [{json.dumps(g["pack"] + "|")} + cx_pk_et]) ?? null',
+                f"{ind}if is_object(cx_pk_g) {{",
+                f'{ind}  cx_pk_out = merge(cx_pk_out, {{"guidance": merge(object!(cx_pk_g), {{"basis": "pack_guidance"}})}})',
+                f'{ind}  cx_pk_gfl = push(cx_pk_gfl, "guidance")',
+                f"{ind}}}"]
+    out.append(f'{ind}cx_pk_out = merge(cx_pk_out, {{"enrichment": {{"fields_observed": cx_pk_obs, '
+               f'"fields_derived": cx_pk_der, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}}}})')
     return out
 
 
@@ -210,14 +290,21 @@ def _yaml_str(value: object) -> str:
     return json.dumps(value if isinstance(value, str) else str(value))
 
 
+def _vrl_literal(value: object) -> str:
+    """A fixture's expected value as VRL: JSON is a VRL literal for objects and arrays."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return _yaml_str(value)
+
+
 def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict, dict]]:
     """(case name, input event, expected doc fields) for every fixture of every
     pack, refusing one whose `expect:` the Python executor does not reproduce."""
     cases: list[tuple[str, dict, dict]] = []
     for pack in packs:
         for fx in pack["fixtures"]:
-            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid")
-                  if k in fx}
+            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid",
+                                     ) if k in fx}
             ev.setdefault("hostname", "spine1")
             ev.setdefault("appname", "unknown")
             ev.setdefault("severity", "notice")
@@ -278,7 +365,7 @@ def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> 
         for key in ASSERTED:
             if key not in want:
                 continue
-            body.append(f'              assert_eq!(.{key}, {_yaml_str(want[key])}, '
+            body.append(f'              assert_eq!(.{key}, {_vrl_literal(want[key])}, '
                         f'"wrong {key}")')
         if not want:
             # A fixture with nothing to assert claims that no pack has an opinion.
