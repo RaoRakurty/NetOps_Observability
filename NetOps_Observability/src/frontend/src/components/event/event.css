@@ -27,6 +27,11 @@
 .evd *, .evd *::before, .evd *::after { box-sizing: border-box; }
 .evd button, .evd a.evd-btn { font-family: var(--font-ui); }
 .evd-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* Numbers read in Inter with tabular figures, as the screenshots set them; mono is
+   only for IPs, OIDs, ids, keys and JSON. */
+.evd-num { font-family: var(--font-ui); font-variant-numeric: tabular-nums; }
+/* Identifiers wrap at their own separators (<wbr>), never mid-token. */
+.evd-ident { overflow-wrap: anywhere; word-break: normal; }
 .evd-ico { flex: none; vertical-align: middle; }
 .evd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: pre; }
 .evd-muted, .evd-note { color: var(--fg-muted); margin: 0; }
@@ -143,9 +148,11 @@
 .evd-kv-row:first-child > dt, .evd-kv-row:first-child > dd { border-top: 0; }
 .evd-kv-label { color: var(--fg-muted); display: flex; align-items: flex-start; gap: 5px; min-width: 0; }
 .evd-kv-dd { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.evd-kv-line { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.evd-kv-val { color: var(--fg); overflow-wrap: break-word; word-break: break-word; min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
-.evd-kv-val.evd-mono { word-break: break-all; }
+.evd-kv-line { display: block; min-width: 0; }
+.evd-kv-line > .evd-copy { vertical-align: middle; margin-left: 4px; }
+.evd-kv-line > .evd-copy-state { margin-left: 6px; }
+.evd-kv-val { color: var(--fg); overflow-wrap: break-word; min-width: 0; display: inline; }
+.evd-kv-val > .evd-kv-ico { vertical-align: -2px; margin-right: 6px; }
 .evd-kv-sec { color: var(--fg-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .evd-kv-ico { color: var(--fg-muted); }
 .evd-kv-ico-check { color: var(--sev-ok); }
@@ -155,8 +162,9 @@
 .evd-kv-val { font-variant-numeric: tabular-nums; }
 /* The observed delay reads as a solid pill, as in the owner's screenshots. */
 .evd-kv-row[data-row="delay"] .evd-pill-sev, .evd-kv-row[data-row="skew"] .evd-pill-sev { background: var(--tone-solid); color: var(--tone-on); box-shadow: none; }
-/* The panel (screenshot A) shows UTC only; the page (B) adds the local line. */
-.evd-mode-panel .evd-kv-sec { display: none; }
+/* The panel caps the label column so values (ids, OIDs) keep their width. */
+.evd-mode-panel .evd-kv { grid-template-columns: fit-content(38%) minmax(0, 1fr); }
+.evd-mode-panel .evd-kv-timing { grid-template-columns: fit-content(34%) minmax(0, 1fr); }
 
 .evd-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .evd-pill-sev { background: var(--tone-bg); color: var(--tone-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 45%, transparent); }
@@ -341,8 +349,9 @@
 @container (max-width: 760px) { .evd-grid-what { grid-template-columns: minmax(0, 1fr); } }
 .evd-device-head .evd-dev-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .evd-dev-ico { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
-.evd-dev-id { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.evd-dev-name { font-size: 18px; font-weight: 700; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.evd-dev-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 11rem; }
+.evd-dev-name { font-size: 18px; font-weight: 700; color: var(--fg); overflow-wrap: anywhere; }
+.evd-dev-name-long { font-size: 16px; }
 .evd-dev-ip { color: var(--fg); font-size: 15px; }
 .evd-page-msg { padding: 32px; color: var(--fg-muted); }
 @container (max-width: 600px) {

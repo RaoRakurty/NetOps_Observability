@@ -456,3 +456,13 @@ describe("chips never repeat", () => {
     expect(labels.filter((l) => l === "Tracker")).toHaveLength(1);
   });
 });
+
+describe("numbers read in Inter; identifiers in mono", () => {
+  it("side stats and metrics are not mono, ids and IPs are", () => {
+    const v = toEventView(CPU_GOLDEN);
+    expect(v.sideStats.every((r) => !r.mono)).toBe(true);
+    expect(v.metrics.every((r) => !r.mono)).toBe(true);
+    expect(v.identity.rows.find((r) => r.key === "event_id")?.mono).toBe(true);
+    expect(v.device.rows.find((r) => r.key === "ip")?.mono).toBe(true);
+  });
+});

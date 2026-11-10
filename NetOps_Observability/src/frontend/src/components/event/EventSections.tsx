@@ -79,14 +79,31 @@ function Pill({ tone, icon, children }: { tone: Tone; icon?: ViewRow["icon"]; ch
   );
 }
 
+/** Identifier separators where a long id may wrap: after "_", ".", ":", "-" and "/". */
+const ID_BREAK = /([_.:/-])/;
+
+/**
+ * An identifier (OID, event id, correlation key, event_type) that wraps only at its
+ * own separators, never mid-token: a <wbr> after each one. Plain text, so React
+ * still escapes every part.
+ */
+export function Breakable({ text }: { text: string }) {
+  const parts = text.split(ID_BREAK);
+  if (parts.length === 1) return <>{text}</>;
+  return <>{parts.map((p, i) => (ID_BREAK.test(p) ? <span key={i}>{p}<wbr /></span> : <span key={i}>{p}</span>))}</>;
+}
+
+const IDENTIFIER_ROWS = new Set(["event_type", "trap_oid", "event_id", "correlation_key", "transition_id", "parser_id", "mib"]);
+
 /** One label/value row, in the screenshots' shape. */
 export function KvRow({ row }: { row: ViewRow }) {
+  const ident = IDENTIFIER_ROWS.has(row.key) || (row.mono && !row.pill);
   const value = row.pill
     ? <Pill tone={row.pill} icon={row.icon}>{row.value}</Pill>
     : (
-      <span className={`evd-kv-val${row.mono ? " evd-mono" : ""}${row.value === DASH ? " evd-dash" : ""}`}>
+      <span className={`evd-kv-val${row.mono ? " evd-mono" : ""}${ident ? " evd-ident" : ""}${row.value === DASH ? " evd-dash" : ""}`}>
         {row.icon && <EvIcon name={row.icon} size={15} className={`evd-kv-ico evd-kv-ico-${row.icon}`} />}
-        {row.value}
+        {ident ? <Breakable text={row.value} /> : row.value}
       </span>
     );
   return (
@@ -240,13 +257,13 @@ function UtilBar({ u }: { u: UtilizationData }) {
             data-testid="event-threshold"
           >
             <span className="evd-thr-pill">{u.threshold.label}</span>
-            <span className="evd-thr-val evd-mono">{fmtPercentShort(u.threshold.value)}</span>
+            <span className="evd-thr-val evd-num">{fmtPercentShort(u.threshold.value)}</span>
           </div>
         )}
         <div className="evd-bar" role="img" aria-label={u.segments.map((s) => `${s.label} ${fmtPercent(s.value)}`).join(", ")}>
           {u.segments.map((s) => (
             <span key={s.key} className={`evd-seg ${SEG_CLASS[s.key]}`} style={{ width: `${Math.max(0, Math.min(100, s.value))}%` }}>
-              {s.value >= 6 && <span className="evd-seg-label evd-mono">{fmtPercent(s.value)}</span>}
+              {s.value >= 6 && <span className="evd-seg-label evd-num">{fmtPercent(s.value)}</span>}
             </span>
           ))}
           {u.threshold && <span className="evd-thr-line" style={{ left: `${u.threshold.value}%` }} aria-hidden="true" />}
@@ -257,7 +274,7 @@ function UtilBar({ u }: { u: UtilizationData }) {
           <li key={s.key}>
             <span className={`evd-swatch ${SEG_CLASS[s.key]}`} aria-hidden="true" />
             <span className="evd-legend-k">{s.label}</span>
-            <span className="evd-legend-v evd-mono">{fmtPercent(s.value)}</span>
+            <span className="evd-legend-v evd-num">{fmtPercent(s.value)}</span>
           </li>
         ))}
       </ul>
@@ -409,7 +426,7 @@ export function StatTable({ rows }: { rows: ViewRow[] }) {
       {rows.map((r, i) => (
         <div key={r.key} className={`evd-stat${i === 0 && r.key === "total" ? " evd-stat-total" : ""}`}>
           <dt>{r.label}</dt>
-          <dd className={r.mono ? "evd-mono" : undefined} title={r.formula ? `= ${r.formula}` : undefined}>{r.value}</dd>
+          <dd className={r.mono ? "evd-mono" : "evd-num"} title={r.formula ? `= ${r.formula}` : undefined}>{r.value}</dd>
         </div>
       ))}
     </dl>
@@ -461,7 +478,7 @@ export function DeviceCard({ view, variant }: { view: EventView; variant: "rows"
         <header className="evd-dev-top">
           <span className="evd-dev-ico" aria-hidden="true"><EvIcon name="server" size={22} /></span>
           <span className="evd-dev-id">
-            <span className="evd-dev-name" title={d.name || undefined}>{d.name || DASH}</span>
+            <span className={`evd-dev-name${(d.name || "").length > 16 ? " evd-dev-name-long" : ""}`}>{d.name ? <Breakable text={d.name} /> : DASH}</span>
             {d.address && d.address !== d.name && <span className="evd-dev-ip evd-mono">{d.address}</span>}
           </span>
           {d.inventory && <Pill tone={d.inventory.tone} icon={d.inventory.tone === "ok" ? "check" : "triangle"}>{d.inventory.label}</Pill>}
@@ -627,7 +644,7 @@ export function DetailsCard({ view }: { view: EventView }) {
               {d.varbinds.map((v, i) => (
                 <tr key={`${v.oid}#${i}`}>
                   <td className={v.name ? undefined : "evd-mono"}>{v.name || DASH}</td>
-                  <td className="evd-mono">{v.oid}</td>
+                  <td className="evd-mono evd-ident"><Breakable text={v.oid} /></td>
                   <td className="evd-mono">{v.type || DASH}</td>
                   <td className="evd-mono">
                     {v.tone
@@ -730,7 +747,7 @@ export function MetricsTab({ view, trend }: { view: EventView; trend: TrendState
                 {view.metrics.map((m) => (
                   <tr key={m.key}>
                     <td>{m.label}{m.tip && <Tip label={m.label} text={m.tip} />}</td>
-                    <td className="evd-mono evd-num">{m.value}</td>
+                    <td className="evd-num">{m.value}</td>
                     <td><ProvTag prov={m.prov} />{m.formula && <span className="evd-formula evd-mono"> = {m.formula}</span>}</td>
                   </tr>
                 ))}

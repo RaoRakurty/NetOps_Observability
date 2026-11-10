@@ -324,8 +324,9 @@ describe("record details: the Event Intelligence panel", () => {
     respond([trapHit]);
     render(<Logs />);
     const detail = within(await openFirst());
-    const oid = detail.getByText("1.3.6.1.4.1.41916.100.1.54.0");
-    expect(oid.className).toContain("evd-mono");
+    // OIDs wrap only at their dots (<wbr>), so the cell, not one text node, holds it.
+    const oid = detail.getAllByRole("cell").find((c) => c.textContent === "1.3.6.1.4.1.41916.100.1.54.0");
+    expect(oid?.className).toContain("evd-mono");
     expect(detail.getByText("System cpu usage back to normal level")).toBeTruthy();
   });
 

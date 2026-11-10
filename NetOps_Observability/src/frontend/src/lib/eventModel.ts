@@ -687,25 +687,25 @@ export function toEventView(hit: LogHit): EventView {
     if (utilization.total !== null) {
       sideStats.push({
         key: "total", label: `Total ${word}${utilization.totalProv === "derived" ? " (derived)" : ""}`,
-        value: fmtPercent(utilization.total), mono: true, prov: utilization.totalProv, formula: utilization.totalFormula,
+        value: fmtPercent(utilization.total), prov: utilization.totalProv, formula: utilization.totalFormula,
       });
     }
     if (utilization.threshold) {
-      sideStats.push({ key: "threshold", label: "Reported Threshold", value: fmtPercentShort(utilization.threshold.value), mono: true, prov: "reported" });
+      sideStats.push({ key: "threshold", label: "Reported Threshold", value: fmtPercentShort(utilization.threshold.value), prov: "reported" });
     }
     for (const s of utilization.segments) {
-      sideStats.push({ key: s.key, label: s.key === "idle" ? `Idle ${word}` : s.label, value: fmtPercent(s.value), mono: true, prov: s.prov });
+      sideStats.push({ key: s.key, label: s.key === "idle" ? `Idle ${word}` : s.label, value: fmtPercent(s.value), prov: s.prov });
     }
   } else if (visual.kind === "bgp") {
     const b = visual.data;
-    if (b.peerAs) sideStats.push({ key: "as", label: "Peer AS", value: b.peerAs, mono: true });
+    if (b.peerAs) sideStats.push({ key: "as", label: "Peer AS", value: b.peerAs });
     if (b.afi) sideStats.push({ key: "afi", label: "Address family", value: b.afi });
     if (b.localAddress) sideStats.push({ key: "local", label: "Local address", value: b.localAddress, mono: true });
     if (b.vrf) sideStats.push({ key: "vrf", label: "VRF", value: b.vrf, mono: true });
   } else if (visual.kind === "flow") {
     const f = visual.data;
-    if (f.bytes) sideStats.push({ key: "bytes", label: "Bytes", value: f.bytes, mono: true, prov: "observed" });
-    if (f.packets) sideStats.push({ key: "packets", label: "Packets", value: f.packets, mono: true, prov: "observed" });
+    if (f.bytes) sideStats.push({ key: "bytes", label: "Bytes", value: f.bytes, prov: "observed" });
+    if (f.packets) sideStats.push({ key: "packets", label: "Packets", value: f.packets, prov: "observed" });
     for (const s of f.sampling) sideStats.push({ key: s.name, label: s.name, value: s.value });
   }
 
@@ -836,7 +836,7 @@ export function toEventView(hit: LogHit): EventView {
   const recovery = recoveredFact === null ? null : { verified: recoveredFact };
   if (recovery) identityRows.push({ key: "recovery", label: "Recovery Status", value: recovery.verified ? "Recovered (verified)" : "Not recovered", icon: recovery.verified ? "check" : "circle" });
   const occ = num(src.occurrence_count);
-  if (occ !== null && occ > 1 && visual.kind !== "bgp") identityRows.push({ key: "occ", label: "Occurrences", value: String(occ), mono: true });
+  if (occ !== null && occ > 1 && visual.kind !== "bgp") identityRows.push({ key: "occ", label: "Occurrences", value: String(occ) });
 
   // ── overview ──
   const guidance = obj(src.guidance);
@@ -882,10 +882,10 @@ export function toEventView(hit: LogHit): EventView {
 
   // ── metrics ──
   const metricRows: ViewRow[] = Object.entries(metrics).map(([name, m]) => ({
-    key: name, label: metricLabel(name), value: fmtPercentOrNum(name, m.value), mono: true, prov: m.prov, formula: m.formula,
+    key: name, label: metricLabel(name), value: fmtPercentOrNum(name, m.value), prov: m.prov, formula: m.formula,
   }));
   if (utilization?.threshold) {
-    metricRows.push({ key: "threshold", label: "Threshold", value: fmtPercentShort(utilization.threshold.value), mono: true, prov: "reported", tip: "Stated in the device's own message. It is not a threshold configured in Correlix." });
+    metricRows.push({ key: "threshold", label: "Threshold", value: fmtPercentShort(utilization.threshold.value), prov: "reported", tip: "Stated in the device's own message. It is not a threshold configured in Correlix." });
   }
   const metricSeries = deviceId && (kind === "cpu" || kind === "memory") && SAFE_LABEL.test(deviceId)
     ? { metric: kind === "cpu" ? "device_cpu_percent" : "device_mem_percent", deviceId, label: kind === "cpu" ? "CPU %" : "Memory %" }
@@ -1067,7 +1067,7 @@ function timingRows(lane: Lane, src: Record<string, any>, ev: LogEvent): ViewRow
       timeRow("event_time", "Event Time", ts, { tip: "The device's clock was off by more than five minutes, so the event time is when our edge read the frame." });
       timeRow("device_claim", "Device Clock Said", known(src, "device_timestamp"));
       const skew = num(src.clock_skew_s);
-      if (skew !== null) rows.push({ key: "skew", label: "Device Clock Offset", value: `${skew.toLocaleString("en-US")} seconds`, pill: "warning", mono: true });
+      if (skew !== null) rows.push({ key: "skew", label: "Device Clock Offset", value: `${skew.toLocaleString("en-US")} seconds`, pill: "warning" });
       rows.push({ key: "basis", label: "Time Basis", value: "Receiver clock (device clock not believed)" });
     } else {
       timeRow("device_time", "Device Time", ts, { tip: "The time in the syslog frame, from the device's clock." });
