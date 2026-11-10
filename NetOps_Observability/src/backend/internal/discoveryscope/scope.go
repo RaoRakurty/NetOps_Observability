@@ -101,7 +101,7 @@ func Validate(s *Scope) error {
 	}
 	clean, _, err := discovery.ValidateScanRanges(s.Ranges, s.AllowNonPrivate)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if len(clean) == 0 {
 		return fmt.Errorf("%w: at least one address range is required", ErrInvalid)
