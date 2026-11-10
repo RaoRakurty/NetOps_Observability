@@ -5,6 +5,7 @@ package snmpcred
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,43 @@ func TestScanCandidatesPlatformOnlyNameOrder(t *testing.T) {
 			ids = append(ids, c.ID)
 		}
 		t.Fatalf("scan candidates = %v, want [b-global plat]", ids)
+	}
+}
+
+// TestScanCandidatesForIsOwnerStrict is owner decision D2 (2026-11-10): a
+// tenant's discovery scope tries only that tenant's own profiles, and the
+// platform scope only platform ones — no secret crosses an owner either way.
+func TestScanCandidatesForIsOwnerStrict(t *testing.T) {
+	cs, _ := resolveFixture(t)
+	if _, err := cs.Upsert(Credential{ID: "acme-a", Name: "Alpha", Version: "v2c", Community: "a", TenantID: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(cs []Credential) []string {
+		out := []string{}
+		for _, c := range cs {
+			out = append(out, c.ID)
+		}
+		return out
+	}
+	cases := []struct {
+		tenant string
+		want   string
+	}{
+		{"acme", "acme-a,acme"},   // own only, name order (Alpha < Shared)
+		{" ACME ", "acme-a,acme"}, // case/space-insensitive owner
+		{"globex", "globex"},
+		{"initech", ""},       // a tenant with no profile gets none — never the platform's
+		{"", "b-global,plat"}, // the platform scope: platform-owned only
+		{"global", "b-global,plat"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(ids(cs.ScanCandidatesFor(c.tenant)), ","); got != c.want {
+			t.Errorf("ScanCandidatesFor(%q) = %q, want %q", c.tenant, got, c.want)
+		}
+	}
+	var nilStore *Store
+	if got := nilStore.ScanCandidatesFor("acme"); len(got) != 0 {
+		t.Fatal("nil store has no candidates")
 	}
 }
 
