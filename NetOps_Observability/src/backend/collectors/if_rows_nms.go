@@ -148,3 +148,31 @@ func (a ifAliasRows) update(targets []Target, results []deviceOutcome) map[strin
 	}
 	return out
 }
+
+// ReadSNMPIfBridge reads the SNMP half of the interface bridge in one go: the
+// address and ifIndex maps, the ifAlias map and each device's walk times. Any
+// part unread is an error (tracker 307).
+func ReadSNMPIfBridge(ctx context.Context) (ifbridge.SNMP, error) {
+	addr, err := FetchIfAddrMap(ctx)
+	if err != nil {
+		return ifbridge.SNMP{}, err
+	}
+	idx, err := FetchIfIndexMap(ctx)
+	if err != nil {
+		return ifbridge.SNMP{}, err
+	}
+	alias, err := FetchIfAliasMap(ctx)
+	if err != nil {
+		return ifbridge.SNMP{}, err
+	}
+	ages, err := FetchSNMPIfRowAges(ctx)
+	if err != nil {
+		return ifbridge.SNMP{}, err
+	}
+	return ifbridge.SNMP{Addr: addr, Index: idx, Alias: alias, AddrAt: ages.Addr, IndexAt: ages.Index}, nil
+}
+
+// LiveIfBridgeIO is the interface bridge's production IO.
+func LiveIfBridgeIO() ifbridge.IO {
+	return ifbridge.IO{SNMP: ReadSNMPIfBridge, NMSRows: FetchNMSIfRows, Publish: PublishNMSIfRows}
+}

@@ -11,14 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
-	"unicode"
 
 	"netops/backend/internal/devmon"
-	"netops/backend/internal/owner"
+	"netops/backend/internal/invfacts"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
+	"netops/backend/nms"
 )
 
 // telemetry_enrichment.go — exports the device→tenant map so the ingest tier
@@ -70,7 +69,7 @@ var enrichmentCSVHeader = []string{"identity", "tenant_id", "device_id", "vendor
 
 // maxEnrichmentCellRunes bounds one fact. It lands on every record of the device,
 // so an inventory field somebody pasted a paragraph into must not ride along.
-const maxEnrichmentCellRunes = 128
+const maxEnrichmentCellRunes = invfacts.MaxCellRunes
 
 // enrichmentRow is one identity's row. Identity is a device id, name or management
 // address; Tenant is the normalized owning tenant ("" for global/unassigned, which
@@ -89,19 +88,7 @@ type enrichmentRow struct {
 // cleanEnrichmentCell makes one inventory value safe to stamp on telemetry: no
 // control characters, no surrounding space, bounded. Inventory text is written by
 // operators and importers, so it is treated as input like any other (§3).
-func cleanEnrichmentCell(v string) string {
-	v = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, v)
-	v = strings.TrimSpace(v)
-	if r := []rune(v); len(r) > maxEnrichmentCellRunes {
-		v = strings.TrimSpace(string(r[:maxEnrichmentCellRunes]))
-	}
-	return v
-}
+func cleanEnrichmentCell(v string) string { return invfacts.CleanCell(v) }
 
 // enrichmentSite is the device's site for telemetry, in the precedence the geomap
 // uses: the operator's device-to-site binding, then the inventory's own label. The
@@ -132,15 +119,7 @@ func newIdentityFacts() *identityFacts {
 // A device that states nothing does not disagree: the same box found by two sources
 // often has the vendor on only one of them. Two different values is a conflict,
 // and a conflict is left blank rather than settled by a guess.
-func soleFact(values map[string]bool) string {
-	if len(values) != 1 {
-		return ""
-	}
-	for v := range values {
-		return v
-	}
-	return ""
-}
+func soleFact(values map[string]bool) string { return invfacts.Sole(values) }
 
 // buildEnrichmentRows projects the device inventory onto the identity→tenant
 // rows the ingest tier looks up. Pure (no IO) so it is unit-testable.
@@ -174,8 +153,8 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 // model, site and role (inventory_facts.go), keyed by (owner, device id). It
 // also returns how each fact of each exported device was settled. nmsFacts nil
 // is "no NMS facts": the rows are exactly what they were before PR 13a.
-func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant string) map[string]string, nmsFacts map[factKey]*factVotes) ([]enrichmentRow, map[factStatKey]int) {
-	stats := map[factStatKey]int{}
+func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant string) map[string]string, nmsFacts map[invfacts.Key]*invfacts.Votes) ([]enrichmentRow, map[invfacts.StatKey]int) {
+	stats := map[invfacts.StatKey]int{}
 	// identity -> set of distinct tenants seen for it.
 	seen := map[string]map[string]bool{}
 	facts := map[string]*identityFacts{}
@@ -226,14 +205,9 @@ func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant 
 		vendor, _ := reg.InventoryVendorID(d.Vendor) // "" = the inventory states none
 		// The NMS votes are keyed by the device's OWN owner: another tenant's
 		// controller can only ever have voted on its own devices.
-		facts := resolveDeviceFacts(d, enrichmentSite(d, bindingsFor(t)), nmsFacts[factKey{owner.Of(t), d.ID}])
-		for _, fo := range []struct {
-			name string
-			o    factOutcome
-		}{{factModel, facts.model}, {factSite, facts.site}, {factRole, facts.role}} {
-			stats[factStatKey{fo.name, fo.o.source, fo.o.state}]++
-		}
-		model, site, role := facts.model.value, facts.site.value, facts.role.value
+		facts := invfacts.Resolve(d, enrichmentSite(d, bindingsFor(t)), nmsFacts[invfacts.KeyFor(t, d.ID)])
+		invfacts.Count(stats, facts)
+		model, site, role := facts.Model.Value, facts.Site.Value, facts.Role.Value
 		add(d.ID, t, d, vendor, model, site, role)
 		add(d.Name, t, d, vendor, model, site, role)
 		add(d.Address, t, d, vendor, model, site, role)
@@ -356,9 +330,24 @@ func (s *server) enrichmentRowsFor(devices []models.Device) []enrichmentRow {
 	s.refreshInventoryFacts()
 	rows, stats := buildEnrichmentRowsFacts(devices, func(tenant string) map[string]string {
 		return s.deviceSites.Assignments(tenant, false)
-	}, s.invFacts.current())
-	s.invFacts.setStats(stats)
+	}, s.invFacts.Current())
+	s.invFacts.SetStats(stats)
 	return rows
+}
+
+// refreshInventoryFacts is the registry export's facts step (internal/invfacts):
+// bounded, logged on failure, never fatal to the export.
+func (s *server) refreshInventoryFacts() {
+	if s.invFacts == nil || s.nms == nil || s.nmsResolver == nil {
+		return
+	}
+	var store nms.EnabledLister = s.nms.Store()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := s.invFacts.Refresh(ctx, store, s.nmsResolver.Peek); err != nil {
+		logWarn("tenant-enrichment", "NMS inventory facts unread: the registry keeps the previous model/site/role facts this cycle",
+			map[string]any{"error": err.Error()})
+	}
 }
 
 // startTenantEnrichment runs the export loop until ctx is cancelled. It is a

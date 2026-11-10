@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/internal/invfacts"
 	"netops/backend/models"
 	"netops/backend/nms"
 )
@@ -103,49 +104,6 @@ func rowsByIdentity(rows []enrichmentRow) map[string]enrichmentRow {
 	return out
 }
 
-func TestResolveDeviceFactsPrecedence(t *testing.T) {
-	votes := func(model, site, role []string) *factVotes {
-		v := newFactVotes()
-		for _, m := range model {
-			v.models[m] = true
-		}
-		for _, s := range site {
-			v.sites[s] = true
-		}
-		for _, r := range role {
-			v.roles[r] = true
-		}
-		return v
-	}
-	cases := []struct {
-		name   string
-		d      models.Device
-		manual string
-		v      *factVotes
-		want   invDeviceFacts
-	}{
-		{"nothing states anything", models.Device{}, "", nil, invDeviceFacts{
-			model: factOutcome{"", factSourceNone, factStateBlank}, site: factOutcome{"", factSourceNone, factStateBlank}, role: factOutcome{"", factSourceNone, factStateBlank}}},
-		{"NMS fills all three", models.Device{}, "", votes([]string{"vedge-CSR-1000v"}, []string{"81"}, []string{"edge"}), invDeviceFacts{
-			model: factOutcome{"vedge-CSR-1000v", factSourceNMS, factStateSet}, site: factOutcome{"81", factSourceNMS, factStateSet}, role: factOutcome{"edge", factSourceNMS, factStateSet}}},
-		{"manual site and role win over the NMS", models.Device{Labels: map[string]string{"role": "hub"}}, "dc-east", votes(nil, []string{"81"}, []string{"edge"}), invDeviceFacts{
-			model: factOutcome{"", factSourceNone, factStateBlank}, site: factOutcome{"dc-east", factSourceManual, factStateSet}, role: factOutcome{"hub", factSourceManual, factStateSet}}},
-		{"inventory model agrees with the NMS", models.Device{Model: "vedge-CSR-1000v"}, "", votes([]string{"vedge-CSR-1000v"}, nil, nil), invDeviceFacts{
-			model: factOutcome{"vedge-CSR-1000v", factSourceNMS, factStateSet}, site: factOutcome{"", factSourceNone, factStateBlank}, role: factOutcome{"", factSourceNone, factStateBlank}}},
-		{"inventory model alone", models.Device{Model: "C8300", Type: "router"}, "", nil, invDeviceFacts{
-			model: factOutcome{"C8300", factSourceInventory, factStateSet}, site: factOutcome{"", factSourceNone, factStateBlank}, role: factOutcome{"router", factSourceInventory, factStateSet}}},
-		{"inventory and NMS disagree: blank", models.Device{Model: "CSR1000V"}, "", votes([]string{"vedge-CSR-1000v"}, nil, nil), invDeviceFacts{
-			model: factOutcome{"", factSourceNMS, factStateConflict}, site: factOutcome{"", factSourceNone, factStateBlank}, role: factOutcome{"", factSourceNone, factStateBlank}}},
-		{"two controllers disagree: blank, and no type fallback", models.Device{Type: "router"}, "", votes(nil, []string{"40", "41"}, []string{"edge", "controller"}), invDeviceFacts{
-			model: factOutcome{"", factSourceNone, factStateBlank}, site: factOutcome{"", factSourceNMS, factStateConflict}, role: factOutcome{"", factSourceNMS, factStateConflict}}},
-	}
-	for _, c := range cases {
-		if got := resolveDeviceFacts(c.d, c.manual, c.v); got != c.want {
-			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
-		}
-	}
-}
-
 // The lab, once the controller and the SNMP twins have one owner (here the
 // platform's own integration): every edge's model, site and role reach the
 // registry, on every identity of the device.
@@ -155,14 +113,14 @@ func TestRegistryStampsTheLabsNMSFacts(t *testing.T) {
 		ints: []nms.Integration{{Tenant: "global", ID: "nmsi-668f5b96d5ce7857", Vendor: "vmanage", Enabled: true}},
 		devs: map[string][]nms.ControllerDevice{"nmsi-668f5b96d5ce7857": labControllerDevices("global")},
 	}
-	f := newInventoryFacts()
-	if err := f.refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
+	f := invfacts.NewStore()
+	if err := f.Refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.calls) != 1 || store.calls[0] != "global|scoped|nmsi-668f5b96d5ce7857" {
 		t.Fatalf("the device list must be read tenant-scoped, as the integration's owner: %v", store.calls)
 	}
-	rows, stats := buildEnrichmentRowsFacts(devs, nil, f.current())
+	rows, stats := buildEnrichmentRowsFacts(devs, nil, f.Current())
 	got := rowsByIdentity(rows)
 	want := map[string][3]string{ // identity → model, site, role
 		"cedge-81-11060ae2":  {"vedge-CSR-1000v", "81", "edge"},
@@ -182,7 +140,7 @@ func TestRegistryStampsTheLabsNMSFacts(t *testing.T) {
 			t.Errorf("%s: %+v, want model/site/role %v (tenant and vendor unchanged)", id, r, w)
 		}
 	}
-	for _, k := range []factStatKey{{factModel, factSourceNMS, factStateSet}, {factSite, factSourceNMS, factStateSet}, {factRole, factSourceNMS, factStateSet}} {
+	for _, k := range []invfacts.StatKey{{Fact: invfacts.FactModel, Source: invfacts.SourceNMS, State: invfacts.StateSet}, {Fact: invfacts.FactSite, Source: invfacts.SourceNMS, State: invfacts.StateSet}, {Fact: invfacts.FactRole, Source: invfacts.SourceNMS, State: invfacts.StateSet}} {
 		if stats[k] != 8 {
 			t.Errorf("stats %v = %d, want 8", k, stats[k])
 		}
@@ -200,15 +158,15 @@ func TestRegistryFactsNeverCrossFromAnotherOwnersController(t *testing.T) {
 		ints: []nms.Integration{{Tenant: retail, ID: "nmsi-668f5b96d5ce7857", Vendor: "vmanage", Enabled: true}},
 		devs: map[string][]nms.ControllerDevice{"nmsi-668f5b96d5ce7857": labControllerDevices(retail)},
 	}
-	f := newInventoryFacts()
-	if err := f.refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
+	f := invfacts.NewStore()
+	if err := f.Refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.current()) != 0 {
-		t.Fatalf("another owner's controller voted on platform devices: %v", f.current())
+	if len(f.Current()) != 0 {
+		t.Fatalf("another owner's controller voted on platform devices: %v", f.Current())
 	}
 	before := rowsByIdentity(buildEnrichmentRows(devs))
-	rows, stats := buildEnrichmentRowsFacts(devs, nil, f.current())
+	rows, stats := buildEnrichmentRowsFacts(devs, nil, f.Current())
 	for id, r := range rowsByIdentity(rows) {
 		if r != before[id] {
 			t.Errorf("%s changed: %+v → %+v", id, before[id], r)
@@ -217,7 +175,7 @@ func TestRegistryFactsNeverCrossFromAnotherOwnersController(t *testing.T) {
 			t.Errorf("%s gained a fact: %+v", id, r)
 		}
 	}
-	if stats[factStatKey{factModel, factSourceNone, factStateBlank}] != 8 {
+	if stats[invfacts.StatKey{Fact: invfacts.FactModel, Source: invfacts.SourceNone, State: invfacts.StateBlank}] != 8 {
 		t.Fatalf("stats %v", stats)
 	}
 }
@@ -228,20 +186,20 @@ func TestInventoryFactsRefreshFailureKeepsThePreviousFacts(t *testing.T) {
 		ints: []nms.Integration{{Tenant: "global", ID: "i1", Vendor: "vmanage", Enabled: true}},
 		devs: map[string][]nms.ControllerDevice{"i1": labControllerDevices("global")},
 	}
-	f := newInventoryFacts()
-	if err := f.refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
+	f := invfacts.NewStore()
+	if err := f.Refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
 		t.Fatal(err)
 	}
-	n := len(f.current())
+	n := len(f.Current())
 	store.err = errors.New("pg down")
-	if err := f.refresh(context.Background(), store, resolverOver(devs).Peek); err == nil {
+	if err := f.Refresh(context.Background(), store, resolverOver(devs).Peek); err == nil {
 		t.Fatal("a failed read was not reported")
 	}
-	if len(f.current()) != n || n == 0 {
-		t.Fatalf("a failed read changed the facts: %d → %d", n, len(f.current()))
+	if len(f.Current()) != n || n == 0 {
+		t.Fatalf("a failed read changed the facts: %d → %d", n, len(f.Current()))
 	}
 	var b bytes.Buffer
-	f.setStats(map[factStatKey]int{{factModel, factSourceNMS, factStateSet}: 8})
+	f.SetStats(map[invfacts.StatKey]int{{Fact: invfacts.FactModel, Source: invfacts.SourceNMS, State: invfacts.StateSet}: 8})
 	f.WriteMetrics(&b)
 	out := b.String()
 	for _, line := range []string{
@@ -253,7 +211,7 @@ func TestInventoryFactsRefreshFailureKeepsThePreviousFacts(t *testing.T) {
 			t.Errorf("missing %q in\n%s", line, out)
 		}
 	}
-	if strings.Count(out, "netops_inventory_facts{") != len(factStatKeys()) {
+	if strings.Count(out, "netops_inventory_facts{") != len(invfacts.StatKeys()) {
 		t.Fatal("label set not closed / zero-filled")
 	}
 	for _, bad := range []string{"tenant", "device="} {
@@ -262,10 +220,10 @@ func TestInventoryFactsRefreshFailureKeepsThePreviousFacts(t *testing.T) {
 		}
 	}
 	// nil-safe
-	var nf *inventoryFacts
+	var nf *invfacts.Store
 	nf.WriteMetrics(&b)
-	nf.setStats(nil)
-	if nf.current() != nil {
+	nf.SetStats(nil)
+	if nf.Current() != nil {
 		t.Fatal("nil current")
 	}
 }
@@ -274,7 +232,7 @@ func TestInventoryFactsRefreshFailureKeepsThePreviousFacts(t *testing.T) {
 func TestRegistryWithoutNMSFactsIsUnchanged(t *testing.T) {
 	devs := isoDevices()
 	a := buildEnrichmentRows(devs)
-	b, _ := buildEnrichmentRowsFacts(devs, nil, map[factKey]*factVotes{})
+	b, _ := buildEnrichmentRowsFacts(devs, nil, map[invfacts.Key]*invfacts.Votes{})
 	if len(a) != len(b) {
 		t.Fatalf("rows %d vs %d", len(a), len(b))
 	}

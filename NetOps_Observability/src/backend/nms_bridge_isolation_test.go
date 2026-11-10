@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"netops/backend/collectors"
 	"netops/backend/internal/ifbridge"
+	"netops/backend/internal/invfacts"
 	"netops/backend/models"
 	"netops/backend/nms"
 )
@@ -139,17 +139,8 @@ func TestNMSBridgeIgnoresAClaimedTenant(t *testing.T) {
 		t.Fatal("the payload's as_tenant/tenant moved rows to tenant B")
 	}
 
-	forged := ifbridge.NewState()
-	forged.Devices["globex-edge"] = &ifbridge.DeviceRows{Tenant: bridgeTenantA, At: time.Now().Add(-time.Minute).UnixMilli(),
-		Rows: []ifbridge.Row{{IfName: "Gi9", Addrs: []string{"172.16.0.99"}}}}
-	s2 := &server{ifBridge: ifbridge.NewStore(), ifBridgeMetrics: ifbridge.NewMetrics()}
-	loaded := false
-	var published ifbridge.State
-	kv := fakeBridgeIO(nil, forged, func(st ifbridge.State) { published = st })
-	s2.ifBridgeCycle(context.Background(), kv, devs, &loaded, time.Now())
-	if _, ok := published.Devices["globex-edge"]; ok {
-		t.Fatal("a stored row claiming tenant A was published for tenant B's device")
-	}
+	// A stored row claiming another owner is dropped on load, never relabelled:
+	// internal/ifbridge TestWorkerDropsAStoredRowOfAnotherOwner.
 }
 
 // Facts: tenant A's controller states a model, site and role for "edge-1" at
@@ -168,11 +159,11 @@ func TestNMSFactsNeverCopiedAcrossTenants(t *testing.T) {
 			Model: "LEAKED", SiteID: "666", Role: nms.RoleManager,
 		}}},
 	}
-	f := newInventoryFacts()
-	if err := f.refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
+	f := invfacts.NewStore()
+	if err := f.Refresh(context.Background(), store, resolverOver(devs).Peek); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := buildEnrichmentRowsFacts(devs, nil, f.current())
+	rows, _ := buildEnrichmentRowsFacts(devs, nil, f.Current())
 	got := rowsByIdentity(rows)
 	if r := got["acme-edge"]; r.Model != "ACME-MODEL" || r.Site != "7" || r.Role != "edge" || r.Tenant != bridgeTenantA {
 		t.Fatalf("tenant A's own device: %+v", r)
@@ -190,29 +181,5 @@ func TestNMSFactsNeverCopiedAcrossTenants(t *testing.T) {
 	// The shared name "edge-1" is claimed by three owners: omitted whole, facts included.
 	if _, ok := got["edge-1"]; ok {
 		t.Fatal("an identity three owners claim was exported")
-	}
-}
-
-// fakeBridgeIO is an ifBridgeIO over fixed maps. publish records what was stored.
-func fakeBridgeIO(snmpAddr map[string]map[string]string, stored ifbridge.State, publish func(ifbridge.State)) ifBridgeIO {
-	empty := func(context.Context) (map[string]map[string]string, error) {
-		return map[string]map[string]string{}, nil
-	}
-	return ifBridgeIO{
-		snmpAddr: func(context.Context) (map[string]map[string]string, error) {
-			if snmpAddr == nil {
-				return map[string]map[string]string{}, nil
-			}
-			return snmpAddr, nil
-		},
-		snmpIndex: empty, snmpAlias: empty,
-		snmpAges: func(context.Context) (collectors.SNMPIfRowAges, error) { return collectors.SNMPIfRowAges{}, nil },
-		nmsRows:  func(context.Context) (ifbridge.State, error) { return stored, nil },
-		publish: func(_ context.Context, st ifbridge.State) error {
-			if publish != nil {
-				publish(st)
-			}
-			return nil
-		},
 	}
 }

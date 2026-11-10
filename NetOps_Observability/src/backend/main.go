@@ -49,6 +49,7 @@ import (
 	"netops/backend/internal/changesignals"
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/ifbridge"
+	"netops/backend/internal/invfacts"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -578,7 +579,7 @@ type server struct {
 	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
 	ifBridge        *ifbridge.Store                      // tracker 387 PR 13a: the interface bridge's NMS rows (if_bridge.go)
 	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
-	invFacts        *inventoryFacts                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
+	invFacts        *invfacts.Store                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -1261,7 +1262,7 @@ func newServer() *server {
 		ifaceNames:       flownames.NewExporter(),
 		ifBridge:         ifbridge.NewStore(),
 		ifBridgeMetrics:  ifbridge.NewMetrics(),
-		invFacts:         newInventoryFacts(),
+		invFacts:         invfacts.NewStore(),
 		flowDatasets:     flownames.NewDatasetWatch(),
 		discovery:        d,
 		devStore:         devStore,
