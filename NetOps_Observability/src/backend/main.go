@@ -73,6 +73,7 @@ import (
 	// DATA-PROTECTION-END
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/discoveryscope"
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/hardening"
 	// CONFIG-BACKUP-END
@@ -689,8 +690,11 @@ type server struct {
 	portStore    portintel.Store       // Port Intelligence physical-layer store (#94)
 	netboxCfg    *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync   *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
-	vulns        *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	// discoveryScopes are the tenant-owned discovery scans (internal/discoveryscope):
+	// the scanner reads its snapshot every poll, /api/discovery/scopes writes it.
+	discoveryScopes *discoveryscope.Registry
+	netboxSync      *netboxSyncer // reconciles discovered devices INTO NetBox (write-through)
+	vulns           *vuln.Feed    // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -879,7 +883,11 @@ func newServer() *server {
 	// SNMP credential store is created below; capture a pointer the subnet
 	// sweep and the target builder resolve profiles against (set after init).
 	var snmpCredsRef *snmpcred.Store
-	snmpScan := newSNMPSourceFromStore(discoveryCfg, func() *snmpcred.Store { return snmpCredsRef }, d.Devices)
+	// Tenant-owned discovery scopes: loaded before the scanner's first poll so
+	// a customer's scan is a channel from boot (a load failure leaves them off
+	// and is retried — see newDiscoveryScopeRegistry).
+	discoveryScopes := newDiscoveryScopeRegistry()
+	snmpScan := newSNMPSourceFromStore(discoveryCfg, discoveryScopes, func() *snmpcred.Store { return snmpCredsRef }, d.Devices)
 	// Tracker 366: the scanner's memory of what it has found survives a
 	// restart, so a device that is down at boot is still inventory (same id,
 	// same tenant row, same topology node). Restored here — before
@@ -1791,6 +1799,7 @@ func newServer() *server {
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
+	srv.discoveryScopes = discoveryScopes
 	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
 	// reading the deduped inventory. No-op while NetBox is disabled.
 	srv.netboxSync = newNetboxSyncer(netboxCfg.effective, srv.discovery.Devices)
@@ -2718,6 +2727,9 @@ func Run() {
 	// so the first enrichment tick already has its rungs (see vulns_http.go).
 	srv.buildOSVersionLadder()
 	srv.discovery.Start(ctx)
+	// A failed boot load of the customer discovery scans is retried until it
+	// succeeds (the last good set otherwise stays in force).
+	workers.start("discovery-scope-reload", func() { srv.discoveryScopes.RetryLoop(ctx, time.Minute) })
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	// Credential sentinel — self-healing SNMP credential resolution. Runs with
@@ -3665,7 +3677,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	// not silently hide optional UI surfaces. See handleFeatures.
 	mux.HandleFunc("/api/features", s.handleFeatures)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
-	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig)  // subnet-scan scope (platform-owner)
+	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig) // subnet-scan scope (platform-owner)
+	// Tenant-owned discovery scans: write = platform owner, read = infra:read + tenant filter.
+	mux.HandleFunc("/api/discovery/scopes", s.handleDiscoveryScopes)
+	mux.HandleFunc("/api/discovery/scopes/", s.handleDiscoveryScopes)
 	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig)    // Source-of-Truth config (platform-owner)
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)

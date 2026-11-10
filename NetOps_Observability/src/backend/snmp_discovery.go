@@ -4,12 +4,15 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"netops/backend/collectors"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/discoveryscope"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/vault"
@@ -17,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"netops/backend/models"
 )
@@ -304,17 +308,51 @@ func (c discoveryScanConfig) public() publicDiscoveryConfig {
 // The sealed store stays; scanSettings adapts it onto the scanner's slice.
 type SNMPSource = discovery.SNMPSource
 
-func newSNMPSourceFromStore(store *discoveryConfigStore, creds func() *snmpcred.Store, known func() []models.Device) *SNMPSource {
+// newSNMPSourceFromStore wires the scanner onto its two configuration sources:
+// the platform scan (the operator config, tenant "") and the tenant-owned
+// scopes (internal/discoveryscope). The master switch is on while either has
+// something to sweep; each scope still turns itself off by having no ranges.
+func newSNMPSourceFromStore(store *discoveryConfigStore, scopes *discoveryscope.Registry, creds func() *snmpcred.Store, known func() []models.Device) *SNMPSource {
 	return discovery.NewSNMPSource(func() discovery.ScanSettings {
 		c := store.effective()
-		return discovery.ScanSettings{
-			Enabled: c.Enabled,
-			Scopes: []discovery.ScanScope{{
+		var all []discovery.ScanScope
+		if c.Enabled {
+			all = append(all, discovery.ScanScope{
 				ID: discovery.PlatformScopeID, Ranges: c.Ranges,
 				Credentials: scanCredentials(creds()), AllowNonPrivate: c.AllowNonPrivate,
-			}},
+			})
 		}
+		if scopes != nil {
+			all = append(all, scopes.ScanScopes(func(sc discoveryscope.Scope) []discovery.ScanCredential {
+				return tenantScanCredentials(creds(), sc.TenantID, sc.CredentialRefs)
+			})...)
+		}
+		return discovery.ScanSettings{Enabled: len(all) > 0, Scopes: all}
 	}, known)
+}
+
+// tenantScanCredentials is a tenant scope's credentials: that tenant's OWN
+// profiles only (owner decision D2, snmpcred.ScanCandidatesFor), narrowed to the
+// scope's credential refs when it names any. A ref that no longer names one of
+// the tenant's profiles (deleted, or re-homed) is skipped, never widened to the
+// platform's — the scope then reports "no credential" rather than spraying
+// somebody else's secret.
+func tenantScanCredentials(creds *snmpcred.Store, tenant string, refs []string) []discovery.ScanCredential {
+	want := map[string]bool{}
+	for _, r := range refs {
+		want[r] = true
+	}
+	cands := creds.ScanCandidatesFor(tenant)
+	out := make([]discovery.ScanCredential, 0, len(cands))
+	for _, c := range cands {
+		if len(want) > 0 && !want[c.ID] {
+			continue
+		}
+		var tgt collectors.Target
+		snmpcred.ApplyCredToTarget(&tgt, c)
+		out = append(out, discovery.ScanCredential{ProfileID: c.ID, Target: tgt})
+	}
+	return out
 }
 
 // scanCredentials maps the sweep-eligible profiles (platform-owned, name order —
@@ -358,8 +396,8 @@ type discoveredDevice struct {
 // maxDiscoveredListed bounds the results list in one GET (§9: bounded).
 const maxDiscoveredListed = 500
 
-// discoveredBySweep lists the inventory devices the subnet sweep reported, in
-// address order. Scan-found devices are platform-owned and the endpoint is
+// discoveredBySweep lists the inventory devices the PLATFORM scan reported, in
+// address order. They are platform-owned and the endpoint is
 // requireCrossTenant, so nothing here crosses a tenant boundary.
 func (s *server) discoveredBySweep() []discoveredDevice {
 	out := []discoveredDevice{}
@@ -367,7 +405,9 @@ func (s *server) discoveredBySweep() []discoveredDevice {
 		return out
 	}
 	for _, d := range s.discovery.Devices() {
-		if d.Source != "snmp" {
+		// The platform scan's own results: a customer scope's devices are
+		// listed under that scope (/api/discovery/scopes), never here.
+		if d.Source != "snmp" || !owner.IsPlatform(d.TenantID) {
 			continue
 		}
 		out = append(out, discoveredDevice{ID: d.ID, Name: d.Name, Address: d.Address, Vendor: d.Vendor, CredentialRef: d.CredentialRef})
@@ -398,7 +438,7 @@ func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{
 			"config": s.discoveryCfg.effective().public(),
 			"limits": map[string]int{"max_hosts": discovery.MaxScanHosts, "max_ranges": discovery.MaxScanRanges},
-			"stats":  s.discovery.Health()["snmp"],
+			"stats":  s.platformScanStats(),
 			// What the sweep will authenticate with — the platform-owned SNMP
 			// profiles, tried in name order (counts only; no secret, no tenant data).
 			"scan_profiles": scanProfileSummary(s.snmpCreds),
@@ -431,5 +471,135 @@ func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// platformScanStats is the scanner's source stats with the PLATFORM scope's own
+// refusal: with customer scopes beside it, one scope's refusal no longer fails
+// the whole poll, so the console reads the platform scope's status instead.
+func (s *server) platformScanStats() any {
+	st := s.discovery.Health()["snmp"]
+	for _, sc := range s.snmpScan.ScopeStatuses() {
+		if sc.ScopeID == discovery.PlatformScopeID && sc.LastError != "" {
+			st.LastError = sc.LastError
+		}
+	}
+	return st
+}
+
+// =============================================================================
+// Tenant-owned discovery scopes (/api/discovery/scopes) — the logic lives in
+// internal/discoveryscope; this is the wiring.
+// =============================================================================
+
+// discoveryScopesPath is where the file backend keeps the tenant scopes.
+func discoveryScopesPath() string {
+	return envOr("DISCOVERY_SCOPES_STORE_PATH", "/data/discovery_scopes.json")
+}
+
+// newDiscoveryScopeRegistry picks the scope store the way newFoundStore does
+// (the FORCE-RLS discovery_scopes table under STORE_BACKEND=postgres, else one
+// record per scope on the platform kv) and loads it under a bounded boot
+// deadline. A load failure is logged; customer scans stay off until a reload
+// succeeds (Registry.RetryLoop), the platform scan is unaffected.
+func newDiscoveryScopeRegistry() *discoveryscope.Registry {
+	var st discoveryscope.Store
+	if ps, ok := platformdb.ActivePG(); ok {
+		st = discoveryscope.NewPGStore(ps.DB())
+	} else if _, ok := platformdb.ActivePrefix(); ok {
+		st = discoveryscope.NewFileStore(discoveryScopesPath(), platformPrefixKV{})
+	} else {
+		st = discoveryscope.Unavailable(errors.New("the store backend has no per-record capability"))
+	}
+	reg := discoveryscope.NewRegistry(st)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := reg.Reload(ctx); err != nil {
+		logError("discovery", "customer discovery scans not loaded — they stay off until the store answers (retried every minute); the platform scan is unaffected", errf(err))
+	}
+	return reg
+}
+
+// handleDiscoveryScopes serves /api/discovery/scopes[/{id}].
+func (s *server) handleDiscoveryScopes(w http.ResponseWriter, r *http.Request) {
+	if s.discoveryScopes == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("customer discovery scans are not available"))
+		return
+	}
+	s.discoveryScopeDeps().Handler(w, r)
+}
+
+// discoveryScopeDeps binds the scope API onto the server's gates and stores.
+func (s *server) discoveryScopeDeps() discoveryscope.Deps {
+	caller := func(c jwtClaims) discoveryscope.Caller {
+		tenant, cross := principalTenant(c)
+		return discoveryscope.Caller{Subject: c.Sub, Tenant: tenant, Cross: cross, PlatformOwner: isPlatformOwner(c)}
+	}
+	return discoveryscope.Deps{
+		Registry: s.discoveryScopes,
+		// Read: infrastructure:read, scoped by principalTenant.
+		Reader: func(w http.ResponseWriter, r *http.Request) (discoveryscope.Caller, bool) {
+			c, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+			return caller(c), ok
+		},
+		// Write: the platform owner only (owner decision D1).
+		Writer: func(w http.ResponseWriter, r *http.Request) (discoveryscope.Caller, bool) {
+			c, ok := s.requirePlatformAdmin(w, r)
+			return caller(c), ok
+		},
+		ResolveTenant: func(ref string) (string, bool) {
+			if s.tenants == nil {
+				return "", false
+			}
+			t, ok := s.tenants.Resolve(ref)
+			return t.ID, ok
+		},
+		TenantName: func(id string) string {
+			if s.tenants == nil {
+				return ""
+			}
+			if t, ok := s.tenants.Get(id); ok {
+				return t.Name
+			}
+			return ""
+		},
+		CredentialOwner: func(id string) (string, bool) {
+			c, ok := s.snmpCreds.Get(id)
+			return c.TenantID, ok
+		},
+		PlatformScan: func() ([]string, bool, int) {
+			if s.discoveryCfg == nil {
+				return nil, false, 0
+			}
+			c := s.discoveryCfg.effective()
+			_, hosts, err := discovery.ValidateScanRanges(c.Ranges, c.AllowNonPrivate)
+			if err != nil {
+				hosts = 0 // refused at sweep time: it charges nothing
+			}
+			return c.Ranges, c.Enabled && len(c.Ranges) > 0, hosts
+		},
+		Status:  s.snmpScan.ScopeStatuses,
+		Devices: s.discovery.Devices,
+		Refresh: s.discovery.RefreshNow,
+		Audit: func(r *http.Request, c discoveryscope.Caller, action string, sc discoveryscope.Scope) {
+			if s.audit == nil {
+				return
+			}
+			// Filed under the CUSTOMER's tenant, so the customer's own audit
+			// trail shows the platform pointed a scan at its network.
+			s.audit.Record(AuditEvent{
+				Actor: c.Subject, Tenant: sc.TenantID, Method: r.Method, Path: r.URL.Path,
+				Decision: "allow", Remote: auditClientIP(r),
+				Detail: map[string]any{
+					"action": "discovery_scope_" + action, "scope_id": sc.ID, "scope_tenant": sc.TenantID,
+					"ranges": sc.Ranges, "credential_refs": len(sc.CredentialRefs), "enabled": sc.Enabled,
+				},
+			})
+		},
+		NewID:      discoveryscope.NewID,
+		Now:        func() time.Time { return time.Now().UTC() },
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Log:        func(msg string, err error) { logError("discovery", msg, errf(err)) },
 	}
 }
