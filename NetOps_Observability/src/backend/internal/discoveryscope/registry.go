@@ -26,11 +26,17 @@ import (
 
 // Registry is the scanner's view of the stored scopes.
 type Registry struct {
-	store   Store
-	mu      sync.RWMutex
-	all     []Scope
-	loaded  bool
-	loadErr error
+	store Store
+	// reloadMu serializes a whole reload — the store read AND the publish — so
+	// two concurrent reloads cannot publish out of order: without it, a slow
+	// reload that read the store BEFORE a write could finish AFTER the reload
+	// that read it after, and put the stale set back in force (last writer
+	// wins on old data). mu only guards the published fields.
+	reloadMu sync.Mutex
+	mu       sync.RWMutex
+	all      []Scope
+	loaded   bool
+	loadErr  error
 }
 
 // NewRegistry wraps st. Call Reload before the scanner's first poll.
@@ -42,6 +48,8 @@ func (r *Registry) Store() Store { return r.store }
 // Reload re-reads every scope (cross-tenant). On failure the previous snapshot
 // stays in force and the error is returned and remembered.
 func (r *Registry) Reload(ctx context.Context) error {
+	r.reloadMu.Lock()
+	defer r.reloadMu.Unlock()
 	all, err := r.store.List(ctx, "", true)
 	r.mu.Lock()
 	defer r.mu.Unlock()

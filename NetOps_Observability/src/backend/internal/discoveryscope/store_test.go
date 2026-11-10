@@ -224,3 +224,62 @@ func TestRegistryKeepsTheLastGoodSetAndMapsTurnedOnScopes(t *testing.T) {
 		t.Fatalf("recovery: %v", err)
 	}
 }
+
+// versionStore answers List with the version current when the read STARTED;
+// the first read can be held mid-flight to model a slow store.
+type versionStore struct {
+	Store
+	mu      sync.Mutex
+	version int
+	hold    chan struct{} // closed to release the held read
+	entered chan struct{} // closed when the held read has started
+	held    bool
+}
+
+func (v *versionStore) List(ctx context.Context, tenant string, cross bool) ([]Scope, error) {
+	v.mu.Lock()
+	ver := v.version
+	holdThis := !v.held
+	v.held = true
+	v.mu.Unlock()
+	if holdThis {
+		close(v.entered)
+		<-v.hold
+	}
+	return []Scope{{ID: sid(ver), TenantID: "t_a"}}, nil
+}
+
+// TestConcurrentReloadsNeverPublishAStaleSet: reload A reads the store, then
+// stalls; the store changes; reload B starts. Whatever the interleaving, the
+// set in force afterwards is the newer one — A must not finish last and put
+// its older read back.
+func TestConcurrentReloadsNeverPublishAStaleSet(t *testing.T) {
+	vs := &versionStore{version: 1, hold: make(chan struct{}), entered: make(chan struct{})}
+	reg := NewRegistry(vs)
+	ctx := context.Background()
+	aDone := make(chan error, 1)
+	go func() { aDone <- reg.Reload(ctx) }()
+	<-vs.entered // A has read version 1 and is stalled
+	vs.mu.Lock()
+	vs.version = 2 // a committed write lands
+	vs.mu.Unlock()
+	bDone := make(chan error, 1)
+	go func() { bDone <- reg.Reload(ctx) }()
+	// Give an unserialized B every chance to read version 2 and publish first.
+	select {
+	case err := <-bDone:
+		bDone <- err
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(vs.hold) // A finishes now — last, if B was not made to wait
+	if err := <-aDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-bDone; err != nil {
+		t.Fatal(err)
+	}
+	snap := reg.Snapshot()
+	if len(snap) != 1 || snap[0].ID != sid(2) {
+		t.Fatalf("a slow reload published its older read over a newer one: %+v", snap)
+	}
+}
