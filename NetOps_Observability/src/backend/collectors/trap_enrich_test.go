@@ -298,8 +298,10 @@ func TestTrapLifecycle_RepeatAndLateReport(t *testing.T) {
 	eq(t, "same severity", mk("err", "2026-11-10T04:00:20Z").LifecycleState, lifecycleRepeat)
 	late := mk("crit", "2026-11-10T04:00:05Z")
 	eq(t, "late basis", late.LifecycleBasis, lifecycleLate)
-	// The late report did not rewind memory: the next one compares against err.
-	eq(t, "after late", mk("warning", "2026-11-10T04:00:30Z").LifecycleState, lifecycleDowngrade)
+	// The late report did not rewind memory: the next one compares against err,
+	// not against the late crit (which would make it a downgrade).
+	eq(t, "after late", mk("err", "2026-11-10T04:00:30Z").LifecycleState, lifecycleRepeat)
+	eq(t, "then lower", mk("warning", "2026-11-10T04:00:40Z").LifecycleState, lifecycleDowngrade)
 	// Unattributed: never remembered, always basis unknown.
 	ev := &TrapEvent{Family: "cpu", EventState: trapStateRaise, Severity: "err"}
 	tg.observeLifecycle(ev)
@@ -495,6 +497,7 @@ func TestTrapSynthetic_Peer2IndexForms(t *testing.T) {
 		{"1.4.10.0.1", "", "", peerUnparsed},                                 // truncated: never guessed
 		{"1.4.10.0.0.256", "", "", peerUnparsed},                             // not an octet
 		{"7.4.10.0.0.1", "", "", peerUnparsed},                               // no such InetAddressType
+		{"0.4.10.0.0.1", "", "", peerUnparsed},                               // unknown(0) carries no octets
 	}
 	for _, c := range cases {
 		ev := synth("1.3.6.1.4.1.9.9.187.0.8", cedge81, t0, [2]string{cbgpPeer2Col + "3." + c.index, "1"}, [2]string{cbgpPeer2Col + "29." + c.index, "6"})
@@ -507,6 +510,16 @@ func TestTrapSynthetic_Peer2IndexForms(t *testing.T) {
 			eq(t, c.index+" title", ev.Title, "A BGP neighbour on cEDGE-81 moved to Idle (session lost)")
 		}
 	}
+}
+
+// The bare-address form is a pack-stated deviation, per table: a table no pack
+// row names never reads a short suffix as an address.
+func TestTrapSynthetic_BareIndexOnlyWhereThePackSaysSo(t *testing.T) {
+	t0 := time.Date(2026, 11, 10, 6, 0, 0, 0, time.UTC)
+	ev := synth("1.3.6.1.4.1.30065.4.1.0.2", "dev-arista", t0, [2]string{"1.3.6.1.4.1.30065.4.1.1.2.1.13.10.0.0.1", "1"})
+	deriveEnvelopeWith(ev, nil, t0)
+	eq(t, "basis", ev.BGP.PeerBasis, peerUnparsed)
+	eq(t, "peer", ev.BGP.PeerAddress, "")
 }
 
 func TestTrapSynthetic_MultiVendorBGP(t *testing.T) {
