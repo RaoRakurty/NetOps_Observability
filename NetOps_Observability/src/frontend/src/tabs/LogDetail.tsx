@@ -96,6 +96,14 @@ function SummaryTab({ ev }: { ev: LogEvent }) {
             <dd className="lv-mono">{ev.trap.oid}</dd>
           </>
         )}
+        {ev.trap?.interface && (
+          <>
+            <dt>Interface</dt>
+            <dd>
+              <span className="lv-mono">{ev.trap.interface}</span> <span className="lv-addr">{ev.trap.interfaceHow}</span>
+            </dd>
+          </>
+        )}
         {ev.trap?.uptime && (
           <>
             <dt>Device up for</dt>

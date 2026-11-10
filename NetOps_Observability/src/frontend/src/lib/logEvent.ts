@@ -111,7 +111,12 @@ export interface LogEvent {
   flow?: FlowView;
   syslog?: SyslogView;
   /** Trap identity, kept apart so the details view can set it in mono. */
-  trap?: { oid: string; uptime: string };
+  /**
+   * `interface` is the receiver's port, as an operator reads it (tracker 387 PR 13c):
+   * `ge0/3 (4)` when named, `4` when only the index is known; `interfaceHow` says
+   * how it was named. Empty when the trap is about no interface.
+   */
+  trap?: { oid: string; uptime: string; interface: string; interfaceHow: string };
   message: string;
   pipeline: Record<string, unknown>;
   raw: Record<string, any>;
@@ -397,6 +402,23 @@ function flowSamplingOf(src: Record<string, any>): LogField[] {
   return out;
 }
 
+/** How the receiver named a trap's interface, in plain words. */
+const TRAP_INTERFACE_HOW: Record<string, string> = {
+  varbind_name: "named in the trap",
+  ifindex_map: "named from the device's interface table",
+  ifindex_only: "index only, not named",
+};
+
+/** A trap's interface: the receiver's name beside the index, or the index alone. */
+function trapInterfaceOf(src: Record<string, any>): { label: string; how: string } {
+  const basis = pick(src, "interface_basis");
+  const name = pick(src, "interface");
+  const index = pick(src, "ifindex");
+  if (!name || basis === "none" || !(basis in TRAP_INTERFACE_HOW)) return { label: "", how: "" };
+  const label = basis === "ifindex_only" || !index || index === name ? name : `${name} (${index})`;
+  return { label, how: TRAP_INTERFACE_HOW[basis] };
+}
+
 /** One interface as shown: the API's name beside the index, or the index alone. */
 function interfaceLabel(index: string, name: unknown, basis: unknown): string {
   if (index === "") return "";
@@ -501,7 +523,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
       const oid = pick(src, "trap_oid");
       const uptime = pick(src, "sys_uptime_human");
       varbinds = varbindsOf(src);
-      trap = { oid, uptime };
+      const iface = trapInterfaceOf(src);
+      trap = { oid, uptime, interface: iface.label, interfaceHow: iface.how };
+      if (iface.label) addChip({ label: `Interface ${iface.label}`, stream: true });
       const undecoded = name.toLowerCase() === "enterprisespecific";
       if (undecoded) addChip({ label: NOT_DECODED, stream: true });
       else addChip(parserChip(parserStatus));
