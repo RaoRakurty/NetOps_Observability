@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { api, type CopilotConfig, type ProviderTestResult } from "../services/api";
 import { ConnectModelBanner } from "../components/ConnectModelBanner";
+import { operatorError } from "../lib/errors";
 import {
   PROVIDER_ORDER,
   GEMINI_FREE_TIER_WARNING,
@@ -66,7 +67,7 @@ export default function ConnectModelStep() {
       setResult(await api.testCopilotConfig({ provider: fields.provider, key: key.trim() || undefined, model: fields.model_fast || fields.model || undefined }));
     } catch (e) {
       setResult(null);
-      setMessage(e instanceof Error ? e.message : "The test could not run.");
+      setMessage(operatorError(e, "The test could not run."));
     } finally {
       setTesting(false);
     }
@@ -81,7 +82,7 @@ export default function ConnectModelStep() {
       setKey("");
       setMessage(saved.key_present ? "Saved. Iris now uses this model." : "Saved, but no key is stored yet.");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Not saved.");
+      setMessage(operatorError(e, "The settings could not be saved."));
     } finally {
       setSaving(false);
     }
