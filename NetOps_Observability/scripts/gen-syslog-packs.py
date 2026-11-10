@@ -47,7 +47,7 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-from syslog_packs import PackTable, field_is_observed
+from syslog_packs import PackTable, field_is_observed, template_parts
 
 import syslog_pack_vrl as V
 
@@ -113,27 +113,14 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         "cx_pk_sev = 99",
         'cx_pk_msg = string(.message) ?? ""',
         "cx_pk_app = downcase(.appname)",
-        # The rich event fields (tracker 387, the trap lane's names), merged onto the
-        # record by the hand-written code after this block.
-        "cx_pk_out = {}",
-        "cx_pk_obs = []",
-        "cx_pk_der = []",
-        "cx_pk_unk = []",
-        'cx_pk_pack = ""',
+        # The rich event fields (tracker 387, the trap lane's names): a branch only
+        # names its grammar; the epilogue renders every field from one table, once.
+        # VRL type-checks each branch against every local in scope, so per-branch
+        # template code made the transform about 2x slower to compile, and a table
+        # declared up here about 10x (a 2-case `vector test` went from 20 s to 193 s).
+        'cx_pk_gid = ""',
+        'cx_pk_capj = "{}"',
     ]
-    record = None
-    if any(_reads_record(g) for g in rows):
-        record = {"host": "cx_pk_host", "device": "cx_pk_device"}
-        out += [
-            "cx_pk_host = .hostname",
-            'cx_pk_device = string(cx_inv.device_id) ?? ""',
-            'if cx_pk_device == "" {',
-            "  cx_pk_device = cx_pk_host",
-            "}",
-        ]
-    tables = _guidance_tables(rows)
-    if tables:
-        out.append(f"cx_pk_gt = {json.dumps(tables, sort_keys=True)}")
     if any(g.get("with_msgid") for g in rows):
         # `<MSGID>: <message>` for the rows that read a tag from RFC 5424 MSGID; `-`
         # is the nil value. Only declared when a row reads it: VRL warns on an unused local.
@@ -169,9 +156,10 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         if g["category"]:
             out.append(f"    cx_pk_cat = {json.dumps(g['category'])}")
         out += V.severity_lines(g, "cx_pk_m", "cx_pk_sev", "    ")
-        out += _event_model_lines(g, record, "    ")
+        out += [f"    cx_pk_gid = {json.dumps(g['id'])}",
+                "    cx_pk_capj = encode_json(cx_pk_m)"]
         out += ["  }", "}"]
-    out += _event_model_epilogue(bool(tables))
+    out += _event_model_epilogue(rows, _guidance_tables(rows))
     return out
 
 
@@ -179,11 +167,6 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
 _OBSERVED_LOCALS = (("facility", "cx_pk_fac"), ("event_type", "cx_pk_et"),
                     ("summary", "cx_pk_sum"), ("severity_native_text", "cx_pk_ntxt"),
                     ("severity_native_code", "cx_pk_ncode"))
-_DERIVED_FIELDS = ("title", "correlation_key")
-
-
-def _reads_record(g: dict) -> bool:
-    return any(re.search(r"\{(?:host|device)\}", t) for t in (g.get("fields") or {}).values())
 
 
 def _guidance_tables(rows: list[dict]) -> dict[str, dict]:
@@ -195,47 +178,150 @@ def _guidance_tables(rows: list[dict]) -> dict[str, dict]:
     return out
 
 
-def _event_model_lines(g: dict, record: dict | None, ind: str) -> list[str]:
-    """The per-grammar half of syslog_packs._event_model: this row's templates and
-    metrics, each named into observed / derived / unknown in declaration order. The
-    shared half (the line's own fields, guidance, the enrichment object) is the
-    epilogue, written once."""
-    out = [f"{ind}cx_pk_pack = {json.dumps(g['pack'])}"]
-    for name, tmpl in (g.get("fields") or {}).items():
-        lst = "cx_pk_obs" if field_is_observed(name, tmpl) else "cx_pk_der"
-        out += V.template_lines(tmpl, "cx_pk_m", "cx_pk_v", ind, record)
-        out.append(f'{ind}if cx_pk_v != "" {{ cx_pk_out = merge(cx_pk_out, {{{json.dumps(name)}: cx_pk_v}}); '
-                   f'{lst} = push({lst}, "{name}") }} else {{ cx_pk_unk = push(cx_pk_unk, "{name}") }}')
-    if g.get("metrics"):
-        out.append(f"{ind}cx_pk_met = {{}}")
-        for name, group in g["metrics"].items():
-            raw = V.group_expr("cx_pk_m", group)
-            out += [f"{ind}cx_pk_mf, cx_pk_mferr = to_float({raw})",
-                    (f'{ind}if cx_pk_mferr == null && {raw} != "" {{ '
-                     f'cx_pk_met = merge(cx_pk_met, {{{json.dumps(name)}: {{"value": cx_pk_mf, "basis": "observed"}}}}); '
-                     f'cx_pk_obs = push(cx_pk_obs, "metrics.{name}") }} else {{ '
-                     f'cx_pk_unk = push(cx_pk_unk, "metrics.{name}") }}')]
-        out.append(f'{ind}if length(cx_pk_met) > 0 {{ cx_pk_out = merge(cx_pk_out, {{"metrics": cx_pk_met}}) }}')
-    return out
+def _fields_used(rows: list[dict]) -> list[str]:
+    seen: dict[str, None] = {}
+    for g in rows:
+        for name in g.get("fields") or {}:
+            seen.setdefault(name, None)
+    return list(seen)
 
 
-def _event_model_epilogue(has_guidance: bool) -> list[str]:
-    """Once, after the grammars: the line's own fields first (syslog_packs._OBSERVED_ORDER),
-    pack guidance by `<pack>|<event_type>`, and the enrichment object."""
-    out = ['if cx_pk_parser != "" {', "  cx_pk_base = []"]
+def _event_model_atoms(template: str) -> list[dict]:
+    """A template as segments the epilogue renders without parsing: `{"c": clause,
+    "a": atoms}`, an atom `=text` (literal), `@group` or `%host` / `%device` (the
+    record's reserved names). A clause segment renders only when none of its
+    groups is empty (syslog_packs._render)."""
+    segs: list[dict] = []
+    cur: dict = {"c": False, "a": []}
+    for kind, text in template_parts(template):
+        if kind in ("[", "]"):
+            if cur["a"]:
+                segs.append(cur)
+            cur = {"c": kind == "[", "a": []}
+        elif kind == "lit":
+            cur["a"].append("=" + text)
+        else:
+            cur["a"].append(("%" if text in bake_rules.RESERVED_TEMPLATE_VARS else "@") + text)
+    if cur["a"]:
+        segs.append(cur)
+    return segs
+
+
+def _event_model_table(rows: list[dict]) -> dict[str, dict]:
+    """grammar id -> its pack and its declared fields then metrics, in order: `k` is
+    `o` (observed field), `d` (derived field) or `m` (metric)."""
+    table: dict[str, dict] = {}
+    for g in rows:
+        entries: list[dict] = []
+        for name, tmpl in (g.get("fields") or {}).items():
+            entries.append({"k": "o" if field_is_observed(name, tmpl) else "d", "n": name,
+                            "s": _event_model_atoms(tmpl)})
+        for name, group in (g.get("metrics") or {}).items():
+            entries.append({"k": "m", "n": name, "g": group})
+        table[g["id"]] = {"pack": g["pack"], "e": entries}
+    return table
+
+
+def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str]:
+    """Once, after the grammars: the matched grammar's fields rendered from its
+    captures, the line's own fields first in `fields_observed`
+    (syslog_packs._OBSERVED_ORDER), each declared name into observed / derived /
+    unknown in declaration order, pack guidance by `<pack>|<event_type>`, the
+    metrics and the enrichment object. The matched grammar hands over its id and its
+    captures as JSON text, and each grammar's spec is JSON text in the table: an
+    object or table literal here is type-checked field by field, and carried through
+    every branch, which is what made the transform slow to compile."""
+    fields = _fields_used(rows)
+    # `cx_pk_out` is read by the hand-written applier whether or not a grammar matched.
+    # The table literals are declared here, after the grammars, never in the prologue:
+    # a large literal is part of the type state VRL carries through every branch.
+    out = ["cx_pk_out = {}",
+           # Spelled apart from the hand-written applier's `if cx_pk_parser != "" {`,
+           # which a test locates by that text to prove that code names no vendor.
+           "if length(cx_pk_parser) > 0 {",
+           "  cx_pk_emt = " + json.dumps({k: json.dumps(v, sort_keys=True) for k, v
+                                         in sorted(_event_model_table(rows).items())}),
+           '  cx_pk_spec = object(parse_json(string(get(cx_pk_emt, [cx_pk_gid]) ?? "") ?? "") ?? {}) ?? {}',
+           '  cx_pk_pack = string(cx_pk_spec.pack) ?? ""',
+           "  cx_pk_caps = object(parse_json(cx_pk_capj) ?? {}) ?? {}",
+           "  cx_pk_host = .hostname",
+           '  cx_pk_device = string(cx_inv.device_id) ?? ""',
+           '  if cx_pk_device == "" { cx_pk_device = cx_pk_host }',
+           '  cx_pk_obs = ""',
+           '  cx_pk_der = ""',
+           '  cx_pk_unk = ""',
+           "  cx_pk_fo = {}",
+           "  cx_pk_met = {}",
+           "  for_each(array(cx_pk_spec.e) ?? []) -> |_cx_pk_i, cx_pk_ent| {",
+           "    cx_pk_eo = object(cx_pk_ent) ?? {}",
+           '    cx_pk_name = string(cx_pk_eo.n) ?? ""',
+           '    if cx_pk_eo.k == "m" {',
+           '      cx_pk_raw = string(get(cx_pk_caps, [string(cx_pk_eo.g) ?? ""]) ?? "") ?? ""',
+           "      cx_pk_mf, cx_pk_mferr = to_float(cx_pk_raw)",
+           '      if cx_pk_mferr == null && cx_pk_raw != "" {',
+           '        cx_pk_met = set!(cx_pk_met, [cx_pk_name], {"value": cx_pk_mf, "basis": "observed"})',
+           '        cx_pk_obs = cx_pk_obs + "metrics." + cx_pk_name + ","',
+           "      } else {",
+           '        cx_pk_unk = cx_pk_unk + "metrics." + cx_pk_name + ","',
+           "      }",
+           '    } else if cx_pk_name != "" {',
+           '      cx_pk_v = ""',
+           "      for_each(array(cx_pk_eo.s) ?? []) -> |_cx_pk_j, cx_pk_seg| {",
+           "        cx_pk_so = object(cx_pk_seg) ?? {}",
+           '        cx_pk_sv = ""',
+           "        cx_pk_miss = false",
+           "        for_each(array(cx_pk_so.a) ?? []) -> |_cx_pk_k, cx_pk_at| {",
+           '          cx_pk_as = string(cx_pk_at) ?? ""',
+           '          cx_pk_ar = slice(cx_pk_as, 1) ?? ""',
+           '          if starts_with(cx_pk_as, "=") {',
+           "            cx_pk_sv = cx_pk_sv + cx_pk_ar",
+           "          } else {",
+           '            cx_pk_x = string(get(cx_pk_caps, [cx_pk_ar]) ?? "") ?? ""',
+           '            if cx_pk_as == "%host" { cx_pk_x = cx_pk_host }',
+           '            if cx_pk_as == "%device" { cx_pk_x = cx_pk_device }',
+           '            if cx_pk_x == "" { cx_pk_miss = true }',
+           "            cx_pk_sv = cx_pk_sv + cx_pk_x",
+           "          }",
+           "        }",
+           "        if !(cx_pk_miss && cx_pk_so.c == true) { cx_pk_v = cx_pk_v + cx_pk_sv }",
+           "      }",
+           '      if cx_pk_v == "" {',
+           '        cx_pk_unk = cx_pk_unk + cx_pk_name + ","',
+           "      } else {",
+           "        cx_pk_fo = set!(cx_pk_fo, [cx_pk_name], cx_pk_v)",
+           '        if cx_pk_eo.k == "o" {',
+           '          cx_pk_obs = cx_pk_obs + cx_pk_name + ","',
+           "        } else {",
+           '          cx_pk_der = cx_pk_der + cx_pk_name + ","',
+           "        }",
+           "      }",
+           "    }",
+           "  }"]
+    # One static key per field, so the record keeps a known type after the applier's
+    # merge (a set! object merged onto it would make every field unknown).
+    for name in fields:
+        out += [f'  cx_pk_fx = string(cx_pk_fo.{name}) ?? ""',
+                f'  if cx_pk_fx != "" {{ cx_pk_out = merge(cx_pk_out, {{"{name}": cx_pk_fx}}) }}']
+    out += ['  if length(cx_pk_met) > 0 { cx_pk_out = merge(cx_pk_out, {"metrics": cx_pk_met}) }',
+            '  cx_pk_base = ""']
     for name, local in _OBSERVED_LOCALS:
-        out.append(f'  if {local} != "" {{ cx_pk_base = push(cx_pk_base, "{name}") }}')
-    out += ['  cx_pk_derv = append(["normalized_severity"], cx_pk_der)',
-            '  if cx_pk_cat != "" { cx_pk_derv = push(cx_pk_derv, "dedup_key") }',
-            "  cx_pk_gfl = []"]
-    if has_guidance:
-        out += ['  cx_pk_g = get(cx_pk_gt, [cx_pk_pack + "|" + cx_pk_et]) ?? null',
+        out.append(f'  if {local} != "" {{ cx_pk_base = cx_pk_base + "{name}," }}')
+    out += ['  cx_pk_derv = "normalized_severity," + cx_pk_der',
+            '  if cx_pk_cat != "" { cx_pk_derv = cx_pk_derv + "dedup_key," }',
+            '  cx_pk_gfl = ""']
+    if tables:
+        out += ["  cx_pk_gt = " + json.dumps({k: json.dumps(v, sort_keys=True)
+                                          for k, v in sorted(tables.items())}),
+                '  cx_pk_g = parse_json(string(get(cx_pk_gt, [cx_pk_pack + "|" + cx_pk_et]) ?? "") ?? "") ?? null',
                 "  if is_object(cx_pk_g) {",
                 '    cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})',
-                '    cx_pk_gfl = ["guidance"]',
+                '    cx_pk_gfl = "guidance,"',
                 "  }"]
-    out += [('  cx_pk_out = merge(cx_pk_out, {"enrichment": {"fields_observed": append(cx_pk_base, cx_pk_obs), '
-             '"fields_derived": cx_pk_derv, "fields_guidance": cx_pk_gfl, "unknown": cx_pk_unk}})'),
+    out += [('  cx_pk_out = merge(cx_pk_out, {"enrichment": {'
+             '"fields_observed": compact(split(cx_pk_base + cx_pk_obs, ",")), '
+             '"fields_derived": compact(split(cx_pk_derv, ",")), '
+             '"fields_guidance": compact(split(cx_pk_gfl, ",")), '
+             '"unknown": compact(split(cx_pk_unk, ","))}})'),
             "}"]
     return out
 
