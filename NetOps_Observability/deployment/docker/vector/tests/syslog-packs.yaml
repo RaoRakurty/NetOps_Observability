@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 112
+# cases: 120
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -529,6 +529,70 @@ tests:
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "dns_resolution_successful", "wrong event_type")
+  - name: "cisco_sdwan: the vBond cache entry expiring is the lookup's own success path, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "VTRACKER"
+          severity: "notice"
+          message: "monitor_req_send_cb[537]: DNS cache expired for 0/vbond.example.net/0 via none, resolving DNS again"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dns_cache_expired", "wrong event_type")
+              assert_eq!(.summary, "DNS cache expired for vbond.example.net via none, resolving again", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.message, "monitor_req_send_cb[537]: DNS cache expired for 0/vbond.example.net/0 via none, resolving DNS again", "wrong message")
+              assert_eq!(.title, "DNS cache expired for vbond.example.net on vEdge-1, resolving again", "wrong title")
+              assert_eq!(.correlation_key, "dns:vEdge-1:vbond.example.net", "wrong correlation_key")
+  - name: "cisco_sdwan: the resolver caching the vBond answer is a success with its address, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "VTRACKER"
+          severity: "notice"
+          message: "dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dns_resolved", "wrong event_type")
+              assert_eq!(.summary, "DNS lookup succeeded for vbond.example.net via none: resolved to 192.0.2.3", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.title, "DNS lookup succeeded for vbond.example.net on vEdge-1: resolved to 192.0.2.3", "wrong title")
+              assert_eq!(.correlation_key, "dns:vEdge-1:vbond.example.net", "wrong correlation_key")
+  - name: "cisco_sdwan: the vBond cache words from a daemon outside the tracker are not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "notice"
+          message: "dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -1850,6 +1914,107 @@ tests:
               assert_eq!(.event_type, "audit_session_terminated", "wrong event_type")
               assert_eq!(.summary, "Session of svc-user closed (normal)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
+  - name: "standard: an SNMP request with a wrong community is a security record that names no community"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 127.0.0.1.198.53"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_auth_failed_community", "wrong event_type")
+              assert_eq!(.summary, "SNMP request refused: unknown community from 127.0.0.1", "wrong summary")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+              assert_eq!(.event_category, "security_audit", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|confd|snmp_auth_failed_community", "wrong dedup_key")
+              assert_eq!(.title, "SNMP request refused on vEdge-1: unknown community from 127.0.0.1", "wrong title")
+              assert_eq!(.correlation_key, "audit:vEdge-1:snmp_auth_failed", "wrong correlation_key")
+              assert_eq!(.audit_action, "auth_failed", "wrong audit_action")
+              assert_eq!(.audit_source, "127.0.0.1", "wrong audit_source")
+              assert_eq!(.audit_via, "snmp", "wrong audit_via")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "audit_action", "audit_via", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "audit_source"], "unknown": []}, "wrong enrichment")
+  - name: "standard: a wrong community with a space in it and no address still names neither"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: wrong community 7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong community 7f3a"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_auth_failed_community", "wrong event_type")
+              assert_eq!(.summary, "SNMP request refused: unknown community", "wrong summary")
+              assert_eq!(.event_category, "security_audit", "wrong event_category")
+              assert_eq!(.title, "SNMP request refused on vEdge-1: unknown community", "wrong title")
+  - name: "standard: an IPv6 transport address is not read as an IPv4 source"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1.198.53"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_auth_failed_community", "wrong event_type")
+              assert_eq!(.title, "SNMP request refused on vEdge-1: unknown community", "wrong title")
+  - name: "standard: six dotted numbers inside the community are never read as the source"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: x 10.9.8.7.6.5 y/0 SNMP authentication failed: PDU discarded: bad community name: x 10.9.8.7.6.5 y"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "snmp_auth_failed_community", "wrong event_type")
+              assert_eq!(.summary, "SNMP request refused: unknown community", "wrong summary")
+  - name: "standard: the same refusal from another app is not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "info"
+          message: "audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 127.0.0.1.198.53"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a NETCONF request"
     inputs:
       - insert_at: syslog_normalized

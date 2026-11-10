@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-10-process-snapshot'
+PARSER_REV = '2026-11-10-sdwan-dns-snmpauth'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -163,6 +163,46 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_ios',
   'facility': '',
   'event_type': 'dns_{step}_{outcome}',
   'summary': 'DNS {step} {outcome} for {target}[ via {via}][ ({reason})]',
+  'sev_digit': '',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': '',
+  'native_code': '',
+  'alarm_floor': None,
+  'category': '',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'cisco_sdwan',
+  'vendor': 'cisco',
+  'id': 'cisco_sdwan.vedge_dns_cache_expired',
+  'parser_id': 'cisco_sdwan.v1',
+  'literal': ']: DNS cache expired for ',
+  'apps': ['vtracker'],
+  'pattern': '^(?P<func>[a-z][a-z0-9_]{0,63})\\[(?P<lno>\\d{1,6})\\]: DNS cache expired for '
+             '(?:\\d{1,3}/)?(?P<target>[^\\s,/]{1,253})(?:/\\d{1,5})?(?: via (?P<via>[^\\s,]{0,64}))?',
+  'facility': '',
+  'event_type': 'dns_cache_expired',
+  'summary': 'DNS cache expired for {target}[ via {via}], resolving again',
+  'sev_digit': '',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': '',
+  'native_code': '',
+  'alarm_floor': None,
+  'category': '',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'cisco_sdwan',
+  'vendor': 'cisco',
+  'id': 'cisco_sdwan.vedge_dns_resolved',
+  'parser_id': 'cisco_sdwan.v1',
+  'literal': ']: FQDN ',
+  'apps': ['vtracker'],
+  'pattern': '^(?P<func>[a-z][a-z0-9_]{0,63})\\[(?P<lno>\\d{1,6})\\]: FQDN (?P<target>[^\\s,/()]{1,253})(?: \\(via (?P<via>[^\\s,()]{0,64})\\))? '
+             'resolved to (?P<addr>[0-9A-Fa-f.:]{2,45})',
+  'facility': '',
+  'event_type': 'dns_resolved',
+  'summary': 'DNS lookup succeeded for {target}[ via {via}]: resolved to {addr}',
   'sev_digit': '',
   'sev_word': '',
   'sev_map': {},
@@ -440,6 +480,26 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_ios',
   'native_code': '',
   'alarm_floor': None,
   'category': 'management_audit',
+  'fidelity': 'lab_validated',
+  'source': ''},
+ {'pack': 'standard',
+  'vendor': '',
+  'id': 'standard.confd_snmp_auth_failed',
+  'parser_id': 'standard_mgmt_audit.v1',
+  'literal': ' SNMP authentication failed: PDU discarded: bad community name:',
+  'apps': ['confd'],
+  'pattern': '^audit user: .{1,256}?/\\d{1,12} SNMP authentication failed: PDU discarded: bad community name:(?: .{0,256} '
+             '(?:\\d{1,3}(?:\\.\\d{1,3}){5}[^ \\d]|(?P<src>\\d{1,3}(?:\\.\\d{1,3}){3})\\.\\d{1,3}\\.\\d{1,3}|[^ ]{0,64}))?',
+  'facility': '',
+  'event_type': 'snmp_auth_failed_community',
+  'summary': 'SNMP request refused: unknown community[ from {src}]',
+  'sev_digit': '',
+  'sev_word': '',
+  'sev_map': {},
+  'native_text': '',
+  'native_code': '',
+  'alarm_floor': None,
+  'category': 'security_audit',
   'fidelity': 'lab_validated',
   'source': ''},
  {'pack': 'standard',
@@ -3596,6 +3656,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = 'd2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f'
+BAKED_RULES_HASH = '6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)
