@@ -550,7 +550,177 @@ def test_store_backend_defaults_to_postgres(default_docs):
                if d["kind"] == "Deployment" and d["metadata"]["name"] == "api")
     env = {e["name"]: e for e in api["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["STORE_BACKEND"].get("value") == "postgres"
-    assert "secretKeyRef" in env["DATABASE_URL"]["valueFrom"]
+    # Tracker 384: the same Secret key an operator already has, as a file.
+    spec = api["spec"]["template"]["spec"]
+    assert "DATABASE_URL" not in env, "the DSN carries the password: never in the pod's environment"
+    assert env["DATABASE_URL_FILE"]["value"] == "/run/secrets/postgres/api/database_url"
+    vol = next(v for v in spec["volumes"] if v["name"] == "postgres-dsn")
+    assert vol["secret"]["items"] == [{"key": "DATABASE_URL", "path": "database_url"}]
+    assert {"name": "postgres-dsn", "mountPath": "/run/secrets/postgres/api", "readOnly": True} \
+        in spec["containers"][0]["volumeMounts"]
+    assert "DB_PASSWORD" not in env, "the Postgres superuser password: nothing in the api reads it"
+
+
+# ── vmauth wiring (tracker 384) ─────────────────────────────────────────────
+
+VMAUTH_CLIENTS = {
+    # workload -> (Secret key, mount path)
+    "api": ("VMAUTH_API_PASSWORD", "/run/secrets/vmauth/api"),
+    "prober": ("VMAUTH_PROBER_PASSWORD", "/run/secrets/vmauth/prober"),
+    "vmalert": ("VMAUTH_VMALERT_PASSWORD", "/run/secrets/vmauth/vmalert"),
+    "gnmic": ("VMAUTH_GNMIC_PASSWORD", "/run/secrets/vmauth/gnmic"),
+    "vector-aggregator": ("VMAUTH_VECTOR_PASSWORD", "/run/secrets/vmauth/vector"),
+}
+VMAUTH_ON = ("-f", LAB_VALUES, "--set", "vmauth.enabled=true", "--set", "tls.enabled=true",
+             "--set", "gnmic.enabled=true", "--set", "prober.enabled=true",
+             "--set", "vmalert.enabled=true", "--set", "vectorAggregator.enabled=true",
+             "--set", "api.enabled=true", "--set", "grafana.enabled=true",
+             "--set", "networkPolicy.enabled=true")
+
+
+@pytest.fixture(scope="module")
+def vmauth_docs() -> list[dict]:
+    if HELM is None:
+        pytest.skip("helm is not installed")
+    return _docs(_render(*VMAUTH_ON))
+
+
+def _workload(docs: list[dict], name: str) -> dict:
+    return next(d for d in docs if d["kind"] in ("Deployment", "StatefulSet")
+                and d["metadata"]["name"] == name)
+
+
+def _container(docs: list[dict], name: str) -> dict:
+    return _workload(docs, name)["spec"]["template"]["spec"]["containers"][0]
+
+
+def _env_map(container: dict) -> dict:
+    return {e["name"]: e for e in container.get("env") or []}
+
+
+@needs_helm
+@pytest.mark.parametrize("name", sorted(VMAUTH_CLIENTS))
+def test_vmauth_clients_mount_exactly_their_own_credential(vmauth_docs, name):
+    key, path = VMAUTH_CLIENTS[name]
+    spec = _workload(vmauth_docs, name)["spec"]["template"]["spec"]
+    vol = next(v for v in spec["volumes"] if v["name"] == "vmauth-cred")
+    assert vol["secret"]["items"] == [{"key": key, "path": "password"}], \
+        "one identity's key only: never the whole Secret"
+    assert {"name": "vmauth-cred", "mountPath": path, "readOnly": True} \
+        in spec["containers"][0]["volumeMounts"]
+    assert key not in _env_map(spec["containers"][0]), "it must not also be in the environment"
+
+
+@needs_helm
+def test_vmauth_clients_point_at_vmauth(vmauth_docs):
+    for name, user in (("api", "svc-api"), ("prober", "svc-prober")):
+        env = _env_map(_container(vmauth_docs, name))
+        assert env["VICTORIA_URL"]["value"] == "https://vmauth:8427"
+        assert env["METRICS_URL"]["value"] == "https://vmauth:8427"
+        assert env["VICTORIA_AUTH_USER"]["value"] == user
+        assert env["VICTORIA_AUTH_PASSWORD_FILE"]["value"] == f"{VMAUTH_CLIENTS[name][1]}/password"
+        assert env["TLS_BACKEND_CA_FILE"]["value"] == "/tls/ca/ca.crt"
+
+    args = _container(vmauth_docs, "vmalert")["args"]
+    for hop in ("datasource", "remoteWrite", "remoteRead"):
+        assert f"-{hop}.url=https://vmauth:8427" in args
+        assert f"-{hop}.basicAuth.username=svc-vmalert" in args
+        assert f"-{hop}.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password" in args
+        assert f"-{hop}.tlsCAFile=/tls/ca/ca.crt" in args
+
+    gnmic = _container(vmauth_docs, "gnmic")
+    assert gnmic["command"][:3] == ["/bin/sh", "/app/conf/cx-secret-env.sh",
+                                    "GNMIC_VMAUTH_PASSWORD=/run/secrets/vmauth/gnmic/password"]
+    assert gnmic["command"][-2:] == ["--", "/app/gnmic"]
+    assert _env_map(gnmic)["VICTORIA_WRITE_URL"]["value"] == "https://vmauth:8427/api/v1/write"
+
+    agg = _env_map(_container(vmauth_docs, "vector-aggregator"))
+    assert agg["VM_REMOTE_WRITE_URL"]["value"] == "https://vmauth:8427/api/v1/write"
+    assert agg["VMAUTH_VECTOR_PASSWORD_REF"]["value"] == "SECRET[vmauth.vector]"
+
+
+@needs_helm
+def test_vmauth_itself_holds_only_the_vmauth_credentials(vmauth_docs):
+    c = _container(vmauth_docs, "vmauth")
+    assert "envFrom" not in c, "vmauth used to receive every credential in the Secret"
+    assert {e["name"] for e in c["env"]} == {
+        "VMAUTH_API_PASSWORD", "VMAUTH_GNMIC_PASSWORD", "VMAUTH_VECTOR_PASSWORD",
+        "VMAUTH_VMALERT_PASSWORD", "VMAUTH_GRAFANA_PASSWORD", "VMAUTH_PROBER_PASSWORD"}
+
+
+@needs_helm
+def test_vmauth_closes_the_direct_path_to_the_store(vmauth_docs):
+    pol = next(d for d in vmauth_docs if d["kind"] == "NetworkPolicy"
+               and d["metadata"]["name"] == "correlix-victoria-ingress")
+    selector = pol["spec"]["ingress"][0]["from"][0]["podSelector"]
+    allowed = set(selector["matchExpressions"][0]["values"])
+    assert allowed == {"vmauth", "watchdog"}
+    front = next(d for d in vmauth_docs if d["kind"] == "NetworkPolicy"
+                 and d["metadata"]["name"] == "correlix-vmauth-ingress")
+    clients = set(front["spec"]["ingress"][0]["from"][0]["podSelector"]["matchExpressions"][0]["values"])
+    assert clients == set(VMAUTH_CLIENTS)
+
+
+@needs_helm
+def test_with_vmauth_off_clients_keep_the_plaintext_store(default_docs):
+    """The default render is what every existing chart user is running."""
+    env = _env_map(_container(default_docs, "api"))
+    assert env["VICTORIA_URL"]["value"] == "http://victoria:8428"
+    assert "VICTORIA_AUTH_USER" not in env
+    spec = _workload(default_docs, "api")["spec"]["template"]["spec"]
+    assert not [v for v in spec["volumes"] if v["name"] in ("vmauth-cred", "mesh-ca")]
+    assert not [d for d in default_docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "vmauth"]
+
+
+@needs_helm
+@pytest.mark.parametrize("extra", [(), VMAUTH_ON], ids=["default", "vmauth-on"])
+def test_no_workload_takes_the_whole_secret_or_a_credential_url(extra):
+    """The Secret holds every credential the platform has. envFrom on it hands them
+    all to one container; only the operator's separate integration Secret may be
+    used that way. And no rendered value may carry a password in a URL."""
+    docs = _docs(_render(*extra))
+    cred_url = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@\"']*:[^\s/@\"']+@")
+    for kind, name, spec in _pod_specs(docs):
+        for c in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+            assert not c.get("envFrom"), f"{kind}/{name}/{c['name']} uses envFrom"
+            for e in c.get("env") or []:
+                assert not cred_url.search(str(e.get("value", ""))), \
+                    f"{kind}/{name}/{c['name']}: {e['name']} carries a credential in a URL"
+            for arg in (c.get("args") or []) + (c.get("command") or []):
+                assert not cred_url.search(str(arg)), f"{kind}/{name}/{c['name']}: credential in argv"
+
+
+# A converted credential must not come back through a secretKeyRef, where it would
+# sit in the container's environment again. workload -> the only ones that may.
+ENV_SECRET_KEYS_ONLY_FOR = {
+    "VMAUTH_API_PASSWORD": {"vmauth"}, "VMAUTH_PROBER_PASSWORD": {"vmauth"},
+    "VMAUTH_VMALERT_PASSWORD": {"vmauth"}, "VMAUTH_GNMIC_PASSWORD": {"vmauth"},
+    "VMAUTH_VECTOR_PASSWORD": {"vmauth"}, "VMAUTH_GRAFANA_PASSWORD": {"vmauth"},
+    "DATABASE_URL": set(),
+    "GRAFANA_CH_PASSWORD": set(),
+    "GRAFANA_ADMIN_PASSWORD": set(),
+    "DB_PASSWORD": {"postgres"},
+}
+
+
+@needs_helm
+@pytest.mark.parametrize("extra", [(), VMAUTH_ON], ids=["default", "vmauth-on"])
+def test_converted_credentials_stay_out_of_every_environment(extra):
+    for _kind, name, spec in _pod_specs(_docs(_render(*extra))):
+        for c in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+            for e in c.get("env") or []:
+                ref = ((e.get("valueFrom") or {}).get("secretKeyRef") or {}).get("key")
+                allowed = ENV_SECRET_KEYS_ONLY_FOR.get(ref)
+                if allowed is not None:
+                    assert name in allowed, f"{name}/{c['name']} takes {ref} through its environment"
+
+
+@needs_helm
+def test_grafana_takes_its_admin_password_from_a_file(vmauth_docs):
+    env = _env_map(_container(vmauth_docs, "grafana"))
+    assert "GF_SECURITY_ADMIN_PASSWORD" not in env
+    assert "GRAFANA_CH_PASSWORD" not in env, "the chart mounts no provisioning files: dead credential"
+    assert env["GF_SECURITY_ADMIN_PASSWORD__FILE"]["value"] == "/run/secrets/grafana/admin/password"
 
 
 @needs_helm

@@ -31,6 +31,9 @@ expect_never:
   - app-edge-5xx
   - bgp-prefix-missing
 expect_select: path-seam-handoff
+expect_never_tools:
+  - run_protocol_diagnostic
+  - get_device_state
 
 ---
 

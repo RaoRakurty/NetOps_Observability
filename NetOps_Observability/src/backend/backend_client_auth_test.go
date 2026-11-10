@@ -11,6 +11,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -99,6 +100,66 @@ func TestBackendClientNoUserinfoPassthrough(t *testing.T) {
 	}
 	if seen.auth != "" {
 		t.Fatalf("unexpected Authorization header %q on a credential-less URL", seen.auth)
+	}
+}
+
+// Tracker 384: the cloud metric reads go where every other VictoriaMetrics read
+// goes, with the same credential. They used a bare client against plain
+// victoria:8428, past vmauth. The PromQL is passed through untouched: its tenant
+// scope comes from the handlers' selectors, and moving the upstream must not
+// change it (the §3a behaviour is cloud_metrics_series_isolation_test.go).
+func TestCloudMetricReadsPresentTheBackendCredential(t *testing.T) {
+	keepCreds(t)
+	var gotAuth, gotQuery, gotPath []string
+	vm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+		gotQuery = append(gotQuery, r.URL.Query().Get("query"))
+		gotPath = append(gotPath, r.URL.Path)
+		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
+	}))
+	t.Cleanup(vm.Close)
+	t.Setenv("VICTORIA_URL", vm.URL)
+	t.Setenv("METRICS_URL", "")
+	t.Setenv("VICTORIA_AUTH_USER", "svc-api")
+	t.Setenv("VICTORIA_AUTH_PASSWORD_FILE", secretFile(t, "api-pw\n"))
+	if err := initBackendCredentials(); err != nil {
+		t.Fatal(err)
+	}
+
+	const instant = `max by (provider) (cloud_cpu_util{resource_id=~"i-a"})`
+	if got := vmQueryBy(context.Background(), instant, "provider"); got == nil {
+		t.Fatal("vmQueryBy degraded against a healthy store")
+	}
+	const ranged = `cloud_cpu_util{resource_id=~"i-a"}`
+	if _, err := vmQueryRangeBy(context.Background(), ranged, 1, 2, 60, "resource_id"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := backendauth.BasicHeader("svc-api", "api-pw")
+	if len(gotAuth) != 2 || gotAuth[0] != want || gotAuth[1] != want {
+		t.Fatalf("Authorization = %q, want the svc-api credential on both reads", gotAuth)
+	}
+	if gotQuery[0] != instant || gotQuery[1] != ranged {
+		t.Fatalf("the upstream must receive the handler's PromQL unchanged, got %q", gotQuery)
+	}
+	if gotPath[0] != "/api/v1/query" || gotPath[1] != "/api/v1/query_range" {
+		t.Fatalf("paths = %q", gotPath)
+	}
+
+	// A credential that never loaded refuses the read; it never goes anonymous.
+	t.Setenv("VICTORIA_AUTH_PASSWORD_FILE", filepath.Join(t.TempDir(), "absent"))
+	if err := initBackendCredentials(); err != nil {
+		t.Fatal(err)
+	}
+	before := len(gotAuth)
+	if _, err := vmQueryRangeBy(context.Background(), ranged, 1, 2, 60, "resource_id"); !errors.Is(err, backendauth.ErrCredentialUnavailable) {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	if got := vmQueryBy(context.Background(), instant, "provider"); got != nil {
+		t.Fatalf("instant read with no credential = %v, want nil (degraded)", got)
+	}
+	if len(gotAuth) != before {
+		t.Fatal("an anonymous request reached the metrics store")
 	}
 }
 

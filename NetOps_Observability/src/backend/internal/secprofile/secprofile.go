@@ -175,6 +175,27 @@ func plaintextURL(v string) bool {
 // ones whose client reads a file-backed credential instead.
 var credentialURLVars = []string{"VICTORIA_URL", "METRICS_URL", "OPENSEARCH_URL"}
 
+// dsnCarriesPassword reports whether a Postgres DSN holds a password: in the
+// userinfo of a URL DSN, or as a password= keyword. Textual for the same reason
+// as urlCarriesUserinfo.
+func dsnCarriesPassword(v string) bool {
+	v = strings.TrimSpace(v)
+	i := strings.Index(v, "://")
+	if i < 0 {
+		return strings.Contains(v, "password=")
+	}
+	authority := v[i+3:]
+	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+		rest := authority[j:]
+		authority = authority[:j]
+		if strings.Contains(rest, "password=") {
+			return true
+		}
+	}
+	at := strings.LastIndex(authority, "@")
+	return at >= 0 && strings.Contains(authority[:at], ":")
+}
+
 // urlCarriesUserinfo reports whether a URL value holds userinfo
 // (scheme://user[:pass]@host). Textual on purpose: a malformed URL that still
 // carries a credential must be flagged, not skipped because it fails to parse.
@@ -293,13 +314,18 @@ var rules = []rule{
 		// on the lab). The file-backed *_AUTH_PASSWORD_FILE form replaces it.
 		// WARN for one release while deployments migrate, then FATAL (owner
 		// decision 2026-11-07). Only variable NAMES are reported — never the
-		// value. DATABASE_URL is a libpq DSN and is deliberately out of scope
-		// here (its own follow-up).
+		// value. DATABASE_URL (tracker 384) may name its role in the userinfo;
+		// only a password there counts.
 		var carrying []string
 		for _, v := range credentialURLVars {
 			if urlCarriesUserinfo(env(v)) {
 				carrying = append(carrying, v)
 			}
+		}
+		// A DSN read from DATABASE_URL_FILE is in no URL variable: it is what this
+		// rule asks for.
+		if env("DATABASE_URL_FILE") == "" && dsnCarriesPassword(env("DATABASE_URL")) {
+			carrying = append(carrying, "DATABASE_URL")
 		}
 		if len(carrying) == 0 {
 			return Finding{}, false
@@ -308,7 +334,7 @@ var rules = []rule{
 			Rule: "CRED-001", Control: "service credentials are not carried in URLs", Component: "api",
 			Source:   strings.Join(carrying, " / "),
 			Observed: "credential in URL userinfo (value not shown)",
-			Required: "credential-free URL + VICTORIA_AUTH_USER/VICTORIA_AUTH_PASSWORD_FILE or OPENSEARCH_AUTH_USER/OPENSEARCH_AUTH_PASSWORD_FILE",
+			Required: "credential-free URL + VICTORIA_AUTH_USER/VICTORIA_AUTH_PASSWORD_FILE, OPENSEARCH_AUTH_USER/OPENSEARCH_AUTH_PASSWORD_FILE or PGPASSFILE",
 			Remedy:   "re-run scripts/install.py (renders data/secrets/*) and use the shipped compose.tls.yml; becomes FATAL in the next release",
 			Severity: Warn,
 		}, true

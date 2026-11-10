@@ -55,6 +55,17 @@ secret:
   cxmac:
     type: exec
     command: ["/etc/vector/conf/cx-secret-backend.sh", "mac"]
+  # Tracker 384: svc_router's password for the OpenSearch sinks, from the file
+  # scripts/install.py renders. The aggregator's script (./vector is mounted here
+  # as /etc/vector/shared), so there is one reader of these files. Nothing
+  # references it unless an env var expands to a token: Vector interpolates env
+  # first and secrets second, so the plaintext baseline and helm never run it.
+  # An unreadable file refuses the config rather than sending the placeholder.
+  # NOTE: Vector scans the RAW text for references, comments included — never
+  # write a complete backend.key reference in a comment here.
+  opensearch:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/shared/cx-secret-exec.sh", "/run/secrets/opensearch"]
 
 # ----------------------------------------------------------------------------
 # DURABILITY (F-04) — end-to-end acknowledgements.

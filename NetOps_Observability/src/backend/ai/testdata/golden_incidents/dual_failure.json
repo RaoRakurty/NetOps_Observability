@@ -29,6 +29,9 @@
       }
     },
     "model_reply": "Branch-7 users lost the edge-1 uplink and saw upstream loss at isp-gw-1 in the same window [hypothesis:df01ffff:0] [hypothesis:df01ffff:1]. The DIA packet loss at isp-gw-1 was caused by the optic failure on edge-1. Next: replace the optic on edge-1.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "optic-los", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "status": "Suspected",
@@ -53,6 +56,9 @@
       }
     },
     "model_reply": "Two separate suspected incidents are active: an optical loss on edge-1 [problem:df02ffff-0000-4000-8000-000000000032] and upstream loss at isp-gw-1 [problem:df03ffff-0000-4000-8000-000000000033]. Work them in parallel; neither explains the other on current evidence.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 0},
     "expect": {
       "required_citations": ["problem:df02ffff-0000-4000-8000-000000000032", "problem:df03ffff-0000-4000-8000-000000000033"],
       "required_text": ["Optical loss of signal on edge-1", "DIA upstream packet loss at isp-gw-1"]
@@ -74,6 +80,9 @@
       }
     },
     "model_reply": "One fault explains everything: the root cause is the optic failure on edge-1 [problem:df04ffff-0000-4000-8000-000000000034], and the DIA loss at isp-gw-1 was caused by it [problem:df05ffff-0000-4000-8000-000000000035]. Next: replace the optic.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 0},
     "expect": {
       "required_citations": ["problem:df04ffff-0000-4000-8000-000000000034", "problem:df05ffff-0000-4000-8000-000000000035"],
       "forbidden_claims": ["root cause is the optic failure", "was caused by it"]

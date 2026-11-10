@@ -62,7 +62,8 @@ export type SourceStatus =
   | "permission_denied"
   | "misconfigured"
   | "no_data"
-  | "not_supported";
+  | "not_supported"
+  | "unknown";
 
 export const STATUS_META: Record<SourceStatus, { label: string; tone: string }> = {
   flowing: { label: "Flowing", tone: "var(--ok)" },
@@ -72,6 +73,7 @@ export const STATUS_META: Record<SourceStatus, { label: string; tone: string }> 
   misconfigured: { label: "Misconfigured", tone: "var(--crit)" },
   no_data: { label: "Nothing has arrived yet", tone: "var(--warn)" },
   not_supported: { label: "Not collected here", tone: "var(--fg-subtle)" },
+  unknown: { label: "Could not be checked", tone: "var(--warn)" },
 };
 
 export interface SourceReadiness {
@@ -244,7 +246,7 @@ export interface ReadinessSummary {
   stale: number;
   off: number;
   permissionErrors: number;
-  partial: number; // no_data | misconfigured
+  partial: number; // no_data | misconfigured | unknown
   lastSyncIso?: string;
 }
 
@@ -256,7 +258,7 @@ export function summarize(readiness: SourceReadiness[], connectedAccounts: numbe
     stale: count("stale"),
     off: count("off"),
     permissionErrors: count("permission_denied"),
-    partial: count("no_data") + count("misconfigured"),
+    partial: count("no_data") + count("misconfigured") + count("unknown"),
     lastSyncIso: readiness.find((r) => r.sourceType === "inventory")?.lastSyncIso,
   };
 }
@@ -286,7 +288,7 @@ export function getMeasurementState(status: SourceStatus | undefined): MeasureSt
     case "permission_denied":
       return "permission_denied";
     default:
-      // off | no_data | misconfigured | not_supported | undefined
+      // off | no_data | misconfigured | not_supported | unknown | undefined
       return "not_measured";
   }
 }

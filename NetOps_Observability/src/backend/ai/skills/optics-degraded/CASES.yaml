@@ -27,6 +27,8 @@ expect_never:
   - log-confirmation
   - path-seam-handoff
   - app-edge-5xx
+expect_hypotheses:
+  - link-down=SUPPORTED
 
 ---
 
@@ -79,6 +81,8 @@ expect_never:
   - path-seam-handoff
   - app-edge-5xx
 expect_select: optics-degraded
+expect_never_tools:
+  - run_protocol_diagnostic
 
 ---
 

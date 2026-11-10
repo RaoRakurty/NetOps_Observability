@@ -36,7 +36,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import install  # noqa: E402
 
-KEYS = [s.env_key for s in install.SERVICE_SECRETS] + sorted(install.VMAUTH_TEMPLATE_KEYS)
+KEYS = ([s.env_key for s in install.SERVICE_SECRETS]
+        + [d.env_key for d in install.DERIVED_SECRETS]
+        + sorted(install.VMAUTH_TEMPLATE_KEYS))
 
 
 @pytest.fixture(autouse=True)
@@ -112,15 +114,19 @@ def test_modes(tree):
     assert mode(base / "vmauth" / "vmauth" / "auth.yml") == 0o400
 
 
-def test_ownership_is_requested_for_the_consumer_uid_batched(tree):
+def test_ownership_is_requested_for_the_consumer_uid_batched(tree, monkeypatch):
+    # A uid no installer runs as: on a host where the installer IS 1000 no chown
+    # is needed and there would be nothing to observe.
+    monkeypatch.setattr(install, "_OPENSEARCH_IMAGE_OWNER", (4000, 4000))
     rec = ChownRecorder()
     render(tree, make_env(), rec)
     owners = {(uid, gid): rels for uid, gid, rels in rec.calls}
     # api + grafana are user-mapped to CORRELIX_UID == the installer here: no
     # chown at all. Root-run consumers and curl_user get exactly one batch each.
-    assert set(owners) == {(0, 0), (100, 101)}, rec.calls
+    assert set(owners) == {(0, 0), (100, 101), (4000, 4000)}, rec.calls
     root_dirs = sorted(Path(r).parent.as_posix() for r in owners[(0, 0)])
-    assert root_dirs == ["vmauth/gnmic", "vmauth/prober", "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
+    assert root_dirs == ["opensearch/aggregator", "opensearch/router", "vmauth/gnmic", "vmauth/prober",
+                         "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
     assert [Path(r).parent.as_posix() for r in owners[(100, 101)]] == ["opensearch/bootstrap"]
 
 
@@ -128,7 +134,7 @@ def test_api_and_grafana_follow_correlix_uid(tree):
     rec = ChownRecorder()
     render(tree, make_env(CORRELIX_UID="4242", CORRELIX_GID="4343"), rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
-    assert sorted(owners[(4242, 4343)]) == ["opensearch/api", "vmauth/api", "vmauth/grafana"]
+    assert sorted(owners[(4242, 4343)]) == ["clickhouse/grafana", "grafana/admin", "opensearch/api", "vmauth/api", "vmauth/grafana"]
 
 
 def test_compose_defaults_when_correlix_uid_unset(tree):
@@ -138,7 +144,7 @@ def test_compose_defaults_when_correlix_uid_unset(tree):
     render(tree, env, rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
     assert sorted(owners[(65532, 65532)]) == ["opensearch/api", "vmauth/api"]
-    assert owners[(472, 472)] == ["vmauth/grafana"]
+    assert sorted(owners[(472, 472)]) == ["clickhouse/grafana", "grafana/admin", "vmauth/grafana"]
 
 
 def test_auth_yml_is_fully_rendered(tree):
@@ -232,6 +238,30 @@ def test_refuses_unusable_values_naming_only_the_key(tree, capsys, key, value, w
     assert not (tree / "data" / "secrets" / "vmauth" / "vmauth" / "auth.yml").exists()
 
 
+def test_dashboards_config_carries_exactly_the_password(tree):
+    """Tracker 384. Any printable value must survive the YAML round trip."""
+    hostile = 'a"b\\c: #d\'e%f'
+    render(tree, make_env(OS_DASHBOARDS_PASSWORD=hostile))
+    f = tree / "data" / "secrets" / "opensearch" / "dashboards" / "opensearch_dashboards.secret.yml"
+    assert yaml.safe_load(f.read_text()) == {"opensearch.password": hostile}
+    assert mode(f) == 0o400
+
+
+def test_security_init_gets_one_file_per_identity(tree, monkeypatch):
+    monkeypatch.setattr(install, "_OPENSEARCH_IMAGE_OWNER", (4000, 4000))
+    env = make_env()
+    rec = ChownRecorder()
+    render(tree, env, rec)
+    base = tree / "data" / "secrets" / "opensearch" / "security-init"
+    assert sorted(p.name for p in base.iterdir()) == sorted(install._OS_IDENTITY_KEYS)
+    for key in install._OS_IDENTITY_KEYS:
+        assert (base / key).read_text() == env[key], key
+        assert mode(base / key) == 0o400
+    owned = {Path(r).parent.as_posix() for uid, gid, rels in rec.calls
+             if (uid, gid) == (4000, 4000) for r in rels}
+    assert owned == {"opensearch/dashboards", "opensearch/security-init"}
+
+
 def test_os_passwords_may_use_the_full_printable_alphabet(tree):
     # OS_* values only ever land in a file read by Go / curl: no quoting hazard.
     render(tree, make_env(OS_API_PASSWORD='a%b"c\\d'))
@@ -251,6 +281,68 @@ def test_legacy_url_warning_prints_the_key_not_the_value(tree, capsys):
     assert "DATABASE_URL" in out.out and "deferred" in out.out   # info, not warn
     assert secret not in text
     assert install.url_credential_keys(env) == ["DATABASE_URL", "VICTORIA_URL"]
+
+
+def test_a_dsn_naming_only_its_role_is_not_a_url_credential():
+    """Tracker 384: that is the new form, and warning on it would be noise."""
+    env = {"DATABASE_URL": "postgres://netops_app@postgres:5432/netops?sslmode=disable"}
+    assert install.url_credential_keys(env) == []
+
+
+@pytest.mark.parametrize("password,line", [
+    ("plain", "*:*:*:*:plain\n"),
+    ("with:colon", "*:*:*:*:with\\:colon\n"),
+    ("back\\slash", "*:*:*:*:back\\\\slash\n"),
+    ("!@#%^&*-_=+", "*:*:*:*:!@#%^&*-_=+\n"),
+])
+def test_pgpass_line_escapes_for_the_driver(password, line):
+    # The Go side parses these bytes and pins itself to pgx's own parser
+    # (internal/platformdb TestPasswordLineAgreesWithTheDriversParser).
+    assert install._pgpass_line(password) == line
+
+
+def pg_env(**over: str) -> dict[str, str]:
+    return make_env(STORE_BACKEND="postgres", **over)
+
+
+def test_app_role_password_renders_for_the_api_uid(tree):
+    env = pg_env(DATABASE_URL="postgres://netops_app@postgres:5432/netops", APP_DB_PASSWORD="app-pw",
+                 CORRELIX_UID="4242", CORRELIX_GID="4343")
+    rec = ChownRecorder()
+    render(tree, env, rec)
+    f = tree / "data" / "secrets" / "postgres" / "api" / "pgpass"
+    assert f.read_text() == "*:*:*:*:app-pw\n"
+    assert mode(f) == 0o400
+    assert mode(f.parent) == 0o711
+    owned = {Path(r).parent.as_posix() for uid, gid, rels in rec.calls
+             if (uid, gid) == (4242, 4343) for r in rels}
+    assert "postgres/api" in owned
+
+
+def test_an_unmigrated_env_renders_the_password_from_the_url(tree):
+    """A .env still holding the old form must keep working through an update even
+    if something renders before the migration ran."""
+    env = pg_env(DATABASE_URL="postgres://netops_app:from-url@postgres:5432/netops", APP_DB_PASSWORD="minted")
+    render(tree, env)
+    f = tree / "data" / "secrets" / "postgres" / "api" / "pgpass"
+    assert f.read_text() == "*:*:*:*:from-url\n"
+
+
+def test_a_file_backend_renders_no_password_but_keeps_the_mount_source(tree):
+    render(tree, make_env(STORE_BACKEND="file", APP_DB_PASSWORD="unused"))
+    d = tree / "data" / "secrets" / "postgres" / "api"
+    assert d.is_dir(), "Docker would otherwise create the bind source as root"
+    assert mode(d) == 0o711
+    assert not (d / "pgpass").exists()
+
+
+def test_a_vmauth_only_render_leaves_the_app_role_file_alone(tree):
+    env = pg_env(DATABASE_URL="postgres://netops_app@postgres:5432/netops", APP_DB_PASSWORD="one")
+    render(tree, env)
+    f = tree / "data" / "secrets" / "postgres" / "api" / "pgpass"
+    install.render_service_secrets(tree, {**env, "APP_DB_PASSWORD": "two"},
+                                   chown_paths=ChownRecorder(), vmauth_only=True)
+    assert f.read_text() == "*:*:*:*:one\n"
 
 
 def test_never_prints_any_secret_value(tree, capsys):

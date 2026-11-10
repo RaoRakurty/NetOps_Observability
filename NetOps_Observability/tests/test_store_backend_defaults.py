@@ -52,7 +52,10 @@ def test_a_fresh_install_defaults_to_postgres(tmp_path):
     assert env["STORE_BACKEND"] == "postgres", \
         "a new installation must use the authoritative durable state backend"
     dsn = env["DATABASE_URL"]
-    user, pw, host, db = install._split_app_dsn(dsn)
+    user, in_url, host, db = install._split_app_dsn(dsn)
+    assert in_url == "", "tracker 384: the DSN must not carry the password"
+    pw = env["APP_DB_PASSWORD"]
+    assert install.app_db_password(env) == pw
     assert user == install.APP_STATE_ROLE, "the api must not connect as the cluster superuser"
     assert user != env["DB_USER"], "the app role must be distinct from the superuser role"
     assert len(pw) >= 20, "the app-state role needs a real generated password"
@@ -68,9 +71,7 @@ def test_a_fresh_install_mints_a_unique_app_role_password(tmp_path):
     a, b = tmp_path / "a.env", tmp_path / "b.env"
     install.write_env(a, 8000, force=False)
     install.write_env(b, 8000, force=False)
-    _, pw_a, _, _ = install._split_app_dsn(parse_env(a)["DATABASE_URL"])
-    _, pw_b, _, _ = install._split_app_dsn(parse_env(b)["DATABASE_URL"])
-    assert pw_a != pw_b
+    assert parse_env(a)["APP_DB_PASSWORD"] != parse_env(b)["APP_DB_PASSWORD"]
 
 
 # ── upgrade safety ──────────────────────────────────────────────────────────
@@ -105,7 +106,85 @@ def test_an_upgrade_leaves_an_explicit_postgres_install_alone(tmp_path):
     install.write_env(env_path, 8000, force=False)
     env = parse_env(env_path)
     assert env["STORE_BACKEND"] == "postgres"
-    assert "netops_app:existing@" in env["DATABASE_URL"], "an operator's DSN must survive an upgrade"
+    # Tracker 384: the password moves out of the URL and nothing else changes.
+    assert env["DATABASE_URL"] == "postgres://netops_app@postgres:5432/netops?sslmode=disable"
+    assert env["APP_DB_PASSWORD"] == "existing", "the live role's password, never a newly minted one"
+
+
+@pytest.mark.parametrize("dsn,clean,pw", [
+    ("postgres://netops_app:pw@postgres:5432/netops?sslmode=disable",
+     "postgres://netops_app@postgres:5432/netops?sslmode=disable", "pw"),
+    # Percent-encoded in the URL, the real value everywhere else.
+    ("postgres://u:p%40ss%3Aw%2Fd@db.example.net:5432/x",
+     "postgres://u@db.example.net:5432/x", "p@ss:w/d"),
+    # A verify-full DSN and every other byte of it survive.
+    ("postgres://netops_app:pw@postgres:5432/netops?sslmode=verify-full&sslrootcert=/data/tls/ca.pem",
+     "postgres://netops_app@postgres:5432/netops?sslmode=verify-full&sslrootcert=/data/tls/ca.pem", "pw"),
+])
+def test_old_form_dsn_moves_to_the_file_form(tmp_path, dsn, clean, pw):
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"# keep me\nSTORE_BACKEND=postgres\nDATABASE_URL={dsn}\nGRAFANA_CH_PASSWORD=g\nOTHER=1\n")
+    install.migrate_env_credentials(env_path)
+    env = parse_env(env_path)
+    assert env["DATABASE_URL"] == clean
+    assert env["APP_DB_PASSWORD"] == pw
+    assert "# keep me" in env_path.read_text() and env["OTHER"] == "1"
+    # Idempotent: a second run changes nothing, not even by a byte.
+    before = env_path.read_text()
+    install.migrate_env_credentials(env_path)
+    assert env_path.read_text() == before
+
+
+def test_migration_replaces_an_app_password_beside_an_old_form_dsn(tmp_path):
+    """The URL is what the running stack has been using. A value sitting beside it
+    (a half-finished edit, a restored .env) must not win."""
+    env_path = tmp_path / ".env"
+    env_path.write_text("DATABASE_URL=postgres://u:live@postgres/x\nAPP_DB_PASSWORD=stale\nGRAFANA_CH_PASSWORD=g\n")
+    install.migrate_env_credentials(env_path)
+    assert parse_env(env_path)["APP_DB_PASSWORD"] == "live"
+
+
+@pytest.mark.parametrize("dsn", [
+    "host=db.example.net user=u password=pw dbname=x",   # key=value
+    "postgres://u:%22quoted@postgres/x",                 # .env would misread it
+    "postgres://u:caf%C3%A9@postgres/x",                 # not printable ASCII
+])
+def test_a_dsn_env_cannot_hold_stays_as_it_is(tmp_path, dsn, capsys):
+    """Refusing here would abort an upgrade of a working install. It keeps
+    working through the api's fallback, and the renderer names the key."""
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"STORE_BACKEND=postgres\nDATABASE_URL={dsn}\nGRAFANA_CH_PASSWORD=g\n")
+    install.migrate_env_credentials(env_path)
+    env = parse_env(env_path)
+    assert env["DATABASE_URL"] == dsn
+    assert "APP_DB_PASSWORD" not in env
+    assert install.app_db_password({**env, "APP_DB_PASSWORD": "minted-beside-it"}) is None, \
+        "a minted value must never be rendered over a DSN that is still authoritative"
+    assert "pw" not in capsys.readouterr().out
+
+
+def test_migration_never_prints_the_password(tmp_path, capsys):
+    env_path = tmp_path / ".env"
+    env_path.write_text("DATABASE_URL=postgres://u:S3CRET-VALUE@postgres/x\n")
+    install.migrate_env_credentials(env_path)
+    out = capsys.readouterr()
+    assert "S3CRET-VALUE" not in out.out + out.err
+    assert "DATABASE_URL" in out.out
+
+
+def test_migration_seeds_a_missing_grafana_credential(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("STORE_BACKEND=file\n")
+    install.migrate_env_credentials(env_path)
+    assert parse_env(env_path)["GRAFANA_CH_PASSWORD"]
+
+
+def test_a_migrated_env_is_a_private_atomic_write(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("DATABASE_URL=postgres://u:pw@postgres/x\n")
+    env_path.chmod(0o600)
+    install.migrate_env_credentials(env_path)
+    assert (env_path.stat().st_mode & 0o777) == 0o600
 
 
 # ── deployment artifacts agree ──────────────────────────────────────────────

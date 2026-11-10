@@ -93,6 +93,8 @@ and thereby certified the blind scope as healthy.
 | A registry never falls back to an implicit ephemeral store | ✅ | **BUILD** (tracker 245) — `TestApplicationStoreNeverFallsBackToMemory`, `TestApplicationsRefuseOnUnsupportedBackend`: a configured persistent backend with no implementation for a registry yields a nil store and a 501 with `APPLICATION_REGISTRY_BACKEND_UNSUPPORTED`, never an in-memory store that acknowledges writes it loses on restart. Memory is reachable only by an explicit `STORE_BACKEND=memory`; an unknown value aborts the boot (`TestInitStoreBackendRejectsUnknownValue`) |
 | A store backend never fails over to another backend | ✅ | **BUILD** (tracker 245) — `TestApplicationsPostgresOutageDoesNotFailOverPG` (DATABASE_URL_TEST): with Postgres down the registry answers 503 `APPLICATIONS_STORAGE_UNAVAILABLE`, refuses the write, still reports `active_backend=postgres`, and after recovery holds exactly the pre-outage record. `TestUsePostgresFailureDoesNotSwitchBackends` pins the boot half |
 | Registry storage that cannot serve is distinguishable from an empty registry | ✅ | **BUILD** (tracker 245) — `TestRegistriesStatusReportsTheRealBackend` + the `storageBadge` / Registries UI tests: `GET /api/registries/status` reports configured vs active backend, persistence, availability and reason; the page renders "PostgreSQL · Persistent", "Memory · Ephemeral", "… · Unavailable" or "Unavailable · configured backend: File" from that answer, and shows no badge at all when the posture is unknown |
+| A rotated app-state password reaches the api's next connection with no restart | ✅ | **BUILD** (tracker 384) — `TestPGRotationReachesTheNextConnectionWithoutARestart` (DATABASE_URL_TEST, real Postgres): a DSN with no password boots from the mounted file; `ALTER ROLE` leaves an open connection working; a new connection is refused only until the file changes and then authenticates. `TestPGPassfileAloneDoesNotSurviveARotation` pins why the driver's own `PGPASSFILE` is not enough, and that an old api image can still authenticate through it. `TestPGNoCredentialAnywhereFailsBootClosed`: no credential, no login attempt |
+| No new service credential in a compose environment, a chart environment or a script argv | ✅ | **GATE** (tracker 384) — `tests/test_no_credential_in_url.py` holds a ratchet of the ones that remain (a new one fails, a removed one must be deleted from the list), `tests/test_helm_chart.py` checks every rendered workload (CI's helm-chart job has helm; a machine without it skips loudly) |
 | Applications survive an API restart | ✅ | **BUILD** (tracker 245) — `TestApplicationsSurviveAnAPIRestartPG`: two tenants' applications, the store closed and reopened, both records and their cross-tenant isolation intact |
 
 ### 2a. Security producer (P3-EMIT, 2026-09-02)
@@ -609,6 +611,23 @@ Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 | Held-out scores measure generalisation | ❌ **not yet** | Every current case is synthetic and existed while the rules were tuned, so the gap understates overfitting. Rewording is not detected |
 | Accuracy on real operator-labelled cases is measured | ❌ **not built** | No importer yet; the field split is empty |
 | The 73-example library performs as well as the previous 82 on a live model | ❌ **not measured** | `-tags nlqmodeleval` needs a provider key; no run since the change |
+
+**Incident Replay, offline leg (tracker 337 N-H2, 2026-11-09). BUILD, not PROVEN:** nothing here has run against a real incident, a live model or a production ledger. Details in `docs/ai/evals.md`.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Replay reads the case and nothing else; the package imports no store, network or process API | ✅ | **BUILD** — `TestReplayImportsNoStore` (AST), `TestExportWritesNoFile` |
+| A tool not in `allowed_tools` is not registered; a request for it is `not_registered`, never a live call | ✅ | **BUILD** — `TestUnlistedToolIsNotRegistered` |
+| Two runs of one input are identical but for timestamps and latency | ✅ | **BUILD** — `TestReplayIsDeterministic` |
+| The harness catches a prohibited tool, a forbidden string in a prompt alone, and a budget overrun | ✅ | **BUILD** — `TestProhibitedToolThatRanFailsTheCase`, `TestForbiddenAnywhereCoversPrompts`, `TestToolBudgetExceededFailsTheCase` |
+| The fingerprint moves on one byte of a skill file, a prompt builder, a tool contract, a pin or a model name | ✅ | **BUILD** — `TestFingerprintHashesBytes`. Prompts are hashed as rendered on a fixed input, so a builder change that does not alter that rendering is not seen |
+| A pin mismatch is reported, never substituted; cost without provider usage or a price is `censored` | ✅ | **BUILD** — `TestPinMismatchIsReportedNeverSubstituted`, `TestCostIsCensoredUnlessMeasured` |
+| Replay feeds only existing gates, adds no bar, and RCA agreement gates nothing | ✅ | **BUILD** — `TestReplayMeasuresFeedExistingGatesOnly`, `TestBarsArePinned` |
+| The export is own-tenant only: foreign and unknown are one 404, `as_tenant` is ignored, every string is redacted, `source` is `field` and held out | ✅ | **BUILD** — `iris_replay_export_isolation_test.go`, `TestExportRedactsEveryTextField`. The CH store is faked, and `pgintegration` does not cover this route |
+| Committed cases are synthetic only | ✅ | **BUILD** — `tests/test_iris_replay_customer_data.py` |
+| Replay with a live model, and re-running on a model, prompt, tool or runbook change | ❌ **not built** | The live-model leg, `IRIS_REPLAY_LIVE`, token budgets and the nightly workflow are out of this item; `ModelLeg` is the seam |
+| A re-read at capture equals what the decision saw | ❌ **cannot hold** | The ledger keeps hashes only. A capture compares and reports `live_data_moved`; a tool whose arguments it cannot name is `args_not_recoverable` |
+| Topology is replayed as of the incident | ❌ **not possible today** | The api has no versioned topology store: frozen as a tool result, and reports say so |
 
 ## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
 

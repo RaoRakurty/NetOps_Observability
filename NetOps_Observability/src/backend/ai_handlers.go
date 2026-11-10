@@ -27,6 +27,7 @@ import (
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
@@ -2924,6 +2925,100 @@ func (s *server) handleAIDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"decisions": entries, "scope": scope,
 		"event_types": aidecision.EventTypes})
+}
+
+// aiReplayExportBudget bounds one capture: it is a bounded set of reads.
+const aiReplayExportBudget = 30 * time.Second
+
+// handleAIReplayExport serves GET /api/ai/replay/export/{correlation_id}: one
+// correlation the caller may see, as a frozen replay case (tracker 337 N-H2,
+// internal/irisreplay). This handler only wires the caller's own tenant-scoped
+// reads; nothing is written on the server.
+//
+// §3a: per-tenant data → administration:read + the tenant filter inside every
+// seam. Unknown and another tenant's id are the same 404 with the same body, a
+// malformed id never reaches a store, and as_tenant walks nothing for a caller
+// who cannot already reach that tenant.
+func (s *server) handleAIReplayExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "administration", LevelRead)
+	if !ok {
+		return
+	}
+	notFound := func() { writeError(w, http.StatusNotFound, errors.New("not found")) }
+	id := strings.ToLower(strings.TrimPrefix(r.URL.Path, "/api/ai/replay/export/"))
+	if !isUUIDToken(id) {
+		notFound()
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+		notFound()
+		return
+	}
+	// One capture is a few dozen store reads.
+	if !s.copilotLimiter.AllowN("replay-export|"+claims.Tenant+"|"+claims.Sub, envInt("IRIS_REPLAY_EXPORT_RATE_PER_MIN", 30)) {
+		writeError(w, http.StatusTooManyRequests, errors.New("too many replay exports; try again in a minute"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), aiReplayExportBudget)
+	defer cancel()
+	r = r.WithContext(ctx)
+	orch := s.newOrchestrator(r, claims)
+	ds := aiDataSource{srv: s, ctx: ctx, scope: s.chTenantScope(r), claims: claims}
+	body, err := irisreplay.Export(ctx, irisreplay.CaptureSeams{
+		Principal: s.aiPrincipal(claims),
+		DS:        ds,
+		Deps:      orch.Troubleshoot,
+		Toolbox:   orch.Toolbox(),
+		Snapshot:  ds.replaySnapshot,
+		Decision: func(ctx context.Context, owner, incident string) ([]aidecision.Entry, error) {
+			if s.aiDecisions == nil {
+				return nil, nil
+			}
+			return irisreplay.FindDecision(ctx, cross, owner, incident, func(ctx context.Context, f aidecision.ListFilter) ([]aidecision.Entry, error) {
+				return s.aiDecisions.List(ctx, tenant, cross, f)
+			})
+		},
+		ContextFacts: func(ctx context.Context) (string, []string) {
+			block := s.orgContextBlock(ctx, claims)
+			if block == "" {
+				return "", nil
+			}
+			return aidecision.SHA256Hex([]byte(block)), []string{block}
+		},
+	}, id)
+	switch {
+	case errors.Is(err, ai.ErrNotFound):
+		notFound()
+		return
+	case errors.Is(err, ai.ErrForbidden):
+		writeError(w, http.StatusForbidden, errors.New("infrastructure read permission required"))
+		return
+	case err != nil:
+		logError("ai.replay", "export failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the case could not be captured"))
+		return
+	}
+	if s.audit != nil {
+		s.audit.Record(AuditEvent{
+			Actor: claims.Sub, Tenant: tenant, Cross: cross, SessionID: claims.Sid,
+			Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+			Remote: auditClientIP(r), Detail: map[string]any{"action": "ai.replay.export"},
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	// JSON encoded by irisreplay.RedactedJSON and served as application/json, no-sniff.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil { // #nosec G705 -- a JSON document with a JSON content type, not HTML
+		logError("ai.replay", "export write failed", errf(err))
+	}
 }
 
 // ── Network context (tracker 337 N-F1, internal/orgcontext) ────────────────

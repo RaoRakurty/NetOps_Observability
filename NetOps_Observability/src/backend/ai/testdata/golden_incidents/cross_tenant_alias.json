@@ -57,6 +57,9 @@
       }
     },
     "model_reply": "Problem not available.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 0},
     "expect": {
       "not_found": true,
       "forbidden_citations": [
@@ -146,6 +149,9 @@
       }
     },
     "model_reply": "edge-1 reported Ethernet1/1 down [hypothesis:a0a10000:0]; the cause is not established yet. Next: check the optic and the far end.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "if-down", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "required_citations": [
@@ -250,6 +256,9 @@
       }
     },
     "model_reply": "edge-1 logged Ethernet2/4 going down at 10:06:40 [log:os:0]; no configuration change was recorded for it in the last 24 hours. Next: check the optic on Ethernet2/4.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_active_major_incidents", "get_bgp_feed_recent", "get_bgp_rpki", "get_bgp_watchlist", "get_case_timeline", "get_config_diff", "get_device_health", "get_device_state", "get_metric_anomalies", "get_problem_evidence", "get_rca_verdict", "get_recent_changes", "get_security_findings", "get_topology_context", "recall_investigations", "run_protocol_diagnostic", "search_logs"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 4},
     "expect": {
       "required_citations": [
         "log:os:0"
@@ -300,6 +309,9 @@
         }
       }
     },
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_owner"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 1},
     "expect": {
       "not_found": true,
       "forbidden_anywhere": [
@@ -354,6 +366,9 @@
       }
     },
     "model_reply": "One suspected incident is active: Ethernet1/1 down on edge-1 [problem:a0a20000-0000-4000-8000-000000000055].",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 0},
     "expect": {
       "required_citations": [
         "problem:a0a20000-0000-4000-8000-000000000055"

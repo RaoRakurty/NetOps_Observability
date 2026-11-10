@@ -25,6 +25,19 @@ export OPENSEARCH_JAVA_HOME="${OPENSEARCH_JAVA_HOME:-/usr/share/opensearch/jdk}"
 
 for v in OS_API_PASSWORD OS_ROUTER_PASSWORD OS_CORRELATION_PASSWORD \
          OS_BOOTSTRAP_PASSWORD OS_DASHBOARDS_PASSWORD OS_AGGREGATOR_PASSWORD; do
+    # Tracker 384: compose mounts one file per identity and names the directory.
+    # The chart still supplies these through its Secret, so the environment form
+    # stays. Exported for hash.sh -env, in this process tree only.
+    if [ -n "${OS_SECRET_DIR:-}" ]; then
+        if [ ! -r "$OS_SECRET_DIR/$v" ]; then
+            echo "apply-security: FATAL: $OS_SECRET_DIR/$v is missing or unreadable — re-run scripts/install.py (it renders data/secrets)" >&2
+            exit 78
+        fi
+        val=$(cat "$OS_SECRET_DIR/$v")
+        eval "$v=\$val"
+        # shellcheck disable=SC2163 # exporting the variable NAMED by $v
+        export "$v"
+    fi
     eval "val=\${$v:-}"
     if [ -z "$val" ]; then
         echo "apply-security: FATAL: $v is empty — refusing to bootstrap a role model with a blank credential" >&2
@@ -48,17 +61,19 @@ rm -f "$WORK/opensearch.yml.example"
 cp "$CONF_SRC/roles.yml" "$CONF_SRC/roles_mapping.yml" "$WORK/"
 
 hash_of() {
+    # $1 names an exported variable: `-env` reads the value from the environment,
+    # because `-p <password>` would put it on the java process's argv (tracker 384).
     # hash.sh prints the bcrypt hash on the last non-empty line.
-    "$SEC_DIR/tools/hash.sh" -p "$1" 2>/dev/null | grep -v '^$' | tail -1
+    "$SEC_DIR/tools/hash.sh" -env "$1" 2>/dev/null | grep -v '^$' | tail -1
 }
 
 echo "apply-security: hashing service credentials ..." >&2
-H_API=$(hash_of "$OS_API_PASSWORD")
-H_ROUTER=$(hash_of "$OS_ROUTER_PASSWORD")
-H_CORR=$(hash_of "$OS_CORRELATION_PASSWORD")
-H_BOOT=$(hash_of "$OS_BOOTSTRAP_PASSWORD")
-H_DASH=$(hash_of "$OS_DASHBOARDS_PASSWORD")
-H_AGG=$(hash_of "$OS_AGGREGATOR_PASSWORD")
+H_API=$(hash_of OS_API_PASSWORD)
+H_ROUTER=$(hash_of OS_ROUTER_PASSWORD)
+H_CORR=$(hash_of OS_CORRELATION_PASSWORD)
+H_BOOT=$(hash_of OS_BOOTSTRAP_PASSWORD)
+H_DASH=$(hash_of OS_DASHBOARDS_PASSWORD)
+H_AGG=$(hash_of OS_AGGREGATOR_PASSWORD)
 for h in "$H_API" "$H_ROUTER" "$H_CORR" "$H_BOOT" "$H_DASH" "$H_AGG"; do
     case "$h" in
         \$2*) : ;; # bcrypt

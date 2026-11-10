@@ -61,7 +61,7 @@ func TestCloudMetricSeriesIsolation(t *testing.T) {
 		{"metric":{"resource_id":"i-acme1"},"values":[[1000,"1"]]},
 		{"metric":{"resource_id":"i-globex1"},"values":[[1000,"2"]]}
 	]`)
-	t.Setenv("VM_QUERY_URL", vm.URL)
+	t.Setenv("VICTORIA_URL", vm.URL)
 
 	get := func(token, path string) (int, []byte) { return do(t, srv, "GET", path, token, nil) }
 
