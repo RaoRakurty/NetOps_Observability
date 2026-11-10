@@ -1943,6 +1943,12 @@ services:
       PATH_GRAPH_ENVIRONMENT: ${PATH_GRAPH_ENVIRONMENT:-prod}
       PATH_GRAPH_VANTAGE_ADDRESSES: ${PATH_GRAPH_VANTAGE_ADDRESSES:-}
       PATH_GRAPH_LOCAL_CONTEXTS: ${PATH_GRAPH_LOCAL_CONTEXTS:-}
+      # Tracker 387 PR 13: the address(es) this appliance's pollers and collectors
+      # send from, as devices see them (after NAT), comma-separated IPs or CIDRs.
+      # Flows to or from them are Correlix's own monitoring (on the lab, 52 % of
+      # flows are our SNMP polling): labelled traffic_class=platform_monitoring
+      # and left out of the flows views by default, never deleted. Empty = none.
+      CX_PLATFORM_ADDRESSES: ${CX_PLATFORM_ADDRESSES:-}
       # Background precompute workers behind the path/service cascade. Both are
       # opt-in and both need CLICKHOUSE_URL (the rollup additionally needs the
       # postgres store); they log and stay down when a prerequisite is missing.

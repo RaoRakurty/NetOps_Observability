@@ -212,6 +212,9 @@ describe("toLogEvent — today's records", () => {
       _resolved: { in_if_name: "", in_if_name_basis: "sentinel" },
     });
     expect(sentinel.flow?.inInterfaceLabel).toBe("none reported (4294967295)");
+    expect(bare.flow?.platformMonitoring).toBe(false);
+    const own = toLogEvent({ ...IPFIX_FLOW, _resolved: { traffic_class: "platform_monitoring" } });
+    expect(own.flow?.platformMonitoring).toBe(true);
     // A name without the resolved basis is not shown.
     const unproven = toLogEvent({ ...IPFIX_FLOW, _resolved: { in_if_name: "ge0/3", in_if_name_basis: "absent" } });
     expect(unproven.flow?.inInterfaceLabel).toBe("1");

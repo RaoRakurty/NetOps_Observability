@@ -160,7 +160,7 @@ func TestLogsFlowNamesForeignTenantNeverResolves(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatal(err)
 	}
-	annotateFlowHits(resp, e, iana.Default())
+	annotateFlowHits(resp, e, iana.Default(), platformAddrSet{})
 	hits := resp["hits"].(map[string]any)["hits"].([]any)
 	res := func(i int) map[string]any { return hits[i].(map[string]any)["_resolved"].(map[string]any) }
 

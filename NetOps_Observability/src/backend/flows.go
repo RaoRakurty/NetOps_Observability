@@ -348,10 +348,17 @@ func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
-	filter, err := flowFilterClause(r)
+	// The coverage counts every row the filter bar selects, platform monitoring
+	// included, and says how many of them the views leave out by default.
+	filter, err := flowFilterCore(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+	platformCond := platformAddrsFromEnv().sqlCond()
+	platformCount, platformConfigured := "toUInt64(0)", "0"
+	if platformCond != "" {
+		platformCount, platformConfigured = "countIf("+platformCond+")", "1"
 	}
 	priv := func(col string) string {
 		return "(isIPAddressInRange(" + col + ", '10.0.0.0/8') OR isIPAddressInRange(" + col + ", '172.16.0.0/12')" +
@@ -368,7 +375,9 @@ SELECT count()                                       AS flows,
        countIf(exporter_app_id != '')                AS flows_with_app_id,
        countIf(exporter_app_name != '')              AS flows_with_app_name,
        countIf(sampling_status = 'reported' OR (sampling_status = '' AND sampling_rate > 0)) AS flows_sampling_reported,
-       uniqExact(sampler_address)                    AS exporters
+       uniqExact(sampler_address)                    AS exporters,
+       ` + platformCount + `                         AS platform_monitoring_flows,
+       ` + platformConfigured + `                    AS platform_addresses_configured
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  FORMAT JSON`
@@ -614,7 +623,19 @@ func isIPish(s string) bool {
 // filter-bar params: src/dst address + exporter device (allowlisted via isIPish,
 // then quote-escaped) and ingress/egress interface ids (parsed as integers). A
 // malformed value is a 400 (returned error), never silently dropped.
+//
+// It also applies the platform-monitoring exclusion (flows_traffic_class.go):
+// flows Correlix itself caused are left out unless ?traffic=all.
 func flowFilterClause(r *http.Request) (string, error) {
+	f, err := flowFilterCore(r)
+	if err != nil {
+		return "", err
+	}
+	return f + flowTrafficClassClause(r), nil
+}
+
+// flowFilterCore is the filter bar alone, without the traffic-class exclusion.
+func flowFilterCore(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	var conds []string
 	for _, f := range []struct{ param, col string }{

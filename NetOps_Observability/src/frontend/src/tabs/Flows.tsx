@@ -37,7 +37,7 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
-import { FlowEmpty, FlowSamplingNote, type FlowDimension } from "./flowEmpty";
+import { FlowEmpty, FlowSamplingNote, PlatformTrafficToggle, type FlowDimension } from "./flowEmpty";
 import { StatStrip, Stat } from "../components/ui";
 import { IANA_PROTO_NAMES } from "../proto";
 import { TopNRow, topNDisplay, topNRowId } from "./flowNames";
@@ -1151,7 +1151,12 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
 
   const fkey = JSON.stringify(filters);
   const q: FlowQuery = { since, ftype, filters, fkey, direction };
-  const activeFilters = Object.entries(filters).filter(([, v]) => v);
+  const activeFilters = Object.entries(filters).filter(([k, v]) => v && k !== "traffic");
+  const includePlatform = filters.traffic === "all";
+  const setIncludePlatform = (on: boolean) => {
+    setDraft((d) => ({ ...d, traffic: on ? "all" : undefined }));
+    setFilters((f) => ({ ...f, traffic: on ? "all" : undefined }));
+  };
 
   const setField = (k: keyof FlowFilters, v: string) => setDraft((d) => ({ ...d, [k]: v }));
   const apply = () => {
@@ -1160,8 +1165,10 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
     setFilters(cleaned);
   };
   const clearAll = () => {
-    setDraft(empty);
-    setFilters(empty);
+    // The platform-traffic toggle is a view choice, not a filter: Clear keeps it.
+    const keep: FlowFilters = filters.traffic ? { traffic: filters.traffic } : {};
+    setDraft(keep);
+    setFilters(keep);
   };
 
   return (
@@ -1216,6 +1223,9 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
           )}
           <p className="mini-meta" style={{ margin: "6px 2px 0" }}>
             <FlowSamplingNote q={q} /> Filters and the source selector apply to every panel below.
+          </p>
+          <p style={{ margin: "4px 2px 0" }}>
+            <PlatformTrafficToggle q={q} included={includePlatform} onChange={setIncludePlatform} />
           </p>
         </div>
 

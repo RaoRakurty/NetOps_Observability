@@ -159,7 +159,7 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 		// exporter that sends none, which groups exactly as before.
 		sql := "SELECT dst_addr AS d, src_addr AS s, exporter_app_id AS xi, exporter_app_name AS xn, " +
 			"sum(bytes*if(sampling_rate=0,1,sampling_rate)) AS b, count() AS f " +
-			"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND" + clause + " " +
+			"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND" + clause + flowTrafficClassClause(r) + " " +
 			"GROUP BY dst_addr, src_addr, exporter_app_id, exporter_app_name ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
 		var err error
 		rows, err = s.chRows(r, sql)

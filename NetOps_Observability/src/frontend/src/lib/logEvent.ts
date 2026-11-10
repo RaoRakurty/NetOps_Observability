@@ -73,6 +73,8 @@ export interface FlowView {
   outInterfaceLabel: string;
   /** The likely service on the lower port, from the IANA registry: a heuristic. */
   service: string;
+  /** A flow to or from Correlix's own pollers (traffic_class=platform_monitoring). */
+  platformMonitoring: boolean;
   packets: string;
   bytes: string;
   /** The search-index sample and the exporter's own sampling, labelled apart. */
@@ -420,6 +422,7 @@ function flowViewOf(src: Record<string, any>, resolved: Record<string, any>): Fl
     inInterfaceLabel: interfaceLabel(inIdx, resolved.in_if_name, resolved.in_if_name_basis),
     outInterfaceLabel: interfaceLabel(outIdx, resolved.out_if_name, resolved.out_if_name_basis),
     service: svcName && svcPort ? `${svcName} (port ${svcPort}, likely)` : "",
+    platformMonitoring: resolved.traffic_class === "platform_monitoring",
     packets: count(pick(src, "flow.packets.observed", "packets")),
     bytes: count(pick(src, "flow.bytes.observed", "bytes")),
     sampling,

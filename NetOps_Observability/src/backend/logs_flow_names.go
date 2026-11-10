@@ -69,7 +69,10 @@ func flowIndexValue(v any) (uint32, bool) {
 
 // annotateFlowHits adds `_resolved` names to every flow hit of a parsed
 // OpenSearch search response. It changes nothing else.
-func annotateFlowHits(resp map[string]any, names flowNameResolver, tables iana.Names) {
+//
+// A document whose source or destination is one of the platform's own
+// addresses also gets traffic_class=platform_monitoring (flows_traffic_class.go).
+func annotateFlowHits(resp map[string]any, names flowNameResolver, tables iana.Names, platform platformAddrSet) {
 	outer, _ := resp["hits"].(map[string]any)
 	hits, _ := outer["hits"].([]any)
 	for _, h := range hits {
@@ -100,6 +103,11 @@ func annotateFlowHits(resp map[string]any, names flowNameResolver, tables iana.N
 					res["service_name"], res["service_port"] = name, port
 				}
 			}
+		}
+		srcAddr, _ := src["src_addr"].(string)
+		dstAddr, _ := src["dst_addr"].(string)
+		if platform.contains(srcAddr) || platform.contains(dstAddr) {
+			res["traffic_class"] = trafficClassPlatform
 		}
 		if len(res) > 0 {
 			hit["_resolved"] = res

@@ -613,6 +613,9 @@ export type FlowFilters = {
   device?: string; // exporter / sampler IP
   in_if?: string; // ingress interface (SNMP ifIndex)
   out_if?: string; // egress interface
+  // "all" includes the flows Correlix's own pollers caused (tracker 387 PR 13);
+  // unset, the API leaves them out and the coverage says how many.
+  traffic?: string;
 };
 
 // flowQS serializes flow filters (and optional direction) into a query-string

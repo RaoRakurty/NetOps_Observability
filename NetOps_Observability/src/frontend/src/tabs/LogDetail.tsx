@@ -164,6 +164,7 @@ function FlowCard({ flow }: { flow: FlowView }) {
         {flow.inInterfaceLabel && <><dt>In interface</dt><dd className="lv-mono">{flow.inInterfaceLabel}</dd></>}
         {flow.outInterfaceLabel && <><dt>Out interface</dt><dd className="lv-mono">{flow.outInterfaceLabel}</dd></>}
         {flow.service && <><dt>Service</dt><dd>{flow.service}</dd></>}
+        {flow.platformMonitoring && <><dt>Traffic</dt><dd>Correlix's own polling</dd></>}
         {flow.packets && <><dt>Packets</dt><dd className="lv-mono">{flow.packets}</dd></>}
         {flow.bytes && <><dt>Bytes</dt><dd className="lv-mono">{flow.bytes}</dd></>}
         {flow.sampling.map((s) => (
