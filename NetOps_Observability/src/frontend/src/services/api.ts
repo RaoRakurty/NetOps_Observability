@@ -1919,6 +1919,35 @@ export type CopilotConfig = {
   key_source?: "env" | "stored" | "none";
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
+  // C2: what the setup step fills in when a provider is picked.
+  recommended?: Record<string, RecommendedModels>;
+  // C3: the latest "Test connection" verdict (in memory on the server).
+  last_test?: ProviderTestResult | null;
+  // D4: budget status — the platform view counts spent workspaces.
+  budget?: AIBudgetStatus;
+};
+
+export type RecommendedModels = { default: string; fast: string; strong: string };
+
+// The verdict of a connection test. Never the key, never the provider's text.
+export type ProviderTestResult = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  latency_ms: number;
+  error_class?: string;
+  http_status?: number;
+  tested_at?: string;
+};
+
+export type AIBudgetStatus = {
+  daily_tokens_default?: number;
+  // platform view
+  workspaces_exhausted?: number;
+  // workspace view
+  daily_tokens?: number;
+  used_today?: number;
+  exhausted?: boolean;
 };
 
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
@@ -2212,6 +2241,8 @@ export type AITenantConfig = {
   platform_key_available: boolean;
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
+  recommended?: Record<string, RecommendedModels>;
+  budget?: AIBudgetStatus;
 };
 
 export type AITenantRow = {
@@ -6611,6 +6642,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  // "Test connection" (C3): one bounded probe; a blank key tests the stored one.
+  // The key is used for this call only — never saved by the test.
+  testCopilotConfig: (body: { provider: string; key?: string; model?: string }) =>
+    request<ProviderTestResult>("/api/copilot/config/test", { method: "POST", body: JSON.stringify(body) }),
+  testAITenantConfig: (body: { provider?: string; key?: string; model?: string }) =>
+    request<ProviderTestResult>("/api/ai/tenant-config/test", { method: "POST", body: JSON.stringify(body) }),
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
@@ -10509,6 +10546,8 @@ export type AiAnswer = {
   statements?: AiStatement[];
   disclaimers: string[];
   provider?: string;
+  // The model that answered (C6 footnote); absent for an evidence-only answer.
+  model?: string;
   // Universal Response-Quality fields (rendered as badges + sections).
   status?: string;
   confidence_label?: string;
