@@ -17,6 +17,18 @@ Metrics:
   `agent_addr`) or `none`, and the tenant attribution outcome.
 - `netops_flow_enrichment_events{...,iface_index}`: whether a flow carried real interface
   indexes or the IPFIX "no interface" sentinels (0, 4294967295). A sentinel is never named.
+- `netops_nms_iface_bridge_rows{source,outcome}`, `netops_nms_iface_bridge_failures_total{stage}`,
+  `netops_nms_iface_bridge_last_publish_timestamp_seconds` on the api (tracker 387 PR 13a):
+  the interface bridge is the SNMP walk's rows merged with each controller's interface
+  list (`if_bridge.go`, `internal/ifbridge`). `bridged` is what stands in the address and
+  ifIndex maps per source; `agreed`/`conflict_won`/`conflict_lost` compare the two sources
+  for one device (newer reading wins); for the NMS source, `device_unresolved`,
+  `device_ambiguous`, `internal_vpn`, `unidentifying_address`, `truncated` and `stale` say why
+  a controller's record reached no row.
+- `netops_inventory_facts{fact,source,state}`: how model, site and role were settled for each
+  device in the last registry export (`inventory_facts.go`): `manual`, `inventory` or `nms`
+  set it, nothing stated it (`none`/`blank`), or two sources disagreed (`conflict`, left
+  blank).
 
 ## FlowExporterWithoutInterfaceNames
 
@@ -29,8 +41,8 @@ views show its ports as bare ifIndex numbers.
 3. Does the device answer the IF-MIB walk? Check `entity_resolver.json` (or the api log
    line `entity-resolver-enrichment: exported N device(s), N iface-ip(s), N ifindex(es)`)
    for its ifindex rows. A device that answers no walk (on the lab: cedge-81, vedge-100)
-   has none. Tracker 387 PR 13a adds the controller (vManage) interface list as a second
-   source.
+   has none from SNMP; its controller's interface list fills them when the controller's
+   device resolves to it. See NMSInterfaceBridgeEmpty below for why it may not.
 4. `netops_iface_names_failures_total{stage="read"}` rising means the bridge itself is
    unread; `stage="write"` means ClickHouse refused the rows.
 
@@ -47,11 +59,36 @@ device's own, never derived from the address.
 
 1. Group the unattributed traps by `host` on the Logs page (signal: SNMP traps,
    `attribution_basis:none`). One address carrying most of them is the usual shape.
-2. If that address is an interface of a known device, does the device answer the SNMP
-   walk? Its interface addresses come from it (ipAddrTable). Until it does, or until
-   tracker 387 PR 13a brings the controller's interface addresses, it cannot attribute.
+2. If that address is an interface of a known device, where do its interface addresses
+   come from? The SNMP walk (ipAddrTable) and the controller's interface list. A
+   controller's rows land only on a device the integration's OWN owner owns, and the
+   receiver attributes only to a device Correlix polls (it must prove that device's
+   community). An integration owned by a tenant cannot name a platform-owned SNMP device:
+   align the owners (assign the devices to the integration's tenant, or own the
+   integration at the platform).
 3. If the device is known by that address, check the community: a mismatch drops the
    identity on purpose (`guardTrapCommunity`).
+
+## NMSInterfaceBridgeEmpty
+
+The controller answered its per-device interface lists for 30 minutes (the
+`interface_realtime` stream polled `ok`), and not one row of them reached the interface
+bridge. Devices known only through the controller keep bare ifIndex numbers on flows and
+traps, and a trap sent from one of their interface addresses names no device.
+
+1. Read `netops_nms_iface_bridge_rows{source="nms"}` by outcome.
+2. `device_unresolved`: the controller's devices match no inventory device of the
+   integration's owner. Resolution is owner-strict (system-ip label, address, host-name,
+   serial; never an address alone): an integration owned by tenant X names only tenant X's
+   devices. The usual cause is an integration owned by a tenant while the SNMP-discovered
+   devices are platform-owned, or the reverse. Align the owners; nothing should be bridged
+   across them.
+3. `device_ambiguous`: a controller key matched more than one device (two devices with one
+   host-name). Fix the duplicate in inventory.
+4. `internal_vpn` / `unidentifying_address` are expected (VPN 65528 and up, loopback,
+   link-local) and never bridge.
+5. `netops_nms_iface_bridge_failures_total{stage="publish"}` rising means the key-value
+   store refused the rows; `stage="read"` that a bridge half could not be read.
 
 ## AS numbers: the iptoasn dataset
 

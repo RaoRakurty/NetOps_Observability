@@ -141,6 +141,14 @@ format is unchanged): a completed walk replaces the rows, and they go when the d
 leaves the inventory or changes tenant, or 7 days after its last completed walk. An
 address two devices claimed at once stays claimed by both, so it stays ambiguous.
 Gauge: `collector_if_rows_retained_devices`.
+**The controller feeds the same rows (tracker 387 PR 13a).** vManage's per-device interface
+list (ifindex, addresses, VPN, description) reaches `interface_ips` and `ifindex` through the
+api's interface bridge (`if_bridge.go`, `internal/ifbridge`), keyed by the inventory device
+the controller's key resolves to OWNER-STRICTLY (never by address). VPN ≥ 65528 and
+loopback/link-local addresses are skipped at the source; SNMP and NMS rows for one device
+merge (same port canonically → the SNMP spelling; disagreement → the newer reading); NMS rows
+outlive their polls for the same 7 days. The wire format is unchanged, so stage [1] reads
+them like SNMP rows. Gauge: `netops_nms_iface_bridge_rows{source,outcome}`.
 
 **Trap attribution (tracker 387 PR 13c', 2026-11-10).** The Go receiver names the
 device by management address, then an interface address exactly one device reports
