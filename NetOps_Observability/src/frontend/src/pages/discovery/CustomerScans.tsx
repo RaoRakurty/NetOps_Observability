@@ -354,7 +354,7 @@ function ScanForm(props: {
       <li className="disc-step">
         <span className="disc-step-num" aria-hidden>2</span>
         <div className="disc-step-body">
-          <h3 className="disc-step-title">Choose the customer's SNMP profiles</h3>
+          <h3 className="disc-step-title">SNMP profiles</h3>
           {draft.tenantId === "" ? (
             <p className="disc-text">Choose the customer first.</p>
           ) : own.length === 0 ? (

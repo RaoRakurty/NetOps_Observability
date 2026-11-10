@@ -98,7 +98,7 @@ describe("Scans for a customer — platform administrator", () => {
     const steps = screen.getByRole("list", { name: "Set up a scan for a customer" });
     const items = within(steps).getAllByRole("listitem");
     expect(items.map((li) => within(li).getByRole("heading").textContent)).toEqual([
-      "Choose the customer", "Choose the customer's SNMP profiles", "Choose the addresses", "Turn it on",
+      "Choose the customer", "SNMP profiles", "Choose the addresses", "Turn it on",
     ]);
     expect(items.map((li) => li.querySelector(".disc-step-num")?.textContent)).toEqual(["1", "2", "3", "4"]);
     const select = within(items[0]).getByLabelText("Customer") as HTMLSelectElement;
