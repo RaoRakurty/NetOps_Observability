@@ -58,6 +58,8 @@ func (p Planner) Execute(ctx context.Context, sc Scope, q *ast.AST, constraints 
 		err = p.incidents(ctx, sc, q, rs)
 	case ast.IncidentExplain:
 		err = p.explain(ctx, sc, q, rs)
+	case ast.EntityCount, ast.EntityList:
+		err = p.inventory(ctx, sc, q, rs)
 	default:
 		err = fmt.Errorf("plan: query type %q is not executable", q.Type)
 	}

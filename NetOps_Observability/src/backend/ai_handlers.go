@@ -424,6 +424,16 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 		rec := c.record(irisquerylog.SourceRouter, question)
 		rec.ConversationID = convID
 		ledger.Add(nlqPlanEntry(ledger, question, c, rec))
+		if !nlqAdmits(c, opts) {
+			// Not this arm's question (hybrid NLU plan A4): the router knows
+			// another arm answers it, or a symptom phrasing did not compile to
+			// one entity's incidents. Recorded as not_data, not as a dead end.
+			if rec.Outcome != irisquerylog.OutcomeDeclined {
+				rec.Outcome = irisquerylog.OutcomeNotData
+			}
+			s.nlqCapture(rq, claims, &rec, start)
+			return ai.DataAnswer{Status: ai.DataNotData}, nil
+		}
 		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
 		if err != nil {
 			rec.Outcome = irisquerylog.OutcomeError
@@ -492,6 +502,22 @@ var nlqAnswerable = map[string]bool{
 	validate.CodeScopeUnavailable: true, validate.CodeUnmappedProvider: true,
 }
 
+// nlqAdmits applies the router's options to a compiled question:
+//   - IncidentRefOnly ("what's wrong with X"): only an incident list about a
+//     resolved entity is this arm's;
+//   - an explicit router intent: a question the grammar could not parse, or a
+//     lookup that found nothing, is left to the classic path (not_data).
+func nlqAdmits(c nlqCompiled, opts ai.DataOpts) bool {
+	if opts.IncidentRefOnly && (c.checked == nil || c.checked.Type != nlqast.IncidentList || len(c.checked.Refs) == 0) {
+		return false
+	}
+	explicit := opts.ClassicIntent != "" && opts.ClassicIntent != "capability"
+	if explicit && (c.res.Unparsed || c.res.NotFound != nil) {
+		return false
+	}
+	return true
+}
+
 // nlqDataAnswer turns one compiled question into the data arm's answer; rec
 // (never nil) receives what the run produced — counts only.
 func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan, rec *irisquerylog.Record) (ai.DataAnswer, error) {
@@ -499,6 +525,15 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 	switch {
 	case c.res.Decline != "" || c.res.Unparsed:
 		return notData, nil
+	case c.res.NotFound != nil:
+		// A bare name the caller cannot see: said so, with the caller's own
+		// near matches — identical for a foreign name and a missing one.
+		payload, err := json.Marshal(c.body())
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
+			Text: compile.NotFoundAnswer(c.res)}, nil
 	case len(c.res.Clarify) > 0:
 		var names []string
 		for _, ref := range c.res.Clarify {
@@ -1568,6 +1603,9 @@ func (c nlqCompiled) body() map[string]any {
 	if len(c.res.DidYouMean) > 0 {
 		out["did_you_mean"] = c.res.DidYouMean
 	}
+	if c.res.NotFound != nil {
+		out["not_found"] = c.res.NotFound
+	}
 	if c.res.AST != nil {
 		out["validation"] = *c.vr
 		if c.checked != nil {
@@ -2493,6 +2531,10 @@ func nlqNoQueryReason(outcome string) string {
 		return "The query Iris built did not pass its checks, so it was never run. The check codes say why."
 	case irisquerylog.OutcomeError:
 		return "Iris failed while answering this question, before a query was kept."
+	case irisquerylog.OutcomeNotData:
+		return "This question was answered by another part of Iris, not by a data query."
+	case irisquerylog.OutcomeNotFound:
+		return "Iris found nothing you can see by that name, so no query was built."
 	}
 	return "No query was kept for this question."
 }

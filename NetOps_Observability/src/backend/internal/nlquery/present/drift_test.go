@@ -75,7 +75,7 @@ func TestHighlightEnumMatchesClient(t *testing.T) {
 func TestQueryTypesMatchClient(t *testing.T) {
 	var server []string
 	for _, k := range []ast.QueryType{ast.MetricSeries, ast.MetricTopK, ast.MetricFilter, ast.CompareWindows,
-		ast.ChangeList, ast.IncidentList, ast.IncidentExplain, ast.FlowTop, ast.LogSearch} {
+		ast.ChangeList, ast.IncidentList, ast.IncidentExplain, ast.EntityCount, ast.EntityList, ast.FlowTop, ast.LogSearch} {
 		if !k.Known() {
 			t.Fatalf("%q is not a known query type", k)
 		}

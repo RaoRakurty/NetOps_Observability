@@ -73,6 +73,10 @@ type Result struct {
 	// name close to one the caller can see (confirm-only, never applied) or a
 	// word with several equally close vocabulary words.
 	DidYouMean []Suggestion `json:"did_you_mean,omitempty"`
+	// NotFound is set when the question asked for one named thing and
+	// nothing the caller can see has that name (the answer is "not found",
+	// identical for a name that exists elsewhere and one that exists nowhere).
+	NotFound *NotFound `json:"not_found,omitempty"`
 }
 
 // Suggestion is the did-you-mean for one word not understood. Refs are entity
@@ -244,6 +248,12 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 	if m == nil {
 		m, alias = c.stateMetric(text)
 	}
+	if m == nil {
+		// "which interfaces are busiest": the superlative names the metric.
+		if hits, word := c.superlativeMetric(text); hits != nil {
+			m, alias, st.sup = hits, word, word
+		}
+	}
 	if m != nil {
 		st.e.phrase(alias)
 		r, err := st.metric(m)
@@ -252,8 +262,14 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 		}
 		return st.done(r), err
 	}
-	if isIncidentQuestion(text) {
+	if isIncidentQuestion(text) || severityRe.MatchString(text) {
 		r, err := st.incidents()
+		return st.done(r), err
+	}
+	if r, ok, err := st.inventory(); ok || err != nil {
+		return st.done(r), err
+	}
+	if r, ok, err := c.lookup(st); ok || err != nil {
 		return st.done(r), err
 	}
 	return Result{Unparsed: true, NotUnderstood: st.e.leftovers(text)}, nil
@@ -268,6 +284,11 @@ type state struct {
 	e    *eaten
 	refs []reference
 	raw  string // the question as asked, for values whose casing is data (owner names)
+	// sup is the catalog superlative that named the metric ("busiest").
+	sup string
+	// readings are the interpretations this compile applied (severity, an
+	// implicit top N), disclosed with the result.
+	readings []lex.Reading
 }
 
 // threshold reads the number a comparison regexp captured. A number too large
@@ -286,6 +307,7 @@ func (s *state) done(r Result) Result {
 	if left := s.e.leftovers(s.text); len(left) > 0 {
 		return Result{Intent: r.Intent, Unparsed: true, NotUnderstood: left, Entities: r.Entities}
 	}
+	r.Readings = append(r.Readings, s.readings...)
 	return r
 }
 
@@ -295,7 +317,7 @@ func isChangeQuestion(t string) bool {
 	return changeWords.MatchString(t) && !strings.Contains(t, "changed most")
 }
 
-var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|what happened|what's wrong|whats wrong|what is wrong|why is|why are|slow|broken|down)\b`)
+var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|what happened|what's wrong|whats wrong|what is wrong|what wrong|anything wrong|something wrong|why is|why are|slow|broken|down)\b`)
 
 func isIncidentQuestion(t string) bool { return incidentWords.MatchString(t) }
 
@@ -633,6 +655,16 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 		s.e.phrase(g[0])
 	}
 	switch {
+	case s.sup != "":
+		// A superlative with no metric word ranks by the metric it names;
+		// with no number, the top DefaultSuperlativeN — and says so.
+		q.Type, q.Limit = ast.MetricTopK, s.topN()
+		s.e.re(topNRe, s.text)
+		if q.Limit == 0 {
+			q.Limit = DefaultSuperlativeN
+			s.readings = append(s.readings, lex.Reading{From: s.sup, To: "top 5", Kind: lex.KindImplicitN})
+		}
+		q.OrderBy = []ast.OrderKey{{Field: "value", Dir: "desc"}}
 	case len(q.GroupBy) > 0 && !topNRe.MatchString(s.text) && s.perGroupExtreme(m, q):
 		// "worst interface errors per device": the extreme OF each group, not
 		// a ranking of the groups (no number, no "top").
@@ -997,6 +1029,7 @@ func (s *state) incidents() (Result, error) {
 			q.Filters = append(q.Filters, ast.Filter{Field: r.field, Op: "eq", Values: []string{r.value}})
 		}
 	}
+	s.severityFilter(q, filterText)
 	if m := confRe.FindStringSubmatch(s.text); m != nil && s.e.re(confRe, s.text) {
 		q.Filters = append(q.Filters, ast.Filter{Field: "top_confidence", Op: "gt", Values: []string{m[1]}})
 	}
@@ -1107,6 +1140,14 @@ func (c Compiler) followUp(ctx context.Context, text string, cx Context) (Result
 	case onlyRe.MatchString(text):
 		what := onlyRe.FindStringSubmatch(text)[1]
 		st := &state{c: c, ctx: ctx, text: what, cx: cx}
+		// "only critical" over an incident list: the severity reading (D1).
+		if q.Type == ast.IncidentList && severityRe.MatchString(what) && strings.TrimSpace(severityRe.ReplaceAllString(what, "")) == "" {
+			st.e = newEaten()
+			sq := &ast.AST{}
+			st.severityFilter(sq, what)
+			q.Filters = replaceFilter(q.Filters, sq.Filters[0])
+			return Result{Intent: "refine_filter", AST: q, Readings: st.readings}, true, nil
+		}
 		if q.Type == ast.ChangeList {
 			st.text = what + " changes"
 			if f := st.changeTypeFilter(); f != nil {

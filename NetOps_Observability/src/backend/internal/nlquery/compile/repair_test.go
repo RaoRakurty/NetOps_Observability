@@ -19,7 +19,7 @@ import (
 // ruleFragments are letter runs inside this package's regular expressions
 // that are suffixes or stems, not words an operator types (deploy(?:ed|ment)).
 var ruleFragments = map[string]bool{
-	"ment": true, "ments": true,
+	"ment": true, "ments": true, "couldn": true,
 	// Site names the actor guard (isKnownWord) refuses as actor names. Names
 	// are never vocabulary: a misspelt name is OFFERED (rung 6b), never
 	// auto-corrected.

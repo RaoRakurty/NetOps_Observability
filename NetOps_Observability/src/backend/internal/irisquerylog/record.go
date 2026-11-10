@@ -60,7 +60,10 @@ const (
 )
 
 // Outcomes (closed). "compiled" is a question the query API compiled to a
-// valid query without running it (POST /api/ai/query/compile).
+// valid query without running it (POST /api/ai/query/compile). "not_data" is
+// a data-arm attempt on a question the router already knew another arm
+// answers (it is not a dead end: the classic path answered it). "not_found"
+// asked for one named thing the caller cannot see (answered as such).
 const (
 	OutcomeAnswered = "answered"
 	OutcomeCompiled = "compiled"
@@ -69,10 +72,13 @@ const (
 	OutcomeUnparsed = "unparsed"
 	OutcomeInvalid  = "invalid"
 	OutcomeError    = "error"
+	OutcomeNotData  = "not_data"
+	OutcomeNotFound = "not_found"
 )
 
 var outcomes = map[string]bool{OutcomeAnswered: true, OutcomeCompiled: true, OutcomeClarify: true,
-	OutcomeDeclined: true, OutcomeUnparsed: true, OutcomeInvalid: true, OutcomeError: true}
+	OutcomeDeclined: true, OutcomeUnparsed: true, OutcomeInvalid: true, OutcomeError: true,
+	OutcomeNotData: true, OutcomeNotFound: true}
 
 // Sources (closed): which surface answered.
 const (
@@ -408,6 +414,8 @@ func FromCompile(source, question string, res compile.Result, checked *ast.AST, 
 		r.Outcome = OutcomeDeclined
 	case len(res.Clarify) > 0:
 		r.Outcome = OutcomeClarify
+	case res.NotFound != nil:
+		r.Outcome = OutcomeNotFound
 	case res.Unparsed || res.AST == nil:
 		r.Outcome = OutcomeUnparsed
 	case checked == nil:

@@ -445,12 +445,48 @@ func (r Resolver) synonym(text, norm string, types []string, aliases []Alias, in
 	return Result{}, false
 }
 
-// Fuzzy-name bounds (rung 6b, hybrid NLU plan A2). Names are matched on
-// their separator-free key (lex.Squash): at most one edit for 5–7
-// characters, two for 8 or more, a different first character counts double,
-// and at most MaxSuggestions candidates, closest first. A key with a digit is
-// never fuzzed: "edge-3" is a different device from "edge-1", not a typo of it.
-const minFuzzy = 5
+// Fuzzy-name bounds (rung 6b, hybrid NLU plan A2). Names are compared word
+// by word (catalog.NormalizeAlias): the same number of words, all equal but
+// ONE, and that one a word of at least minFuzzyWord letters within the edit
+// budget of the whole name's key — at most one edit for 5–7 characters, two
+// for 8 or more, a different first character counting double. At most
+// MaxSuggestions candidates, closest first. A key with a digit is never
+// fuzzed, and neither is a short word: "edge-3" and "edge-b" are different
+// devices from "edge-1" and "edge-a", not typos of them.
+const (
+	minFuzzy     = 5
+	minFuzzyWord = 4
+)
+
+// fuzzyDistance is the typo distance between two names, or -1 when they are
+// not one misspelt word apart.
+func fuzzyDistance(text, name string) int {
+	tw, nw := strings.Fields(catalog.NormalizeAlias(lex.Fold(text))), strings.Fields(catalog.NormalizeAlias(lex.Fold(name)))
+	if len(tw) == 0 || len(tw) != len(nw) {
+		return -1
+	}
+	diff := -1
+	for i := range tw {
+		if tw[i] != nw[i] {
+			if diff >= 0 {
+				return -1 // two words differ: not one typo
+			}
+			diff = i
+		}
+	}
+	if diff < 0 {
+		return 0
+	}
+	a, b := tw[diff], nw[diff]
+	if len(a) < minFuzzyWord || len(b) < minFuzzyWord {
+		return -1
+	}
+	d := lex.Distance(a, b)
+	if a[0] != b[0] {
+		d++
+	}
+	return d
+}
 
 func fuzzyLimit(n int) int {
 	switch {
@@ -488,15 +524,8 @@ func (r Resolver) fuzzy(text string, aliases []Alias, inv []Named) []Ref {
 	}
 	best := map[string]cand{}
 	consider := func(typ, id, name string) {
-		nk := lex.Squash(name)
-		if nk == "" || absInt(len(nk)-len(key)) > limit {
-			return
-		}
-		d := lex.Distance(key, nk)
-		if nk[0] != key[0] {
-			d++
-		}
-		if d == 0 || d > limit {
+		d := fuzzyDistance(text, name)
+		if d <= 0 || d > limit {
 			return
 		}
 		k := typ + "\x1f" + id
@@ -530,13 +559,6 @@ func (r Resolver) fuzzy(text string, aliases []Alias, inv []Named) []Ref {
 		out = append(out, cs[i].ref)
 	}
 	return out
-}
-
-func absInt(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
 
 // suggest runs rung 7.

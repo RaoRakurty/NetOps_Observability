@@ -64,6 +64,10 @@ var grammarWords = []string{
 	"those", "them", "they", "that", "this", "there", "then", "here", "same", "these",
 	"back", "edit", "happen", "prior", "roll", "shut", "some", "touch", "will", "your", "mpls",
 	"four", "five", "seven", "eight", "nine", "three", "twelve", "fifteen", "twenty", "thirty", "sixty",
+	// A4 families: severity, inventory, lookup.
+	"critical", "severe", "major", "urgent", "priority", "altogether", "known", "visible", "onboarded",
+	"discovered", "monitored", "managed", "inventory", "nodes", "locations", "cannot", "cant", "dont",
+	"locate", "lookup", "search", "wrong", "anything", "something",
 }
 
 // Vocabulary is the grammar's closed vocabulary: BaseVocabulary plus every
@@ -96,6 +100,7 @@ func baseLists(cat *catalog.Catalog) []string {
 	}
 	for _, m := range cat.Metrics {
 		fromCat = append(fromCat, m.Aliases...)
+		fromCat = append(fromCat, m.Superlatives...)
 	}
 	for _, d := range cat.Dimensions {
 		fromCat = append(fromCat, strings.ReplaceAll(d.Name, "_", " "))

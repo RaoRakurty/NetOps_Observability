@@ -117,12 +117,6 @@
       "source": "catalog:metric:mem_util_pct (plural)"
     },
     {
-      "from": "nodes",
-      "to": "node",
-      "kind": "variant",
-      "source": "catalog:entity:device (plural)"
-    },
-    {
       "from": "offices",
       "to": "office",
       "kind": "variant",

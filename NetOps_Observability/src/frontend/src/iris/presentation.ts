@@ -96,6 +96,8 @@ export const QUERY_TYPES = [
   "change_list",
   "incident_list",
   "incident_explain",
+  "entity_count",
+  "entity_list",
   "flow_top",
   "log_search",
 ] as const;
@@ -484,6 +486,12 @@ export function defaultPlanFor(result: ResultSet, hint: QueryHint = {}): Present
       return { primary_view: "TABLE", secondary_view: "TIMELINE", title: "Incidents in this window" };
     case "incident_explain":
       return { primary_view: "INCIDENT_CARD", secondary_view: "EVIDENCE_LIST", title: "Why this incident happened" };
+    // Inventory answers (entity_count / entity_list): the server's summary
+    // carries the count; the rows are the table.
+    case "entity_count":
+      return { primary_view: "SUMMARY", secondary_view: "TABLE", title: "What you can see" };
+    case "entity_list":
+      return { primary_view: "TABLE", title: "What you can see" };
     default:
       return { primary_view: "SUMMARY", title: FALLBACK_TITLE };
   }

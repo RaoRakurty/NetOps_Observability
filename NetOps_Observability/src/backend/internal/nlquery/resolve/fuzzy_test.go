@@ -28,8 +28,9 @@ func TestFuzzyNameNeedsConfirmation(t *testing.T) {
 	}
 }
 
-// The guards: short keys, keys with a digit, vocabulary words and names that
-// are too far are never fuzzed; an exact name still decides at rung 3.
+// The guards: short keys, keys with a digit, a difference in a short word,
+// two misspelt words, vocabulary words and names that are too far are never
+// fuzzed; an exact name still decides at rung 3.
 func TestFuzzyNameGuards(t *testing.T) {
 	rv := resolverFor(tenantA())
 	for _, text := range []string{
@@ -46,6 +47,19 @@ func TestFuzzyNameGuards(t *testing.T) {
 			}
 		}
 	}
+	w := tenantA()
+	w.inv = append(w.inv, Named{Type: "device", ID: "device:core-a", Names: []string{"core-a"}},
+		Named{Type: "site", ID: "site:north-plant", Names: []string{"North Plant"}})
+	for _, text := range []string{"core-b", "nort plnt"} { // a short word / two words differ
+		for _, ref := range mustResolve(t, resolverFor(w), text, nil).Refs {
+			if ref.Method == MethodFuzzyName {
+				t.Errorf("%q must not be fuzzed: %+v", text, ref)
+			}
+		}
+	}
+	if res := mustResolve(t, resolverFor(w), "nort plant", nil); len(res.Refs) != 1 || res.Refs[0].EntityID != "site:north-plant" {
+		t.Errorf("one misspelt word of a two-word name is offered: %+v", res)
+	}
 	if res := mustResolve(t, rv, "edge-1", nil); res.Refs[0].Method != MethodInventoryName {
 		t.Errorf("an exact name decides at rung 3: %+v", res)
 	}
@@ -54,10 +68,10 @@ func TestFuzzyNameGuards(t *testing.T) {
 // At most MaxSuggestions candidates, closest first.
 func TestFuzzyNameCapsCandidates(t *testing.T) {
 	w := tenantA()
-	for _, n := range []string{"branch-a", "branch-b", "branch-c", "branch-d", "branch-e"} {
+	for _, n := range []string{"kearny", "kearns", "kearne", "kearnd", "kearnt"} {
 		w.inv = append(w.inv, Named{Type: "site", ID: "site:" + n, Names: []string{n}})
 	}
-	res := mustResolve(t, resolverFor(w), "branch-x", []string{"site"})
+	res := mustResolve(t, resolverFor(w), "kearnx", []string{"site"})
 	if len(res.Refs) == 0 || len(res.Refs) > MaxSuggestions {
 		t.Fatalf("candidates = %d, want 1..%d", len(res.Refs), MaxSuggestions)
 	}

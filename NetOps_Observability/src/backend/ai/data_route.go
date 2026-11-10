@@ -65,6 +65,15 @@ type DataOpts struct {
 	// false skips the model and leaves the question to the classic path. Set
 	// only for a CONTESTED question (route_tiebreak.go); nil = today's path.
 	BeforeModel func(ctx context.Context) bool
+	// IncidentRefOnly admits the question ONLY as an incident list about a
+	// resolved entity ("what's wrong with edge-1"); anything else is not
+	// data and the skills investigate it as before.
+	IncidentRefOnly bool
+	// ClassicIntent is the router's own intent for the question. When it is
+	// an explicit one (not "capability"), a question the grammar could not
+	// parse is recorded as not_data — the classic path answers it — and a
+	// lookup that found nothing is left to that path too.
+	ClassicIntent string
 }
 
 // NLQueryFunc answers a question with the NL query engine, in the caller's
@@ -72,7 +81,13 @@ type DataOpts struct {
 type NLQueryFunc func(ctx context.Context, p Principal, question string, opts DataOpts) (DataAnswer, error)
 
 // diagnosticCue marks a question that asks for a diagnosis, not a listing.
-var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|what'?s wrong|what is wrong|not working|broken|fix|explain)\b`)
+var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|fix|explain)\b`)
+
+// listingCue is a symptom phrasing that is a listing when it names a thing:
+// "what's wrong with edge-1" is that device's incidents. The data arm takes
+// it only as an incident list about a resolved entity (IncidentRefOnly);
+// without one ("what is broken") the skills investigate, as before.
+var listingCue = regexp.MustCompile(`(?i)\b(?:what'?s wrong|what is wrong|not working|broken)\b`)
 
 // answerData runs the data arm; handled=false leaves the question to the
 // classic path. A failing data arm is never fatal: the classic path answers.
@@ -81,7 +96,10 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 		return Answer{}, false
 	}
 	emitTrace(o.Trace, TraceEvent{Type: TraceToolStarted, Tool: "nl_query"})
-	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation"}
+	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation", ClassicIntent: plan.Intent}
+	if listingCue.MatchString(question) {
+		opts.IncidentRefOnly, opts.AllowModel = true, false
+	}
 	if method := o.contestedMethod(question, plan, opts.AllowModel); method != "" {
 		// N-G4: the grammar may fail and a method also claims the question —
 		// ask once, cheaply, before spending the model compile on it.
