@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,6 +67,35 @@ type TrapPack struct {
 	Source        string                          `json:"source"`
 	Objects       map[string]TrapObjectRule       `json:"objects"`
 	Notifications map[string]TrapNotificationRule `json:"notifications"`
+	// Tables states a vendor's deviation from its own MIB's INDEX encoding,
+	// keyed by the row (entry) OID. Evidence-backed: each names its fidelity.
+	Tables map[string]TrapTableRule `json:"tables,omitempty"`
+	// TitleTemplates are the wordings (trap_title.go), by key; Titles picks one
+	// per notification OID. A notification needs no `notifications` row to get
+	// a title, so wording never changes what the engine admits.
+	TitleTemplates map[string][]string      `json:"title_templates,omitempty"`
+	Titles         map[string]TrapTitleRule `json:"titles,omitempty"`
+	// Derived metrics and per-family guidance (trap_enrich.go).
+	Derived  []TrapDerivedMetric         `json:"derived,omitempty"`
+	Guidance map[string]TrapGuidanceRule `json:"guidance,omitempty"`
+	// Platform names the product line a pack's MIB is specific to (SD-WAN,
+	// SR OS), so a trap it words carries it. Empty for a MIB several platforms
+	// share (CISCO-BGP4-MIB runs on IOS, IOS-XE and NX-OS): never a guess.
+	Platform string `json:"platform,omitempty"`
+}
+
+// TrapTableRule is one table's deviation. BareAddressIndex: the agent may send
+// the row index as the bare address octets, without the type and length arcs.
+type TrapTableRule struct {
+	Name             string `json:"name"`
+	BareAddressIndex bool   `json:"bare_address_index"`
+	Fidelity         string `json:"fidelity"`
+}
+
+// TrapTitleRule names the template a notification is worded with.
+type TrapTitleRule struct {
+	Name     string `json:"name"`
+	Template string `json:"template"`
 }
 
 // TrapObjectRule says what one object means. Name must match the OID index.
@@ -78,6 +108,62 @@ type TrapObjectRule struct {
 	// Field names the event field this value fills; Type is float, int or string.
 	Field string `json:"field,omitempty"`
 	Type  string `json:"type,omitempty"`
+	// Attr is the meaning this object carries, from the closed trapAttrs set:
+	// read from the varbind's value, and from the row index when the object is
+	// an index object of the row a varbind names (bgpPeerRemoteAddr is both).
+	Attr string `json:"attr,omitempty"`
+	// A typed number's legal range and unit: a value outside it is not shown
+	// (metrics_invalid names it), never clamped.
+	Min  *float64 `json:"min,omitempty"`
+	Max  *float64 `json:"max,omitempty"`
+	Unit string   `json:"unit,omitempty"`
+	// Extract reads a number the vendor states inside this object's text.
+	Extract []TrapExtractRule `json:"extract,omitempty"`
+}
+
+// TrapExtractRule: one capture group of Pattern (RE2) fills Field, from the
+// closed trapExtractFields set.
+type TrapExtractRule struct {
+	Pattern string   `json:"pattern"`
+	Field   string   `json:"field"`
+	Min     *float64 `json:"min,omitempty"`
+	Max     *float64 `json:"max,omitempty"`
+}
+
+// trapExtractFields: what text may state. The threshold is the one the DEVICE
+// reports in its message, never a configured one (threshold_basis says so).
+var trapExtractFields = map[string]bool{"threshold_reported_percent": true}
+
+// TrapDerivedMetric is a metric computed from observed ones, with its formula as
+// the operator should read it. Op is from the closed set: complement (Base - Of).
+type TrapDerivedMetric struct {
+	Field   string   `json:"field"`
+	Op      string   `json:"op"`
+	Of      string   `json:"of"`
+	Base    float64  `json:"base"`
+	Formula string   `json:"formula"`
+	Unit    string   `json:"unit,omitempty"`
+	Min     *float64 `json:"min,omitempty"`
+	Max     *float64 `json:"max,omitempty"`
+}
+
+// TrapGuidanceRule is per family (or family.transition_class): what the event
+// usually means for service and what to check next, written vendor-neutral and
+// never a diagnosis. Expects names the fields such an event should carry, so the
+// ones that are missing are reported as unknown.
+type TrapGuidanceRule struct {
+	Impact     []string `json:"impact"`
+	NextChecks []string `json:"next_checks"`
+	Expects    []string `json:"expects,omitempty"`
+}
+
+// trapAttrs is the closed set of meanings a pack may give an object.
+var trapAttrs = map[string]bool{
+	"peer_address": true, "peer_afi": true, "peer_as": true,
+	"local_address": true, "local_afi": true, "routing_instance": true,
+	"bgp_state": true, "bgp_prev_state": true, "bgp_last_error": true,
+	"bgp_error_code": true, "bgp_error_subcode": true, "bgp_last_error_text": true,
+	"if_admin_status": true, "if_oper_status": true,
 }
 
 // TrapNotificationRule says how one notification reports its lifecycle.
@@ -123,6 +209,26 @@ type trapNotificationEntry struct {
 type trapSemantics struct {
 	objects       map[string]trapObjectEntry
 	notifications map[string]trapNotificationEntry
+	tables        map[string]TrapTableRule
+	templates     map[string][]string
+	titles        map[string]TrapTitleRule
+	derived       []TrapDerivedMetric
+	guidance      map[string]TrapGuidanceRule
+	extracts      map[string][]trapExtract // object OID → compiled extractions
+	platforms     map[string]string        // notification OID → its pack's platform
+}
+
+type trapExtract struct {
+	TrapExtractRule
+	re *regexp.Regexp
+}
+
+func newTrapSemantics() *trapSemantics {
+	return &trapSemantics{
+		objects: map[string]trapObjectEntry{}, notifications: map[string]trapNotificationEntry{},
+		tables: map[string]TrapTableRule{}, templates: map[string][]string{}, titles: map[string]TrapTitleRule{},
+		guidance: map[string]TrapGuidanceRule{}, extracts: map[string][]trapExtract{}, platforms: map[string]string{},
+	}
 }
 
 var trapSem = loadEmbeddedTrapPacks()
@@ -134,7 +240,7 @@ func loadEmbeddedTrapPacks() *trapSemantics {
 	sem, err := compileTrapPacks(trapPackFS, "mibs/packs")
 	if err != nil {
 		slog.Error("snmptrap: trap packs not loaded, traps decode without vendor semantics", "err", err)
-		return &trapSemantics{objects: map[string]trapObjectEntry{}, notifications: map[string]trapNotificationEntry{}}
+		return newTrapSemantics()
 	}
 	return sem
 }
@@ -167,7 +273,7 @@ func compileTrapPacks(fsys fs.FS, dir string) (*trapSemantics, error) {
 // claimed twice or a state outside the vocabulary refuses the whole set, because
 // a half-read table would make a trap's meaning depend on load order.
 func compileTrapPackData(packs ...[]byte) (*trapSemantics, error) {
-	sem := &trapSemantics{objects: map[string]trapObjectEntry{}, notifications: map[string]trapNotificationEntry{}}
+	sem := newTrapSemantics()
 	for _, raw := range packs {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
@@ -187,6 +293,16 @@ func compileTrapPackData(packs ...[]byte) (*trapSemantics, error) {
 				return nil, fmt.Errorf("trap pack %s: object %s: %w", p.Pack, oid, err)
 			}
 			sem.objects[oid] = e
+			for _, x := range o.Extract {
+				if !trapExtractFields[x.Field] {
+					return nil, fmt.Errorf("trap pack %s: object %s: extract field %q is not allowed", p.Pack, oid, x.Field)
+				}
+				re, err := regexp.Compile(x.Pattern)
+				if err != nil || re.NumSubexp() != 1 {
+					return nil, fmt.Errorf("trap pack %s: object %s: extract pattern %q needs one capture group", p.Pack, oid, x.Pattern)
+				}
+				sem.extracts[oid] = append(sem.extracts[oid], trapExtract{TrapExtractRule: x, re: re})
+			}
 		}
 		for oid, n := range p.Notifications {
 			if _, dup := sem.notifications[oid]; dup {
@@ -197,6 +313,68 @@ func compileTrapPackData(packs ...[]byte) (*trapSemantics, error) {
 				return nil, fmt.Errorf("trap pack %s: notification %s: %w", p.Pack, oid, err)
 			}
 			sem.notifications[oid] = e
+		}
+		for oid, t := range p.Tables {
+			if _, dup := sem.tables[oid]; dup {
+				return nil, fmt.Errorf("trap pack %s: table %s is claimed twice", p.Pack, oid)
+			}
+			if t.Name == "" || !trapFidelities[t.Fidelity] || !t.BareAddressIndex {
+				return nil, fmt.Errorf("trap pack %s: table %s needs a name, a fidelity and a deviation", p.Pack, oid)
+			}
+			sem.tables[oid] = t
+		}
+		for key, ts := range p.TitleTemplates {
+			if _, dup := sem.templates[key]; dup {
+				return nil, fmt.Errorf("trap pack %s: title template %q is claimed twice", p.Pack, key)
+			}
+			if len(ts) == 0 {
+				return nil, fmt.Errorf("trap pack %s: title template %q has no wording", p.Pack, key)
+			}
+			for _, t := range ts {
+				if err := compileTitleTemplate(t); err != nil {
+					return nil, fmt.Errorf("trap pack %s: title template %q: %w", p.Pack, key, err)
+				}
+			}
+			sem.templates[key] = ts
+		}
+		for _, d := range p.Derived {
+			if d.Field == "" || d.Of == "" || d.Op != "complement" || d.Formula == "" {
+				return nil, fmt.Errorf("trap pack %s: derived metric %+v is incomplete", p.Pack, d)
+			}
+			sem.derived = append(sem.derived, d)
+		}
+		for fam, g := range p.Guidance {
+			if _, dup := sem.guidance[fam]; dup {
+				return nil, fmt.Errorf("trap pack %s: guidance for %q is claimed twice", p.Pack, fam)
+			}
+			if len(g.Impact) == 0 || len(g.NextChecks) == 0 {
+				return nil, fmt.Errorf("trap pack %s: guidance for %q needs impact and next_checks", p.Pack, fam)
+			}
+			sem.guidance[fam] = g
+		}
+		if p.Platform != "" {
+			for oid := range p.Notifications {
+				sem.platforms[oid] = p.Platform
+			}
+			for oid := range p.Titles {
+				sem.platforms[oid] = p.Platform
+			}
+		}
+		for oid, t := range p.Titles {
+			if _, dup := sem.titles[oid]; dup {
+				return nil, fmt.Errorf("trap pack %s: title for %s is claimed twice", p.Pack, oid)
+			}
+			if t.Name == "" || t.Template == "" {
+				return nil, fmt.Errorf("trap pack %s: title for %s needs a name and a template", p.Pack, oid)
+			}
+			sem.titles[oid] = t
+		}
+	}
+	// A title may use another pack's wording (the standard pack's, typically), so
+	// the reference is checked once every pack is in.
+	for oid, t := range sem.titles {
+		if _, ok := sem.templates[t.Template]; !ok {
+			return nil, fmt.Errorf("trap packs: title for %s names template %q, which no pack defines", oid, t.Template)
 		}
 	}
 	return sem, nil
@@ -214,6 +392,9 @@ func compileTrapObject(o TrapObjectRule) (trapObjectEntry, error) {
 	case trapRoleNativeSeverity:
 	default:
 		return trapObjectEntry{}, fmt.Errorf("unknown role %q", o.Role)
+	}
+	if o.Attr != "" && !trapAttrs[o.Attr] {
+		return trapObjectEntry{}, fmt.Errorf("unknown attr %q", o.Attr)
 	}
 	if (o.Field == "") != (o.Type == "") {
 		return trapObjectEntry{}, fmt.Errorf("field and type go together")
@@ -284,21 +465,48 @@ func validTrapState(s string) bool {
 // decodeVarbind resolves one binding against the index. The raw value and the
 // numeric OID are kept whatever else resolves.
 func decodeVarbind(oid, raw string) TrapVarbind {
+	return decodeVarbindTag(oid, raw, 0)
+}
+
+// berTypeNames are the SMI types a BER tag states (RFC 2578 §7.1), for a varbind
+// whose OID no indexed MIB names. 0 = the tag is not known (a replay, a test).
+var berTypeNames = map[byte]string{
+	0x02: "INTEGER", 0x04: "OCTET STRING", 0x05: "NULL", 0x06: "OBJECT IDENTIFIER",
+	0x40: "IpAddress", 0x41: "Counter32", 0x42: "Gauge32", 0x43: "TimeTicks",
+	0x44: "Opaque", 0x46: "Counter64",
+}
+
+// smiTypeName spells a MIB SYNTAX the way an operator reads it: net-snmp's index
+// pass records OCTET STRING as its first word.
+func smiTypeName(t string) string {
+	if t == "OCTET" {
+		return "OCTET STRING"
+	}
+	return t
+}
+
+// decodeVarbindTag is decodeVarbind with the BER tag the value arrived with,
+// which names the SMI type when no MIB does.
+func decodeVarbindTag(oid, raw string, tag byte) TrapVarbind {
 	name, disp := resolveVarbind(oid, raw)
-	vb := TrapVarbind{OID: oid, Name: sanitizeLabel(name), Value: disp, Raw: raw}
+	vb := TrapVarbind{OID: oid, Name: sanitizeLabel(name), Value: disp, Raw: raw, Type: berTypeNames[tag]}
 	n, _, ok := lookupOID(oid)
 	if !ok {
 		return vb
 	}
-	vb.Type = n.Type
+	if n.Type != "" {
+		vb.Type = smiTypeName(n.Type)
+	}
 	if lbl, found := n.Enum[raw]; found {
 		vb.Label = lbl
+		vb.Decoded = lbl
 		return vb
 	}
 	switch n.Type {
 	case "DateAndTime":
 		if t, ok := decodeDateAndTime(raw); ok {
 			vb.Time = t
+			vb.Decoded = t
 		}
 	case "Integer32", "Unsigned32", "Gauge32", "Counter32", "Counter64", "TimeTicks", "INTEGER":
 		// A Counter64 past 2^53 loses precision here; Raw stays exact.
@@ -393,6 +601,7 @@ func applyTrapSemantics(ev *TrapEvent, sem *trapSemantics) {
 					ev.NativeSeverityCode = &code
 				}
 				ev.NativeSeverityText = vb.Label
+				ev.NativeSeverity = vb.Value // the vendor's own words: critical(1)
 				r := rule
 				severityRule = &r
 			}

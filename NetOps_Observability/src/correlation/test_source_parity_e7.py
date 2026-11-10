@@ -222,6 +222,18 @@ def _as_received(sig):
     return sig
 
 
+def _never_established_by_its_own_states(trap: dict) -> bool:
+    """The trap carries both FSM states and they never include established."""
+    states = {}
+    for vb in trap.get("varbinds") or []:
+        oid = str(vb.get("oid") or "")
+        for col, key in (("1.3.6.1.4.1.9.9.187.1.2.5.1.3.", "to"), ("1.3.6.1.2.1.15.3.1.2.", "to"),
+                         ("1.3.6.1.4.1.9.9.187.1.2.5.1.29.", "from"), ("1.3.6.1.4.1.9.9.187.1.2.1.1.8.", "from")):
+            if oid.startswith(col):
+                states[key] = "".join(c for c in str(vb.get("value") or "") if c.isdigit())[-1:]
+    return {"to", "from"} <= set(states) and "6" not in states.values() and "0" not in states.values()
+
+
 def observed_divergences(view=_as_received) -> set[str]:
     """`view` maps a lane's signal to what the engine holds for it: as produced
     (default), or through the live window entry with stage [1] on/off
@@ -242,8 +254,12 @@ def observed_divergences(view=_as_received) -> set[str]:
                 and abs(uptime_cs(t) - rfc_up) <= 100]
         family = [view(P.trap_control_signal(joined(t), TENANT, INGEST)) for t in same]
         want = (trap_sig.entity_id, trap_sig.attrs.get("state"))
+        # Tracker 387 (owner 2026-11-10): a report whose OWN prior and new state
+        # show the session never came up builds no down, by design; the evidence
+        # that must agree is the reports that cannot tell (no prior state).
+        undecided = [s for t, s in zip(same, family) if not _never_established_by_its_own_states(t)]
         if not same or any(s is None or (s.entity_id, s.attrs.get("state")) != want
-                           for s in family):
+                           for s in undecided):
             seen.add("cisco_bgp4_mib_unclassified")
         col = TransitionCollapser()
         kept = [s for s in [trap_sig, *family] if s is not None

@@ -7,7 +7,8 @@ import { api, OSHit, ExportFmt, LogRetention, LogSampling, LogSearchOpts } from 
 import { severityLabel, severityRank, severityVar } from "../theme/severity";
 import { LogTime, LogLevel, LogMessage } from "../lib/logfmt";
 import {
-  LogClause, LogEvent, LogSignal, addClause, buildFacets, isIpLike, queryHasClause, removeClause, toLogEvent,
+  LogClause, LogEvent, LogSignal, TransitionGroup, addClause, buildFacets, groupTransitions, isIpLike, queryHasClause,
+  removeClause, toLogEvent,
 } from "../lib/logEvent";
 import DataTable, { Column } from "../components/DataTable";
 import EventDetailPanel from "../components/event/EventDetailPanel";
@@ -85,7 +86,7 @@ function useIsPhone(): boolean {
 }
 
 // The title of a row. Addresses are set in mono; a flow's is nothing but addresses.
-function RowTitle({ ev }: { ev: LogEvent }) {
+function RowTitle({ ev, group }: { ev: LogEvent; group?: TransitionGroup }) {
   const flow = ev.flow;
   const isTuple = flow && (flow.source.address || flow.destination.address) && ev.title.includes("→");
   return (
@@ -95,6 +96,11 @@ function RowTitle({ ev }: { ev: LogEvent }) {
         : <LogMessage text={ev.title} highlight="stream" />}
       {ev.lifecycle && <span className="lv-quiet-chip">{ev.lifecycle}</span>}
       {ev.chips.filter((c) => c.stream).map((c) => <span key={c.label} className="lv-quiet-chip">{c.label}</span>)}
+      {group && (
+        <span className="lv-quiet-chip" title={`One BGP transition, reported by ${group.count} traps on this page (${group.firstSeen} to ${group.lastSeen})`}>
+          {group.count} reports
+        </span>
+      )}
     </div>
   );
 }
@@ -351,7 +357,10 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, resolved: h._resolved ?? null, ev };
     });
   }, [hits]);
-  type Line = (typeof lines)[number];
+  // One BGP transition's reports fold into one row on the stream (tracker 387); the
+  // selection, export and facets still read every loaded record.
+  const streamLines = useMemo(() => groupTransitions(lines), [lines]);
+  type Line = (typeof streamLines)[number];
 
   const allSelected = lines.length > 0 && selected.size === lines.length;
   const toggleRow = (id: string) =>
@@ -491,7 +500,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
               {l.ev.severity && <LogLevel level={l.ev.severity} />}
               <LogTime ts={l.ts} withDate={false} />
             </div>
-            <RowTitle ev={l.ev} />
+            <RowTitle ev={l.ev} group={l.group} />
             <div className="lv-line lv-detail-line">
               <DeviceName label={l.ev.deviceLabel} />
               <span className="lv-signal">{l.ev.signalLabel}</span>
@@ -539,7 +548,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         key: "message", header: "Event", text: (l) => `${l.ev.title} ${l.ev.detailLine}`,
         render: (l) => (
           <div className="lv-two">
-            <RowTitle ev={l.ev} />
+            <RowTitle ev={l.ev} group={l.group} />
             <RowDetail ev={l.ev} />
           </div>
         ),
@@ -775,7 +784,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         ) : (
           <div className="lv-stream">
             <DataTable<Line>
-              rows={lines}
+              rows={streamLines}
               columns={columns}
               rowKey={(l) => l.id}
               height="60vh"

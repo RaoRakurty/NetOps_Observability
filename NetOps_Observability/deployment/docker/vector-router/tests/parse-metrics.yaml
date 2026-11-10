@@ -284,3 +284,90 @@ tests:
               assert_eq!(.name, "netops_trap_attribution_events")
               assert_eq!(.tags.basis, "mgmt_ip")
               assert_eq!(.tags.outcome, "enriched")
+
+  - name: "trap semantics: a templated BGP trap with a decoded peer"
+    inputs:
+      - insert_at: trap_semantics_labels
+        type: log
+        log_fields:
+          family: "bgp"
+          title_basis: "templated"
+          bgp.peer_basis: "index_vendor_form"
+          device: "cedge-81-11060ae2"
+          host: "192.168.200.33"
+    outputs:
+      - extract_from: trap_semantics_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.family, "bgp")
+              assert_eq!(.title, "templated")
+              assert_eq!(.peer, "parsed")
+              assert!(!exists(.device))
+              assert!(!exists(.host))
+
+  - name: "trap semantics: an untitled trap with no peer, and an unparsed peer"
+    inputs:
+      - insert_at: trap_semantics_labels
+        type: log
+        log_fields:
+          family: "cpu"
+    outputs:
+      - extract_from: trap_semantics_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.family, "cpu")
+              assert_eq!(.title, "fallback")
+              assert_eq!(.peer, "absent")
+
+  - name: "trap semantics: an unparsed peer is counted as such"
+    inputs:
+      - insert_at: trap_semantics_labels
+        type: log
+        log_fields:
+          family: "bgp"
+          title_basis: "fallback"
+          bgp.peer_basis: "unparsed"
+    outputs:
+      - extract_from: trap_semantics_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.peer, "unparsed")
+              assert_eq!(.title, "fallback")
+
+  - name: "trap semantics: a forged value cannot mint a series"
+    inputs:
+      - insert_at: trap_semantics_labels
+        type: log
+        log_fields:
+          family: "10.0.0.1"
+          title_basis: "acme"
+          bgp.peer_basis: "evil"
+    outputs:
+      - extract_from: trap_semantics_labels
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.family, "other")
+              assert_eq!(.title, "fallback")
+              assert_eq!(.peer, "absent")
+
+  - name: "trap semantics: the counter names the metric and its three labels"
+    inputs:
+      - insert_at: trap_semantics_metric
+        type: log
+        log_fields:
+          family: "bgp"
+          title: "templated"
+          peer: "parsed"
+    outputs:
+      - extract_from: trap_semantics_metric
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "netops_trap_semantics_events")
+              assert_eq!(.tags.family, "bgp")
+              assert_eq!(.tags.title, "templated")
+              assert_eq!(.tags.peer, "parsed")
