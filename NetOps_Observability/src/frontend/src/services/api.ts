@@ -478,6 +478,9 @@ export type OSHit = {
   _index: string;
   _id: string;
   _source: Record<string, any>;
+  // Names the API resolved beside a flow document (tracker 387 PR 13b):
+  // in_if_name/_basis, out_if_name/_basis, proto_name, service_name. Not stored.
+  _resolved?: Record<string, any> | null;
 };
 // Sampling disclosure the backend injects on sampled stores (today: the flows
 // signal, whose OpenSearch index holds the router's 1:50 sample — ClickHouse

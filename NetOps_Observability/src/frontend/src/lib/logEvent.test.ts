@@ -190,6 +190,33 @@ describe("toLogEvent — today's records", () => {
     expect(everyVisibleString(ev)).not.toMatch(/ambiguous|estimated|bps|1:50/);
   });
 
+  it("an interface the API named reads `name (index)`, otherwise the index (tracker 387 PR 13b)", () => {
+    const named = toLogEvent({
+      ...IPFIX_FLOW,
+      _resolved: {
+        in_if_name: "ge0/3", in_if_name_basis: "resolved",
+        out_if_name: "", out_if_name_basis: "absent",
+        service_name: "snmp", service_port: 161,
+      },
+    });
+    expect(named.flow?.inInterfaceLabel).toBe("ge0/3 (1)");
+    expect(named.flow?.outInterfaceLabel).toBe("4");
+    expect(named.flow?.service).toBe("snmp (port 161, likely)");
+    // Without the API's names the index stands alone, and nothing is invented.
+    const bare = toLogEvent(IPFIX_FLOW);
+    expect(bare.flow?.inInterfaceLabel).toBe("1");
+    expect(bare.flow?.service).toBe("");
+    const sentinel = toLogEvent({
+      _index: "netops-flows-x",
+      _source: { src_addr: "1.1.1.1", in_if: 4294967295 },
+      _resolved: { in_if_name: "", in_if_name_basis: "sentinel" },
+    });
+    expect(sentinel.flow?.inInterfaceLabel).toBe("none reported (4294967295)");
+    // A name without the resolved basis is not shown.
+    const unproven = toLogEvent({ ...IPFIX_FLOW, _resolved: { in_if_name: "ge0/3", in_if_name_basis: "absent" } });
+    expect(unproven.flow?.inInterfaceLabel).toBe("1");
+  });
+
   it("names a protocol from the shared table and marks one it cannot name", () => {
     const proto = (p: unknown) => toLogEvent({ _index: "netops-flows-x", _source: { src_addr: "1.1.1.1", proto: p } }).flow?.protocol;
     expect(proto(6)).toBe("TCP");

@@ -307,7 +307,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const app = String(src.app_id || src.app || (fgt.app ?? "") || "");
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, ev };
+      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, resolved: h._resolved ?? null, ev };
     });
   }, [hits]);
   type Line = (typeof lines)[number];

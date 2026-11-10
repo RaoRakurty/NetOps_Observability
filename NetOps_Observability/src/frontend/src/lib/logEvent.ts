@@ -64,6 +64,15 @@ export interface FlowView {
   protocol: string;
   inInterface: string;
   outInterface: string;
+  /**
+   * The interface as an operator reads it: `ge0/3 (4)` when the API named the
+   * index (tracker 387 PR 13b), `4` when it could not, and `none reported (0)` for
+   * the IPFIX "no interface" sentinels. Never a name the API did not give.
+   */
+  inInterfaceLabel: string;
+  outInterfaceLabel: string;
+  /** The likely service on the lower port, from the IANA registry: a heuristic. */
+  service: string;
   packets: string;
   bytes: string;
   /** The search-index sample and the exporter's own sampling, labelled apart. */
@@ -386,16 +395,31 @@ function flowSamplingOf(src: Record<string, any>): LogField[] {
   return out;
 }
 
-function flowViewOf(src: Record<string, any>): FlowView {
+/** One interface as shown: the API's name beside the index, or the index alone. */
+function interfaceLabel(index: string, name: unknown, basis: unknown): string {
+  if (index === "") return "";
+  if (basis === "sentinel") return `none reported (${index})`;
+  const n = typeof name === "string" ? name.trim() : "";
+  return basis === "resolved" && n ? `${n} (${index})` : index;
+}
+
+function flowViewOf(src: Record<string, any>, resolved: Record<string, any>): FlowView {
   const sampling = flowSamplingOf(src);
+  const inIdx = pick(src, "network.ingress.interface.index", "in_if");
+  const outIdx = pick(src, "network.egress.interface.index", "out_if");
+  const svcName = typeof resolved.service_name === "string" ? resolved.service_name : "";
+  const svcPort = resolved.service_port !== undefined ? String(resolved.service_port) : "";
   return {
     exporter: pick(src, "exporter.address", "sampler_address"),
     exporterName: known(src, "exporter.name", "exporter_name", "device_name"),
     source: endpoint(src, "source", "src_addr", "src_port"),
     destination: endpoint(src, "destination", "dst_addr", "dst_port"),
     protocol: protocolName(src),
-    inInterface: pick(src, "network.ingress.interface.index", "in_if"),
-    outInterface: pick(src, "network.egress.interface.index", "out_if"),
+    inInterface: inIdx,
+    outInterface: outIdx,
+    inInterfaceLabel: interfaceLabel(inIdx, resolved.in_if_name, resolved.in_if_name_basis),
+    outInterfaceLabel: interfaceLabel(outIdx, resolved.out_if_name, resolved.out_if_name_basis),
+    service: svcName && svcPort ? `${svcName} (port ${svcPort}, likely)` : "",
     packets: count(pick(src, "flow.packets.observed", "packets")),
     bytes: count(pick(src, "flow.bytes.observed", "bytes")),
     sampling,
@@ -423,6 +447,8 @@ export interface LogHit {
   _index?: string;
   _id?: string;
   _source?: Record<string, any> | null;
+  /** Names the API resolved beside the stored document (tracker 387 PR 13b). Never stored. */
+  _resolved?: Record<string, any> | null;
 }
 
 export function toLogEvent(hit: LogHit): LogEvent {
@@ -486,7 +512,7 @@ export function toLogEvent(hit: LogHit): LogEvent {
       break;
     }
     case "flow": {
-      flow = flowViewOf(src);
+      flow = flowViewOf(src, (redactSecrets(hit._resolved ?? {}) as Record<string, any>) ?? {});
       deviceLabel = flow.exporterName || flow.exporter;
       deviceAddress = flow.exporter;
       title = summary || (flow.source.address || flow.destination.address

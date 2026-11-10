@@ -13,8 +13,11 @@ import { LogJson, LogLevel, LogMessage, LogTime } from "../lib/logfmt";
 const TABS = ["Summary", "Fields", "Raw"] as const;
 type Tab = (typeof TABS)[number];
 
-export function LogLineDetailBody({ line }: { line: { index: string; raw: Record<string, any> } }) {
-  const ev = useMemo(() => toLogEvent({ _index: line.index, _source: line.raw }), [line.index, line.raw]);
+export function LogLineDetailBody({ line }: { line: { index: string; raw: Record<string, any>; resolved?: Record<string, any> | null } }) {
+  const ev = useMemo(
+    () => toLogEvent({ _index: line.index, _source: line.raw, _resolved: line.resolved }),
+    [line.index, line.raw, line.resolved],
+  );
   const [tab, setTab] = useState<Tab>("Summary");
   const uid = useId();
 
@@ -158,8 +161,9 @@ function FlowCard({ flow }: { flow: FlowView }) {
         {end("Destination", flow.destination)}
       </div>
       <dl className="lv-kv">
-        {flow.inInterface && <><dt>In interface</dt><dd className="lv-mono">{flow.inInterface}</dd></>}
-        {flow.outInterface && <><dt>Out interface</dt><dd className="lv-mono">{flow.outInterface}</dd></>}
+        {flow.inInterfaceLabel && <><dt>In interface</dt><dd className="lv-mono">{flow.inInterfaceLabel}</dd></>}
+        {flow.outInterfaceLabel && <><dt>Out interface</dt><dd className="lv-mono">{flow.outInterfaceLabel}</dd></>}
+        {flow.service && <><dt>Service</dt><dd>{flow.service}</dd></>}
         {flow.packets && <><dt>Packets</dt><dd className="lv-mono">{flow.packets}</dd></>}
         {flow.bytes && <><dt>Bytes</dt><dd className="lv-mono">{flow.bytes}</dd></>}
         {flow.sampling.map((s) => (
