@@ -56,7 +56,7 @@ func loadLabTraps(t *testing.T) []labTrap {
 		if err := json.Unmarshal(sc.Bytes(), &lt); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(strings.ToLower(sc.Text()), "communit") {
+		if strings.Contains(strings.ToLower(sc.Text()), "community") || strings.Contains(sc.Text(), "snmp_comm") {
 			t.Fatal("a lab fixture must never carry a community")
 		}
 		out = append(out, lt)
