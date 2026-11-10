@@ -334,6 +334,7 @@ func providerDoOnce(ctx context.Context, urlStr string, headers map[string]strin
 	}
 	resp, err := providerHTTP.Do(req)
 	if err != nil {
+		err = scrubURLError(err)
 		applog.Error("copilot", "provider request failed", map[string]any{"provider": provider, "err": err.Error()})
 		return nil, err
 	}
@@ -417,10 +418,12 @@ func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessa
 		"contents":           contents,
 		"generationConfig":   map[string]any{"maxOutputTokens": MaxOutputTokens},
 	})
-	// Gemini authenticates via the API key in the query string (over HTTPS). The
-	// URL is never logged (ProviderDo logs provider/status/body only).
-	endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent?key=" + url.QueryEscape(key)
-	rb, err := ProviderDo(ctx, endpoint, nil, body, "gemini")
+	// Gemini authenticates with the x-goog-api-key HEADER, never the query
+	// string: a transport error (*url.Error) embeds the full request URL in its
+	// message, and a key in the URL was written to the logs on every failed call
+	// (found live 2026-11-10). The header never appears in an error.
+	endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent"
+	rb, err := ProviderDo(ctx, endpoint, map[string]string{"x-goog-api-key": key}, body, "gemini")
 	if err != nil {
 		return Completion{}, err
 	}
@@ -516,4 +519,24 @@ ClickHouse-flavoured SQL. If asked for log queries, return OpenSearch
 query_string syntax. If you don't have enough context, say so and tell
 the operator exactly which signal to fetch next.
 `)
+}
+
+// scrubURLError strips the query string and any userinfo from the URL a
+// transport error carries, so a credential that ever travels in a URL cannot
+// reach a log line or a caller through err.Error(). Defense in depth: no
+// provider puts a key in the URL any more.
+func scrubURLError(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	u, perr := url.Parse(ue.URL)
+	if perr != nil {
+		return &url.Error{Op: ue.Op, URL: "<unparseable url>", Err: ue.Err}
+	}
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.User = nil
+	u.Fragment = ""
+	return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
 }
