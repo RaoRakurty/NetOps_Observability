@@ -94,6 +94,11 @@ export function normalizeView(v: TopologyView): TopologyView {
     // finding, so they must survive normalization verbatim — never widened, never
     // invented here. A producer that omits them is a HEALTHY read.
     degraded: Array.isArray(v.degraded) ? v.degraded.filter((d) => typeof d === "string" && d !== "") : [],
+    notices: Array.isArray(v.notices)
+      ? v.notices.filter((n) => n && typeof n.headline === "string" && n.headline !== ""
+          && (n.severity === "info" || n.severity === "warning" || n.severity === "critical")
+          && (!n.action || (typeof n.action.path === "string" && n.action.path.startsWith("/"))))
+      : [],
   };
 }
 

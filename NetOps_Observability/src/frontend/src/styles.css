@@ -7857,3 +7857,33 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .ddp-ctl { margin-top: var(--sp-3); }
 .ddp-ctl-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
 .ddp-ctl-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+
+/* Topology view notices (owner 2026-11-10): one short chip, details on click. */
+.topo-notices { position: relative; display: inline-flex; }
+.topo-notices-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 340px; padding: 3px 10px 3px 4px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--fg);
+  font-size: 12.5px; font-weight: 600; cursor: pointer; line-height: 1.4; }
+.topo-notices-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.topo-notices-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-notices-icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  font-size: 11px; font-weight: 800; color: #fff; background: var(--muted); flex: none; }
+.topo-notices-chip.sev-warning { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.topo-notices-chip.sev-warning .topo-notices-icon { background: var(--warn); }
+.topo-notices-chip.sev-critical { border-color: color-mix(in srgb, var(--bad) 55%, var(--border)); }
+.topo-notices-chip.sev-critical .topo-notices-icon { background: var(--bad); }
+.topo-notices-chip.sev-info .topo-notices-icon { background: var(--accent); }
+.topo-notices-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(380px, 90vw);
+  background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 6px; }
+.topo-notices-pop ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.topo-notices-pop li { padding: 10px 12px; border-radius: 8px; border-left: 3px solid var(--muted); display: grid; gap: 6px; }
+.topo-notices-pop li.sev-warning { border-left-color: var(--warn); }
+.topo-notices-pop li.sev-critical { border-left-color: var(--bad); }
+.topo-notices-pop li.sev-info { border-left-color: var(--accent); }
+.topo-notice-head { font-weight: 600; font-size: 14px; }
+.topo-notice-detail { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.topo-notice-devices { display: flex; flex-wrap: wrap; gap: 4px; }
+.topo-notice-device { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 6px;
+  border-radius: 4px; background: var(--surface-2, rgba(127,127,127,.12)); }
+.topo-notice-action { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; justify-self: start; }
+.topo-notice-action:hover, .topo-notice-action:focus-visible { text-decoration: underline; }

@@ -279,7 +279,18 @@ export type TopologyView = {
    * empty when a collector is simply not deployed.
    */
   degraded?: string[];
+  /** The same conditions, structured: a short headline plus detail, action and devices (owner 2026-11-10). */
+  notices?: TopologyNotice[];
   renderer_hints?: { preferred: "react_flow" | "sigma" | "deck_geo"; max_detail_level: number };
+};
+
+export type TopologyNotice = {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  headline: string;
+  detail?: string;
+  action?: { label: string; path: string };
+  devices?: string[];
 };
 
 // ── selection (kept SEPARATE from node/edge arrays for rerender perf) ──

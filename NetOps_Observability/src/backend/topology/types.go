@@ -264,6 +264,30 @@ type View struct {
 	// complete. Empty on a healthy read, and empty when a collector is simply
 	// not deployed — absence of a collector is not a degradation.
 	Degraded []string `json:"degraded,omitempty"`
+	// Notices carries the same conditions in a structured, operator-sized form:
+	// a short headline the canvas shows in a compact "Notices" control, and the
+	// detail, the one action that fixes it and the devices it concerns, shown
+	// only when the operator opens that control (owner 2026-11-10: a note on the
+	// map must never pop a paragraph). Every Degraded entry a producer can
+	// structure has a Notice whose Headline equals that entry; an entry with no
+	// Notice is shown as a headline alone.
+	Notices []Notice `json:"notices,omitempty"`
+}
+
+// Notice is one condition the view could not show, sized for an operator.
+type Notice struct {
+	ID       string        `json:"id"`                // stable per condition, e.g. "sdwan.tunnels.unmatched"
+	Severity string        `json:"severity"`          // "info" | "warning" | "critical"
+	Headline string        `json:"headline"`          // short; the only text shown on the map
+	Detail   string        `json:"detail,omitempty"`  // why, in one or two short sentences
+	Action   *NoticeAction `json:"action,omitempty"`  // the one thing that fixes it
+	Devices  []string      `json:"devices,omitempty"` // display names of the devices concerned, sorted, capped
+}
+
+// NoticeAction is an in-app link: a label and a SPA path.
+type NoticeAction struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
 }
 
 // ── input: the DI'd telemetry bundle ─────────────────────────────────────────

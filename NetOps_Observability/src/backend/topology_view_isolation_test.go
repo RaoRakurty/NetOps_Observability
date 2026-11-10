@@ -18,6 +18,7 @@ package backend
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -296,16 +297,52 @@ func TestSDWANOverlayOnViewNamesWhatItCannotSee(t *testing.T) {
 	facts := []topology.DeviceFact{{ID: "cedge-9", Name: "cEDGE-9", IfNames: []string{"Sdwan-intf"}}}
 	var view topology.View
 	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
-	if len(view.Degraded) != 1 || !strings.Contains(view.Degraded[0], "1 SD-WAN edge(s) are monitored over SNMP only") {
-		t.Fatalf("no-snapshot note: %v", view.Degraded)
+	// No device in this view is managed by an SD-WAN manager integration, so the
+	// one fix to name is adding one.
+	if len(view.Notices) != 1 || view.Notices[0].ID != "sdwan.tunnels.snmp_only" ||
+		view.Notices[0].Headline != "Tunnels not visible for 1 SD-WAN edge" ||
+		view.Notices[0].Action == nil || view.Notices[0].Action.Label != "Add an integration" ||
+		strings.Join(view.Notices[0].Devices, ",") != "cEDGE-9" {
+		t.Fatalf("no-snapshot notice: %+v", view.Notices)
+	}
+	if len(view.Degraded) != 1 || view.Degraded[0] != view.Notices[0].Headline {
+		t.Fatalf("degraded must carry the short headline only: %v", view.Degraded)
 	}
 	snap, _ := twoTenantOverlay(t)
 	snap.at = time.Now().Add(-20 * time.Minute)
 	view = topology.View{}
 	attachSDWANOverlay(&view, snap, facts, devs, time.Now())
 	joined := strings.Join(view.Degraded, " | ")
-	if !strings.Contains(joined, "20 minutes old") || !strings.Contains(joined, "1 SD-WAN edge(s) are monitored over SNMP only") {
+	if !strings.Contains(joined, "SD-WAN overlay 20 min old") || !strings.Contains(joined, "Tunnels not visible for 1 SD-WAN edge") {
 		t.Fatalf("stale + missing notes: %v", view.Degraded)
+	}
+	if len(view.Notices) != 2 || view.Notices[0].ID != "sdwan.overlay.stale" || view.Notices[0].Detail == "" {
+		t.Fatalf("stale notice: %+v", view.Notices)
+	}
+}
+
+// Owner 2026-11-10: a note on the map must be short. Every headline stays well
+// under a line; the explanation lives in Detail, opened on demand.
+func TestTopologyNoticeHeadlinesAreShort(t *testing.T) {
+	many := make([]string, 0, 30)
+	for i := 0; i < 30; i++ {
+		many = append(many, fmt.Sprintf("edge-%02d", i))
+	}
+	for _, known := range []bool{true, false} {
+		for _, n := range missingTunnelNotices(many, many, known) {
+			if len(n.Headline) > 48 {
+				t.Errorf("headline too long (%d chars): %q", len(n.Headline), n.Headline)
+			}
+			if n.Detail == "" || n.Action == nil || n.Action.Path == "" {
+				t.Errorf("a notice without its why or its fix: %+v", n)
+			}
+			if len(n.Devices) != maxNoticeDevices || n.Devices[0] != "edge-00" {
+				t.Errorf("device list must be sorted and capped at %d: %v", maxNoticeDevices, n.Devices)
+			}
+			if !strings.Contains(n.Headline, "30 SD-WAN edges") {
+				t.Errorf("the headline keeps the true count even when the list is capped: %q", n.Headline)
+			}
+		}
 	}
 }
 
@@ -322,17 +359,24 @@ func TestSDWANMissingTunnelNoteNamesTheSourceThatCouldReportThem(t *testing.T) {
 	}
 	var view topology.View
 	attachSDWANOverlay(&view, nil, facts, devs, time.Now())
-	joined := strings.Join(view.Degraded, " | ")
-	if len(view.Degraded) != 2 ||
-		!strings.Contains(joined, "1 SD-WAN edge(s) have no tunnels drawn yet: their SD-WAN manager integration has not reported") ||
-		!strings.Contains(joined, "1 SD-WAN edge(s) are monitored over SNMP only") {
-		t.Fatalf("want one managed and one SNMP-only note: %v", view.Degraded)
+	if len(view.Notices) != 2 {
+		t.Fatalf("want one managed and one unmatched notice: %+v", view.Notices)
 	}
-	if strings.Contains(view.Degraded[0], "SNMP") {
-		t.Fatalf("a managed edge must not be told to fix SNMP: %q", view.Degraded[0])
+	stale, unmatched := view.Notices[0], view.Notices[1]
+	if stale.ID != "sdwan.tunnels.stale" || stale.Headline != "1 SD-WAN edge without tunnel data" ||
+		strings.Join(stale.Devices, ",") != "cEDGE-40" || strings.Contains(stale.Detail, "SNMP") {
+		t.Fatalf("a managed edge must be pointed at its integration, never at SNMP: %+v", stale)
 	}
-	if got := missingTunnelNotes(0, 0); len(got) != 0 {
-		t.Fatalf("nothing missing, no note: %v", got)
+	// The integration EXISTS (cEDGE-40 is managed by it), so the SNMP-only edge is
+	// one it did not match: "add an integration" would be wrong advice.
+	if unmatched.ID != "sdwan.tunnels.unmatched" || unmatched.Headline != "1 SD-WAN edge not matched to SD-WAN Manager" ||
+		unmatched.Action == nil || unmatched.Action.Label != "Review device matching" ||
+		strings.Contains(strings.ToLower(unmatched.Detail+unmatched.Action.Label), "add an") ||
+		strings.Join(unmatched.Devices, ",") != "cEDGE-9" {
+		t.Fatalf("an unmatched edge in a view that has an integration: %+v", unmatched)
+	}
+	if got := missingTunnelNotices(nil, nil, true); len(got) != 0 {
+		t.Fatalf("nothing missing, no notice: %v", got)
 	}
 }
 
