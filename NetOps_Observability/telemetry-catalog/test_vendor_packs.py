@@ -286,8 +286,13 @@ def test_audit_rows_cannot_alarm():
     assert audit
     assert all(not g.reads_severity and g.alarm_floor is None for g in audit)
     rows = [r for p in B.load_packs() for r in p.get("rules") or [] if not r.get("known_benign")]
-    audit_literals = {g.literal for g in audit}
+    # A one-character literal (`:`, the SYSMGR process-table row) is a cheap gate, not the
+    # line's identity: its `apps` gate is. Those rows are held to the fixture instead,
+    # where each one is asserted to emit nothing.
+    audit_literals = {g.literal for g in audit if len(g.literal) >= 3}
     assert not any(lit in str(r.get("pattern_src")) for r in rows for lit in audit_literals)
+    short = [g for g in audit if len(g.literal) < 3]
+    assert all(g.apps for g in short), "a short-literal category row needs an apps gate"
 
 
 def test_usernames_stay_in_the_message():

@@ -786,6 +786,28 @@ transforms:
           cx_pk_cat = "management_audit"
         }
       }
+      # grammar cisco_sdwan.sysmgr_ps_header (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "PID %CPU %MEM") && includes(["sysmgr"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^USER\s+PID\s+%CPU\s+%MEM\s+VSZ\s+RSS\s+TTY\s+STAT\s+START\s+TIME\s+COMMAND')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan_diag.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("process_table")
+          cx_pk_sum = "process table header"
+          cx_pk_cat = "diagnostic_dump"
+        }
+      }
+      # grammar cisco_sdwan.sysmgr_ps_row (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, ":") && includes(["sysmgr"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^(?P<user>\S{1,32})\s+(?P<pid>\d{1,7})\s+(?P<cpu>\d{1,3}\.\d)\s+(?P<mem>\d{1,3}\.\d)\s+\d{1,12}\s+\d{1,12}\s+\S{1,16}\s+\S{1,8}\s+\S{1,8}\s+\d{1,6}:\d{2}\s+(?P<cmd>\S.{0,255})')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan_diag.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("process_table")
+          cx_pk_sum = (string(cx_pk_m.cmd) ?? "") + " cpu " + (string(cx_pk_m.cpu) ?? "") + "% mem " + (string(cx_pk_m.mem) ?? "") + "%"
+          cx_pk_cat = "diagnostic_dump"
+        }
+      }
       # grammar juniper_junos.junos_tag (doc_claimed)
       if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "juniper") && contains(cx_pk_midmsg, "_") && includes(["bfdd", "chassisd", "dcd", "eventd", "kmd", "l2cpd", "mgd", "mib2d", "rpd"], cx_pk_app) {
         cx_pk_m, cx_pk_merr = parse_regex(cx_pk_midmsg, r'^(?P<tag>(?P<fac>[A-Z][A-Z0-9]{0,15})_[A-Z0-9_]{1,64}): ?(?P<text>.*)')
@@ -860,6 +882,17 @@ transforms:
           cx_pk_parser = "standard_mgmt_audit.v1"
           cx_pk_vendor = ""
           cx_pk_et = downcase("netconf_rpc")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_action (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_action_" + (string(cx_pk_m.action) ?? ""))
+          cx_pk_sum = "action " + (string(cx_pk_m.action) ?? "") + " " + (string(cx_pk_m.target) ?? "")
           cx_pk_cat = "management_audit"
         }
       }

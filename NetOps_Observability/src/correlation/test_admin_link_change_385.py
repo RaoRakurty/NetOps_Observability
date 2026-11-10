@@ -474,7 +474,7 @@ def test_the_parser_is_untouched():
     behind every older one; the trap link rows this file protects did not move."""
     assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1"
     assert parser_rules.BAKED_RULES_HASH == (
-        "4844f744669e22ef4294039e31e08e3a15cf3c82c0476390886512d284d0db42")
+        "4016fcbf1877477905912be40ec32d653805b63414cb6f3920a7ef1d8d4a1ac7")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

@@ -107,6 +107,18 @@ grammars:
     category: management_audit
     fidelity: lab_validated
 
+  # A NETCONF action (live on vEdges, 2026-11-10): `netconf id=N action name={<ns>}<action>
+  # instance-identifier=<path>`. One key per action, so repeats of one action group.
+  - id: confd_netconf_action
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ action name=\{[^}]{0,128}\}(?P<action>[A-Za-z][\w-]{0,63})(?: instance-identifier=(?P<target>\S{1,256}))?'
+    event_type: 'netconf_action_{action}'
+    summary: 'action {action} {target}'
+    category: management_audit
+    fidelity: lab_validated
+
   - id: confd_netconf_session
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
@@ -277,6 +289,20 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: netconf_session
+    signal: null
+
+  - name: a NETCONF action names the action in its summary, digits masked
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: "netconf id=987346 action name={'http://viptela.com/actions'}clear instance-identifier=/viptela-actions:request/interface-stats"
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: netconf_action_clear
+      summary: 'action clear /viptela-actions:request/interface-stats'
+      event_category: management_audit
+      dedup_key: 'vEdge-1|confd|netconf_action_clear'
     signal: null
 
   - name: an outbound NETCONF notification carrying a marker word stays silent

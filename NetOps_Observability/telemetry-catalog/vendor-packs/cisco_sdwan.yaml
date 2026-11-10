@@ -127,6 +127,32 @@ grammars:
     category: management_audit
     fidelity: lab_validated
 
+  # vEdge SYSMGR process-table dumps (live, 2026-11-10): with each cpu-usage event the
+  # vEdge logs `ps` one line per row, a header then one row per process. Diagnostic
+  # context, never an alarm: no severity reader, no rule row. Header and rows share one
+  # event type, so the read path's (device, app, event type) key plus time groups one
+  # dump, and the cpu-usage line it accompanies is the same host within the same second.
+  # The pack mechanism has no cross-record link, so that join is left to read time.
+  - id: sysmgr_ps_header
+    parser_id: cisco_sdwan_diag.v1
+    literal: 'PID %CPU %MEM'
+    apps: [sysmgr]
+    pattern: '^USER\s+PID\s+%CPU\s+%MEM\s+VSZ\s+RSS\s+TTY\s+STAT\s+START\s+TIME\s+COMMAND'
+    event_type: process_table
+    summary: process table header
+    category: diagnostic_dump
+    fidelity: lab_validated
+
+  - id: sysmgr_ps_row
+    parser_id: cisco_sdwan_diag.v1
+    literal: ':'
+    apps: [sysmgr]
+    pattern: '^(?P<user>\S{1,32})\s+(?P<pid>\d{1,7})\s+(?P<cpu>\d{1,3}\.\d)\s+(?P<mem>\d{1,3}\.\d)\s+\d{1,12}\s+\d{1,12}\s+\S{1,16}\s+\S{1,8}\s+\S{1,8}\s+\d{1,6}:\d{2}\s+(?P<cmd>\S.{0,255})'
+    event_type: process_table
+    summary: '{cmd} cpu {cpu}% mem {mem}%'
+    category: diagnostic_dump
+    fidelity: lab_validated
+
 # Typed rows, in match order. D3: only the critical CPU row may open an object alone.
 # Everything else states `warn` or `info`, below `severity_open_floor`, so it can join
 # a component and cannot start one. E1 still makes a device's own syslog and its SNMP
@@ -767,6 +793,51 @@ fixtures:
       event_type: snmp_agent_table_error
       event_category: management_audit
     signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: a process-table header is a diagnostic dump, not an alarm
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    message: 'USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: process table header
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      normalized_severity: info
+    signal: null
+
+  - name: a process-table row keeps its command and load, digits masked
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    message: 'root      1234  2.5  1.2 123456 23456 ?      Sl   Oct09   1:23 /usr/sbin/ftmd -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: '/usr/sbin/ftmd -f cpu 2.5% mem 1.2%'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+    signal: null
+
+  - name: a kernel-thread row is the same dump
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    message: 'root        12  0.0  0.0      0     0 ?        S    Oct09   0:00 [kworker/0:1]'
+    expect:
+      parser_status: parsed
+      event_type: process_table
+      summary: '[kworker/0:1] cpu 0.0% mem 0.0%'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+    signal: null
 
   - name: a cEdge device-management login is audit
     fidelity: lab_validated
