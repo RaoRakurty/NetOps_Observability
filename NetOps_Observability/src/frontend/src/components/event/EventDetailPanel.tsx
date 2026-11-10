@@ -24,7 +24,9 @@ export default function EventDetailPanel({ hit, onClose }: { hit: LogHit; onClos
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const panel = ref.current;
-    (panel?.querySelector<HTMLElement>('[data-testid="event-close"]') ?? panel)?.focus();
+    // The dialog itself takes focus, not its first button: the Enter that opened the
+    // panel from a row would otherwise land on that button and close it again.
+    panel?.focus();
     return () => {
       if (opener && document.contains(opener)) opener.focus();
     };

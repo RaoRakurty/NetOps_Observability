@@ -100,7 +100,7 @@ export function KvRow({ row }: { row: ViewRow }) {
           {value}
           {row.copy && <CopyButton text={row.value} label={row.label} />}
         </span>
-        {row.secondary && <span className="evd-kv-sec evd-mono">{row.secondary}</span>}
+        {row.secondary && <span className="evd-kv-sec">{row.secondary}</span>}
       </dd>
     </div>
   );
@@ -129,7 +129,7 @@ export function Card({ icon, title, children, className, aside, testId, iconTone
 
 // ── header ───────────────────────────────────────────────────────────────────
 
-export function EventHeader({ view, actions, titleId }: { view: EventView; actions?: ReactNode; titleId: string }) {
+export function EventHeader({ view, actions, close, titleId }: { view: EventView; actions?: ReactNode; close?: ReactNode; titleId: string }) {
   const tone = view.severity.tone;
   const icon = tone ? SEVERITY_TONES[tone].icon : "info";
   return (
@@ -146,16 +146,19 @@ export function EventHeader({ view, actions, titleId }: { view: EventView; actio
           <h2 className="evd-title" id={titleId} data-testid="event-title">{view.title}</h2>
         </div>
         {view.subtitle && <p className="evd-subtitle">{view.subtitle}</p>}
-        <ul className="evd-chips" aria-label="Event classification">
-          {view.chips.map((c) => (
-            <li key={`${c.key}:${c.label}`} className={`evd-chip evd-chip-${c.key}${c.tone && c.tone !== "neutral" ? ` evd-chip-toned ${toneClass(c.tone === "accent" ? null : c.tone)}` : ""}`}>
-              <EvIcon name={c.icon} size={14} />
-              {c.label}
-            </li>
-          ))}
-        </ul>
+        <div className="evd-head-row">
+          <ul className="evd-chips" aria-label="Event classification">
+            {view.chips.map((c) => (
+              <li key={`${c.key}:${c.label}`} className={`evd-chip evd-chip-${c.key}${c.tone && c.tone !== "neutral" ? ` evd-chip-toned ${toneClass(c.tone === "accent" ? null : c.tone)}` : ""}`}>
+                <EvIcon name={c.icon} size={14} />
+                {c.label}
+              </li>
+            ))}
+          </ul>
+          {actions && <div className="evd-actions">{actions}</div>}
+        </div>
       </div>
-      {actions && <div className="evd-actions">{actions}</div>}
+      {close && <div className="evd-head-close">{close}</div>}
     </header>
   );
 }
@@ -229,7 +232,13 @@ function UtilBar({ u }: { u: UtilizationData }) {
     <div className="evd-util">
       <div className={`evd-bar-wrap${u.threshold ? " evd-bar-wrap-thr" : ""}`}>
         {u.threshold && (
-          <div className="evd-thr" style={{ left: `${u.threshold.value}%` }} data-testid="event-threshold">
+          // Centred on the line, except near an end, where it leans inward so it never
+          // spills past the bar (and the page) on a narrow screen.
+          <div
+            className="evd-thr"
+            style={{ left: `${u.threshold.value}%`, transform: `translateX(-${u.threshold.value < 15 || u.threshold.value > 85 ? Math.round(u.threshold.value) : 50}%)` }}
+            data-testid="event-threshold"
+          >
             <span className="evd-thr-pill">{u.threshold.label}</span>
             <span className="evd-thr-val evd-mono">{fmtPercentShort(u.threshold.value)}</span>
           </div>
@@ -433,7 +442,7 @@ function VisualBody({ v, view }: { v: PrimaryVisual; view: EventView }) {
 export function PrimaryVisualCard({ view }: { view: EventView }) {
   const v = view.primaryVisual;
   return (
-    <section className={`evd-card evd-vis evd-vis-${v.kind}`} aria-label={v.title} data-testid="event-visual" data-kind={v.kind}>
+    <section className={`evd-card evd-vis evd-vis-${v.kind}${view.sideStats.length === 0 ? " evd-vis-solo" : ""}`} aria-label={v.title} data-testid="event-visual" data-kind={v.kind}>
       <div className="evd-vis-body"><VisualBody v={v} view={view} /></div>
       {view.sideStats.length > 0 && <StatTable rows={view.sideStats} />}
     </section>
@@ -452,7 +461,7 @@ export function DeviceCard({ view, variant }: { view: EventView; variant: "rows"
         <header className="evd-dev-top">
           <span className="evd-dev-ico" aria-hidden="true"><EvIcon name="server" size={22} /></span>
           <span className="evd-dev-id">
-            <span className="evd-dev-name">{d.name || DASH}</span>
+            <span className="evd-dev-name" title={d.name || undefined}>{d.name || DASH}</span>
             {d.address && d.address !== d.name && <span className="evd-dev-ip evd-mono">{d.address}</span>}
           </span>
           {d.inventory && <Pill tone={d.inventory.tone} icon={d.inventory.tone === "ok" ? "check" : "triangle"}>{d.inventory.label}</Pill>}
@@ -479,7 +488,11 @@ export function ClassificationCard({ view }: { view: EventView }) {
 }
 
 function GuidanceTag({ basis }: { basis: string }) {
-  return <span className="evd-guidance" title={basis || undefined}>Guidance{basis ? ` · ${basis}` : ""}</span>;
+  return (
+    <span className="evd-guidance" title={basis ? `Guidance from the ${basis}, not measured on this device` : "Guidance, not measured on this device"}>
+      Guidance{basis ? ` · ${basis}` : ""}
+    </span>
+  );
 }
 
 export function ImpactCard({ view }: { view: EventView }) {

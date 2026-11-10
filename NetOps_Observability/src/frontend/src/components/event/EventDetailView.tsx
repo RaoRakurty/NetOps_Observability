@@ -111,13 +111,13 @@ export default function EventDetailView({ view, mode, onClose, titleId }: EventD
           <EvIcon name="external" size={16} /> Full page
         </a>
       )}
-      {mode === "panel" && onClose && (
-        <button type="button" className="evd-icon-btn evd-close" onClick={onClose} aria-label="Close event details" title="Close (Esc)" data-testid="event-close">
-          <EvIcon name="close" size={20} />
-        </button>
-      )}
     </>
   );
+  const close = mode === "panel" && onClose ? (
+    <button type="button" className="evd-icon-btn evd-close" onClick={onClose} aria-label="Close event details" title="Close (Esc)" data-testid="event-close">
+      <EvIcon name="close" size={20} />
+    </button>
+  ) : undefined;
 
   const tabPanel = (content: ReactNode) => (
     <div className="evd-tabpanel" role="tabpanel" id={`${uid}-panel`} aria-labelledby={`${uid}-tab-${tab.replace(/\s/g, "")}`} tabIndex={0}>
@@ -139,7 +139,7 @@ export default function EventDetailView({ view, mode, onClose, titleId }: EventD
   if (mode === "panel") {
     return (
       <div className={`evd evd-mode-panel ${toneClass(view.severity.tone)}`} data-testid="event-detail" data-lane={view.lane}>
-        <EventHeader view={view} actions={actions} titleId={tid} />
+        <EventHeader view={view} actions={actions} close={close} titleId={tid} />
         <EventTabs tab={tab} onTab={setTab} uid={uid} />
         {tabPanel(tab === "Overview" ? (
           <div className="evd-stack">
