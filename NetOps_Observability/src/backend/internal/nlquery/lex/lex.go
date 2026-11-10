@@ -206,7 +206,8 @@ func Tokens(q string) []string {
 
 // ClassifierText is the question router's reading: Fold and single spaces,
 // with sentence punctuation KEPT — the router's rules read "?" as the end of a
-// clause. (Typo repair joins it in vocab.go.)
+// clause — and misspelt core words repaired (ClassifierRepair).
 func ClassifierText(q string) string {
-	return strings.Join(strings.Fields(Fold(q)), " ")
+	t, _ := ClassifierRepair(q)
+	return t
 }

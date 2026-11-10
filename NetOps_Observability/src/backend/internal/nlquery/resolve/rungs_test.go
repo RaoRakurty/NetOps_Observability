@@ -295,16 +295,17 @@ func TestModelSuggestionNeedsConfirmationAndIsDisclosed(t *testing.T) {
 	sg := &fakeSuggester{names: []string{"Dallas"}}
 	rv := resolverFor(tenantA())
 	rv.Suggest = sg
-	res := mustResolve(t, rv, "dalas", nil)
+	// "big d" is nothing the deterministic rungs (fuzzy 6b included) place.
+	res := mustResolve(t, rv, "big d", nil)
 	if len(res.Refs) != 1 || res.Disclosure != SuggestionDisclosure {
-		t.Fatalf("dalas = %+v", res)
+		t.Fatalf("big d = %+v", res)
 	}
 	ref := res.Refs[0]
 	if ref.EntityID != "site:dfw-hq" || ref.Method != MethodModelSuggestion || !ref.NeedsConfirmation ||
-		ref.Confidence != confModel || ref.SuggestedText != "Dallas" || ref.InputText != "dalas" {
+		ref.Confidence != confModel || ref.SuggestedText != "Dallas" || ref.InputText != "big d" {
 		t.Fatalf("a model suggestion must be marked, confirmed first and disclosed: %+v", ref)
 	}
-	if sg.last != "dalas" {
+	if sg.last != "big d" {
 		t.Fatalf("the model must be given only the operator's text, got %q", sg.last)
 	}
 }
@@ -347,7 +348,7 @@ func TestModelSuggestionNegatives(t *testing.T) {
 	// A model failure is said, never an error and never a guess.
 	rv := resolverFor(tenantA())
 	rv.Suggest = &fakeSuggester{err: errors.New("budget spent")}
-	res := mustResolve(t, rv, "dalas", nil)
+	res := mustResolve(t, rv, "big d", nil)
 	if len(res.Refs) != 0 || res.SuggestionError != SuggestionUnavailable {
 		t.Fatalf("model failure = %+v", res)
 	}
@@ -358,7 +359,7 @@ func TestModelSuggestionNegatives(t *testing.T) {
 		t.Fatalf("names past MaxSuggestions must not be looked up: %+v", res)
 	}
 	// Not wired (the compiler's ladder): never asked.
-	if res := mustResolve(t, resolverFor(tenantA()), "dalas", nil); len(res.Refs) != 0 || res.SuggestionError != "" {
+	if res := mustResolve(t, resolverFor(tenantA()), "big d", nil); len(res.Refs) != 0 || res.SuggestionError != "" {
 		t.Fatalf("no Suggester must mean no model rung: %+v", res)
 	}
 }

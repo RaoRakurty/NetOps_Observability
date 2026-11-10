@@ -4,6 +4,7 @@
 package ai
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -96,4 +97,36 @@ var broadPhrasings = []struct {
 	// Truly unrecognized → capability clarification, NOT current_state.
 	{"who should I call about the wan", "capability"},
 	{"tell me a joke", "capability"},
+}
+
+// A misspelt word the router repairs is disclosed on the answer (D2): the
+// lab's "list top isues today" reaches the incident list and says how it read
+// the question; a correctly spelt question carries no such line.
+func TestRouterRepairsAreDisclosed(t *testing.T) {
+	if got := Classify("list top isues today", nil).Intent; got != "incident_list" {
+		t.Fatalf("list top isues today → %q, want incident_list", got)
+	}
+	o := newOrch(newMockDS())
+	ans, err := o.Ask(context.Background(), tenantA(), "list top isues today", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, d := range ans.Disclaimers {
+		if d == `I read "isues" as "issues".` {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("the repair must be disclosed exactly once: %q", ans.Disclaimers)
+	}
+	plain, err := o.Ask(context.Background(), tenantA(), "list top issues today", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range plain.Disclaimers {
+		if strings.HasPrefix(d, "I read ") {
+			t.Fatalf("nothing repaired, nothing disclosed: %q", plain.Disclaimers)
+		}
+	}
 }

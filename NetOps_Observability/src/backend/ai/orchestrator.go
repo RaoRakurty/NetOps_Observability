@@ -233,6 +233,21 @@ var moduleRoutes = []moduleRoute{
 	},
 }
 
+// discloseReadings adds one disclaimer per reading the answer does not already
+// carry (the data arm discloses the grammar's own repairs).
+func discloseReadings(ans *Answer, readings []lex.Reading) {
+	have := map[string]bool{}
+	for _, d := range ans.Disclaimers {
+		have[d] = true
+	}
+	for _, r := range readings {
+		if n := r.Note(); !have[n] {
+			ans.Disclaimers = append(ans.Disclaimers, n)
+			have[n] = true
+		}
+	}
+}
+
 // Classify maps a free-text question (+ UI context like the open RCA's id) to a
 // Plan. P0/P1 uses a deterministic rule classifier (testable, no LLM cost on the
 // hot path); later phases can swap in an LLM classifier behind this same shape.
@@ -405,7 +420,7 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	return ans, err
 }
 
-func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
+func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (ans Answer, err error) {
 	o.trace(TracePlanning)
 	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
 	// number on a screen already named the term it wants defined, and the answer
@@ -431,6 +446,11 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	}
 
 	plan := Classify(question, uiContext)
+	// A misspelt word the router repaired ("isues" → "issues") is disclosed
+	// on whatever answer follows (D2): nothing is read differently silently.
+	if _, readings := lex.ClassifierRepair(question); len(readings) > 0 {
+		defer func() { discloseReadings(&ans, readings) }()
+	}
 
 	// The question router's DATA arm (N-G4) runs before module governance and
 	// skills: it claims only questions the NL compiler understands completely

@@ -65,6 +65,23 @@ type Result struct {
 	Unparsed bool `json:"unparsed,omitempty"`
 	// NotUnderstood lists the words that made it Unparsed.
 	NotUnderstood []string `json:"not_understood,omitempty"`
+	// Readings are the reinterpretations the compiler APPLIED (a misspelt
+	// vocabulary word, …). Every one is disclosed with the answer; none is
+	// applied silently.
+	Readings []lex.Reading `json:"readings,omitempty"`
+	// DidYouMean offers candidates for words that were NOT understood: a
+	// name close to one the caller can see (confirm-only, never applied) or a
+	// word with several equally close vocabulary words.
+	DidYouMean []Suggestion `json:"did_you_mean,omitempty"`
+}
+
+// Suggestion is the did-you-mean for one word not understood. Refs are entity
+// candidates from the caller's own scope (resolver rungs 6/6b, each
+// NeedsConfirmation); Words are vocabulary candidates.
+type Suggestion struct {
+	Word  string        `json:"word"`
+	Refs  []resolve.Ref `json:"refs,omitempty"`
+	Words []string      `json:"words,omitempty"`
 }
 
 // Compiler compiles questions.
@@ -100,9 +117,90 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	if text == "" {
 		return Result{Unparsed: true}, nil
 	}
-	if injectRe.MatchString(text) || crossRe.MatchString(text) || actionRe.MatchString(text) {
+	if declined(text) {
 		return Result{Decline: DeclineNotAQuery}, nil
 	}
+	rep, err := c.repairText(ctx, text)
+	if err != nil {
+		return Result{}, err
+	}
+	// A misspelt action or instruction is still one ("restrat edge-1").
+	if rep.Text != text && declined(rep.Text) {
+		return Result{Decline: DeclineNotAQuery}, nil
+	}
+	text = rep.Text
+	res, err := c.compileText(ctx, question, text, cx)
+	if err != nil {
+		return res, err
+	}
+	res = withRepairs(res, rep)
+	if res.Unparsed {
+		if res, err = c.nameSuggestions(ctx, res); err != nil {
+			return Result{}, err
+		}
+	}
+	return res, nil
+}
+
+// nameSuggestions offers, for each word left not understood, the names in the
+// caller's OWN scope it is probably a misspelling or a fragment of (resolver
+// rungs 6 and 6b). They are candidates for the operator to pick — the
+// question stays Unparsed, nothing is applied.
+func (c Compiler) nameSuggestions(ctx context.Context, res Result) (Result, error) {
+	offered := map[string]bool{}
+	for _, d := range res.DidYouMean {
+		offered[d.Word] = true
+	}
+	for _, w := range res.NotUnderstood {
+		if offered[w] || strings.Contains(w, " ") || len(w) < 3 {
+			continue
+		}
+		r, err := c.R.Resolve(ctx, w, nil)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(r.Refs) == 0 || !allNeedConfirmation(r.Refs) {
+			continue
+		}
+		refs := r.Refs
+		if len(refs) > resolve.MaxSuggestions {
+			refs = refs[:resolve.MaxSuggestions]
+		}
+		res.DidYouMean = append(res.DidYouMean, Suggestion{Word: w, Refs: refs})
+	}
+	return res, nil
+}
+
+func allNeedConfirmation(refs []resolve.Ref) bool {
+	for _, r := range refs {
+		if !r.NeedsConfirmation {
+			return false
+		}
+	}
+	return true
+}
+
+func declined(text string) bool {
+	return injectRe.MatchString(text) || crossRe.MatchString(text) || actionRe.MatchString(text)
+}
+
+// withRepairs discloses the typo repairs on a result and offers the tied
+// vocabulary candidates of any word left not understood.
+func withRepairs(res Result, rep lex.Repair) Result {
+	if res.Decline != "" {
+		return res
+	}
+	res.Readings = append(rep.Readings, res.Readings...)
+	for _, w := range res.NotUnderstood {
+		if ties, ok := rep.Ties[w]; ok {
+			res.DidYouMean = append(res.DidYouMean, Suggestion{Word: w, Words: ties})
+		}
+	}
+	return res
+}
+
+// compileText compiles one normalised, repaired question.
+func (c Compiler) compileText(ctx context.Context, question, text string, cx Context) (Result, error) {
 	if res, ok, err := c.followUp(ctx, text, cx); ok || err != nil {
 		return res, err
 	}

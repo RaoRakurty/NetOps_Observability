@@ -15,6 +15,7 @@
 //	5 catalog synonym  "SFDC" → the caller's Salesforce   confidence 0.95
 //	                   "Xfinity" → provider:comcast (seed) confidence 0.90
 //	6 partial name     "dall" → the ONE match            confidence 0.70, needs confirmation
+//	6b fuzzy name      "dalas" → "Dallas" (one typo)     confidence 0.60, needs confirmation
 //	7 model suggestion "dalas" → model says "Dallas"     confidence 0.50, needs confirmation
 //
 // A rung that yields more than one candidate is AMBIGUOUS and returns them
@@ -23,7 +24,7 @@
 // core-1"), which names every neighbour on purpose: its result is a Set — the
 // same type is a list (OR), never a guess between its members.
 //
-// Rungs 6 and 7 never decide anything: their candidates carry
+// Rungs 6, 6b and 7 never decide anything: their candidates carry
 // NeedsConfirmation and the query compiler does not use them. A model may only
 // SUGGEST a name (rung 7); the suggestion goes back through rungs 1–5 like any
 // other text, so it can only ever land on an entity the caller can already
@@ -58,6 +59,7 @@ const (
 	MethodCatalogSynonym  = "catalog_synonym"
 	MethodCatalogSeed     = "catalog_seed"
 	MethodPartialName     = "partial_name"
+	MethodFuzzyName       = "fuzzy_name"
 	MethodModelSuggestion = "model_suggestion"
 )
 
@@ -72,6 +74,7 @@ const (
 	confSeed       = 0.9
 	confTopoUnsure = 0.8
 	confPartial    = 0.7
+	confFuzzy      = 0.6
 	confModel      = 0.5
 )
 
@@ -203,6 +206,12 @@ func (r Resolver) Resolve(ctx context.Context, text string, types []string) (Res
 		}
 	}
 	if len(hits) > 0 {
+		return finish(hits), nil
+	}
+
+	// 6b. fuzzy name — a misspelling of a name the caller can see ("dalas"
+	// for Dallas), offered for confirmation, never used on its own.
+	if hits := r.fuzzy(text, aliasesOf(ctx, r.L), inv); len(hits) > 0 {
 		return finish(hits), nil
 	}
 
@@ -434,6 +443,100 @@ func (r Resolver) synonym(text, norm string, types []string, aliases []Alias, in
 		return finish(seeds), true
 	}
 	return Result{}, false
+}
+
+// Fuzzy-name bounds (rung 6b, hybrid NLU plan A2). Names are matched on
+// their separator-free key (lex.Squash): at most one edit for 5–7
+// characters, two for 8 or more, a different first character counts double,
+// and at most MaxSuggestions candidates, closest first. A key with a digit is
+// never fuzzed: "edge-3" is a different device from "edge-1", not a typo of it.
+const minFuzzy = 5
+
+func fuzzyLimit(n int) int {
+	switch {
+	case n < minFuzzy:
+		return 0
+	case n < 8:
+		return 1
+	}
+	return 2
+}
+
+// aliasesOf reads the caller's aliases for the fuzzy rung; an unreadable
+// alias table only narrows the candidates (the deterministic rungs already
+// read it successfully, or returned the error).
+func aliasesOf(ctx context.Context, l Lookups) []Alias {
+	as, err := l.Aliases(ctx)
+	if err != nil {
+		return nil
+	}
+	return as
+}
+
+// fuzzy runs rung 6b over the caller's OWN aliases and inventory — the same
+// scoped candidates rungs 2–3 read, so another tenant's name can never be a
+// candidate.
+func (r Resolver) fuzzy(text string, aliases []Alias, inv []Named) []Ref {
+	key := lex.Squash(text)
+	limit := fuzzyLimit(len(key))
+	if limit == 0 || strings.ContainsAny(key, "0123456789") || r.Cat.IsVocabulary(catalog.NormalizeAlias(text)) {
+		return nil
+	}
+	type cand struct {
+		ref Ref
+		d   int
+	}
+	best := map[string]cand{}
+	consider := func(typ, id, name string) {
+		nk := lex.Squash(name)
+		if nk == "" || absInt(len(nk)-len(key)) > limit {
+			return
+		}
+		d := lex.Distance(key, nk)
+		if nk[0] != key[0] {
+			d++
+		}
+		if d == 0 || d > limit {
+			return
+		}
+		k := typ + "\x1f" + id
+		if c, ok := best[k]; !ok || d < c.d {
+			best[k] = cand{ref: Ref{InputText: text, EntityID: id, EntityType: typ, Confidence: confFuzzy, Method: MethodFuzzyName, NeedsConfirmation: true}, d: d}
+		}
+	}
+	for _, a := range aliases {
+		consider(a.EntityType, a.EntityID, a.Alias)
+	}
+	for _, n := range inv {
+		for _, name := range n.Names {
+			consider(n.Type, n.ID, name)
+		}
+	}
+	cs := make([]cand, 0, len(best))
+	for _, c := range best {
+		cs = append(cs, c)
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].d != cs[j].d {
+			return cs[i].d < cs[j].d
+		}
+		if cs[i].ref.EntityType != cs[j].ref.EntityType {
+			return cs[i].ref.EntityType < cs[j].ref.EntityType
+		}
+		return cs[i].ref.EntityID < cs[j].ref.EntityID
+	})
+	var out []Ref
+	for i := 0; i < len(cs) && i < MaxSuggestions; i++ {
+		out = append(out, cs[i].ref)
+	}
+	return out
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // suggest runs rung 7.

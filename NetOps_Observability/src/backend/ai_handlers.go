@@ -524,7 +524,7 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		if err != nil {
 			return ai.DataAnswer{}, err
 		}
-		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload,
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
 			Text: "I understood the question but can't run it as asked: " + strings.Join(msgs, "; ") + "."}, nil
 	}
 	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
@@ -554,6 +554,8 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		// The query shown with the answer is what ran — say so, first.
 		notes = append(notes, nlqModelDisclosure)
 	}
+	// Every word read differently from how it was typed is said (D2).
+	notes = append(notes, c.readingNotes()...)
 	for _, k := range c.vr.Constraints {
 		notes = append(notes, "Adjusted: "+k.Reason)
 	}
@@ -1539,6 +1541,16 @@ func (c nlqCompiled) record(source, question string) irisquerylog.Record {
 	return rec
 }
 
+// readingNotes are the disclosure lines of the readings the compiler applied
+// ("I read \"shwo\" as \"show\".").
+func (c nlqCompiled) readingNotes() []string {
+	var out []string
+	for _, rd := range c.res.Readings {
+		out = append(out, rd.Note())
+	}
+	return out
+}
+
 // body is the compile answer: what was understood, and the query — the
 // validated one, or the invalid one shown (never executed) so the operator
 // sees what was understood.
@@ -1547,6 +1559,14 @@ func (c nlqCompiled) body() map[string]any {
 		"decline": c.res.Decline, "unparsed": c.res.Unparsed, "not_understood": c.res.NotUnderstood}
 	if c.source != "" {
 		out["source"] = c.source // "model": interpreted by the model, not the grammar
+	}
+	// Disclosure (D2): every reading applied, and the candidates offered for
+	// the words not understood (names from the caller's own scope only).
+	if len(c.res.Readings) > 0 {
+		out["readings"] = c.res.Readings
+	}
+	if len(c.res.DidYouMean) > 0 {
+		out["did_you_mean"] = c.res.DidYouMean
 	}
 	if c.res.AST != nil {
 		out["validation"] = *c.vr
