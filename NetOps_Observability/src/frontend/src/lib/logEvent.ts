@@ -145,8 +145,15 @@ function isCommunityOid(oid: string): boolean {
 // so anything unrecognised stays hidden.
 const NOT_SECRET = new Set([
   "message_key", "__key", "partition_key", "routing_key", "sort_key", "primary_key",
+  // Event identity (tracker 387): the alarm's correlation key and the syslog dedup key
+  // are ids an operator copies, not credentials.
+  "correlation_key", "dedup_key",
   "bgp_community", "bgp_communities", "large_communities", "extended_communities",
 ]);
+
+// Names that would read as secrets but are booleans by contract ("a community was
+// present"). Shown only while they ARE booleans: any other value is hidden.
+const BOOLEAN_ONLY = new Set(["snmp_community_present"]);
 
 export function isSecretName(name: string): boolean {
   const snake = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.\-\s]+/g, "_").toLowerCase();
@@ -187,7 +194,8 @@ export function redactSecrets<T>(value: T, depth = 0): T {
     );
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rec)) {
-      out[k] = isSecretName(k) || (labelled && k === "value") ? HIDDEN : redactSecrets(v, depth + 1);
+      if (BOOLEAN_ONLY.has(k)) out[k] = typeof v === "boolean" ? v : HIDDEN;
+      else out[k] = isSecretName(k) || (labelled && k === "value") ? HIDDEN : redactSecrets(v, depth + 1);
     }
     return out as T;
   }
@@ -199,14 +207,14 @@ export function redactSecrets<T>(value: T, depth = 0): T {
 /** Values a pipeline writes when it knows nothing. They read as noise, so they read as nothing. */
 const PLACEHOLDER = /^(?:|-|unknown|n\/?a|none|null|undefined)$/i;
 
-function scalar(v: unknown): string {
+export function scalar(v: unknown): string {
   if (typeof v === "string") return v.trim();
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   if (typeof v === "boolean") return String(v);
   return "";
 }
 
-function lookup(src: Record<string, any>, path: string): unknown {
+export function lookup(src: Record<string, any>, path: string): unknown {
   if (path in src) return src[path];
   let cur: any = src;
   for (const part of path.split(".")) {
@@ -217,7 +225,7 @@ function lookup(src: Record<string, any>, path: string): unknown {
 }
 
 /** First scalar value among `paths`; a nested path and a literal dotted key both resolve. */
-function pick(src: Record<string, any>, ...paths: string[]): string {
+export function pick(src: Record<string, any>, ...paths: string[]): string {
   for (const p of paths) {
     const s = scalar(lookup(src, p));
     if (s !== "") return s;
@@ -226,7 +234,7 @@ function pick(src: Record<string, any>, ...paths: string[]): string {
 }
 
 /** Same, but `unknown`-style placeholders do not count as a value. */
-function known(src: Record<string, any>, ...paths: string[]): string {
+export function known(src: Record<string, any>, ...paths: string[]): string {
   for (const p of paths) {
     const s = scalar(lookup(src, p));
     if (!PLACEHOLDER.test(s)) return s;
