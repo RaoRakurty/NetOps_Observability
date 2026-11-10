@@ -47,7 +47,7 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-from syslog_packs import PackTable, field_is_observed, template_parts
+from syslog_packs import PackTable, field_is_observed, template_parts, var_name
 
 import syslog_pack_vrl as V
 
@@ -66,8 +66,12 @@ ASSERTED = ("vendor", "vendor_source", "parser_id", "parser_status", "facility",
             "event_type", "summary", "severity_native_text", "severity_native_code",
             "normalized_severity", "event_category", "dedup_key", "procid", "message",
             "message_original", "title", "correlation_key", "audit_user", "audit_action",
-            "audit_source", "audit_via", "session_id", "audit_groups", "metrics",
+            "audit_source", "audit_via", "session_id", "audit_groups", "dump_id", "metrics",
             "guidance", "enrichment")
+
+
+#: The event time of a fixture that states none (see decide_fixtures).
+DEFAULT_FIXTURE_TIME = "2026-01-01T00:00:00Z"
 
 
 class GenerationError(RuntimeError):
@@ -143,12 +147,13 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
             f"    cx_pk_parser = {json.dumps(g['parser_id'])}",
             f"    cx_pk_vendor = {json.dumps(g['vendor'])}",
         ]
+        labels = g.get("labels") or {}
         if g["facility"]:
-            out.append(f"    cx_pk_fac = {V.template_expr(g['facility'], 'cx_pk_m')}")
+            out.append(f"    cx_pk_fac = {V.template_expr(g['facility'], 'cx_pk_m', labels)}")
         if g["event_type"]:
-            out.append(f"    cx_pk_et = downcase({V.template_expr(g['event_type'], 'cx_pk_m')})")
+            out.append(f"    cx_pk_et = downcase({V.template_expr(g['event_type'], 'cx_pk_m', labels)})")
         if g["summary"]:
-            out += V.template_lines(g["summary"], "cx_pk_m", "cx_pk_sum", "    ")
+            out += V.template_lines(g["summary"], "cx_pk_m", "cx_pk_sum", "    ", labels=labels)
         if g["native_text"]:
             out.append(f"    cx_pk_ntxt = {V.group_expr('cx_pk_m', g['native_text'])}")
         if g["native_code"]:
@@ -188,9 +193,10 @@ def _fields_used(rows: list[dict]) -> list[str]:
 
 def _event_model_atoms(template: str) -> list[dict]:
     """A template as segments the epilogue renders without parsing: `{"c": clause,
-    "a": atoms}`, an atom `=text` (literal), `@group` or `%host` / `%device` (the
-    record's reserved names). A clause segment renders only when none of its
-    groups is empty (syslog_packs._render)."""
+    "a": atoms}`, an atom `=text` (literal), `@group`, `@group|table` (read through a
+    label table) or `%host` / `%device` / `%minute` (the record's reserved names). A
+    clause segment renders only when none of its groups is empty
+    (syslog_packs._render)."""
     segs: list[dict] = []
     cur: dict = {"c": False, "a": []}
     for kind, text in template_parts(template):
@@ -201,24 +207,30 @@ def _event_model_atoms(template: str) -> list[dict]:
         elif kind == "lit":
             cur["a"].append("=" + text)
         else:
-            cur["a"].append(("%" if text in bake_rules.RESERVED_TEMPLATE_VARS else "@") + text)
+            reserved = var_name(text)[0] in bake_rules.RESERVED_TEMPLATE_VARS
+            cur["a"].append(("%" if reserved else "@") + text)
     if cur["a"]:
         segs.append(cur)
     return segs
 
 
 def _event_model_table(rows: list[dict]) -> dict[str, dict]:
-    """grammar id -> its pack and its declared fields then metrics, in order: `k` is
-    `o` (observed field), `d` (derived field) or `m` (metric)."""
+    """grammar id -> its pack, its label tables (`l`) and its declared fields then
+    metrics, in order: `k` is `o` (observed field), `d` (derived field) or `m` (metric;
+    `t` when it keeps the matched text rather than a number)."""
     table: dict[str, dict] = {}
     for g in rows:
         entries: list[dict] = []
         for name, tmpl in (g.get("fields") or {}).items():
             entries.append({"k": "o" if field_is_observed(name, tmpl) else "d", "n": name,
                             "s": _event_model_atoms(tmpl)})
-        for name, group in (g.get("metrics") or {}).items():
-            entries.append({"k": "m", "n": name, "g": group})
-        table[g["id"]] = {"pack": g["pack"], "e": entries}
+        for name, spec in (g.get("metrics") or {}).items():
+            if isinstance(spec, dict):
+                entries.append({"k": "m", "n": name, "g": spec["text"], "t": True})
+            else:
+                entries.append({"k": "m", "n": name, "g": spec})
+        table[g["id"]] = {"pack": g["pack"], "e": entries,
+                          **({"l": g["labels"]} if g.get("labels") else {})}
     return table
 
 
@@ -247,6 +259,14 @@ def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str
            "  cx_pk_host = .hostname",
            '  cx_pk_device = string(cx_inv.device_id) ?? ""',
            '  if cx_pk_device == "" { cx_pk_device = cx_pk_host }',
+           # The record's event time as its UTC minute (syslog_packs.record_minute); a
+           # string time must state its zone, as the Python executor requires.
+           "  cx_pk_ts = .timestamp",
+           '  if is_string(cx_pk_ts) { cx_pk_ts = parse_timestamp(string!(cx_pk_ts), "%+") ?? null }',
+           '  cx_pk_minute = ""',
+           "  cx_pk_tsv, cx_pk_tserr = timestamp(cx_pk_ts)",
+           '  if cx_pk_tserr == null { cx_pk_minute = format_timestamp!(cx_pk_tsv, "%Y-%m-%dT%H:%M", timezone: "UTC") }',
+           "  cx_pk_lbl = object(cx_pk_spec.l) ?? {}",
            '  cx_pk_obs = ""',
            '  cx_pk_der = ""',
            '  cx_pk_unk = ""',
@@ -258,7 +278,10 @@ def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str
            '    if cx_pk_eo.k == "m" {',
            '      cx_pk_raw = string(get(cx_pk_caps, [string(cx_pk_eo.g) ?? ""]) ?? "") ?? ""',
            "      cx_pk_mf, cx_pk_mferr = to_float(cx_pk_raw)",
-           '      if cx_pk_mferr == null && cx_pk_raw != "" {',
+           '      if cx_pk_eo.t == true && cx_pk_raw != "" {',
+           '        cx_pk_met = set!(cx_pk_met, [cx_pk_name], {"value": cx_pk_raw, "basis": "observed"})',
+           '        cx_pk_obs = cx_pk_obs + "metrics." + cx_pk_name + ","',
+           '      } else if cx_pk_eo.t != true && cx_pk_mferr == null && cx_pk_raw != "" {',
            '        cx_pk_met = set!(cx_pk_met, [cx_pk_name], {"value": cx_pk_mf, "basis": "observed"})',
            '        cx_pk_obs = cx_pk_obs + "metrics." + cx_pk_name + ","',
            "      } else {",
@@ -276,9 +299,15 @@ def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str
            '          if starts_with(cx_pk_as, "=") {',
            "            cx_pk_sv = cx_pk_sv + cx_pk_ar",
            "          } else {",
-           '            cx_pk_x = string(get(cx_pk_caps, [cx_pk_ar]) ?? "") ?? ""',
+           '            cx_pk_vt = split(cx_pk_ar, "|")',
+           '            cx_pk_vn = string(cx_pk_vt[0]) ?? ""',
+           '            cx_pk_x = string(get(cx_pk_caps, [cx_pk_vn]) ?? "") ?? ""',
            '            if cx_pk_as == "%host" { cx_pk_x = cx_pk_host }',
            '            if cx_pk_as == "%device" { cx_pk_x = cx_pk_device }',
+           '            if cx_pk_as == "%minute" { cx_pk_x = cx_pk_minute }',
+           '            if length(cx_pk_vt) > 1 && cx_pk_x != "" {',
+           '              cx_pk_x = string(get(cx_pk_lbl, [string(cx_pk_vt[1]) ?? "", cx_pk_x]) ?? null) ?? cx_pk_x',
+           "            }",
            '            if cx_pk_x == "" { cx_pk_miss = true }',
            "            cx_pk_sv = cx_pk_sv + cx_pk_x",
            "          }",
@@ -399,7 +428,10 @@ def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict
     for pack in packs:
         for fx in pack["fixtures"]:
             ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid",
-                                     ) if k in fx}
+                                     "timestamp") if k in fx}
+            # Vector stamps a test event with the current time when it states none, so
+            # every case states one: the same input for both executors, run to run.
+            ev.setdefault("timestamp", DEFAULT_FIXTURE_TIME)
             ev.setdefault("hostname", "spine1")
             ev.setdefault("appname", "unknown")
             ev.setdefault("severity", "notice")
@@ -447,7 +479,7 @@ def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> 
             "        type: log",
             "        log_fields:",
         ]
-        for key in ("hostname", "appname", "severity", "message", "msgid"):
+        for key in ("hostname", "appname", "severity", "message", "msgid", "timestamp"):
             if key in ev:
                 body.append(f"          {key}: {_yaml_str(ev[key])}")
         body += [

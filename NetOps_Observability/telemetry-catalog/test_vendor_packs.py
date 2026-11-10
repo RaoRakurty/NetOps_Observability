@@ -10,12 +10,15 @@ opens an object alone" (owner D3) is enforced for every pack by construction.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 
-import bake_rules as B
 import pytest
+import yaml
+
+import bake_rules as B
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "src", "correlation")))
@@ -37,11 +40,13 @@ def _fixtures() -> list[tuple[str, dict]]:
 def _event(fx: dict) -> dict:
     """The event as the engine receives it: Stage B has already run."""
     raw = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
-           "severity": fx.get("severity", "notice"), "message": fx["message"],
-           "timestamp": "2026-11-09T10:00:00Z"}
-    if "msgid" in fx:
-        raw["msgid"] = fx["msgid"]
-    return _stage_b(raw)
+           "severity": fx.get("severity", "notice"), "message": fx["message"]}
+    for key in ("msgid", "timestamp"):
+        if key in fx:
+            raw[key] = fx[key]
+    # The parse sees the fixture's own time or none (a time-less fixture claims a row
+    # with no stated time); the engine's signal still needs one.
+    return {"timestamp": "2026-11-09T10:00:00Z", **_stage_b(raw)}
 
 
 def _stage_b(raw: dict) -> dict:
@@ -431,8 +436,9 @@ FAULT_EVENT_TYPES = {
 def _parse_fixture(table, fx: dict) -> dict:
     ev = {"hostname": fx.get("hostname", "spine1"), "appname": fx.get("appname", "unknown"),
           "severity": fx.get("severity", "notice"), "message": fx["message"]}
-    if "msgid" in fx:
-        ev["msgid"] = fx["msgid"]
+    for key in ("msgid", "timestamp"):
+        if key in fx:
+            ev[key] = fx[key]
     return table.parse(ev)
 
 
@@ -490,6 +496,10 @@ def test_a_missing_optional_group_is_unknown_never_invented():
     (lambda g: g.update(fields={"title": "costs $5"}), "dollar"),
     (lambda g: g.update(metrics={"Bad-Name": "s"}), "snake_case"),
     (lambda g: g.update(metrics={"ok": "nope"}), "lacks"),
+    (lambda g: g.update(metrics={"ok": {"text": "nope"}}), "lacks"),
+    (lambda g: g.update(metrics={"ok": {"txt": "s"}}), "takes a group"),
+    (lambda g: g.update(summary="{s|nope}"), "does not state"),
+    (lambda g: g.update(fields={"title": "{host|names}"}), "record name"),
 ])
 def test_a_bad_event_model_does_not_bake(mutate, needle):
     g = {"id": "x", "parser_id": "x.v1", "literal": "x", "pattern": "(?P<s>[0-7]) x",
@@ -497,7 +507,111 @@ def test_a_bad_event_model_does_not_bake(mutate, needle):
          "fidelity": "lab_validated"}
     mutate(g)
     with pytest.raises(B.BakeError, match=needle):
-        B.pack_tables([{"pack": "p", "vendor": "v", "grammars": [g]}])
+        B.pack_tables([{"pack": "p", "vendor": "v", "grammars": [g],
+                        "labels": {"names": {"a": "b"}}}])
+
+
+@pytest.mark.parametrize("labels,needle", [
+    ({}, "non-empty"),
+    ({"Bad": {"a": "b"}}, "snake_case"),
+    ({"t": {}}, "needs entries"),
+    ({"t": {"a": 'say "hi"'}}, "plain printable"),
+    ({"t": {"a": "back\\slash"}}, "plain printable"),
+    ({"t": {"a": "costs $5"}}, "plain printable"),
+])
+def test_a_bad_label_table_does_not_load(tmp_path, labels, needle):
+    pack = {"pack": "p", "vendor": "v", "labels": labels,
+            "fixtures": [{"name": "n", "message": "m", "expect": {}, "signal": None,
+                          "fidelity": "lab_validated"}]}
+    (tmp_path / "p.yaml").write_text(yaml.safe_dump(pack), encoding="utf-8")
+    with pytest.raises(B.BakeError, match=needle):
+        B.load_packs(str(tmp_path))
+
+
+def test_an_unquoted_fixture_time_does_not_load(tmp_path):
+    (tmp_path / "p.yaml").write_text(
+        "pack: p\nvendor: v\nfixtures:\n  - {name: n, message: m, expect: {}, signal: null,"
+        " fidelity: lab_validated, timestamp: 2026-11-10T09:34:41Z}\n", encoding="utf-8")
+    with pytest.raises(B.BakeError, match="quoted"):
+        B.load_packs(str(tmp_path))
+
+
+# ── the process snapshot (tracker 387, owner feedback 2026-11-10) ──────────────
+
+_SNAPSHOT_ROWS = re.compile(r"^process snapshot row \d+: ")
+
+
+def _snapshot(table: P.PackTable) -> tuple[dict, list[tuple[dict, dict]], dict]:
+    """(header doc, [(fixture, row doc)], cpu-usage doc) of the golden snapshot."""
+    sdwan = next(p for p in B.load_packs() if p["pack"] == "cisco_sdwan")
+    fx = {f["name"]: f for f in sdwan["fixtures"]}
+    header = _parse_fixture(table, fx["a process-table header is the snapshot's representative row"])
+    cpu = _parse_fixture(table, fx["a notification takes its identity from the event name"])
+    rows = [(f, _parse_fixture(table, f)) for n, f in fx.items() if _SNAPSHOT_ROWS.match(n)]
+    return header, rows, cpu
+
+
+def test_the_golden_snapshot_is_one_dump_with_named_typed_rows():
+    labels = next(p for p in B.load_packs() if p["pack"] == "cisco_sdwan")["labels"]["process"]
+    header, rows, cpu = _snapshot(_FULL)
+    assert len(rows) == 10
+    dump = "dump:vEdge-1:2026-11-10T09:34"
+    assert header["dump_id"] == cpu["dump_id"] == dump
+    assert header["title"] == "Process snapshot on vEdge-1"
+    for fx, doc in rows:
+        # The columns, read here independently of the grammar.
+        _user, _pid, cpu_p, mem_p, vsz, rss, _tty, stat, start, cputime, *cmd = fx["message"].split()
+        head = cmd[0] if cmd[0].startswith("[") else cmd[0].rsplit("/", 1)[-1]
+        proc = re.match(r"\[?([A-Za-z0-9_.@-]+)", head).group(1)
+        name = labels.get(proc, proc)
+        assert doc["dump_id"] == dump, fx["name"]
+        assert doc["event_category"] == "diagnostic_dump"
+        assert doc["summary"] == f"{name} ({proc}) using {cpu_p}% CPU, {mem_p}% memory"
+        assert doc["metrics"] == {
+            "process": {"value": proc, "basis": "observed"},
+            "cpu_percent": {"value": float(cpu_p), "basis": "observed"},
+            "mem_percent": {"value": float(mem_p), "basis": "observed"},
+            "rss_kb": {"value": float(rss), "basis": "observed"},
+            "vsz_kb": {"value": float(vsz), "basis": "observed"},
+            "state": {"value": stat, "basis": "observed"},
+            "start": {"value": start, "basis": "observed"},
+            "cputime": {"value": cputime, "basis": "observed"},
+        }, fx["name"]
+    owner = next(doc for fx, doc in rows if fx["message"].startswith("root 3180 0.7 5.3"))
+    assert owner["summary"] == "data-plane forwarding (FTM) (ftmd) using 0.7% CPU, 5.3% memory"
+    assert owner["metrics"]["rss_kb"]["value"] == 47560.0
+    unnamed = next(doc for fx, doc in rows if "zebra" in fx["message"])
+    assert unnamed["summary"].startswith("zebra (zebra) using ")
+
+
+def test_a_row_with_no_stated_time_names_no_snapshot():
+    """dump_id needs the record's time: without one it is unknown, never a key that
+    would group every time-less row of a device into one snapshot."""
+    got = _FULL.parse({"hostname": "vEdge-1", "appname": "SYSMGR", "severity": "info",
+                       "message": "root 3180 0.7 5.3 513260 47560 ? Sl 09:34 0:08 /usr/sbin/ftmd -f"})
+    assert "dump_id" not in got
+    assert got["enrichment"]["unknown"] == ["dump_id"]
+    zoneless = _FULL.parse({"hostname": "vEdge-1", "appname": "SYSMGR", "severity": "info",
+                            "timestamp": "2026-11-10T09:34:41",
+                            "message": "root 3180 0.7 5.3 513260 47560 ? Sl 09:34 0:08 /usr/sbin/ftmd -f"})
+    assert "dump_id" not in zoneless
+
+
+def test_the_snapshot_checks_catch_a_broken_label_table_or_window():
+    """Mutation check: a dropped label and a shifted time each change what the golden
+    test asserts, so neither could slip through it."""
+    packs = B.load_packs()
+    sdwan = next(p for p in packs if p["pack"] == "cisco_sdwan")
+    del sdwan["labels"]["process"]["ftmd"]
+    mutated = P.PackTable(*B.pack_tables(packs))
+    _header, rows, _cpu = _snapshot(mutated)
+    owner = next(doc for fx, doc in rows if fx["message"].startswith("root 3180 0.7 5.3"))
+    assert owner["summary"] == "ftmd (ftmd) using 0.7% CPU, 5.3% memory"
+    fx = dict(next(f for f, _ in rows if f["message"].startswith("root 3180")))
+    fx["timestamp"] = "2026-11-10T09:35:00Z"
+    assert _parse_fixture(_FULL, fx)["dump_id"] == "dump:vEdge-1:2026-11-10T09:35"
+    fx["timestamp"] = "2026-11-10T10:34:41+01:00"   # the same instant, another zone
+    assert _parse_fixture(_FULL, fx)["dump_id"] == "dump:vEdge-1:2026-11-10T09:34"
 
 
 def test_guidance_needs_its_three_parts():

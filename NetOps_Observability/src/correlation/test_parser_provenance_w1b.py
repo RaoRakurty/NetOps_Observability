@@ -628,7 +628,12 @@ RULES_HASH_SONIC = "4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282
 #: never_established/progressing class; sdwan.bgp_peer gated on the class; the event_type
 #: BGP row reads bgp.peer_address instead of the varbind-name scan.
 RULES_HASH_TRAP_BGP_CLASSES = "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342"
-RULES_HASH_A3 = RULES_HASH_TRAP_BGP_CLASSES
+#:
+#: Process snapshot (2026-11-10, tracker 387 owner feedback): the SD-WAN `ps` row reads
+#: every column and the process basename; its summary reads the pack's `process` label
+#: table, so the labels ride in the hash. dump_id and the typed metrics are presentation.
+RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f"
+RULES_HASH_A3 = RULES_HASH_PROCESS_SNAPSHOT
 
 
 def _guard_patterns(node) -> list[str]:

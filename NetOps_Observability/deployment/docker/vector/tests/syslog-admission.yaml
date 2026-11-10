@@ -9,8 +9,8 @@
 # Python screen admit exactly the same lines.
 #
 #   rules_hash : 3a12b8d38230b7e852fbb6bc58ad7a0f7aff9a12b00c7c0a1a14bb5919933b58
-#   cases      : 137 (131 fixture corpus and vendor packs + 6 hand)
-#   admitted   : 104 / 137 (33 correctly rejected)
+#   cases      : 147 (141 fixture corpus and vendor packs + 6 hand)
+#   admitted   : 104 / 147 (43 correctly rejected)
 #
 # Run (from the repo root). Keep every dollar sign out of this file:
 # Vector interpolates environment variables in the raw config TEXT,
@@ -1139,7 +1139,7 @@ tests:
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
               assert_eq!(.cx_admission.v, "3a12b8d38230", "wrong rules_hash stamp")
-  - name: "pack cisco_sdwan: a process-table header is a diagnostic dump, not an alarm"
+  - name: "pack cisco_sdwan: a process-table header is the snapshot's representative row"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log
@@ -1154,12 +1154,12 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission, null, "expected NO admission stamp")
-  - name: "pack cisco_sdwan: a process-table row keeps its command and load, digits masked"
+  - name: "pack cisco_sdwan: process snapshot row 1: ftmd"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log
         log_fields:
-          message: "root      1234  2.5  1.2 123456 23456 ?      Sl   Oct09   1:23 /usr/sbin/ftmd -f"
+          message: "root 3180 0.7 5.3 513260 47560 ? Sl 09:34 0:08 /usr/sbin/ftmd -f"
           appname: "SYSMGR"
           severity: "info"
           hostname: "vEdge-1"
@@ -1169,7 +1169,157 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission, null, "expected NO admission stamp")
-  - name: "pack cisco_sdwan: a kernel-thread row is the same dump"
+  - name: "pack cisco_sdwan: process snapshot row 2: vdaemon"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       2934  0.3  2.1 301440 18936 ?        Sl   09:34   0:03 /usr/sbin/vdaemon -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 3: fpmd"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       3077  0.1  1.4 270104 12544 ?        Sl   09:34   0:01 /usr/sbin/fpmd -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 4: confd"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       2611  1.2  9.8 845212 87644 ?        Ssl  09:33   0:15 /usr/sbin/confd --foreground"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 5: iked"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       3301  0.0  0.9 160220  8312 ?        Sl   09:34   0:00 /usr/sbin/iked -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 6: ompd"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       2990  0.2  1.7 288876 15280 ?        Sl   09:34   0:02 /usr/sbin/ompd -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 7: snmpd"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       2500  0.0  0.6  45120  5432 ?        Ss   09:33   0:00 /usr/sbin/snmpd -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 8: sshd"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       1810  0.0  0.3  30468  3020 ?        Ss   09:33   0:00 /usr/sbin/sshd -D"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 9: kworker"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root         37  0.4  0.0      0     0 ?        I    09:33   0:05 [kworker/0:2]"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: process snapshot row 10: zebra"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root       4012  0.1  0.2  12345  2048 ?        S    09:34   0:00 /usr/bin/zebra -d"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: a row logged in the next minute is the next snapshot"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "root      3180  0.9  5.3 513260 47560 ?        Sl   09:34   0:09 /usr/sbin/ftmd -f"
+          appname: "SYSMGR"
+          severity: "info"
+          hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack cisco_sdwan: a kernel thread started on an earlier day is a row of the same snapshot"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log

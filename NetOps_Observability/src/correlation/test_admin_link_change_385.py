@@ -471,10 +471,11 @@ def test_the_parser_is_untouched():
     line. The admin severity this file protects did not move: a trap link-down stays
     high (test below), and only the protocol line, which carries no cause, went to warn.
     Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
-    behind every older one; the trap link rows this file protects did not move."""
-    assert parser_rules.PARSER_REV == "2026-11-10-trap-bgp-classes"
+    behind every older one; the trap link rows this file protects did not move.
+    Re-pinned for the tracker 387 process snapshot: the SD-WAN `ps` row only."""
+    assert parser_rules.PARSER_REV == "2026-11-10-process-snapshot"
     assert parser_rules.BAKED_RULES_HASH == (
-        "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342")
+        "d2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

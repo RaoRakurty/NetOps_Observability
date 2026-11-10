@@ -34,6 +34,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 #: Mirrors the aggregator's keyword ladder (Stage B, "Severity reconcile"), which
@@ -64,7 +65,7 @@ class Grammar:
 
     __slots__ = (
         "alarm_floor", "apps", "category", "event_type", "facility", "fields", "grammar_id",
-        "guidance", "literal", "metrics", "native_code", "native_text", "pack", "parser_id",
+        "guidance", "labels", "literal", "metrics", "native_code", "native_text", "pack", "parser_id",
         "regex", "sev_digit", "sev_map", "sev_word", "summary", "vendor", "with_msgid",
     )
 
@@ -89,8 +90,12 @@ class Grammar:
         self.category = str(row.get("category") or "")
         self.with_msgid = bool(row.get("with_msgid"))
         self.fields: dict[str, str] = dict(row.get("fields") or {})
-        self.metrics: dict[str, str] = dict(row.get("metrics") or {})
+        #: name -> group (a number) or {"text": group} (the matched text itself).
+        self.metrics: dict[str, Any] = dict(row.get("metrics") or {})
         self.guidance: dict[str, Any] = dict(row.get("guidance") or {})
+        #: The pack's label tables this row's templates read: table -> {value: label}.
+        self.labels: dict[str, dict[str, str]] = {
+            str(t): dict(v) for t, v in (row.get("labels") or {}).items()}
 
     def haystack(self, msg: str, ev: Mapping[str, Any]) -> str:
         """The text this row reads: `<MSGID>: <message>` for a `with_msgid` row when the
@@ -128,10 +133,14 @@ def template_parts(template: str) -> list[tuple[str, str]]:
     `[ by {user}]` is an optional CLAUSE: it renders only when every `{group}` in it
     matched something, so a field the line did not carry drops its words with it and
     never leaves `by ` hanging. Clauses do not nest; brackets are template syntax, so a
-    literal bracket cannot be written in a template (a group's value may hold one)."""
+    literal bracket cannot be written in a template (a group's value may hold one).
+
+    `{proc|process}` reads group `proc` through the pack's label table `process`: the
+    label when the table names the value, else the value itself. A var's text keeps
+    the `|table` suffix (split it with var_name)."""
     parts: list[tuple[str, str]] = []
     pos = 0
-    for tok in re.finditer(r"\{(\w+)\}|\[|\]", template):
+    for tok in re.finditer(r"\{(\w+(?:\|\w+)?)\}|\[|\]", template):
         if tok.start() > pos:
             parts.append(("lit", template[pos:tok.start()]))
         parts.append(("var", tok.group(1)) if tok.group(1) else (tok.group(0), ""))
@@ -141,8 +150,16 @@ def template_parts(template: str) -> list[tuple[str, str]]:
     return parts
 
 
-def _render(template: str, m: re.Match[str], record: Mapping[str, str] | None = None) -> str:
-    """`record` answers the reserved names (`host`, `device`) a template may read."""
+def var_name(text: str) -> tuple[str, str]:
+    """A template var's (name, label table); the table is "" for a plain `{group}`."""
+    name, _, table = text.partition("|")
+    return name, table
+
+
+def _render(template: str, m: re.Match[str], record: Mapping[str, str] | None = None,
+            labels: Mapping[str, Mapping[str, str]] | None = None) -> str:
+    """`record` answers the reserved names (`host`, `device`, `minute`) a template may
+    read; `labels` the pack label tables a `{group|table}` var reads through."""
     out: list[str] = []
     clause: list[str] | None = None
     clause_ok = True
@@ -155,12 +172,15 @@ def _render(template: str, m: re.Match[str], record: Mapping[str, str] | None = 
                 out.extend(clause)
             clause = None
             continue
+        name, table = var_name(text)
         if kind == "lit":
             value = text
-        elif record is not None and text in record:
-            value = record[text]
+        elif record is not None and name in record:
+            value = record[name]
         else:
-            value = m.group(text) or ""
+            value = m.group(name) or ""
+        if kind == "var" and table and value:
+            value = (labels or {}).get(table, {}).get(value, value)
         if clause is None:
             out.append(value)
         else:
@@ -189,8 +209,38 @@ def field_is_observed(name: str, template: str) -> bool:
     or a constant the matching row states (`audit_action: login_accepted`), is derived."""
     if name in _DERIVED_FIELDS:
         return False
-    return any(kind == "var" and text not in ("host", "device")
+    return any(kind == "var" and var_name(text)[0] not in RECORD_NAMES
                for kind, text in template_parts(template))
+
+
+#: Template names that read the record, not the line (bake_rules.RESERVED_TEMPLATE_VARS).
+RECORD_NAMES = frozenset({"host", "device", "minute"})
+
+_TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.\d+)?)?"
+                    r"(Z|[+-]\d\d:?\d\d)?$")
+
+
+def record_minute(ts: Any) -> str:
+    """The record's event time as its UTC minute, `YYYY-MM-DDTHH:MM`; "" when the
+    record states no readable time. Stage B formats the same minute."""
+    if isinstance(ts, datetime):
+        dt = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    m = _TS_RE.match(str(ts or "").strip())
+    if m is None or m.group(7) is None:
+        return ""
+    zone = m.group(7)
+    tz = timezone.utc
+    if zone != "Z":
+        sign = -1 if zone[0] == "-" else 1
+        hh, mm = int(zone[1:3]), int(zone[-2:])
+        tz = timezone(sign * timedelta(hours=hh, minutes=mm))
+    try:
+        dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                      int(m.group(4)), int(m.group(5)), tzinfo=tz)
+    except ValueError:
+        return ""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
 
 
 def _metric_value(raw: str) -> float | None:
@@ -206,12 +256,13 @@ def _event_model(g: Grammar, m: re.Match[str], ev: Mapping[str, Any], out: dict[
     pack guidance and the provenance of each field. Stage B writes the same, generated
     from the same rows."""
     host = str(ev.get("hostname") or "unknown")
-    record = {"host": host, "device": str(ev.get("device_id") or "") or host}
+    record = {"host": host, "device": str(ev.get("device_id") or "") or host,
+              "minute": record_minute(ev.get("timestamp"))}
     observed = [k for k in _OBSERVED_ORDER if out.get(k)]
     derived = ["normalized_severity"]
     unknown: list[str] = []
     for name, tmpl in g.fields.items():
-        value = _render(tmpl, m, record)
+        value = _render(tmpl, m, record, g.labels)
         if value:
             out[name] = value
             (observed if field_is_observed(name, tmpl) else derived).append(name)
@@ -220,8 +271,12 @@ def _event_model(g: Grammar, m: re.Match[str], ev: Mapping[str, Any], out: dict[
     if out.get("dedup_key"):
         derived.append("dedup_key")
     metrics: dict[str, dict[str, Any]] = {}
-    for name, group in g.metrics.items():
-        v = _metric_value(m.group(group) or "")
+    for name, spec in g.metrics.items():
+        v: float | str | None
+        if isinstance(spec, Mapping):
+            v = m.group(str(spec["text"])) or None
+        else:
+            v = _metric_value(m.group(spec) or "")
         if v is None:
             unknown.append(f"metrics.{name}")
         else:
@@ -314,7 +369,7 @@ class PackTable:
             for key, template in (("facility", g.facility),
                                   ("event_type", g.event_type),
                                   ("summary", g.summary)):
-                text = _render(template, m) if template else ""
+                text = _render(template, m, labels=g.labels) if template else ""
                 if text:
                     out[key] = text.lower() if key == "event_type" else text
             if g.vendor and not inventory_vendor:

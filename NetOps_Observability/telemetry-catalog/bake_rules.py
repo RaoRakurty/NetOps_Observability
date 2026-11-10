@@ -302,7 +302,7 @@ def normalize_row(row: dict) -> dict:
 
 PACK_KEYS = frozenset({
     "pack", "vendor", "description", "severity_words", "edge_shapes", "envelopes",
-    "grammars", "rules", "fixtures", "wanted", "guidance",
+    "grammars", "rules", "fixtures", "wanted", "guidance", "labels",
 })
 #: A frame shape normalised at the edge, before syslog-ng's legacy parser runs. `match`
 #: is anchored at the PRI, so it costs one failed anchor on any other frame.
@@ -321,11 +321,16 @@ GRAMMAR_KEYS = frozenset({
 #: and `guidance` are their own keys.
 EVENT_FIELDS = (
     "title", "correlation_key", "audit_user", "audit_action", "audit_source",
-    "audit_via", "session_id", "audit_groups",
+    "audit_via", "session_id", "audit_groups", "dump_id",
 )
-#: Template names that read the record, not the line: the sender's hostname and the
-#: inventory device id (the hostname when the registry states none).
-RESERVED_TEMPLATE_VARS = frozenset({"host", "device"})
+#: Template names that read the record, not the line: the sender's hostname, the
+#: inventory device id (the hostname when the registry states none) and the record's
+#: event time as its UTC minute (`YYYY-MM-DDTHH:MM`, "" when the record states none).
+RESERVED_TEMPLATE_VARS = frozenset({"host", "device", "minute"})
+#: A pack label table's name, and the text a label may hold: it is compiled into a VRL
+#: string literal, so printable ASCII with no backslash, quote or dollar sign.
+_LABEL_TABLE_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+_LABEL_TEXT_RE = re.compile(r"[ !#%&(-\[\]-~]{1,96}")
 _METRIC_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 GUIDANCE_KEYS = frozenset({"event_types", "impact", "next_checks"})
 GRAMMAR_REQUIRED = ("id", "parser_id", "literal", "pattern", "fidelity")
@@ -336,14 +341,14 @@ ENVELOPE_KEYS = frozenset({
 ENVELOPE_REQUIRED = ("id", "literal", "pattern", "message", "preserve_as", "fidelity")
 FIXTURE_KEYS = frozenset({
     "name", "hostname", "appname", "severity", "message", "expect", "signal",
-    "fidelity", "msgid", "source",
+    "fidelity", "msgid", "source", "timestamp",
 })
 FIXTURE_REQUIRED = ("name", "message", "expect", "signal", "fidelity")
 WANTED_KEYS = frozenset({"symptom", "why_absent", "kind"})
 #: Characters a grammar may not contain: a pattern is pasted into `r'…'` VRL, and
 #: Vector interpolates `$` in the raw config text, comments included.
 PACK_FORBIDDEN_CHARS = ("'", "$")
-_TEMPLATE_VAR_RE = re.compile(r"\{(\w+)\}")
+_TEMPLATE_VAR_RE = re.compile(r"\{(\w+)(?:\|(\w+))?\}")
 
 
 def _check_pack_pattern(where: str, spec: dict) -> dict[str, int]:
@@ -388,8 +393,11 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
     seen.add(gid)
     groups = _check_pack_pattern(where, g)
     _check_fidelity(where, g)
+    labels = pack.get("labels") or {}
+    used: set[str] = set()
     for key in ("facility", "event_type", "summary"):
-        _check_template(where, key, str(g.get(key) or ""), groups, reserved=False)
+        used |= _check_template(where, key, str(g.get(key) or ""), groups, reserved=False,
+                                labels=labels)
     fields = g.get("fields") or {}
     if not isinstance(fields, dict):
         raise BakeError(f"{where}: fields must be a mapping")
@@ -398,14 +406,23 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
             raise BakeError(f"{where}: field {name!r} is not one of {EVENT_FIELDS}")
         if not isinstance(tmpl, str) or not tmpl.strip():
             raise BakeError(f"{where}: field {name!r} needs a template")
-        _check_template(where, name, tmpl, groups, reserved=True)
+        used |= _check_template(where, name, tmpl, groups, reserved=True, labels=labels)
     metrics = g.get("metrics") or {}
     if not isinstance(metrics, dict):
         raise BakeError(f"{where}: metrics must be a mapping of name to group")
-    for name, group in metrics.items():
+    baked_metrics: dict[str, Any] = {}
+    for name, spec in metrics.items():
         if not _METRIC_NAME_RE.fullmatch(str(name)):
             raise BakeError(f"{where}: metric name {name!r} is not snake_case")
-        _check_group(where, str(group), groups)
+        # `name: group` is a number; `name: {text: group}` keeps the matched text.
+        if isinstance(spec, dict):
+            if set(spec) != {"text"}:
+                raise BakeError(f"{where}: metric {name!r} takes a group or {{text: group}}")
+            _check_group(where, str(spec["text"]), groups)
+            baked_metrics[str(name)] = {"text": str(spec["text"])}
+        else:
+            _check_group(where, str(spec), groups)
+            baked_metrics[str(name)] = str(spec)
     for key in ("native_text", "native_code"):
         if g.get(key):
             _check_group(where, str(g[key]), groups)
@@ -462,23 +479,33 @@ def _bake_grammar(pack: dict, g: dict, seen: set[str]) -> dict:
         "fidelity": g["fidelity"], "source": g.get("source") or "",
         **({"with_msgid": True} if with_msgid else {}),
         **({"fields": dict(fields)} if fields else {}),
-        **({"metrics": {str(k): str(v) for k, v in metrics.items()}} if metrics else {}),
+        **({"metrics": baked_metrics} if baked_metrics else {}),
         **({"guidance": guidance_table(pack)} if pack.get("guidance") else {}),
+        **({"labels": {t: dict(labels[t]) for t in sorted(used)}} if used else {}),
     }
 
 
 def _check_template(where: str, key: str, tmpl: str, groups: dict[str, int],
-                    reserved: bool) -> None:
-    """Groups exist (or are a reserved record name), and `[ ... ]` optional clauses are
-    balanced, flat, and hold a group to drop on (syslog_packs.template_parts)."""
+                    reserved: bool, labels: dict | None = None) -> set[str]:
+    """Groups exist (or are a reserved record name), a `{group|table}` names a label
+    table the pack states, and `[ ... ]` optional clauses are balanced, flat, and hold a
+    group to drop on (syslog_packs.template_parts). Returns the label tables read."""
     if "$" in tmpl:
         raise BakeError(f"{where}: {key} carries a dollar sign: Vector would interpolate it")
-    for name in _TEMPLATE_VAR_RE.findall(tmpl):
+    used: set[str] = set()
+    for name, table in _TEMPLATE_VAR_RE.findall(tmpl):
+        if table:
+            if name in RESERVED_TEMPLATE_VARS:
+                raise BakeError(f"{where}: {key} reads a record name through a label table")
+            if table not in (labels or {}):
+                raise BakeError(f"{where}: {key} reads label table {table!r}, "
+                                "which the pack does not state")
+            used.add(table)
         if reserved and name in RESERVED_TEMPLATE_VARS:
             continue
         _check_group(where, name, groups)
     depth, has_var = 0, False
-    for tok in re.finditer(r"\{(\w+)\}|\[|\]", tmpl):
+    for tok in re.finditer(r"\{(\w+(?:\|\w+)?)\}|\[|\]", tmpl):
         if tok.group(0) == "[":
             if depth:
                 raise BakeError(f"{where}: {key} nests an optional clause")
@@ -493,6 +520,25 @@ def _check_template(where: str, key: str, tmpl: str, groups: dict[str, int],
             has_var = True
     if depth:
         raise BakeError(f"{where}: {key} leaves an optional clause open")
+    return used
+
+
+def _check_labels(where: str, labels: object) -> None:
+    """`labels: {table: {value: label}}`, vendor-scoped presentation text."""
+    if not isinstance(labels, dict) or not labels:
+        raise BakeError(f"{where}: labels must be a non-empty mapping of table to entries")
+    for table, entries in labels.items():
+        if not _LABEL_TABLE_RE.fullmatch(str(table)):
+            raise BakeError(f"{where}: label table {table!r} is not snake_case")
+        if not isinstance(entries, dict) or not entries:
+            raise BakeError(f"{where}: label table {table!r} needs entries")
+        for value, label in entries.items():
+            if not isinstance(value, str) or not value or not isinstance(label, str):
+                raise BakeError(f"{where}: label table {table!r} maps text to text")
+            for text in (value, label):
+                if not _LABEL_TEXT_RE.fullmatch(text):
+                    raise BakeError(f"{where}: label {text!r} is not plain printable text "
+                                    "(no quote, backslash or dollar sign)")
 
 
 def guidance_table(pack: dict) -> dict[str, dict]:
@@ -597,6 +643,9 @@ def _check_fixture(pack: dict, fx: dict) -> None:
             raise BakeError(f"{where}: missing required key {k!r}")
     if fx["fidelity"] not in FIDELITY_STATUSES:
         raise BakeError(f"{where}: fidelity {fx['fidelity']!r} not on the ladder")
+    if "timestamp" in fx and not isinstance(fx["timestamp"], str):
+        # Unquoted, YAML reads a datetime, and the vector suite would get its str().
+        raise BakeError(f"{where}: timestamp must be a quoted RFC 3339 string")
 
 
 def load_packs(packs_dir: str = PACKS_DIR) -> list[dict]:
@@ -622,6 +671,8 @@ def load_packs(packs_dir: str = PACKS_DIR) -> list[dict]:
         if pack["pack"] in names:
             raise BakeError(f"{where}: duplicate pack name {pack['pack']!r}")
         names.add(pack["pack"])
+        if "labels" in pack:
+            _check_labels(where, pack["labels"])
         if not pack.get("fixtures"):
             raise BakeError(f"{where}: a pack with no fixtures proves nothing")
         for fx in pack["fixtures"]:

@@ -509,7 +509,8 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # read those vendors' formats only; the V1 noise pool is Cisco IOS three-part lines.
     # 2026-11-10-trap-bgp-classes: tracker 387 trap BGP classes (TRAP lane) and the SONiC
     # pack; the V1 noise pool has neither.
-    assert parser_rules.PARSER_REV == "2026-11-10-trap-bgp-classes", (
+    # 2026-11-10-process-snapshot: the SD-WAN `ps` row; the V1 pool has no SYSMGR line.
+    assert parser_rules.PARSER_REV == "2026-11-10-process-snapshot", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

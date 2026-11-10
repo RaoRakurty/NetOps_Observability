@@ -402,13 +402,14 @@ def test_syslog_event_model_fields_are_declared_with_their_types():
         "title": "text", "correlation_key": "keyword",
         "audit_user": "keyword", "audit_action": "keyword", "audit_source": "keyword",
         "audit_via": "keyword", "session_id": "keyword", "audit_groups": "keyword",
+        "dump_id": "keyword", "event_category": "keyword",
     }
     wrong = {k: props.get(k, {}).get("type") for k, t in flat.items() if props.get(k, {}).get("type") != t}
     assert not wrong, f"netops-syslog event-model field types: {wrong}"
     m = props["metrics"]
     assert m.get("dynamic") is False, "metrics must not grow fields from the wire"
     for name, spec in m["properties"].items():
-        assert spec["properties"]["value"]["type"] == "double", name
+        assert spec["properties"]["value"]["type"] in ("double", "keyword"), name
         assert spec["properties"]["basis"]["type"] == "keyword", name
     # Pack text: kept in the document, never a mapping a pack edit could grow.
     assert props["guidance"] == {"type": "object", "enabled": False}
@@ -423,8 +424,14 @@ def test_the_syslog_metrics_mapping_covers_every_pack_metric():
     import bake_rules
     grammars, _ = bake_rules.pack_tables(bake_rules.load_packs())
     names = {m for g in grammars for m in (g.get("metrics") or {})}
-    declared = set(_props("netops-syslog")["metrics"]["properties"])
-    assert names and names <= declared, f"pack metrics not declared: {sorted(names - declared)}"
+    declared = _props("netops-syslog")["metrics"]["properties"]
+    assert names and names <= set(declared), f"pack metrics not declared: {sorted(names - set(declared))}"
+    # A number is a double, a `{text: group}` metric a keyword: the value's own type.
+    for g in grammars:
+        for name, spec in (g.get("metrics") or {}).items():
+            want = "keyword" if isinstance(spec, dict) else "double"
+            got = declared[name]["properties"]["value"]["type"]
+            assert got == want, f"metrics.{name}.value is {got}, the pack states a {want}"
 
 
 def test_every_event_field_a_pack_can_state_is_declared_for_syslog():

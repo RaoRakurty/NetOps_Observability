@@ -347,6 +347,9 @@
             "audit_groups": {
               "type": "keyword"
             },
+            "dump_id": {
+              "type": "keyword"
+            },
             "metrics": {
               "type": "object",
               "dynamic": false,
@@ -381,7 +384,7 @@
                     }
                   }
                 },
-                "process_cpu_percent": {
+                "cpu_percent": {
                   "properties": {
                     "value": {
                       "type": "double"
@@ -391,7 +394,67 @@
                     }
                   }
                 },
-                "process_mem_percent": {
+                "cputime": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "mem_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "process": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "rss_kb": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "start": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "state": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "vsz_kb": {
                   "properties": {
                     "value": {
                       "type": "double"

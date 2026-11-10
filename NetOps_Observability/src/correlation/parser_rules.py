@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-10-trap-bgp-classes'
+PARSER_REV = '2026-11-10-process-snapshot'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -255,10 +255,10 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_ios',
   'parser_id': 'cisco_sdwan_diag.v1',
   'literal': ':',
   'apps': ['sysmgr'],
-  'pattern': '^(?P<user>\\S{1,32})\\s+(?P<pid>\\d{1,7})\\s+(?P<cpu>\\d{1,3}\\.\\d)\\s+(?P<mem>\\d{1,3}\\.\\d)\\s+\\d{1,12}\\s+\\d{1,12}\\s+\\S{1,16}\\s+\\S{1,8}\\s+\\S{1,8}\\s+\\d{1,6}:\\d{2}\\s+(?P<cmd>\\S.{0,255})',
+  'pattern': '^(?P<user>\\S{1,32})\\s+(?P<pid>\\d{1,7})\\s+(?P<cpu>\\d{1,3}\\.\\d)\\s+(?P<mem>\\d{1,3}\\.\\d)\\s+(?P<vsz>\\d{1,12})\\s+(?P<rss>\\d{1,12})\\s+(?P<tty>\\S{1,16})\\s+(?P<stat>\\S{1,8})\\s+(?P<start>\\S{1,8})\\s+(?P<time>\\d{1,6}:\\d{2})\\s+(?P<cmd>(?:\\[|\\S*/)?(?P<proc>[A-Za-z0-9_.@-]{1,64}).{0,255})',
   'facility': '',
   'event_type': 'process_table',
-  'summary': '{cmd} cpu {cpu}% mem {mem}%',
+  'summary': '{proc|process} ({proc}) using {cpu}% CPU, {mem}% memory',
   'sev_digit': '',
   'sev_word': '',
   'sev_map': {},
@@ -267,7 +267,21 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_ios',
   'alarm_floor': None,
   'category': 'diagnostic_dump',
   'fidelity': 'lab_validated',
-  'source': ''},
+  'source': '',
+  'labels': {'process': {'ftmd': 'data-plane forwarding (FTM)',
+                         'vdaemon': 'control-plane connections (vSmart/vBond)',
+                         'fpmd': 'forwarding policy',
+                         'confd': 'configuration/management (confd)',
+                         'iked': 'IPsec key exchange',
+                         'ikev2': 'IPsec key exchange',
+                         'omp': 'OMP routing',
+                         'ompd': 'OMP routing',
+                         'cfgmgr': 'configuration manager',
+                         'sysmgrd': 'system manager',
+                         'snmpd': 'SNMP agent',
+                         'sshd': 'SSH server',
+                         'ntpd': 'time sync (NTP)',
+                         'kworker': 'kernel worker'}}},
  {'pack': 'juniper_junos',
   'vendor': 'juniper',
   'id': 'juniper_junos.junos_tag',
@@ -3582,6 +3596,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342'
+BAKED_RULES_HASH = 'd2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

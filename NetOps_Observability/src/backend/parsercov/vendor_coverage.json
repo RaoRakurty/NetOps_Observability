@@ -78,7 +78,7 @@
           "trap_definitions": 16
         },
         "syslog": {
-          "fixtures": 33,
+          "fixtures": 42,
           "grammars": 13,
           "rules": {
             "doc_claimed": 11,

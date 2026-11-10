@@ -42,6 +42,8 @@ grammars:
     fields:
       title: '{warning} on {host}'
       correlation_key: 'cpu:{device}'
+      # The process snapshot the edge logs with this crossing carries the same id.
+      dump_id: '[dump:{device}:{minute}]'
     metrics:
       cpu_user_percent: user
       cpu_system_percent: system
@@ -184,10 +186,13 @@ grammars:
 
   # vEdge SYSMGR process-table dumps (live, 2026-11-10): with each cpu-usage event the
   # vEdge logs `ps` one line per row, a header then one row per process. Diagnostic
-  # context, never an alarm: no severity reader, no rule row. Header and rows share one
-  # event type, so the read path's (device, app, event type) key plus time groups one
-  # dump, and the cpu-usage line it accompanies is the same host within the same second.
-  # The pack mechanism has no cross-record link, so that join is left to read time.
+  # context, never an alarm: no severity reader, no rule row (event_category
+  # diagnostic_dump, which the Logs list hides by default). Every row of one snapshot,
+  # and the cpu-usage line it accompanies, carries one dump_id: the device and the UTC
+  # minute of the record. Stateless, so a snapshot that straddles a minute boundary
+  # splits in two, and rows carry no sequence number: read time orders a dump by
+  # receive time and joins the neighbouring minute. The header is the dump's
+  # representative row. Rows stay stored (D5).
   - id: sysmgr_ps_header
     parser_id: cisco_sdwan_diag.v1
     literal: 'PID %CPU %MEM'
@@ -197,24 +202,35 @@ grammars:
     summary: process table header
     category: diagnostic_dump
     fields:
-      title: 'Process table on {host}'
+      title: 'Process snapshot on {host}'
       correlation_key: 'process_table:{device}'
+      dump_id: '[dump:{device}:{minute}]'
     fidelity: lab_validated
 
+  # One `ps aux` row. `proc` is the command's basename (`/usr/sbin/ftmd -f` -> ftmd) or a
+  # kernel thread's name (`[kworker/0:2]` -> kworker), read through the pack's
+  # `process` label table for the summary.
   - id: sysmgr_ps_row
     parser_id: cisco_sdwan_diag.v1
     literal: ':'
     apps: [sysmgr]
-    pattern: '^(?P<user>\S{1,32})\s+(?P<pid>\d{1,7})\s+(?P<cpu>\d{1,3}\.\d)\s+(?P<mem>\d{1,3}\.\d)\s+\d{1,12}\s+\d{1,12}\s+\S{1,16}\s+\S{1,8}\s+\S{1,8}\s+\d{1,6}:\d{2}\s+(?P<cmd>\S.{0,255})'
+    pattern: '^(?P<user>\S{1,32})\s+(?P<pid>\d{1,7})\s+(?P<cpu>\d{1,3}\.\d)\s+(?P<mem>\d{1,3}\.\d)\s+(?P<vsz>\d{1,12})\s+(?P<rss>\d{1,12})\s+(?P<tty>\S{1,16})\s+(?P<stat>\S{1,8})\s+(?P<start>\S{1,8})\s+(?P<time>\d{1,6}:\d{2})\s+(?P<cmd>(?:\[|\S*/)?(?P<proc>[A-Za-z0-9_.@-]{1,64}).{0,255})'
     event_type: process_table
-    summary: '{cmd} cpu {cpu}% mem {mem}%'
+    summary: '{proc|process} ({proc}) using {cpu}% CPU, {mem}% memory'
     category: diagnostic_dump
     fields:
-      title: 'Process {cmd} on {host}'
+      title: '{proc|process} ({proc}) on {host}'
       correlation_key: 'process_table:{device}'
+      dump_id: '[dump:{device}:{minute}]'
     metrics:
-      process_cpu_percent: cpu
-      process_mem_percent: mem
+      process: {text: proc}
+      cpu_percent: cpu
+      mem_percent: mem
+      rss_kb: rss
+      vsz_kb: vsz
+      state: {text: stat}
+      start: {text: start}
+      cputime: {text: time}
     fidelity: lab_validated
 
 # Typed rows, in match order. D3: only the critical CPU row may open an object alone.
@@ -620,6 +636,7 @@ fixtures:
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
+    timestamp: '2026-11-10T09:34:40Z'
     message: '%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:"vEdge-1" system-ip:192.0.2.1 warning:"System cpu usage is above 90% (critically high)" cpu-user-percentage:"9.18" cpu-system-percentage:"90.82" cpu-idle-percentage:"0.00"'
     expect:
       parser_status: parsed
@@ -629,13 +646,14 @@ fixtures:
       normalized_severity: notice
       title: 'System cpu usage is above 90% (critically high) on vEdge-1'
       correlation_key: 'cpu:vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
       metrics:
         cpu_user_percent: {value: 9.18, basis: observed}
         cpu_system_percent: {value: 90.82, basis: observed}
         cpu_idle_percent: {value: 0.0, basis: observed}
       enrichment:
         fields_observed: [facility, event_type, summary, severity_native_text, metrics.cpu_user_percent, metrics.cpu_system_percent, metrics.cpu_idle_percent]
-        fields_derived: [normalized_severity, title, correlation_key]
+        fields_derived: [normalized_severity, title, correlation_key, dump_id]
         fields_guidance: [guidance]
         unknown: []
     signal: null
@@ -888,11 +906,17 @@ fixtures:
       event_category: management_audit
     signal: {kind: device_alarm, severity: warn, opens_alone: false}
 
-  - name: a process-table header is a diagnostic dump, not an alarm
+  # A golden process snapshot (tracker 387): the header, then ten rows of one `ps aux`
+  # logged within one minute. The first row is the owner's live line, digits as given.
+  # Every row and the header share dump_id; each row names its process in plain words
+  # (the pack's `process` table; an unnamed one keeps its basename) and carries its
+  # load as typed metrics.
+  - name: a process-table header is the snapshot's representative row
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
     severity: info
+    timestamp: '2026-11-10T09:34:41Z'
     message: 'USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND'
     expect:
       parser_id: cisco_sdwan_diag.v1
@@ -902,39 +926,311 @@ fixtures:
       event_category: diagnostic_dump
       dedup_key: 'vEdge-1|SYSMGR|process_table'
       normalized_severity: info
+      title: 'Process snapshot on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
     signal: null
 
-  - name: a process-table row keeps its command and load, digits masked
+  - name: 'process snapshot row 1: ftmd'
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
     severity: info
-    message: 'root      1234  2.5  1.2 123456 23456 ?      Sl   Oct09   1:23 /usr/sbin/ftmd -f'
+    timestamp: '2026-11-10T09:34:42Z'
+    message: 'root 3180 0.7 5.3 513260 47560 ? Sl 09:34 0:08 /usr/sbin/ftmd -f'
     expect:
       parser_id: cisco_sdwan_diag.v1
       parser_status: parsed
       event_type: process_table
-      summary: '/usr/sbin/ftmd -f cpu 2.5% mem 1.2%'
+      summary: 'data-plane forwarding (FTM) (ftmd) using 0.7% CPU, 5.3% memory'
       event_category: diagnostic_dump
       dedup_key: 'vEdge-1|SYSMGR|process_table'
-      title: 'Process /usr/sbin/ftmd -f on vEdge-1'
+      title: 'data-plane forwarding (FTM) (ftmd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
       metrics:
-        process_cpu_percent: {value: 2.5, basis: observed}
-        process_mem_percent: {value: 1.2, basis: observed}
+        process: {value: ftmd, basis: observed}
+        cpu_percent: {value: 0.7, basis: observed}
+        mem_percent: {value: 5.3, basis: observed}
+        rss_kb: {value: 47560.0, basis: observed}
+        vsz_kb: {value: 513260.0, basis: observed}
+        state: {value: Sl, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:08', basis: observed}
     signal: null
 
-  - name: a kernel-thread row is the same dump
+  - name: 'process snapshot row 2: vdaemon'
     fidelity: lab_validated
     hostname: vEdge-1
     appname: SYSMGR
     severity: info
+    timestamp: '2026-11-10T09:34:43Z'
+    message: 'root       2934  0.3  2.1 301440 18936 ?        Sl   09:34   0:03 /usr/sbin/vdaemon -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'control-plane connections (vSmart/vBond) (vdaemon) using 0.3% CPU, 2.1% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'control-plane connections (vSmart/vBond) (vdaemon) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: vdaemon, basis: observed}
+        cpu_percent: {value: 0.3, basis: observed}
+        mem_percent: {value: 2.1, basis: observed}
+        rss_kb: {value: 18936.0, basis: observed}
+        vsz_kb: {value: 301440.0, basis: observed}
+        state: {value: Sl, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:03', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 3: fpmd'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:44Z'
+    message: 'root       3077  0.1  1.4 270104 12544 ?        Sl   09:34   0:01 /usr/sbin/fpmd -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'forwarding policy (fpmd) using 0.1% CPU, 1.4% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'forwarding policy (fpmd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: fpmd, basis: observed}
+        cpu_percent: {value: 0.1, basis: observed}
+        mem_percent: {value: 1.4, basis: observed}
+        rss_kb: {value: 12544.0, basis: observed}
+        vsz_kb: {value: 270104.0, basis: observed}
+        state: {value: Sl, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:01', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 4: confd'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:45Z'
+    message: 'root       2611  1.2  9.8 845212 87644 ?        Ssl  09:33   0:15 /usr/sbin/confd --foreground'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'configuration/management (confd) (confd) using 1.2% CPU, 9.8% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'configuration/management (confd) (confd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: confd, basis: observed}
+        cpu_percent: {value: 1.2, basis: observed}
+        mem_percent: {value: 9.8, basis: observed}
+        rss_kb: {value: 87644.0, basis: observed}
+        vsz_kb: {value: 845212.0, basis: observed}
+        state: {value: Ssl, basis: observed}
+        start: {value: '09:33', basis: observed}
+        cputime: {value: '0:15', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 5: iked'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:46Z'
+    message: 'root       3301  0.0  0.9 160220  8312 ?        Sl   09:34   0:00 /usr/sbin/iked -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'IPsec key exchange (iked) using 0.0% CPU, 0.9% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'IPsec key exchange (iked) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: iked, basis: observed}
+        cpu_percent: {value: 0.0, basis: observed}
+        mem_percent: {value: 0.9, basis: observed}
+        rss_kb: {value: 8312.0, basis: observed}
+        vsz_kb: {value: 160220.0, basis: observed}
+        state: {value: Sl, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:00', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 6: ompd'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:47Z'
+    message: 'root       2990  0.2  1.7 288876 15280 ?        Sl   09:34   0:02 /usr/sbin/ompd -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'OMP routing (ompd) using 0.2% CPU, 1.7% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'OMP routing (ompd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: ompd, basis: observed}
+        cpu_percent: {value: 0.2, basis: observed}
+        mem_percent: {value: 1.7, basis: observed}
+        rss_kb: {value: 15280.0, basis: observed}
+        vsz_kb: {value: 288876.0, basis: observed}
+        state: {value: Sl, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:02', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 7: snmpd'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:48Z'
+    message: 'root       2500  0.0  0.6  45120  5432 ?        Ss   09:33   0:00 /usr/sbin/snmpd -f'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'SNMP agent (snmpd) using 0.0% CPU, 0.6% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'SNMP agent (snmpd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: snmpd, basis: observed}
+        cpu_percent: {value: 0.0, basis: observed}
+        mem_percent: {value: 0.6, basis: observed}
+        rss_kb: {value: 5432.0, basis: observed}
+        vsz_kb: {value: 45120.0, basis: observed}
+        state: {value: Ss, basis: observed}
+        start: {value: '09:33', basis: observed}
+        cputime: {value: '0:00', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 8: sshd'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:49Z'
+    message: 'root       1810  0.0  0.3  30468  3020 ?        Ss   09:33   0:00 /usr/sbin/sshd -D'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'SSH server (sshd) using 0.0% CPU, 0.3% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'SSH server (sshd) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: sshd, basis: observed}
+        cpu_percent: {value: 0.0, basis: observed}
+        mem_percent: {value: 0.3, basis: observed}
+        rss_kb: {value: 3020.0, basis: observed}
+        vsz_kb: {value: 30468.0, basis: observed}
+        state: {value: Ss, basis: observed}
+        start: {value: '09:33', basis: observed}
+        cputime: {value: '0:00', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 9: kworker'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:50Z'
+    message: 'root         37  0.4  0.0      0     0 ?        I    09:33   0:05 [kworker/0:2]'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'kernel worker (kworker) using 0.4% CPU, 0.0% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'kernel worker (kworker) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: kworker, basis: observed}
+        cpu_percent: {value: 0.4, basis: observed}
+        mem_percent: {value: 0.0, basis: observed}
+        rss_kb: {value: 0.0, basis: observed}
+        vsz_kb: {value: 0.0, basis: observed}
+        state: {value: I, basis: observed}
+        start: {value: '09:33', basis: observed}
+        cputime: {value: '0:05', basis: observed}
+    signal: null
+
+  - name: 'process snapshot row 10: zebra'
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:51Z'
+    message: 'root       4012  0.1  0.2  12345  2048 ?        S    09:34   0:00 /usr/bin/zebra -d'
+    expect:
+      parser_id: cisco_sdwan_diag.v1
+      parser_status: parsed
+      event_type: process_table
+      summary: 'zebra (zebra) using 0.1% CPU, 0.2% memory'
+      event_category: diagnostic_dump
+      dedup_key: 'vEdge-1|SYSMGR|process_table'
+      title: 'zebra (zebra) on vEdge-1'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      metrics:
+        process: {value: zebra, basis: observed}
+        cpu_percent: {value: 0.1, basis: observed}
+        mem_percent: {value: 0.2, basis: observed}
+        rss_kb: {value: 2048.0, basis: observed}
+        vsz_kb: {value: 12345.0, basis: observed}
+        state: {value: S, basis: observed}
+        start: {value: '09:34', basis: observed}
+        cputime: {value: '0:00', basis: observed}
+    signal: null
+
+  - name: a row logged in the next minute is the next snapshot
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:35:02Z'
+    message: 'root      3180  0.9  5.3 513260 47560 ?        Sl   09:34   0:09 /usr/sbin/ftmd -f'
+    expect:
+      summary: 'data-plane forwarding (FTM) (ftmd) using 0.9% CPU, 5.3% memory'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:35'
+    signal: null
+
+  - name: a kernel thread started on an earlier day is a row of the same snapshot
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: SYSMGR
+    severity: info
+    timestamp: '2026-11-10T09:34:55Z'
     message: 'root        12  0.0  0.0      0     0 ?        S    Oct09   0:00 [kworker/0:1]'
     expect:
       parser_status: parsed
       event_type: process_table
-      summary: '[kworker/0:1] cpu 0.0% mem 0.0%'
+      summary: 'kernel worker (kworker) using 0.0% CPU, 0.0% memory'
       event_category: diagnostic_dump
       dedup_key: 'vEdge-1|SYSMGR|process_table'
+      dump_id: 'dump:vEdge-1:2026-11-10T09:34'
+      enrichment:
+        fields_observed: [event_type, summary, metrics.process, metrics.cpu_percent, metrics.mem_percent, metrics.rss_kb, metrics.vsz_kb, metrics.state, metrics.start, metrics.cputime]
+        fields_derived: [normalized_severity, title, correlation_key, dump_id, dedup_key]
+        fields_guidance: []
+        unknown: []
     signal: null
 
   - name: a cEdge device-management login is audit
@@ -956,6 +1252,26 @@ fixtures:
       dedup_key: '192.0.2.10|R0/0|dmi_auth_passed'
       normalized_severity: notice
     signal: null
+
+# Plain-language names for SD-WAN edge processes, read by `{proc|process}` in the process
+# snapshot rows. Presentation only: a process this table does not name keeps its
+# basename. ttmd is left out until a Cisco source names it.
+labels:
+  process:
+    ftmd: data-plane forwarding (FTM)
+    vdaemon: control-plane connections (vSmart/vBond)
+    fpmd: forwarding policy
+    confd: configuration/management (confd)
+    iked: IPsec key exchange
+    ikev2: IPsec key exchange
+    omp: OMP routing
+    ompd: OMP routing
+    cfgmgr: configuration manager
+    sysmgrd: system manager
+    snmpd: SNMP agent
+    sshd: SSH server
+    ntpd: time sync (NTP)
+    kworker: kernel worker
 
 # What an operator checks first for each fault family (tracker 387 event model; on the
 # record as `guidance` with `basis: pack_guidance`). Advice, never evidence: it moves no
