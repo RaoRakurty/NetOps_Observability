@@ -183,7 +183,7 @@ func (s *server) ifBridgeCycle(ctx context.Context, kv ifBridgeIO, devs []models
 		logWarn("if-bridge", "SNMP interface rows unread: the bridge counts keep their last values", map[string]any{"error": err.Error()})
 		return
 	}
-	s.ifBridgeMetrics.Set(merged.Stats, s.ifBridge.IngestCounts(), snap)
+	s.ifBridgeMetrics.Set(merged.Stats, s.ifBridge.IngestCounts(now), snap)
 }
 
 // runIfaceBridge runs ifBridgeCycle every ifBridgeRefresh until ctx ends.

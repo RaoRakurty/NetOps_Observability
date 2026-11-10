@@ -48,18 +48,28 @@ type Record struct {
 // ingestCounts is the last poll's per-outcome record counts of one integration.
 type ingestCounts map[string]int
 
+// ingestCountsMaxAge bounds how long an integration's last poll counts stay in
+// the gauge: an integration disabled or deleted stops polling, and its counts
+// must not describe the bridge forever.
+const ingestCountsMaxAge = 6 * time.Hour
+
+type lastPoll struct {
+	at     time.Time
+	counts ingestCounts
+}
+
 // Store holds the NMS rows. Safe for concurrent use.
 type Store struct {
 	mu sync.Mutex
 	st State
 	// last holds each integration's last poll counts, keyed by
 	// tenant + "\x00" + integration. Bounded by the enabled integrations.
-	last map[string]ingestCounts
+	last map[string]lastPoll
 }
 
 // NewStore returns an empty store.
 func NewStore() *Store {
-	return &Store{st: NewState(), last: map[string]ingestCounts{}}
+	return &Store{st: NewState(), last: map[string]lastPoll{}}
 }
 
 // Load seeds the store from a persisted state (a restart). Rows already in
@@ -146,7 +156,7 @@ func (s *Store) Ingest(tenant, integration, system string, recs []Record, now ti
 		}
 		s.st.Devices[id] = &DeviceRows{Tenant: own, Integration: integration, System: system, At: p.at, Rows: rows}
 	}
-	s.last[own+"\x00"+integration] = counts
+	s.last[own+"\x00"+integration] = lastPoll{at: now, counts: counts}
 }
 
 // mergeDuplicateRows folds rows of one interface (vEdge lists an interface
@@ -247,14 +257,19 @@ func (s *Store) Snapshot(owners map[string]string, now time.Time) (State, Snapsh
 	return out, stats
 }
 
-// IngestCounts sums the last poll's per-outcome counts over every integration.
-func (s *Store) IngestCounts() map[string]int {
+// IngestCounts sums the last poll's per-outcome counts over every integration
+// that polled within ingestCountsMaxAge of now; older entries are dropped.
+func (s *Store) IngestCounts(now time.Time) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]int{}
-	for _, c := range s.last {
-		for k, v := range c {
-			out[k] += v
+	for k, lp := range s.last {
+		if now.Sub(lp.at) > ingestCountsMaxAge {
+			delete(s.last, k)
+			continue
+		}
+		for o, v := range lp.counts {
+			out[o] += v
 		}
 	}
 	return out

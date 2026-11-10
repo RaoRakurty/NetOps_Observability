@@ -33,7 +33,8 @@ const (
 )
 
 // PublishNMSIfRows stores the NMS rows. No key-value channel on this
-// deployment is not an error: the rows then live in the api's memory only.
+// deployment is not an error: nothing is stored, and the bridge's readers, who
+// read the SNMP maps over the same channel, have no bridge at all there.
 func PublishNMSIfRows(ctx context.Context, st ifbridge.State) error {
 	if RedisAddr() == "" {
 		return nil

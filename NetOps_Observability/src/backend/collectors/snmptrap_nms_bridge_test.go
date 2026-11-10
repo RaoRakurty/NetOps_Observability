@@ -75,7 +75,7 @@ func bridgeFromVManage(t *testing.T, devs []models.Device, integrationOwner stri
 		owners[d.ID] = d.TenantID
 	}
 	st, _ := store.Snapshot(owners, now)
-	return ifbridge.Merge(ifbridge.SNMP{Addr: labSNMPAddr}, st, nil, owners), store.IngestCounts()
+	return ifbridge.Merge(ifbridge.SNMP{Addr: labSNMPAddr}, st, nil, owners), store.IngestCounts(now)
 }
 
 // labTrapTargets are the receiver's targets: the SNMP-collected devices, with

@@ -111,7 +111,7 @@ func TestStoreIngestCountsWhatBridgesNothing(t *testing.T) {
 	in = append(in, recs("", "ambiguous", t0, Row{IfName: "Gi1"})...)
 	in = append(in, recs("", "conflict", t0, Row{IfName: "Gi2"})...)
 	s.Ingest("global", "nmsi-1", "vmanage", in, t0)
-	c := s.IngestCounts()
+	c := s.IngestCounts(t0)
 	want := map[string]int{OutcomeInternalVPN: 1, OutcomeDeviceUnresolved: 1, OutcomeDeviceAmbiguous: 2}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("counts %v, want %v", c, want)
@@ -126,8 +126,12 @@ func TestStoreIngestCountsWhatBridgesNothing(t *testing.T) {
 			t.Fatalf("internal VPN row bridged: %+v", r)
 		}
 	}
+	if len(s.IngestCounts(t0.Add(ingestCountsMaxAge+time.Second))) != 0 {
+		t.Fatal("an integration that stopped polling kept its counts")
+	}
+	s.Ingest("global", "nmsi-1", "vmanage", in, t0)
 	s.Forget("global", "nmsi-1")
-	if len(s.IngestCounts()) != 0 {
+	if len(s.IngestCounts(t0)) != 0 {
 		t.Fatal("Forget kept the counts")
 	}
 }
@@ -183,7 +187,7 @@ func TestStoreBoundsRowsPerDevice(t *testing.T) {
 		in = append(in, Record{DeviceID: "big", Resolve: "matched", At: t0, Row: Row{IfName: "port" + strconv.Itoa(i)}})
 	}
 	s.Ingest("global", "i", "vmanage", in, t0)
-	if c := s.IngestCounts()[OutcomeTruncated]; c != 10 {
+	if c := s.IngestCounts(t0)[OutcomeTruncated]; c != 10 {
 		t.Fatalf("truncated %d, want 10", c)
 	}
 	st, _ := s.Snapshot(map[string]string{"big": ""}, t0)
