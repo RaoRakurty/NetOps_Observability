@@ -784,6 +784,19 @@ observed.
 **NOT COVERED:** the trap receiver has no test yet for a trap sent from the sibling's interface address
 (tracker 396 b). Customers cannot write their own ranges until collector tier C3 (D1).
 
+**Known limits (advisor review 2026-11-10; not fixed):**
+- **One global scan-memory bound.** `maxFound` = 2×MaxScanHosts covers every owner together. New finds are
+  admitted in (tenant, address) order, and the restore keeps the most recently answered records first. So
+  when restored stale records plus a full sweep exceed the bound, the records dropped are the ones last in
+  that order: the alphabetically-last tenant's new finds, or the least recently answered restored records.
+  It is reached only through accumulated stale memory, never by a tenant's own action, because only the
+  platform owner writes scopes. Each drop is counted (`netops_discovery_found_dropped_total`). Eventual fix:
+  a per-partition share of the bound.
+- **Overlapping scopes of one tenant try only the first scope's credentials.** When two of a tenant's
+  scopes cover one address, the address is probed once, with the first scope's credentials (scopes are
+  ordered by id). If those fail, the second scope's credentials never reach that address. Workaround: do
+  not overlap a tenant's scopes, or give the overlap one profile. Eventual fix: try the union.
+
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
 **Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**

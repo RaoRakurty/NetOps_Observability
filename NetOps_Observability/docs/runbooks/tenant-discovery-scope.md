@@ -136,6 +136,17 @@ scan, or re-apply 0067 and re-create the scans; the devices come back under the 
 ids. The script sets `app.tenant_id = '*'` for its own session, because the table is
 FORCE-RLS, and clears it at the end.
 
+## Known limits
+
+- **One memory bound for every scan.** The scanner remembers at most 8192 devices (2 × 4096) across the
+  platform and every customer. If stale devices pile up past that, the newest finds are dropped in
+  (customer, address) order, so the alphabetically-last customer loses first. Each drop is counted in
+  `netops_discovery_found_dropped_total`. Only accumulated stale memory reaches this; a customer cannot
+  trigger it.
+- **Overlapping scans of one customer use the first scan's profiles only.** If two of a customer's scans
+  cover the same address, that address is tried only with the first scan's SNMP profiles (scans are
+  ordered by id). Don't overlap a customer's scans, or give both scans the same profile for the overlap.
+
 ## Troubleshooting
 
 | Symptom | Cause | What to do |
