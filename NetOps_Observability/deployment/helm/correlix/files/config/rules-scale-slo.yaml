@@ -1324,3 +1324,47 @@ groups:
           summary: "far more lines that state a high severity are reaching nothing in the correlation engine than over the last 6 hours"
           description: "A line that states error severity or worse matched a grammar whose alarm floor keeps it out (owner decision D3), and no typed rule took it. Each is retained and searchable, but none reaches RCA alone. A rise usually means a fault nobody has written a rule for: read them and add a typed or known_benign row."
           runbook: "docs/runbooks/parse-coverage.md"
+
+  # ============================================================================
+  # telemetry-names (tracker 387 PR 13): what the names and the trap attribution
+  # could NOT do. Both are WARNING tier: a flow without an interface name and a
+  # trap without a device are still stored and searchable, so neither is one of
+  # the four owner-approved page conditions. Runbook: docs/runbooks/telemetry-names.md.
+  #
+  #  - netops_iface_names_exporters_uncovered (api gauge): flow exporters seen in
+  #    the last hour with no interface name at all, so every port they report
+  #    stays a bare ifIndex. -1 means "not measured", which never fires.
+  #  - netops_trap_attribution_events{basis,outcome} (vector-router counter, no
+  #    `_total`): which rung of the receiver's ladder named the trap's device.
+  #    basis="none" is a trap no rung could attribute: evidence filed under its
+  #    source address, which RCA cannot bind to a device.
+  # ============================================================================
+  - name: telemetry-names
+    rules:
+      - alert: FlowExporterWithoutInterfaceNames
+        expr: max(netops_iface_names_exporters_uncovered) > 0
+        for: 2h
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value }} flow exporter(s) have sent flows for 2 hours with no interface name"
+          description: "The flows views show these exporters' interfaces as bare ifIndex numbers. Names come from the device's IF-MIB walk (and, once tracker 387 PR 13a lands, from the controller). The usual cause is a device that answers no SNMP walk, or one whose flow source address is not its inventory address."
+          runbook: "docs/runbooks/telemetry-names.md#flowexporterwithoutinterfacenames"
+
+      - alert: TrapSourceUnattributedRatioHigh
+        # A LEVEL with a volume floor: more than half the traps of the last 30
+        # minutes reached no device. 20 traps in 30 minutes keeps one stray
+        # sender out.
+        expr: |
+          (
+            sum(increase(netops_trap_attribution_events{basis="none"}[30m]))
+            /
+            sum(increase(netops_trap_attribution_events[30m]))
+          ) > 0.5
+          and
+          sum(increase(netops_trap_attribution_events[30m])) > 20
+        for: 30m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of SNMP traps reach no device"
+          description: "These traps are stored under their source address, and RCA cannot bind them to a device. A device trapping from an address that is neither its management address nor a unique interface address it reports, a community that does not match, or a device that answers no SNMP walk are the usual causes."
+          runbook: "docs/runbooks/telemetry-names.md#trapsourceunattributedratiohigh"
