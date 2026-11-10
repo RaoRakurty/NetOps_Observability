@@ -121,7 +121,7 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
     if any(_reads_record(g) for g in rows):
         record = {"host": "cx_pk_host", "device": "cx_pk_device"}
         out += [
-            'cx_pk_host = string(.hostname) ?? "unknown"',
+            "cx_pk_host = .hostname",
             'cx_pk_device = string(cx_inv.device_id) ?? ""',
             'if cx_pk_device == "" {',
             "  cx_pk_device = cx_pk_host",

@@ -677,7 +677,7 @@ transforms:
       cx_pk_msg = string(.message) ?? ""
       cx_pk_app = downcase(.appname)
       cx_pk_out = {}
-      cx_pk_host = string(.hostname) ?? "unknown"
+      cx_pk_host = .hostname
       cx_pk_device = string(cx_inv.device_id) ?? ""
       if cx_pk_device == "" {
         cx_pk_device = cx_pk_host
