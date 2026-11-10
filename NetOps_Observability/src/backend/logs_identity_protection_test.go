@@ -173,6 +173,7 @@ func idpDoors() []struct{ name, method, path, body string } {
 		{"search POST", http.MethodPost, "/api/logs/search", `{"signal":"syslog","query":"*"}`},
 		{"search GET", http.MethodGet, "/api/logs/search?signal=syslog", ""},
 		{"retention", http.MethodGet, "/api/logs/retention?signal=syslog", ""},
+		{"severity counts", http.MethodGet, "/api/logs/severity-counts?signal=syslog", ""},
 		{"indices", http.MethodGet, "/api/logs/indices", ""},
 		{"export", http.MethodGet, "/api/logs/export?signal=syslog&format=csv", ""},
 		{"export rows", http.MethodPost, "/api/logs/export/rows", `{"format":"csv","rows":[["a"]]}`},
@@ -187,6 +188,8 @@ func idpCall(s *server, w http.ResponseWriter, method, path, body string, claims
 		s.handleLogsSearch(w, r)
 	case strings.HasPrefix(path, "/api/logs/retention"):
 		s.handleLogsRetention(w, r)
+	case strings.HasPrefix(path, "/api/logs/severity-counts"):
+		s.handleLogsSeverityCounts(w, r)
 	case strings.HasPrefix(path, "/api/logs/indices"):
 		s.handleLogsIndices(w, r)
 	case strings.HasPrefix(path, "/api/logs/export/rows"):
@@ -831,6 +834,8 @@ func TestLogReadsCrossOrgIsolation(t *testing.T) {
 		{"search GET as_tenant", "GET", "/api/logs/search?signal=syslog&as_tenant=" + b.tenantID, nil},
 		{"retention", "GET", "/api/logs/retention?signal=syslog", nil},
 		{"retention as_tenant", "GET", "/api/logs/retention?signal=syslog&as_tenant=" + b.tenantID, nil},
+		{"severity counts", "GET", "/api/logs/severity-counts?signal=syslog", nil},
+		{"severity counts as_tenant", "GET", "/api/logs/severity-counts?signal=syslog&as_tenant=" + b.tenantID, nil},
 		{"indices", "GET", "/api/logs/indices", nil},
 		{"indices as_tenant", "GET", "/api/logs/indices?as_tenant=" + b.tenantID, nil},
 		{"export", "GET", "/api/logs/export?signal=syslog&format=json&mode=sync", nil},

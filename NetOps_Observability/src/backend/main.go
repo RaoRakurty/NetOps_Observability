@@ -3669,7 +3669,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
-	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention)    // retention floor: oldest visible log + exact total (tenant-scoped)
+	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention) // retention floor: oldest visible log + exact total (tenant-scoped)
+	// Logs summary tiles: severity counts over the search's own logsScope surface (tracker 387).
+	mux.HandleFunc("/api/logs/severity-counts", s.handleLogsSeverityCounts)
 	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)
 	mux.HandleFunc("/api/logs/export/rows", s.handleLogsExportRows) // Mode A: selected/loaded rows
 	mux.HandleFunc("/api/exports/view/", s.handleExportView)        // token-authenticated (public)

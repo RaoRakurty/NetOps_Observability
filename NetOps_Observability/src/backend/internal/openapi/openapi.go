@@ -274,6 +274,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},
+	{"GET", "/api/logs/severity-counts", "Telemetry", "How many records of each stored severity match a log search (?signal=, ?query=, ?from=, ?to=), counted by the store over the same tenant-scoped surface the search reads. Returns {signal, total, counts:[{field, value, count}], unrated, other}: a record with both severity and level counts once by severity, one with neither is unrated, words past the per-field limit are in other, so the parts add up to total"},
 	{"GET", "/api/metrics/query", "Telemetry", "Instant PromQL query"},
 	{"GET", "/api/metrics/query_range", "Telemetry", "Range PromQL query"},
 	// Parser coverage (programme A6, parsercov/). The stats route is
