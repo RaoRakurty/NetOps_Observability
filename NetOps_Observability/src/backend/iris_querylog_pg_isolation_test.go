@@ -243,3 +243,36 @@ func TestIrisQueryLogBoundsPG(t *testing.T) {
 		}
 	}
 }
+
+// Migration 0068 (hybrid NLU plan A5): the readings a compile applied round-
+// trip under RLS, bounded by the store, and stay invisible to another tenant.
+func TestIrisQueryLogReadingsRoundTripPG(t *testing.T) {
+	ps, st := qlogPGStore(t)
+	ctx := context.Background()
+	in := irisquerylog.Record{Principal: "alice", Source: irisquerylog.SourceRouter, Question: "shwo the critical incidents",
+		Outcome: irisquerylog.OutcomeAnswered, Readings: []irisquerylog.Reading{
+			{From: "shwo", To: "show", Kind: "typo"},
+			{From: "critical", To: "confirmed incidents", Kind: "severity"},
+			{From: "x", To: "y", Kind: "guess"}, // not a closed kind: dropped by the store
+		}}
+	rec, err := st.Record(ctx, "acme", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, "acme", "alice", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Readings) != 2 || got.Readings[0].From != "shwo" || got.Readings[1].Kind != "severity" {
+		t.Fatalf("readings round trip: %+v", got.Readings)
+	}
+	if _, err := st.Get(ctx, "globex", "alice", rec.ID); !errors.Is(err, irisquerylog.ErrNotFound) {
+		t.Fatalf("RLS LEAK: another tenant read the readings (%v)", err)
+	}
+	var n int
+	if err := ps.DB().WithTenant(ctx, "globex", false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM iris_query_log WHERE readings::text LIKE '%shwo%'`).Scan(&n)
+	}); err != nil || n != 0 {
+		t.Fatalf("RLS LEAK: globex's session sees %d acme readings (%v)", n, err)
+	}
+}

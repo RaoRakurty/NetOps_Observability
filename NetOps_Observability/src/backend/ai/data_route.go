@@ -30,6 +30,9 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
+
+	"netops/backend/internal/nlquery/lex"
 )
 
 // ModeDataQuery answers a data question from the NL query engine.
@@ -95,6 +98,14 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 	if o.NLQuery == nil || plan.Intent == "problem_explanation" || diagnosticCue.MatchString(question) {
 		return Answer{}, false
 	}
+	// Several questions in one message (hybrid NLU plan A6): when every part
+	// is a data question, each is answered on its own, in one answer.
+	// Otherwise the message is read whole, exactly as before.
+	if parts := lex.Split(question); len(parts) > 1 {
+		if ans, ok := o.answerDataParts(ctx, p, parts, disc); ok {
+			return ans, true
+		}
+	}
 	emitTrace(o.Trace, TraceEvent{Type: TraceToolStarted, Tool: "nl_query"})
 	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation", ClassicIntent: plan.Intent}
 	if listingCue.MatchString(question) {
@@ -130,4 +141,57 @@ func nonEmptyList(xs []string) []string {
 		return []string{}
 	}
 	return xs
+}
+
+// IntentMultiQuestion is the intent of an answer to several data questions.
+const IntentMultiQuestion = "multi_question"
+
+// answerDataParts answers each part of a multi-question message from the data
+// arm, or nothing: one part that is not a data question (or a diagnosis)
+// hands the whole message back, so nothing is half-answered.
+func (o *Orchestrator) answerDataParts(ctx context.Context, p Principal, parts []string, disc []string) (Answer, bool) {
+	type partAnswer struct {
+		Question string          `json:"question"`
+		Intent   string          `json:"intent"`
+		Data     json.RawMessage `json:"data,omitempty"`
+	}
+	var answered []DataAnswer
+	for _, part := range parts {
+		pl := Classify(part, nil)
+		if pl.Intent == "problem_explanation" || diagnosticCue.MatchString(part) || listingCue.MatchString(part) {
+			return Answer{}, false
+		}
+		// The model is never spent on a part: a multi-question message is
+		// answered from the grammar or read whole.
+		d, err := o.NLQuery(ctx, p, part, DataOpts{ClassicIntent: pl.Intent})
+		if err != nil || d.Status != DataAnswered {
+			return Answer{}, false
+		}
+		answered = append(answered, d)
+	}
+	var text []string
+	var cits []Citation
+	notes := append([]string{}, disc...)
+	seen := map[string]bool{}
+	payload := make([]partAnswer, 0, len(parts))
+	for i, d := range answered {
+		text = append(text, parts[i]+"\n"+d.Text)
+		cits = append(cits, d.Citations...)
+		for _, n := range d.Notes {
+			if !seen[n] {
+				seen[n] = true
+				notes = append(notes, n)
+			}
+		}
+		payload = append(payload, partAnswer{Question: parts[i], Intent: d.Intent, Data: d.Payload})
+	}
+	raw, err := json.Marshal(map[string]any{"parts": payload})
+	if err != nil {
+		return Answer{}, false
+	}
+	if cits == nil {
+		cits = []Citation{}
+	}
+	return Answer{Mode: ModeDataQuery, Intent: IntentMultiQuestion, Modules: []string{},
+		Text: strings.Join(text, "\n\n"), Citations: cits, Disclaimers: nonEmptyList(notes), Data: raw}, true
 }

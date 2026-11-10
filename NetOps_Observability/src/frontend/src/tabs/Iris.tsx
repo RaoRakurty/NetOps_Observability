@@ -900,7 +900,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 </div>
               )}
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
                   ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} />
                   : renderContent(m.content)}
@@ -1058,7 +1058,24 @@ function badgeTone(b: string): string {
   return "accent";
 }
 
-function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () => void; onClose: () => void }) {
+// didYouMeanAsks reads the server-written did-you-mean chips (hybrid NLU plan
+// A7) off a data answer. Untrusted: only well-formed entries are kept, and a
+// chip only ever re-asks the SERVER's rephrasing — the client builds nothing.
+export function didYouMeanAsks(ans: AiAnswer): { label: string; question: string }[] {
+  const raw = ans.mode === "data_query" ? ans.data?.did_you_mean_asks : undefined;
+  if (!Array.isArray(raw)) return [];
+  const out: { label: string; question: string }[] = [];
+  for (const a of raw) {
+    if (a && typeof a === "object" && typeof (a as { label?: unknown }).label === "string" && typeof (a as { question?: unknown }).question === "string") {
+      const { label, question } = a as { label: string; question: string };
+      if (label.trim() && question.trim()) out.push({ label: label.slice(0, 80), question: question.slice(0, 500) });
+    }
+    if (out.length === 6) break;
+  }
+  return out;
+}
+
+function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite: () => void; onClose: () => void; onAsk?: (q: string) => void }) {
   const { openHelp } = useShell();
   const [rated, setRated] = useState<"up" | "down" | null>(null);
   const rate = (r: "up" | "down") => {
@@ -1117,6 +1134,15 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
           {/* The server chooses the view (N-E1) and sends it as `presentation`;
               an older server sends none and the client's default applies. */}
           <PresentationPlanRenderer result={ans.data.result} plan={ans.data.presentation} hint={hintFromAst(ans.data.ast)} />
+        </div>
+      )}
+      {/* Did you mean (A7, owner D2): a name Iris could not place is offered,
+          never applied — picking one asks the server's rephrasing. */}
+      {onAsk && didYouMeanAsks(ans).length > 0 && (
+        <div className="op-chips" data-testid="iris-did-you-mean">
+          {didYouMeanAsks(ans).map((a) => (
+            <button key={a.question} type="button" className="op-chip" onClick={() => onAsk(a.question)}>{a.label}</button>
+          ))}
         </div>
       )}
       {/* "That's not what I meant" (N-C8): only on a data answer the server

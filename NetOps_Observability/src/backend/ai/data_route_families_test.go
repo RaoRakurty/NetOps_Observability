@@ -5,6 +5,7 @@ package ai
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,53 @@ func TestDataArmRoutingOptions(t *testing.T) {
 	ask("how many devices are onboarded?")
 	if len(got) != 1 || got[0].IncidentRefOnly {
 		t.Fatalf("an inventory question goes to the data arm as a plain attempt: %+v", got)
+	}
+}
+
+// Several data questions in one message are answered each on its own, in one
+// answer; one part that is not data hands the whole message back.
+func TestMultiQuestionDataAnswer(t *testing.T) {
+	var asked []string
+	o := newOrch(newMockDS())
+	o.NLQuery = func(_ context.Context, _ Principal, q string, opts DataOpts) (DataAnswer, error) {
+		asked = append(asked, q)
+		if opts.AllowModel && !strings.Contains(q, "? ") {
+			t.Errorf("a part must never spend the model: %q", q)
+		}
+		switch q {
+		case "how many devices can you see?", "list the sites":
+			return DataAnswer{Status: DataAnswered, Intent: "count_entities", Text: "answer to " + q, Notes: []string{"same note"}}, nil
+		}
+		return DataAnswer{Status: DataNotData}, nil
+	}
+	ans, err := o.Ask(context.Background(), tenantA(), "how many devices can you see? list the sites", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeDataQuery || ans.Intent != IntentMultiQuestion {
+		t.Fatalf("multi answer = %+v", ans)
+	}
+	if want := "how many devices can you see?\nanswer to how many devices can you see?\n\nlist the sites\nanswer to list the sites"; ans.Text != want {
+		t.Fatalf("text = %q", ans.Text)
+	}
+	n := 0
+	for _, d := range ans.Disclaimers {
+		if d == "same note" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("a note shared by two parts is said once: %q", ans.Disclaimers)
+	}
+	asked = nil
+	ans, err = o.Ask(context.Background(), tenantA(), "how many devices can you see? tell me a joke", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Intent == IntentMultiQuestion || ans.Mode == ModeDataQuery {
+		t.Fatalf("a non-data part hands the message back: %+v", ans)
+	}
+	if len(asked) == 0 || asked[len(asked)-1] != "how many devices can you see? tell me a joke" {
+		t.Fatalf("the whole message is then read as before: %q", asked)
 	}
 }

@@ -42,6 +42,20 @@ func TestFuzzyNameNeverCrossesTenantsAPI(t *testing.T) {
 	if dym := nlqJSON(out["did_you_mean"]); !strings.Contains(dym, "device:dev-a") || !strings.Contains(dym, `"needs_confirmation":true`) {
 		t.Fatalf("tenant A must be offered its own edge-a, confirm-only: %v", out["did_you_mean"])
 	}
+	// The chip: labelled with A's own name for it, asking the question with the
+	// candidate's id written in.
+	if asks := nlqJSON(out["did_you_mean_asks"]); !strings.Contains(asks, `"label":"edge-a"`) || !strings.Contains(asks, "show cpu on device:dev-a for the last hour") {
+		t.Fatalf("did-you-mean chip: %v", out["did_you_mean_asks"])
+	}
+	// Picking the chip asks a question that compiles — in the caller's scope.
+	_, picked := nlqAPI(t, s, a, "/api/ai/query/compile", `{"question":"show cpu on device:dev-a for the last hour"}`)
+	if !strings.Contains(nlqJSON(picked["ast"]), "device:dev-a") {
+		t.Fatalf("the chip's question must compile to the candidate: %v", picked)
+	}
+	_, stolen := nlqAPI(t, s, b, "/api/ai/query/compile", `{"question":"show cpu on device:dev-a for the last hour"}`)
+	if stolen["ast"] != nil && strings.Contains(nlqJSON(stolen["ast"]), "dev-a") {
+		t.Fatalf("a chip question replayed by another tenant must not resolve: %v", stolen)
+	}
 	b.ActingTenant = a.Tenant
 	for _, path := range []string{"/api/ai/query/compile", "/api/ai/query/compile?as_tenant=" + a.Tenant} {
 		code, out := nlqAPI(t, s, b, path, q)

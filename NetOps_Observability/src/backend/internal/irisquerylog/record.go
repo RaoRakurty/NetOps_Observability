@@ -41,6 +41,7 @@ import (
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/compile"
+	"netops/backend/internal/nlquery/lex"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/validate"
 )
@@ -183,6 +184,38 @@ type Record struct {
 	// exactly when Query is.
 	Query      *ast.AST `json:"query,omitempty"`
 	CompiledBy string   `json:"compiled_by,omitempty"`
+	// Readings are the reinterpretations the compiler applied and disclosed
+	// ("shwo" read as "show"; "critical" read as confirmed incidents).
+	Readings []Reading `json:"readings"`
+}
+
+// Reading is one disclosed reinterpretation (compile.Result.Readings).
+type Reading struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+}
+
+// MaxReadings bounds the readings kept per record.
+const MaxReadings = 16
+
+// readingKinds is the closed set a stored reading may carry (lex.Kind*).
+var readingKinds = map[string]bool{lex.KindTypo: true, lex.KindSynonym: true, lex.KindSeverity: true, lex.KindImplicitN: true}
+
+// boundedReadings keeps the well-formed readings: a known kind, non-empty
+// words, each clipped, at most MaxReadings.
+func boundedReadings(in []Reading) []Reading {
+	out := []Reading{}
+	for _, r := range in {
+		if !readingKinds[r.Kind] || strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" {
+			continue
+		}
+		out = append(out, Reading{From: clipRunes(r.From, 64), To: clipRunes(r.To, 64), Kind: r.Kind})
+		if len(out) == MaxReadings {
+			break
+		}
+	}
+	return out
 }
 
 // ListFilter selects records. Principal "" means every principal of the
@@ -275,6 +308,7 @@ func Normalize(tenant string, r Record, now time.Time) (Record, error) {
 	r.CatalogVersion = clipRunes(r.CatalogVersion, 64)
 	r.ValidationCodes = boundedCodes(r.ValidationCodes)
 	r.Entities = boundedEntities(r.Entities)
+	r.Readings = boundedReadings(r.Readings)
 	r.Rows, r.Series = max(r.Rows, 0), max(r.Series, 0)
 	r.DurationMs = max(r.DurationMs, 0)
 	if r.At.IsZero() {
@@ -394,6 +428,9 @@ func clipRunes(s string, n int) string {
 // compiled.
 func FromCompile(source, question string, res compile.Result, checked *ast.AST, vr *validate.Result) Record {
 	r := Record{Source: source, Question: question, Intent: res.Intent}
+	for _, rd := range res.Readings {
+		r.Readings = append(r.Readings, Reading{From: rd.From, To: rd.To, Kind: rd.Kind})
+	}
 	for _, e := range res.Entities {
 		r.Entities = append(r.Entities, Entity{Type: e.EntityType, ID: e.EntityID, Method: e.Method, Confidence: e.Confidence})
 	}
