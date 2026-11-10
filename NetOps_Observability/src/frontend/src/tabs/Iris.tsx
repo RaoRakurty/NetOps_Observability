@@ -2,6 +2,8 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ConnectModelBanner } from "../components/ConnectModelBanner";
+import { applyRecommended, answerFootnote, testResultText, GEMINI_FREE_TIER_WARNING } from "../iris/connectModel";
 import { AI_NAME } from "../brand";
 import {
   api,
@@ -17,6 +19,7 @@ import {
   CopilotConfig,
   AITenantConfig,
   AITenantRow,
+  ProviderTestResult,
   AiAnswer,
   AiCitation,
   AiCommand,
@@ -301,6 +304,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   const [showHelp, setShowHelp] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
+  // C3: the latest "Test connection" verdict shown under the settings form.
+  const [cfgTest, setCfgTest] = useState<ProviderTestResult | null>(null);
+  const [testingCfg, setTestingCfg] = useState(false);
   // Slash-command menu (like Claude Code): typing "/" surfaces pre-made questions.
   // The list is the SERVER command registry (single source of truth); the static
   // set is only a fallback if the fetch fails.
@@ -361,6 +367,26 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       setError(operatorError(e, "The settings could not be saved."));
     } finally {
       setSavingCfg(false);
+    }
+  };
+
+  // C3 "Test connection": the platform admin tests the platform key (or the
+  // pasted draft); a workspace admin tests their own workspace key only. The
+  // server never stores the key from a test and returns only a verdict.
+  const testCfg = async (scope: "platform" | "workspace") => {
+    setTestingCfg(true);
+    setError(null);
+    try {
+      if (scope === "platform" && cfg) {
+        setCfgTest(await api.testCopilotConfig({ provider: cfg.provider, key: keyDraft.trim() || undefined, model: (cfg.model_fast || cfg.model || "").trim() || undefined }));
+      } else if (tcfg) {
+        setCfgTest(await api.testAITenantConfig({ provider: tcfg.provider || undefined, key: tKeyDraft.trim() || undefined, model: (tcfg.model_fast || tcfg.model || "").trim() || undefined }));
+      }
+    } catch (e) {
+      setCfgTest(null);
+      setError(operatorError(e, "The connection test could not run."));
+    } finally {
+      setTestingCfg(false);
     }
   };
 
@@ -624,6 +650,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
         </span>
       </div>
       {context}
+      {/* C5: admin-only (both config calls are 403 for operators). */}
+      <ConnectModelBanner platform={cfg} workspace={cfg ? null : tcfg} onConnect={() => { setShowSettings(true); setShowHelp(false); }} />
 
       {showHelp && (
         <div className="op-settings op-help">
@@ -645,7 +673,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       {showSettings && cfg && (
         <div className="op-settings">
           <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
-            Runs on Claude by default. The API key is encrypted at rest and never shown again.
+            Pick a provider and paste its API key. The key is encrypted at rest and never shown again.
           </p>
           <label className="op-field">
             <span>
@@ -672,7 +700,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
               {(cfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
                 <button type="button" key={pv}
                   className={`op-tile${cfg.provider === pv ? " on" : ""}`}
-                  onClick={() => { const s = cfg.model_suggestions?.[pv] ?? []; setCfg({ ...cfg, provider: pv, model: s[0] ?? cfg.model }); }}>
+                  onClick={() => { setCfg({ ...cfg, ...applyRecommended(pv, cfg.recommended, cfg) }); setCfgTest(null); }}>
                   <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
                     <Icon name="model" size={16} />
                   </span>
@@ -684,6 +712,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
               ))}
             </div>
           </div>
+          {cfg.provider === "gemini" && <p className="connect-warn" role="note">{GEMINI_FREE_TIER_WARNING}</p>}
+          <details className="op-advanced">
+          <summary>Advanced: choose the models</summary>
           <div className="op-field">
             <span>Model</span>
             <input className="op-modelinput" list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="Default model" />
@@ -699,10 +730,15 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
           <TierModelFields
             fast={cfg.model_fast ?? ""} strong={cfg.model_strong ?? ""}
             onChange={(t) => setCfg({ ...cfg, model_fast: t.fast, model_strong: t.strong })} />
+          </details>
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
+            <button className="dash-btn" onClick={() => testCfg("platform")} disabled={testingCfg || (!cfg.key_present && !keyDraft.trim())}>
+              {testingCfg ? "Testing…" : "Test connection"}
+            </button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+          <ConnectionTestLine result={cfgTest ?? cfg.last_test ?? null} />
 
           {/* Per-workspace access (platform owner): which customer workspaces get
               the assistant, and which may run AI Investigations (tool lookups). */}
@@ -779,8 +815,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
             <div className="op-tiles">
               {(tcfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
                 <button type="button" key={pv}
-                  className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "anthropic") ? " on" : ""}`}
-                  onClick={() => { const s = tcfg.model_suggestions?.[pv] ?? []; setTcfg({ ...tcfg, provider: pv, model: s[0] ?? "" }); }}>
+                  className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "gemini") ? " on" : ""}`}
+                  onClick={() => { setTcfg({ ...tcfg, ...applyRecommended(pv, tcfg.recommended, tcfg) }); setCfgTest(null); }}>
                   <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
                     <Icon name="model" size={16} />
                   </span>
@@ -792,6 +828,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
               ))}
             </div>
           </div>
+          {tcfg.provider === "gemini" && <p className="connect-warn" role="note">{GEMINI_FREE_TIER_WARNING}</p>}
+          <details className="op-advanced">
+          <summary>Advanced: choose the models</summary>
           <div className="op-field">
             <span>Model</span>
             <input className="op-modelinput" value={tcfg.model}
@@ -801,6 +840,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
           <TierModelFields
             fast={tcfg.model_fast ?? ""} strong={tcfg.model_strong ?? ""}
             onChange={(t) => setTcfg({ ...tcfg, model_fast: t.fast, model_strong: t.strong })} />
+          </details>
           {tcfg.platform_key_available && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", margin: "2px 0 8px" }}>
               <input type="checkbox" checked={!tcfg.no_platform_key}
@@ -819,8 +859,12 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                   finally { setSavingCfg(false); }
                 }}>Remove key</button>
             )}
+            <button className="dash-btn" onClick={() => testCfg("workspace")} disabled={testingCfg || (!tcfg.key_present && !tKeyDraft.trim())}>
+              {testingCfg ? "Testing…" : "Test connection"}
+            </button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+          <ConnectionTestLine result={cfgTest} />
           {tcfg.assistant_enabled && nlqEntitled && <IrisVocabulary />}
         </div>
       )}
@@ -1080,7 +1124,9 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
   // Provider-fallback chips are pulled OUT of the top badge row and shown once as
   // a small footer note (spec §1/§8) — never a loud top badge or a headline.
   const badges = (ans.mode_badges ?? []).filter((b) => !/^(evidence-only|ai provider)/i.test(b));
-  const providerNote = ans.provider_note || (ans.evidence_only ? "Evidence only — no AI provider is connected." : "");
+  // C6: one footnote per answer — the model that answered, the specific reason
+  // a model did not (timed out, paused, budget spent), or "from your data".
+  const providerNote = answerFootnote(ans);
   const whyFirst = pr?.why_first ?? cs?.why_first;
   return (
     <div className="op-grounded">
@@ -1279,6 +1325,18 @@ function extractAssistantText(r: CopilotChatResponse): string {
 // look-ups with the "fast" model and multi-step investigations with the
 // "strong" one; blank means "use the model above for everything", which is the
 // behaviour of every install that never sets them.
+// ConnectionTestLine — the latest "Test connection" verdict (C3/C6 "last
+// tested"), in plain words; never the provider's own message.
+function ConnectionTestLine({ result }: { result: ProviderTestResult | null }) {
+  if (!result) return null;
+  return (
+    <p className={`op-conn-test ${result.ok ? "ok" : "bad"}`} role="status" data-testid="connection-test">
+      {testResultText(result)}
+      {result.tested_at && <span className="op-conn-when"> Tested {result.tested_at.replace("T", " ").replace(/\.\d+Z$|Z$/, " UTC")}.</span>}
+    </p>
+  );
+}
+
 function TierModelFields({ fast, strong, onChange }: {
   fast: string;
   strong: string;

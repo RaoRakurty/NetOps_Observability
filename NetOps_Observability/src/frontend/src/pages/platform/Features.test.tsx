@@ -15,6 +15,9 @@ const apiMock = vi.hoisted(() => ({
   platformFeatures: vi.fn(),
   setPlatformFeature: vi.fn(),
   restartPlatform: vi.fn(),
+  // The Connect-a-model step (tracker 337 C4) has its own tests
+  // (src/iris/ConnectModelStep.test.tsx); here it is a non-admin's 403.
+  copilotConfig: vi.fn(() => Promise.reject(new Error("403"))),
 }));
 vi.mock("../../services/api", () => ({ api: apiMock }));
 

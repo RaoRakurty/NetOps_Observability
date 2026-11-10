@@ -49,7 +49,10 @@ func (s *server) agentLoopEligible(claims jwtClaims) bool {
 
 // aiToolsDailyTokens is the platform-default per-tenant daily budget
 // (metered by ai.DailyBudget); ≤0 disables metering.
-func aiToolsDailyTokens() int { return envInt("AI_TOOLS_DAILY_TOKENS", 250_000) }
+// aiToolsDailyTokens is the platform default tokens/day per workspace. 1 M
+// since 2026-11-10 (owner D4: model-assisted understanding is on by default
+// once a key is set; 250 k covered ~30 strong compiles a day).
+func aiToolsDailyTokens() int { return envInt("AI_TOOLS_DAILY_TOKENS", 1_000_000) }
 
 // ---- the loop ----------------------------------------------------------------
 

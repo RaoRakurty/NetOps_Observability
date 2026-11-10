@@ -6,9 +6,12 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/aidecision"
+	"netops/backend/internal/aiprovider"
 )
 
 // ai_llm.go — adapts the existing provider-agnostic proxy (copilot.go's chain:
@@ -64,22 +67,99 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	if l.srv.aiToolBudget != nil && !l.srv.aiToolBudget.Allow(tenant, l.srv.dailyTokensFor(tenant)) {
 		return "", "", ai.TokenUsage{}, errAIBudgetExhausted
 	}
-	for _, cand := range l.srv.providerCandidatesForTier(l.claims, tier) {
-		c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, cmsgs)
+	cands := l.srv.providerCandidatesForTier(l.claims, tier)
+	if len(cands) == 0 {
+		return "", "", ai.TokenUsage{}, errNoAIProvider
+	}
+	var lastErr error
+	skipped := 0
+	for _, cand := range cands {
+		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
 			l.charge(c, chars)
 			// The decision ledger names the model that answered (N-A6); a
-			// no-op outside a ledgered request.
+			// no-op outside a ledgered request. The answer's own note feeds
+			// the per-answer footnote (C6).
 			aidecision.FromContext(ctx).NoteModel(aidecision.ModelUse{Provider: cand.name, Name: cand.model, Tier: string(tier)})
+			ai.NoteModelUsed(ctx, cand.name, cand.model)
 			return c.Text, cand.name, c.Usage, nil
 		}
+		if errors.Is(err, ai.ErrProviderBreakerOpen) {
+			skipped++
+		}
+		lastErr = err
 		// Raw provider error stays server-side (SR-022); fall through to the next.
 	}
-	return "", "", ai.TokenUsage{}, errors.New("no AI provider configured")
+	if skipped == len(cands) {
+		return "", "", ai.TokenUsage{}, ai.ErrProviderBreakerOpen
+	}
+	// Wrapped, not replaced: the caller's honest footer ("timed out", "paused")
+	// is decided from the class of the last failure.
+	return "", "", ai.TokenUsage{}, fmt.Errorf("no AI provider answered: %w", lastErr)
 }
 
 // errAIBudgetExhausted is the refusal once a tenant's daily token budget is spent.
-var errAIBudgetExhausted = errors.New("daily AI token budget exhausted for this workspace")
+var errAIBudgetExhausted = ai.ErrBudgetExhausted
+
+// errNoAIProvider: no provider this caller may use is configured.
+var errNoAIProvider = fmt.Errorf("no AI provider configured: %w", ai.ErrNoProvider)
+
+// callProviderGuarded is ONE provider attempt behind the guards every model
+// call shares (Iris latency batch 2026-11-10, CLAUDE.md §9/§10):
+//   - the (tenant, provider) circuit breaker — an open breaker skips the call
+//     (ErrProviderBreakerOpen) instead of paying another full timeout;
+//   - one structured log line for EVERY failure (provider, model, tier, http
+//     status, provider reason, error class, latency — never the key, the
+//     prompt or the provider's message text);
+//   - netops_ai_provider_call_seconds{provider,tier,outcome}.
+//
+// A call the caller abandoned (context canceled) or that never left (budget)
+// is not the provider's failure and does not move the breaker.
+func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai.ModelTier, cand providerCandidate, system string, msgs []copilotMessage) (ai.Completion, error) {
+	tierLabel := string(tier)
+	if !s.aiBreaker.Allow(tenant, cand.name) {
+		s.aiProvCalls.ObserveCall(cand.name, tierLabel, ai.ProvBreakerOpen, 0)
+		return ai.Completion{}, ai.ErrProviderBreakerOpen
+	}
+	start := time.Now()
+	c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, msgs)
+	took := time.Since(start)
+	outcome := ai.ClassifyProviderError(err)
+	// A deadline that expired because the CALLER'S context ended (client gone)
+	// is a cancellation, not a provider timeout.
+	if outcome == ai.ProvTimeout && errors.Is(ctx.Err(), context.Canceled) {
+		outcome = ai.ProvCanceled
+	}
+	s.aiProvCalls.ObserveCall(cand.name, tierLabel, outcome, took.Seconds())
+	switch {
+	case err == nil:
+		s.aiBreaker.Record(tenant, cand.name, false)
+	case ai.CountsAgainstProvider(outcome):
+		s.aiBreaker.Record(tenant, cand.name, true)
+	default:
+		s.aiBreaker.Release(tenant, cand.name)
+	}
+	if err != nil {
+		fields := map[string]any{
+			"tenant": tenant, "provider": cand.name, "model": cand.model, "tier": tierLabel,
+			"key_source": cand.source, "error_class": outcome, "latency_ms": took.Milliseconds(),
+			"breaker": s.aiBreaker.State(tenant, cand.name).String(),
+		}
+		if st := ai.ProviderStatusOf(err); st != 0 {
+			fields["http_status"] = st
+		}
+		var se *ai.ProviderStatusError
+		if errors.As(err, &se) && se.Reason != "" {
+			fields["provider_reason"] = se.Reason
+		}
+		var ee *ai.ProviderEmptyError
+		if errors.As(err, &ee) {
+			fields["finish_reason"], fields["block_reason"], fields["thought_tokens"] = ee.FinishReason, ee.BlockReason, ee.ThoughtTok
+		}
+		logWarn("ai.provider", "model provider call failed", fields)
+	}
+	return c, err
+}
 
 // charge meters one successful completion against the caller's tenant budget.
 func (l aiLLM) charge(c ai.Completion, promptChars int) {
@@ -92,4 +172,39 @@ func (l aiLLM) charge(c ai.Completion, promptChars int) {
 		tokens = (promptChars + len(c.Text)) / 4
 	}
 	l.srv.aiToolBudget.Charge(tenant, tokens)
+}
+
+// aiModelBudgets is the per-stage model budget (never block a ready answer on a
+// model): AI_MODEL_BUDGET_FAST / AI_MODEL_BUDGET_STRONG as Go durations
+// ("8s", "15s"); unset or invalid → the ai package defaults. Clamped by
+// ai.StageBudgets.For to the transport ceiling.
+func aiModelBudgets() ai.StageBudgets {
+	return ai.StageBudgets{
+		Fast:   envDuration("AI_MODEL_BUDGET_FAST", ai.DefaultFastBudget),
+		Strong: envDuration("AI_MODEL_BUDGET_STRONG", ai.DefaultStrongBudget),
+	}
+}
+
+// aiBreakerConfig: AI_PROVIDER_BREAKER_FAILURES consecutive failures open a
+// (tenant, provider) breaker for AI_PROVIDER_BREAKER_COOLDOWN (a Go duration).
+func aiBreakerConfig() aiprovider.Config {
+	return aiprovider.Config{
+		Threshold: envInt("AI_PROVIDER_BREAKER_FAILURES", aiprovider.DefaultThreshold),
+		Cooldown:  envDuration("AI_PROVIDER_BREAKER_COOLDOWN", aiprovider.DefaultCooldown),
+	}
+}
+
+// usableProviderCandidates is the caller's provider chain minus the providers
+// whose (tenant, provider) breaker would refuse a call right now. It PEEKS —
+// it never claims a half-open probe — so a "should we try at all" check cannot
+// starve the call that follows it.
+func (s *server) usableProviderCandidates(claims jwtClaims, tier ai.ModelTier) []providerCandidate {
+	tenant, _ := principalTenant(claims)
+	var out []providerCandidate
+	for _, c := range s.providerCandidatesForTier(claims, tier) {
+		if s.aiBreaker.Peek(tenant, c.name) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

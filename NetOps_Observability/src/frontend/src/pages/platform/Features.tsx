@@ -24,6 +24,7 @@ import { fmtDateTime } from "../../lib/time";
 import { Modal } from "../../components/ui";
 import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue } from "./featuresModel";
 import { useFeatureSwitches } from "./useFeatureSwitches";
+import ConnectModelStep from "../../iris/ConnectModelStep";
 
 export default function Features() {
   const { load, busy, rowError, save: saveEnv, restart, requestRestart } = useFeatureSwitches();
@@ -49,6 +50,8 @@ export default function Features() {
   return (
     <div className="features-page" style={{ fontSize: 14, maxWidth: 1100 }}>
       <h2 style={{ margin: "0 0 4px" }}>Features</h2>
+      {/* The first-login landing for a platform admin with no model key (D5). */}
+      <ConnectModelStep />
       <ol className="fact-line" style={{ margin: "0 0 16px", paddingLeft: 20, lineHeight: 1.7 }}>
         <li>Turn a feature on or off below. It is saved at once.</li>
         <li>Most features apply at once. Some apply after a restart — they say so.</li>

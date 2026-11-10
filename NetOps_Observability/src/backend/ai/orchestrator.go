@@ -20,6 +20,10 @@ import (
 // an LLMClient (the provider proxy), the feature-flag lookup, and an optional
 // redactor. It holds NO credentials and makes NO store query itself.
 type Orchestrator struct {
+	// ModelBudgets bounds each model call by tier (provider_outcome.go). The
+	// zero value is the defaults (8 s fast, 15 s strong): the never-block
+	// guarantee holds unless a deployment sets other values.
+	ModelBudgets StageBudgets
 	// NLQuery is the question router's DATA arm (data_route.go): a question the
 	// NL compiler fully understands is answered from its query. nil = disabled.
 	NLQuery NLQueryFunc
@@ -390,8 +394,14 @@ func Classify(question string, uiContext map[string]string) Plan {
 // a store was down.
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	started := time.Now()
+	ctx, note := WithModelNote(ctx)
 	ans, err := o.ask(ctx, p, question, uiContext)
 	if err == nil {
+		// C6: the per-answer footnote names the model that answered — read at
+		// the one exit from the request's note, so no LLM seam changes shape.
+		if ans.Provider != "" && ans.Provider != "none" && ans.Model == "" {
+			ans.Model = note.Model(ans.Provider)
+		}
 		// N-I7: the answer's next actions as grounded cards — built here, at
 		// the one exit, from server-authored steps and this answer's citations.
 		ans.Recommendations = RecommendationsFor(ans)
@@ -709,7 +719,7 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...) // neutral evidence-only chip
-		providerNote = ProviderFallbackNote(false)        // the REASON is a single footer note
+		providerNote = FallbackNoteFor(lerr)              // the REASON is a single footer note
 	}
 	// Unsupported-claim guard (§11/§16): strip any citation the MODEL invented.
 	// The deterministic fallback is already grounded, so only verify model output.
@@ -887,7 +897,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...)
-		providerNote = ProviderFallbackNote(false)
+		providerNote = FallbackNoteFor(lerr)
 		statements = serverStatements(text, ClassCorrelixRCA, "", sc)
 	} else {
 		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
@@ -1224,7 +1234,7 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...) // neutral chip; reason is the footer note
-		providerNote = ProviderFallbackNote(false)
+		providerNote = FallbackNoteFor(lerr)
 	} else {
 		// Unsupported-claim guard (§11/§16) on the model headline.
 		mh.Headline, badges, disc = o.verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)

@@ -227,13 +227,59 @@ func (s *server) aiTenantConfigView(tenant string) map[string]any {
 		"assistant_enabled":      !c.AssistantOff,
 		"investigations_enabled": c.AgentTools && featureAIToolsEnabled(),
 		"platform_key_available": s.copilotKeyPresent(),
-		"providers":              []string{"anthropic", "openai", "gemini"},
-		"model_suggestions": map[string][]string{
-			"anthropic": {"claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"},
-			"openai":    {"gpt-4o", "gpt-4o-mini", "gpt-4.1"},
-			"gemini":    {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-latest"},
-		},
+		"providers":              []string{"gemini", "anthropic", "openai"},
+		"model_suggestions":      ai.ModelSuggestions(),
+		"recommended":            ai.RecommendedModels(),
+		// D4: this workspace's own budget today (the banner says when spent).
+		"budget": s.aiBudgetView(tenant),
 	}
+}
+
+// handleAITenantConfigTest: POST /api/ai/tenant-config/test — a tenant admin
+// tests THEIR OWN workspace's provider key (C3, §3a). The tenant comes from the
+// principal only. A blank key tests the workspace's stored BYO key; the
+// platform key is never tested here (a tenant must not be able to probe, and
+// so learn about, the operator's provider account). The key is used for this
+// one call only: never persisted, never logged, never echoed.
+func (s *server) handleAITenantConfigTest(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New("platform owners test the assistant in platform settings"))
+		return
+	}
+	req, err := decodeProviderTest(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	tc := s.aiTenantCfg.Get(tenant)
+	name, key := req.provider, req.key
+	if key == "" {
+		// The workspace's own stored key, for the provider it was stored for.
+		bname, bkey, _, has := s.aiTenantCfg.BYOProvider(tenant, ai.TierFast, providerModel)
+		if !has || (name != "" && name != bname) {
+			writeError(w, http.StatusBadRequest, errors.New("this workspace has no API key of its own to test — paste one first"))
+			return
+		}
+		name, key = bname, bkey
+	}
+	if name == "" {
+		name = ai.NormalizeProvider(tc.Provider)
+		if name == "" {
+			name = "gemini"
+		}
+	}
+	model := ai.ProbeModel(name, req.model, tc.Models(), ai.NormalizeProvider(tc.Provider))
+	writeJSON(w, http.StatusOK, s.runProviderProbe(r, claims, name, key, model))
 }
 
 // handleAITenants: GET /api/ai/tenants (list entitlements) and
