@@ -525,12 +525,25 @@ type overlayDevState struct {
 	probedAt    time.Time
 	capability  string
 	lastFlapSum int64
+	// lastTLOCSig is the TLOC table's shape at the last poll (transport count
+	// and the per-transport total/up session counts). A change in it means the
+	// BFD detail may have changed even when nothing flapped: the restart case is
+	// "no TLOCs" → "every TLOC up with zero flaps", which neither the up-ratio
+	// nor the flap counter can see (found live 2026-11-10: vEdge-20 showed 0
+	// tunnels for 30 minutes after its overlay came back with 17 sessions up).
+	lastTLOCSig string
+	// wasCapable remembers that this device once answered the SD-WAN MIBs. A
+	// formerly capable device that stops answering (a lab or site outage) is
+	// re-probed on the fast reprobeLost cadence, not the 30-minute cadence a
+	// never-SD-WAN device gets, so its overlay returns within minutes.
+	wasCapable bool
 }
 
 type sdwanOverlayCollector struct {
 	interval       time.Duration
 	reprobeCapable time.Duration // identity refresh for a capable device
 	reprobeOthers  time.Duration // re-probe for a device that answered nothing
+	reprobeLost    time.Duration // re-probe for a formerly capable device that stopped answering
 	detailEvery    time.Duration // BFD refresh when nothing suggests a change
 	workers        int
 	limits         overlayLimits
@@ -551,6 +564,7 @@ func NewSDWANOverlay(targets TargetFunc) Collector {
 		interval:       90 * time.Second,
 		reprobeCapable: 6 * time.Hour,
 		reprobeOthers:  30 * time.Minute,
+		reprobeLost:    envDuration("SDWAN_OVERLAY_REPROBE_LOST", 2*time.Minute),
 		detailEvery:    envDuration("SDWAN_OVERLAY_DETAIL_INTERVAL", 30*time.Minute),
 		workers:        envIntBounded("SDWAN_OVERLAY_WORKERS", 8, 1, 64),
 		limits: overlayLimits{
@@ -742,9 +756,13 @@ func (c *sdwanOverlayCollector) pollDevice(ctx context.Context, tg Target) devic
 
 	now := time.Now()
 	capableBefore := snap.capability == OverlayAvailable || snap.capability == OverlayPartial
+	othersEvery := c.reprobeOthers
+	if snap.wasCapable {
+		othersEvery = c.reprobeLost // an SD-WAN edge that went quiet: back within minutes
+	}
 	reprobe := snap.probedAt.IsZero() ||
 		(capableBefore && now.Sub(snap.probedAt) >= c.reprobeCapable) ||
-		(!capableBefore && now.Sub(snap.probedAt) >= c.reprobeOthers)
+		(!capableBefore && now.Sub(snap.probedAt) >= othersEvery)
 	if !capableBefore && !reprobe {
 		res.capability = snap.capability
 		return res // a non-SD-WAN device, not due: costs nothing this cycle
@@ -775,15 +793,22 @@ func (c *sdwanOverlayCollector) pollDevice(ctx context.Context, tg Target) devic
 	}
 
 	// BFD detail: only when it can have changed, or on the slow refresh.
-	var flapSum int64
+	var flapSum, sessTotal int64
 	allUp := true
 	for _, t := range f.TLOCs {
 		flapSum += t.Flaps
+		sessTotal += t.Total
 		if t.Up < t.Total {
 			allUp = false
 		}
 	}
-	due := !snap.facts.DetailRead || !allUp || flapSum != snap.lastFlapSum || now.Sub(snap.facts.DetailAt) >= c.detailEvery
+	tlocSig := tlocSignature(f.TLOCs)
+	due := !snap.facts.DetailRead || !allUp || flapSum != snap.lastFlapSum ||
+		tlocSig != snap.lastTLOCSig ||
+		// The last read found no peers but the TLOCs now report sessions: the
+		// detail is stale by construction.
+		(len(snap.facts.Peers) == 0 && sessTotal > 0) ||
+		now.Sub(snap.facts.DetailAt) >= c.detailEvery
 	if due {
 		dctx, dcancel := context.WithTimeout(ctx, 120*time.Second)
 		peers, local, rows, trunc, derr := readSessions(dctx, c.walk, addr, creds, f.MIB, c.limits)
@@ -839,6 +864,7 @@ func (c *sdwanOverlayCollector) pollDevice(ctx context.Context, tg Target) devic
 	c.recordCapability(tg.ID, f.Capability, now, f.MIB, &f)
 	c.stMu.Lock()
 	c.state[tg.ID].lastFlapSum = flapSum
+	c.state[tg.ID].lastTLOCSig = tlocSig
 	c.stMu.Unlock()
 	res.capability = f.Capability
 	res.facts = &f
@@ -853,6 +879,9 @@ func (c *sdwanOverlayCollector) recordCapability(id, capability string, now time
 	prev := st.capability
 	st.capability = capability
 	st.probedAt = now
+	if capability == OverlayAvailable || capability == OverlayPartial {
+		st.wasCapable = true
+	}
 	if f != nil {
 		st.facts = *f
 	}
@@ -954,4 +983,15 @@ func FetchOverlayFacts(ctx context.Context) (map[string]OverlayDeviceFacts, erro
 		}
 	}
 	return out, nil
+}
+
+// tlocSignature is the TLOC table's shape: each transport's name, total and up
+// session counts, in a stable order. Flaps are tracked separately.
+func tlocSignature(ts []OverlayTLOC) string {
+	parts := make([]string, 0, len(ts))
+	for _, t := range ts {
+		parts = append(parts, fmt.Sprintf("%s/%s/%d/%d", t.Interface, t.Encap, t.Total, t.Up))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }
