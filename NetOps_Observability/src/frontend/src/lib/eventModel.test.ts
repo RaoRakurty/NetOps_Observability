@@ -343,6 +343,11 @@ describe("missing fields: nothing invented", () => {
     expect(v.device.inventory).toBeNull();
     expect(text(v)).not.toMatch(/incident status|recovered|Inventory Matched/i);
   });
+  it("no tenant row when the record names no tenant, so a raw attribution never shows alone", () => {
+    expect(v.device.rows.find((r) => r.key === "tenant")).toBeUndefined();
+    const u = toEventView(SYSLOG_UNPARSED);
+    expect(JSON.stringify(u.device.rows)).not.toContain("unmatched");
+  });
   it("device fields the inventory left blank read as a dash, not a guess", () => {
     expect(row(v.device.rows, "type")).toBe(DASH);
     expect(row(v.device.rows, "site")).toBe(DASH);

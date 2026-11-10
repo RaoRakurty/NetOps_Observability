@@ -746,9 +746,11 @@ export function toEventView(hit: LogHit): EventView {
     deviceRows.push({ key: "ip", label: "IP", value: dash(deviceAddr), mono: true });
     deviceRows.push({ key: "type", label: "Device Type", value: dash(deviceType) });
     deviceRows.push({ key: "owner", label: "Ownership", value: dash(ev.owner) });
-    if (tenantId || attribution) {
-      const t = tenantId ? (ownerOf(tenantId) === PROVIDER_TENANT ? "Platform" : tenantId) : "";
-      deviceRows.push({ key: "tenant", label: "Tenant", value: [t, attribution && `(${attribution})`].filter(Boolean).join(" ") || DASH, mono: false });
+    // The tenant only when the record names one; how it was attributed is already the
+    // Ownership row, so the raw attribution only rides along beside a named tenant.
+    if (tenantId) {
+      const t = ownerOf(tenantId) === PROVIDER_TENANT ? "Platform" : tenantId;
+      deviceRows.push({ key: "tenant", label: "Tenant", value: attribution ? `${t} (${attribution})` : t });
     }
     deviceRows.push({ key: "site", label: "Site", value: dash(known(src, "site")) });
     deviceRows.push({ key: "role", label: "Role", value: dash(known(src, "role")) });
