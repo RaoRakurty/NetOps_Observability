@@ -73,7 +73,7 @@ func TestScanTriesProfilesInNameOrderAndBindsTheAnsweringOne(t *testing.T) {
 	if _, err := store.set(discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/30"}}); err != nil {
 		t.Fatal(err)
 	}
-	src := newSNMPSourceFromStore(store, func() *snmpcred.Store { return cs }, nil)
+	src := newSNMPSourceFromStore(store, nil, func() *snmpcred.Store { return cs }, nil)
 
 	tried := map[string][]string{}
 	var mu sync.Mutex // probes run on the sweep's worker pool
@@ -147,7 +147,7 @@ func TestScanWithNoProfilesRefusesLoudlyAndNeverGuessesPublic(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, creds := range []*snmpcred.Store{nil, cs} {
-		src := newSNMPSourceFromStore(store, func() *snmpcred.Store { return creds }, nil)
+		src := newSNMPSourceFromStore(store, nil, func() *snmpcred.Store { return creds }, nil)
 		src.SetProbeForTest(func(context.Context, collectors.Target) (string, string, string, bool) {
 			t.Fatal("no eligible profile → no probe at all")
 			return "", "", "", false
@@ -370,7 +370,7 @@ func TestDiscoveryConfigGetShowsProfilesAndBindings(t *testing.T) {
 	if _, err := s.discoveryCfg.set(discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/30"}}); err != nil {
 		t.Fatal(err)
 	}
-	src := newSNMPSourceFromStore(s.discoveryCfg, func() *snmpcred.Store { return s.snmpCreds }, nil)
+	src := newSNMPSourceFromStore(s.discoveryCfg, nil, func() *snmpcred.Store { return s.snmpCreds }, nil)
 	src.SetProbeForTest(func(_ context.Context, tg collectors.Target) (string, string, string, bool) {
 		if tg.Address == "10.20.0.1" && tg.SNMPVersion == 3 {
 			return "r1", "cisco", "", true

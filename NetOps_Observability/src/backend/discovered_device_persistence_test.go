@@ -34,7 +34,7 @@ var scanCreds366 = []discovery.ScanCredential{{ProfileID: "lab-ro", Target: coll
 // switchable.
 func newScanSource366(alive *atomic.Pointer[map[string]string], enabled bool) *discovery.SNMPSource {
 	src := discovery.NewSNMPSource(func() discovery.ScanSettings {
-		return discovery.ScanSettings{Enabled: enabled, Ranges: []string{"10.77.0.0/29"}, Credentials: scanCreds366}
+		return platformScanSettings(enabled, []string{"10.77.0.0/29"}, scanCreds366)
 	}, nil)
 	src.SetProbeForTest(func(_ context.Context, tg collectors.Target) (string, string, string, bool) {
 		m := alive.Load()

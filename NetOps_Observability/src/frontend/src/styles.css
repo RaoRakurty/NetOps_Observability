@@ -6125,6 +6125,19 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .disc-step .disc-refusal { margin-top: 0; }
 .disc-card table { margin-top: 12px; }
 .disc-foot .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* Network Scan → Scans for a customer (tenant-owned discovery scopes, 2026-11-10). */
+.cust-scans .disc-field select { padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 7px;
+  background: var(--panel); color: var(--fg); font-size: 14px; max-width: 420px; }
+.cust-scan { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--panel-border); display: flex; flex-direction: column; gap: 8px; }
+.cust-scan .disc-step-title { font-size: 16px; }
+.cust-scan-tenant { color: var(--muted); }
+.cust-scan-actions { margin-left: auto; display: inline-flex; gap: 8px; }
+.cust-scan .disc-refusal { margin-top: 0; }
+.cust-profiles { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.cust-check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.cust-muted { color: var(--muted); font-size: 14px; }
+.cust-flag { display: inline-block; margin-right: 6px; padding: 1px 8px; border-radius: 999px; font-size: 14px;
+  background: var(--sev-warning-bg); color: var(--warn); }
 
 /* ── NMS Integrations (#95) — vendor gallery + wizard + manager ─────────────── */
 .nms-page { display: flex; flex-direction: column; gap: var(--sp-4); }

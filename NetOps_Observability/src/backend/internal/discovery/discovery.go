@@ -87,6 +87,9 @@ type DiscoveryAggregator struct {
 	// warm is the set of sources whose inventory is complete: restored at
 	// Start or polled successfully since (Ready).
 	warm map[string]bool
+	// crossOwnerRefused counts source records refused by ingestLocked's
+	// cross-owner overwrite guard.
+	crossOwnerRefused uint64
 }
 
 type sourceStats struct {
@@ -393,14 +396,25 @@ func (a *DiscoveryAggregator) ingestLocked(src DiscoverySource, devices []models
 		// address-hash uniqueness (see snapshotLocked). d.ID itself is still
 		// checked first so non-SNMP sources (static/netbox), whose ids are not
 		// scan ids, keep honouring their own tombstones.
-		if a.store != nil && (a.store.IsSuppressed(d.ID) ||
-			a.store.IsSuppressed(ScanDeviceID(d.Name, "")) ||
-			a.store.IsSuppressed(ScanDeviceID(d.Name, d.Address))) {
+		if a.suppressedLocked(src.Name(), d) {
 			continue
 		}
 		existing, ok := a.cache[d.ID]
 		if ok && existing.Source != src.Name() {
 			continue // higher-precedence source already won this id
+		}
+		if ok && deviceTenantKey(existing) != deviceTenantKey(d) {
+			// §3a: the cache is keyed by id, and one source can report records
+			// of SEVERAL owners (the SNMP scanner's scopes). A record whose id
+			// another owner's row already holds must never replace that row —
+			// that is a cross-tenant overwrite: one owner's device silently
+			// gone from its inventory, the other's filed under its id. Refused,
+			// logged, counted; the incumbent stays. Tenant scan ids are salted
+			// with the tenant (ScanDeviceIDFor), so this needs a hash collision
+			// or a stamping bug to fire — which is exactly when it must hold.
+			a.crossOwnerRefused++
+			log.Printf("discovery source %s: refused a record whose id is held by another owner's device (cross-owner overwrite refused)", src.Name())
+			continue
 		}
 		seen[d.ID] = true
 		d.Source = src.Name()
@@ -442,6 +456,66 @@ func (a *DiscoveryAggregator) ingestLocked(src DiscoverySource, devices []models
 		a.persistSeenLocked()
 	}
 	a.logOverLimitLocked()
+}
+
+// suppressedLocked reports whether an operator's delete suppresses d (F-69).
+//
+// A device a TENANT's scan scope found is suppressed only by a tombstone of
+// ITS OWN id stamped with ITS OWN tenant — a delete issued in that tenant's
+// scope. The bare-id derivations below are the platform scan's id eras, so a
+// delete of the platform's copy of a box (same name, same address) never
+// suppresses a customer's copy: moving a customer's devices onto its own scan
+// retires the platform rows exactly that way (plan §6 step 4).
+//
+// Every other record keeps the rule it always had. Caller holds a.mu.
+func (a *DiscoveryAggregator) suppressedLocked(source string, d models.Device) bool {
+	if a.store == nil {
+		return false
+	}
+	if tenant := deviceTenantKey(d); tenant != "" && source == "snmp" {
+		if own, ok := a.store.(ownedSuppressor); ok {
+			return own.IsSuppressedOwned(tenant, d.ID)
+		}
+		return a.store.IsSuppressed(d.ID) // the id is tenant-salted either way
+	}
+	// A tombstone is checked against BOTH scan-id derivations, not just the
+	// live d.ID, so a delete sticks regardless of which id era it was made in:
+	// the pre-hash legacy id ScanDeviceID(name, "") and the current
+	// address-hashed id ScanDeviceID(name, addr). ScanDeviceID gained an
+	// address-hash suffix mid-flight; a device deleted before OR during that
+	// window has its tombstone keyed by the id of that era, which no longer
+	// equals today's d.ID. Deriving both from the (name, address) we already
+	// have makes suppression order- and era-independent without giving up the
+	// address-hash uniqueness (see snapshotLocked). d.ID itself is still
+	// checked first so non-SNMP sources (static/netbox), whose ids are not
+	// scan ids, keep honouring their own tombstones.
+	return a.store.IsSuppressed(d.ID) ||
+		a.store.IsSuppressed(ScanDeviceID(d.Name, "")) ||
+		a.store.IsSuppressed(ScanDeviceID(d.Name, d.Address))
+}
+
+// ownedSuppressor is the OPTIONAL owner-aware tombstone lookup on a
+// DeviceStore (DevStore implements it). Kept off DeviceStore itself so a
+// blob-only or test implementation stays valid without it.
+type ownedSuppressor interface {
+	IsSuppressedOwned(tenant, id string) bool
+}
+
+// CrossOwnerRefusals is how many source records were refused because their id
+// was held by another owner's device (§10: the guard is observable).
+func (a *DiscoveryAggregator) CrossOwnerRefusals() uint64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.crossOwnerRefused
+}
+
+// WriteMetrics exposes the aggregator's own guards to the /metrics scrape.
+// Nil-safe.
+func (a *DiscoveryAggregator) WriteMetrics(w io.Writer) {
+	if a == nil {
+		return
+	}
+	fmt.Fprintf(w, "# HELP netops_discovery_cross_owner_refused_total Source records refused because another owner's device holds their id (a cross-tenant overwrite prevented).\n# TYPE netops_discovery_cross_owner_refused_total counter\nnetops_discovery_cross_owner_refused_total %d\n", a.CrossOwnerRefusals())
 }
 
 // PollOnceForTest runs a single synchronous poll of src into the cache — test
