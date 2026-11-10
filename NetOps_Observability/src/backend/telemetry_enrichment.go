@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"netops/backend/internal/devmon"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
@@ -165,6 +166,16 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 // operator's device-to-site bindings. It is called with the device's own tenant
 // only; nil means no bindings are available.
 func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant string) map[string]string) []enrichmentRow {
+	rows, _ := buildEnrichmentRowsFacts(devices, siteBindings, nil)
+	return rows
+}
+
+// buildEnrichmentRowsFacts is buildEnrichmentRowsWith with the NMS's votes on
+// model, site and role (inventory_facts.go), keyed by (owner, device id). It
+// also returns how each fact of each exported device was settled. nmsFacts nil
+// is "no NMS facts": the rows are exactly what they were before PR 13a.
+func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant string) map[string]string, nmsFacts map[factKey]*factVotes) ([]enrichmentRow, map[factStatKey]int) {
+	stats := map[factStatKey]int{}
 	// identity -> set of distinct tenants seen for it.
 	seen := map[string]map[string]bool{}
 	facts := map[string]*identityFacts{}
@@ -180,7 +191,7 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 		}
 		return b
 	}
-	add := func(identity, tenant string, d models.Device, vendor, site, role string) {
+	add := func(identity, tenant string, d models.Device, vendor, model, site, role string) {
 		if identity == "" {
 			return
 		}
@@ -194,7 +205,7 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 			into  map[string]bool
 			value string
 		}{
-			{f.deviceIDs, d.ID}, {f.vendors, vendor}, {f.models, d.Model}, {f.sites, site}, {f.roles, role},
+			{f.deviceIDs, d.ID}, {f.vendors, vendor}, {f.models, model}, {f.sites, site}, {f.roles, role},
 		} {
 			if v := cleanEnrichmentCell(c.value); v != "" {
 				c.into[v] = true
@@ -213,14 +224,19 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 		}
 		t := deviceTenant(d)
 		vendor, _ := reg.InventoryVendorID(d.Vendor) // "" = the inventory states none
-		site := enrichmentSite(d, bindingsFor(t))
-		role := d.Labels["role"]
-		if role == "" {
-			role = d.Type
+		// The NMS votes are keyed by the device's OWN owner: another tenant's
+		// controller can only ever have voted on its own devices.
+		facts := resolveDeviceFacts(d, enrichmentSite(d, bindingsFor(t)), nmsFacts[factKey{owner.Of(t), d.ID}])
+		for _, fo := range []struct {
+			name string
+			o    factOutcome
+		}{{factModel, facts.model}, {factSite, facts.site}, {factRole, facts.role}} {
+			stats[factStatKey{fo.name, fo.o.source, fo.o.state}]++
 		}
-		add(d.ID, t, d, vendor, site, role)
-		add(d.Name, t, d, vendor, site, role)
-		add(d.Address, t, d, vendor, site, role)
+		model, site, role := facts.model.value, facts.site.value, facts.role.value
+		add(d.ID, t, d, vendor, model, site, role)
+		add(d.Name, t, d, vendor, model, site, role)
+		add(d.Address, t, d, vendor, model, site, role)
 	}
 
 	rows := make([]enrichmentRow, 0, len(seen))
@@ -238,7 +254,7 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Identity < rows[j].Identity })
-	return rows
+	return rows, stats
 }
 
 // writeEnrichmentCSV atomically writes the rows as a headered CSV to
@@ -337,9 +353,12 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 // bindings are read for its own tenant, non-cross, so another tenant's are
 // unreachable however the identity tokens collide.
 func (s *server) enrichmentRowsFor(devices []models.Device) []enrichmentRow {
-	return buildEnrichmentRowsWith(devices, func(tenant string) map[string]string {
+	s.refreshInventoryFacts()
+	rows, stats := buildEnrichmentRowsFacts(devices, func(tenant string) map[string]string {
 		return s.deviceSites.Assignments(tenant, false)
-	})
+	}, s.invFacts.current())
+	s.invFacts.setStats(stats)
+	return rows
 }
 
 // startTenantEnrichment runs the export loop until ctx is cancelled. It is a

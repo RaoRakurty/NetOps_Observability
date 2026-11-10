@@ -75,6 +75,17 @@ type key struct {
 // IndexSource reads the ifIndex bridge; injectable so tests need no Valkey.
 type IndexSource func(ctx context.Context) (map[string]map[string]string, error)
 
+// Bridge is the merged interface bridge as the export reads it (tracker 387
+// PR 13a: the SNMP collector's rows and the controllers', internal/ifbridge).
+type Bridge struct {
+	Index  map[string]map[string]string // device → ifIndex → ifName
+	Alias  map[string]map[string]string // device → ifIndex → description (ifAlias / controller desc)
+	Source map[string]map[string]string // device → ifIndex → "snmp" | "nms"; absent = "snmp"
+}
+
+// BridgeSource reads the merged bridge; injectable so tests need no Valkey.
+type BridgeSource func(ctx context.Context) (Bridge, error)
+
 // Writer writes one row batch; injectable so tests need no ClickHouse.
 type Writer func(ctx context.Context, rows []map[string]any) error
 
@@ -126,6 +137,13 @@ func clampName(s string) string {
 // BuildRows is the pure core: devices x ifIndex map → rows, sorted,
 // capped. truncated counts the rows the cap dropped.
 func BuildRows(devs []models.Device, tenantOf func(models.Device) string, ifidx map[string]map[string]string, maxRows int) (rows []Row, truncated int) {
+	return BuildBridgeRows(devs, tenantOf, Bridge{Index: ifidx}, maxRows)
+}
+
+// BuildBridgeRows is BuildRows over the merged bridge: each row also carries
+// the port's description and the source that named it.
+func BuildBridgeRows(devs []models.Device, tenantOf func(models.Device) string, br Bridge, maxRows int) (rows []Row, truncated int) {
+	ifidx := br.Index
 	type dev struct{ id, tenant, addr string }
 	byID := map[string]dev{}
 	claim := map[string]map[string]int{} // tenant → address → devices claiming it
@@ -173,9 +191,14 @@ func BuildRows(devs []models.Device, tenantOf func(models.Device) string, ifidx 
 				truncated++
 				continue
 			}
+			key := strconv.FormatUint(uint64(i), 10)
+			src := br.Source[id][key]
+			if src != "nms" {
+				src = "snmp"
+			}
 			rows = append(rows, Row{
 				TenantID: d.tenant, DeviceID: d.id, ExporterAddr: d.addr,
-				IfIndex: i, IfName: names[i], Source: "snmp",
+				IfIndex: i, IfName: names[i], IfAlias: clampName(br.Alias[id][key]), Source: src,
 			})
 		}
 	}
@@ -209,13 +232,21 @@ func (e *Exporter) Install(rows []Row) {
 
 // cycle runs one export: read the bridge, build, write when needed.
 func (e *Exporter) Cycle(ctx context.Context, devs []models.Device, tenantOf func(models.Device) string, read IndexSource, write Writer, now time.Time) error {
-	ifidx, err := read(ctx)
+	return e.CycleBridge(ctx, devs, tenantOf, func(ctx context.Context) (Bridge, error) {
+		m, err := read(ctx)
+		return Bridge{Index: m}, err
+	}, write, now)
+}
+
+// CycleBridge is Cycle over the merged bridge (names, descriptions, sources).
+func (e *Exporter) CycleBridge(ctx context.Context, devs []models.Device, tenantOf func(models.Device) string, read BridgeSource, write Writer, now time.Time) error {
+	br, err := read(ctx)
 	if err != nil {
 		// Keep the last good set: a read failure is not "no names" (tracker 307).
 		e.readFailures.Add(1)
 		return fmt.Errorf("ifIndex bridge unread, interface names keep the last export: %w", err)
 	}
-	rows, truncated := BuildRows(devs, tenantOf, ifidx, MaxRows)
+	rows, truncated := BuildBridgeRows(devs, tenantOf, br, MaxRows)
 	if truncated > 0 {
 		e.truncated.Add(uint64(truncated))
 		applog.Warn("iface-names", "interface-name export hit its row cap; the rest stay unnamed", map[string]any{

@@ -144,6 +144,9 @@ func (s *server) rebuildNMSDeviceIndex(ctx context.Context) {
 	if s.nmsResolver == nil || s.discovery == nil {
 		return
 	}
+	// The SNMP collector's addresses ALONE, never the merged interface bridge
+	// (if_bridge.go): an address a controller reported must not help that
+	// controller's own key resolve, or a wrong match could feed itself.
 	ifaddr, err := collectors.FetchIfAddrMap(ctx)
 	if err != nil {
 		logWarn("nms", "interface addresses unread — controller devices are matched by system-ip and name only this cycle", map[string]any{"error": err.Error()})
@@ -259,11 +262,11 @@ func (s *server) runTrapAddressIndex(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := t.rebuild(rctx, s.discovery.Devices(), collectors.FetchIfAddrMap); err != nil {
+		if err := t.rebuild(rctx, s.discovery.Devices(), fetchIfAddrMap); err != nil {
 			logWarn("snmptrap", "interface addresses unread: traps from an interface address keep the previous index this cycle",
 				map[string]any{"error": err.Error()})
 		}
-		if err := t.refreshIfNames(rctx, collectors.FetchIfIndexMap); err != nil {
+		if err := t.refreshIfNames(rctx, fetchIfIndexMap); err != nil {
 			logWarn("snmptrap", "ifIndex map unread: trap interfaces keep the previous names this cycle",
 				map[string]any{"error": err.Error()})
 		}

@@ -48,6 +48,7 @@ import (
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
 	"netops/backend/internal/flownames"
+	"netops/backend/internal/ifbridge"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -482,7 +483,7 @@ type server struct {
 	meteringAPI      *metering.API
 	// METERING-END
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
-	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
+	// the WAN endpoint projector. Defaults to fetchIfAddrMap (the merged interface bridge); a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
 	wanIfAddr func(context.Context) (map[string]map[string]string, error)
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
@@ -575,6 +576,9 @@ type server struct {
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
 	flowDatasets    *flownames.DatasetWatch              // tracker 387 PR 13d: do ip_asn / geoip_country load
 	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
+	ifBridge        *ifbridge.Store                      // tracker 387 PR 13a: the interface bridge's NMS rows (if_bridge.go)
+	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
+	invFacts        *inventoryFacts                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -1255,6 +1259,9 @@ func newServer() *server {
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		ifaceNames:       flownames.NewExporter(),
+		ifBridge:         ifbridge.NewStore(),
+		ifBridgeMetrics:  ifbridge.NewMetrics(),
+		invFacts:         newInventoryFacts(),
 		flowDatasets:     flownames.NewDatasetWatch(),
 		discovery:        d,
 		devStore:         devStore,
@@ -1672,6 +1679,8 @@ func newServer() *server {
 		// One router = one entity: controller device keys join inventory ids.
 		srv.nmsResolver = &nms.InventoryResolver{}
 		srv.nms.SetDeviceResolver(srv.nmsResolver)
+		// Controller interface lists feed the interface bridge (tracker 387 PR 13a).
+		srv.nms.SetInterfaceSink(srv.ingestNMSInterfaces)
 	}
 	// TRACKER 256 — wireless controllers and access points are DEVICES, and one
 	// entitlement each when Correlix is collecting from them. Registering them
@@ -2956,6 +2965,8 @@ func Run() {
 	// The SNMP trap receiver's interface-address rung and ifIndex names
 	// (tracker 387 PR 13c', 13c).
 	srv.workers.start("trap-addr-index", func() { srv.runTrapAddressIndex(ctx) })
+	// The interface bridge's NMS half: project, store, count (tracker 387 PR 13a).
+	srv.workers.start("iface-bridge", func() { srv.runIfaceBridge(ctx) })
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
@@ -4829,6 +4840,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.sealMetrics.write(w)
 	}
 	s.ifaceNames.WriteMetrics(w)
+	s.ifBridgeMetrics.WriteMetrics(w)
+	s.invFacts.WriteMetrics(w)
 	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)

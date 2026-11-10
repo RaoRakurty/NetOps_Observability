@@ -203,7 +203,7 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 
 	fetchIfAddr := s.wanIfAddr
 	if fetchIfAddr == nil {
-		fetchIfAddr = collectors.FetchIfAddrMap
+		fetchIfAddr = fetchIfAddrMap
 	}
 	// device → ip → ifName. This registry is what makes an interface VISIBLE to the
 	// projection at all (`for ip, ifn := range ifaddr[devID]` below is the only
