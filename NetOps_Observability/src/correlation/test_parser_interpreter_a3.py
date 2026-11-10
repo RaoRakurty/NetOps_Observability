@@ -145,8 +145,10 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # `syslog.config.change` ships SHADOW — see events.yaml for why) · 41 since
     # tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since tracker 377 (`trap.bgp.nokia_ng`)
     # · 59 with tracker 387's trap-pack block · 71 with its syslog pack (12 rows)
-    # · 72 with PR 10's known_benign row for the SSH banner probe.
-    assert len(P.RULES) == 72
+    # · 72 with PR 10's known_benign row for the SSH banner probe
+    # · 93 with 387 §6a wave 1 (Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5)
+    # · 94 with the SD-WAN SNMP-agent poll-error known_benign row.
+    assert len(P.RULES) == 94
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

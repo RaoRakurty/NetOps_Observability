@@ -1,0 +1,421 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Juniper Junos, tracker 387 plan §6a, wave 1.
+# Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# TWO WIRE FORMATS, ONE TAG (research §2.2). Standard: `<ts> <host> <process>[<pid>]:
+# <TAG>: <text>`. Structured data (RFC 5424): `<PRI>1 <ts> <host> <process> <pid> <TAG>
+# [junos@2636.<platform> k="v" ...] <text>`, where the TAG is the RFC 5424 MSGID and the
+# structured data reaches no field (PR 10 keeps it whole as `structured_data`). The
+# grammar reads `with_msgid`, so it sees `<TAG>: <text>` in both and states one event
+# type for one event. The stable identity is the TAG.
+#
+# SEVERITY. Junos puts no severity in the text; PRI is reliable in both formats (research
+# §2.2), so the grammar reads none and states no floor. The generic net acts on PRI as it
+# does for every vendor: only emerg, alert and crit open alone (owner D3).
+#
+# PROCESSES. The grammar runs only for the daemons that log these tags: the seven the
+# aggregator's vendor heuristic already names (vector.yaml), mib2d (the SNMP_TRAP_LINK_*
+# lines, napalm-logs) and bfdd (the BFDD_* tags, research §2.2). A `FOO_BAR: text` line
+# from any other program is not claimed for Juniper.
+#
+# EVIDENCE. No Junos box on the lab. `doc_claimed`, each fixture names its source. The
+# Juniper System Log Explorer was not reachable, so the tags are those a citable page
+# prints; the rest are recorded under `wanted`.
+pack: juniper_junos
+vendor: juniper
+description: Juniper Junos routers and switches, standard and structured-data syslog.
+
+grammars:
+  - id: junos_tag
+    parser_id: junos.v1
+    literal: '_'
+    apps: [rpd, mgd, mib2d, chassisd, bfdd, eventd, dcd, kmd, l2cpd]
+    with_msgid: true
+    pattern: '^(?P<tag>(?P<fac>[A-Z][A-Z0-9]{0,15})_[A-Z0-9_]{1,64}): ?(?P<text>.*)'
+    facility: '{fac}'
+    event_type: '{tag}'
+    summary: '{text}'
+    fidelity: doc_claimed
+    source: 'Junos 13.1 "Interpreting messages generated in structured-data format" (networkingdocs.hpe.com), and the standard-format samples in napalm-logs (Apache-2.0)'
+
+# Typed rows. Owner D3: every row is `warn` or `info`, below the open floor. A Junos
+# session or link down joins a component and its trap twin (high) is what opens alone;
+# E1 makes the two one observation. The guards read `ctoken`, which holds the tag as the
+# event type in both wire formats.
+rules:
+  # `BGP peer <ip> (External AS <n>) changed state from <A> to <B> (event <E>)`. A move
+  # into Established is up; a move out of Established is down; anything else is the
+  # session churning while it is down, which states no transition (info).
+  - rule_id: syslog.junos.bgp.state_change
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [juniper]
+    fidelity_status: doc_claimed
+    pattern_src: 'BGP peer \S{1,64} .{0,64}?changed state from \w{1,16} to \w{1,16}'
+    guard:
+      all:
+        - {contains: [ctoken, 'RPD_BGP_NEIGHBOR_STATE_CHANGED']}
+        - {re: [msg, 'BGP peer \S{1,64} .{0,64}?changed state from \w{1,16} to \w{1,16}', '']}
+    extract:
+      peer: {re: [[msg, 'BGP peer (\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:]{2,39})', 1, '']]}
+      from_state: {re: [[msg, 'changed state from (\w{1,16}) to', 1, '']]}
+      to_state: {re: [[msg, 'changed state from \w{1,16} to (\w{1,16})', 1, '']]}
+      reason: {re: [[msg, '\(event (\w{1,32})\)', 1, '']]}
+      state:
+        case:
+          - {when: {eq: ['$to_state', 'Established']}, value: up}
+          - {when: {eq: ['$from_state', 'Established']}, value: down}
+          - {when: {always: true}, value: unknown}
+    emit:
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: warn, up: warn}, default: info}
+      native_id: '{host}|bgp_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        from_state: {var: from_state}
+        to_state: {var: to_state}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  # `OSPF neighbor <ip> (realm <r> <ifl> area <a>) state changed from <A> to <B> due to
+  # <E>`. The tag says the direction; Full is up, NBRDOWN is down, a step on the way up
+  # (Init to ExStart) states no adjacency yet.
+  - rule_id: syslog.junos.ospf.neighbor
+    lane: syslog
+    source: syslog
+    kind: ospf_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [juniper]
+    fidelity_status: doc_claimed
+    pattern_src: 'OSPF neighbor \S{1,64} \(realm .{0,96}?state changed from \w{1,16} to \w{1,16}'
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'RPD_OSPF_NBRDOWN']}
+            - {contains: [ctoken, 'RPD_OSPF_NBRUP']}
+        - {re: [msg, 'OSPF neighbor \S{1,64} \(realm .{0,96}?state changed from \w{1,16} to \w{1,16}', '']}
+    extract:
+      peer: {re: [[msg, 'OSPF neighbor (\S{1,64}) \(', 1, '']]}
+      ifname: {re: [[msg, '\(realm \S{1,32} (\S{1,64}) area', 1, '']]}
+      to_state: {re: [[msg, 'state changed from \w{1,16} to (\w{1,16})', 1, '']]}
+      reason: {re: [[msg, 'due to (\w{1,32})', 1, '']]}
+      state:
+        case:
+          - {when: {contains: [ctoken, 'RPD_OSPF_NBRDOWN']}, value: down}
+          - {when: {eq: ['$to_state', 'Full']}, value: up}
+          - {when: {always: true}, value: unknown}
+    emit:
+      metric: ospf_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: warn, up: warn}, default: info}
+      native_id: '{host}|ospf_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        interface: {var: ifname}
+        state: {var: state}
+        to_state: {var: to_state}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  # `IS-IS lost L2 adjacency to <neighbor> on <ifl>, reason: <r>` and `IS-IS new L2
+  # adjacency to <neighbor> on <ifl>`. The neighbour is a system NAME, a real device
+  # identity, so it is a token as the IS-IS system id is in the vendor-neutral row.
+  - rule_id: syslog.junos.isis.adjacency
+    lane: syslog
+    source: syslog
+    kind: isis_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [juniper]
+    fidelity_status: doc_claimed
+    pattern_src: 'IS-IS (?:lost|new) L\d adjacency to \S{1,128} on \S{1,64}'
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'RPD_ISIS_ADJDOWN']}
+            - {contains: [ctoken, 'RPD_ISIS_ADJUP']}
+        - {re: [msg, 'IS-IS (?:lost|new) L\d adjacency to \S{1,128} on \S{1,64}', '']}
+    severity: warn
+    extract:
+      peer: {re: [[msg, 'adjacency to (\S{1,128}) on', 1, '']]}
+      level: {re: [[msg, 'IS-IS (?:lost|new) (L\d) adjacency', 1, '']]}
+      ifname: {re: [[msg, 'adjacency to \S{1,128} on ([^,\s]{1,64})', 1, '']]}
+      reason: {re: [[msg, 'reason: ([^:\r\n]{1,64})', 1, '']]}
+      state:
+        case:
+          - {when: {contains: [ctoken, 'RPD_ISIS_ADJDOWN']}, value: down}
+          - {when: {always: true}, value: up}
+    emit:
+      metric: isis_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|isis_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        level: {var: level}
+        interface: {var: ifname}
+        reason: {var: reason}
+        state: {var: state}
+        tag: {var: tag}
+
+  # mib2d's syslog twin of the link trap: `ifIndex <n>, ifAdminStatus <s>(<n>),
+  # ifOperStatus <s>(<n>), ifName <name>`. The cause comes from ifAdminStatus exactly as
+  # the trap rows read it (events.yaml `trap_link_cause`): admin down is an operator's
+  # shutdown (tracker 388); admin up on a down line names no cause, so `unknown`.
+  - rule_id: syslog.junos.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [juniper]
+    fidelity_status: doc_claimed
+    pattern_src: 'ifAdminStatus \w{1,16}\W{1,8}\d\W{1,8}ifOperStatus \w{1,16}\W{1,8}\d\W{1,8}ifName \S{1,128}'
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'SNMP_TRAP_LINK_DOWN']}
+            - {contains: [ctoken, 'SNMP_TRAP_LINK_UP']}
+        - {re: [msg, 'ifAdminStatus \w{1,16}\W{1,8}\d\W{1,8}ifOperStatus \w{1,16}\W{1,8}\d\W{1,8}ifName \S{1,128}', '']}
+    extract:
+      ifname: {re: [[msg, 'ifName (\S{1,128})', 1, '']]}
+      if_index: {re: [[msg, 'ifIndex (\d{1,10})', 1, '']]}
+      admin_status: {re: [[msg, 'ifAdminStatus (\w{1,16})\(', 1, '']]}
+      oper_status: {re: [[msg, 'ifOperStatus (\w{1,16})\(', 1, '']]}
+      state:
+        case:
+          - {when: {contains: [ctoken, 'SNMP_TRAP_LINK_DOWN']}, value: down}
+          - {when: {always: true}, value: up}
+      link_cause:
+        case:
+          - when: {all: [{eq: ['$state', down]}, {eq: ['$admin_status', down]}]}
+            value: admin
+          - when: {eq: ['$state', down]}
+            value: unknown
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: warn
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        if_index: {var: if_index}
+        state: {var: state}
+        admin_status: {var: admin_status}
+        oper_status: {var: oper_status}
+        link_cause: {var: link_cause}
+        tag: {var: tag}
+      omit_empty: [link_cause]
+
+  # The commit landed (`UI_COMMIT_COMPLETED`). The request line, `UI_COMMIT`, is the
+  # vendor-neutral shadow row's (events.yaml syslog.config.change), and this row answers
+  # only the completion, so a commit is one change and nothing here re-classifies the V1
+  # workload profile, which carries no Junos line. Info: it corroborates, never confirms.
+  - rule_id: syslog.junos.config.commit_completed
+    lane: syslog
+    source: syslog
+    kind: device_config_change
+    entity_type: device
+    family: null
+    vendors: [juniper]
+    fidelity_status: doc_claimed
+    markers: [UI_COMMIT_COMPLETED]
+    guard: {contains: [ctoken, 'UI_COMMIT_COMPLETED']}
+    severity: info
+    extract:
+      state: {const: changed}
+    emit:
+      metric: device_config_change
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|config_change|commit_completed|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        method: {const: commit_completed}
+        state: {var: state}
+        tag: {var: tag}
+
+wanted:
+  - symptom: BFD session down/up
+    kind: bfd_session_flap
+    why_absent: BFDD_TRAP_SHOP_STATE_DOWN/UP are named by the research but no citable line shows their text
+  - symptom: chassis power, fan and temperature (CHASSISD_*)
+    kind: device_alarm
+    why_absent: tag names only, from the research; no citable text. The craftd alarm line (`Major alarm set, ...`) carries no tag, so the grammar does not read it
+  - symptom: memory and scheduler slip (KERNEL_MEMORY_*, RPD_SCHED_SLIP)
+    kind: device_resource_anomaly
+    why_absent: tag names only, from the research; no citable text
+  - symptom: chatty Junos lines worth a known_benign row
+    why_absent: no Junos capture exists to measure which lines repeat at warning or worse
+
+fixtures:
+  # Structured data, the vendor's own literal. The tag lives in MSGID.
+  - name: a structured-data frame takes its tag from MSGID
+    fidelity: doc_claimed
+    source: 'https://networkingdocs.hpe.com/documentation/en_US/junos13.1/topics/reference/general/syslog-interpreting-msg-generated-structured-data-format.html (literal), framed as tests/test_syslog_edge_framing.py JUNOS_SD'
+    hostname: router1
+    appname: mgd
+    msgid: UI_DBASE_LOGOUT_EVENT
+    severity: notice
+    message: "User 'regress' exiting configuration mode"
+    expect:
+      vendor: juniper
+      vendor_source: format
+      parser_id: junos.v1
+      parser_status: parsed
+      facility: UI
+      event_type: ui_dbase_logout_event
+      summary: "User 'regress' exiting configuration mode"
+      normalized_severity: notice
+    signal: null
+
+  - name: a BGP session leaving Established is a below-floor down
+    fidelity: doc_claimed
+    source: 'research VENDOR_PACK_SOURCES_2026-11-09 §2.2, Juniper community line, https://community.juniper.net/discussion/event-policy-question'
+    hostname: Branch1
+    appname: rpd
+    severity: warning
+    message: 'RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 10.1.1.1 (External AS 1111) changed state from Established to Idle (event HoldTime) (instance master)'
+    expect:
+      parser_status: parsed
+      facility: RPD
+      event_type: rpd_bgp_neighbor_state_changed
+      summary: BGP peer 10.1.1.1 (External AS 1111) changed state from Established to Idle (event HoldTime) (instance master)
+      normalized_severity: warning
+    signal: {rule_id: syslog.junos.bgp.state_change, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 10.1.1.1}
+
+  - name: a BGP session that never came up states no transition
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/BGP_NEIGHBOR_STATE_CHANGED.html (Apache-2.0)'
+    hostname: vmx01
+    appname: rpd
+    severity: warning
+    message: 'RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 1.1.1.1 (External AS 2222) changed state from Connect to Idle (event Stop) (instance master)'
+    expect:
+      parser_status: parsed
+      event_type: rpd_bgp_neighbor_state_changed
+    signal: {rule_id: syslog.junos.bgp.state_change, kind: bgp_adjacency_change, severity: info, opens_alone: false, state: unknown, peer: 1.1.1.1}
+
+  - name: an OSPF neighbour down names the neighbour and the logical interface
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/OSPF_NEIGHBOR_DOWN.html (Apache-2.0)'
+    hostname: vmx01
+    appname: rpd
+    severity: notice
+    message: 'RPD_OSPF_NBRDOWN: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Full to Down due to InActiveTimer (event reason: BFD session timed out and neighbor was declared dead)'
+    expect:
+      parser_status: parsed
+      event_type: rpd_ospf_nbrdown
+    signal: {rule_id: syslog.junos.ospf.neighbor, kind: ospf_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 1.1.1.1}
+
+  - name: an OSPF neighbour on its way up states no adjacency yet
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/OSPF_NEIGHBOR_UP.html (Apache-2.0)'
+    hostname: vmx01
+    appname: rpd
+    severity: notice
+    message: 'RPD_OSPF_NBRUP: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Init to ExStart due to 2WayRcvd (event reason: exchange start)'
+    expect:
+      parser_status: parsed
+      event_type: rpd_ospf_nbrup
+    signal: {rule_id: syslog.junos.ospf.neighbor, kind: ospf_adjacency_change, severity: info, opens_alone: false, state: unknown, peer: 1.1.1.1}
+
+  - name: an IS-IS adjacency lost names the neighbour system
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/ISIS_NEIGHBOR_DOWN.html (Apache-2.0)'
+    hostname: junos.test.env
+    appname: rpd
+    severity: notice
+    message: 'RPD_ISIS_ADJDOWN: IS-IS lost L2 adjacency to second.junos.device on ge-0/0/1.0, reason: Aged Out: 1521033590.3'
+    expect:
+      parser_status: parsed
+      event_type: rpd_isis_adjdown
+    signal: {rule_id: syslog.junos.isis.adjacency, kind: isis_adjacency_change, severity: warn, opens_alone: false, state: down, peer: second.junos.device}
+
+  - name: an IS-IS adjacency formed is the up side
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/ISIS_NEIGHBOR_UP.html (Apache-2.0)'
+    hostname: junos.test.env
+    appname: rpd
+    severity: info
+    message: 'RPD_ISIS_ADJUP: IS-IS new L2 adjacency to second.junos.device on ge-0/0/1.0'
+    expect:
+      parser_status: parsed
+      event_type: rpd_isis_adjup
+    signal: {rule_id: syslog.junos.isis.adjacency, kind: isis_adjacency_change, severity: warn, opens_alone: false, state: up, peer: second.junos.device}
+
+  # Tracker 388: the line states ifAdminStatus down, so it is an operator's shutdown.
+  - name: a link down with the port administratively down is an admin change
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_DOWN.html (Apache-2.0)'
+    hostname: vmx01
+    appname: mib2d
+    severity: warning
+    message: 'SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus down(2), ifOperStatus down(2), ifName xe-0/0/0'
+    expect:
+      parser_status: parsed
+      facility: SNMP
+      event_type: snmp_trap_link_down
+    signal: {rule_id: syslog.junos.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'vmx01:xe-0/0/0'}
+
+  - name: a link down with the port administratively up names no cause
+    fidelity: doc_claimed
+    source: 'napalm-logs INTERFACE_DOWN line with ifAdminStatus up(1), the shape Juniper community "determine when port was last active" shows for a port that failed'
+    hostname: vmx01
+    appname: mib2d
+    severity: warning
+    message: 'SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus up(1), ifOperStatus down(2), ifName xe-0/0/0'
+    expect:
+      parser_status: parsed
+      event_type: snmp_trap_link_down
+    signal: {rule_id: syslog.junos.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: unknown, entity: 'vmx01:xe-0/0/0'}
+
+  - name: a link up
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_UP.html (Apache-2.0)'
+    hostname: vmx01
+    appname: mib2d
+    severity: info
+    message: 'SNMP_TRAP_LINK_UP: ifIndex 502, ifAdminStatus up(1), ifOperStatus up(1), ifName xe-0/0/0'
+    expect:
+      parser_status: parsed
+      event_type: snmp_trap_link_up
+    signal: {rule_id: syslog.junos.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'vmx01:xe-0/0/0'}
+
+  - name: a completed commit is a change, at info
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/CONFIGURATION_COMMIT_COMPLETED.html (Apache-2.0)'
+    hostname: vmx01
+    appname: mgd
+    severity: notice
+    message: 'UI_COMMIT_COMPLETED: commit complete'
+    expect:
+      parser_status: parsed
+      facility: UI
+      event_type: ui_commit_completed
+    signal: {rule_id: syslog.junos.config.commit_completed, kind: device_config_change, severity: info, opens_alone: false, state: changed}
+
+  - name: a tag-shaped line from a program that is not a Junos daemon is not claimed
+    fidelity: doc_claimed
+    source: 'negative case: the process gate'
+    hostname: host1
+    appname: otherd
+    severity: notice
+    message: 'SOME_TAG: a line from another program'
+    expect: {}
+    signal: null

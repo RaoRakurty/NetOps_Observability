@@ -95,7 +95,10 @@ sources:
       interface_health: {status: unavailable, detail: "syslog carries state messages, not counters"}
       device_reachability: {status: unavailable, detail: "a device cannot log its own unreachability"}
       device_restart: {status: collection_pending, detail: "restart / reload messages exist (e.g. %SYS-5-RESTART); restart is mapped from traps only"}
-      config_change: {status: dormant, detail: "syslog.config.change (CONFIG_I / UI_COMMIT) ships shadow: counted, never emitted, until a V2 capacity profile exists", ref: "tracker 220"}
+      # config_change is supplied (doc_claimed) since tracker 387 wave 1: the Nokia SR OS
+      # and Junos pack rows emit it. The vendor-neutral syslog.config.change (CONFIG_I /
+      # UI_COMMIT) still ships shadow until a V2 capacity profile exists (tracker 220);
+      # the pack rows match no line of the V1 profile (test_config_change_rules.py).
       flow_volume: {status: unavailable, detail: "syslog is not flow export"}
 
   - id: trap

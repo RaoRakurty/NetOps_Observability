@@ -1,0 +1,381 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Cisco IOS, IOS XE, IOS XR and NX-OS, tracker 387 plan §6a, wave 1.
+# Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# WHAT IS HERE. The classic three-part `%FAC-SEV-MNEMONIC:` shared by IOS, IOS XE,
+# NX-OS (and Arista EOS) is still the hand-written `ios_style.v1` grammar in vector.yaml
+# (legacy_grammars.yaml); this pack does not duplicate it. It adds:
+#   - the IOS XR four-part `%CATEGORY-GROUP-SEV-CODE : text`, which matched nothing
+#     (research §0, plan §6a). The grammar files `CATEGORY-GROUP` as the facility and the
+#     code as the event type, so the standard fields read like the three-part form and
+#     the vendor-neutral rules in events.yaml answer XR lines exactly as they answer IOS
+#     (`%PKT_INFRA-LINK-3-UPDOWN` is a link change, `%ROUTING-BGP-5-ADJCHANGE` a BGP one);
+#   - the link-cause rows of tracker 388 for the IOS and NX-OS lines that say WHY a link
+#     went down, and the NX-OS link and BFD rows `ios_style.v1` parses but nothing types.
+#
+# EVIDENCE. Only Cisco SD-WAN is on the lab, so every row here is `doc_claimed` and each
+# fixture names its source. A fixture fills a documented `[chars]` with an illustrative
+# value; the shape around it is the document's.
+pack: cisco_ios
+vendor: cisco
+description: Cisco IOS XR four-part messages, and link cause for IOS, IOS XE and NX-OS.
+
+grammars:
+  # `%<CATEGORY>-<GROUP>-<SEV>-<CODE> : <MSG>`, a space before the colon (research §2.1).
+  # Anchored at the start: since PR 10 the frame's sequence number, host, node and process
+  # are envelope fields (edge shape `node_before_time`), and text later in a line is the
+  # sender's to write. The literal is the ` : ` the three-part form never has.
+  - id: iosxr
+    parser_id: cisco_iosxr.v1
+    literal: ' : '
+    pattern: '^%(?P<cat>[A-Z][A-Z0-9_]{0,31})-(?P<grp>[A-Z][A-Z0-9_]{0,31})-(?P<sev>[0-7])-(?P<code>[A-Z][A-Z0-9_]{0,63}) : (?P<text>.*)'
+    facility: '{cat}-{grp}'
+    event_type: '{code}'
+    summary: '{text}'
+    severity: {digit: sev}
+    native_code: sev
+    # D3: only a critical line may alarm on severity alone; err and below need a row.
+    alarm_floor: 2
+    fidelity: doc_claimed
+    source: 'napalm-logs IOS-XR syslog samples (Apache-2.0), https://napalm-logs.readthedocs.io/en/latest/syslog/iosxr.html'
+
+rules:
+  # ── tracker 388: the line itself says the port was shut ──────────────────────────
+  # IOS logs `%LINK-5-CHANGED ... administratively down` for a `shutdown` and then the
+  # same `%LINEPROTO-5-UPDOWN` a fault produces. Until now the first line emitted nothing,
+  # so only the second reached the engine, with no cause. This row emits the change half:
+  # `link_cause=admin`, which stage [5] (`_admin_change_only`) and the template
+  # `sig.ent.access.admin-link-change-induced` act on. `warn`: a shutdown never opens.
+  # IOS XR is matched by the optional `PKT_INFRA-` and the same words; no XR document was
+  # found for this line (tracker 388 names it), so no fixture claims the XR shape.
+  # Sources: Cisco Community, "interface administratively down" (a shutdown logs
+  # %LINK-5-CHANGED), https://community.cisco.com/t5/other-network-architecture-subjects/interface-administratively-down/td-p/340382
+  - rule_id: syslog.cisco.link.admin_down
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '%(?:PKT_INFRA-)?LINK-5-CHANGED\s?:\sInterface\s\S{1,128},\schanged\sstate\sto\sadministratively\sdown'
+    guard:
+      all:
+        - {contains: [msg, 'LINK-5-CHANGED']}
+        - {re: [msg, '%(?:PKT_INFRA-)?LINK-5-CHANGED\s?:\sInterface\s\S{1,128},\schanged\sstate\sto\sadministratively\sdown', 'i']}
+    severity: warn
+    extract:
+      ifname: {re: [[msg, 'Interface (\S{1,128}?),', 1, '']]}
+      state: {const: down}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      native_id: '{host}|link|{ifname}|down|admin|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        link_cause: {const: admin}
+        link_reason: {const: administratively down}
+        tag: {var: tag}
+
+  # NX-OS states the reason in brackets on every down line: `(Administratively down)`,
+  # `(Link failure)`, `(No operational members)`, `(Initializing)`. Today these are
+  # notice, so the generic net never saw them and an NX-OS link fault reached the engine
+  # only through a trap. One row, the cause in the trap rows' vocabulary: admin for the
+  # shutdown, fault for a failure the device names, unknown for the rest.
+  # Sources: Cisco TechNote 221572, "Troubleshoot Link Flap Issue on Nexus 9000"
+  # (IF_DOWN_LINK_FAILURE, IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN, IF_DOWN_INITIALIZING, IF_UP),
+  # https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html
+  # and the Cisco MDS 9000 Family (NX-OS) System Messages Reference OL-15956-01,
+  # ETHPORT-5-IF_DOWN_ADMIN_DOWN "Interface [chars] is down (Administratively down)".
+  - rule_id: syslog.nxos.link.down
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}:\sInterface\s\S{1,128}\sis\sdown\s\('
+    guard:
+      all:
+        - {contains: [msg, 'ETHPORT-']}
+        - {re: [msg, '%ETHPORT-\d-IF_DOWN_[A-Z_]{1,48}:\sInterface\s\S{1,128}\sis\sdown\s\(', '']}
+    severity: warn
+    extract:
+      ifname: {re: [[msg, 'Interface (\S{1,128}) is down', 1, '']]}
+      link_reason: {re: [[msg, 'is down \(([^)\r\n]{1,64})\)', 1, '']]}
+      link_cause:
+        case:
+          - when: {re: ['$link_reason', '^administratively\s+down$', 'i']}
+            value: admin
+          - when: {re: ['$link_reason', '^link\s+failure$', 'i']}
+            value: fault
+          - {when: {always: true}, value: unknown}
+      state: {const: down}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      native_id: '{host}|link|{ifname}|down|{link_cause}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        link_cause: {var: link_cause}
+        link_reason: {var: link_reason}
+        tag: {var: tag}
+
+  - rule_id: syslog.nxos.link.up
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '%ETHPORT-\d-IF_UP:\sInterface\s\S{1,128}\sis\sup'
+    guard:
+      all:
+        - {contains: [msg, 'ETHPORT-']}
+        - {re: [msg, '%ETHPORT-\d-IF_UP:\sInterface\s\S{1,128}\sis\sup', '']}
+    severity: warn
+    extract:
+      ifname: {re: [[msg, 'Interface (\S{1,128}) is up', 1, '']]}
+      state: {const: up}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      native_id: '{host}|link|{ifname}|up|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {var: tag}
+
+  # NX-OS BFD, the one Cisco fault text the research fetched from the vendor itself:
+  # System Messages Reference 10.6(2)F, `BFD-5-SESSION_STATE_DOWN: BFD session [chars]
+  # to neighbor [chars] on interface [chars] has gone down. Reason: [chars].`
+  # https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html
+  # `bfd_session_flap`, the standard kind trap.bfd.session emits, at warn (D3).
+  - rule_id: syslog.nxos.bfd.down
+    lane: syslog
+    source: syslog
+    kind: bfd_session_flap
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: doc_claimed
+    pattern_src: '%BFD-\d-SESSION_STATE_DOWN: BFD session \S{1,64} to neighbor \S{1,64} on interface \S{1,128} has gone down'
+    guard:
+      all:
+        - {contains: [msg, 'SESSION_STATE_DOWN']}
+        - {re: [msg, '%BFD-\d-SESSION_STATE_DOWN: BFD session \S{1,64} to neighbor \S{1,64} on interface \S{1,128} has gone down', '']}
+    severity: warn
+    extract:
+      session: {re: [[msg, 'BFD session (\S{1,64}) to neighbor', 1, '']]}
+      peer: {re: [[msg, 'to neighbor (\S{1,64}) on interface', 1, '']]}
+      ifname: {re: [[msg, 'on interface (\S{1,128}) has gone down', 1, '']]}
+      reason: {re: [[msg, 'Reason: ([^.\r\n]{1,64})', 1, '']]}
+      state: {const: down}
+    emit:
+      metric: bfd_session
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|bfd|{peer|?}|{ifname|?}|down|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        session: {var: session}
+        peer: {var: peer}
+        interface: {var: ifname}
+        reason: {var: reason}
+        state: {var: state}
+        tag: {var: tag}
+
+  # Rule 1, "ingestion is not incident creation": any other XR error or warning reaches
+  # the engine at `warn`, so it can join a component. XR lines a vendor-neutral rule types
+  # (link, BGP, OSPF, IS-IS) never get here: those rows sit ahead of every pack row.
+  - rule_id: syslog.iosxr.below_floor
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    generic: true
+    fidelity_status: doc_claimed
+    pattern_src: '^%[A-Z][A-Z0-9_]{0,31}-[A-Z][A-Z0-9_]{0,31}-[34]-[A-Z][A-Z0-9_]{0,63} : '
+    guard: {re: [msg, '^%[A-Z][A-Z0-9_]{0,31}-[A-Z][A-Z0-9_]{0,31}-[34]-[A-Z][A-Z0-9_]{0,63} : ', '']}
+    severity: warn
+    extract:
+      facility: {re: [[msg, '^%([A-Z][A-Z0-9_]{0,31}-[A-Z][A-Z0-9_]{0,31})-[34]-', 1, '']]}
+      mnem: {re: [[msg, '-[34]-([A-Z][A-Z0-9_]{0,63}) : ', 1, '']]}
+      ifname: {re: [[msg, '[Ii]nterface\s+([A-Za-z][\w/.\-]*)', 1, '']]}
+      text: {var: msg, slice: 256}
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity:
+        when: {truthy: '$ifname'}
+        type: interface
+        id: '{host}:{ifname}'
+        else: {type: device, id: '{host}'}
+      native_id: '{host}|alarm|{facility|?}|{mnem|?}|{ifname|-}|{ts_ms}'
+      content_tag: msg
+      tokens: [{t: '{host}'}]
+      attrs:
+        facility: {var: facility}
+        mnemonic: {var: mnem}
+        interface: {var: ifname}
+        tag: {var: tag}
+        text: {var: text}
+
+wanted:
+  - symptom: IOS XR BFD session down/up
+    kind: bfd_session_flap
+    why_absent: '%L2-BFD-6-SESSION_STATE_DOWN is named by the research but its text was not found in a citable document'
+  - symptom: IOS XR configuration commit
+    kind: device_config_change
+    why_absent: '%MGBL-CONFIG-6-DB_COMMIT is named by the research but its text was not found in a citable document'
+  - symptom: IOS XR administrative shutdown, documented line
+    why_absent: the admin-down row matches the XR form of %LINK-5-CHANGED by analogy; no XR document shows the line
+  - symptom: IOS and NX-OS environment (power, fan, temperature) and CPU/memory
+    kind: device_alarm
+    why_absent: '%ENVMON-*, %PLATFORM-2-PS_FAIL, %SYS-3-CPUHOG and %SYS-2-MALLOCFAIL texts need the per-platform message guide (CCO login); the generic net takes the critical ones'
+
+fixtures:
+  - name: an XR link fault parses and is typed as IOS would type it
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/syslog/iosxr.html (Apache-2.0), framed as tests/test_syslog_edge_framing.py IOSXR'
+    hostname: gw2.acy1
+    appname: ifmgr
+    severity: err
+    message: '%PKT_INFRA-LINK-3-UPDOWN : Interface TenGigE0/2/0/4, changed state to Down'
+    expect:
+      vendor: cisco
+      vendor_source: format
+      parser_id: cisco_iosxr.v1
+      parser_status: parsed
+      facility: PKT_INFRA-LINK
+      event_type: updown
+      summary: Interface TenGigE0/2/0/4, changed state to Down
+      severity_native_code: '3'
+      normalized_severity: error
+    signal: {kind: link_state_change, severity: high, opens_alone: true, state: down, entity: 'gw2.acy1:TenGigE0/2/0/4'}
+
+  - name: an XR prefix-limit warning is BGP churn, not a session down
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/syslog/iosxr.html (Apache-2.0)'
+    hostname: vmx01
+    appname: bgp
+    severity: notice
+    message: '%ROUTING-BGP-5-MAXPFX : No. of IPv4 Unicast prefixes received from 1.2.3.4 has reached 94106, max 125000'
+    expect:
+      parser_status: parsed
+      facility: ROUTING-BGP
+      event_type: maxpfx
+      severity_native_code: '5'
+      normalized_severity: notice
+    signal: {kind: bgp_route_churn, severity: warn, opens_alone: false, state: churn, peer: 1.2.3.4}
+
+  # The four-part SHAPE is the documented one; the mnemonic family is the one research
+  # §2.1 names for XR environment alarms, and the text is illustrative: no citable XR line
+  # at err sits outside what the vendor-neutral rows type. It proves the net, nothing more.
+  - name: an XR error no row types reaches the engine below the floor
+    fidelity: doc_claimed
+    source: 'shape: napalm-logs IOS-XR samples (Apache-2.0); mnemonic family %PLATFORM-ENVMON-*: research VENDOR_PACK_SOURCES_2026-11-09 §2.1; text illustrative'
+    hostname: gw2.acy1
+    appname: envmon
+    severity: err
+    message: '%PLATFORM-ENVMON-3-EXAMPLE : an illustrative error text'
+    expect:
+      parser_status: parsed
+      facility: PLATFORM-ENVMON
+      event_type: example
+      normalized_severity: error
+    signal: {rule_id: syslog.iosxr.below_floor, kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: an IOS shutdown line carries the admin cause and cannot open
+    fidelity: doc_claimed
+    source: 'Cisco Community td-p/340382 (a shutdown logs %LINK-5-CHANGED); line from itexamanswers.net "shutdown command on cisco router switch"'
+    hostname: r1
+    appname: unknown
+    severity: notice
+    message: '%LINK-5-CHANGED: Interface FastEthernet0/0, changed state to administratively down'
+    expect: {}
+    signal: {rule_id: syslog.cisco.link.admin_down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'r1:FastEthernet0/0'}
+
+  - name: an NX-OS administrative down carries the admin cause
+    fidelity: doc_claimed
+    source: 'Cisco MDS 9000 Family System Messages Reference OL-15956-01, ETHPORT-5-IF_DOWN_ADMIN_DOWN "Interface [chars] is down (Administratively down)"'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%ETHPORT-5-IF_DOWN_ADMIN_DOWN: Interface Ethernet1/1 is down (Administratively down)'
+    expect: {}
+    signal: {rule_id: syslog.nxos.link.down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'sw01.pdx01:Ethernet1/1'}
+
+  - name: an NX-OS link failure carries the fault cause
+    fidelity: doc_claimed
+    source: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%ETHPORT-5-IF_DOWN_LINK_FAILURE: Interface Ethernet1/5 is down (Link failure)'
+    expect: {}
+    signal: {rule_id: syslog.nxos.link.down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: fault, entity: 'sw01.pdx01:Ethernet1/5'}
+
+  - name: an NX-OS port-channel with no members is down with an unknown cause
+    fidelity: doc_claimed
+    source: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%ETHPORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN: Interface port-channel100 is down (No operational members)'
+    expect: {}
+    signal: {rule_id: syslog.nxos.link.down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: unknown, entity: 'sw01.pdx01:port-channel100'}
+
+  - name: an NX-OS interface up
+    fidelity: doc_claimed
+    source: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%ETHPORT-5-IF_UP: Interface Ethernet1/5 is up in mode access'
+    expect: {}
+    signal: {rule_id: syslog.nxos.link.up, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw01.pdx01:Ethernet1/5'}
+
+  - name: an NX-OS speed change stays a log
+    fidelity: doc_claimed
+    source: 'https://www.cisco.com/c/en/us/support/docs/switches/nexus-9000-series-switches/221572-troubleshoot-link-flap-issue-on-nexus-90.html'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%ETHPORT-5-SPEED: Interface Ethernet1/5, operational speed changed to 10 Gbps'
+    expect: {}
+    signal: null
+
+  - name: an NX-OS BFD session down is a below-floor BFD flap
+    fidelity: doc_claimed
+    source: 'https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/sw/106x/system-messages/n9k-syslogs-10-6-2-f.html (BFD-5-SESSION_STATE_DOWN)'
+    hostname: sw01.pdx01
+    appname: unknown
+    severity: notice
+    message: '%BFD-5-SESSION_STATE_DOWN: BFD session 1090519041 to neighbor 192.0.2.6 on interface Ethernet1/5 has gone down. Reason: Control Detection Time Expired.'
+    expect: {}
+    signal: {rule_id: syslog.nxos.bfd.down, kind: bfd_session_flap, severity: warn, opens_alone: false, state: down, peer: 192.0.2.6}
+
+  - name: the three-part IOS form is not the XR grammar
+    fidelity: doc_claimed
+    source: 'negative case: the classic form stays ios_style.v1 in vector.yaml'
+    hostname: r1
+    appname: unknown
+    severity: notice
+    message: '%SYS-5-CONFIG_I: Configured from console by admin on vty0'
+    expect: {}
+    signal: null

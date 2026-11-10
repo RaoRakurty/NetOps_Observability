@@ -35,6 +35,14 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-09-vendor-packs-wave1 — tracker 387 §6a wave 1: the Nokia SR OS, Cisco IOS XR
+# (+ IOS/NX-OS link cause, tracker 388) and Juniper Junos packs, and `with_msgid` grammars
+# (a Junos structured-data tag lives in MSGID). Pack rows sit behind every older rule.
+# Two vendor-neutral rows move: syslog.isis.adjacency_change also reads an ISIS
+# ADJCHANGE/ADJCHG mnemonic (IOS XR, EOS), and syslog.link.state_change keeps an XR
+# protocol line below the open floor as it keeps the untagged IOS one. No golden-corpus
+# line carries either shape, so the corpus replays byte-for-byte.
+#
 # 2026-11-09-syslog-framing — tracker 387 PR 10: real PRI reaches the engine, so the
 # syslog generic net's err rung moves below the open floor (owner D3) and the SSH banner
 # probe gets a known_benign row first. No typed row reads PRI. One typed row moves: the IOS
@@ -120,7 +128,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-09-syslog-framing
+parser_rev: 2026-11-09-vendor-packs-wave1
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -439,12 +447,24 @@ rules:
     vendors: [nokia, cisco]
     markers: [ISISADJACENCYCHANGE, CLNS]
     state_re: 'to state\s+(\w+)'
+    # Tracker 387: the third arm is the IS-IS mnemonic every other vendor writes once a
+    # grammar has filled the standard fields: IOS XR `%ROUTING-ISIS-5-ADJCHANGE` (facility
+    # `ROUTING-ISIS`, vendor-packs/cisco_ios.yaml) and EOS `%ISIS-4-ISIS_ADJCHG`. Both fell
+    # to the generic `routing_adjacency_change` before, which no IS-IS template reads. The
+    # mnemonic must be the adjacency CHANGE: Junos `RPD_ISIS_ADJDOWN` states its direction
+    # in the tag and has its own row (vendor-packs/juniper_junos.yaml). No line of the
+    # golden corpus carries ISIS with ADJCHANGE or ADJCHG in its classification token.
     guard:
       any:
         - {contains: [msg_u, 'ISISADJACENCYCHANGE']}
         - all:
             - {contains: [ctoken, 'CLNS']}
             - {contains: [ctoken, 'ADJ']}
+        - all:
+            - {contains: [ctoken, 'ISIS']}
+            - any:
+                - {contains: [ctoken, 'ADJCHANGE']}
+                - {contains: [ctoken, 'ADJCHG']}
     extract:
       peer: {re: [[msg, *sysid, 1, '']]}
       # local interface — a canonical label the catalog reads; the Signal does
@@ -705,9 +725,15 @@ rules:
       # A protocol-only fault on IOS (a tunnel, a keepalive) does not open alone; it did
       # not before either, when framing hid the line. Telling it from a shutdown needs both
       # lines: tracker 388.
+      # IOS XR (tracker 387) pairs its lines the same way, behind a process tag:
+      # `%PKT_INFRA-LINK-5-CHANGED` then `%PKT_INFRA-LINEPROTO-5-UPDOWN` on a shutdown. The
+      # XR grammar files the facility as `PKT_INFRA-LINEPROTO`, so that token says which
+      # convention the sender follows without reading the tag.
       severity:
         case:
           - when: {all: [{eq: [tag, 'UNKNOWN']}, {contains: [ctoken, 'LINEPROTO']}]}
+            value: warn
+          - when: {contains: [ctoken, 'PKT_INFRA-LINEPROTO']}
             value: warn
           - when: {eq: ['$state', 'down']}
             value: high

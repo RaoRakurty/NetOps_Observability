@@ -602,7 +602,18 @@ RULES_HASH_TRAIN_C = "72841087e8f1bce0d1296f4f5a2eb3d5b22a755eb3310adac6f3cc9bc1
 #: below the open floor, the IOS protocol line is `warn`, and the SSH banner probe gains a
 #: known_benign row and an audit grammar. The envelope row is deleted.
 RULES_HASH_SYSLOG_FRAMING = "d19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc83da35062cdb4"
-RULES_HASH_A3 = RULES_HASH_SYSLOG_FRAMING
+#:
+#: Vendor packs, wave 1 (2026-11-09, tracker 387 §6a, 388): the Nokia SR OS, Cisco IOS XR
+#: (+ IOS/NX-OS link cause) and Junos packs, behind every older rule; the IS-IS row reads
+#: an ISIS ADJCHANGE/ADJCHG mnemonic and the link row keeps an XR protocol line at warn.
+RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a996297d4e71df2aef"
+#:
+#: SD-WAN SNMP-agent poll records (2026-11-10, tracker 387, D2): the vEdge confd agent's
+#: errors while answering our interfaceTable walk become audit-shaped records and one
+#: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar; the
+#: SYSMGR process-table dump and the confd NETCONF action are classified (no rule row).
+RULES_HASH_SDWAN_SNMP_POLL = "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a"
+RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
 
 
 def _guard_patterns(node) -> list[str]:

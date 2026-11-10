@@ -136,8 +136,13 @@ def test_an_ios_shutdown_does_not_open() -> None:
                     _ios("LINEPROTO-5-UPDOWN", PROTO_DOWN, "notice")) == 0
 
 
-def test_an_ios_shutdown_line_is_not_a_signal_at_any_real_pri_it_sends() -> None:
-    assert _signal(_ios("LINK-5-CHANGED", ADMIN_DOWN, "notice")) is None
+def test_an_ios_shutdown_line_is_a_change_that_cannot_open() -> None:
+    """Tracker 388: the line that says `administratively down` is the change half
+    (link_cause=admin), below the open floor, on the same node as the protocol line."""
+    sig = _signal(_ios("LINK-5-CHANGED", ADMIN_DOWN, "notice"))
+    assert (sig.kind, sig.severity.value, sig.attrs["link_cause"]) == (
+        "link_state_change", "warn", "admin")
+    assert sig.entity_id == "r1:Gi1"
 
 
 def test_the_protocol_line_still_joins_a_fault() -> None:

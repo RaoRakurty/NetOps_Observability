@@ -410,7 +410,9 @@ def test_no_other_rule_drops_an_attr():
                          "trap.sdwan.control_connection", "trap.sdwan.control_connection.clear",
                          "trap.sdwan.omp", "trap.sdwan.omp.clear", "trap.sdwan.omp_tloc_change",
                          "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface",
-                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear"}
+                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear",
+                         # tracker 388: a Junos link UP names no cause.
+                         "syslog.junos.link.state_change"}
 
 
 def test_omit_empty_cannot_name_a_key_the_rule_does_not_emit():

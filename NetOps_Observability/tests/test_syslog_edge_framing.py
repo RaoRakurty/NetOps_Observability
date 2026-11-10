@@ -81,6 +81,8 @@ _ENGINE_PROBE = textwrap.dedent("""\
             "kind": sig.kind if sig else None,
             "severity": sig.severity.value if sig else None,
             "entity": sig.entity_id if sig else None,
+            "link_cause": sig.attrs.get("link_cause") if sig else None,
+            "rule_id": sig.attrs.get("rule_id") if sig else None,
         })
     json.dump(out, sys.stdout)
 """)
@@ -106,6 +108,11 @@ VEDGE_ERR = (b"<187>1 2026-11-09T09:00:00.123Z vEdge-1 FTMD 3875 - - "
              b"%Viptela-vEdge-1-FTMD-3-ERRO-1000002: control connection went away")
 VEDGE_CRIT = (b"<186>1 2026-11-09T09:00:00.123-06:00 vEdge-1 SYSMGR 913 - - "
               b"%Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)")
+# A vEdge daemon line in the frame the lab's vEdges send: the program must survive the edge,
+# because the pack's DNS row reads it (tracker 387; coordinator, 2026-11-10).
+VEDGE_DNS = (b"<187>1 2026-11-09T09:00:00.123Z vEdge-1 VTRACKER 1234 - - "
+             b"dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, "
+             b"reason: Timeout while contacting DNS servers")
 SSHD_KEX = (b"<35>1 2026-11-09T09:00:00.123Z vEdge-1 sshd 27761 - - "
             b"error: kex_exchange_identification: Connection closed by remote host")
 CEDGE = (b"<189>25165: Nov  9 09:00:00.123: %DMI-5-AUTH_PASSED: R0/0: dmiauthd: "
@@ -141,6 +148,13 @@ FRAMES = [
         "frame_format": "rfc5424", "hostname": "vEdge-1", "appname": "SYSMGR", "procid": 913,
         "severity": "crit", "syslog_facility": "local7", "timestamp": "2026-11-09T15:00:00.123Z",
         "normalized_severity": "critical", "parser_id": "cisco_sdwan.v1"}),
+    ("vEdge daemon line keeps its program and parses", VEDGE_DNS, {
+        "frame_format": "rfc5424", "hostname": "vEdge-1", "appname": "VTRACKER", "procid": 1234,
+        "severity": "err",
+        "message": "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via "
+                   "none, reason: Timeout while contacting DNS servers",
+        "parser_id": "cisco_sdwan.v1", "parser_status": "parsed",
+        "event_type": "dnsclient_ares_callback", "vendor": "cisco"}),
     ("vEdge sshd", SSHD_KEX, {
         "frame_format": "rfc5424", "hostname": "vEdge-1", "appname": "sshd", "procid": 27761,
         "severity": "err", "syslog_facility": "auth",
@@ -159,13 +173,17 @@ FRAMES = [
         "timestamp": "2007-02-15T09:17:15.719Z",
         "message": "User 'regress' exiting configuration mode",
         "structured_data": '[junos@2636.1.1.1.2.18 username="regress"]',
-        "event_type": "ui_dbase_logout_event", "vendor": "juniper", "tenant_id": "lab"}),
+        "event_type": "ui_dbase_logout_event", "vendor": "juniper", "tenant_id": "lab",
+        # Tracker 387 wave 1: the Junos grammar reads the tag from MSGID.
+        "parser_id": "junos.v1", "parser_status": "parsed", "facility": "UI",
+        "summary": "User 'regress' exiting configuration mode"}),
     ("Junos standard", JUNOS_STD, {
         "frame_format": "rfc3164", "hostname": "Branch1", "appname": "rpd", "procid": 2310,
         "severity": "warning", "syslog_facility": "daemon",
         "message": "RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 10.1.1.1 (External AS 1111) "
                    "changed state from Established to Idle",
-        "vendor": "juniper"}),
+        "vendor": "juniper", "parser_id": "junos.v1", "parser_status": "parsed",
+        "facility": "RPD", "event_type": "rpd_bgp_neighbor_state_changed"}),
     ("ASA EMBLEM", ASA, {
         "frame_format": "rfc3164", "hostname": SENDER, "appname": "unknown",
         "severity": "info", "syslog_facility": "local4", "timestamp": "2018-06-27T12:17:46Z",
@@ -184,8 +202,9 @@ FRAMES = [
         "frame_format": "rfc3164", "hostname": "gw2.acy1", "appname": "ifmgr", "procid": 214,
         "severity": "err", "syslog_facility": "local7",
         "message": "%PKT_INFRA-LINK-3-UPDOWN : Interface TenGigE0/2/0/4, changed state to Down",
-        # Still unparsed, and the body grammar is a later stream's (plan §6a).
-        "parser_status": "unparsed"}),
+        # Tracker 387 wave 1: the four-part grammar (vendor-packs/cisco_ios.yaml).
+        "parser_id": "cisco_iosxr.v1", "parser_status": "parsed", "vendor": "cisco",
+        "facility": "PKT_INFRA-LINK", "event_type": "updown", "normalized_severity": "error"}),
     ("EOS", EOS, {
         "frame_format": "rfc3164", "hostname": "edge01", "appname": "Rib", "severity": "notice",
         "syslog_facility": "local2",
@@ -197,7 +216,10 @@ FRAMES = [
         "frame_format": "rfc3164", "hostname": "10.221.38.108", "appname": "TMNX",
         "severity": "warning", "syslog_facility": "local7",
         "message": "17 Base SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed",
-        "parser_status": "unparsed"}),
+        # Tracker 387 wave 1 (vendor-packs/nokia_sros.yaml).
+        "parser_id": "nokia_sros.v1", "parser_status": "parsed", "vendor": "nokia",
+        "facility": "SYSTEM", "event_type": "system_2009", "severity_native_text": "WARNING",
+        "summary": "Status of Card 1 changed"}),
     ("SONiC, the severity word is not the program", SONIC, {
         "frame_format": "rfc3164", "hostname": "sonic-1", "appname": "bgp#bgpd", "procid": 123,
         "severity": "info", "syslog_facility": "daemon", "timestamp": "2026-11-09T09:00:00.123Z",
@@ -244,11 +266,12 @@ ENGINE_CASES = [
     ("vEdge crit opens through its typed row", VEDGE_CRIT, "device_resource_anomaly", "crit"),
     ("the SSH banner probe emits nothing at err", SSHD_KEX, None, None),
     ("a vEdge err stays below the floor", VEDGE_ERR, "device_alarm", "warn"),
+    ("a vEdge vBond DNS failure reaches its typed row", VEDGE_DNS, "device_alarm", "warn"),
     ("cEdge audit is not an alarm", CEDGE, None, None),
     ("EOS BGP notification types as it always did", EOS, "bgp_adjacency_change", "high"),
-    ("IOS-XR link fault: no body grammar yet, so generic and below the floor",
-     IOSXR, "device_alarm", "warn"),
-    ("Junos warning is kept below the floor", JUNOS_STD, "device_alarm", "warn"),
+    # Tracker 387 wave 1: XR's standard fields read like IOS, so the IOS link row types it.
+    ("IOS-XR link fault opens as the IOS one does", IOSXR, "link_state_change", "high"),
+    ("Junos BGP down is typed, below the floor (D3)", JUNOS_STD, "bgp_adjacency_change", "warn"),
     ("SONiC err is kept below the floor", SONIC_ERR, "device_alarm", "warn"),
     ("SONiC info is a log", SONIC, None, None),
     ("SR OS warning is kept below the floor", SROS, "device_alarm", "warn"),
@@ -262,6 +285,12 @@ def test_the_engine_reads_the_framed_line(edge: H.Edge, name: str, frame: bytes,
                                           severity: str | None) -> None:
     got = engine([edge.send(frame)])[0]
     assert (got["kind"], got["severity"]) == (kind, severity), got
+
+
+def test_a_vedge_dns_failure_is_answered_by_its_own_row_not_the_net(edge: H.Edge) -> None:
+    """The generic net would also say device_alarm/warn at err, so the rule id is the fact."""
+    got = engine([edge.send(VEDGE_DNS)])[0]
+    assert got["rule_id"] == "syslog.sdwan.dns.failed", got
 
 
 def test_a_tag_carried_only_in_msgid_reaches_the_field_the_rules_read(edge: H.Edge) -> None:
@@ -320,13 +349,14 @@ LINK_FRAMES = [
     ("protocol line, IOS hostname", f"<189>Nov  9 09:00:02 r1 %LINEPROTO-5-UPDOWN: {PROTO_DOWN}", "warn"),
     # Recovery: never opens.
     ("recovery, IOS no hostname", f"<189>25168: Nov  9 09:00:03.123: %LINK-3-UPDOWN: {LINK_UP}", "warn"),
-    # An operator's shutdown: the line that says so must not open.
-    ("admin, IOS no hostname", f"<189>25169: Nov  9 09:00:03.123: %LINK-5-CHANGED: {ADMIN_DOWN}", None),
-    ("admin, IOS hostname", f"<189>Nov  9 09:00:03 r1 %LINK-5-CHANGED: {ADMIN_DOWN}", None),
+    # An operator's shutdown: the line that says so must not open. Since tracker 388 it is
+    # evidence, below the floor and carrying link_cause=admin (the change half 385 acts on).
+    ("admin, IOS no hostname", f"<189>25169: Nov  9 09:00:03.123: %LINK-5-CHANGED: {ADMIN_DOWN}", "warn"),
+    ("admin, IOS hostname", f"<189>Nov  9 09:00:03 r1 %LINK-5-CHANGED: {ADMIN_DOWN}", "warn"),
     ("admin, IOS-XR", ("<189>94308: gw2.acy1 LC/0/2/CPU0:Jul  7 20:16:14.834 : ifmgr[214]: "
-                       "%PKT_INFRA-LINK-5-CHANGED : Interface TenGigE0/2/0/4, changed state to Administratively Down"), None),
+                       "%PKT_INFRA-LINK-5-CHANGED : Interface TenGigE0/2/0/4, changed state to Administratively Down"), "warn"),
     ("admin, NX-OS", ("<189>sw01.pdx01: 2017 Jul 28 14:42:46 UTC: %ETHPORT-5-IF_DOWN_ADMIN_DOWN: "
-                      "Interface Ethernet1/1 is down (Administratively down)"), None),
+                      "Interface Ethernet1/1 is down (Administratively down)"), "warn"),
 ]
 
 
@@ -336,13 +366,16 @@ def test_a_link_line_opens_exactly_what_it_should(edge: H.Edge, name: str, line:
     assert got["severity"] == severity, f"{name}: {got}"
     if severity is not None:
         assert got["kind"] == "link_state_change", got
+    # Tracker 388: the cause is stated only by a line that says administratively down.
+    assert (got["link_cause"] == "admin") == name.startswith("admin"), got
 
 
 def test_a_junos_admin_link_down_cannot_open_an_object(edge: H.Edge) -> None:
     doc = edge.send(b"<28>Nov  9 09:00:01 r1 mib2d[1]: SNMP_TRAP_LINK_DOWN: ifIndex 1, "
                     b"ifAdminStatus down(2), ifOperStatus down(2), ifName ge-0/0/0")
     got = engine([doc])[0]
-    assert (got["kind"], got["severity"]) == ("device_alarm", "warn"), got
+    # Tracker 388: typed, and the line's own ifAdminStatus says it was a shutdown.
+    assert (got["kind"], got["severity"], got["link_cause"]) == ("link_state_change", "warn", "admin"), got
     assert not opens_alone(got)
 
 
