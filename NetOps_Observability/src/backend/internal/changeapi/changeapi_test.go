@@ -51,6 +51,7 @@ func newFixture(t *testing.T) *fixture {
 		}),
 		change("acme", "chg-old", "edge-1", "dfw", now.Add(-3*time.Hour), nil),
 		change("globex", "chg-g1", "edge-1", "dfw", now.Add(-12*time.Minute), nil),
+		change("global", "chg-p1", "core-1", "noc", now.Add(-11*time.Minute), nil),
 	} {
 		if _, err := st.RecordChange(context.Background(), c); err != nil {
 			t.Fatal(err)
@@ -66,12 +67,14 @@ func newFixture(t *testing.T) *fixture {
 				return Caller{}, false
 			case "*":
 				return Caller{Tenant: "global", Cross: true}, true
+			case "none":
+				return Caller{}, true // a caller the composition root gave no ledger
 			default:
 				return Caller{Tenant: r.Header.Get("X-Test-Tenant")}, true
 			}
 		},
 		Incident: func(_ context.Context, r *http.Request, id string) (IncidentScope, error) {
-			if id != incID || r.Header.Get("X-Test-Tenant") != "acme" {
+			if h := r.Header.Get("X-Test-Tenant"); id != incID || (h != "acme" && h != "*") {
 				return IncidentScope{}, ErrNotFound
 			}
 			return IncidentScope{ID: id, Start: now.Add(-12 * time.Minute), Devices: []string{"EDGE-1"}, Sites: []string{"dfw"}}, nil
@@ -138,8 +141,43 @@ func TestListIsTheCallersOwnAndBounded(t *testing.T) {
 	if code, _ := f.get(t, "", "/api/changes"); code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated: %d", code)
 	}
-	if _, out := f.get(t, "*", "/api/changes"); len(ids(out)) != 0 || out["note"] == nil {
-		t.Fatalf("the Global view has no single ledger and says so: %v", out)
+}
+
+// The Global view reads the Provider's ledger and says that is all it shows; no
+// other caller reaches that ledger, and a caller with no ledger reads nothing.
+func TestGlobalViewReadsTheProvidersLedger(t *testing.T) {
+	f := newFixture(t)
+	code, out := f.get(t, "*", "/api/changes?window=1h")
+	if code != 200 || strings.Join(ids(out), ",") != "chg-p1" || out["note"] != CrossNote {
+		t.Fatalf("the Global view: %d %v", code, out)
+	}
+	if _, out := f.get(t, "acme", "/api/changes?window=1h"); out["note"] != nil || strings.Contains(strings.Join(ids(out), ","), "chg-p1") {
+		t.Fatalf("a tenant's list: %v", out)
+	}
+	for _, p := range []string{"/api/changes/chg-p1", "/api/changes/chg-p1/diff"} {
+		if code, _ := f.get(t, "*", p); code != 200 {
+			t.Errorf("the Global view %s: %d", p, code)
+		}
+		for _, tenant := range []string{"acme", "globex", "none"} {
+			if code, _ := f.get(t, tenant, p); code != http.StatusNotFound {
+				t.Errorf("%s %s: %d, want 404", tenant, p, code)
+			}
+		}
+	}
+	if code, out := f.get(t, "none", "/api/changes?window=1h"); code != 200 || len(ids(out)) != 0 {
+		t.Fatalf("no ledger reads nothing: %d %v", code, out)
+	}
+	// Another tenant's change id is not the Global view's: it reads one ledger.
+	if code, _ := f.get(t, "*", "/api/changes/chg-a1"); code != http.StatusNotFound {
+		t.Fatalf("the Global view reached a tenant's change by id: %d", code)
+	}
+	code, out = f.get(t, "*", "/api/changes?incident_id="+incID)
+	if code != 200 || strings.Join(ids(out), ",") != "chg-p1" || out["note"] != CrossNote {
+		t.Fatalf("the Global view around an incident: %d %v", code, out)
+	}
+	row := out["changes"].([]any)[0].(map[string]any)
+	if row["relation"] != RelationTemporal || row["in_incident_scope"] != false {
+		t.Fatalf("labelled by what is known: %v", row)
 	}
 }
 

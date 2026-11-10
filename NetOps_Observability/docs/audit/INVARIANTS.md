@@ -717,6 +717,30 @@ vManage and SNMP values normalise to agreement (and how often sources really dis
 **NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
 show a different value from the one Iris cites. The collectors and identity deliberately keep that row.
 
+## 25. Change ledger: Provider-owned devices (tracker 337 N-D2, 2026-11-09)
+
+Owner decision 2026-11-09: a config-change signal from a Provider-owned device goes in the change ledger.
+The bridge stamps `""` and `global` with `owner.Platform` (`global`) and still refuses `*`. The rows live in
+`dem_change_events` under the tenant_iso policy of migration 0044; no migration was needed.
+
+**PROVEN by tests:** stamping, one row for both spellings, and honest `recorded` / `skipped` counts —
+`TestProviderSignalIsStampedWithThePlatformOwner`, `TestProviderAndWildcardOutcomes`. Only `isPlatformOwner`
+reads the rows on `/api/changes`, `/{id}`, `/{id}/diff`, the Iris NL change read and the NL application seeds;
+another tenant, a non-owner in the `global` tenant, a caller with no tenant and an `as_tenant` walk get nothing
+or 404 — `TestProviderChangesReachOnlyThePlatformOwner`, and through the real router
+`TestProviderChangesOverTheRealRouter`. RLS and WITH CHECK on a real Postgres — `TestProviderChangesRLSPG`.
+
+**BUILT, NOT PROVEN:** nothing has run on the lab. Whether real traps from tenant-less devices now reach the
+Provider's ledger shows on `netops_change_ledger_writes_total{producer="device_trap"}` once deployed.
+
+**NOT COVERED:**
+- The Global view reads the Provider's ledger only, never a union of the tenants' ledgers.
+- `/api/dem/changes` and the DEM assemblies refuse the platform tenant for everyone (`demAuthz`), so the
+  platform owner has no Provider rows in the Changes page. It reads them through `/api/changes` and Iris.
+- `config_capture` still fails on a tenant-less device (the ledger refuses a blank tenant, counted `failed`),
+  and `correlix_audit` still skips platform-scope actions. This decision changed neither.
+- `/api/changes` and the Iris NL change read do not apply the per-tenant operator-visibility restriction when
+  the platform owner scopes into a restricted tenant. The DEM routes do. This predates the decision and is open.
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
 **Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**

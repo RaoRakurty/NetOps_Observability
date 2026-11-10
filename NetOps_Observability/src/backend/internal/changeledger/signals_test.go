@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/owner"
 )
 
 var signalAt = time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
@@ -129,10 +130,67 @@ func TestUnauthenticatedTrapSaysSo(t *testing.T) {
 	}
 }
 
-func TestSignalWithNoOwnerIsSkippedNotStamped(t *testing.T) {
-	for _, tenant := range []string{"", " ", "*", "global", "GLOBAL"} {
+// A Provider-owned device's change is recorded, under the one spelling of the
+// platform owner: both spellings of it are one fact, so one row.
+func TestProviderSignalIsStampedWithThePlatformOwner(t *testing.T) {
+	var id string
+	for _, tenant := range []string{"", " ", "global", "GLOBAL", " Global "} {
+		ev, err := SignalChangeEvent(trapSignal(tenant, "core-1"), nil)
+		if err != nil {
+			t.Fatalf("tenant %q: %v", tenant, err)
+		}
+		if ev.TenantID != owner.Platform {
+			t.Errorf("tenant %q stamped %q, want %q", tenant, ev.TenantID, owner.Platform)
+		}
+		if id != "" && ev.ID != id {
+			t.Errorf("tenant %q: id %q, want %q: one owner, one row", tenant, ev.ID, id)
+		}
+		id = ev.ID
+		if err := ev.Validate(); err != nil {
+			t.Errorf("tenant %q: the ledger would refuse the row: %v", tenant, err)
+		}
+	}
+	tenantEv, err := SignalChangeEvent(trapSignal("acme", "core-1"), nil)
+	if err != nil || tenantEv.ID == id || tenantEv.TenantID != "acme" {
+		t.Fatalf("a tenant's row must stay its own: %+v %v", tenantEv, err)
+	}
+}
+
+func TestWildcardSignalIsSkippedNotStamped(t *testing.T) {
+	for _, tenant := range []string{"*", " * "} {
 		if _, err := SignalChangeEvent(trapSignal(tenant, "edge-1"), nil); !errors.Is(err, ErrNotAChange) {
 			t.Errorf("tenant %q: %v", tenant, err)
+		}
+	}
+}
+
+// The metric stays honest: a Provider row is recorded, a wildcard is skipped.
+func TestProviderAndWildcardOutcomes(t *testing.T) {
+	sink := &ledgerSink{}
+	p, err := New(Deps{Sink: sink, LogWarn: func(string, map[string]any) {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tenant := range []string{"", "global", "*"} {
+		if err := p.RecordSignal(context.Background(), trapSignal(tenant, "core-1")); err != nil {
+			t.Fatalf("tenant %q: %v", tenant, err)
+		}
+	}
+	if n := p.Metrics().Count(ProducerDeviceTrap, OutcomeRecorded); n != 2 {
+		t.Errorf("recorded = %d, want 2", n)
+	}
+	if n := p.Metrics().Count(ProducerDeviceTrap, OutcomeSkipped); n != 1 {
+		t.Errorf("skipped = %d, want 1", n)
+	}
+	if n := p.Metrics().Count(ProducerDeviceTrap, OutcomeFailed); n != 0 {
+		t.Errorf("failed = %d, want 0", n)
+	}
+	if len(sink.mu) != 1 {
+		t.Fatalf("two spellings of one owner must be one row: %v", sink.mu)
+	}
+	for k := range sink.mu {
+		if !strings.HasPrefix(k, owner.Platform+"/") {
+			t.Errorf("row stored under %q", k)
 		}
 	}
 }

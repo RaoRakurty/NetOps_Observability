@@ -6,7 +6,8 @@ package backend
 // change_api_isolation_test.go — /api/changes (tracker 337 N-D3) through the
 // real handler: own-tenant list only, another tenant's change id is 404 on
 // /api/changes/{id} and /api/changes/{id}/diff, an as_tenant walk by a
-// non-owner changes nothing, and the Global view reads no single ledger.
+// non-owner changes nothing, and the Global view reads only the Provider's ledger
+// (change_ledger_signals_isolation_test.go proves that one).
 
 import (
 	"context"

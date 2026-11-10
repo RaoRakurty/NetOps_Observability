@@ -20,7 +20,9 @@
 //
 // §3a. The tenant is the caller's, from Authorize — never a request field. A
 // change id from another tenant, a malformed id and a missing one are the same
-// 404. A cross-tenant (Global) caller has no single ledger and is told so.
+// 404. The cross-tenant (Global) view reads the Provider's own ledger, never a
+// union of the tenants' ledgers, and is told so. A caller with no ledger (Tenant
+// "") reads nothing.
 package changeapi
 
 import (
@@ -58,10 +60,16 @@ const RelationNote = "Happened in the incident's window — temporally correlate
 // ErrNotFound: not visible to the caller (or does not exist).
 var ErrNotFound = errors.New("changeapi: not found")
 
+// CrossNote is what the Global view is told about the one ledger it reads.
+const CrossNote = "The Global view shows the Provider's own changes. Choose a workspace to see that workspace's changes."
+
 // Caller is the authenticated principal's scope.
 type Caller struct {
+	// Tenant is the ledger this caller may read, and the composition root decides
+	// it. "" is no ledger at all: the store answers nothing for it.
 	Tenant string
-	Cross  bool // a Global (cross-tenant) view: no single ledger to read
+	// Cross marks the Global view, whose Tenant is the Provider's ledger.
+	Cross bool
 }
 
 // IncidentScope is what an incident anchors: when it began and what it
@@ -190,9 +198,6 @@ func (d Deps) Handler(w http.ResponseWriter, r *http.Request) {
 func (d Deps) redact(s string) string { return experience.RedactChangeValue(s, d.Redact) }
 
 func (d Deps) one(ctx context.Context, caller Caller, id string) (experience.ChangeEvent, error) {
-	if caller.Cross {
-		return experience.ChangeEvent{}, ErrNotFound
-	}
 	evs, err := d.Store.ListChanges(ctx, caller.Tenant, experience.ChangeQuery{IDs: []string{id}, Limit: 1})
 	if err != nil {
 		return experience.ChangeEvent{}, err
@@ -321,11 +326,6 @@ func (d Deps) list(w http.ResponseWriter, r *http.Request, caller Caller) {
 		d.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	if caller.Cross {
-		d.WriteJSON(w, http.StatusOK, map[string]any{"changes": []View{}, "returned": 0, "truncated": false,
-			"note": "Choose a workspace: the change ledger belongs to one workspace, and the Global view has none of its own."})
-		return
-	}
 	var inc *IncidentScope
 	if p.incident != "" {
 		sc, err := d.Incident(r.Context(), r, p.incident)
@@ -362,6 +362,9 @@ func (d Deps) list(w http.ResponseWriter, r *http.Request, caller Caller) {
 	}
 	out := map[string]any{"changes": views, "returned": len(views), "truncated": truncated,
 		"window": map[string]time.Time{"from": p.q.Since, "to": p.q.Until}}
+	if caller.Cross {
+		out["note"] = CrossNote
+	}
 	if inc != nil {
 		out["incident"] = map[string]any{"id": inc.ID, "start": inc.Start,
 			"rule": "A change is in the incident's scope when its object is one of the incident's affected devices or its site is one of the incident's sites. That is where it happened, not why the incident happened."}

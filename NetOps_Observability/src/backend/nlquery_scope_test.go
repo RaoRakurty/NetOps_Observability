@@ -64,8 +64,10 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		"MetricInstant": {"h.s.metricsScopeFiltersFor(h.claims)"},
 		"Incidents":     {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
 		"Incident":      {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
-		"Changes":       {"principalTenant(h.claims)"},
-		"Circuits":      {"h.s.deviceVisibilityFor(h.claims)"},
+		// changeLedgerTenant is principalTenant plus the platform-owner check
+		// for Provider rows; pinned below to keep calling principalTenant.
+		"Changes":  {"changeLedgerTenant(h.claims)"},
+		"Circuits": {"h.s.deviceVisibilityFor(h.claims)"},
 	}
 	for method, needles := range want {
 		if src[method] == "" {
@@ -78,6 +80,9 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 				t.Errorf("nlqScope.%s no longer calls %s — its read is not scoped", method, n)
 			}
 		}
+	}
+	if b := methodBody(full, "func changeLedgerTenant("); !strings.Contains(b, "principalTenant(claims)") || !strings.Contains(b, "isPlatformOwner(claims)") {
+		t.Error("changeLedgerTenant must derive the tenant from principalTenant and gate Provider rows on isPlatformOwner")
 	}
 	if b := methodBody(full, "func (h *nlqScope) visibleDevices("); !strings.Contains(b, "h.s.visibleDevicesFor(h.claims)") {
 		t.Error("device resolution must come from the caller's visible devices")
