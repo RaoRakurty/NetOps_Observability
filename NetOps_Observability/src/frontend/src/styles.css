@@ -1041,7 +1041,8 @@ code, kbd, pre, .mono, td.mono {
   color: var(--fg-muted); font-size: 15px; white-space: nowrap;
 }
 .lv-subtab:hover { color: var(--fg); }
-.lv-subtab[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent-bright); font-weight: 600; }
+/* --accent alone is too deep on OLED; mixed toward --fg it holds AA on every theme. */
+.lv-subtab[aria-pressed="true"] { color: color-mix(in srgb, var(--accent) 55%, var(--fg)); border-bottom-color: var(--accent-bright); font-weight: 600; }
 .lv-subtab-n { font-variant-numeric: tabular-nums; }
 /* Pager: "Showing 1–200 of 7,547 events" and numbered pages over the exact total. */
 .lv-pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
