@@ -121,7 +121,7 @@ async function boot(page: Page, theme?: string): Promise<SearchBody[]> {
 }
 
 const rows = (page: Page) => page.getByRole("grid", { name: "Log results" }).locator(".dtv-row");
-const detail = (page: Page) => page.getByTestId("log-detail");
+const detail = (page: Page) => page.getByTestId("event-detail");
 
 async function shot(page: Page, name: string) {
   if (!SHOTS) return;
@@ -133,7 +133,7 @@ async function shot(page: Page, name: string) {
 async function typeAudit(page: Page) {
   return page.evaluate(() => {
     const out: { tooSmall: string[]; outsideFaces: string[]; overflow: number; outside: string[] } = { tooSmall: [], outsideFaces: [], overflow: 0, outside: [] };
-    const roots = [...document.querySelectorAll(".lv, .lv-det")];
+    const roots = [...document.querySelectorAll(".lv, .evd")];
     for (const root of roots) {
       for (const el of [root, ...root.querySelectorAll("*")]) {
         const hasText = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim());
@@ -145,7 +145,7 @@ async function typeAudit(page: Page) {
       }
     }
     out.overflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
-    for (const el of document.querySelectorAll(".lv, .lv .card, .lv-filters, .xpl-bar, .lv-results-head, .lv-stream, .lv .dtv, .lv-det, .lv-card")) {
+    for (const el of document.querySelectorAll(".lv, .lv .card, .lv-filters, .xpl-bar, .lv-results-head, .lv-stream, .lv .dtv, .evd, .evd-card")) {
       if (el.getBoundingClientRect().right > window.innerWidth + 0.5) out.outside.push(el.className);
     }
     return out;
@@ -209,21 +209,21 @@ test("rows read as device, severity, type and a plain event, with no secret or p
   await expect(first).toHaveCSS("height", "44px");
 });
 
-test("details open on a summary; pipeline fields stay closed; the raw view has no secret", async ({ page }) => {
+test("details open on the overview; pipeline fields stay closed; the raw view has no secret", async ({ page }) => {
   await boot(page);
   await rows(page).nth(0).click();
   await expect(detail(page)).toBeVisible();
-  await expect(detail(page).getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-  await expect(detail(page).getByText("System cpu usage back to normal level")).toBeVisible();
+  await expect(detail(page).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(detail(page).getByText("System cpu usage back to normal level").first()).toBeVisible();
   await expect(detail(page).locator(".lf-json")).toHaveCount(0);
 
-  await detail(page).getByRole("tab", { name: "Fields" }).click();
-  await expect(detail(page).getByText("trap_oid")).toBeVisible();
+  await detail(page).getByRole("tab", { name: "Technical Details" }).click();
+  await expect(detail(page).getByRole("cell", { name: "trap_oid", exact: true })).toBeVisible();
   await expect(detail(page).getByText("partition", { exact: true })).toBeHidden();
   await detail(page).getByText("Pipeline details").click();
   await expect(detail(page).getByText("partition", { exact: true })).toBeVisible();
 
-  await detail(page).getByRole("tab", { name: "Raw" }).click();
+  await detail(page).getByRole("tab", { name: "Raw Event" }).click();
   await expect(detail(page).locator(".lf-json")).toContainText('"snmp_community": "hidden"');
   expect(await page.content()).not.toContain(SECRET);
 });
@@ -254,9 +254,11 @@ test("the page works from the keyboard", async ({ page }) => {
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(detail(page)).toBeVisible();
-  await detail(page).getByRole("tab", { name: "Summary" }).focus();
+  await detail(page).getByRole("tab", { name: "Overview" }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(detail(page).getByRole("tab", { name: "Fields" })).toHaveAttribute("aria-selected", "true");
+  await expect(detail(page).getByRole("tab", { name: "Metrics" })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect(detail(page)).toHaveCount(0);
 });
 
 for (const [name, width, height] of [["desktop-1366", 1366, 768], ["desktop-1920", 1920, 1080], ["phone", 390, 844]] as const) {
@@ -301,19 +303,24 @@ test("screenshots", async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
     await boot(page, theme);
     await shot(page, `${label}-1366-stream`);
-    await rows(page).nth(0).click();
-    await expect(detail(page)).toBeVisible();
+    const open = async (n: number) => {
+      if (await detail(page).count()) await page.keyboard.press("Escape");
+      await rows(page).nth(n).click();
+      await expect(detail(page)).toBeVisible();
+    };
+    await open(0);
     await shot(page, `${label}-1366-trap-summary`);
-    await rows(page).nth(5).click();
+    await open(5);
     await expect(detail(page).getByTestId("flow-strip")).toBeVisible();
     await shot(page, `${label}-1366-flow-summary`);
-    await rows(page).nth(1).click();
+    await open(1);
     await shot(page, `${label}-1366-syslog-summary`);
-    await detail(page).getByRole("tab", { name: "Fields" }).click();
+    await detail(page).getByRole("tab", { name: "Technical Details" }).click();
     await detail(page).getByText("Pipeline details").click();
     await shot(page, `${label}-1366-fields`);
-    await detail(page).getByRole("tab", { name: "Raw" }).click();
+    await detail(page).getByRole("tab", { name: "Raw Event" }).click();
     await shot(page, `${label}-1366-raw`);
+    await page.keyboard.press("Escape");
   }
   await page.setViewportSize({ width: 1920, height: 1080 });
   await boot(page, "indigo");
