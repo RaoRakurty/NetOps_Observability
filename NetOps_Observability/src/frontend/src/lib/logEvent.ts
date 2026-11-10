@@ -497,7 +497,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
   }
   if (index) pipeline._index = index;
 
-  const summary = pick(src, "summary", "event.summary");
+  // The enrichment's headline (tracker 387 `title`) leads when a record has one; the
+  // parser's summary is next. Both are the record's own words.
+  const summary = known(src, "title") || pick(src, "summary", "event.summary");
   const eventMessage = pick(src, "event.message");
   const message = eventMessage || pick(src, "message", "msg");
   const parserStatus = pick(src, "parser.status", "parser_status");

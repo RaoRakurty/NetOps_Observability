@@ -95,7 +95,7 @@ describe("the golden CPU trap (vedge-51, 2026-11-10)", () => {
     );
     expect(v.overview.impact).toHaveLength(3);
     expect(v.overview.nextChecks).toHaveLength(4);
-    expect(v.overview.basis).toMatch(/vendor pack's guidance/);
+    expect(v.overview.basis).toBe("vendor pack");
   });
 
   it("decoded varbinds with name, OID, type and value; the severity value marked as a pill", () => {
@@ -440,5 +440,14 @@ describe("identity fields that look like secrets", () => {
     expect(v.raw.snmp_community_present).toBe("hidden");
     expect(v.classification.find((r) => r.key === "community")).toBeUndefined();
     expect(JSON.stringify(v)).not.toContain(FIXTURE_SECRET);
+  });
+});
+
+describe("chips never repeat", () => {
+  it("a family and a category with the same name show once", () => {
+    const v = toEventView(SYSLOG_FAULT);
+    const labels = v.chips.map((c) => c.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.filter((l) => l === "Tracker")).toHaveLength(1);
   });
 });

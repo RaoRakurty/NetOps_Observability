@@ -702,7 +702,6 @@ export function toEventView(hit: LogHit): EventView {
     if (b.afi) sideStats.push({ key: "afi", label: "Address family", value: b.afi });
     if (b.localAddress) sideStats.push({ key: "local", label: "Local address", value: b.localAddress, mono: true });
     if (b.vrf) sideStats.push({ key: "vrf", label: "VRF", value: b.vrf, mono: true });
-    if (b.occurrences !== null) sideStats.push({ key: "occ", label: "Notifications grouped", value: String(b.occurrences), mono: true });
   } else if (visual.kind === "flow") {
     const f = visual.data;
     if (f.bytes) sideStats.push({ key: "bytes", label: "Bytes", value: f.bytes, mono: true, prov: "observed" });
@@ -720,7 +719,7 @@ export function toEventView(hit: LogHit): EventView {
     const label = saturated ? `${utilization!.resource === "cpu" ? "CPU" : "Memory"} Saturation` : humanize(family);
     chips.push({ key: "family", label, icon: FAMILY_ICON[family.toLowerCase()] ?? "tag" });
   }
-  if (category) chips.push({ key: "category", label: humanize(category), icon: "pulse" });
+  if (category && !chips.some((c) => c.label === humanize(category))) chips.push({ key: "category", label: humanize(category), icon: "pulse" });
   chips.push({ key: "signal", label: laneLabel, icon: LANE_ICON[lane] });
   const lifecycle = lifecycleOf(src, ev);
   if (lifecycle) chips.push({ key: "lifecycle", label: LIFECYCLE[lifecycle].label, icon: LIFECYCLE[lifecycle].icon, tone: lifecycle === "clear" ? "ok" : tone ?? "neutral" });
@@ -846,7 +845,7 @@ export function toEventView(hit: LogHit): EventView {
     what: whatHappened(visual, summary, message, title),
     impact,
     nextChecks,
-    basis: gBasis === "pack_guidance" ? "From the vendor pack's guidance, not from this device" : gBasis ? humanize(gBasis) : "",
+    basis: gBasis === "pack_guidance" ? "vendor pack" : gBasis ? humanize(gBasis).toLowerCase() : "",
   };
 
   // ── own timeline steps ──
@@ -1038,7 +1037,9 @@ function timingRows(lane: Lane, src: Record<string, any>, ev: LogEvent): ViewRow
   const rows: ViewRow[] = [];
   const timeRow = (key: string, label: string, iso: string, extra: Partial<ViewRow> = {}) => {
     if (!iso) return;
-    rows.push({ key, label, value: fmtUtc(iso), secondary: fmtLocal(iso) ? `(${fmtLocal(iso)})` : undefined, mono: true, ...extra });
+    // The local line only when the viewer's clock is not UTC already (it would repeat).
+    const local = fmtLocal(iso);
+    rows.push({ key, label, value: fmtUtc(iso), secondary: local && !/ (UTC|GMT)$/.test(local) ? `(${local})` : undefined, ...extra });
   };
   const delayRow = (seconds: number | null, prov: Provenance, tip = DELAY_TIP) => {
     if (seconds === null) return;
