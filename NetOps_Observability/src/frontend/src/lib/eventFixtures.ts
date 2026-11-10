@@ -12,7 +12,7 @@ import type { LogHit } from "./logEvent";
 // The literal only exists so the redaction tests can prove it never reaches the page.
 export const FIXTURE_SECRET = "s3cr3t-community";
 
-const PIPELINE = { topic: "netops.snmptrap", partition: 3, offset: 991823, source_type: "kafka", message_key: "abc123" };
+const PIPELINE = { "topic": "netops.snmptrap", partition: 3, offset: 991823, source_type: "kafka", message_key: "abc123" };
 
 const CPU_VARBINDS = [
   { name: "sysUpTime", oid: "1.3.6.1.2.1.1.3.0", type: "TimeTicks", value: "143277415", decoded: "143277415" },
@@ -168,7 +168,7 @@ export const SYSLOG_FAULT: LogHit = {
     summary: "The DNS tracker dns-tracker on VPN 0 could not reach 8.8.8.8.",
     event_type: "sdwan_vtracker_dns_failure", event_category: "tracker", family: "tracker",
     parser_status: "parsed", parser_id: "cisco-sdwan.vtracker",
-    topic: "netops.syslog", partition: 2,
+    "topic": "netops.syslog", partition: 2,
   },
 };
 
