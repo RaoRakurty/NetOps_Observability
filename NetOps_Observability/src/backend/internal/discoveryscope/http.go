@@ -339,13 +339,9 @@ func (d Deps) admit(w http.ResponseWriter, sc *Scope) bool {
 		if platOn {
 			used += platHosts
 		}
-		for _, o := range d.Registry.Snapshot() {
-			if o.Enabled && o.ID != sc.ID {
-				used += Hosts(o)
-			}
-		}
+		used += EnabledHosts(d.Registry.Snapshot(), sc.ID)
 		if used > discovery.MaxScanHosts {
-			d.WriteError(w, http.StatusBadRequest, fmt.Errorf("the scans together would probe %d addresses per sweep; the appliance's budget is %d, shared by every scan — narrow the ranges", used, discovery.MaxScanHosts))
+			d.WriteError(w, http.StatusBadRequest, BudgetError(used))
 			return false
 		}
 	}
@@ -453,11 +449,19 @@ func (d Deps) newViewer(c Caller) *viewer {
 	return v
 }
 
-func toStatus(st discovery.ScopeStatus, ok bool) *statusView {
+// budgetRefusedForCustomer is what a non-cross reader sees for a scope the
+// shared sweep budget refused: the scanner's own text measures OTHER scans'
+// load (and the platform scan's), which is not this customer's to read.
+const budgetRefusedForCustomer = "Not scanned: the appliance's scan limit is reached. Your platform operator can see why."
+
+func toStatus(st discovery.ScopeStatus, ok, cross bool) *statusView {
 	if !ok {
 		return nil
 	}
 	sv := &statusView{LastError: st.LastError, Answering: st.Answering, Stale: st.Stale}
+	if st.BudgetRefused && !cross {
+		sv.LastError = budgetRefusedForCustomer
+	}
 	if !st.LastSweep.IsZero() {
 		at := st.LastSweep.UTC()
 		sv.LastSweep = &at
@@ -490,7 +494,12 @@ func inNets(nets []*net.IPNet, addr string) bool {
 
 func (v *viewer) view(sc Scope) scopeView {
 	st, ok := v.statuses[sc.ID]
-	out := scopeView{Scope: sc, Status: toStatus(st, ok), Found: []foundView{}}
+	out := scopeView{Scope: sc, Status: toStatus(st, ok, v.c.Cross), Found: []foundView{}}
+	if !v.c.Cross {
+		// Who on the platform side created it is the platform's record (it
+		// stays in the audit trail); a customer-facing read leaves it out.
+		out.CreatedBy = ""
+	}
 	if v.d.TenantName != nil {
 		out.TenantName = v.d.TenantName(sc.TenantID)
 	}
@@ -521,7 +530,7 @@ func (v *viewer) view(sc Scope) scopeView {
 func (v *viewer) platformView() platformView {
 	ranges, enabled, _ := v.d.PlatformScan()
 	st, ok := v.statuses[discovery.PlatformScopeID]
-	pv := platformView{ID: discovery.PlatformScopeID, Platform: true, Ranges: append([]string{}, ranges...), Enabled: enabled, Status: toStatus(st, ok)}
+	pv := platformView{ID: discovery.PlatformScopeID, Platform: true, Ranges: append([]string{}, ranges...), Enabled: enabled, Status: toStatus(st, ok, v.c.Cross)}
 	for _, dev := range v.devices {
 		if dev.Source == "snmp" && owner.IsPlatform(dev.TenantID) {
 			pv.FoundTotal++

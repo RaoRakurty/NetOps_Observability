@@ -48,7 +48,7 @@ type Scope struct {
 	// D2). Empty means "every profile the customer owns", in name order.
 	CredentialRefs []string  `json:"credential_refs"`
 	Enabled        bool      `json:"enabled"`
-	CreatedBy      string    `json:"created_by"`
+	CreatedBy      string    `json:"created_by,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -131,6 +131,25 @@ func Hosts(s Scope) int {
 		return 0
 	}
 	return n
+}
+
+// EnabledHosts is what the turned-on scopes charge against the shared sweep
+// budget, leaving out the scope with id exclude ("" excludes none).
+func EnabledHosts(scopes []Scope, exclude string) int {
+	n := 0
+	for _, o := range scopes {
+		if o.Enabled && o.ID != exclude {
+			n += Hosts(o)
+		}
+	}
+	return n
+}
+
+// BudgetError is THE refusal for a write that would take the scans past the
+// appliance's one sweep budget — the same words on the customer-scan API and
+// on the platform scan's own config, so an operator reads one rule.
+func BudgetError(used int) error {
+	return fmt.Errorf("the scans together would probe %d addresses per sweep; the appliance's budget is %d, shared by every scan — narrow the ranges", used, discovery.MaxScanHosts)
 }
 
 // Store is the persistence seam. Every read is scoped by the caller's

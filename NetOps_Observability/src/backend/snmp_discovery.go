@@ -461,6 +461,14 @@ func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errDiscoveryCommunityRemoved)
 			return
 		}
+		// The platform scan shares ONE sweep budget with every customer scan
+		// and is charged first: widening it past the budget would silently turn
+		// every customer's scan off at the next sweep. Refused here instead,
+		// with the words the customer-scan API uses.
+		if err := s.platformScanFitsBudget(in.discoveryScanConfig); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		out, err := s.discoveryCfg.set(in.discoveryScanConfig)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -503,13 +511,20 @@ func discoveryScopesPath() string {
 // deadline. A load failure is logged; customer scans stay off until a reload
 // succeeds (Registry.RetryLoop), the platform scan is unaffected.
 func newDiscoveryScopeRegistry() *discoveryscope.Registry {
+	// Per-record capability FIRST, for both backends: without it the device
+	// store runs whole-blob, where tombstones reload with tenant "" and a
+	// customer scan device's delete would not survive a restart
+	// (DevStore.IsSuppressedOwned). No per-record capability → no customer scans.
 	var st discoveryscope.Store
-	if ps, ok := platformdb.ActivePG(); ok {
-		st = discoveryscope.NewPGStore(ps.DB())
-	} else if _, ok := platformdb.ActivePrefix(); ok {
-		st = discoveryscope.NewFileStore(discoveryScopesPath(), platformPrefixKV{})
-	} else {
+	_, perRecord := platformdb.ActivePrefix()
+	ps, pg := platformdb.ActivePG()
+	switch {
+	case !perRecord:
 		st = discoveryscope.Unavailable(errors.New("the store backend has no per-record capability"))
+	case pg:
+		st = discoveryscope.NewPGStore(ps.DB())
+	default:
+		st = discoveryscope.NewFileStore(discoveryScopesPath(), platformPrefixKV{})
 	}
 	reg := discoveryscope.NewRegistry(st)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -602,4 +617,21 @@ func (s *server) discoveryScopeDeps() discoveryscope.Deps {
 		WriteError: writeError,
 		Log:        func(msg string, err error) { logError("discovery", msg, errf(err)) },
 	}
+}
+
+// platformScanFitsBudget refuses a platform scan config that, with the turned-on
+// customer scans, would probe more than the appliance's one sweep budget. Ranges
+// that do not validate are left to set(), which refuses them with its own error.
+func (s *server) platformScanFitsBudget(c discoveryScanConfig) error {
+	if !c.Enabled || s.discoveryScopes == nil {
+		return nil
+	}
+	_, hosts, err := discovery.ValidateScanRanges(c.Ranges, c.AllowNonPrivate)
+	if err != nil {
+		return nil
+	}
+	if used := hosts + discoveryscope.EnabledHosts(s.discoveryScopes.Snapshot(), ""); used > discovery.MaxScanHosts {
+		return discoveryscope.BudgetError(used)
+	}
+	return nil
 }

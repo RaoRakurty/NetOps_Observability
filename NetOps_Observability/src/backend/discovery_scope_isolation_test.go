@@ -15,12 +15,14 @@ package backend
 // the body says.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"netops/backend/internal/discoveryscope"
 	"netops/backend/internal/platformdb"
@@ -244,5 +246,54 @@ func TestDiscoveryScopeCrossOrgIsolation(t *testing.T) {
 		if sc.ID == c.scopeID {
 			t.Fatal("the scanner still holds a deleted scan")
 		}
+	}
+}
+
+// TestPlatformScanPutHonoursTheSharedBudget: the platform scan is charged first
+// against the ONE sweep budget, so widening it past the budget while customer
+// scans are on would silently turn every customer's scan off at the next sweep.
+// The platform PUT refuses that with the customer-scan API's own words.
+func TestPlatformScanPutHonoursTheSharedBudget(t *testing.T) {
+	srv, s := newTestServerState(t)
+	ctx := context.Background()
+	store := discoveryscope.NewFileStore(filepath.Join(t.TempDir(), "discovery_scopes.json"), platformdb.FileKV{})
+	s.discoveryScopes = discoveryscope.NewRegistry(store)
+	s.discoveryCfg = newDiscoveryConfigStore(filepath.Join(t.TempDir(), "discovery_config.json"), nil)
+	at := time.Now().UTC()
+	sc := discoveryscope.Scope{ID: "ds-00000000000000a1", TenantID: "t_retail", Name: "edges", Ranges: []string{"10.70.0.0/29"}, Enabled: true, CreatedAt: at, UpdatedAt: at}
+	if err := store.Put(ctx, sc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.discoveryScopes.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+	put := func(enabled bool, ranges ...string) (int, string) {
+		st, b := do(t, srv, "PUT", "/api/discovery/config", admin, map[string]any{"enabled": enabled, "ranges": ranges})
+		return st, string(b)
+	}
+	st, body := put(true, "10.80.0.0/20") // 4096 + the customer's 8
+	if st != 400 || !strings.Contains(body, discoveryscope.BudgetError(4104).Error()) {
+		t.Fatalf("a platform scan past the shared budget must be refused with the shared words: %d %s", st, body)
+	}
+	if cur := s.discoveryCfg.effective(); len(cur.Ranges) != 0 {
+		t.Fatalf("a refused PUT must not be saved: %+v", cur)
+	}
+	if st, body := put(true, "10.80.0.0/21"); st != 200 {
+		t.Fatalf("2048 + 8 fits: %d %s", st, body)
+	}
+	if st, body := put(false, "10.80.0.0/20"); st != 200 {
+		t.Fatalf("a platform scan that is off charges nothing: %d %s", st, body)
+	}
+	// With the customer's scan off, the platform may use the whole budget.
+	sc.Enabled = false
+	if err := store.Put(ctx, sc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.discoveryScopes.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, body := put(true, "10.80.0.0/20"); st != 200 {
+		t.Fatalf("the whole budget is the platform's when no customer scan is on: %d %s", st, body)
 	}
 }
