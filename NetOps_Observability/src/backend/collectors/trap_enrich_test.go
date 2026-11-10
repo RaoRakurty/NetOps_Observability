@@ -172,6 +172,7 @@ func TestTrapGolden_CPUCriticalFromTheLab(t *testing.T) {
 	eq(t, "lifecycle_basis (nothing remembered yet)", ev.LifecycleBasis, lifecycleUnknown)
 	eq(t, "recovery_verified", ev.RecoveryVerified, false)
 	eq(t, "auth_model", ev.AuthModel, "community")
+	eq(t, "platform (VIPTELA-TRAPS is SD-WAN only)", ev.Platform, "SD-WAN")
 	eq(t, "authenticated stays false for v2c", ev.Authenticated, false)
 	eq(t, "op_state", ev.OpState, "alarm")
 	if ev.Guidance == nil || ev.Guidance.Basis != "pack_guidance" || !strings.HasPrefix(ev.Guidance.Impact[0], "Sustained high CPU") {
@@ -360,6 +361,7 @@ func TestTrapGolden_BGPNeverEstablishedFromTheLab(t *testing.T) {
 		deriveEnvelopeWith(ev, tg, receiveTime(t, lt.Timestamp))
 		eq(t, "forward title", ev.Title, "BGP neighbour 192.168.200.34 on cEDGE-81 went from Idle to Active (never established)")
 		eq(t, "forward class", ev.BGP.TransitionClass, bgpNeverEstablished)
+		eq(t, "CISCO-BGP4-MIB is shared by IOS, IOS-XE and NX-OS: no platform", ev.Platform, "")
 	}
 	group := labByCapture(t, "bgp_transition")
 	var ids = map[string]int{}

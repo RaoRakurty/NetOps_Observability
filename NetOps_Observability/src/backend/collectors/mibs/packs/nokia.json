@@ -2,6 +2,7 @@
   "schema": 1,
   "pack": "nokia",
   "source": "TIMETRA-BGP-MIB (SR OS): tBgpPeerNgTable INDEX { InstanceIndex, AddressType, Address }. doc_claimed: no capture.",
+  "platform": "SR OS",
   "objects": {
     "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.1": {
       "name": "tBgpPeerNgInstanceIndex",

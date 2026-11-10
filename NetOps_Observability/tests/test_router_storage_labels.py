@@ -136,6 +136,7 @@ def test_trap_semantic_fields_are_declared_with_their_types():
         "transition_id": "keyword", "transition_seq": "integer",
         "transition_representative": "boolean", "occurrence_count": "integer",
         "first_seen": "keyword", "last_seen": "keyword",
+        "platform": "keyword", "device_type": "keyword",
     }
     wrong = {k: props.get(k, {}).get("type") for k, t in flat.items() if props.get(k, {}).get("type") != t}
     assert not wrong, f"netops-snmptrap semantic field types: {wrong}"
@@ -446,3 +447,13 @@ def test_storage_label_suite_passes_on_the_shipped_config():
     assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
     expected = len(yaml.safe_load(SUITE.read_text(encoding="utf-8"))["tests"])
     assert run.output.count("... passed") == expected, run.output
+
+
+def test_the_timeline_keys_are_searchable_on_both_event_lanes():
+    """The event panel's Timeline queries records by these keys through the logs
+    search: undeclared under `dynamic: false`, they would match nothing."""
+    for lane in ("netops-snmptrap", "netops-syslog"):
+        props = _props(lane)
+        for k in ("correlation_key", "event_id", "transition_id", "platform", "device_type"):
+            assert props.get(k, {}).get("type") == "keyword", (lane, k, props.get(k))
+

@@ -2,6 +2,7 @@
   "schema": 1,
   "pack": "arista",
   "source": "ARISTA-BGP4V2-MIB (EOS), modelled on draft-ietf-idr-bgp4-mibv2: aristaBgp4V2PeerTable INDEX { Instance, RemoteAddrType, RemoteAddr }. doc_claimed: no capture.",
+  "platform": "EOS",
   "objects": {
     "1.3.6.1.4.1.30065.4.1.1.2.1.1": {
       "name": "aristaBgp4V2PeerInstance",

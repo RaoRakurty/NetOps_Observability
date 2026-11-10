@@ -149,7 +149,11 @@ type TrapEvent struct {
 	// The same names the syslog lane uses for the same facts (tracker 387 item 5):
 	// source_ip is the transport sender (= host), event_category the taxonomy
 	// tier-1 (= category), normalized_severity syslog's five-word scale.
-	SourceIP                 string                `json:"source_ip,omitempty"`
+	SourceIP string `json:"source_ip,omitempty"`
+	// Platform: the product line the trap's pack is specific to (SD-WAN), omitted
+	// when the MIB is shared. device_type is NOT emitted: the receiver's inventory
+	// view holds no model, so it could only be guessed.
+	Platform                 string                `json:"platform,omitempty"`
 	EventCategory            string                `json:"event_category,omitempty"`
 	NormalizedSeverity       string                `json:"normalized_severity,omitempty"`
 	Title                    string                `json:"title,omitempty"`
@@ -408,6 +412,7 @@ func deriveEnvelopeWith(ev *TrapEvent, tg *trapTransitions, now time.Time) {
 	// they come last.
 	applyTrapUptime(ev)
 	ev.SourceIP, ev.EventCategory, ev.NormalizedSeverity = ev.Host, ev.Category, normalizedSeverity(ev.Severity)
+	ev.Platform = trapSem.platforms[ev.TrapOID]
 	ev.EventID = ev.MessageKey
 	ev.CorrelationKey = correlationKey(ev)
 	if tg != nil {

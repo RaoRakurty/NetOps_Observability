@@ -2,6 +2,7 @@
   "schema": 1,
   "pack": "juniper",
   "source": "BGP4-V2-MIB-JUNIPER (Junos): jnxBgpM2PeerTable INDEX { RoutingInstance, LocalAddrType, LocalAddr, RemoteAddrType, RemoteAddr }; the notifications also bind the addresses as values. doc_claimed: no capture.",
+  "platform": "Junos",
   "objects": {
     "1.3.6.1.4.1.2636.5.1.1.2.1.1.1.15": {
       "name": "jnxBgpM2PeerRoutingInstance",

@@ -200,7 +200,7 @@
       "_comment": "Platform-infra self-health logs (log_class=platform), split from netops-applogs-* so they stay out of the device-monitoring GUI. Same field contract as applogs."
     },
     "netops-syslog": {
-      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed.",
+      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed. Tracker 387 trap semantics: correlation_key, event_id and transition_id are declared with the trap lane's names and types, so the event panel's Timeline can query both lanes by one key; platform and device_type likewise.",
       "index_patterns": [
         "netops-syslog-*"
       ],
@@ -375,6 +375,21 @@
             },
             "source_masked": {
               "type": "boolean"
+            },
+            "correlation_key": {
+              "type": "keyword"
+            },
+            "event_id": {
+              "type": "keyword"
+            },
+            "transition_id": {
+              "type": "keyword"
+            },
+            "platform": {
+              "type": "keyword"
+            },
+            "device_type": {
+              "type": "keyword"
             }
           }
         }
@@ -938,6 +953,12 @@
               "type": "keyword"
             },
             "normalized_severity": {
+              "type": "keyword"
+            },
+            "platform": {
+              "type": "keyword"
+            },
+            "device_type": {
               "type": "keyword"
             }
           }

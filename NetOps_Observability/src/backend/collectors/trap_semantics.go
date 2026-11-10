@@ -78,6 +78,10 @@ type TrapPack struct {
 	// Derived metrics and per-family guidance (trap_enrich.go).
 	Derived  []TrapDerivedMetric         `json:"derived,omitempty"`
 	Guidance map[string]TrapGuidanceRule `json:"guidance,omitempty"`
+	// Platform names the product line a pack's MIB is specific to (SD-WAN,
+	// SR OS), so a trap it words carries it. Empty for a MIB several platforms
+	// share (CISCO-BGP4-MIB runs on IOS, IOS-XE and NX-OS): never a guess.
+	Platform string `json:"platform,omitempty"`
 }
 
 // TrapTableRule is one table's deviation. BareAddressIndex: the agent may send
@@ -211,6 +215,7 @@ type trapSemantics struct {
 	derived       []TrapDerivedMetric
 	guidance      map[string]TrapGuidanceRule
 	extracts      map[string][]trapExtract // object OID → compiled extractions
+	platforms     map[string]string        // notification OID → its pack's platform
 }
 
 type trapExtract struct {
@@ -222,7 +227,7 @@ func newTrapSemantics() *trapSemantics {
 	return &trapSemantics{
 		objects: map[string]trapObjectEntry{}, notifications: map[string]trapNotificationEntry{},
 		tables: map[string]TrapTableRule{}, templates: map[string][]string{}, titles: map[string]TrapTitleRule{},
-		guidance: map[string]TrapGuidanceRule{}, extracts: map[string][]trapExtract{},
+		guidance: map[string]TrapGuidanceRule{}, extracts: map[string][]trapExtract{}, platforms: map[string]string{},
 	}
 }
 
@@ -346,6 +351,14 @@ func compileTrapPackData(packs ...[]byte) (*trapSemantics, error) {
 				return nil, fmt.Errorf("trap pack %s: guidance for %q needs impact and next_checks", p.Pack, fam)
 			}
 			sem.guidance[fam] = g
+		}
+		if p.Platform != "" {
+			for oid := range p.Notifications {
+				sem.platforms[oid] = p.Platform
+			}
+			for oid := range p.Titles {
+				sem.platforms[oid] = p.Platform
+			}
 		}
 		for oid, t := range p.Titles {
 			if _, dup := sem.titles[oid]; dup {
