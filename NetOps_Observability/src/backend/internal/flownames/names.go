@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-package backend
+package flownames
 
 import (
 	"context"
@@ -17,18 +17,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"netops/backend/collectors"
+	"netops/backend/internal/applog"
 	"netops/backend/models"
 )
 
-// iface_names_export.go: keeps netops.iface_names, the table the flows API
+// names.go: keeps netops.iface_names, the table the flows API
 // names interfaces through (tracker 387 PR 13b; internal/chschema/
 // iface_names_schema.go explains why it is a table and a JOIN).
 //
 // Every minute it builds one row per (tenant, exporter address, ifIndex) from
 // inventory and the ifIndex bridge the SNMP collector already publishes
 // (collectors.FetchIfIndexMap, the same data entity_resolver.json carries), and
-// writes them when the set changed, or every ifaceNamesRefreshEvery so the 8-day
+// writes them when the set changed, or every RefreshEvery so the 8-day
 // TTL never ages out a live name. It only READS the bridge.
 //
 // Tenant isolation (§3a): a row's tenant is its DEVICE's tenant from inventory
@@ -41,22 +41,22 @@ import (
 // number; an address two devices of one tenant share names neither.
 
 const (
-	// ifaceNamesMaxRows bounds one export: ~1k devices x 200 ports. Past it the
+	// MaxRows bounds one export: ~1k devices x 200 ports. Past it the
 	// rest are dropped, counted and logged, never silently.
-	ifaceNamesMaxRows = 200_000
-	// ifaceNameMaxRunes bounds one device-reported name (SNMP data is untrusted).
-	ifaceNameMaxRunes = 128
-	// ifaceNamesRefreshEvery re-writes an unchanged set well inside the TTL.
-	ifaceNamesRefreshEvery = 6 * time.Hour
-	// ifaceNamesCoverageEvery is how often the uncovered-exporter count is read.
-	ifaceNamesCoverageEvery = 5 * time.Minute
-	// ifaceNamesSentinelZero and ifaceNamesSentinelNone are IPFIX "no interface".
-	ifaceNamesSentinelZero uint32 = 0
-	ifaceNamesSentinelNone uint32 = 4294967295
+	MaxRows = 200_000
+	// NameMaxRunes bounds one device-reported name (SNMP data is untrusted).
+	NameMaxRunes = 128
+	// RefreshEvery re-writes an unchanged set well inside the TTL.
+	RefreshEvery = 6 * time.Hour
+	// CoverageEvery is how often the uncovered-exporter count is read.
+	CoverageEvery = 5 * time.Minute
+	// SentinelZero and SentinelNone are IPFIX "no interface".
+	SentinelZero uint32 = 0
+	SentinelNone uint32 = 4294967295
 )
 
-// ifaceNameRow is one netops.iface_names row (JSONEachRow).
-type ifaceNameRow struct {
+// Row is one netops.iface_names row (JSONEachRow).
+type Row struct {
 	TenantID     string `json:"tenant_id"`
 	DeviceID     string `json:"device_id"`
 	ExporterAddr string `json:"exporter_addr"`
@@ -66,22 +66,22 @@ type ifaceNameRow struct {
 	Source       string `json:"source"`
 }
 
-// ifaceNameKey is the lookup key: the ROW's tenant, exporter and index.
-type ifaceNameKey struct {
+// key is the lookup key: the ROW's tenant, exporter and index.
+type key struct {
 	tenant, exporter string
 	ifindex          uint32
 }
 
-// ifaceIndexSource reads the ifIndex bridge; injectable so tests need no Valkey.
-type ifaceIndexSource func(ctx context.Context) (map[string]map[string]string, error)
+// IndexSource reads the ifIndex bridge; injectable so tests need no Valkey.
+type IndexSource func(ctx context.Context) (map[string]map[string]string, error)
 
-// ifaceNameWriter writes one row batch; injectable so tests need no ClickHouse.
-type ifaceNameWriter func(ctx context.Context, rows []map[string]any) error
+// Writer writes one row batch; injectable so tests need no ClickHouse.
+type Writer func(ctx context.Context, rows []map[string]any) error
 
-// ifaceNameExporter owns the export loop, the in-memory name set and the metrics.
-type ifaceNameExporter struct {
+// Exporter owns the export loop, the in-memory name set and the metrics.
+type Exporter struct {
 	mu    sync.RWMutex
-	names map[ifaceNameKey]string
+	names map[key]string
 
 	lastHash  [32]byte
 	lastWrite time.Time
@@ -94,15 +94,15 @@ type ifaceNameExporter struct {
 	lastSuccess   atomic.Int64 // unix seconds of the last good export
 }
 
-func newIfaceNameExporter() *ifaceNameExporter {
-	e := &ifaceNameExporter{names: map[ifaceNameKey]string{}}
+func NewExporter() *Exporter {
+	e := &Exporter{names: map[key]string{}}
 	e.uncovered.Store(-1)
 	return e
 }
 
-// normIfaceAddr reduces an inventory address (host or host:port) to the
+// NormAddr reduces an inventory address (host or host:port) to the
 // canonical IP text flows carry in sampler_address; "" when it is no IP.
-func normIfaceAddr(a string) string {
+func NormAddr(a string) string {
 	a = strings.TrimSpace(a)
 	if h, _, err := net.SplitHostPort(a); err == nil {
 		a = h
@@ -114,27 +114,27 @@ func normIfaceAddr(a string) string {
 	return ip.String()
 }
 
-// clampIfaceName trims and bounds one device-reported name.
-func clampIfaceName(s string) string {
+// clampName trims and bounds one device-reported name.
+func clampName(s string) string {
 	s = strings.TrimSpace(s)
-	if r := []rune(s); len(r) > ifaceNameMaxRunes {
-		s = string(r[:ifaceNameMaxRunes])
+	if r := []rune(s); len(r) > NameMaxRunes {
+		s = string(r[:NameMaxRunes])
 	}
 	return s
 }
 
-// buildIfaceNameRows is the pure core: devices x ifIndex map → rows, sorted,
+// BuildRows is the pure core: devices x ifIndex map → rows, sorted,
 // capped. truncated counts the rows the cap dropped.
-func buildIfaceNameRows(devs []models.Device, ifidx map[string]map[string]string, maxRows int) (rows []ifaceNameRow, truncated int) {
+func BuildRows(devs []models.Device, tenantOf func(models.Device) string, ifidx map[string]map[string]string, maxRows int) (rows []Row, truncated int) {
 	type dev struct{ id, tenant, addr string }
 	byID := map[string]dev{}
 	claim := map[string]map[string]int{} // tenant → address → devices claiming it
 	for _, d := range devs {
-		addr := normIfaceAddr(d.Address)
+		addr := NormAddr(d.Address)
 		if d.ID == "" || addr == "" {
 			continue
 		}
-		t := deviceTenant(d)
+		t := tenantOf(d)
 		byID[d.ID] = dev{id: d.ID, tenant: t, addr: addr}
 		if claim[t] == nil {
 			claim[t] = map[string]int{}
@@ -160,8 +160,8 @@ func buildIfaceNameRows(devs []models.Device, ifidx map[string]map[string]string
 				continue
 			}
 			i := uint32(n)
-			name := clampIfaceName(v)
-			if i == ifaceNamesSentinelZero || i == ifaceNamesSentinelNone || name == "" {
+			name := clampName(v)
+			if i == SentinelZero || i == SentinelNone || name == "" {
 				continue
 			}
 			idxs = append(idxs, i)
@@ -173,7 +173,7 @@ func buildIfaceNameRows(devs []models.Device, ifidx map[string]map[string]string
 				truncated++
 				continue
 			}
-			rows = append(rows, ifaceNameRow{
+			rows = append(rows, Row{
 				TenantID: d.tenant, DeviceID: d.id, ExporterAddr: d.addr,
 				IfIndex: i, IfName: names[i], Source: "snmp",
 			})
@@ -185,21 +185,21 @@ func buildIfaceNameRows(devs []models.Device, ifidx map[string]map[string]string
 // lookup names (tenant, exporter, ifindex) from the last export. ok=false for
 // a sentinel or a miss. The tenant is the CALLER-SUPPLIED row tenant: a
 // document's own tenant_id, never the principal's.
-func (e *ifaceNameExporter) lookup(tenant, exporter string, ifindex uint32) (string, bool) {
-	if e == nil || ifindex == ifaceNamesSentinelZero || ifindex == ifaceNamesSentinelNone {
+func (e *Exporter) Lookup(tenant, exporter string, ifindex uint32) (string, bool) {
+	if e == nil || ifindex == SentinelZero || ifindex == SentinelNone {
 		return "", false
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	n, ok := e.names[ifaceNameKey{tenant: tenant, exporter: normIfaceAddr(exporter), ifindex: ifindex}]
+	n, ok := e.names[key{tenant: tenant, exporter: NormAddr(exporter), ifindex: ifindex}]
 	return n, ok
 }
 
 // install swaps in a new name set.
-func (e *ifaceNameExporter) install(rows []ifaceNameRow) {
-	m := make(map[ifaceNameKey]string, len(rows))
+func (e *Exporter) Install(rows []Row) {
+	m := make(map[key]string, len(rows))
 	for _, r := range rows {
-		m[ifaceNameKey{tenant: r.TenantID, exporter: r.ExporterAddr, ifindex: r.IfIndex}] = r.IfName
+		m[key{tenant: r.TenantID, exporter: r.ExporterAddr, ifindex: r.IfIndex}] = r.IfName
 	}
 	e.mu.Lock()
 	e.names = m
@@ -208,27 +208,27 @@ func (e *ifaceNameExporter) install(rows []ifaceNameRow) {
 }
 
 // cycle runs one export: read the bridge, build, write when needed.
-func (e *ifaceNameExporter) cycle(ctx context.Context, devs []models.Device, read ifaceIndexSource, write ifaceNameWriter, now time.Time) error {
+func (e *Exporter) Cycle(ctx context.Context, devs []models.Device, tenantOf func(models.Device) string, read IndexSource, write Writer, now time.Time) error {
 	ifidx, err := read(ctx)
 	if err != nil {
 		// Keep the last good set: a read failure is not "no names" (tracker 307).
 		e.readFailures.Add(1)
 		return fmt.Errorf("ifIndex bridge unread, interface names keep the last export: %w", err)
 	}
-	rows, truncated := buildIfaceNameRows(devs, ifidx, ifaceNamesMaxRows)
+	rows, truncated := BuildRows(devs, tenantOf, ifidx, MaxRows)
 	if truncated > 0 {
 		e.truncated.Add(uint64(truncated))
-		logWarn("iface-names", "interface-name export hit its row cap; the rest stay unnamed", map[string]any{
-			"cap": ifaceNamesMaxRows, "dropped": truncated,
+		applog.Warn("iface-names", "interface-name export hit its row cap; the rest stay unnamed", map[string]any{
+			"cap": MaxRows, "dropped": truncated,
 		})
 	}
-	e.install(rows)
+	e.Install(rows)
 	body, err := json.Marshal(rows)
 	if err != nil {
 		return fmt.Errorf("marshal interface names: %w", err)
 	}
 	h := sha256.Sum256(body)
-	if h == e.lastHash && now.Sub(e.lastWrite) < ifaceNamesRefreshEvery {
+	if h == e.lastHash && now.Sub(e.lastWrite) < RefreshEvery {
 		e.lastSuccess.Store(now.Unix())
 		return nil // unchanged and fresh: nothing to write
 	}
@@ -250,17 +250,20 @@ func (e *ifaceNameExporter) cycle(ctx context.Context, devs []models.Device, rea
 	return nil
 }
 
-// ifaceNamesUncoveredSQL counts exporters seen in flows over the last hour
+// UncoveredSQL counts exporters seen in flows over the last hour
 // that have no interface name at all. Platform-scope read (worker).
-const ifaceNamesUncoveredSQL = `SELECT uniqExact(sampler_address) AS n
+const UncoveredSQL = `SELECT uniqExact(sampler_address) AS n
   FROM netops.flows
  WHERE ts >= now() - INTERVAL 1 HOUR
    AND (tenant_id, sampler_address) NOT IN (SELECT tenant_id, exporter_addr FROM netops.iface_names)
  FORMAT JSON`
 
 // measureCoverage refreshes the uncovered-exporter gauge.
-func (e *ifaceNameExporter) measureCoverage(ctx context.Context) error {
-	rows, err := chSelect(ctx, "__all__", ifaceNamesUncoveredSQL, "worker:iface-names")
+// Query runs one platform-scope (tenant_scope __all__) read and returns its rows.
+type Query func(ctx context.Context, sql string) ([]map[string]any, error)
+
+func (e *Exporter) MeasureCoverage(ctx context.Context, query Query) error {
+	rows, err := query(ctx, UncoveredSQL)
 	if err != nil {
 		e.uncovered.Store(-1)
 		return err
@@ -282,7 +285,7 @@ func (e *ifaceNameExporter) measureCoverage(ctx context.Context) error {
 
 // WriteMetrics renders the export's gauges and counters. No tenant or device
 // label: the series are platform plumbing on the shared exporter.
-func (e *ifaceNameExporter) WriteMetrics(w io.Writer) {
+func (e *Exporter) WriteMetrics(w io.Writer) {
 	if e == nil {
 		return
 	}
@@ -302,41 +305,4 @@ func (e *ifaceNameExporter) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_iface_names_last_success_timestamp_seconds When the interface-name export last completed.\n")
 	fmt.Fprintf(w, "# TYPE netops_iface_names_last_success_timestamp_seconds gauge\n")
 	fmt.Fprintf(w, "netops_iface_names_last_success_timestamp_seconds %d\n", e.lastSuccess.Load())
-}
-
-// startIfaceNamesExport runs the export every minute until ctx ends. No-op
-// without ClickHouse or discovery.
-func (s *server) startIfaceNamesExport(ctx context.Context) {
-	if s.ifaceNames == nil || s.discovery == nil || envOr("CLICKHOUSE_URL", "") == "" {
-		return
-	}
-	write := func(ctx context.Context, rows []map[string]any) error {
-		// One mixed-tenant batch, so the scope is the deliberate "__all__"
-		// (chInsertJSON's contract); each row carries its device's tenant.
-		return chInsertJSON(ctx, "netops.iface_names", "__all__", rows)
-	}
-	s.workers.start("iface-names-export", func() {
-		t := time.NewTicker(time.Minute)
-		defer t.Stop()
-		var lastCoverage time.Time
-		for {
-			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			now := time.Now()
-			if err := s.ifaceNames.cycle(cctx, s.discovery.Devices(), collectors.FetchIfIndexMap, write, now); err != nil {
-				logWarn("iface-names", "interface-name export failed", map[string]any{"error": err.Error()})
-			}
-			if now.Sub(lastCoverage) >= ifaceNamesCoverageEvery {
-				lastCoverage = now
-				if err := s.ifaceNames.measureCoverage(cctx); err != nil {
-					logWarn("iface-names", "uncovered-exporter count unread", map[string]any{"error": err.Error()})
-				}
-			}
-			cancel()
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	})
 }

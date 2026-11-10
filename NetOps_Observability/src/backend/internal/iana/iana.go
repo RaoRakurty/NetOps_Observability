@@ -28,6 +28,7 @@ var servicesTSV string
 type Tables struct {
 	protocols map[uint8]string
 	services  map[uint32]string // proto<<16 | port
+	malformed int               // lines Parse could not read: counted, never silently dropped
 }
 
 // Names is the lookup the rest of the backend depends on, so a caller can be
@@ -48,9 +49,10 @@ func Default() *Tables {
 	return loaded
 }
 
-// Parse reads the two generated TSVs. A malformed line is skipped: the
-// generator's --check (tests/test_iana_tables.py) is what proves the files
-// well formed, and a lookup must never fail a request.
+// Parse reads the two generated TSVs. A malformed line is skipped AND counted
+// (Malformed): a lookup must never fail a request, and the generator's --check
+// (tests/test_iana_tables.py) plus TestDefaultParsesCleanly prove the embedded
+// files have none.
 func Parse(protocols, services string) *Tables {
 	t := &Tables{protocols: map[uint8]string{}, services: map[uint32]string{}}
 	for _, line := range strings.Split(protocols, "\n") {
@@ -58,11 +60,13 @@ func Parse(protocols, services string) *Tables {
 			continue
 		}
 		cols := strings.Split(line, "\t")
-		if len(cols) != 2 {
+		if len(cols) != 2 || cols[1] == "" {
+			t.malformed++
 			continue
 		}
 		n, err := strconv.ParseUint(cols[0], 10, 8)
-		if err != nil || cols[1] == "" {
+		if err != nil {
+			t.malformed++
 			continue
 		}
 		t.protocols[uint8(n)] = cols[1]
@@ -72,12 +76,14 @@ func Parse(protocols, services string) *Tables {
 			continue
 		}
 		cols := strings.Split(line, "\t")
-		if len(cols) != 3 {
+		if len(cols) != 3 || cols[2] == "" {
+			t.malformed++
 			continue
 		}
 		p, err1 := strconv.ParseUint(cols[0], 10, 8)
 		port, err2 := strconv.ParseUint(cols[1], 10, 16)
-		if err1 != nil || err2 != nil || cols[2] == "" {
+		if err1 != nil || err2 != nil {
+			t.malformed++
 			continue
 		}
 		t.services[uint32(p)<<16|uint32(port)] = cols[2]
@@ -101,6 +107,14 @@ func (t *Tables) Service(proto uint8, port uint16) string {
 		return ""
 	}
 	return t.services[uint32(proto)<<16|uint32(port)]
+}
+
+// Malformed is how many lines Parse could not read.
+func (t *Tables) Malformed() int {
+	if t == nil {
+		return 0
+	}
+	return t.malformed
 }
 
 // Len reports the table sizes (for tests and the start-up log).

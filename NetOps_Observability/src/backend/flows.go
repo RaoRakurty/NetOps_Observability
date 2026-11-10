@@ -4,15 +4,19 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/flownames"
 	"netops/backend/internal/iana"
 	"netops/backend/models"
 )
@@ -355,7 +359,7 @@ func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	platformCond := platformAddrsFromEnv().sqlCond()
+	platformCond := platformAddrsFromEnv().SQLCond()
 	platformCount, platformConfigured := "toUInt64(0)", "0"
 	if platformCond != "" {
 		platformCount, platformConfigured = "countIf("+platformCond+")", "1"
@@ -624,7 +628,7 @@ func isIPish(s string) bool {
 // then quote-escaped) and ingress/egress interface ids (parsed as integers). A
 // malformed value is a 400 (returned error), never silently dropped.
 //
-// It also applies the platform-monitoring exclusion (flows_traffic_class.go):
+// It also applies the platform-monitoring exclusion (flownames/platform.go):
 // flows Correlix itself caused are left out unless ?traffic=all.
 func flowFilterClause(r *http.Request) (string, error) {
 	f, err := flowFilterCore(r)
@@ -964,6 +968,72 @@ func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status
 		}
 	}
 	return out
+}
+
+// ── Names and traffic class (tracker 387 PR 13; internal/flownames) ──────────
+
+// platformAddrsFromEnv is the live platform-address configuration: the
+// appliance's own sender addresses (CX_PLATFORM_ADDRESSES) and the probers'
+// (PATH_GRAPH_VANTAGE_ADDRESSES). See flownames/platform.go.
+func platformAddrsFromEnv() flownames.PlatformAddrs {
+	return flownames.ParsePlatformAddrs(os.Getenv("CX_PLATFORM_ADDRESSES"), os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"))
+}
+
+// includePlatformTraffic reads the visible toggle: ?traffic=all includes it.
+func includePlatformTraffic(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("traffic")), "all")
+}
+
+// flowTrafficClassClause is the default exclusion the flows views apply:
+// flows Correlix's own pollers caused (traffic_class=platform_monitoring) are
+// left out unless ?traffic=all. Nothing is deleted; unconfigured, nothing is hidden.
+func flowTrafficClassClause(r *http.Request) string {
+	if includePlatformTraffic(r) {
+		return ""
+	}
+	if c := platformAddrsFromEnv().SQLCond(); c != "" {
+		return " AND NOT " + c
+	}
+	return ""
+}
+
+// runIfaceNamesExport keeps netops.iface_names (flownames/names.go) every
+// minute until ctx ends. Blocking: Run starts it through the drain group.
+// No-op without ClickHouse or discovery.
+func (s *server) runIfaceNamesExport(ctx context.Context) {
+	if s.ifaceNames == nil || s.discovery == nil || envOr("CLICKHOUSE_URL", "") == "" {
+		return
+	}
+	write := func(ctx context.Context, rows []map[string]any) error {
+		// One mixed-tenant batch, so the scope is the deliberate "__all__"
+		// (chInsertJSON's contract); each row carries its device's tenant.
+		return chInsertJSON(ctx, "netops.iface_names", "__all__", rows)
+	}
+	query := func(ctx context.Context, sql string) ([]map[string]any, error) {
+		return chSelect(ctx, "__all__", sql, "worker:iface-names")
+	}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	var lastCoverage time.Time
+	for {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		now := time.Now()
+		if err := s.ifaceNames.Cycle(cctx, s.discovery.Devices(), deviceTenant, collectors.FetchIfIndexMap, write, now); err != nil {
+			logWarn("iface-names", "interface-name export failed", map[string]any{"error": err.Error()})
+		}
+		if now.Sub(lastCoverage) >= flownames.CoverageEvery {
+			lastCoverage = now
+			if err := s.ifaceNames.MeasureCoverage(cctx, query); err != nil {
+				logWarn("iface-names", "uncovered-exporter count unread", map[string]any{"error": err.Error()})
+			}
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // intQuery parses a bounded integer query parameter.

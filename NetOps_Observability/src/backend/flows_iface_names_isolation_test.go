@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	"netops/backend/internal/flownames"
 	"netops/backend/internal/iana"
 	"netops/backend/models"
 )
@@ -145,8 +146,8 @@ func TestFlowsTopNIfaceAsTenantIgnored(t *testing.T) {
 // resolves on your document, the platform's names resolve on platform
 // documents, and the sentinels never name.
 func TestLogsFlowNamesForeignTenantNeverResolves(t *testing.T) {
-	e := newIfaceNameExporter()
-	e.install([]ifaceNameRow{
+	e := flownames.NewExporter()
+	e.Install([]flownames.Row{
 		{TenantID: "globex", ExporterAddr: "10.1.0.1", IfIndex: 4, IfName: "GLOBEX-SECRET"},
 		{TenantID: "acme", ExporterAddr: "10.1.0.1", IfIndex: 2, IfName: "Gi2"},
 		{TenantID: "", ExporterAddr: "10.70.245.104", IfIndex: 4, IfName: "ge0/3"},
@@ -160,7 +161,7 @@ func TestLogsFlowNamesForeignTenantNeverResolves(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatal(err)
 	}
-	annotateFlowHits(resp, e, iana.Default(), platformAddrSet{})
+	flownames.AnnotateHits(resp, e, iana.Default(), flownames.PlatformAddrs{})
 	hits := resp["hits"].(map[string]any)["hits"].([]any)
 	res := func(i int) map[string]any { return hits[i].(map[string]any)["_resolved"].(map[string]any) }
 

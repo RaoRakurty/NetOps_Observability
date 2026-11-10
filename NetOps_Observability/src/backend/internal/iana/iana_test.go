@@ -57,4 +57,14 @@ func TestParseSkipsMalformedLines(t *testing.T) {
 	if tb.Service(17, 161) != "snmp" || len(tb.services) != 1 {
 		t.Errorf("services parsed wrong: %v", tb.services)
 	}
+	if tb.Malformed() != 5 {
+		t.Errorf("malformed lines counted %d, want 5", tb.Malformed())
+	}
+}
+
+// The embedded tables have no line the parser could not read.
+func TestDefaultParsesCleanly(t *testing.T) {
+	if n := Default().Malformed(); n != 0 {
+		t.Fatalf("embedded IANA tables carry %d malformed lines", n)
+	}
 }

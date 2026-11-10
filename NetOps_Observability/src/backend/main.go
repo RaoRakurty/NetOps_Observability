@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/flownames"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -571,7 +572,7 @@ type server struct {
 	tlsPeerProber   *tlsprobe.Prober                     // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	corrReconcile   corrReconcileStats                   // tracker 328: corr_current reconciler gauges/counters
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
-	ifaceNames      *ifaceNameExporter                   // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
+	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -1251,7 +1252,7 @@ func newServer() *server {
 		restart:          featureflags.NewRestartGate(5 * time.Minute),
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
-		ifaceNames:       newIfaceNameExporter(),
+		ifaceNames:       flownames.NewExporter(),
 		discovery:        d,
 		devStore:         devStore,
 		snmpScan:         snmpScan,
@@ -2947,9 +2948,10 @@ func Run() {
 	srv.startEntityResolverEnrichment(ctx)
 	// (tenant, exporter, ifIndex)→ifName rows in netops.iface_names, the table the
 	// flows API names interfaces through (tracker 387 PR 13b).
-	srv.startIfaceNamesExport(ctx)
-	// The SNMP trap receiver's interface-address rung (tracker 387 PR 13c').
-	srv.startTrapAddressIndex(ctx)
+	srv.workers.start("iface-names-export", func() { srv.runIfaceNamesExport(ctx) })
+	// The SNMP trap receiver's interface-address rung and ifIndex names
+	// (tracker 387 PR 13c', 13c).
+	srv.workers.start("trap-addr-index", func() { srv.runTrapAddressIndex(ctx) })
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
