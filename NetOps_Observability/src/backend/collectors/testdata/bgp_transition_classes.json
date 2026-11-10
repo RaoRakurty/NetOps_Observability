@@ -1,0 +1,215 @@
+{
+ "_about": "tracker 387: the BGP transition classes, pinned for BOTH the receiver (collectors/trap_bgp.go) and the engine (src/correlation/producers.py). Owner rule 2026-11-10: only established -> lower is a session failure; moves below established are never_established.",
+ "rows": [
+  {
+   "prev": "",
+   "state": "idle",
+   "class": "unknown"
+  },
+  {
+   "prev": "",
+   "state": "connect",
+   "class": "unknown"
+  },
+  {
+   "prev": "",
+   "state": "active",
+   "class": "unknown"
+  },
+  {
+   "prev": "",
+   "state": "opensent",
+   "class": "unknown"
+  },
+  {
+   "prev": "",
+   "state": "openconfirm",
+   "class": "unknown"
+  },
+  {
+   "prev": "",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "idle",
+   "state": "idle",
+   "class": "never_established"
+  },
+  {
+   "prev": "idle",
+   "state": "connect",
+   "class": "never_established"
+  },
+  {
+   "prev": "idle",
+   "state": "active",
+   "class": "never_established"
+  },
+  {
+   "prev": "idle",
+   "state": "opensent",
+   "class": "progressing"
+  },
+  {
+   "prev": "idle",
+   "state": "openconfirm",
+   "class": "progressing"
+  },
+  {
+   "prev": "idle",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "connect",
+   "state": "idle",
+   "class": "never_established"
+  },
+  {
+   "prev": "connect",
+   "state": "connect",
+   "class": "never_established"
+  },
+  {
+   "prev": "connect",
+   "state": "active",
+   "class": "never_established"
+  },
+  {
+   "prev": "connect",
+   "state": "opensent",
+   "class": "progressing"
+  },
+  {
+   "prev": "connect",
+   "state": "openconfirm",
+   "class": "progressing"
+  },
+  {
+   "prev": "connect",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "active",
+   "state": "idle",
+   "class": "never_established"
+  },
+  {
+   "prev": "active",
+   "state": "connect",
+   "class": "never_established"
+  },
+  {
+   "prev": "active",
+   "state": "active",
+   "class": "never_established"
+  },
+  {
+   "prev": "active",
+   "state": "opensent",
+   "class": "progressing"
+  },
+  {
+   "prev": "active",
+   "state": "openconfirm",
+   "class": "progressing"
+  },
+  {
+   "prev": "active",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "opensent",
+   "state": "idle",
+   "class": "never_established"
+  },
+  {
+   "prev": "opensent",
+   "state": "connect",
+   "class": "never_established"
+  },
+  {
+   "prev": "opensent",
+   "state": "active",
+   "class": "never_established"
+  },
+  {
+   "prev": "opensent",
+   "state": "opensent",
+   "class": "never_established"
+  },
+  {
+   "prev": "opensent",
+   "state": "openconfirm",
+   "class": "progressing"
+  },
+  {
+   "prev": "opensent",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "idle",
+   "class": "never_established"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "connect",
+   "class": "never_established"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "active",
+   "class": "never_established"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "opensent",
+   "class": "never_established"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "openconfirm",
+   "class": "never_established"
+  },
+  {
+   "prev": "openconfirm",
+   "state": "established",
+   "class": "session_up"
+  },
+  {
+   "prev": "established",
+   "state": "idle",
+   "class": "session_lost"
+  },
+  {
+   "prev": "established",
+   "state": "connect",
+   "class": "session_lost"
+  },
+  {
+   "prev": "established",
+   "state": "active",
+   "class": "session_lost"
+  },
+  {
+   "prev": "established",
+   "state": "opensent",
+   "class": "session_lost"
+  },
+  {
+   "prev": "established",
+   "state": "openconfirm",
+   "class": "session_lost"
+  },
+  {
+   "prev": "established",
+   "state": "established",
+   "class": "unknown"
+  }
+ ]
+}

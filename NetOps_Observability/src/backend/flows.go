@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"netops/backend/collectors"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/iana"
@@ -1122,7 +1121,7 @@ func (s *server) runIfaceNamesExport(ctx context.Context) {
 	for {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		now := time.Now()
-		if err := s.ifaceNames.Cycle(cctx, s.discovery.Devices(), deviceTenant, collectors.FetchIfIndexMap, write, now); err != nil {
+		if err := s.ifaceNames.CycleBridge(cctx, s.discovery.Devices(), deviceTenant, fetchIfaceNamesBridge, write, now); err != nil {
 			logWarn("iface-names", "interface-name export failed", map[string]any{"error": err.Error()})
 		}
 		if now.Sub(lastCoverage) >= flownames.CoverageEvery {

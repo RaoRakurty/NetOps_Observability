@@ -48,6 +48,8 @@ import (
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
 	"netops/backend/internal/flownames"
+	"netops/backend/internal/ifbridge"
+	"netops/backend/internal/invfacts"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -73,6 +75,7 @@ import (
 	// DATA-PROTECTION-END
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/discoveryscope"
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/hardening"
 	// CONFIG-BACKUP-END
@@ -128,6 +131,7 @@ import (
 	"math"
 	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/aiprovider"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
@@ -482,7 +486,7 @@ type server struct {
 	meteringAPI      *metering.API
 	// METERING-END
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
-	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
+	// the WAN endpoint projector. Defaults to fetchIfAddrMap (the merged interface bridge); a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
 	wanIfAddr func(context.Context) (map[string]map[string]string, error)
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
@@ -575,6 +579,9 @@ type server struct {
 	sdwanOverlay    atomic.Pointer[sdwanOverlaySnapshot] // tracker 349: last inferred SD-WAN overlay (reconcile cycle)
 	flowDatasets    *flownames.DatasetWatch              // tracker 387 PR 13d: do ip_asn / geoip_country load
 	ifaceNames      *flownames.Exporter                  // tracker 387 PR 13b: netops.iface_names export + the Logs flow names
+	ifBridge        *ifbridge.Store                      // tracker 387 PR 13a: the interface bridge's NMS rows (if_bridge.go)
+	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
+	invFacts        *invfacts.Store                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
@@ -582,6 +589,8 @@ type server struct {
 	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
 	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
 	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
+	aiBreaker       *aiprovider.Breaker                  // per-(tenant, provider) model circuit breaker (Iris latency 2026-11-10)
+	aiProvCalls     *aiprovider.Metrics                  // netops_ai_provider_call_seconds + breaker gauges
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
@@ -689,8 +698,11 @@ type server struct {
 	portStore    portintel.Store       // Port Intelligence physical-layer store (#94)
 	netboxCfg    *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync   *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
-	vulns        *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	// discoveryScopes are the tenant-owned discovery scans (internal/discoveryscope):
+	// the scanner reads its snapshot every poll, /api/discovery/scopes writes it.
+	discoveryScopes *discoveryscope.Registry
+	netboxSync      *netboxSyncer // reconciles discovered devices INTO NetBox (write-through)
+	vulns           *vuln.Feed    // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -879,7 +891,11 @@ func newServer() *server {
 	// SNMP credential store is created below; capture a pointer the subnet
 	// sweep and the target builder resolve profiles against (set after init).
 	var snmpCredsRef *snmpcred.Store
-	snmpScan := newSNMPSourceFromStore(discoveryCfg, func() *snmpcred.Store { return snmpCredsRef }, d.Devices)
+	// Tenant-owned discovery scopes: loaded before the scanner's first poll so
+	// a customer's scan is a channel from boot (a load failure leaves them off
+	// and is retried — see newDiscoveryScopeRegistry).
+	discoveryScopes := newDiscoveryScopeRegistry()
+	snmpScan := newSNMPSourceFromStore(discoveryCfg, discoveryScopes, func() *snmpcred.Store { return snmpCredsRef }, d.Devices)
 	// Tracker 366: the scanner's memory of what it has found survives a
 	// restart, so a device that is down at boot is still inventory (same id,
 	// same tenant row, same topology node). Restored here — before
@@ -1255,6 +1271,9 @@ func newServer() *server {
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		ifaceNames:       flownames.NewExporter(),
+		ifBridge:         ifbridge.NewStore(),
+		ifBridgeMetrics:  ifbridge.NewMetrics(),
+		invFacts:         invfacts.NewStore(),
 		flowDatasets:     flownames.NewDatasetWatch(),
 		discovery:        d,
 		devStore:         devStore,
@@ -1672,6 +1691,8 @@ func newServer() *server {
 		// One router = one entity: controller device keys join inventory ids.
 		srv.nmsResolver = &nms.InventoryResolver{}
 		srv.nms.SetDeviceResolver(srv.nmsResolver)
+		// Controller interface lists feed the interface bridge (tracker 387 PR 13a).
+		srv.nms.SetInterfaceSink(srv.ingestNMSInterfaces)
 	}
 	// TRACKER 256 — wireless controllers and access points are DEVICES, and one
 	// entitlement each when Correlix is collecting from them. Registering them
@@ -1701,6 +1722,8 @@ func newServer() *server {
 	srv.exportLimiter = ratelimit.New()
 	srv.copilotLimiter = ratelimit.New()
 	srv.aiToolBudget = ai.NewDailyBudget()
+	srv.aiBreaker = aiprovider.NewBreaker(aiBreakerConfig())
+	srv.aiProvCalls = aiprovider.NewMetrics(srv.aiBreaker)
 	engine.OnFire = srv.ingestAlertIncident
 	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
 	// into per-tenant episodes; muted/snoozed episodes pause NOTIFICATIONS only.
@@ -1791,6 +1814,7 @@ func newServer() *server {
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
+	srv.discoveryScopes = discoveryScopes
 	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
 	// reading the deduped inventory. No-op while NetBox is disabled.
 	srv.netboxSync = newNetboxSyncer(netboxCfg.effective, srv.discovery.Devices)
@@ -2718,6 +2742,9 @@ func Run() {
 	// so the first enrichment tick already has its rungs (see vulns_http.go).
 	srv.buildOSVersionLadder()
 	srv.discovery.Start(ctx)
+	// A failed boot load of the customer discovery scans is retried until it
+	// succeeds (the last good set otherwise stays in force).
+	workers.start("discovery-scope-reload", func() { srv.discoveryScopes.RetryLoop(ctx, time.Minute) })
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	// Credential sentinel — self-healing SNMP credential resolution. Runs with
@@ -2956,6 +2983,8 @@ func Run() {
 	// The SNMP trap receiver's interface-address rung and ifIndex names
 	// (tracker 387 PR 13c', 13c).
 	srv.workers.start("trap-addr-index", func() { srv.runTrapAddressIndex(ctx) })
+	// The interface bridge's NMS half: project, store, count (tracker 387 PR 13a).
+	srv.workers.start("iface-bridge", func() { srv.runIfaceBridge(ctx) })
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
@@ -3665,7 +3694,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	// not silently hide optional UI surfaces. See handleFeatures.
 	mux.HandleFunc("/api/features", s.handleFeatures)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
-	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig)  // subnet-scan scope (platform-owner)
+	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig) // subnet-scan scope (platform-owner)
+	// Tenant-owned discovery scans: write = platform owner, read = infra:read + tenant filter.
+	mux.HandleFunc("/api/discovery/scopes", s.handleDiscoveryScopes)
+	mux.HandleFunc("/api/discovery/scopes/", s.handleDiscoveryScopes)
 	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig)    // Source-of-Truth config (platform-owner)
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
@@ -3918,6 +3950,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/contact-points/", s.handleContactPointByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
+	mux.HandleFunc("/api/copilot/config/test", s.handleCopilotConfigTest)
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
@@ -3972,6 +4005,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)
 	mux.HandleFunc("/api/ai/tenant-config", s.handleAITenantConfig)
+	mux.HandleFunc("/api/ai/tenant-config/test", s.handleAITenantConfigTest)
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
@@ -4829,6 +4863,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 		s.sealMetrics.write(w)
 	}
 	s.ifaceNames.WriteMetrics(w)
+	s.ifBridgeMetrics.WriteMetrics(w)
+	s.invFacts.WriteMetrics(w)
 	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
@@ -4872,6 +4908,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.nlqQueryLogMetrics.Write(w)                                // Iris query capture + corrections (N-C8); nil-safe
 	s.aiDecisionMetrics.Write(w)                                 // Iris AI decision ledger appends (N-A6); nil-safe
 	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
+	_ = s.aiProvCalls.Write(w)                                   // provider call latency/outcome + breaker state; nil-safe, best-effort
 	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
 	_ = s.srcAuthorityMetrics.Write(w)                           // source-authority resolutions (N-F6); nil-safe, best-effort like the line above
 	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above
@@ -4907,6 +4944,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// SNMP scan memory (tracker 366): failed writes, whether it was restored,
 	// and how many remembered devices are stale. Nil-safe.
 	s.snmpScan.WriteMetrics(w)
+	// The registry's cross-owner overwrite guard (tenant scan scopes). Nil-safe.
+	s.discovery.WriteMetrics(w)
 	// LICENCE-BEGIN — emitted on every deployment including Community, so
 	// "no licence" is a VALUE (the 36500-day sentinel) and never a gap in the
 	// series. A vanished series must mean a scrape failure, not a state change.

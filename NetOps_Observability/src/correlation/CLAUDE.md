@@ -133,6 +133,22 @@ interface and BGP keep the device lane's `state=up` convention (tracker 380). A 
 trap binds `<tloc pair>` without the controller's `@instance`, so it meets vManage's
 report through the device token (rank 7), not as one node.
 
+**BGP transition semantics (tracker 387, 2026-11-10).** Owner rule: only an ESTABLISHED
+session going down is a session failure. The receiver decodes the peer from the row index
+(gen_index.py writes each column's INDEX clause into the OID index; IOS-XE's bare
+cbgpPeer2 index is a pack `tables` row), groups one transition's ~6 reports
+(`transition_id`, `transition_seq`, `occurrence_count`) and stamps
+`bgp.transition_class` (session_lost | session_up | never_established | progressing |
+unknown), filling a report's missing prior state from the same transition or the peer's
+last state (`bgp.prev_state_basis`). Stage [1] (`trap_control_signal`): a
+`bgp_adjacency_change` down whose transition is never_established or progressing (the
+trap's own fsm_from/fsm_to first, then the receiver's class) emits NO signal and is counted
+(`corr_trap_bgp_not_session_failure_total{class}`); "unknown" or no class leaves the rule's
+reading as it was. The lab's idle <-> active neighbour used to open a `high` singleton per
+transition. Dedup of the six reports stays `trap_collapse.TransitionCollapser` (main.py).
+Both sides pin the classifier to `collectors/testdata/bgp_transition_classes.json`. No
+template, gate or constant moved: ENGINE_SEMVER does not move.
+
 **A device's interface rows outlive its polls.** `interface_ips` and `ifindex` in
 `entity_resolver.json` are each device's LAST-KNOWN rows, so `device_for_ip` still
 recovers a trap sent from an interface address by a device that has stopped answering.
@@ -141,6 +157,14 @@ format is unchanged): a completed walk replaces the rows, and they go when the d
 leaves the inventory or changes tenant, or 7 days after its last completed walk. An
 address two devices claimed at once stays claimed by both, so it stays ambiguous.
 Gauge: `collector_if_rows_retained_devices`.
+**The controller feeds the same rows (tracker 387 PR 13a).** vManage's per-device interface
+list (ifindex, addresses, VPN, description) reaches `interface_ips` and `ifindex` through the
+api's interface bridge (`if_bridge.go`, `internal/ifbridge`), keyed by the inventory device
+the controller's key resolves to OWNER-STRICTLY (never by address). VPN ≥ 65528 and
+loopback/link-local addresses are skipped at the source; SNMP and NMS rows for one device
+merge (same port canonically → the SNMP spelling; disagreement → the newer reading); NMS rows
+outlive their polls for the same 7 days. The wire format is unchanged, so stage [1] reads
+them like SNMP rows. Gauge: `netops_nms_iface_bridge_rows{source,outcome}`.
 
 **Trap attribution (tracker 387 PR 13c', 2026-11-10).** The Go receiver names the
 device by management address, then an interface address exactly one device reports

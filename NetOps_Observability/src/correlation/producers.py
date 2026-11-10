@@ -499,6 +499,16 @@ SHADOW_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.shadow}
 # honest: a benign row whose rate moves is a decision to revisit, not silence.
 KNOWN_BENIGN_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.known_benign}
 
+# Tracker 387, trap semantics (owner 2026-11-10): only an ESTABLISHED session going
+# down is a BGP session failure. A move below established (idle <-> active, an
+# OPEN that fails) is a neighbour that cannot connect: degraded, never a fault.
+# Same vocabulary as the Go receiver (collectors/trap_bgp.go); both sides pin it
+# to collectors/testdata/bgp_transition_classes.json.
+BGP_TRANSITION_CLASSES: frozenset[str] = frozenset(
+    {"session_lost", "session_up", "never_established", "progressing", "unknown"})
+# Classes a `bgp_adjacency_change` down may NOT be built from: counted, no signal.
+BGP_NOT_A_SESSION_FAILURE: dict[str, int] = {"never_established": 0, "progressing": 0}
+
 # The semantic-promotion rate is measured over a ROLLING WINDOW of the last
 # PROMOTION_WINDOW ADMITTED lines — "admitted" meaning a line that produced a
 # signal at all (typed or generic). Lines that classify as nothing are not in
@@ -557,6 +567,7 @@ def parser_stats() -> dict:
         "rule_hits": dict(RULE_HITS),
         "shadow_hits": dict(SHADOW_HITS),
         "known_benign_hits": dict(KNOWN_BENIGN_HITS),
+        "trap_bgp_not_session_failure": dict(BGP_NOT_A_SESSION_FAILURE),
         "generic_fallbacks": dict(GENERIC_FALLBACKS),
         "semantic_promotion_rate": round(semantic_promotion_rate(), 6),
         "promotion_window": PROMOTION_WINDOW,
@@ -575,6 +586,8 @@ def reset_parser_counters() -> None:
         SHADOW_HITS[k] = 0
     for k in KNOWN_BENIGN_HITS:
         KNOWN_BENIGN_HITS[k] = 0
+    for k in BGP_NOT_A_SESSION_FAILURE:
+        BGP_NOT_A_SESSION_FAILURE[k] = 0
     _PROMO_RING.clear()
     _PROMO_POS = 0
     _PROMO_TYPED = 0
@@ -1643,7 +1656,70 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         # classifies.
         _TRAP_LANE_FNS,
     )
-    return _run(_TRAP_PLAN, ctx, tenant, ts, observer, device, Source.TRAP)
+    sig = _run(_TRAP_PLAN, ctx, tenant, ts, observer, device, Source.TRAP)
+    if sig is None:
+        # The catalog's own gates (trap.bgp.cisco_bgp4, trap.sdwan.bgp_peer) may
+        # already have refused a never-established transition before any signal
+        # was built. Count it here too, so the counter keeps its meaning — every
+        # BGP transition of a session that was never established and emitted no
+        # signal — whichever layer refused it.
+        bgp = ev.get("bgp")
+        if isinstance(bgp, dict):
+            cls = str(bgp.get("transition_class") or "")
+            if cls in BGP_NOT_A_SESSION_FAILURE:
+                BGP_NOT_A_SESSION_FAILURE[cls] += 1
+        return None
+    if sig.kind == "bgp_adjacency_change" and sig.attrs.get("state") == "down":
+        cls = bgp_transition_class(ev, sig)
+        if cls in BGP_NOT_A_SESSION_FAILURE:
+            # Stage [1] normalize: the rule saw a "backward" notification, but the
+            # session was never established, so nothing was lost. The trap stays
+            # searchable with its typed meaning; no fault signal is built from it.
+            BGP_NOT_A_SESSION_FAILURE[cls] += 1
+            return None
+    return sig
+
+
+# FSM numbering of the RFC 4273 states as the cisco_bgp4 row extracts them.
+_FSM_NAME = {"1": "idle", "2": "connect", "3": "active", "4": "opensent",
+             "5": "openconfirm", "6": "established"}
+_FSM_RANK = {"idle": 1, "connect": 2, "active": 3, "opensent": 4, "openconfirm": 5, "established": 6}
+
+
+def classify_bgp_transition(prev: str, state: str) -> str:
+    """The receiver's classifier, the same table (trap_bgp.go classifyBGPTransition).
+    prev "" = the prior state is not evidenced."""
+    to = _FSM_RANK.get(state)
+    if to is None:
+        return ""
+    frm = _FSM_RANK.get(prev)
+    if to == 6:
+        return "unknown" if frm == 6 else "session_up"
+    if frm is None:
+        return "unknown"
+    if frm == 6:
+        return "session_lost"
+    if to > frm and to >= 4:
+        return "progressing"
+    return "never_established"
+
+
+def bgp_transition_class(ev: dict, sig: Signal) -> str:
+    """What a BGP trap's transition was, from the best evidence the record holds:
+    the trap's OWN prior and new state (the rule's fsm_from/fsm_to) first, then
+    the receiver's class (`bgp.transition_class`, which may rest on the same
+    transition's other reports or the peer's last state; tracker 387). "" when
+    neither says; the rule's own reading then stands, as before."""
+    frm = _FSM_NAME.get(str(sig.attrs.get("fsm_from") or ""))
+    to = _FSM_NAME.get(str(sig.attrs.get("fsm_to") or ""))
+    if frm and to:
+        return classify_bgp_transition(frm, to)
+    bgp = ev.get("bgp")
+    if isinstance(bgp, dict):
+        cls = str(bgp.get("transition_class") or "")
+        if cls in BGP_TRANSITION_CLASSES and cls != "unknown":
+            return cls
+    return ""
 
 
 # ---------------------------------------------------------------------------

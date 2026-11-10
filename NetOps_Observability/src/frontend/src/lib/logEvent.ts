@@ -116,7 +116,17 @@ export interface LogEvent {
    * `ge0/3 (4)` when named, `4` when only the index is known; `interfaceHow` says
    * how it was named. Empty when the trap is about no interface.
    */
-  trap?: { oid: string; uptime: string; interface: string; interfaceHow: string };
+  trap?: {
+    oid: string; uptime: string; interface: string; interfaceHow: string;
+    /**
+     * The BGP neighbour the receiver decoded (tracker 387, trap semantics), with how it
+     * was decoded, and the transition's class in operator words. Empty when the trap
+     * names no peer: the browser never derives one.
+     */
+    peer: string; peerHow: string; transition: string;
+    /** Every report of one BGP transition shares this id (the receiver groups them). */
+    transitionId: string;
+  };
   message: string;
   pipeline: Record<string, unknown>;
   raw: Record<string, any>;
@@ -410,6 +420,21 @@ function flowSamplingOf(src: Record<string, any>): LogField[] {
   return out;
 }
 
+/** How the receiver decoded a BGP peer, in plain words (bgp.peer_basis). */
+const TRAP_PEER_HOW: Record<string, string> = {
+  index: "from the table index",
+  index_vendor_form: "from the table index (vendor form)",
+  varbind: "named in the trap",
+};
+
+/** A BGP transition's class, as the receiver stated it (bgp.transition_class). */
+export const TRAP_TRANSITION_TEXT: Record<string, string> = {
+  session_lost: "Session lost",
+  session_up: "Session up",
+  never_established: "Never established",
+  progressing: "Progressing",
+};
+
 /** How the receiver named a trap's interface, in plain words. */
 const TRAP_INTERFACE_HOW: Record<string, string> = {
   varbind_name: "named in the trap",
@@ -508,7 +533,7 @@ export function toLogEvent(hit: LogHit): LogEvent {
 
   const severityRaw = pick(src, "native_severity", "severity_native", "event.severity", "syslog.severity", "level", "severity");
   const severity = PLACEHOLDER.test(severityRaw) ? null : severityRaw;
-  const lifecycle = pick(src, "event.lifecycle", "alarm.state", "event.action") || undefined;
+  const lifecycle = pick(src, "event.lifecycle", "alarm.state", "event.action", "lifecycle_state") || undefined;
 
   const chips: LogChip[] = [];
   const addChip = (c: LogChip | null) => {
@@ -527,19 +552,29 @@ export function toLogEvent(hit: LogHit): LogEvent {
 
   switch (signal) {
     case "trap": {
-      deviceLabel = known(src, "device.hostname", "device", "hostname", "host");
+      deviceLabel = known(src, "device_name", "device.hostname", "device", "hostname", "host");
       deviceAddress = known(src, "device.observed_address", "host", "source_address", "source_ip");
       const name = eventName || pick(src, "trap_name");
       const oid = pick(src, "trap_oid");
       const uptime = pick(src, "sys_uptime_human");
       varbinds = varbindsOf(src);
       const iface = trapInterfaceOf(src);
-      trap = { oid, uptime, interface: iface.label, interfaceHow: iface.how };
+      const peerBasis = pick(src, "bgp.peer_basis");
+      const peer = peerBasis in TRAP_PEER_HOW ? pick(src, "bgp.peer_address") : "";
+      const transition = TRAP_TRANSITION_TEXT[pick(src, "bgp.transition_class")] ?? "";
+      trap = {
+        oid, uptime, interface: iface.label, interfaceHow: iface.how,
+        peer, peerHow: peer ? TRAP_PEER_HOW[peerBasis] : "", transition,
+        transitionId: pick(src, "transition_id"),
+      };
       if (iface.label) addChip({ label: `Interface ${iface.label}`, stream: true });
+      if (peer) addChip({ label: `Peer ${peer}`, stream: true });
+      if (transition) addChip({ label: transition, stream: true });
       const undecoded = name.toLowerCase() === "enterprisespecific";
       if (undecoded) addChip({ label: NOT_DECODED, stream: true });
       else addChip(parserChip(parserStatus));
-      title = summary || eventMessage || name || oid || message;
+      // The receiver's sentence when a pack worded it; its summary otherwise.
+      title = pick(src, "title") || summary || eventMessage || name || oid || message;
       const named = (varbinds ?? [])
         .filter((v) => !v.numeric && v.label !== "sysUpTime")
         .slice(0, 4)
@@ -622,6 +657,57 @@ export function toLogEvent(hit: LogHit): LogEvent {
       ? deviceClause
       : undefined,
   };
+}
+
+// ── one BGP transition, however many traps reported it ──────────────────────
+
+/** What the stream shows for a transition's reports folded into one row. */
+export interface TransitionGroup {
+  id: string;
+  /** Reports loaded on this page; the receiver's own count may be higher. */
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  /** Row ids of every loaded report, in the order they arrived on the page. */
+  members: string[];
+}
+
+/**
+ * Folds the loaded reports of one BGP transition (same `transition_id`, tracker 387)
+ * into the row of the first one on the page, which keeps the others as its evidence.
+ * Read-time only (owner D2): nothing stored is merged, and a row with no transition id
+ * passes through untouched. Times are the records' own; the browser computes nothing
+ * it does not have.
+ */
+export function groupTransitions<T extends { id: string; ev: LogEvent }>(
+  lines: readonly T[],
+): Array<T & { group?: TransitionGroup }> {
+  const groups = new Map<string, TransitionGroup>();
+  for (const l of lines) {
+    const id = l.ev.trap?.transitionId;
+    if (!id) continue;
+    const g = groups.get(id);
+    const t = l.ev.time;
+    if (!g) {
+      groups.set(id, { id, count: 1, firstSeen: t, lastSeen: t, members: [l.id] });
+      continue;
+    }
+    g.count++;
+    g.members.push(l.id);
+    if (t && (!g.firstSeen || t < g.firstSeen)) g.firstSeen = t;
+    if (t && t > g.lastSeen) g.lastSeen = t;
+  }
+  const out: Array<T & { group?: TransitionGroup }> = [];
+  for (const l of lines) {
+    const id = l.ev.trap?.transitionId;
+    const g = id ? groups.get(id) : undefined;
+    if (!g || g.count < 2) {
+      out.push(l);
+      continue;
+    }
+    if (g.members[0] === l.id) out.push({ ...l, group: g });
+  }
+  return out;
 }
 
 // ── quick filters ────────────────────────────────────────────────────────────

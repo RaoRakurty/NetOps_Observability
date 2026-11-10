@@ -87,6 +87,36 @@ Rules a pack follows:
   a typed rule may decide what that opens (`test_every_pack_state_has_a_typed_row`).
   An unlisted notification keeps its `SEVERITY_HINT`, whatever the vendor calls it.
 
+### Semantics: peers, metrics, titles and guidance (tracker 387)
+
+The same packs carry what an operator reads first (`collectors/trap_enrich.go`):
+
+- `objects[*].attr`: the meaning an object carries, from a closed set (`peer_address`,
+  `peer_afi`, `peer_as`, `local_address`, `routing_instance`, `bgp_state`,
+  `bgp_prev_state`, `bgp_last_error`, `bgp_error_code`/`_subcode`,
+  `bgp_last_error_text`, `if_admin_status`, `if_oper_status`). It is read from a
+  varbind's value AND from the row index of any varbind whose table indexes by that
+  object: `gen_index.py` writes every column's INDEX clause (`index`, `index_oids`,
+  `index_syntax`, `index_implied`), so the receiver decodes a suffix with no table
+  named in code. A suffix that does not decode exactly is `peer_basis=unparsed`.
+- `objects[*].min`/`max`/`unit`: a typed number's legal range. Out of range or
+  unparsable → omitted, named in `metrics_invalid`.
+- `objects[*].extract`: a number the vendor states in its own text (today only
+  `threshold_reported_percent`, which is never presented as a configured threshold).
+- `derived`: a metric computed from observed ones (`complement`: base - of), with the
+  formula the UI shows.
+- `tables`: a vendor's documented deviation from its own MIB's index encoding
+  (`bare_address_index`), with its fidelity.
+- `title_templates` + `titles`: the wording per notification. `{field}` is required,
+  `[ ... ]` is dropped when a field inside is missing, `{field=value}` is a guard. A
+  notification with no wording keeps the old summary (`title_basis=fallback`).
+- `guidance`: per family (or `family.transition_class`), impact and next checks,
+  vendor-neutral, never a diagnosis; `expects` names the fields such an event should
+  carry, and the ones missing are listed in `enrichment.unknown`.
+
+Regenerate only the INDEX clauses, leaving every node otherwise untouched:
+`INDEX_ONLY=1 python3 gen_index.py`.
+
 A varbind always keeps its numeric OID and `raw_value`; everything else is added
 beside them. Fields on the event: `severity_native_text`, `severity_native_code`,
 `event_state` (`raise|clear|point`), `event_state_fidelity`, `mib_module`,

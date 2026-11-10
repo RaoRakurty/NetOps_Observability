@@ -165,7 +165,7 @@ func newScanRig(t *testing.T, kv *prefixMemKV) *scanRig {
 	t.Helper()
 	r := &scanRig{clock: &scanClock{t: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}, live: &liveSet{}, kv: kv,
 		cfg: &atomic.Pointer[ScanSettings]{}}
-	r.cfg.Store(&ScanSettings{Enabled: true, Ranges: []string{"10.66.0.0/29"}, Credentials: testCreds})
+	r.cfg.Store(ptrSettings(platformSettings(true, []string{"10.66.0.0/29"}, testCreds)))
 	r.src = NewSNMPSource(func() ScanSettings { return *r.cfg.Load() }, nil)
 	r.src.SetProbeForTest(r.live.probe)
 	r.src.SetClockForTest(r.clock.now)
@@ -300,7 +300,7 @@ func TestRestoredButTombstonedDeviceStaysSuppressed(t *testing.T) {
 func missesOf(s *SNMPSource, addr string) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, ok := s.found[addr]
+	e, ok := s.found[s.foundKey("", addr)]
 	if !ok {
 		return 0, false
 	}
@@ -328,8 +328,7 @@ func TestNonCompletedSweepsCountNoMisses(t *testing.T) {
 			}
 		},
 		"refused-range": func() {
-			c := base
-			c.Ranges = []string{"10.0.0.0/8"}
+			c := withPlatform(base, func(sc *ScanScope) { sc.Ranges = []string{"10.0.0.0/8"} })
 			r.cfg.Store(&c)
 			r.clock.advance(ScanCooldown + time.Second)
 			if _, err := r.src.Poll(context.Background()); err == nil {
@@ -337,8 +336,7 @@ func TestNonCompletedSweepsCountNoMisses(t *testing.T) {
 			}
 		},
 		"no-credentials": func() {
-			c := base
-			c.Credentials = nil
+			c := withPlatform(base, func(sc *ScanScope) { sc.Credentials = nil })
 			r.cfg.Store(&c)
 			r.clock.advance(ScanCooldown + time.Second)
 			if _, err := r.src.Poll(context.Background()); err == nil {
@@ -532,7 +530,7 @@ func TestUnreadableStoreRefusesWritesAndIsNotReady(t *testing.T) {
 	}
 	kv.failLoad = false
 	r.live.set(map[string]string{"10.66.0.9": "newcomer"}) // outside the seed
-	r.cfg.Store(&ScanSettings{Enabled: true, Ranges: []string{"10.66.0.8/29"}, Credentials: testCreds})
+	r.cfg.Store(ptrSettings(platformSettings(true, []string{"10.66.0.8/29"}, testCreds)))
 	r.clock.advance(ScanCooldown + time.Second)
 	a.PollOnceForTest(context.Background(), r.src)
 	if n, _, _ := r.store.reset(); n != 0 {

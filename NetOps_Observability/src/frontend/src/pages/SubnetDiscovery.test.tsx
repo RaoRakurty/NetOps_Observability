@@ -23,12 +23,16 @@ const discoveryConfig = vi.fn();
 const saveDiscoveryConfig = vi.fn();
 const refreshDiscovery = vi.fn();
 const listSnmpCreds = vi.fn();
+const discoveryScopes = vi.fn();
+const listTenants = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
     discoveryConfig: (...a: unknown[]) => discoveryConfig(...a),
     saveDiscoveryConfig: (...a: unknown[]) => saveDiscoveryConfig(...a),
     refreshDiscovery: (...a: unknown[]) => refreshDiscovery(...a),
     listSnmpCreds: (...a: unknown[]) => listSnmpCreds(...a),
+    discoveryScopes: (...a: unknown[]) => discoveryScopes(...a),
+    listTenants: (...a: unknown[]) => listTenants(...a),
   },
 }));
 
@@ -55,6 +59,8 @@ beforeEach(() => {
   }));
   refreshDiscovery.mockResolvedValue({ status: "scheduled" });
   listSnmpCreds.mockResolvedValue([{ id: "cred-core", name: "core-ro", version: "v2c" }]);
+  discoveryScopes.mockResolvedValue({ scopes: [] });
+  listTenants.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -77,6 +83,8 @@ describe("Subnet Discovery auth-audience gate", () => {
     render(<SubnetDiscovery />);
     expect(await screen.findByRole("heading", { name: "Network Scan", level: 2 })).toBeTruthy();
     expect(screen.queryByText(TENANT_COPY)).toBeNull();
+    // ... and, beneath it, the scans it runs for customers.
+    expect(await screen.findByRole("heading", { name: "Scans for a customer", level: 2 })).toBeTruthy();
   });
 
   it("shows the honest tenant explanation to a resolved tenant user", async () => {
@@ -88,6 +96,9 @@ describe("Subnet Discovery auth-audience gate", () => {
     expect(screen.queryByRole("heading", { name: "Network Scan", level: 2 })).toBeNull();
     // The tenant never triggers the requireCrossTenant config read.
     expect(discoveryConfig).not.toHaveBeenCalled();
+    // It does see its own scans, read-only (tenant-owned discovery scopes).
+    expect(await screen.findByRole("heading", { name: "Your scans", level: 2 })).toBeTruthy();
+    expect(listTenants).not.toHaveBeenCalled();
   });
 });
 

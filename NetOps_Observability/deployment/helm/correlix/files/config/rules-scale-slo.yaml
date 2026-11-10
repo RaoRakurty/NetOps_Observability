@@ -1338,6 +1338,14 @@ groups:
   #    `_total`): which rung of the receiver's ladder named the trap's device.
   #    basis="none" is a trap no rung could attribute: evidence filed under its
   #    source address, which RCA cannot bind to a device.
+  #  - netops_trap_semantics_events{family,title,peer} (vector-router counter,
+  #    tracker 387 trap semantics): whether a pack worded the trap and decoded
+  #    its BGP peer. A rise in title="fallback" is the alert below.
+  #  - netops_nms_iface_bridge_rows{source,outcome} (api gauge, tracker 387 PR
+  #    13a): interface bridge rows of the last cycle. source="nms",
+  #    outcome="bridged" is what the controllers' interface lists put into the
+  #    address and ifIndex maps; the other NMS outcomes say why a record did not
+  #    get there (device_unresolved, device_ambiguous, internal_vpn, ...).
   # ============================================================================
   - name: telemetry-names
     rules:
@@ -1347,7 +1355,7 @@ groups:
         labels: { severity: warning, tier: warning, layer: ingest }
         annotations:
           summary: "{{ $value }} flow exporter(s) have sent flows for 2 hours with no interface name"
-          description: "The flows views show these exporters' interfaces as bare ifIndex numbers. Names come from the device's IF-MIB walk (and, once tracker 387 PR 13a lands, from the controller). The usual cause is a device that answers no SNMP walk, or one whose flow source address is not its inventory address."
+          description: "The flows views show these exporters' interfaces as bare ifIndex numbers. Names come from the device's IF-MIB walk and from its controller's interface list. The usual cause is a device that answers no SNMP walk and whose controller does not report it under the same owner, or one whose flow source address is not its inventory address."
           runbook: "docs/runbooks/telemetry-names.md#flowexporterwithoutinterfacenames"
 
       - alert: TrapSourceUnattributedRatioHigh
@@ -1368,3 +1376,58 @@ groups:
           summary: "{{ $value | humanizePercentage }} of SNMP traps reach no device"
           description: "These traps are stored under their source address, and RCA cannot bind them to a device. A device trapping from an address that is neither its management address nor a unique interface address it reports, a community that does not match, or a device that answers no SNMP walk are the usual causes."
           runbook: "docs/runbooks/telemetry-names.md#trapsourceunattributedratiohigh"
+
+      - alert: TrapTitleFallbackRatioRising
+        # Tracker 387, trap semantics. netops_trap_semantics_events{family,title,peer}
+        # (vector-router counter, no `_total`): title="fallback" is a trap no pack
+        # wording could describe, shown to the operator as its MIB name. A RISE, not a
+        # level: an estate full of undecoded vendors has a high steady ratio and that is
+        # the coverage scorecard's business. Fires when the last 30 minutes' fallback
+        # share is above a quarter AND more than twice its share over the 6 hours
+        # before (or there is no history), with a volume floor of 20 traps.
+        expr: |
+          (
+            sum(increase(netops_trap_semantics_events{title="fallback"}[30m]))
+            /
+            sum(increase(netops_trap_semantics_events[30m]))
+          ) > 0.25
+          and
+          (
+            sum(increase(netops_trap_semantics_events{title="fallback"}[30m]))
+            /
+            sum(increase(netops_trap_semantics_events[30m]))
+          ) > 2 * (
+            (
+              sum(increase(netops_trap_semantics_events{title="fallback"}[6h] offset 30m))
+              /
+              sum(increase(netops_trap_semantics_events[6h] offset 30m))
+            ) or vector(0)
+          )
+          and
+          sum(increase(netops_trap_semantics_events[30m])) > 20
+        for: 30m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of SNMP traps have no readable title, up from their usual share"
+          description: "These traps are stored and searchable, but the Logs page shows them by MIB name instead of a sentence, and their peer, metrics and guidance may be missing. A new vendor or notification sending traps that no trap pack words, or a pack or MIB-index change that stopped matching, are the usual causes. The family label says which kind of trap."
+          runbook: "docs/runbooks/telemetry-names.md#traptitlefallbackratiorising"
+      - alert: NMSInterfaceBridgeEmpty
+        # The controller IS answering its per-device interface lists (the
+        # interface_realtime stream polled ok in the last 30 minutes), yet not
+        # one row of them reached the interface bridge. Both series are the
+        # api's own scrape (job="netops-api"): a dead api makes them absent and
+        # this rule silent, which is ScrapeTargetDown's page, not this one.
+        expr: |
+          (
+            sum(increase(netops_nms_poll_runs_total{job="netops-api",stream="interface_realtime",result="ok"}[30m])) > 0
+          )
+          and on()
+          (
+            sum(netops_nms_iface_bridge_rows{job="netops-api",source="nms",outcome="bridged"}) == 0
+          )
+        for: 30m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "the controller answers its interface lists, but none of them reached the interface bridge"
+          description: "Devices known only through their controller have no interface names on flows and traps, and a trap sent from one of their interface addresses names no device. Read netops_nms_iface_bridge_rows by outcome: device_unresolved means the controller's devices match no inventory device of the integration's owner (an integration owned by a tenant while the devices belong to the platform, or the reverse), device_ambiguous means a key matched more than one device."
+          runbook: "docs/runbooks/telemetry-names.md#nmsinterfacebridgeempty"

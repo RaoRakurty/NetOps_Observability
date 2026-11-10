@@ -31,6 +31,7 @@ const aiCommands = vi.fn();
 const features = vi.fn();
 const startIrisConversation = vi.fn();
 const correctIrisQuery = vi.fn();
+const testCopilotConfig = vi.fn();
 // A test can take over the streamed ask (N-E2) to drive progress events.
 type StreamFn = (q: string, ctx: unknown, conv: unknown, onEvent: (e: { type: string; tool?: string; outcome?: string }) => void) => Promise<AiAnswer>;
 const streamOverride: { fn?: StreamFn } = {};
@@ -54,6 +55,7 @@ vi.mock("../services/api", () => ({
     aiFeedback: () => Promise.resolve(),
     startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
+    testCopilotConfig: (...a: unknown[]) => testCopilotConfig(...a),
   },
 }));
 
@@ -119,7 +121,7 @@ async function ask(text: string) {
 
 beforeEach(() => {
   streamOverride.fn = undefined;
-  [aiAsk, copilotChat, copilotConfig, aiTenantConfig, aiTenants, aiCommands, features, startIrisConversation].forEach((m) => m.mockReset());
+  [aiAsk, copilotChat, copilotConfig, aiTenantConfig, aiTenants, aiCommands, features, startIrisConversation, testCopilotConfig].forEach((m) => m.mockReset());
   try { sessionStorage.clear(); } catch { /* no storage in this environment */ }
   startIrisConversation.mockRejectedValue(new Error("503")); // conversations off unless a test turns them on
   features.mockResolvedValue({ copilot: true });
@@ -493,5 +495,85 @@ describe("Iris — did-you-mean chips (hybrid NLU plan A7)", () => {
     await ask("cpu on edge-1");
     await screen.findByText(/peak 48%/);
     expect(screen.queryByTestId("iris-did-you-mean")).toBeNull();
+  });
+});
+
+describe("Iris — the per-answer footnote names who answered (tracker 337 C6)", () => {
+  const foot = () => document.querySelector(".op-provnote")?.textContent ?? "";
+  it("a model answer names the provider and model, based on the customer's data", async () => {
+    keyedOwner();
+    aiAsk.mockResolvedValue(citedAnswer({ provider: "gemini", model: "gemini-flash-latest" }));
+    await renderOpsis();
+    await ask("what is going on right now");
+    await waitFor(() => expect(foot()).toBe("Answered with Gemini gemini-flash-latest · based on your Correlix data"));
+  });
+  it("a deterministic answer says it came from Correlix data, with no AI model", async () => {
+    keyedOwner();
+    aiAsk.mockResolvedValue(citedAnswer({ provider: "none", evidence_only: true, provider_note: "Evidence-only mode: AI provider not configured." }));
+    await renderOpsis();
+    await ask("what is going on right now");
+    await waitFor(() => expect(foot()).toBe("Answered from your Correlix data (no AI model)"));
+  });
+  it("a timed-out narration says so instead", async () => {
+    keyedOwner();
+    aiAsk.mockResolvedValue(citedAnswer({ provider: "none", evidence_only: true, provider_note: "Model narrative timed out; showing the evidence answer." }));
+    await renderOpsis();
+    await ask("what is going on right now");
+    await waitFor(() => expect(foot()).toBe("Model narrative timed out; showing the evidence answer."));
+  });
+  it("there is no operator model picker: an operator sees the footnote, not settings", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({ provider: "gemini", model: "gemini-flash-latest" }));
+    await renderOpsis();
+    expect(screen.queryByTestId("connect-model-banner")).toBeNull();
+    fireEvent.click(screen.getByTitle("AI models"));
+    expect(screen.queryByText("Test connection")).toBeNull();
+    expect(document.querySelector(".op-modelinput")).toBeNull();
+  });
+});
+
+describe("Iris — connect a model (tracker 337 C2/C3/C5)", () => {
+  const recommended = {
+    gemini: { default: "gemini-flash-latest", fast: "gemini-flash-lite-latest", strong: "gemini-flash-latest" },
+    anthropic: { default: "claude-sonnet-4-6", fast: "claude-haiku-4-5", strong: "claude-opus-4-8" },
+    openai: { default: "gpt-4o-mini", fast: "gpt-4o-mini", strong: "gpt-4.1" },
+  };
+  function keylessOwner() {
+    copilotConfig.mockResolvedValue({ provider: "gemini", model: "", feature_enabled: true, key_present: false, key_source: "none",
+      providers: ["gemini", "anthropic", "openai"], recommended, budget: { daily_tokens_default: 1000000, workspaces_exhausted: 0 } });
+    aiTenants.mockResolvedValue({ tenants: [] });
+  }
+  it("shows the admin banner when no key is set, and it opens the settings", async () => {
+    keylessOwner();
+    await renderOpsis();
+    const banner = await screen.findByTestId("connect-model-banner");
+    expect(banner.textContent).toContain("Connect a model to unlock full language understanding.");
+    fireEvent.click(screen.getByRole("button", { name: "Connect a model" }));
+    expect(await screen.findByText("Test connection")).toBeTruthy();
+    expect(screen.getByRole("note").textContent).toMatch(/Free-tier Gemini keys/);
+  });
+  it("picking a provider fills the recommended models (C2)", async () => {
+    keylessOwner();
+    await renderOpsis();
+    fireEvent.click(await screen.findByTitle("AI models"));
+    fireEvent.click(await screen.findByText("Anthropic"));
+    const model = document.querySelector(".op-modelinput") as HTMLInputElement;
+    expect(model.value).toBe("claude-sonnet-4-6");
+    expect(screen.queryByRole("note")).toBeNull(); // the free-tier warning is Gemini's
+  });
+  it("Test connection sends the draft key and shows a plain verdict, never the provider's text", async () => {
+    keylessOwner();
+    testCopilotConfig.mockResolvedValue({ ok: false, provider: "gemini", model: "gemini-flash-lite-latest", latency_ms: 210, error_class: "auth" });
+    await renderOpsis();
+    fireEvent.click(await screen.findByTitle("AI models"));
+    fireEvent.change(screen.getByPlaceholderText("Paste API key"), { target: { value: "AIza-draft" } });
+    await act(async () => { fireEvent.click(screen.getByText("Test connection")); });
+    expect(testCopilotConfig).toHaveBeenCalledWith({ provider: "gemini", key: "AIza-draft", model: undefined });
+    expect((await screen.findByTestId("connection-test")).textContent).toContain("The provider rejected this key.");
+  });
+  it("tells an admin when workspaces have spent today's budget (D4)", async () => {
+    copilotConfig.mockResolvedValue({ provider: "gemini", model: "", feature_enabled: true, key_present: true, key_source: "stored",
+      budget: { daily_tokens_default: 1000000, workspaces_exhausted: 2 } });
+    await renderOpsis();
+    expect((await screen.findByTestId("connect-model-banner")).textContent).toBe("2 workspaces have spent today's AI budget.");
   });
 });

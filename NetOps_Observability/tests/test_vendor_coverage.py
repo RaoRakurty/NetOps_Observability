@@ -91,7 +91,7 @@ def test_a_vendor_with_nothing_reads_as_nothing():
     """The honest-empty input the page words as `Not covered yet`. If a future change
     gave these a count by accident they would read as coverage nobody earned."""
     rows = _rows()
-    for vendor in ("sonic", "extreme", "dell"):
+    for vendor in ("extreme", "dell"):
         for lane, stats in rows[vendor]["lanes"].items():
             assert stats["fixtures"] == 0, f"{vendor}/{lane}"
             assert stats["rules"] == {}, f"{vendor}/{lane}"

@@ -147,8 +147,9 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # · 59 with tracker 387's trap-pack block · 71 with its syslog pack (12 rows)
     # · 72 with PR 10's known_benign row for the SSH banner probe
     # · 93 with 387 §6a wave 1 (Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5)
-    # · 94 with the SD-WAN SNMP-agent poll-error known_benign row.
-    assert len(P.RULES) == 94
+    # · 94 with the SD-WAN SNMP-agent poll-error known_benign row
+    # · 95 with the SONiC orchagent link row (387 wave 2).
+    assert len(P.RULES) == 95
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

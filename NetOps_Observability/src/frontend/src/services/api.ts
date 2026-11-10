@@ -128,6 +128,64 @@ export type DiscoveryConfigEnvelope = {
   config_error?: string;
 };
 
+// Tenant-owned discovery scans (/api/discovery/scopes, 2026-11-10). The
+// platform administrator points a scan at a customer's network on its behalf,
+// with the customer's OWN SNMP profiles; every device it finds is the
+// customer's. Customers read their own scans; only the platform administrator
+// creates, changes or removes one.
+export type DiscoveryScopeFound = {
+  id: string;
+  name: string;
+  address: string;
+  vendor?: string;
+  credential_ref?: string;
+  stale?: boolean;
+  // The platform scan holds a copy of this address: its telemetry is
+  // attributed to nobody until one copy is removed.
+  also_found_by_platform: boolean;
+  // Other customers' devices at the same address (platform administrator only).
+  also_found_by_other_customers?: number;
+};
+export type DiscoveryScopeStatus = {
+  last_sweep?: string;
+  last_error?: string;
+  answering: number;
+  stale: number;
+};
+export type DiscoveryScope = {
+  id: string;
+  tenant_id: string;
+  tenant_name?: string;
+  name: string;
+  ranges: string[];
+  allow_non_private: boolean;
+  credential_refs: string[];
+  enabled: boolean;
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+  status?: DiscoveryScopeStatus;
+  found: DiscoveryScopeFound[];
+  found_total: number;
+};
+export type DiscoveryScopesEnvelope = {
+  scopes: DiscoveryScope[];
+  // The platform's own scan — platform administrator, All tenants / Provider view only.
+  platform?: { id: string; platform: true; ranges: string[]; enabled: boolean; status?: DiscoveryScopeStatus; found_total: number };
+  limits?: { max_hosts: number; per_customer: number; max_credential_refs: number };
+  scanner_view_stale?: boolean;
+};
+// The server refuses unknown fields, so this is the whole body. tenant_id is
+// honoured only for the platform administrator in the All tenants view.
+export type DiscoveryScopeInput = {
+  tenant_id?: string;
+  name: string;
+  ranges: string[];
+  allow_non_private: boolean;
+  credential_refs: string[];
+  enabled: boolean;
+};
+
 export type CollectorStatus = {
   kind?: string; // "protocol" | "discovery"
   name: string;
@@ -1919,6 +1977,35 @@ export type CopilotConfig = {
   key_source?: "env" | "stored" | "none";
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
+  // C2: what the setup step fills in when a provider is picked.
+  recommended?: Record<string, RecommendedModels>;
+  // C3: the latest "Test connection" verdict (in memory on the server).
+  last_test?: ProviderTestResult | null;
+  // D4: budget status — the platform view counts spent workspaces.
+  budget?: AIBudgetStatus;
+};
+
+export type RecommendedModels = { default: string; fast: string; strong: string };
+
+// The verdict of a connection test. Never the key, never the provider's text.
+export type ProviderTestResult = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  latency_ms: number;
+  error_class?: string;
+  http_status?: number;
+  tested_at?: string;
+};
+
+export type AIBudgetStatus = {
+  daily_tokens_default?: number;
+  // platform view
+  workspaces_exhausted?: number;
+  // workspace view
+  daily_tokens?: number;
+  used_today?: number;
+  exhausted?: boolean;
 };
 
 // Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
@@ -2212,6 +2299,8 @@ export type AITenantConfig = {
   platform_key_available: boolean;
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
+  recommended?: Record<string, RecommendedModels>;
+  budget?: AIBudgetStatus;
 };
 
 export type AITenantRow = {
@@ -5867,6 +5956,13 @@ export const api = {
   discoveryConfig: () => request<DiscoveryConfigEnvelope>("/api/discovery/config"),
   saveDiscoveryConfig: (c: DiscoveryConfigInput) =>
     request<DiscoveryConfigEnvelope>("/api/discovery/config", { method: "PUT", body: JSON.stringify(c) }),
+  discoveryScopes: () => request<DiscoveryScopesEnvelope>("/api/discovery/scopes"),
+  createDiscoveryScope: (s: DiscoveryScopeInput) =>
+    request<DiscoveryScope>("/api/discovery/scopes", { method: "POST", body: JSON.stringify(s) }),
+  updateDiscoveryScope: (id: string, s: DiscoveryScopeInput) =>
+    request<DiscoveryScope>(`/api/discovery/scopes/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(s) }),
+  deleteDiscoveryScope: (id: string) =>
+    request<void>(`/api/discovery/scopes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   alerts: () => request<Alert[]>("/api/alerts"),
   // Alert episodes: grouped firings + triage. Actor is always the signed-in
   // principal (stamped server-side); mute/snooze pause notifications only.
@@ -6611,6 +6707,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  // "Test connection" (C3): one bounded probe; a blank key tests the stored one.
+  // The key is used for this call only — never saved by the test.
+  testCopilotConfig: (body: { provider: string; key?: string; model?: string }) =>
+    request<ProviderTestResult>("/api/copilot/config/test", { method: "POST", body: JSON.stringify(body) }),
+  testAITenantConfig: (body: { provider?: string; key?: string; model?: string }) =>
+    request<ProviderTestResult>("/api/ai/tenant-config/test", { method: "POST", body: JSON.stringify(body) }),
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
@@ -8950,6 +9052,7 @@ export type SnmpGenResult = {
 export type SNMPCredential = {
   id?: string;
   name: string;
+  tenant_id?: string; // owning tenant; "" / absent = platform-owned
   version: string; // v1 | v2c | v3
   port?: number;
   timeout_ms?: number;
@@ -10509,6 +10612,8 @@ export type AiAnswer = {
   statements?: AiStatement[];
   disclaimers: string[];
   provider?: string;
+  // The model that answered (C6 footnote); absent for an evidence-only answer.
+  model?: string;
   // Universal Response-Quality fields (rendered as badges + sections).
   status?: string;
   confidence_label?: string;

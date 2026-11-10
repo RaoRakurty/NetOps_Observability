@@ -4,6 +4,7 @@
 import { type CSSProperties, ReactNode, Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isLocalAccount, userLabel } from "./lib/userLabel";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
+import { useConnectModelLanding, readFreshLoginFlag } from "./iris/useConnectModelLanding";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
@@ -190,6 +191,9 @@ export default function App() {
   // a stale/forbidden route is ignored (keeps the built-in home).
   const initialHash = useRef(location.hash);
   const appliedLanding = useRef(false);
+  // D5 (tracker 337): read BEFORE the landing effect below clears the flag.
+  const freshLoginAtLoad = useRef(readFreshLoginFlag(LANDING_PENDING_KEY));
+  useConnectModelLanding(freshLoginAtLoad.current, !loading && !!user, nav);
   useEffect(() => {
     if (appliedLanding.current || loading || !user) return;
     appliedLanding.current = true;

@@ -51,6 +51,17 @@ var routeIsolationLedger = map[string]string{
 	// request); the BYO key is write-only and sealed under the tenant DEK.
 	// Cross-tenant isolation proven by ai_tenant_config_test.go.
 	"/api/ai/tenant-config": "scoped",
+	// Tenant-owned discovery scans (2026-11-10): per-tenant DATA (FORCE-RLS
+	// discovery_scopes / per-tenant file records), read = infrastructure:read +
+	// principalTenant filter, write = platform owner only with the customer
+	// chosen explicitly (owner decision D1). discovery_scope_isolation_test.go.
+	"/api/discovery/scopes":  "scoped",
+	"/api/discovery/scopes/": "scoped",
+	// "Test connection" for the caller's OWN workspace key (tracker 337 C3):
+	// tenant from the principal; a blank key tests only that workspace's stored
+	// key, never the platform key. Proven by
+	// TestTenantConfigTestUsesOnlyTheCallersOwnKey (ai_provider_probe_test.go).
+	"/api/ai/tenant-config/test": "scoped",
 	// Static, identical-for-everyone reference: the slash-command registry + the
 	// caller's own answer feedback (audited). No tenant data crosses these.
 	"/api/ai/commands":             "selfScoped",
@@ -805,6 +816,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/platform/features":    "platform",
 	"/api/platform/restart":     "platform",
 	"/api/copilot/config":       "platform",
+	"/api/copilot/config/test":  "platform", // requirePlatformAdmin: tests the platform provider key (C3)
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
 	// poller across EVERY tenant's connectors, so it is platform plumbing by

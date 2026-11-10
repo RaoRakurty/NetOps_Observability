@@ -154,7 +154,7 @@ func (f serverPathFacts) Facts(ctx context.Context, tenant string, at time.Time)
 	// rank 3 — device interface registry (tenant-scoped through the device inventory).
 	fetchIfAddr := s.wanIfAddr
 	if fetchIfAddr == nil {
-		fetchIfAddr = collectors.FetchIfAddrMap
+		fetchIfAddr = fetchIfAddrMap
 	}
 	// DEGRADE AND SAY SO (tracker 307). rank 3 is one of several fact ranks, and
 	// the resolver is built to abstain on a rank it has nothing for — so losing

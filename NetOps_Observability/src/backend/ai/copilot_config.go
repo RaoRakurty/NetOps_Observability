@@ -61,6 +61,28 @@ type CopilotConfigStore struct {
 	path     string
 	sealer   SecretSealer
 	defaults func() (provider, model string) // env resolution stays with the caller
+	// lastTest is the most recent "Test connection" verdict (C3/C6 "last
+	// tested"). In memory only: a verdict is about the moment it was taken, and
+	// it never holds the key.
+	lastTest *ProbeResult
+}
+
+// SetLastTest records the latest connection-test verdict.
+func (s *CopilotConfigStore) SetLastTest(r ProbeResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTest = &r
+}
+
+// LastTest returns the latest connection-test verdict, or nil.
+func (s *CopilotConfigStore) LastTest() *ProbeResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastTest == nil {
+		return nil
+	}
+	r := *s.lastTest
+	return &r
 }
 
 // NewCopilotConfigStore opens the store; sealer nil = passthrough (dormant
@@ -135,7 +157,10 @@ func (s *CopilotConfigStore) Get() CopilotConfig {
 	if c.Provider == "" {
 		c.Provider = strings.ToLower(defProvider)
 	}
-	if c.Model == "" {
+	// The env model default applies ONLY to the provider it was configured
+	// for. COPILOT_MODEL names one provider's model; handing it to another
+	// provider (a Claude model id sent to Gemini) was the plan's C1 defect.
+	if c.Model == "" && strings.EqualFold(strings.TrimSpace(defProvider), c.Provider) {
 		c.Model = defModel
 	}
 	return c
@@ -144,8 +169,8 @@ func (s *CopilotConfigStore) Get() CopilotConfig {
 // Set normalizes and persists the assistant config (key sealed at rest).
 func (s *CopilotConfigStore) Set(c CopilotConfig) CopilotConfig {
 	c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
-	if c.Provider != "openai" && c.Provider != "gemini" {
-		c.Provider = "anthropic" // default; supported: anthropic | openai | gemini
+	if c.Provider != "openai" && c.Provider != "anthropic" {
+		c.Provider = "gemini" // default (owner D6, 2026-11-09); supported: anthropic | openai | gemini
 	}
 	c.Model = strings.TrimSpace(c.Model)
 	// The tier overrides are normalized but NOT defaulted: blank means "this tier

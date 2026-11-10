@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# SONiC, tracker 387 plan §6a, wave 2. Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# FRAMING. SONiC's rsyslog template puts the severity word where the program belongs; the
+# edge shape `severity_word_as_program` (standard.yaml) fixes it, so the program reaches
+# `appname` and the text after it the message (tests/test_syslog_edge_framing.py SONIC).
+# Most SONiC daemons (FRR bgpd, zebra, syncd) log free text with no stable identity, so
+# they stay unparsed and only the generic net reads their PRI. What has a stable shape is
+# below.
+#
+# EVIDENCE. No SONiC box and no sonic-vs on the lab yet (research §6). `doc_claimed`; the
+# one line is napalm-logs' (Apache-2.0) INTERFACE_DOWN / INTERFACE_UP sample.
+pack: sonic
+vendor: sonic
+description: SONiC switches (orchagent interface state).
+
+grammars:
+  # `:- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28`:
+  # orchagent pushing a port's operational state to the kernel host interface. It says
+  # the port went operationally down or up, not why.
+  - id: orchagent_oper_status
+    parser_id: sonic.v1
+    literal: 'setHostIntfsOperStatus: '
+    apps: [orchagent]
+    pattern: 'setHostIntfsOperStatus: Set operation status (?P<state>UP|DOWN) to host interface (?P<ifname>[A-Za-z][\w/.:-]{0,63})'
+    facility: orchagent
+    event_type: 'host_intf_oper_status_{state}'
+    summary: 'Interface {ifname} operationally {state}'
+    fields:
+      title: 'Interface {ifname} operationally {state} on {host}'
+      correlation_key: 'link:{device}:{ifname}'
+    fidelity: doc_claimed
+    source: 'napalm-logs INTERFACE_DOWN / INTERFACE_UP SONiC samples (Apache-2.0), https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_DOWN.html'
+
+rules:
+  # Below the open floor (D3): a SONiC port down reaches the engine as the link change it
+  # is, joins a component, and its trap or poll twin is what opens alone. No link_cause:
+  # the line does not say whether the port was shut.
+  - rule_id: syslog.sonic.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [sonic]
+    fidelity_status: doc_claimed
+    pattern_src: 'setHostIntfsOperStatus: Set operation status (?:UP|DOWN) to host interface '
+    guard:
+      all:
+        - {contains: [tag, 'ORCHAGENT']}
+        - {re: [msg, 'setHostIntfsOperStatus: Set operation status (?:UP|DOWN) to host interface ', '']}
+    severity: warn
+    extract:
+      ifname: {re: [[msg, 'to host interface ([A-Za-z][\w/.:-]{0,63})', 1, '']]}
+      state:
+        case:
+          - {when: {re: [msg, 'operation status DOWN ', '']}, value: down}
+          - {when: {always: true}, value: up}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {var: tag}
+
+guidance:
+  - event_types: [host_intf_oper_status_down]
+    impact:
+      - A front-panel port went operationally down; traffic and adjacencies over it stop or move.
+    next_checks:
+      - Run show interfaces status and show interfaces transceiver presence for the port.
+      - Check whether the port was shut in config_db and the far end of the link.
+
+wanted:
+  - symptom: BGP, BFD and zebra events
+    kind: bgp_adjacency_change
+    why_absent: FRR logs free text with no stable identity; no citable SONiC sample beyond the interface line
+  - symptom: SONiC SNMP traps
+    why_absent: upstream sonic-snmpagent ships no traps (unmerged PR #366, research §3)
+
+fixtures:
+  - name: an orchagent port down is a below-floor link change with no cause
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_DOWN.html (Apache-2.0)'
+    hostname: ss12.00.lab
+    appname: orchagent
+    severity: notice
+    message: ':- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28'
+    expect:
+      vendor: sonic
+      vendor_source: format
+      parser_id: sonic.v1
+      parser_status: parsed
+      facility: orchagent
+      event_type: host_intf_oper_status_down
+      summary: Interface Ethernet28 operationally DOWN
+      title: Interface Ethernet28 operationally DOWN on ss12.00.lab
+      correlation_key: 'link:ss12.00.lab:Ethernet28'
+    signal: {rule_id: syslog.sonic.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'ss12.00.lab:Ethernet28'}
+
+  - name: an orchagent port up
+    fidelity: doc_claimed
+    source: 'https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_UP.html (Apache-2.0)'
+    hostname: ss12.00.lab
+    appname: orchagent
+    severity: notice
+    message: ':- setHostIntfsOperStatus: Set operation status UP to host interface Ethernet28'
+    expect:
+      parser_status: parsed
+      event_type: host_intf_oper_status_up
+    signal: {rule_id: syslog.sonic.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'ss12.00.lab:Ethernet28'}
+
+  - name: the same words from another program are not this pack's
+    fidelity: doc_claimed
+    source: 'negative case: the program gate'
+    hostname: ss12.00.lab
+    appname: otherd
+    severity: notice
+    message: ':- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28'
+    expect: {}
+    signal: null

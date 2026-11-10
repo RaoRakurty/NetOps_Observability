@@ -1,8 +1,15 @@
 {
   "schema": 1,
   "pack": "standard",
-  "source": "IETF notifications whose identity states the transition: RFC 2863 IF-MIB, RFC 4273 BGP4-MIB, RFC 7331 BFD-STD-MIB. Every vendor at once.",
-  "objects": {},
+  "source": "IETF notifications whose identity states the transition: RFC 2863 IF-MIB, RFC 4273 BGP4-MIB, RFC 7331 BFD-STD-MIB, RFC 3418 SNMPv2-MIB. Every vendor at once. Title wording and guidance are vendor-neutral (tracker 387, trap semantics); guidance is what such an event usually means, never a diagnosis.",
+  "objects": {
+    "1.3.6.1.2.1.15.3.1.7": {"name": "bgpPeerRemoteAddr", "attr": "peer_address"},
+    "1.3.6.1.2.1.15.3.1.2": {"name": "bgpPeerState", "attr": "bgp_state"},
+    "1.3.6.1.2.1.15.3.1.14": {"name": "bgpPeerLastError", "attr": "bgp_last_error"},
+    "1.3.6.1.2.1.15.3.1.9": {"name": "bgpPeerRemoteAs", "attr": "peer_as"},
+    "1.3.6.1.2.1.2.2.1.7": {"name": "ifAdminStatus", "attr": "if_admin_status"},
+    "1.3.6.1.2.1.2.2.1.8": {"name": "ifOperStatus", "attr": "if_oper_status"}
+  },
   "notifications": {
     "1.3.6.1.6.3.1.1.5.3": {"name": "linkDown", "fidelity": "doc_claimed", "event_state": "raise"},
     "1.3.6.1.6.3.1.1.5.4": {"name": "linkUp", "fidelity": "doc_claimed", "event_state": "clear"},
@@ -21,6 +28,164 @@
       "family": "bfd",
       "fidelity": "doc_claimed",
       "event_state": "clear"
+    }
+  },
+  "title_templates": {
+    "bgp_transition": [
+      "BGP neighbour {peer}[ (AS {peer_as})][ in VRF {vrf}] on {device} went from {prev_state} to {state}[ ({transition})][ — last error: {last_error}]",
+      "BGP neighbour {peer}[ (AS {peer_as})][ in VRF {vrf}] on {device} moved to {state}[ ({transition})][ — last error: {last_error}]",
+      "A BGP neighbour on {device} moved to {state}[ ({transition})]"
+    ],
+    "link_state": [
+      "Interface {interface} on {device} went {oper}[ (admin {admin})]",
+      "An interface on {device} went {oper}[ (admin {admin})]"
+    ],
+    "link_down": [
+      "Interface {interface} on {device} went {oper}[ (admin {admin})]",
+      "Interface {interface} on {device} went down[ (admin {admin})]",
+      "An interface on {device} went down[ (admin {admin})]"
+    ],
+    "link_up": [
+      "Interface {interface} on {device} went {oper}[ (admin {admin})]",
+      "Interface {interface} on {device} came up",
+      "An interface on {device} came up"
+    ],
+    "restart_cold": ["{device} restarted (cold start)"],
+    "restart_warm": ["{device} restarted (warm start)"],
+    "snmp_auth_failure": ["{device} reported an SNMP authentication failure"],
+    "bfd_down": ["BFD session on {device} went down"],
+    "bfd_up": ["BFD session on {device} came up"]
+  },
+  "titles": {
+    "1.3.6.1.6.3.1.1.5.1": {"name": "coldStart", "template": "restart_cold"},
+    "1.3.6.1.6.3.1.1.5.2": {"name": "warmStart", "template": "restart_warm"},
+    "1.3.6.1.6.3.1.1.5.3": {"name": "linkDown", "template": "link_down"},
+    "1.3.6.1.6.3.1.1.5.4": {"name": "linkUp", "template": "link_up"},
+    "1.3.6.1.6.3.1.1.5.5": {"name": "authenticationFailure", "template": "snmp_auth_failure"},
+    "1.3.6.1.2.1.15.7.1": {"name": "bgpEstablished", "template": "bgp_transition"},
+    "1.3.6.1.2.1.15.7.2": {"name": "bgpBackwardTransition", "template": "bgp_transition"},
+    "1.3.6.1.2.1.15.0.1": {"name": "bgpEstablished", "template": "bgp_transition"},
+    "1.3.6.1.2.1.15.0.2": {"name": "bgpBackwardTransition", "template": "bgp_transition"},
+    "1.3.6.1.2.1.222.0.2": {"name": "bfdSessDown", "template": "bfd_down"},
+    "1.3.6.1.2.1.222.0.1": {"name": "bfdSessUp", "template": "bfd_up"}
+  },
+  "guidance": {
+    "cpu": {
+      "impact": [
+        "Sustained high CPU can delay control-plane work done in software: routing updates, BFD and tunnel keepalives, management sessions.",
+        "Polling and management access to the device may slow down or time out while it lasts."
+      ],
+      "next_checks": [
+        "Check whether CPU stays high in the device's own polled CPU metrics, not only in this trap.",
+        "List the busiest processes on the device.",
+        "Look for control-plane churn at the same time on this device: routing, BFD or tunnel flaps, or a burst of polling.",
+        "Check for a recent configuration or software change on the device."
+      ],
+      "expects": ["metrics.cpu_user_percent", "metrics.cpu_system_percent", "metrics.cpu_idle_percent", "threshold_reported_percent", "device_event_time"]
+    },
+    "memory": {
+      "impact": [
+        "Low free memory can make the device refuse new sessions or routes, or restart processes.",
+        "Sustained pressure often precedes a process or device restart."
+      ],
+      "next_checks": [
+        "Check the trend of free memory in the device's polled metrics.",
+        "List the processes using the most memory on the device.",
+        "Check route and session table sizes against the platform's limits.",
+        "Check for a recent configuration or software change on the device."
+      ],
+      "expects": ["metrics.free_mb", "metrics.total_mb", "device_event_time"]
+    },
+    "bgp.session_lost": {
+      "impact": [
+        "Routes learned from this neighbour are withdrawn: traffic that used them reroutes, or is dropped if there is no other path.",
+        "Services reachable only through this neighbour are affected until the session is re-established."
+      ],
+      "next_checks": [
+        "Read the last error this event carries (hold timer expired, cease, notification) and the device's BGP log.",
+        "Check reachability to the neighbour address and the link toward it.",
+        "Check whether BFD, the interface or the tunnel under the session went down at the same time.",
+        "Check the neighbour for a reset or configuration change."
+      ],
+      "expects": ["bgp.peer_address", "bgp.prev_state", "bgp.peer_as"]
+    },
+    "bgp.never_established": {
+      "impact": [
+        "This session did not reach Established in the transitions observed, so it carried no routes before or after: this event withdrew nothing.",
+        "If the neighbour is expected to be up, the routes or the redundancy it should provide are missing."
+      ],
+      "next_checks": [
+        "Confirm the neighbour is configured on the peer side, with matching AS numbers and addresses.",
+        "Check TCP port 179 reachability between the session addresses: routing, access lists, firewalls.",
+        "Check session authentication and source-address settings on both sides.",
+        "If the neighbour is intentionally unused, shut it down or remove it so it stops retrying."
+      ],
+      "expects": ["bgp.peer_address", "bgp.prev_state"]
+    },
+    "bgp.session_up": {
+      "impact": [
+        "The session is Established again and routes from this neighbour are being relearned."
+      ],
+      "next_checks": [
+        "Check how long the session was down and whether it flaps repeatedly.",
+        "Confirm the expected prefixes are received again."
+      ],
+      "expects": ["bgp.peer_address"]
+    },
+    "bgp": {
+      "impact": [
+        "A BGP session changed state. Whether routes were affected depends on whether it was Established before, which this event does not show."
+      ],
+      "next_checks": [
+        "Check the session's current state and uptime on the device.",
+        "Look for the same neighbour's other reports of this transition, which may state the prior state."
+      ],
+      "expects": ["bgp.peer_address", "bgp.prev_state"]
+    },
+    "link_state": {
+      "impact": [
+        "Traffic over this interface stops; paths through it reroute if a redundant path exists.",
+        "An interface shut down by an operator is down by intent: check the admin status before treating it as a fault."
+      ],
+      "next_checks": [
+        "Check the admin status: was the port shut down on purpose?",
+        "Check the physical layer: optics, cabling, the far-end port.",
+        "Check the interface's error counters before the event.",
+        "Check the routing, tunnel or BFD changes that followed."
+      ],
+      "expects": ["interface", "if_oper_status"]
+    },
+    "bfd": {
+      "impact": [
+        "The path this BFD session watches is considered down; routing or tunnels that rely on it may fail over."
+      ],
+      "next_checks": [
+        "Check the underlay path between the two endpoints: loss, latency, interface state.",
+        "Check whether other sessions over the same link or transport went down at the same time.",
+        "Check for BFD timer or configuration changes on either end."
+      ],
+      "expects": ["device_event_time"]
+    },
+    "control_connection": {
+      "impact": [
+        "The device lost a control connection to its controller: policy and route updates may stop reaching it, while forwarding continues on the last state it learned."
+      ],
+      "next_checks": [
+        "Check transport reachability from the device to its controllers.",
+        "Check the device's certificates and clock synchronisation.",
+        "Check whether other devices lost their control connections at the same time, which points at the controller side."
+      ],
+      "expects": ["device_event_time"]
+    },
+    "omp": {
+      "impact": [
+        "The overlay routing session changed state: routes and TLOCs learned through it may be withdrawn."
+      ],
+      "next_checks": [
+        "Check the device's control connections, which the overlay routing session runs over.",
+        "Check whether other devices' overlay sessions changed at the same time."
+      ],
+      "expects": ["device_event_time"]
     }
   }
 }

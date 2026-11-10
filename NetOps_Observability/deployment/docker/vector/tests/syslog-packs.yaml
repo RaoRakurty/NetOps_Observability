@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 99
+# cases: 112
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -21,6 +21,7 @@ tests:
           appname: "ifmgr"
           severity: "err"
           message: "%PKT_INFRA-LINK-3-UPDOWN : Interface TenGigE0/2/0/4, changed state to Down"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -44,6 +45,7 @@ tests:
           appname: "bgp"
           severity: "notice"
           message: "%ROUTING-BGP-5-MAXPFX : No. of IPv4 Unicast prefixes received from 1.2.3.4 has reached 94106, max 125000"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -63,6 +65,7 @@ tests:
           appname: "envmon"
           severity: "err"
           message: "%PLATFORM-ENVMON-3-EXAMPLE : an illustrative error text"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -81,13 +84,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%LINK-5-CHANGED: Interface FastEthernet0/0, changed state to administratively down"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS administrative down carries the admin cause"
     inputs:
       - insert_at: syslog_normalized
@@ -97,13 +101,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%ETHPORT-5-IF_DOWN_ADMIN_DOWN: Interface Ethernet1/1 is down (Administratively down)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS link failure carries the fault cause"
     inputs:
       - insert_at: syslog_normalized
@@ -113,13 +118,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%ETHPORT-5-IF_DOWN_LINK_FAILURE: Interface Ethernet1/5 is down (Link failure)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS port-channel with no members is down with an unknown cause"
     inputs:
       - insert_at: syslog_normalized
@@ -129,13 +135,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%ETHPORT-5-IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN: Interface port-channel100 is down (No operational members)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS interface up"
     inputs:
       - insert_at: syslog_normalized
@@ -145,13 +152,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%ETHPORT-5-IF_UP: Interface Ethernet1/5 is up in mode access"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS speed change stays a log"
     inputs:
       - insert_at: syslog_normalized
@@ -161,13 +169,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%ETHPORT-5-SPEED: Interface Ethernet1/5, operational speed changed to 10 Gbps"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS BFD session down is a below-floor BFD flap"
     inputs:
       - insert_at: syslog_normalized
@@ -177,13 +186,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%BFD-5-SESSION_STATE_DOWN: BFD session 1090519041 to neighbor 192.0.2.6 on interface Ethernet1/5 has gone down. Reason: Control Detection Time Expired."
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: the three-part IOS form is not the XR grammar"
     inputs:
       - insert_at: syslog_normalized
@@ -193,13 +203,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "%SYS-5-CONFIG_I: Configured from console by admin on vty0"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: an error line parses and lifts severity"
     inputs:
       - insert_at: syslog_normalized
@@ -209,6 +220,7 @@ tests:
           appname: "FTMD"
           severity: "notice"
           message: "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: User ifname = ge0/0; kernel if_name= ge0_0; encap = 1"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -234,6 +246,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-SYSMGR-4-WARN-200071: System cpu usage is above 60%"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -254,6 +267,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-SYSMGR-5-NTCE-200072: System cpu usage is below 75%"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -272,6 +286,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-SYSMGR-2-CRIT-200069: System cpu usage is above 90% (critically high)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -291,6 +306,7 @@ tests:
           appname: "VDAEMON"
           severity: "notice"
           message: "%Viptela-vEdge-1-VDAEMON_0-2-CRIT-999999: synthetic shape of an unknown critical id"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -309,6 +325,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:critical host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 90% (critically high)\" cpu-user-percentage:\"9.18\" cpu-system-percentage:\"90.82\" cpu-idle-percentage:\"0.00\""
+          timestamp: "2026-11-10T09:34:40Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -319,6 +336,11 @@ tests:
               assert_eq!(.event_type, "cpu-usage", "wrong event_type")
               assert_eq!(.severity_native_text, "critical", "wrong severity_native_text")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.title, "System cpu usage is above 90% (critically high) on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "cpu:vEdge-1", "wrong correlation_key")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_idle_percent": {"basis": "observed", "value": 0.0}, "cpu_system_percent": {"basis": "observed", "value": 90.82}, "cpu_user_percent": {"basis": "observed", "value": 9.18}}, "wrong metrics")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "dump_id"], "fields_guidance": ["guidance"], "fields_observed": ["facility", "event_type", "summary", "severity_native_text", "metrics.cpu_user_percent", "metrics.cpu_system_percent", "metrics.cpu_idle_percent"], "unknown": []}, "wrong enrichment")
   - name: "cisco_sdwan: a controller notification, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -328,6 +350,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-Manager01-sysmgrd-6-INFO-1400002: Notification: system-login-change"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -345,6 +368,7 @@ tests:
           appname: "FTMD"
           severity: "notice"
           message: "%Cisco-SDWAN-vm5-FTMD-4-WARN-1000009: BFD-session synthetic body"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -366,6 +390,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:major host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage is above 75%\" cpu-user-percentage:\"2.11\" cpu-system-percentage:\"85.26\" cpu-idle-percentage:\"12.63\""
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -383,6 +408,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-SYSMGR-4-WARN-200070: System cpu usage is above 75%"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -399,6 +425,7 @@ tests:
           appname: "SYSMGR"
           severity: "notice"
           message: "%Viptela-vEdge-1-sysmgrd-6-INFO-1400002: Notification: cpu-usage severity-level:minor host-name:\"vEdge-1\" system-ip:192.0.2.1 warning:\"System cpu usage back to normal level\" cpu-user-percentage:\"8.29\" cpu-system-percentage:\"35.75\" cpu-idle-percentage:\"55.96\""
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -416,6 +443,7 @@ tests:
           appname: "VTRACKER"
           severity: "notice"
           message: "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -423,7 +451,11 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_failed", "wrong event_type")
+              assert_eq!(.title, "DNS lookup failed for vbond.example.net on vEdge-1 (Timeout while contacting DNS servers)", "wrong title")
+              assert_eq!(.correlation_key, "dns:vEdge-1:vbond.example.net", "wrong correlation_key")
+              assert_eq!(.guidance, {"basis": "pack_guidance", "impact": ["The edge cannot resolve its vBond orchestrator, so a control connection that drops cannot be rebuilt.", "Existing control and data-plane sessions keep running until they need the orchestrator again."], "next_checks": ["Check the DNS servers configured in VPN 0 and that the transport interface can reach them.", "Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).", "Run show control connections and show control local-properties to see whether the edge is still attached."]}, "wrong guidance")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key"], "fields_guidance": ["guidance"], "fields_observed": ["event_type", "summary"], "unknown": []}, "wrong enrichment")
   - name: "cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_normalized
@@ -433,6 +465,7 @@ tests:
           appname: "VDAEMON"
           severity: "notice"
           message: "dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, reason: Timeout while contacting DNS servers"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -440,7 +473,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_failed", "wrong event_type")
   - name: "cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_normalized
@@ -450,6 +483,7 @@ tests:
           appname: "VTRACKER"
           severity: "notice"
           message: "monitor_dns_callback[170]: DNS resolution failed for vbond.example.net via "
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -457,7 +491,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_resolution_failed", "wrong event_type")
   - name: "cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -467,6 +501,7 @@ tests:
           appname: "VTRACKER"
           severity: "notice"
           message: "dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -474,7 +509,8 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "dnsclient_ares_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_lookup_succeeded", "wrong event_type")
+              assert_eq!(.title, "DNS lookup succeeded for vbond.example.net on vEdge-1", "wrong title")
   - name: "cisco_sdwan: the resolver success emits nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -484,6 +520,7 @@ tests:
           appname: "VTRACKER"
           severity: "notice"
           message: "monitor_dns_callback[190]: DNS resolution successful for vbond.example.net via "
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -491,7 +528,7 @@ tests:
             source: |
               assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
-              assert_eq!(.event_type, "monitor_dns_callback", "wrong event_type")
+              assert_eq!(.event_type, "dns_resolution_successful", "wrong event_type")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -501,13 +538,14 @@ tests:
           appname: "resolved"
           severity: "notice"
           message: "DNS lookup failed for host.example.net via none"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -517,6 +555,7 @@ tests:
           appname: "VDAEMON"
           severity: "notice"
           message: "%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:down peer-type:vsmart peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -534,6 +573,7 @@ tests:
           appname: "VDAEMON"
           severity: "notice"
           message: "%Viptela-vEdge-1-VDAEMON_0-5-NTCE-1000001: control-connection-state-change new-state:up peer-type:vmanage peer-system-ip:192.0.2.2 public-ip:192.0.2.3 public-port:12345 domain-id:1 site-id:1005"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -550,6 +590,7 @@ tests:
           appname: "FTMD"
           severity: "notice"
           message: "%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:\"vEdge-1\" system-ip:192.0.2.1 local-color:\"mpls\" remote-color:\"biz-internet\" new-state:down deleted:\"false\" flap-reason:timeout"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -568,6 +609,7 @@ tests:
           appname: "FTMD"
           severity: "notice"
           message: "%Viptela-vEdge-1-ftmd-6-INFO-1400002: Notification: bfd-state-change severity-level:major host-name:\"vEdge-1\" system-ip:192.0.2.1 local-color:\"mpls\" remote-color:\"biz-internet\" new-state:up deleted:\"false\" flap-reason:na"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -584,6 +626,7 @@ tests:
           appname: "FTMD"
           severity: "notice"
           message: "%Viptela-vEdge-1-FTMD-3-ERRO-1000003: forwarding table programming failed"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -601,6 +644,7 @@ tests:
           appname: "unknown"
           severity: "err"
           message: "devel-snmpa internal error: table get-next: interfaceTable (error: non_increasing_index)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -623,6 +667,7 @@ tests:
           appname: "unknown"
           severity: "err"
           message: "devel-snmpa {confd_snmpa_instr,table_func,[{table,interfaceTable},'http://viptela.com/oper-vpn',[int..."
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -643,6 +688,7 @@ tests:
           appname: "unknown"
           severity: "err"
           message: "snmp get-response reqid=1234567 192.0.2.1:50123 error-status=genErr ix=1 (Unsigned32 interfaceVpnId.3.)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -663,6 +709,7 @@ tests:
           appname: "unknown"
           severity: "err"
           message: "devel-snmpa internal error: table get-next: bfdSessionsTable (error: non_increasing_index)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -671,7 +718,7 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "snmp_agent_table_error", "wrong event_type")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
-  - name: "cisco_sdwan: a process-table header is a diagnostic dump, not an alarm"
+  - name: "cisco_sdwan: a process-table header is the snapshot's representative row"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -680,6 +727,7 @@ tests:
           appname: "SYSMGR"
           severity: "info"
           message: "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND"
+          timestamp: "2026-11-10T09:34:41Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -692,7 +740,9 @@ tests:
               assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
               assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
-  - name: "cisco_sdwan: a process-table row keeps its command and load, digits masked"
+              assert_eq!(.title, "Process snapshot on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+  - name: "cisco_sdwan: process snapshot row 1: ftmd"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -700,7 +750,8 @@ tests:
           hostname: "vEdge-1"
           appname: "SYSMGR"
           severity: "info"
-          message: "root      1234  2.5  1.2 123456 23456 ?      Sl   Oct09   1:23 /usr/sbin/ftmd -f"
+          message: "root 3180 0.7 5.3 513260 47560 ? Sl 09:34 0:08 /usr/sbin/ftmd -f"
+          timestamp: "2026-11-10T09:34:42Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -709,10 +760,246 @@ tests:
               assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "process_table", "wrong event_type")
-              assert_eq!(.summary, "/usr/sbin/ftmd -f cpu 2.5% mem 1.2%", "wrong summary")
+              assert_eq!(.summary, "data-plane forwarding (FTM) (ftmd) using 0.7% CPU, 5.3% memory", "wrong summary")
               assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
-  - name: "cisco_sdwan: a kernel-thread row is the same dump"
+              assert_eq!(.title, "data-plane forwarding (FTM) (ftmd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.7}, "cputime": {"basis": "observed", "value": "0:08"}, "mem_percent": {"basis": "observed", "value": 5.3}, "process": {"basis": "observed", "value": "ftmd"}, "rss_kb": {"basis": "observed", "value": 47560.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "Sl"}, "vsz_kb": {"basis": "observed", "value": 513260.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 2: vdaemon"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       2934  0.3  2.1 301440 18936 ?        Sl   09:34   0:03 /usr/sbin/vdaemon -f"
+          timestamp: "2026-11-10T09:34:43Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "control-plane connections (vSmart/vBond) (vdaemon) using 0.3% CPU, 2.1% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "control-plane connections (vSmart/vBond) (vdaemon) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.3}, "cputime": {"basis": "observed", "value": "0:03"}, "mem_percent": {"basis": "observed", "value": 2.1}, "process": {"basis": "observed", "value": "vdaemon"}, "rss_kb": {"basis": "observed", "value": 18936.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "Sl"}, "vsz_kb": {"basis": "observed", "value": 301440.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 3: fpmd"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       3077  0.1  1.4 270104 12544 ?        Sl   09:34   0:01 /usr/sbin/fpmd -f"
+          timestamp: "2026-11-10T09:34:44Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "forwarding policy (fpmd) using 0.1% CPU, 1.4% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "forwarding policy (fpmd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.1}, "cputime": {"basis": "observed", "value": "0:01"}, "mem_percent": {"basis": "observed", "value": 1.4}, "process": {"basis": "observed", "value": "fpmd"}, "rss_kb": {"basis": "observed", "value": 12544.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "Sl"}, "vsz_kb": {"basis": "observed", "value": 270104.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 4: confd"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       2611  1.2  9.8 845212 87644 ?        Ssl  09:33   0:15 /usr/sbin/confd --foreground"
+          timestamp: "2026-11-10T09:34:45Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "configuration/management (confd) (confd) using 1.2% CPU, 9.8% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "configuration/management (confd) (confd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 1.2}, "cputime": {"basis": "observed", "value": "0:15"}, "mem_percent": {"basis": "observed", "value": 9.8}, "process": {"basis": "observed", "value": "confd"}, "rss_kb": {"basis": "observed", "value": 87644.0}, "start": {"basis": "observed", "value": "09:33"}, "state": {"basis": "observed", "value": "Ssl"}, "vsz_kb": {"basis": "observed", "value": 845212.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 5: iked"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       3301  0.0  0.9 160220  8312 ?        Sl   09:34   0:00 /usr/sbin/iked -f"
+          timestamp: "2026-11-10T09:34:46Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "IPsec key exchange (iked) using 0.0% CPU, 0.9% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "IPsec key exchange (iked) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.0}, "cputime": {"basis": "observed", "value": "0:00"}, "mem_percent": {"basis": "observed", "value": 0.9}, "process": {"basis": "observed", "value": "iked"}, "rss_kb": {"basis": "observed", "value": 8312.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "Sl"}, "vsz_kb": {"basis": "observed", "value": 160220.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 6: ompd"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       2990  0.2  1.7 288876 15280 ?        Sl   09:34   0:02 /usr/sbin/ompd -f"
+          timestamp: "2026-11-10T09:34:47Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "OMP routing (ompd) using 0.2% CPU, 1.7% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "OMP routing (ompd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.2}, "cputime": {"basis": "observed", "value": "0:02"}, "mem_percent": {"basis": "observed", "value": 1.7}, "process": {"basis": "observed", "value": "ompd"}, "rss_kb": {"basis": "observed", "value": 15280.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "Sl"}, "vsz_kb": {"basis": "observed", "value": 288876.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 7: snmpd"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       2500  0.0  0.6  45120  5432 ?        Ss   09:33   0:00 /usr/sbin/snmpd -f"
+          timestamp: "2026-11-10T09:34:48Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "SNMP agent (snmpd) using 0.0% CPU, 0.6% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "SNMP agent (snmpd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.0}, "cputime": {"basis": "observed", "value": "0:00"}, "mem_percent": {"basis": "observed", "value": 0.6}, "process": {"basis": "observed", "value": "snmpd"}, "rss_kb": {"basis": "observed", "value": 5432.0}, "start": {"basis": "observed", "value": "09:33"}, "state": {"basis": "observed", "value": "Ss"}, "vsz_kb": {"basis": "observed", "value": 45120.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 8: sshd"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       1810  0.0  0.3  30468  3020 ?        Ss   09:33   0:00 /usr/sbin/sshd -D"
+          timestamp: "2026-11-10T09:34:49Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "SSH server (sshd) using 0.0% CPU, 0.3% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "SSH server (sshd) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.0}, "cputime": {"basis": "observed", "value": "0:00"}, "mem_percent": {"basis": "observed", "value": 0.3}, "process": {"basis": "observed", "value": "sshd"}, "rss_kb": {"basis": "observed", "value": 3020.0}, "start": {"basis": "observed", "value": "09:33"}, "state": {"basis": "observed", "value": "Ss"}, "vsz_kb": {"basis": "observed", "value": 30468.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 9: kworker"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root         37  0.4  0.0      0     0 ?        I    09:33   0:05 [kworker/0:2]"
+          timestamp: "2026-11-10T09:34:50Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "kernel worker (kworker) using 0.4% CPU, 0.0% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "kernel worker (kworker) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.4}, "cputime": {"basis": "observed", "value": "0:05"}, "mem_percent": {"basis": "observed", "value": 0.0}, "process": {"basis": "observed", "value": "kworker"}, "rss_kb": {"basis": "observed", "value": 0.0}, "start": {"basis": "observed", "value": "09:33"}, "state": {"basis": "observed", "value": "I"}, "vsz_kb": {"basis": "observed", "value": 0.0}}, "wrong metrics")
+  - name: "cisco_sdwan: process snapshot row 10: zebra"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root       4012  0.1  0.2  12345  2048 ?        S    09:34   0:00 /usr/bin/zebra -d"
+          timestamp: "2026-11-10T09:34:51Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan_diag.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "process_table", "wrong event_type")
+              assert_eq!(.summary, "zebra (zebra) using 0.1% CPU, 0.2% memory", "wrong summary")
+              assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.title, "zebra (zebra) on vEdge-1", "wrong title")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.metrics, {"cpu_percent": {"basis": "observed", "value": 0.1}, "cputime": {"basis": "observed", "value": "0:00"}, "mem_percent": {"basis": "observed", "value": 0.2}, "process": {"basis": "observed", "value": "zebra"}, "rss_kb": {"basis": "observed", "value": 2048.0}, "start": {"basis": "observed", "value": "09:34"}, "state": {"basis": "observed", "value": "S"}, "vsz_kb": {"basis": "observed", "value": 12345.0}}, "wrong metrics")
+  - name: "cisco_sdwan: a row logged in the next minute is the next snapshot"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "SYSMGR"
+          severity: "info"
+          message: "root      3180  0.9  5.3 513260 47560 ?        Sl   09:34   0:09 /usr/sbin/ftmd -f"
+          timestamp: "2026-11-10T09:35:02Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.summary, "data-plane forwarding (FTM) (ftmd) using 0.9% CPU, 5.3% memory", "wrong summary")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:35", "wrong dump_id")
+  - name: "cisco_sdwan: a kernel thread started on an earlier day is a row of the same snapshot"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -721,6 +1008,7 @@ tests:
           appname: "SYSMGR"
           severity: "info"
           message: "root        12  0.0  0.0      0     0 ?        S    Oct09   0:00 [kworker/0:1]"
+          timestamp: "2026-11-10T09:34:55Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -728,9 +1016,11 @@ tests:
             source: |
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "process_table", "wrong event_type")
-              assert_eq!(.summary, "[kworker/0:1] cpu 0.0% mem 0.0%", "wrong summary")
+              assert_eq!(.summary, "kernel worker (kworker) using 0.0% CPU, 0.0% memory", "wrong summary")
               assert_eq!(.event_category, "diagnostic_dump", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|SYSMGR|process_table", "wrong dedup_key")
+              assert_eq!(.dump_id, "dump:vEdge-1:2026-11-10T09:34", "wrong dump_id")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "dump_id", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "metrics.process", "metrics.cpu_percent", "metrics.mem_percent", "metrics.rss_kb", "metrics.vsz_kb", "metrics.state", "metrics.start", "metrics.cputime"], "unknown": []}, "wrong enrichment")
   - name: "cisco_sdwan: a cEdge device-management login is audit"
     inputs:
       - insert_at: syslog_normalized
@@ -740,6 +1030,7 @@ tests:
           appname: "R0/0"
           severity: "notice"
           message: "dmiauthd: User 'svc-user' authenticated successfully from 192.0.2.1:41424 and was authorized for netconf over ssh. External groups:"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -753,6 +1044,10 @@ tests:
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "192.0.2.10|R0/0|dmi_auth_passed", "wrong dedup_key")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "login_accepted", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:41424", "wrong audit_source")
+              assert_eq!(.audit_via, "netconf over ssh", "wrong audit_via")
   - name: "juniper_junos: a structured-data frame takes its tag from MSGID"
     inputs:
       - insert_at: syslog_normalized
@@ -763,6 +1058,7 @@ tests:
           severity: "notice"
           message: "User 'regress' exiting configuration mode"
           msgid: "UI_DBASE_LOGOUT_EVENT"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -785,6 +1081,7 @@ tests:
           appname: "rpd"
           severity: "warning"
           message: "RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 10.1.1.1 (External AS 1111) changed state from Established to Idle (event HoldTime) (instance master)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -804,6 +1101,7 @@ tests:
           appname: "rpd"
           severity: "warning"
           message: "RPD_BGP_NEIGHBOR_STATE_CHANGED: BGP peer 1.1.1.1 (External AS 2222) changed state from Connect to Idle (event Stop) (instance master)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -820,6 +1118,7 @@ tests:
           appname: "rpd"
           severity: "notice"
           message: "RPD_OSPF_NBRDOWN: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Full to Down due to InActiveTimer (event reason: BFD session timed out and neighbor was declared dead)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -836,6 +1135,7 @@ tests:
           appname: "rpd"
           severity: "notice"
           message: "RPD_OSPF_NBRUP: OSPF neighbor 1.1.1.1 (realm ospf-v2 ge-0/0/0.0 area 0.0.0.0) state changed from Init to ExStart due to 2WayRcvd (event reason: exchange start)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -852,6 +1152,7 @@ tests:
           appname: "rpd"
           severity: "notice"
           message: "RPD_ISIS_ADJDOWN: IS-IS lost L2 adjacency to second.junos.device on ge-0/0/1.0, reason: Aged Out: 1521033590.3"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -868,6 +1169,7 @@ tests:
           appname: "rpd"
           severity: "info"
           message: "RPD_ISIS_ADJUP: IS-IS new L2 adjacency to second.junos.device on ge-0/0/1.0"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -884,6 +1186,7 @@ tests:
           appname: "mib2d"
           severity: "warning"
           message: "SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus down(2), ifOperStatus down(2), ifName xe-0/0/0"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -901,6 +1204,7 @@ tests:
           appname: "mib2d"
           severity: "warning"
           message: "SNMP_TRAP_LINK_DOWN: ifIndex 502, ifAdminStatus up(1), ifOperStatus down(2), ifName xe-0/0/0"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -917,6 +1221,7 @@ tests:
           appname: "mib2d"
           severity: "info"
           message: "SNMP_TRAP_LINK_UP: ifIndex 502, ifAdminStatus up(1), ifOperStatus up(1), ifName xe-0/0/0"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -933,6 +1238,7 @@ tests:
           appname: "mgd"
           severity: "notice"
           message: "UI_COMMIT_COMPLETED: commit complete"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -950,13 +1256,14 @@ tests:
           appname: "otherd"
           severity: "notice"
           message: "SOME_TAG: a line from another program"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "nokia_sros: the documented SYSTEM line parses and reads its severity word"
     inputs:
       - insert_at: syslog_normalized
@@ -966,6 +1273,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "17 Base SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed administrative state: inService, operational state: outOfService"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -989,6 +1297,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "18 Base BGP-WARNING-tBgpNgBackwardTransition-2020 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Idle due to event holdTimerExpired"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1008,6 +1317,7 @@ tests:
           appname: "TMNX"
           severity: "crit"
           message: "19 Base BGP-MAJOR-bgpBackwardTransNotification-2039 []: (ASN 65001) 192.0.2.2: moved from higher state Established to lower state Active due to event tcpConnectionFails"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1026,6 +1336,7 @@ tests:
           appname: "TMNX"
           severity: "err"
           message: "20 Base BGP-MINOR-bgpEstablishedNotification-2038 []: (ASN 65001) 192.0.2.2: moved into established state"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1043,6 +1354,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "21 Base BGP-WARNING-receiveNotification-2006 []: (ASN 65001) 192.0.2.2: received notification: code CEASE subcode ADMINSHUTDOWN"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1059,6 +1371,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "22 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to down (event inactivityTimer)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1076,6 +1389,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "23 Base OSPF-WARNING-tmnxOspfNgNbrStateChange-2042 []: LCL_RTR_ID 192.0.2.1: Neighbor 192.0.2.9 on 198.51.100.2 router state changed to exchange (event negotiationDone)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1092,6 +1406,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "24 Base ISIS-WARNING-tmnxIsisAdjacencyChange-2045 []: Adjacency status changed to down for interface: 3, for level: l2 LSP-id: 1921.6800.1001.00-00"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1109,6 +1424,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "25 Base SNMP-WARNING-linkDown-2004 [my-interface-abc]: Interface my-interface-abc is not operational"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1127,6 +1443,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "26 Base SNMP-WARNING-linkUp-2005 [my-interface-abc]: Interface my-interface-abc is operational"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1143,6 +1460,7 @@ tests:
           appname: "TMNX"
           severity: "alert"
           message: "27 Base CHASSIS-CRITICAL-tmnxEqPhysChassPowerSupInFail-2144 []: Chassis 1 power supply 2 input failure"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1162,6 +1480,7 @@ tests:
           appname: "TMNX"
           severity: "alert"
           message: "28 Base CHASSIS-CRITICAL-tmnxEqPhysChassisFanFailure-2148 []: Chassis 1 fan 3 failure"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1178,6 +1497,7 @@ tests:
           appname: "TMNX"
           severity: "info"
           message: "29 Base CHASSIS-CLEARED-tmnxEqPhysChassisFanFailureClear-2149 []: Chassis 1 fan 3 failure cleared"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1196,6 +1516,7 @@ tests:
           appname: "TMNX"
           severity: "crit"
           message: "30 Base CHASSIS-MAJOR-tmnxEnvTempTooHigh-2005 []: cpm Slot A: temperature too high"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1213,6 +1534,7 @@ tests:
           appname: "TMNX"
           severity: "crit"
           message: "31 Base SYSTEM-MAJOR-tmnxModuleMallocFailed-2010 []: Memory allocation request for 65536 bytes from module BGP failed"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1229,6 +1551,7 @@ tests:
           appname: "TMNX"
           severity: "err"
           message: "32 Base PORT-MINOR-tmnxEqPortError-2009 [1/1/1]: Physical port signal failure"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1247,6 +1570,7 @@ tests:
           appname: "TMNX"
           severity: "err"
           message: "33 Base PORT-MINOR-tmnxEqPortEtherAlarmClear-2018 [1/1/1]: Alarm remoteFault Cleared"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1263,6 +1587,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "34 Base SYSTEM-WARNING-tmnxConfigModify-2006 []: router configuration modified"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1279,6 +1604,7 @@ tests:
           appname: "TMNX"
           severity: "err"
           message: "35 Base USER-MINOR-cli_config_io-2011 [admin]: User from 192.0.2.50: A:pe1>config>router# interface to-core shutdown"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1296,6 +1622,7 @@ tests:
           appname: "TMNX"
           severity: "warning"
           message: "36 Base SYSTEM-WARNING-ssiSaveConfigSucceeded-2002 []: Configuration file saved to: cf3:/config.cfg"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1312,6 +1639,7 @@ tests:
           appname: "TMNX"
           severity: "crit"
           message: "37 Base SYSTEM-MAJOR-ssiSaveConfigFailed-2003 []: Configuration file write failed: cf3:/config.cfg media full"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1329,13 +1657,72 @@ tests:
           appname: "otherd"
           severity: "notice"
           message: "BGP-WARNING-tBgpNgBackwardTransition-2020: a sender quoting a Nokia name"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+  - name: "sonic: an orchagent port down is a below-floor link change with no cause"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "ss12.00.lab"
+          appname: "orchagent"
+          severity: "notice"
+          message: ":- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "sonic", "wrong vendor")
+              assert_eq!(.vendor_source, "format", "wrong vendor_source")
+              assert_eq!(.parser_id, "sonic.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "orchagent", "wrong facility")
+              assert_eq!(.event_type, "host_intf_oper_status_down", "wrong event_type")
+              assert_eq!(.summary, "Interface Ethernet28 operationally DOWN", "wrong summary")
+              assert_eq!(.title, "Interface Ethernet28 operationally DOWN on ss12.00.lab", "wrong title")
+              assert_eq!(.correlation_key, "link:ss12.00.lab:Ethernet28", "wrong correlation_key")
+  - name: "sonic: an orchagent port up"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "ss12.00.lab"
+          appname: "orchagent"
+          severity: "notice"
+          message: ":- setHostIntfsOperStatus: Set operation status UP to host interface Ethernet28"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "host_intf_oper_status_up", "wrong event_type")
+  - name: "sonic: the same words from another program are not this pack's"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "ss12.00.lab"
+          appname: "otherd"
+          severity: "notice"
+          message: ":- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_normalized
@@ -1345,6 +1732,7 @@ tests:
           appname: "app"
           severity: "notice"
           message: "a genuine message that begins this way"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1360,6 +1748,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1373,6 +1762,14 @@ tests:
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
               assert_eq!(.message, "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
+              assert_eq!(.title, "SNMP session on vEdge-1 by svc-user from 192.0.2.1 (poll)", "wrong title")
+              assert_eq!(.correlation_key, "audit:vEdge-1:snmp:777134", "wrong correlation_key")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "session_created", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:59169", "wrong audit_source")
+              assert_eq!(.audit_via, "snmp", "wrong audit_via")
+              assert_eq!(.session_id, "777134", "wrong session_id")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "audit_action", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "audit_user", "audit_source", "audit_via", "session_id"], "unknown": []}, "wrong enrichment")
   - name: "standard: a NETCONF session opening keeps its own key"
     inputs:
       - insert_at: syslog_normalized
@@ -1382,6 +1779,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1400,6 +1798,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "audit user: admin/777140 created new session via cli from 192.0.2.7:51234 with ssh"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1418,6 +1817,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "audit user: svc-user/777134 assigned to groups: basic"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1427,6 +1827,10 @@ tests:
               assert_eq!(.event_type, "audit_session_groups", "wrong event_type")
               assert_eq!(.summary, "Session of svc-user given groups basic", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "groups_assigned", "wrong audit_action")
+              assert_eq!(.session_id, "777134", "wrong session_id")
+              assert_eq!(.audit_groups, "basic", "wrong audit_groups")
   - name: "standard: session end"
     inputs:
       - insert_at: syslog_normalized
@@ -1436,6 +1840,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "audit user: svc-user/777134 terminated session (reason: normal)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1454,6 +1859,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id=\"1\""
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1472,6 +1878,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987343 sending rpc-reply, attrs: nc:message-id=\"1\""
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1489,6 +1896,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987343 close-session attrs: nc:message-id=\"2\""
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1506,6 +1914,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987344 new tcp session for user svc-user from 192.0.2.1"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1514,6 +1923,10 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "netconf_session", "wrong event_type")
               assert_eq!(.summary, "NETCONF transport session opened for svc-user from 192.0.2.1", "wrong summary")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_source, "192.0.2.1", "wrong audit_source")
+              assert_eq!(.audit_via, "netconf", "wrong audit_via")
+              assert_eq!(.session_id, "987344", "wrong session_id")
   - name: "standard: a NETCONF action names the action in its summary, digits masked"
     inputs:
       - insert_at: syslog_normalized
@@ -1523,6 +1936,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987346 action name={'http://viptela.com/actions'}clear instance-identifier=/viptela-actions:request/interface-stats"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1543,6 +1957,7 @@ tests:
           appname: "confd"
           severity: "notice"
           message: "netconf id=987345 sending notification {http://viptela.com/system}cpu-usage"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1560,6 +1975,7 @@ tests:
           appname: "sshd"
           severity: "notice"
           message: "Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1571,6 +1987,11 @@ tests:
               assert_eq!(.summary, "SSH login accepted for svc-user from 192.0.2.1 (publickey)", "wrong summary")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|sshd|ssh_login_accepted", "wrong dedup_key")
+              assert_eq!(.title, "SSH login accepted on vEdge-1 for svc-user from 192.0.2.1", "wrong title")
+              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
+              assert_eq!(.audit_action, "login_accepted", "wrong audit_action")
+              assert_eq!(.audit_source, "192.0.2.1:35112", "wrong audit_source")
+              assert_eq!(.audit_via, "ssh", "wrong audit_via")
   - name: "standard: an SSH session opened"
     inputs:
       - insert_at: syslog_normalized
@@ -1580,6 +2001,7 @@ tests:
           appname: "sshd"
           severity: "notice"
           message: "pam_unix(sshd:session): session opened for user svc-user by (uid=0)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1597,6 +2019,7 @@ tests:
           appname: "sshd"
           severity: "notice"
           message: "pam_unix(sshd:session): session closed for user svc-user"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1614,13 +2037,14 @@ tests:
           appname: "sshd"
           severity: "notice"
           message: "Failed password for svc-user from 192.0.2.1 port 35112 ssh2"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: the same words from another app are not classified"
     inputs:
       - insert_at: syslog_normalized
@@ -1630,13 +2054,14 @@ tests:
           appname: "otherd"
           severity: "notice"
           message: "audit user: svc-user/1 terminated session (reason: normal)"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
     inputs:
       - insert_at: syslog_normalized
@@ -1646,6 +2071,7 @@ tests:
           appname: "sshd"
           severity: "notice"
           message: "Accepted publickey for svc-user from 192.0.2.1 port 2222 ssh2"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1663,6 +2089,7 @@ tests:
           appname: "sshd"
           severity: "err"
           message: "error: kex_exchange_identification: Connection closed by remote host"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
@@ -1684,13 +2111,14 @@ tests:
           appname: "sshd"
           severity: "err"
           message: "error: Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a tagged line whose mnemonic is the only severity it states"
     inputs:
       - insert_at: syslog_normalized
@@ -1700,13 +2128,14 @@ tests:
           appname: "Rib"
           severity: "notice"
           message: "%FOO-3-BAR: a line no rule knows"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a mnemonic later in the line sets no severity"
     inputs:
       - insert_at: syslog_normalized
@@ -1716,13 +2145,14 @@ tests:
           appname: "unknown"
           severity: "notice"
           message: "a sender quoting %FOO-1-BAR in its own text"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: a critical line with no pack still opens alone"
     inputs:
       - insert_at: syslog_normalized
@@ -1732,13 +2162,14 @@ tests:
           appname: "otherd"
           severity: "crit"
           message: "the fan tray has failed"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
   - name: "standard: an error line with no pack stays below the open floor"
     inputs:
       - insert_at: syslog_normalized
@@ -1748,10 +2179,11 @@ tests:
           appname: "otherd"
           severity: "err"
           message: "something this platform calls an error"
+          timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
         conditions:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")

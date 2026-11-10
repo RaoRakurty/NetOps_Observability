@@ -232,6 +232,7 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	r, rec := s.aiDecisionStart(r, claims, req)
 	orch := s.newOrchestrator(r, claims)
 	orch.Trace = trace
+	orch.ModelBudgets = aiModelBudgets() // never block a ready answer on a model
 	var ran nlqRan
 	if conv != nil && orch.NLQuery != nil {
 		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, conv.ID, &ran)
@@ -370,7 +371,10 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		NLQuery: s.aiNLQuery(r, claims),
 		// Network context (N-F1): the customer's approved facts, read once per
 		// request, placed before the data fence.
-		OrgContext: func() string { return s.orgContextBlock(r.Context(), claims) },
+		// Read under the narration's own rules (orgContextBlock bounds it to
+		// 3 s): a cancelled request must not strip the network context from a
+		// narration that still runs to its budget.
+		OrgContext: func() string { return s.orgContextBlock(context.WithoutCancel(r.Context()), claims) },
 	}
 }
 
@@ -482,7 +486,13 @@ func (s *server) recordAskTurn(r *http.Request, claims jwtClaims, conv *irisconv
 		turn.ASTHash, turn.QueryID, turn.Rows = ran.rs.ASTHash, ran.rs.QueryID, len(ran.rs.Rows)+len(ran.rs.Series)
 	}
 	tenant, _ := principalTenant(claims)
-	_, err := s.nlqConvos.Append(r.Context(), tenant, claims.Sub, conv.ID, turn, next)
+	// Detached from the client's cancellation, bounded on its own: an answer
+	// that finished (its narration runs to its own budget, ai.ModelCallContext)
+	// is kept in the conversation even when the browser left first — live
+	// 2026-11-10 15:33Z the append died with "context canceled" on a reload.
+	actx, acancel := context.WithTimeout(context.WithoutCancel(r.Context()), nlqCaptureTimeout)
+	defer acancel()
+	_, err := s.nlqConvos.Append(actx, tenant, claims.Sub, conv.ID, turn, next)
 	switch {
 	case err == nil:
 		ans.ConversationID = conv.ID
@@ -1390,13 +1400,14 @@ const nlqModelFallbackTier = ai.TierStrong
 
 // nlqModelFallback binds the model fallback (tracker 337 N-C5) to the caller:
 // their own aliases and inventory, and their own provider chain and daily
-// budget through aiLLM. With Iris off, IRIS_NLQ_MODEL_FALLBACK=false, or no
-// provider this caller may use, Model stays nil and the fallback is silently
-// unavailable — the grammar's answer stands, key-free.
+// budget through aiLLM. With Iris off, IRIS_NLQ_MODEL_FALLBACK=false, no
+// provider this caller may use, or every such provider's circuit breaker open
+// (repeated failures, cooling down), Model stays nil and the fallback is
+// skipped without a call — the grammar's answer stands at once, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
 	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims), Examples: s.nlqExamples}
 	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
-		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.providerCandidatesForTier(claims, nlqModelFallbackTier)) == 0 {
+		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.usableProviderCandidates(claims, nlqModelFallbackTier)) == 0 {
 		return f
 	}
 	f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}}

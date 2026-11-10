@@ -37,6 +37,9 @@ grammars:
     facility: '{fac}'
     event_type: '{tag}'
     summary: '{text}'
+    fields:
+      title: '{tag} on {host}: {text}'
+      correlation_key: '{tag}:{device}'
     fidelity: doc_claimed
     source: 'Junos 13.1 "Interpreting messages generated in structured-data format" (networkingdocs.hpe.com), and the standard-format samples in napalm-logs (Apache-2.0)'
 
@@ -419,3 +422,30 @@ fixtures:
     message: 'SOME_TAG: a line from another program'
     expect: {}
     signal: null
+
+# What an operator checks first per fault family (tracker 387 event model; `guidance`,
+# `basis: pack_guidance`). Advice, never evidence. Commands are the Junos CLI.
+guidance:
+  - event_types: [rpd_bgp_neighbor_state_changed]
+    impact:
+      - A BGP session changed state; leaving Established withdraws the routes learned from that peer.
+    next_checks:
+      - Run show bgp neighbor for the peer and read the last error and the event named in the line.
+      - Check reachability to the peer and the interface it runs over.
+  - event_types: [rpd_ospf_nbrdown]
+    impact:
+      - An OSPF neighbour went down; routes through it are recalculated.
+    next_checks:
+      - Run show ospf neighbor and show ospf interface for the logical interface named in the line.
+      - Check the reason the line gives (dead timer, BFD) and the link itself.
+  - event_types: [rpd_isis_adjdown]
+    impact:
+      - An IS-IS adjacency was lost; routes through it are recalculated.
+    next_checks:
+      - Run show isis adjacency and show isis interface for the interface named in the line.
+  - event_types: [snmp_trap_link_down]
+    impact:
+      - An interface went down; services and adjacencies over it stop or move.
+    next_checks:
+      - Run show interfaces for the interface and check ifAdminStatus in the line, which says whether it was shut administratively.
+      - Check the optics and the far end of the link.
