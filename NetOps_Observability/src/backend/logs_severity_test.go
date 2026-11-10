@@ -12,6 +12,8 @@ package backend
 // role without log access runs there too (idpDoors).
 
 import (
+	"netops/backend/internal/oslog"
+
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,9 +26,9 @@ const osSeverityReply = `{"hits":{"total":{"value":40,"relation":"eq"},"hits":[]
 	`"lvl_only":{"doc_count":10,"lvl":{"sum_other_doc_count":0,"buckets":[{"key":"error","doc_count":10}]}},` +
 	`"none":{"doc_count":5}}}`
 
-func decodeSeverity(t *testing.T, w *httptest.ResponseRecorder) severityCountsResp {
+func decodeSeverity(t *testing.T, w *httptest.ResponseRecorder) oslog.SeverityCountsResp {
 	t.Helper()
-	var out severityCountsResp
+	var out oslog.SeverityCountsResp
 	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -83,7 +85,7 @@ func TestSeverityCountsAddUpAndKeepTheStoredWords(t *testing.T) {
 	if out.Total != 40 || out.Unrated != 5 || out.Other != 2 {
 		t.Errorf("total/unrated/other = %d/%d/%d, want 40/5/2", out.Total, out.Unrated, out.Other)
 	}
-	want := []severityCount{{"severity", "crit", 3}, {"severity", "warning", 20}, {"level", "error", 10}}
+	want := []oslog.SeverityCount{{Field: "severity", Value: "crit", Count: 3}, {Field: "severity", Value: "warning", Count: 20}, {Field: "level", Value: "error", Count: 10}}
 	if len(out.Counts) != len(want) {
 		t.Fatalf("counts = %+v, want %+v (an empty key is not a severity)", out.Counts, want)
 	}
@@ -122,7 +124,7 @@ func TestSeverityCountsValidateInputBeforeTheStore(t *testing.T) {
 		{"bad from", "/api/logs/severity-counts?from=yesterday-ish"},
 		{"bad to", "/api/logs/severity-counts?to=%3Cscript%3E"},
 		{"window backwards", "/api/logs/severity-counts?from=2026-11-10T06:00:00Z&to=2026-11-10T00:00:00Z"},
-		{"query too long", "/api/logs/severity-counts?query=" + strings.Repeat("a", severityCountsQueryMax+1)},
+		{"query too long", "/api/logs/severity-counts?query=" + strings.Repeat("a", oslog.SeverityCountsQueryMax+1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			paths, _ := fakeOS(t, osSeverityReply)
