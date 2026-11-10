@@ -685,3 +685,87 @@ func TestOSPFNeighborAddr(t *testing.T) {
 		}
 	}
 }
+
+// The restart case, found live 2026-11-10: an edge polled while its overlay is
+// still down publishes identity with no TLOCs and no sessions. When the overlay
+// comes back every TLOC is up with zero flaps, so neither the up-ratio nor the
+// flap counter moves, and the collector kept "0 tunnels" until its 30-minute
+// refresh (vEdge-20 showed 0 peers with 17 BFD sessions up). A change in the
+// TLOC table's shape must make the BFD detail due at once.
+func TestCollectorRereadsBFDWhenTheOverlayComesBackAllUp(t *testing.T) {
+	m := newFakeMIB()
+	fam := sdwanMIBs[0]
+	m.set(col(fam.local, localSystemIP), "0", ipVal(10, 255, 255, 20))
+	m.set(col(fam.local, localSiteID), "0", intVal(20))
+	m.set(fam.personality, "0", strVal("vedge"))
+	pub := &publishLog{}
+	c := newTestCollector(m, pub)
+	tg := Target{ID: "vedge-20", Address: "192.0.2.20"}
+
+	r := c.pollDevice(context.Background(), tg)
+	if r.facts == nil || len(r.facts.TLOCs) != 0 || len(r.facts.Peers) != 0 {
+		t.Fatalf("overlay down: want identity with no TLOCs and no peers, got %+v", r.facts)
+	}
+
+	// The overlay converges: two transports, all sessions up, no flaps.
+	for _, name := range []string{"ge0/0", "ge0/2"} {
+		m.set(col(fam.tlocEntry, tlocTotal), tlocIdx(name, 2), intVal(6))
+		m.set(col(fam.tlocEntry, tlocUp), tlocIdx(name, 2), intVal(6))
+		m.set(col(fam.tlocEntry, tlocFlap), tlocIdx(name, 2), intVal(0))
+	}
+	addSession(m, fam, [4]int{200, 20, 2, 20}, [4]int{200, 40, 1, 40}, [4]byte{10, 255, 255, 40}, 40, 2, 2, 3)
+	addSession(m, fam, [4]int{200, 20, 2, 20}, [4]int{200, 50, 1, 51}, [4]byte{10, 255, 255, 51}, 50, 2, 2, 3)
+
+	r = c.pollDevice(context.Background(), tg)
+	if r.facts == nil || len(r.facts.Peers) != 2 {
+		t.Fatalf("the overlay came back all up, but the BFD detail was not re-read: peers=%d (TLOCs %d)",
+			len(r.facts.Peers), len(r.facts.TLOCs))
+	}
+	if r.capability != OverlayAvailable {
+		t.Fatalf("capability = %q, want %q once sessions and TLOCs are read", r.capability, OverlayAvailable)
+	}
+}
+
+// An SD-WAN edge that answered before and then went quiet (an outage) must be
+// re-probed on the short cadence, not the 30-minute cadence a device that never
+// answered the SD-WAN MIBs gets: otherwise its overlay stays missing for half
+// an hour after the site comes back.
+func TestCollectorReprobesAFormerlyCapableEdgeQuickly(t *testing.T) {
+	m := newFakeMIB()
+	fam := sdwanMIBs[0]
+	seedEdge(m, fam, [4]byte{10, 255, 255, 51}, "vedge")
+	addSession(m, fam, [4]int{198, 51, 100, 1}, [4]int{198, 51, 100, 2}, [4]byte{10, 255, 255, 52}, 50, 4, 4, 3)
+	pub := &publishLog{}
+	c := newTestCollector(m, pub)
+	tg := Target{ID: "vedge-51", Address: "192.0.2.51"}
+	if r := c.pollDevice(context.Background(), tg); r.capability != OverlayAvailable {
+		t.Fatalf("first poll: capability %q", r.capability)
+	}
+
+	// The site goes dark: the agent answers nothing.
+	saved := m.cols
+	m.cols = map[string]map[string]berVal{}
+	if r := c.pollDevice(context.Background(), tg); r.capability != OverlayNotAnswering {
+		t.Fatalf("outage: capability %q, want %q", r.capability, OverlayNotAnswering)
+	}
+
+	// Back up, within the short cadence: it must be probed again, while a
+	// never-capable device would wait reprobeOthers.
+	m.cols = saved
+	c.reprobeLost = 0
+	c.reprobeOthers = time.Hour
+	r := c.pollDevice(context.Background(), tg)
+	if !r.probed || r.capability != OverlayAvailable {
+		t.Fatalf("a formerly capable edge was not re-probed on the short cadence: %+v", r)
+	}
+	// And a device that never answered keeps the slow cadence.
+	other := Target{ID: "access-sw", Address: "192.0.2.99"}
+	m2 := newFakeMIB()
+	c2 := newTestCollector(m2, &publishLog{})
+	c2.reprobeLost = 0
+	c2.reprobeOthers = time.Hour
+	c2.pollDevice(context.Background(), other)
+	if r2 := c2.pollDevice(context.Background(), other); r2.probed {
+		t.Fatal("a never-capable device was re-probed on the short cadence")
+	}
+}
