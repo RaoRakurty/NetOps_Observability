@@ -184,6 +184,9 @@ from producers import (
     clock_skew_signal,
     episode_signal,
     flow_sample,
+    high_severity_no_signal,
+    known_benign_total,
+    note_classifier_no_signal,
     parse_event_ts,
     parser_stats,
     port_event_signal,
@@ -13559,6 +13562,7 @@ async def handle_syslog(ev: dict) -> None:
         # the gate.
         promotable = (not CORR_INGEST_PREFILTER) or syslog_promotable(ev)
         if promotable:
+            benign_before = known_benign_total()
             try:
                 cp_sig = syslog_control_signal(ev, cp_tenant, recv_now)
             except DeadLetter as exc:
@@ -13613,6 +13617,11 @@ async def handle_syslog(ev: dict) -> None:
                 if pe_fwd is not None:
                     buffer_signal(pe_fwd)
                 log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
+            # Telemetry only (tracker 387 PR 14): a line that stated a high severity
+            # and reached nothing is a question for a person. A known_benign row
+            # already answered it.
+            if cp_sig is None and pe_sig is None and known_benign_total() == benign_before:
+                note_classifier_no_signal(ev)
         # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
         # clock_skew_s on the event when the origin timestamp disagrees with the
         # receive clock beyond tolerance; here it becomes a per-device signal.
@@ -14669,6 +14678,10 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_ingest_prefilter_total counter",
         f'corr_ingest_prefilter_total{{outcome="passed"}} {ing["syslog_prefilter_passed"]}',
         f'corr_ingest_prefilter_total{{outcome="rejected"}} {ing["syslog_prefilter_rejected"]}',
+        "# HELP corr_syslog_high_severity_no_signal_total Lines whose own text stated error severity or worse that produced no signal: a grammar's alarm floor kept them from the generic net, and no typed or known_benign row took them.",
+        "# TYPE corr_syslog_high_severity_no_signal_total counter",
+        f'corr_syslog_high_severity_no_signal_total{{path="screen"}} {high_severity_no_signal()["screen"]}',
+        f'corr_syslog_high_severity_no_signal_total{{path="classifier"}} {high_severity_no_signal()["classifier"]}',
         # W1b parser provenance. `corr_parser_rule_hits_total` is labelled by
         # `rule_id`, whose value set is `producers.RULES` — fixed at import, so
         # the series count is bounded and no untrusted device string reaches a
@@ -14723,6 +14736,13 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_parser_shadow_hits_total counter",]
     for _rid, _hits in sorted(_parser["shadow_hits"].items()):
         lines.append(f'corr_parser_shadow_hits_total{{rule_id="{_rid}"}} {_hits}')
+    # Tracker 387: lines a catalog row judged not to be evidence. Emitted no signal,
+    # so without this a benign row would be invisible. Bounded: fixed rule corpus.
+    lines += [
+        "# HELP corr_parser_known_benign_total Lines matched by a known_benign rule, which emit NO signal, by rule.",
+        "# TYPE corr_parser_known_benign_total counter",]
+    for _rid, _hits in sorted(_parser["known_benign_hits"].items()):
+        lines.append(f'corr_parser_known_benign_total{{rule_id="{_rid}"}} {_hits}')
     _proactive = proactive_stats()
     lines += [
         # A4 proactive checks. The SAME split as the parser's shadow series and
@@ -15972,6 +15992,7 @@ def _health_payload() -> dict:
             # refused tenant claim or a disabled signal lane.
             "syslog_prefilter_passed": prefilter_counts()[0],
             "syslog_prefilter_rejected": prefilter_counts()[1],
+            "syslog_high_severity_no_signal": sum(high_severity_no_signal().values()),
             # P3 step 2: promoted signals the Aggregation plane absorbed as pure
             # repeats (never reached the engine window) vs forwarded as deltas.
             # BELOW the raw counters by design — every raw line is still

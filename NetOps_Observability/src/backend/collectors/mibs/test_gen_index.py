@@ -312,8 +312,13 @@ def test_the_real_pins_are_well_formed_and_https():
     # LLDP-MIB, RSTP-MIB, OLD-CISCO-INTERFACES-MIB, TIMETRA-BGP-MIB and their
     # import chains, all pinned to one LibreNMS commit.
     tracker_377 = {"ATM-TC-MIB", "HCNUM-TC", "IANA-ADDRESS-FAMILY-NUMBERS-MIB", "IANA-RTPROTO-MIB", "IEEE8021-PAE-MIB", "IP-FORWARD-MIB", "IP-MIB", "LLDP-MIB", "OLD-CISCO-INTERFACES-MIB", "RFC-1215", "RSTP-MIB", "SNMPv2-MIB", "TIMETRA-BGP-MIB", "TIMETRA-CHASSIS-MIB", "TIMETRA-FILTER-MIB", "TIMETRA-GLOBAL-MIB", "TIMETRA-PORT-MIB", "TIMETRA-QOS-MIB", "TIMETRA-SAP-MIB", "TIMETRA-SERV-MIB", "TIMETRA-TC-MIB", "TIMETRA-VRTR-MIB"}
+    # 2026-11-09 (tracker 387, owner D4): Cisco SD-WAN from Cisco's own repo, and
+    # RFC 7331 with its imports.
+    tracker_387 = {"VIPTELA-GLOBAL", "VIPTELA-TRAPS", "CISCO-SDWAN-BFD-MIB", "CISCO-SDWAN-OMP-MIB",
+                   "CISCO-SDWAN-SECURITY-MIB", "BFD-STD-MIB", "BFD-TC-STD-MIB", "IANA-BFD-TC-STD-MIB",
+                   "DIFFSERV-MIB", "DIFFSERV-DSCP-TC", "INTEGRATED-SERVICES-MIB"}
     assert set(gen.FETCH_PINS) == {"ARISTA-SMI-MIB", "ARISTA-BRIDGE-EXT-MIB", "CISCO-BGP4-MIB", "CISCO-SMI",
-                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"} | tracker_377, (
+                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"} | tracker_377 | tracker_387, (
         "the fetch table is the licence boundary — adding to it is a licence "
         "decision, so it is pinned here deliberately")
     for mod, pin in gen.FETCH_PINS.items():
@@ -371,3 +376,87 @@ def test_the_ietf_modules_replaced_the_cisco_extracts(fetch_env):
                 assert line.count("--") == 1, (
                     f"{name}:{lineno}: a second `--` closes the comment and the "
                     f"rest of the line becomes live tokens: {line!r}")
+
+
+# ══ tracker 387: one commit, and one symbol in many modules ══════════════════
+
+#: Owner D4. Cisco's own repo, at an exact commit: a branch name would let the
+#: bytes move under the pin's URL.
+CISCO_MIBS_COMMIT = "c9ab98c03ee051de74edda72f6d5c43ee65cad91"
+
+
+def test_cisco_sdwan_is_pinned_to_one_commit_of_ciscos_own_repo():
+    sdwan = {m: p for m, p in gen.FETCH_PINS.items() if m.startswith(("VIPTELA-", "CISCO-SDWAN-"))}
+    assert len(sdwan) == 5
+    for mod, pin in sdwan.items():
+        assert len(pin["urls"]) == 1, f"{mod}: no second mirror (D4: official repo only)"
+        assert pin["urls"][0].startswith(
+            f"https://raw.githubusercontent.com/cisco/cisco-mibs/{CISCO_MIBS_COMMIT}/sdwan/"), mod
+
+
+def test_every_tracker_387_url_names_a_commit_not_a_branch():
+    for mod in ("BFD-STD-MIB", "BFD-TC-STD-MIB", "IANA-BFD-TC-STD-MIB", "DIFFSERV-MIB",
+                "DIFFSERV-DSCP-TC", "INTEGRATED-SERVICES-MIB"):
+        for url in gen.FETCH_PINS[mod]["urls"]:
+            assert re.search(r"/[0-9a-f]{40}/", url), f"{mod}: {url}"
+
+
+def test_the_sources_file_lists_every_pin_it_owes():
+    with open(os.path.join(gen.VENDORED, "SOURCES.md"), encoding="utf-8") as fh:
+        text = fh.read()
+    for mod in ("VIPTELA-TRAPS", "CISCO-SDWAN-SECURITY-MIB", "BFD-STD-MIB"):
+        assert gen.FETCH_PINS[mod]["sha256"] in text, mod
+        assert gen.FETCH_PINS[mod]["urls"][0] in text, mod
+
+
+TD = """VIPTELA-TRAPS::netconfNotificationSeverity
+netconfNotificationSeverity OBJECT-TYPE
+  -- FROM\tVIPTELA-TRAPS
+  SYNTAX\tINTEGER {critical(1), major(2), minor(3)}
+::= { iso(1) org(3) dod(6) internet(1) private(4) enterprises(1) viptela(41916) viptela-traps(100) fields(1) 2 }
+
+CISCO-SDWAN-SECURITY-MIB::netconfNotificationSeverity
+netconfNotificationSeverity OBJECT-TYPE
+  -- FROM\tCISCO-SDWAN-SECURITY-MIB
+::= { iso(1) org(3) dod(6) internet(1) private(4) enterprises(1) cisco(9) ciscoMgmt(9) 1006 ciscoSdwanSecurityMIBNotifObjects(2) 2 }
+
+LOST-MIB::noClosingLine
+noClosingLine OBJECT-TYPE
+"""
+
+
+def test_one_symbol_in_two_modules_keeps_both_oids():
+    """`-Td` blocks are keyed by the OID each states. Keyed by name, the second
+    module would overwrite the first, and one of them would vanish from the index."""
+    blocks = gen._td_blocks_by_oid(TD)
+    assert set(blocks) == {"1.3.6.1.4.1.41916.100.1.2", "1.3.6.1.4.1.9.9.1006.2.2"}
+    assert "VIPTELA-TRAPS" in blocks["1.3.6.1.4.1.41916.100.1.2"]
+    assert "CISCO-SDWAN-SECURITY-MIB" in blocks["1.3.6.1.4.1.9.9.1006.2.2"]
+
+
+def test_the_shared_symbol_reached_the_index_under_every_module(nodes):
+    for oid, mib in (("1.3.6.1.4.1.41916.100.1.2", "VIPTELA-TRAPS"),
+                     ("1.3.6.1.4.1.9.9.1003.2.2", "CISCO-SDWAN-OMP-MIB"),
+                     ("1.3.6.1.4.1.9.9.1006.2.2", "CISCO-SDWAN-SECURITY-MIB")):
+        node = nodes[oid]
+        assert (node["name"], node["mib"]) == ("netconfNotificationSeverity", mib)
+        assert node["enum"] == {"1": "critical", "2": "major", "3": "minor"}
+
+
+def test_the_cedge_bfd_varbinds_stay_out_because_their_arcs_move(nodes):
+    assert nodes["1.3.6.1.4.1.9.9.1002.0.1"]["name"] == "ciscoSdwanBfdStateChange"
+    assert not [o for o in nodes if o.startswith("1.3.6.1.4.1.9.9.1002.") and ".1002.0." not in o]
+
+
+def test_a_hyphenated_enum_label_is_whole(nodes):
+    peer_state = nodes["1.3.6.1.4.1.41916.100.1.28"]["enum"]
+    assert peer_state["5"] == "init-in-gr" and peer_state["6"] == "down-in-gr"
+
+
+def test_a_datetime_keeps_its_convention_name(nodes):
+    assert nodes["1.3.6.1.4.1.41916.100.1.1"]["type"] == "DateAndTime"
+
+
+def test_all_the_notifications_of_the_pinned_trap_module_are_indexed(nodes):
+    viptela = [n for o, n in nodes.items() if o.startswith("1.3.6.1.4.1.41916.100.2.")]
+    assert len(viptela) == 123 and all(n["kind"] == "notification" for n in viptela)

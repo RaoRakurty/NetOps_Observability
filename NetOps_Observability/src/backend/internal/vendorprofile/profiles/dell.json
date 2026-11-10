@@ -3,6 +3,7 @@
   "vendor": "dell",
   "display_name": "Dell",
   "detection": {
+    "inventory_names": ["dell emc", "dell technologies", "dell inc"],
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.674"
     ]

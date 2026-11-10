@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -157,6 +158,18 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 	}
 	if len(tr.Items) == 0 {
 		tr.Notes = append(tr.Notes, "no matching syslog lines in the window")
+	}
+	// A read of device syslog on the caller's behalf, audited like the human one:
+	// who, the query the model chose and how many lines it got, never a line.
+	if d.srv.audit != nil {
+		d.srv.audit.Record(AuditEvent{
+			Actor: d.claims.Sub, Tenant: p.Tenant, Cross: p.Cross, SessionID: d.claims.Sid,
+			Method: auditMethodLogRead, Path: "/api/ai/tools/search_logs", Status: http.StatusOK, Decision: "allow",
+			Detail: map[string]any{
+				"action": "ai.search_logs", "signal": "syslog", "query": auditQueryText(query),
+				"window": window.String(), "matched": out.Hits.Total.Value, "rows": len(tr.Items),
+			},
+		})
 	}
 	return tr, nil
 }

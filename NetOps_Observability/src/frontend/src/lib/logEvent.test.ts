@@ -255,6 +255,28 @@ describe("toLogEvent — richer fields win when they arrive", () => {
     expect(ev.severityClause).toBeUndefined();
   });
 
+  it("shows the PRI facility, falling back to the grammar's facility", () => {
+    const pill = (source: Record<string, unknown>) =>
+      toLogEvent({ _index: "netops-syslog-x", _source: { message: "m", ...source } })
+        .syslog?.pills.find((p) => p.name === "Facility")?.value;
+    expect(pill({ syslog_facility: "local7", facility: "LINK" })).toBe("local7");
+    expect(pill({ facility: "LINK" })).toBe("LINK");
+    expect(pill({})).toBeUndefined();
+  });
+
+  it("hides secrets in the raw frame and the sender's structured data", () => {
+    const ev = toLogEvent({
+      _index: "netops-syslog-x",
+      _source: {
+        message: "m",
+        message_original: "<189>Nov  9 09:00:01 r1 app: login password=hunter2 ok",
+        structured_data: '[a@1 snmp_community="public"]',
+      },
+    });
+    expect(ev.raw.message_original).toBe("<189>Nov  9 09:00:01 r1 app: login password=hidden ok");
+    expect(ev.raw.structured_data).not.toContain("public");
+  });
+
   it("reads the canonical syslog, device and flow blocks", () => {
     const sys = toLogEvent({
       _index: "netops-syslog-x",
@@ -512,5 +534,21 @@ describe("one severity authority", () => {
       expect(css).toContain(`.lf-sev-${key} { --lf-sev: var(--sev-${key}); --lf-sev-bg: var(--sev-${key}-bg); }`);
     }
     expect(css).not.toMatch(/\.lf-(crit|err|warn|notice|info|debug)\b/);
+  });
+});
+
+describe("ownership wording (tracker 387 D6)", () => {
+  it.each([
+    ["platform_owned", "Platform device"],
+    ["enriched", "Tenant device"],
+    ["unmatched", "Unknown device"],
+  ])("%s reads as %s, and the raw value stays out of the details fields", (outcome, words) => {
+    const ev = toLogEvent({ _index: "netops-syslog-untagged-2026.11.09", _source: { message: "x", tenant_attribution: outcome } });
+    expect(ev.owner).toBe(words);
+    expect(ev.fields.some((f) => f.name === "tenant_attribution")).toBe(false);
+  });
+
+  it("a record with no attribution claims no owner", () => {
+    expect(toLogEvent({ _index: "netops-syslog-untagged-2026.11.09", _source: { message: "x" } }).owner).toBe("");
   });
 });

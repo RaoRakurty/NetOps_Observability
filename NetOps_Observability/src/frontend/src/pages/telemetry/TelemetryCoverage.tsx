@@ -28,6 +28,7 @@ import {
   type ParserStats,
   type UnrecognizedItem,
   type UnrecognizedPage,
+  type VendorScore,
 } from "../../services/api";
 import FidelityBadge from "../../components/FidelityBadge";
 import DataTable, { type Column } from "../../components/DataTable";
@@ -41,13 +42,17 @@ import {
   CATALOG_DOCS_URL,
   fidelityRank,
   isForbidden,
+  laneCapability,
+  liveReading,
   promotionDisplay,
   ruleRows,
   ruleSummary,
+  ruleSummaryOf,
   severityBadgeClass,
   severityLabel,
   unrecognizedItems,
   unrecognizedNote,
+  vendorRows,
 } from "./coverageModel";
 
 const DAYS = 7;
@@ -116,6 +121,37 @@ export function ProposalBody({ proposal, template }: { proposal: CatalogProposal
         </a>
       </p>
     </div>
+  );
+}
+
+// ── vendor scorecard ────────────────────────────────────────────────────────
+
+// Every cell is worded by coverageModel, so a vendor with nothing tested reads
+// "Not covered yet" here by construction, never a percentage.
+function VendorScorecard({ stats }: { stats: ParserStats }) {
+  const rows = vendorRows(stats);
+  const columns = useMemo<Column<VendorScore>[]>(() => [
+    { key: "vendor", header: "Vendor", width: 170, sortable: true, text: (r) => r.display_name, render: (r) => r.display_name },
+    { key: "syslog", header: "Log messages", sortable: false, text: (r) => laneCapability(r.lanes.syslog, "syslog"), render: (r) => (r.unidentified ? "—" : laneCapability(r.lanes.syslog, "syslog")) },
+    { key: "syslog_live", header: "Logs today", sortable: false, text: (r) => liveReading(r, "syslog"), render: (r) => (r.standard ? "—" : liveReading(r, "syslog")) },
+    { key: "trap", header: "Traps", sortable: false, text: (r) => laneCapability(r.lanes.snmptrap, "snmptrap"), render: (r) => (r.unidentified ? "—" : laneCapability(r.lanes.snmptrap, "snmptrap")) },
+    { key: "trap_live", header: "Traps today", sortable: false, text: (r) => liveReading(r, "snmptrap"), render: (r) => (r.standard ? "—" : liveReading(r, "snmptrap")) },
+    { key: "rules", header: "Rules", width: 200, sortable: false, text: (r) => ruleSummaryOf(r), render: (r) => (r.unidentified ? "—" : ruleSummaryOf(r)) },
+  ], []);
+  return (
+    <>
+      <h3 style={{ margin: "var(--sp-4) 0 var(--sp-2)" }}>Coverage by vendor</h3>
+      <div className="card" style={{ paddingTop: 8 }}>
+        <DataTable
+          rows={rows}
+          columns={columns}
+          rowKey={(r) => r.vendor}
+          height={360}
+          ariaLabel="Coverage by vendor"
+          empty={<div className="empty">No vendor coverage reported.</div>}
+        />
+      </div>
+    </>
   );
 }
 
@@ -191,14 +227,17 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
       </div>
 
       <StatStrip>
-        <Stat label="Prefilter passed" value={stats.prefilter.passed.toLocaleString("en-US")} />
-        <Stat label="Prefilter rejected" value={stats.prefilter.rejected.toLocaleString("en-US")} tone={stats.prefilter.rejected > 0 ? "warn" : ""} />
+        <Stat label="Checked for RCA" value={stats.prefilter.passed.toLocaleString("en-US")} />
+        <Stat label="Skipped, not relevant to RCA" value={stats.prefilter.rejected.toLocaleString("en-US")} />
+        <Stat label="High severity skipped" value={(stats.prefilter.high_severity_skipped ?? 0).toLocaleString("en-US")} tone={(stats.prefilter.high_severity_skipped ?? 0) > 0 ? "warn" : ""} />
         <Stat label="Generic fallback (syslog)" value={stats.generic_fallback.syslog.toLocaleString("en-US")} tone={stats.generic_fallback.syslog > 0 ? "warn" : ""} />
         <Stat label="Generic fallback (trap)" value={stats.generic_fallback.trap.toLocaleString("en-US")} tone={stats.generic_fallback.trap > 0 ? "warn" : ""} />
         <Stat label="Rules" value={summary.total} />
         <Stat label="Validated rules" value={summary.validated} tone="good" />
         <Stat label="Shadow rules" value={summary.shadow} tone={summary.shadow > 0 ? "accent" : ""} />
       </StatStrip>
+
+      <VendorScorecard stats={stats} />
 
       <div className="ds-toolbar">
         <label className="fact-line" htmlFor="tc-rule-filter">Filter rules</label>

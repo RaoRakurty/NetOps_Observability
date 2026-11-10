@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "vendor": "sonic",
+  "display_name": "SONiC",
+  "notes": "SONiC runs net-snmp, so sysObjectID answers enterprise 8072 and only sysDescr names the OS. The marker is the first words of the sysDescr its snmpd template writes: 'SONiC Software Version: SONiC.<build> - HwSku: <sku> - Distribution: Debian <n> - Kernel: <k>'. Read from the upstream template, not from a captured device, so it stays doc_claimed until a sonic-vs capture exists (docs/design/research/VENDOR_PACK_SOURCES_2026-11-09.md). No platforms yet: detection only, the same shape as the other vendors with an empty profile list.",
+  "detection": {
+    "sysdescr_contains": [
+      "sonic software version"
+    ],
+    "sysdescr_rank": 145,
+    "refines_agents": [
+      "net-snmp"
+    ]
+  },
+  "dialect": {},
+  "profiles": []
+}

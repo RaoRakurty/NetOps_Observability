@@ -132,6 +132,37 @@ product-identity OIDs, decodes no trap, and pysmi rejects it (duplicate symbol).
 | `TIMETRA-TC-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-TC-MIB | `e970f2099fffec00d08b71eca070f11eba4edd8c84123846eaddb5f99314e45a` |
 | `TIMETRA-VRTR-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-VRTR-MIB | `72729fdd64382e64b255e2c2f64ae9e3167428755c231df1fa01ef763318b424` |
 
+### Tracker 387: Cisco SD-WAN and RFC 7331 (2026-11-09)
+
+Owner decision D4: Cisco's official repo only, exact commit in the URL, sha256
+verified. **`github.com/cisco/cisco-mibs` has no licence file** (GitHub reports no
+licence; `README.md`, `README-MIB.txt` and `CONTRIBUTING.md` state no terms), and the
+module text grants nothing: `CISCO-SDWAN-*` say "Copyright (c) 2020-2023 by Cisco
+Systems, Inc.", `VIPTELA-OMP` carries Viptela and Cisco copyright lines, and
+`VIPTELA-TRAPS` and `VIPTELA-GLOBAL` carry no notice at all. So they are **fetched,
+never vendored**, and nothing is redistributed. The licence question is open with the
+owner. Only OID, name, type and enum facts reach the checked-in index and packs.
+
+`BFD-STD-MIB`, `BFD-TC-STD-MIB`, `IANA-BFD-TC-STD-MIB` are IETF Simplified BSD (their
+own headers); `DIFFSERV-MIB`, `DIFFSERV-DSCP-TC` and `INTEGRATED-SERVICES-MIB` are the
+imports the first one needs. Cisco's repo has no copy, so they come from the LibreNMS
+commit tracker 377 already pins. The notification arcs were checked against the text
+of RFC 7331.
+
+| Module | URL | sha256 |
+|--------|-----|--------|
+| `VIPTELA-GLOBAL` | https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/controller/20.12/VIPTELA-GLOBAL.mib | `e09867c3595a10ef910dfadc29db15cb2904716de4a7ff125165e0151e87cf1d` |
+| `VIPTELA-TRAPS` | https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/controller/20.12/VIPTELA-TRAPS.mib | `63c828762372bae49dd47a99c1a99e8c705ad4b8e9f50f883aa1bc86e0aea865` |
+| `CISCO-SDWAN-BFD-MIB` | https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-BFD-MIB.my | `9104b6b5b556a217f7871ea8a2b162d66c9a2bbe1ccf8d19351ba6bf4e7adf8f` |
+| `CISCO-SDWAN-OMP-MIB` | https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-OMP-MIB.my | `8d6558a4caa8fd2f9e085160c0bf3bc7283f1dfb8435f437d3a007a5e3748f4c` |
+| `CISCO-SDWAN-SECURITY-MIB` | https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-SECURITY-MIB.my | `691d6fe69ba36d5891e7961ee4a297d6f66f221fba3aeef3c3d121f138408f44` |
+| `BFD-STD-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/BFD-STD-MIB | `2347ad90da66c030176469a048130f3bcb7f0baf55e4a6a89ee0d93be1aa75f9` |
+| `BFD-TC-STD-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/BFD-TC-STD-MIB | `bd5e1d5b3e1f8eb5e789eecec4fc8181fb7e8e1283f667fc463fba2eb7014c7a` |
+| `DIFFSERV-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/DIFFSERV-MIB | `f4f7178ef2b45fe60bd7a5c498c89e82be95619ae5ddca3442ca7ac0acb9f7a8` |
+| `DIFFSERV-DSCP-TC` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/DIFFSERV-DSCP-TC | `8b2f0df9f3ac448a7a9f3d20897fde4509a8d78d5dcf4a2c01f419dab66e7e6a` |
+| `INTEGRATED-SERVICES-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/INTEGRATED-SERVICES-MIB | `da8fac25d2aaaf060f1c40e9f1682556203454d12ec9890f55f2323c1f92fc96` |
+| `IANA-BFD-TC-STD-MIB` | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IANA-BFD-TC-STD-MIB | `5617e0077c1e21cce1e3fc318cd2d2d1ff49c495c7b8f405f226141f3176d02d` |
+
 **Fail closed.** The mirror is untrusted (CLAUDE.md §3): every byte, freshly
 downloaded *or already cached*, is checked against the pinned sha256 before the
 parser sees it. A missing/short pin, a moved upstream, or an edited cache file is

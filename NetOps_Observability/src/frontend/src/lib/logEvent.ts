@@ -15,6 +15,7 @@
 //      secrets are replaced before anything else looks at the record, so no view,
 //      tooltip or client-built export can reach the original value.
 
+import { attributionLabel } from "./tenantOwner";
 import { IANA_PROTO_NAMES } from "../proto";
 
 export type LogSignal = "syslog" | "trap" | "flow" | "app" | "cloud" | "other";
@@ -87,6 +88,8 @@ export interface LogEvent {
   severity: string | null;
   deviceLabel: string;
   deviceAddress: string;
+  /** How the record got its owner, in operator words. Never who may read it. */
+  owner: string;
   vendor: string;
   title: string;
   detailLine: string;
@@ -498,7 +501,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
       const app = known(src, "syslog.app_name", "appname");
       const pills: LogField[] = [];
       for (const [name, value] of [
-        ["Facility", known(src, "syslog.facility", "facility")],
+        // The PRI facility, which the aggregator keeps apart. `facility` is a body grammar's
+        // answer (`LINK`, `FTMD`), and is all a record stored before that split has.
+        ["Facility", known(src, "syslog.facility", "syslog_facility", "facility")],
         ["Severity", severity ?? ""],
         ["App", app],
         ["Process", known(src, "syslog.procid", "procid")],
@@ -527,7 +532,9 @@ export function toLogEvent(hit: LogHit): LogEvent {
   const severityField = (["level", "severity"] as const).find((f) => searchable.includes(f) && scalar(src[f]) === severityRaw);
   const deviceClause = pickKnownField(src, DEVICE_CLAUSE_FIELDS[signal]);
 
+  const owner = attributionLabel(pick(src, "tenant_attribution"));
   return {
+    owner,
     signal,
     signalLabel: SIGNAL_LABEL[signal],
     time: pick(src, "event.timestamp", "@timestamp", "timestamp", "ts", "time_received_ns"),

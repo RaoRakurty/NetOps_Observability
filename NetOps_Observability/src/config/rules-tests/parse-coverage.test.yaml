@@ -1,0 +1,201 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the parse-coverage group (rules-scale-slo.yaml, warning tier,
+# tracker 387 PR 14). The counter is vector-router's
+# netops_parse_status_events{lane,vendor,parser_id,parser_status} (no `_total`: Vector's
+# exporter appends none). Everything here tests the VALUE of parser_status. The field is
+# present on 100 % of records in every case, because a present field proves nothing:
+#   * a lane that is 100 % unparsed fires the level rule, even if it never rose;
+#   * a lane that parses, and a lane below the volume floor, stay silent;
+#   * the share rising fires the rise rule; a lane that was always unparsed does not;
+#   * `raw_only` is the trap lane's unparsed, and `partially_decoded` does not count;
+#   * high-severity lines that reached nothing fire on a rise, not on a steady level.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+# 5m: the rise rule's baseline needs 7 h of history, and promtool evaluates the whole
+# file at every step.
+evaluation_interval: 5m
+
+tests:
+  # 1) The failure this exists to catch: every line present, every line unparsed.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="unknown",parser_id="none",parser_status="unparsed"}'
+        values: "0+100x40"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts:
+          - exp_labels:
+              alertname: ParseLaneStuckUnparsed
+              lane: syslog
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the syslog lane has been almost entirely unparsed for over an hour (100%)"
+              description: "Records arrive and are stored, but no grammar understands them. Check the vendor on the stored records and the Telemetry coverage page. parser_status being present is not evidence: it is present on every record, including when its value is unparsed. A vendor pack (telemetry-catalog/vendor-packs) or a framing fix is the remedy, not this alert."
+              runbook: "docs/runbooks/parse-coverage.md"
+      # Steady at 100 %: a level, never a rise.
+      - eval_time: 190m
+        alertname: ParseUnparsedShareRose
+        exp_alerts: []
+
+  # 2) A healthy lane: 99 % is the line, and 98 % parsed stays silent on both rules.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="cisco_sdwan.v1",parser_status="parsed"}'
+        values: "0+98x92"
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="unknown",parser_id="none",parser_status="unparsed"}'
+        values: "0+2x92"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts: []
+      - eval_time: 460m
+        alertname: ParseUnparsedShareRose
+        exp_alerts: []
+
+  # 3) Under the volume floor: one unparsed line a minute is not a lane.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="snmptrap",vendor="unknown",parser_id="none",parser_status="raw_only"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 190m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts: []
+
+  # 4) `raw_only` is unparsed on the trap lane.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="snmptrap",vendor="cisco",parser_id="none",parser_status="raw_only"}'
+        values: "0+100x40"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts:
+          - exp_labels:
+              alertname: ParseLaneStuckUnparsed
+              lane: snmptrap
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the snmptrap lane has been almost entirely unparsed for over an hour (100%)"
+              description: "Records arrive and are stored, but no grammar understands them. Check the vendor on the stored records and the Telemetry coverage page. parser_status being present is not evidence: it is present on every record, including when its value is unparsed. A vendor pack (telemetry-catalog/vendor-packs) or a framing fix is the remedy, not this alert."
+              runbook: "docs/runbooks/parse-coverage.md"
+
+  # 5) A partly decoded trap was read: a lane of them is not stuck.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="snmptrap",vendor="cisco",parser_id="none",parser_status="partially_decoded"}'
+        values: "0+100x40"
+    alert_rule_test:
+      - eval_time: 190m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts: []
+
+  # 6) One lane's failure does not hide behind another's health.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="ios_style.v1",parser_status="parsed"}'
+        values: "0+10000x40"
+      - series: 'netops_parse_status_events{job="vector-router",lane="snmptrap",vendor="cisco",parser_id="none",parser_status="raw_only"}'
+        values: "0+100x40"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ParseLaneStuckUnparsed
+        exp_alerts:
+          - exp_labels:
+              alertname: ParseLaneStuckUnparsed
+              lane: snmptrap
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the snmptrap lane has been almost entirely unparsed for over an hour (100%)"
+              description: "Records arrive and are stored, but no grammar understands them. Check the vendor on the stored records and the Telemetry coverage page. parser_status being present is not evidence: it is present on every record, including when its value is unparsed. A vendor pack (telemetry-catalog/vendor-packs) or a framing fix is the remedy, not this alert."
+              runbook: "docs/runbooks/parse-coverage.md"
+
+  # 7) A parser that stops matching: 7 h parsed, then the share climbs. Pending at
+  #    first; firing after for: 20m. (A grammar change, a framing change, a new OS.)
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="cisco_sdwan.v1",parser_status="parsed"}'
+        values: "0+100x84 8400x12"
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="none",parser_status="unparsed"}'
+        values: "0x84 0+100x12"
+    alert_rule_test:
+      - eval_time: 425m
+        alertname: ParseUnparsedShareRose
+        exp_alerts: []
+      - eval_time: 460m
+        alertname: ParseUnparsedShareRose
+        exp_alerts:
+          - exp_labels:
+              alertname: ParseUnparsedShareRose
+              lane: syslog
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the unparsed share of the syslog lane rose sharply against its previous 6 hours"
+              description: "A lane that was parsing has stopped. A grammar, a framing or a software change is the usual cause; a new device type is the other. Read the unparsed lines on the Logs page and the Unrecognized message shapes table on Telemetry coverage."
+              runbook: "docs/runbooks/parse-coverage.md"
+
+  # 7b) The realistic shape: a healthy lane has NO unparsed series in its baseline.
+  - interval: 5m
+    input_series:
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="cisco_sdwan.v1",parser_status="parsed"}'
+        values: "0+100x84 8400x12"
+      - series: 'netops_parse_status_events{job="vector-router",lane="syslog",vendor="cisco",parser_id="none",parser_status="unparsed"}'
+        values: "_x84 0+100x12"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: ParseUnparsedShareRose
+        exp_alerts:
+          - exp_labels:
+              alertname: ParseUnparsedShareRose
+              lane: syslog
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the unparsed share of the syslog lane rose sharply against its previous 6 hours"
+              description: "A lane that was parsing has stopped. A grammar, a framing or a software change is the usual cause; a new device type is the other. Read the unparsed lines on the Logs page and the Unrecognized message shapes table on Telemetry coverage."
+              runbook: "docs/runbooks/parse-coverage.md"
+
+  # 8) A rise in lines the engine read a high severity on and then did nothing with.
+  - interval: 5m
+    input_series:
+      - series: 'corr_syslog_high_severity_no_signal_total{job="correlation"}'
+        values: "0+1x84 84+200x12"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: EngineIgnoredHighSeverityLinesRose
+        exp_alerts:
+          - exp_labels:
+              alertname: EngineIgnoredHighSeverityLinesRose
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "far more lines that state a high severity are reaching nothing in the correlation engine than over the last 6 hours"
+              description: "A line that states error severity or worse matched a grammar whose alarm floor keeps it out (owner decision D3), and no typed rule took it. Each is retained and searchable, but none reaches RCA alone. A rise usually means a fault nobody has written a rule for: read them and add a typed or known_benign row."
+              runbook: "docs/runbooks/parse-coverage.md"
+
+  # 9) ...and silence on the steady repeater D3 expects (a benign line every 20 s).
+  - interval: 5m
+    input_series:
+      - series: 'corr_syslog_high_severity_no_signal_total{job="correlation"}'
+        values: "0+15x92"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: EngineIgnoredHighSeverityLinesRose
+        exp_alerts: []

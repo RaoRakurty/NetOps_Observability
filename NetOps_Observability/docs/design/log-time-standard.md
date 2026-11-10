@@ -120,8 +120,15 @@ parsed with a configured/implicit zone.
   event occurred, measured by the origin clock") and Elastic's
   origin-time-first guidance; Part 1's D2/D3 defects were exactly violations
   of this rule.
+  *Limit (tracker 387 PR 10, 2026-11-09):* R2 holds where the source states an
+  instant. An RFC 3164 time has no zone and no year, so past the R5 tolerance it is
+  not believed: `timestamp` becomes the edge's receive time, the claim stays as
+  `device_timestamp` (and in `message_original`), `ts_source` is `edge_receive` and
+  `clock_skew_s` is stamped. Otherwise a fleet logging local time stops correlating.
+  A frame with `Z` or a numeric offset keeps its timestamp whatever it says.
 * **R3 — Receive time is recorded *alongside*, not *instead*.** *(ADOPTED
-  2026-07-17.)* Every ingest hop that can, records `ingested_at` (OTel
+  2026-07-17.)* Every ingest hop that can, records `ingested_at` (syslog: when
+  syslog-ng read the frame, since tracker 387 PR 10; OTel
   `ObservedTimestamp` semantics; Datadog's `event_time` vs `ingestion_time`
   distinction) so origin-vs-receive skew is observable — this is what makes
   R5 implementable at all. Sources with no origin wall-clock (SNMP traps)

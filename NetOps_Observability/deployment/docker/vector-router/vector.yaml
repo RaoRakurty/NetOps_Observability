@@ -55,6 +55,17 @@ secret:
   cxmac:
     type: exec
     command: ["/etc/vector/conf/cx-secret-backend.sh", "mac"]
+  # Tracker 384: svc_router's password for the OpenSearch sinks, from the file
+  # scripts/install.py renders. The aggregator's script (./vector is mounted here
+  # as /etc/vector/shared), so there is one reader of these files. Nothing
+  # references it unless an env var expands to a token: Vector interpolates env
+  # first and secrets second, so the plaintext baseline and helm never run it.
+  # An unreadable file refuses the config rather than sending the placeholder.
+  # NOTE: Vector scans the RAW text for references, comments included — never
+  # write a complete backend.key reference in a comment here.
+  opensearch:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/shared/cx-secret-exec.sh", "/run/secrets/opensearch"]
 
 # ----------------------------------------------------------------------------
 # DURABILITY (F-04) — end-to-end acknowledgements.
@@ -102,9 +113,16 @@ enrichment_tables:
       path: /etc/vector/enrichment/device_tenant.csv
       encoding:
         type: csv
+    # The same file as the aggregator's. Tracker 387 PR 12 added the inventory
+    # facts for the log lanes; the flow lane reads only the tenant today.
     schema:
       identity: string
       tenant_id: string
+      device_id: string
+      vendor: string
+      model: string
+      site: string
+      role: string
 
 sources:
   internal_metrics:
@@ -181,6 +199,16 @@ sources:
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
+    # Tracker 387 (PR 3). Vector's kafka source writes the Kafka record KEY into
+    # the event under `key_field`, whose default is `message_key`, OVER whatever
+    # the payload carried. Every producer on this bus keys by tenant, so the trap
+    # receiver's dedup identity (collectors/snmptrap.go, `snmptrap:<vendor>:<who>:
+    # <oid>`) reached storage as the partition key: `message_key: "global"` on
+    # every platform device. The key is routing, not content, and nothing on this
+    # tier reads it. The empty string is Vector's explicit "do not stamp" (proved
+    # against a real broker on 0.40.0: default → "global", "" → the payload's
+    # value). Every kafka source carries this: tests/test_ingest_contract.py.
+    key_field: ""
 
   # Scale P0 — the RAW flow feed from goflow2, consumed only to be re-keyed.
   #
@@ -213,6 +241,7 @@ sources:
     topics: ["netops.flows.raw"]
     group_id: "netops-router-flows-rekey"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_syslog:
     type: kafka
@@ -235,6 +264,7 @@ sources:
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_flows:
     type: kafka
@@ -257,6 +287,7 @@ sources:
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   kafka_snmptrap:
     type: kafka
@@ -279,6 +310,7 @@ sources:
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Unified Cloud Logs — tagged raw cloud log lines (cloud_family/cloud_provider/
   # resource_id) produced by the cloud poller (S3/CloudWatch lanes + CloudTrail)
@@ -305,6 +337,7 @@ sources:
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Security evidence (P3-L1) — the generic secbus.EvidenceEvent envelope that
   # every security provider (posture / exposure / signal) produces through
@@ -334,6 +367,7 @@ sources:
     topics: ["netops.security"]
     group_id: "netops-router-security"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # F-03: dead letters produced by the AGGREGATOR tier (which has no storage
   # sink of its own). Already in the flat dead-letter shape, so this lane goes
@@ -361,6 +395,7 @@ sources:
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # DEM experience events (tracker 254) — the first-party RUM / business-event
   # lane. The api validates, stamps the owning tenant from the caller's
@@ -389,6 +424,7 @@ sources:
     topics: ["netops.experience"]
     group_id: "netops-router-experience"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
   # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
   # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
@@ -415,6 +451,7 @@ sources:
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
     decoding: { codec: json }
+    key_field: ""                         # keep the payload message_key
 
 transforms:
   # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
@@ -526,8 +563,25 @@ transforms:
       # the transport credential, never from a payload hostname. Stamped as
       # its own outcome so "device unknown but tenant authoritative" is
       # never conflated with a registry hit — and never quarantined.
+      #
+      # Tracker 387 D6: a registry HIT with a blank tenant is a device the
+      # inventory knows and no tenant owns, so it reads `platform_owned` and the
+      # UI calls it "Platform device". `unmatched` used to cover it too, which
+      # made a healthy platform device read as a failure and left the miss-rate
+      # alert a steady 1.0 with nothing to rise from. This is a LABEL: tenant_id,
+      # tenant_seg and therefore the index, the read filter and the row policy
+      # are decided above and do not depend on it.
+      #
+      # `unmatched` is everything else: a registry miss, and a blank tenant with
+      # no registry stamp at all (the applogs and cloudlogs lanes, or a producer
+      # that stopped stamping). No hit means no proof of ownership, and only a
+      # hit may claim one. Never derived from an address.
       if seg == "untagged" {
-        .tenant_attribution = "unmatched"
+        if (to_string(.tenant_registry) ?? "") == "hit" {
+          .tenant_attribution = "platform_owned"
+        } else {
+          .tenant_attribution = "unmatched"
+        }
       } else if exists(.tenant_registry) {
         .tenant_attribution = "enriched"
       } else {
@@ -597,7 +651,10 @@ transforms:
         dts, dterr = parse_timestamp(to_string(.timestamp) ?? "", format: "%+")
         if dterr == null {
           .ts = to_unix_timestamp(dts, unit: "milliseconds")
-          .ts_source = "timestamp"
+          # The aggregator names a timestamp it had to replace (edge_receive). Keep that.
+          if !exists(.ts_source) {
+            .ts_source = "timestamp"
+          }
         }
       }
 
@@ -621,8 +678,8 @@ transforms:
         cx_topic = to_string(.topic) ?? "(unknown)"
         # Attribution outcome WITH the reason. "untagged" is the answer that
         # needs one: it is either a genuine platform-owned record or a broken
-        # device→tenant table, and F-11 exists precisely because those two look
-        # identical from the document alone.
+        # device→tenant table. F-11 exists because those two once looked identical
+        # from the document alone; `platform_owned` now separates them.
         cx_attr_reason = "tenant came from an AUTHENTICATED producer (no registry stamp on this lane); the device may be unknown to inventory and that is legitimate"
         if seg == "untagged" {
           cx_attr_reason = "UNATTRIBUTED:tenant_id is empty so this doc goes to the SHARED -untagged- index"
@@ -630,6 +687,9 @@ transforms:
             cx_attr_reason = cx_attr_reason + ", upstream device_tenant registry said " + (to_string(.tenant_registry) ?? "?")
           } else {
             cx_attr_reason = cx_attr_reason + ", and no upstream registry stamp either"
+          }
+          if .tenant_attribution == "platform_owned" {
+            cx_attr_reason = "platform device:the device_tenant registry knows this device and no tenant owns it, so the shared -untagged- index is correct and this is not a miss"
           }
         } else if exists(.tenant_registry) {
           cx_attr_reason = "upstream device_tenant registry hit"
@@ -924,6 +984,20 @@ transforms:
       } else {
         .flow_type = "unknown"
       }
+      # Tracker 387 (PR 5) — what the EXPORTER said about sampling, stated rather
+      # than left for a reader to infer from a zero. goflow2 leaves sampling_rate
+      # at 0 when the export carries no rate (NetFlow v5 without the header
+      # field, or v9/IPFIX with no options record), and the flow queries treat 0
+      # as 1:1 (flows.go). So `not_reported_1to1` means "shown as received", which
+      # is right only if the exporter is not sampling: it is a statement about
+      # the data we hold, not a guarantee about the device.
+      #
+      # A LABEL, and nothing else: bytes, packets, sampling_rate and every total
+      # are untouched, and nothing here or downstream multiplies by anything. Not
+      # to be confused with `.sample_rate`, the router's OWN 1:50 sample of the
+      # OpenSearch copy (flows_os_stamped). Any inbound value is overwritten, so a
+      # producer cannot claim a status.
+      .sampling_status = if (to_int(.sampling_rate) ?? 0) > 0 { "reported" } else { "not_reported_1to1" }
       # Tenant attribution: match the flow exporter (sampler_address) to its
       # device's tenant. No match → "" (global). #20. This lookup used to live
       # in the aggregator's flows_normalized; it moved here with F-49, because
@@ -966,7 +1040,7 @@ transforms:
       # sealing is on.
       .tenant_registry = "miss"
       if sampler != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
           .tenant_registry = "hit"
@@ -989,7 +1063,10 @@ transforms:
       # outcome is stamped so the miss-rate metric separates "no inventory row"
       # from "somebody is writing tenanted flows onto the bus", which is a
       # security event and not an enrichment gap.
-      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
+      #
+      # Tracker 387 D6: same three-way rule as the anchor. A hit with no tenant
+      # is `platform_owned`; only a miss is `unmatched`.
+      .tenant_attribution = if seg != "untagged" { "enriched" } else if .tenant_registry == "hit" { "platform_owned" } else { "unmatched" }
       if claimed_tenant != "" && claimed_tenant != tenant_resolved {
         .tenant_attribution = "claim_rejected"
       }
@@ -1093,7 +1170,7 @@ transforms:
       sampler = to_string(.sampler_address) ?? ""
       k = ""
       if sampler != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           k = to_string(trows[0].tenant_id) ?? ""
         }
@@ -1375,6 +1452,14 @@ transforms:
     inputs: [flows_os_sample]
     source: |
       .sample_rate = 50
+      # The sink's id_key needs this, and the coordinate is stripped from the
+      # stored document, so without it a bulk retry would store a duplicate that
+      # nothing could detect. Same id as the &log_lane anchor; a quarantine restore
+      # keeps its own id. Stamped here, not in flows_decoded, so only the 1:50
+      # OpenSearch sample pays for it.
+      if !exists(.cx_event_id) && exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
 
   # F-11 — make a broken device→tenant enrichment table VISIBLE.
   #
@@ -1388,10 +1473,11 @@ transforms:
   #
   # Counting the attribution OUTCOME per topic turns that into a number:
   # a miss RATE that jumps to 1.0 on lanes that previously matched is an
-  # enrichment failure, while a lab whose devices genuinely have no tenant
-  # simply reads a steady 1.0 and never alerts (rules.yaml scopes the alert to
-  # a RISE, not to a level). Exported on the existing :9598 exporter that
-  # vmscrape.yml already scrapes — no new service, no new scrape job.
+  # enrichment failure, while a lab whose devices genuinely have no tenant reads
+  # `platform_owned`, with a miss rate of 0 that a broken table visibly raises
+  # (rules.yaml scopes the alert to a RISE, not to a level, and tracker 387 D6
+  # is what gave a platform-only deployment a rise to see). Exported on the
+  # existing :9598 exporter that vmscrape.yml already scrapes — no new service, no new scrape job.
   tenant_attribution_metric:
     type: log_to_metric
     inputs:
@@ -1411,6 +1497,136 @@ transforms:
           # lane label needs no per-lane transform (and therefore cannot drift
           # away from the lane it actually describes).
           topic: "{{ topic }}"
+
+  # Tracker 387 PR 14: so a lane never silently sits unparsed again. These count
+  # the VALUE of parser_status. Presence proved nothing: it was on 100 % of syslog
+  # records for as long as 100 % of them read `unparsed`, and nothing noticed.
+  # Rules: the parse-coverage group in rules-scale-slo.yaml (warning tier).
+  #
+  # SERIES. vendor is at most 22 values today and parser_id 8, each from the generated
+  # lists below or `other`, so the label product is bounded at 22 x 8 x 6 statuses =
+  # 1056, and the pipeline can reach about 290 of those: a line has one parser and one
+  # status, and a trap has no parser id. A single-vendor deployment holds about ten.
+  # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 12.
+  # No device, tenant or free text can reach a label, so nothing here is
+  # tenant-scoped and every series is safe on the shared exporter.
+  #
+  # A pack adding a vendor or a parser id grows the lists through
+  # scripts/gen-vendor-coverage.py, and tests/test_vendor_coverage.py pins the bound.
+  # >>> BEGIN GENERATED-PARSE-LABELS (scripts/gen-vendor-coverage.py)
+  # GENERATED from the vendor profiles and the catalogue. DO NOT EDIT: re-run
+  # scripts/gen-vendor-coverage.py; a drift test fails on a stale copy.
+  #
+  # Bounded label cardinality by construction: a label value is either in these
+  # lists or it is `other`, whatever a record on the bus claims. No device,
+  # tenant or free-text value can reach a label. See the metrics below for the count.
+  parse_status_labels:
+    type: remap
+    inputs: [syslog_tagged, snmptrap_tagged]
+    source: |
+      cx_lane = "syslog"
+      if (string(.topic) ?? "") == "netops.snmptrap" { cx_lane = "snmptrap" }
+      cx_vendor = string(.vendor) ?? ""
+      if cx_vendor == "" {
+        cx_vendor = "unknown"
+      } else if !includes(["arista", "aruba", "checkpoint", "cisco", "dell", "extreme", "f5", "fortinet", "hp", "huawei", "juniper", "linux", "mikrotik", "net-snmp", "nokia", "paloalto", "ruckus", "sonic", "sophos", "ubiquiti", "unknown"], cx_vendor) {
+        cx_vendor = "other"
+      }
+      cx_parser = string(.parser_id) ?? ""
+      if cx_parser == "" {
+        cx_parser = "none"
+      } else if !includes(["cisco_mgmt_audit.v1", "cisco_sdwan.v1", "fortios_kv.v1", "ios_style.v1", "srlinux.v1", "standard_mgmt_audit.v1"], cx_parser) {
+        cx_parser = "other"
+      }
+      cx_status = string(.parser_status) ?? ""
+      if !includes(["parsed", "unparsed", "decoded", "partially_decoded", "raw_only"], cx_status) { cx_status = "other" }
+      # The stored record is the other branch of this fan-out: this copy keeps only
+      # what the counter reads, so holding it costs nothing.
+      . = { "lane": cx_lane, "vendor": cx_vendor, "parser_id": cx_parser, "parser_status": cx_status }
+
+  trap_varbind_counts:
+    type: remap
+    inputs: [snmptrap_tagged]
+    source: |
+      cx_vendor = string(.vendor) ?? ""
+      if cx_vendor == "" {
+        cx_vendor = "unknown"
+      } else if !includes(["arista", "aruba", "checkpoint", "cisco", "dell", "extreme", "f5", "fortinet", "hp", "huawei", "juniper", "linux", "mikrotik", "net-snmp", "nokia", "paloalto", "ruckus", "sonic", "sophos", "ubiquiti", "unknown"], cx_vendor) {
+        cx_vendor = "other"
+      }
+      cx_resolved = 0
+      cx_unresolved = 0
+      for_each(array(.varbinds) ?? []) -> |_i, vb| {
+        if (string(vb.name) ?? "") != "" {
+          cx_resolved = cx_resolved + 1
+        } else {
+          cx_unresolved = cx_unresolved + 1
+        }
+      }
+      . = { "vendor": cx_vendor, "resolved": cx_resolved, "unresolved": cx_unresolved }
+  # <<< END GENERATED-PARSE-LABELS
+
+  parse_status_metric:
+    type: log_to_metric
+    inputs: [parse_status_labels]
+    metrics:
+      - type: counter
+        field: parser_status
+        name: netops_parse_status_events
+        tags:
+          lane: "{{ lane }}"
+          vendor: "{{ vendor }}"
+          parser_id: "{{ parser_id }}"
+          parser_status: "{{ parser_status }}"
+
+  # How much of what a trap carried we could name: an unresolved varbind is a bare OID
+  # an operator cannot read, and the count ranks which MIB to fetch next (plan §6a).
+  trap_varbind_metric:
+    type: log_to_metric
+    inputs: [trap_varbind_counts]
+    metrics:
+      - type: counter
+        field: resolved
+        increment_by_value: true
+        name: netops_trap_varbinds
+        tags:
+          vendor: "{{ vendor }}"
+          resolution: resolved
+      - type: counter
+        field: unresolved
+        increment_by_value: true
+        name: netops_trap_varbinds
+        tags:
+          vendor: "{{ vendor }}"
+          resolution: unresolved
+
+  # What the flow lane knew about each record, as read off flows_decoded: whether the
+  # exporter is in inventory, what the sampling label says, and whether AS numbers
+  # came through (they were empty on all of the lab's 29,875 rows, plan §2). Interface
+  # and device names arrive at query time (PR 13), so they are not an outcome here.
+  flow_enrichment_labels:
+    type: remap
+    inputs: [flows_decoded]
+    source: |
+      cx_exporter = "unknown"
+      if (string(.tenant_registry) ?? "") == "hit" { cx_exporter = "known" }
+      cx_sampling = string(.sampling_status) ?? ""
+      if !includes(["reported", "not_reported_1to1"], cx_sampling) { cx_sampling = "other" }
+      cx_as = "absent"
+      if (to_int(.src_as) ?? 0) > 0 || (to_int(.dst_as) ?? 0) > 0 { cx_as = "present" }
+      . = { "exporter": cx_exporter, "sampling": cx_sampling, "as_numbers": cx_as }
+
+  flow_enrichment_metric:
+    type: log_to_metric
+    inputs: [flow_enrichment_labels]
+    metrics:
+      - type: counter
+        field: exporter
+        name: netops_flow_enrichment_events
+        tags:
+          exporter: "{{ exporter }}"
+          sampling: "{{ sampling }}"
+          as_numbers: "{{ as_numbers }}"
 
   # Tracker 373: events whose sender address was lost to the Docker bridge
   # gateway (stamped source_masked by the trap receiver, the aggregator's
@@ -1436,6 +1652,25 @@ transforms:
         tags:
           topic: "{{ topic }}"
 
+  # Tracker 387, PR 10: frames the edge could not read as syslog, and frames it had to
+  # trim. `reason` is the aggregator's frame_problem, a closed set of four (malformed_pri,
+  # malformed_5424, no_pri, oversized), so the label cannot grow with the data. The record
+  # itself is stored; this says how many there were.
+  syslog_bad_frame_events:
+    type: filter
+    inputs: [syslog_tagged]
+    condition: exists(.frame_problem)
+
+  syslog_bad_frame_metric:
+    type: log_to_metric
+    inputs: [syslog_bad_frame_events]
+    metrics:
+      - type: counter
+        field: frame_problem
+        name: netops_ingest_syslog_bad_frames
+        tags:
+          reason: "{{ frame_problem }}"
+
   # F-18: the DLQ lane bypasses the log_lane anchor, so it gets its own
   # coordinate stamp. Deliberately UNCONDITIONAL here (unlike the anchor's
   # exists-guard on cx_event_id): a dead-letter record may CARRY the original
@@ -1460,7 +1695,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────
@@ -1503,6 +1738,20 @@ sinks:
       index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3) — pipeline metadata stops at the sink.
+    # The kafka source stamps topic / partition / offset / headers / source_type
+    # on every event (overwriting any payload field of those names), and they
+    # were stored on every document and shown to operators. They stay on the event
+    # through the whole topology because the pipeline needs them: `.topic`,
+    # `.partition` and `.offset` derive cx_event_id in the &log_lane anchor, and
+    # `.topic` labels the tenant-attribution and masked-source counters. The
+    # sink's encoder is the last step, AFTER Vector has read `id_key` and rendered
+    # the index name, so the coordinate survives as the document _id
+    # (`cxk:<topic>:<partition>:<offset>`), which is the replay locator; nothing
+    # is lost by not storing it twice. Proved against a mock _bulk endpoint by
+    # tests/test_router_sink_metadata.py. `vector tap` still shows all of it.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1552,6 +1801,9 @@ sinks:
       index: "netops-quarantine-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1595,6 +1847,9 @@ sinks:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1645,6 +1900,9 @@ sinks:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # ── #209 — a storage BLOCK must degrade to DELAYED, never to LOST ───────
     # THE DEFECT THIS FIXES (storm-s10, run 09012025x578, 2026-09-01):
     # the host root-fs crossed OpenSearch's flood-stage watermark (95 %; trough
@@ -1810,6 +2068,12 @@ sinks:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    # `path` is the aggregator's http_server stamp on the trap lane (trap_in).
+    # It stays on applogs and cloudlogs, where it can be the producer's own
+    # structured field: evidence, not plumbing.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type, path]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1860,6 +2124,9 @@ sinks:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1915,6 +2182,9 @@ sinks:
       index: "netops-secfindings-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
@@ -1971,6 +2241,9 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # Tracker 387 (PR 3): see opensearch_applogs.
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
     # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
     # the 0.40.0 measurements and the buffer arithmetic live on that sink.
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka

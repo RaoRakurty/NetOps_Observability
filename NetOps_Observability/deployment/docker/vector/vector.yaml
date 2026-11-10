@@ -71,16 +71,27 @@ secret:
   vmauth:
     type: exec
     command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/vmauth"]
+  # Tracker 384: svc_aggregator's password for the OpenSearch stats scrapes.
+  # Same script, same rules, another root; same "nothing references it unless an
+  # env var expands to a token" (the plaintext baseline keeps the placeholder).
+  opensearch:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/opensearch"]
 
 # ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
 #
-# The Go API exports a CSV (identity,tenant_id) — one row per device name and per
-# management address — to a shared volume; we load it here and stamp .tenant_id
-# onto every event by matching its source-device identity (syslog hostname, flows
-# sampler_address). The file is loaded at config load; it always exists (the
-# stack seeds a header-only CSV), and an empty/missing match yields tenant_id=""
-# (global/platform). See docs/design/multitenant-telemetry-isolation.md.
+# The Go API exports a CSV to a shared volume, one row per device id, name and
+# management address; we load it here and stamp .tenant_id onto every event by
+# matching its source-device identity (syslog hostname, flows sampler_address).
+# The file is loaded at config load; it always exists (the stack seeds a
+# header-only CSV), and an empty/missing match yields tenant_id="" (global/platform).
+# See docs/design/multitenant-telemetry-isolation.md.
+#
+# Tracker 387 PR 12: the same row carries the inventory's facts about the device
+# (device_id, vendor, model, site, role), on the same O(1) lookup and the same
+# reload. A file from before these columns simply reads as "no facts stated"
+# (tests/test_inventory_vendor.py), which is what makes the upgrade order free.
 # ----------------------------------------------------------------------------
 
 enrichment_tables:
@@ -93,6 +104,11 @@ enrichment_tables:
     schema:
       identity: string
       tenant_id: string
+      device_id: string
+      vendor: string
+      model: string
+      site: string
+      role: string
 
 # ----------------------------------------------------------------------------
 # SOURCES
@@ -119,6 +135,10 @@ sources:
     type: syslog
     address: 0.0.0.0:6601
     mode: tcp
+    # A relay frame carries the message, the raw frame and the sender's structured data,
+    # escaped: up to 7 times syslog-ng's log-msg-size (32 KiB, see core.conf). Past this
+    # Vector drops the frame, so it stays above that bound.
+    max_length: 262144
     tls:
       enabled: ${SYSLOG_TLS_ENABLED:-false}
       crt_file: "${INGEST_TLS_CRT:-/tls/ca.pem}"
@@ -506,6 +526,66 @@ transforms:
       if gateway != "" && sender == gateway {
         .source_masked = true
       }
+      # Frame facts (tracker 387, PR 10; syslog-ng/core.conf p_frame). syslog-ng reads the
+      # sender's structured data into one text value, so the only elements a device can
+      # reach this transform with are `cx` and `origin`, and no SD element can land on a
+      # field of this event. Flat fields only: an SD id such as junos@2636.1.1.1.2.18 is
+      # the dotted-key shape that once made OpenSearch refuse every app log.
+      cx_frame = string(.cx.frame) ?? ""
+      if cx_frame != "" {
+        .frame_format = cx_frame
+      }
+      cx_raw = string(.cx.raw) ?? ""
+      if cx_raw != "" {
+        .message_original = cx_raw
+      }
+      cx_sd = string(.cx.sd) ?? ""
+      if cx_sd != "" {
+        .structured_data = cx_sd
+      }
+      # Event time (log-time standard R2, R4, R5). An RFC 3164 time has no zone and no
+      # year, so it cannot prove an instant. A device logging local time, or with a wrong
+      # clock, would otherwise reach the engine hours away from its neighbours and never
+      # correlate: `timestamp` is what the engine, the router's `ts` and the Logs sort read.
+      # So past the skew tolerance a zone-less claim is not believed: event time is when
+      # the edge read the frame, the claim stays on the record as device_timestamp, and
+      # ts_source and clock_skew_s say so. Inside the tolerance the device's own time
+      # stands, which keeps sub-second order. A frame that STATES its zone is left alone:
+      # it may truly be old (a replay, a backlog), and re-stamping it would fabricate
+      # freshness; clock_skew_s reports it and the engine's buffer_signal bounds it.
+      # 300 is producers.SYSLOG_CLOCK_SKEW_TOLERANCE_S, pinned by the edge suite.
+      cx_recv, cx_recv_err = parse_timestamp(string(.cx.recv) ?? "", "%+")
+      if cx_recv_err == null {
+        .ingested_at = cx_recv
+        cx_claim = parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? cx_recv
+        cx_skew = to_unix_timestamp(cx_claim) - to_unix_timestamp(cx_recv)
+        if (string(.cx.zone) ?? "") != "stated" && abs(cx_skew) > 300 {
+          .device_timestamp = cx_claim
+          .timestamp = cx_recv
+          .ts_source = "edge_receive"
+          .clock_skew_s = cx_skew
+        }
+      }
+      del(.cx)
+      # Counted by the router (netops_ingest_syslog_bad_frames). The record itself stays.
+      # 32768 is syslog-ng's log-msg-size: a frame this long may have lost its tail.
+      if cx_frame == "malformed_pri" || cx_frame == "malformed_5424" || cx_frame == "no_pri" {
+        .frame_problem = cx_frame
+      } else if strlen(cx_raw) >= 32768 {
+        .frame_problem = "oversized"
+      }
+      # The PRI facility gets its own field, and .facility is left for a body grammar's
+      # answer (`LINK`, `FTMD`). It must not stay in .facility: the engine's screen and its
+      # classifiers read that field, and `local` is one of the screen's literals, so a
+      # fleet logging to local7 (Cisco's default) would pass every line through it.
+      cx_pri_facility = string(.facility) ?? ""
+      if cx_pri_facility != "" {
+        .syslog_facility = cx_pri_facility
+      }
+      del(.facility)
+      # syslog-ng's RFC 5424 writer marks a UTF-8 message with a BOM. It is framing, and
+      # every grammar and the engine read the message from its first character.
+      .message = replace(string(.message) ?? "", r'^\x{FEFF}', "", count: 1)
 
   syslog_normalized:
     type: remap
@@ -547,17 +627,197 @@ transforms:
       # does not know at all — TENANT_UNATTRIBUTABLE, quarantined by the
       # router's generated stage when sealing is enabled. The two used to be
       # indistinguishable (both left .tenant_id == "").
+      #
+      # Tracker 387 PR 12: the facts on the row are a claim only the registry may
+      # make, so the wire's copies die here with the tenant's. `vendor_source` above
+      # all: the engine and the admission stamp narrow their grammars on it.
+      del(.vendor_source)
+      del(.device_id)
+      del(.model)
+      del(.site)
+      del(.role)
       .tenant_id = ""
       .tenant_registry = "miss"
       tenant_resolved = ""
+      cx_inv = {}
       if .hostname != "unknown" {
         trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
           .tenant_id = tenant_resolved
           .tenant_registry = "hit"
+          cx_inv = object(trows[0]) ?? {}
         }
       }
+
+      # Vendor packs (tracker 387, plan §6a). The grammars are data in
+      # telemetry-catalog/vendor-packs/; the generated block below runs them and
+      # this file's other pack code only applies the result, naming no vendor.
+      #
+      # cx_inventory_vendor is what discovery says the device is (sysObjectID, read
+      # through the vendor profiles, telemetry_enrichment.go). It narrows the grammars
+      # to that vendor and wins over every format guess, stamping
+      # vendor_source=inventory. A sender not in inventory, or one the inventory
+      # states no vendor for, falls back to the text below: vendor_source=format.
+      cx_inventory_vendor = string(cx_inv.vendor) ?? ""
+      # >>> BEGIN GENERATED-SYSLOG-PACKS (scripts/gen-syslog-packs.py)
+      # GENERATED from telemetry-catalog/vendor-packs/*.yaml. DO NOT EDIT: change
+      # a pack and re-run scripts/gen-syslog-packs.py; a drift test fails on a
+      # stale copy. Sets cx_pk_* locals plus the envelope rewrite; nothing here
+      # drops or reorders a record.
+      cx_pk_parser = ""
+      cx_pk_vendor = ""
+      cx_pk_fac = ""
+      cx_pk_et = ""
+      cx_pk_sum = ""
+      cx_pk_ntxt = ""
+      cx_pk_ncode = ""
+      cx_pk_cat = ""
+      cx_pk_sev = 99
+      cx_pk_msg = string(.message) ?? ""
+      cx_pk_app = downcase(.appname)
+      # grammar cisco_sdwan.viptela_notification (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.name) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.level) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # grammar cisco_sdwan.viptela (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.proc) ?? "") + "_" + (string(cx_pk_m.id) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
+          cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # grammar cisco_sdwan.cisco_sdwan (doc_claimed)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_sdwan.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_fac = (string(cx_pk_m.proc) ?? "")
+          cx_pk_et = downcase((string(cx_pk_m.proc) ?? "") + "_" + (string(cx_pk_m.id) ?? ""))
+          cx_pk_sum = (string(cx_pk_m.text) ?? "")
+          cx_pk_ntxt = (string(cx_pk_m.word) ?? "")
+          cx_pk_ncode = (string(cx_pk_m.sev) ?? "")
+          cx_pk_sev = to_int(cx_pk_m.sev) ?? 99
+        }
+      }
+      # grammar cisco_sdwan.iosxe_dmi_auth (lab_validated)
+      if cx_pk_parser == "" && (cx_inventory_vendor == "" || cx_inventory_vendor == "cisco") && contains(cx_pk_msg, "dmiauthd: User ") {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'dmiauthd: User \S+ authenticated successfully')
+        if cx_pk_merr == null {
+          cx_pk_parser = "cisco_mgmt_audit.v1"
+          cx_pk_vendor = "cisco"
+          cx_pk_et = downcase("dmi_auth_passed")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_created (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ created new session via (?P<via>[a-z]+)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_created_" + (string(cx_pk_m.via) ?? ""))
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_groups (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ assigned to groups:')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_groups")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_session_terminated (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "audit user: ") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^audit user: \S+ terminated session')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("audit_session_terminated")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_rpc (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ (?:got rpc|get attrs|sending rpc-reply|close-session)')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_rpc")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_session (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ new tcp session')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_session")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.confd_netconf_notification (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "netconf id=") && includes(["confd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^netconf id=\d+ sending notification')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("netconf_notification")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.sshd_accepted (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "Accepted ") && includes(["sshd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^Accepted \S+ for ')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("ssh_login_accepted")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.sshd_banner_probe (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "kex_exchange_identification: ") && includes(["sshd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'^error: kex_exchange_identification: ')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("ssh_banner_probe")
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # grammar standard.sshd_session (lab_validated)
+      if cx_pk_parser == "" && contains(cx_pk_msg, "pam_unix(sshd:session): session ") && includes(["sshd"], cx_pk_app) {
+        cx_pk_m, cx_pk_merr = parse_regex(cx_pk_msg, r'pam_unix\(sshd:session\): session (?P<state>opened|closed) for ')
+        if cx_pk_merr == null {
+          cx_pk_parser = "standard_mgmt_audit.v1"
+          cx_pk_vendor = ""
+          cx_pk_et = downcase("ssh_session_" + (string(cx_pk_m.state) ?? ""))
+          cx_pk_cat = "management_audit"
+        }
+      }
+      # <<< END GENERATED-SYSLOG-PACKS
 
       # Vendor classification from the log signature (heuristic). The
       # authoritative vendor still comes from SNMP sysObjectID at discovery;
@@ -568,7 +828,9 @@ transforms:
       msg = string(.message) ?? ""
       app = downcase(.appname)
       vendor = "unknown"
+      cx_fortios_format = false
       if match(msg, r'devname=\S+') && match(msg, r'logid=') {
+        cx_fortios_format = true
         vendor = "fortinet"
       } else if match(msg, r',(TRAFFIC|THREAT|SYSTEM|CONFIG|HIPMATCH),') {
         vendor = "paloalto"
@@ -580,7 +842,21 @@ transforms:
       } else if match(msg, r'%[A-Z][A-Z0-9_]+-[0-7]-[A-Z0-9_]+') {
         vendor = "cisco"
       }
+      if cx_inventory_vendor != "" {
+        vendor = cx_inventory_vendor
+        .vendor_source = "inventory"
+      } else if cx_pk_vendor != "" {
+        vendor = cx_pk_vendor
+        .vendor_source = "format"
+      } else if vendor != "unknown" {
+        .vendor_source = "format"
+      }
       .vendor = vendor
+      # The FortiOS body parser below needs the body to BE that format and the
+      # device not to be stated as something else. Vendor alone no longer proves
+      # the first once inventory can say it, and a text match alone no longer
+      # proves the second.
+      cx_parse_fortios = cx_fortios_format && vendor == "fortinet"
 
       # FortiOS parser. FortiGate's "default" log format is space-separated
       # key="value" pairs and carries NO clean RFC hostname — Vector keys it to
@@ -606,7 +882,7 @@ transforms:
       # value would (correctly) get the event refused downstream. When it does
       # not qualify, the name is still captured — it is right there in
       # .fgt.devname — it just does not become the device identity.
-      if vendor == "fortinet" {
+      if cx_parse_fortios {
         kv, kverr = parse_key_value(msg)
         if kverr == null {
           .fgt = kv
@@ -617,6 +893,9 @@ transforms:
                (to_string(drows[0].tenant_id) ?? "") == tenant_resolved {
               .hostname = dn
               .host = dn
+              # The record now names this device, so its facts are this device's.
+              # Same tenant by the check above: never another owner's row.
+              cx_inv = object(drows[0]) ?? {}
             }
           }
           t  = string(kv.type) ?? ""
@@ -646,6 +925,17 @@ transforms:
         }
       }
 
+      # The inventory's facts about the device this record names. Flat, and only
+      # when stated, so an absent field keeps meaning "the inventory does not say".
+      cx_inv_v = string(cx_inv.device_id) ?? ""
+      if cx_inv_v != "" { .device_id = cx_inv_v }
+      cx_inv_v = string(cx_inv.model) ?? ""
+      if cx_inv_v != "" { .model = cx_inv_v }
+      cx_inv_v = string(cx_inv.site) ?? ""
+      if cx_inv_v != "" { .site = cx_inv_v }
+      cx_inv_v = string(cx_inv.role) ?? ""
+      if cx_inv_v != "" { .role = cx_inv_v }
+
       # ── Structured-body parsers (#31): turn the vendor log body into canonical
       # normalized fields (subsystem/facility/event_type/summary + embedded
       # severity) so Events/RCA read structure, not raw text. Infallible: every
@@ -653,7 +943,23 @@ transforms:
       # event. parser_status makes coverage observable (no silent failure).
       .parser_status = "unparsed"
       embedded_sev = 99
-      if vendor != "fortinet" {
+      if cx_pk_parser != "" {
+        # A vendor-pack grammar matched. Native severity stays apart from the
+        # normalized one (plan §5.3); a category row gets the stable key the read
+        # path groups repeats by, and nothing is dropped or merged here (owner D2).
+        .parser_id = cx_pk_parser
+        .parser_status = "parsed"
+        if cx_pk_fac != "" { .facility = cx_pk_fac }
+        if cx_pk_et != "" { .event_type = cx_pk_et }
+        if cx_pk_sum != "" { .summary = cx_pk_sum }
+        if cx_pk_ntxt != "" { .severity_native_text = cx_pk_ntxt }
+        if cx_pk_ncode != "" { .severity_native_code = cx_pk_ncode }
+        if cx_pk_cat != "" {
+          .event_category = cx_pk_cat
+          .dedup_key = .hostname + "|" + .appname + "|" + cx_pk_et
+        }
+        embedded_sev = cx_pk_sev
+      } else if !cx_parse_fortios {
         # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
         cm, cmerr = parse_regex(msg, r'%(?P<facility>[A-Z][A-Z0-9_]+)-(?P<sev>[0-7])-(?P<mnemonic>[A-Z0-9_]+):\s*(?P<text>.*)')
         if cmerr == null {
@@ -667,7 +973,11 @@ transforms:
           # Nokia SR Linux: <lvlword>|<pid>|<tid>|<seq>|<subsys>||<S>: <text>
           sm, smerr = parse_regex(msg, r'\w+\|\d+\|\d+\|\d+\|(?P<subsys>[^|]*)\|[^|]*\|(?P<sevchar>[A-Z]):\s*(?P<text>.*)')
           if smerr == null {
-            .vendor = "nokia"
+            # A format guess: it never overrides what the inventory states.
+            if cx_inventory_vendor == "" {
+              .vendor = "nokia"
+              .vendor_source = "format"
+            }
             .subsystem = strip_whitespace(string(sm.subsys) ?? "")
             .summary = strip_whitespace(string(sm.text) ?? "")
             sc = string(sm.sevchar) ?? ""
@@ -676,6 +986,20 @@ transforms:
             .parser_status = "parsed"
           }
         }
+      } else if exists(.fgt) {
+        # The key-value body parsed above. Recorded, or every such line reads as
+        # unparsed on the metric that exists to catch unparsed lanes (387 PR 14).
+        .parser_id = "fortios_kv.v1"
+        .parser_status = "parsed"
+      }
+
+      # RFC 5424 MSGID is the sender's own stable id for the message (Junos puts its
+      # UI_COMMIT tag there and nowhere else). The engine classifies on event_type, so with
+      # no grammar's answer this is the one it reads. The body stays unparsed: it is an
+      # envelope fact, not a parse.
+      cx_msgid = string(.msgid) ?? ""
+      if cx_msgid != "" && !exists(.event_type) {
+        .event_type = downcase(cx_msgid)
       }
 
       # Severity reconcile: the body's embedded level overrides the syslog PRI when
@@ -699,13 +1023,15 @@ transforms:
       # receive clock. |skew| > 300s ⇒ stamp clock_skew_s (signed seconds,
       # positive = device clock ahead) so the record is searchable in
       # OpenSearch and the correlation service raises a per-device finding off
-      # the bus copy. The timestamp itself is NEVER rewritten (R2: origin time
-      # preserved; R3: receive time alongside).
+      # the bus copy. Compared to when the EDGE read the frame (ingested_at, R3)
+      # where known, so a frame held in syslog-ng's disk buffer is not a wrong clock.
+      # syslog_sender has already handled a zone-less claim past the tolerance; a
+      # frame that states its zone keeps its timestamp (R2).
       # (`to_timestamp` does not exist in this Vector's VRL — exit 78 at boot,
       # caught in deploy 2026-07-17. Render→parse handles both a native
       # timestamp and a string form of .timestamp.)
       ots = to_unix_timestamp(parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? now())
-      skew_s = ots - to_unix_timestamp(now())
+      skew_s = ots - to_unix_timestamp(parse_timestamp(to_string(.ingested_at) ?? "", "%+") ?? now())
       if abs(skew_s) > 300 { .clock_skew_s = skew_s }
 
       # ── Scale P0: tenant partition key ──────────────────────────────────
@@ -756,7 +1082,7 @@ transforms:
         }
         # ── the body-parser decision, with the reason a parse did NOT happen ─
         cx_parse_reason = "NO-PARSE:neither %FAC-SEV-MNEMONIC nor the SR-Linux pipe format matched the body"
-        if vendor == "fortinet" {
+        if cx_parse_fortios {
           cx_parse_reason = "NO-PARSE:fortinet-kv branch, parse_key_value FAILED — body left raw"
           if exists(.fgt) {
             cx_parse_reason = "fortinet-kv branch, parsed into .fgt (the structured-body parsers are skipped for this vendor by design)"
@@ -767,6 +1093,7 @@ transforms:
         cx_line = "component=syslog_normalized" +
           " hostname=" + .hostname +
           " vendor=" + vendor +
+          " vendor_source=" + (string(.vendor_source) ?? "-") +
           " tenant_registry=" + .tenant_registry +
           " tenant_id=" + cx_tid +
           " tenant_reason=" + cx_tenant_reason +
@@ -860,10 +1187,10 @@ transforms:
       # the engine COULD promote, and leaves the field unset otherwise. It
       # never drops, rewrites or reorders anything: the stamp is additive.
       #
-      #   rules_hash : 0538afc1b47c3bc4d4d350e5088a4ecf300e8bdc0c8b3a317bb91f2a193209f0
-      #   v          : 0538afc1b47c
+      #   rules_hash : 62510ecb917ec7c1596ca24e280a22c461012aff8f084c46416bf695eed4543a
+      #   v          : 62510ecb917e
       #   floor      : ALARM_SEVERITY_FLOOR = 4
-      #   screen     : 61 literals
+      #   screen     : 71 literals
       #
       # Field parity: this runs immediately after `syslog_normalized`, so it
       # reads exactly the document `kafka_syslog` serializes onto
@@ -903,24 +1230,86 @@ transforms:
         cx_sev = cx_tag_sev
       }
 
+      # The same mnemonic at the start of the message (producers._BODY_SEV_RE).
+      cx_body_sev = 99
+      cx_m = parse_regex(string(.message) ?? "", r'^%[A-Z0-9_]+-(?P<d>\d)-[A-Z0-9_]+') ?? {}
+      if is_string(cx_m.d) {
+        cx_body_sev = to_int(cx_m.d) ?? 99
+      }
+      if cx_body_sev < cx_sev {
+        cx_sev = cx_body_sev
+      }
+
+      # ── vendor-pack severity (producers.syslog_alarm_num) ───────────────
+      # The grammars are telemetry-catalog/vendor-packs/*.yaml. A matching row
+      # adds the severity the line's own text states, and its alarm floor then
+      # decides whether severity alone may admit the line (owner D3).
+      cx_pk_msg = string(.message) ?? ""
+      cx_pk_app = downcase(string(.appname) ?? "")
+      cx_pk_inv = ""
+      if (string(.vendor_source) ?? "") == "inventory" {
+        cx_pk_inv = string(.vendor) ?? ""
+      }
+      cx_pk_n = 99
+      cx_pk_floor = 99
+      if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>Notification:.{0,48}?\b(?P<name>[a-z]+(?:-[a-z]+)+)\b\s*(?:severity-level:(?P<level>[a-z]+))?.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Viptela-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Viptela-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_msg, "%Cisco-SDWAN-") {
+        cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'%Cisco-SDWAN-(?P<origin>\S{1,64}?)-(?P<proc>[A-Za-z][A-Za-z0-9_]{0,31})-(?P<sev>[0-7])-(?P<word>[A-Z]{4})-(?P<id>\d{1,12}):\s*(?P<text>.*)')
+        if cx_pk_err == null {
+          cx_pk_v = 99
+          cx_pk_v = to_int(cx_pk_m.sev) ?? 99
+          if cx_pk_v < 99 {
+            cx_pk_n = cx_pk_v
+            cx_pk_floor = 2
+          }
+        }
+      }
+      if cx_pk_n < cx_sev {
+        cx_sev = cx_pk_n
+      }
+      if cx_pk_n < 99 && cx_sev > cx_pk_floor {
+        cx_sev = 99
+      }
+
       # ── gate 1: the device called it warning-or-worse ───────────────────
       if cx_sev <= 4 {
-        .cx_admission = { "v": "0538afc1b47c", "by": "severity" }
+        .cx_admission = { "v": "62510ecb917e", "by": "severity" }
       }
 
       # ── gate 2: a known typed symptom marker, at any severity ───────────
       # The haystack is `message + " " + upcase(appname) + " " + facility +
       # " " + event_type`, lower-cased — byte-for-byte the join
       # `syslog_promotable` builds. The alternation below is the screen's
-      # 61 literals (longest first, as in the Python tuple); Rust's
+      # 71 literals (longest first, as in the Python tuple); Rust's
       # regex compiles an alternation of plain literals into a literal-set
       # matcher, so this is one pass, not 61 substring searches.
       if !exists(.cx_admission) {
         cx_hay = downcase(
           (string(.message) ?? "") + " " + cx_tag + " " +
           (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
-        if match(cx_hay, r'unsupported_transceiver|is flapping between|isisadjacencychange|has moved between|between nve and|duplicate host|vxlan_mac_move|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
-          .cx_admission = { "v": "0538afc1b47c", "by": "marker" }
+        if match(cx_hay, r'system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |error: kex_exchange_identification: |control-connection-state-change|: system cpu usage is above |: system cpu usage is below |unsupported_transceiver|is flapping between|isisadjacencychange|has moved between|bfd-state-change|between nve and|duplicate host|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%viptela-|adjchange|bias_high|corrected|nbr_reset|qualified|temp_high|threshold|dup_host|mac_move|spantree|macflap|standby|warning|adjchg|deskew|maxpfx|remote|signal|updown|alarm|align|error|light|local|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep|ber|hmm|los|nve|pre') {
+          .cx_admission = { "v": "62510ecb917e", "by": "marker" }
         }
       }
 
@@ -966,16 +1355,42 @@ transforms:
       if .hostname == "" { .hostname = host }
       key = dev
       if key == "" { key = host }
+      # Tracker 387 PR 12: facts on the row are the registry's to state; see the
+      # syslog lane.
+      del(.vendor_source)
+      del(.device_id)
+      del(.model)
+      del(.site)
+      del(.role)
       # F-11: registry-MISS discriminator — see the syslog lane's note.
       .tenant_id = ""
       .tenant_registry = "miss"
+      cx_inv = {}
       if key != "" {
         trows = find_enrichment_table_records("device_tenant", { "identity": key }) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
           .tenant_registry = "hit"
+          cx_inv = object(trows[0]) ?? {}
         }
       }
+      # Vendor: discovery's answer beats the trap OID's enterprise arc, which names
+      # whose MIB the trap is (a standard trap names nobody).
+      cx_inv_v = string(cx_inv.vendor) ?? ""
+      if cx_inv_v != "" {
+        .vendor = cx_inv_v
+        .vendor_source = "inventory"
+      } else if (string(.vendor) ?? "") != "" {
+        .vendor_source = "format"
+      }
+      cx_inv_v = string(cx_inv.device_id) ?? ""
+      if cx_inv_v != "" { .device_id = cx_inv_v }
+      cx_inv_v = string(cx_inv.model) ?? ""
+      if cx_inv_v != "" { .model = cx_inv_v }
+      cx_inv_v = string(cx_inv.site) ?? ""
+      if cx_inv_v != "" { .site = cx_inv_v }
+      cx_inv_v = string(cx_inv.role) ?? ""
+      if cx_inv_v != "" { .role = cx_inv_v }
       # Scale P0: tenant partition key — see the syslog lane's note.
       .__key = "global"
       if .tenant_id != "" { .__key = .tenant_id }
@@ -1045,7 +1460,7 @@ transforms:
       tgt = string(.target) ?? ""
       .tenant_id = ""
       if tgt != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }) ?? []
+        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }
@@ -1065,7 +1480,9 @@ transforms:
       dev = string(.device) ?? ""
       .tenant_id = ""
       if dev != "" {
-        trows = find_enrichment_table_records("device_tenant", { "identity": dev }) ?? []
+        # select: this is the hottest lane, and it reads only the tenant, so it does
+        # not pay to copy the inventory facts for every sample (387 PR 12).
+        trows = find_enrichment_table_records("device_tenant", { "identity": dev }, select: ["tenant_id"]) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }

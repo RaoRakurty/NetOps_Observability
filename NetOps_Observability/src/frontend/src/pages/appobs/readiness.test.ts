@@ -134,6 +134,8 @@ describe("measurement state", () => {
     expect(getMeasurementState("permission_denied")).toBe("permission_denied");
     expect(getMeasurementState("off")).toBe("not_measured");
     expect(getMeasurementState("no_data")).toBe("not_measured");
+    expect(getMeasurementState("unknown")).toBe("not_measured");
+    expect(isMeasured("unknown")).toBe(false);
   });
 });
 
@@ -180,6 +182,19 @@ describe("permission-denied context (Wave 2 #4)", () => {
     expect(flow.sinceIso).toBe("2026-06-23T08:00:00Z");
     // …and the summary tile counts it (the "Permission errors" card).
     expect(summarize(r, 1).permissionErrors).toBe(1);
+  });
+  it("a metrics source that could not be checked keeps its status and says why", () => {
+    const r = deriveReadiness({
+      inventoryCount: 1, inventoryError: false,
+      ingestion: [{
+        source_type: "metrics", status: "unknown", capability: "available",
+        detail: "Metrics could not be checked for this workspace, so this does not mean none are arriving.",
+      }],
+    });
+    const m = r.find((x) => x.sourceType === "metrics")!;
+    expect(m.status).toBe("unknown");
+    expect(m.lastError).toContain("could not be checked");
+    expect(summarize(r, 1).partial).toBe(1);
   });
   it("sinceLabel: weekday inside a week, date beyond, empty for garbage", () => {
     const now = new Date("2026-07-16T12:00:00Z").getTime(); // a Thursday

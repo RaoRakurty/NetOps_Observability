@@ -540,6 +540,17 @@ def test_tenant_attribution_outcome_is_stamped_on_every_lane():
             f"{lane} does not record whether tenant enrichment matched (F-11)"
 
 
+def test_platform_device_is_not_counted_as_a_miss():
+    """Tracker 387 D6: a registry hit with a blank tenant is a platform device.
+    On the shared anchor and on the hand-rolled flows lane alike, and `unmatched`
+    survives for what it means. The hand-rolled lane is the one that drifts."""
+    cfg = vector_cfg("router")
+    for lane in ("syslog_tagged", "snmptrap_tagged", "flows_decoded"):
+        src = cfg["transforms"][lane]["source"]
+        assert "platform_owned" in src, f"{lane} still calls a platform device unmatched"
+        assert "unmatched" in src, f"{lane} lost the outcome for a real registry miss"
+
+
 def test_tenant_attribution_is_exported_as_a_metric():
     cfg = vector_cfg("router")
     metric = cfg["transforms"]["tenant_attribution_metric"]
@@ -839,6 +850,17 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         # undeclared field is stored and not indexed — no mapping conflict, no
         # rejected doc; tests/test_pipeline_debug_vrl.py pins both halves.
         "cx_parse_trace",
+        # tracker 387: the frame as received. Kept for retrieval, never searched; the
+        # cleaned `message` is the searchable one, so indexing this as well would index
+        # every line twice.
+        "message_original",
+        # tracker 387 PR 10: the sender's RFC 5424 structured data as one text value. A
+        # device writes its element and param names, so mapping them is a mapping
+        # explosion; it is read from _source.
+        "structured_data",
+        # tracker 387 PR 10: what a device claimed when its zone-less time was not believed.
+        # Kept for retrieval; `timestamp` is the searchable time.
+        "device_timestamp",
         "vendor", "hostname", "appname", "severity", "facility", "summary",
         "subsystem", "event_type", "normalized_severity", "clock_skew_s",
         "fgt", "app_id", "app_vendor", "app_src", "app_dst", "app_dport",

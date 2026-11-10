@@ -92,6 +92,25 @@ type Detection struct {
 	// match wins. It is load-bearing: "BIG-IP … : Linux 3.10" must resolve to
 	// f5, not linux. 0 = the vendor does not participate in text detection.
 	SysDescrRank int `json:"sysdescr_rank,omitempty"`
+	// AgentIdentity marks a detection identity that names the SNMP agent or the
+	// host OS, not whoever built the box's network OS: net-snmp answers on
+	// anything that runs it, so its enterprise number says nothing about which
+	// syslog grammars the device speaks. Such a vendor stays a detection answer
+	// and is never stated to the telemetry lanes as a fact about the device
+	// (InventoryVendorID), because a false "inventory vendor" would narrow the
+	// grammars away from the lines the box actually sends.
+	AgentIdentity bool `json:"agent_identity,omitempty"`
+	// RefinesAgents lists agent-identity vendors whose enterprise number this
+	// vendor's boxes report. When one of them answers sysObjectID, this vendor's
+	// SysDescrContains markers win over it (VendorRefiningAgent): a network OS
+	// built on an off-the-shelf agent is otherwise indistinguishable from a
+	// plain host running that agent.
+	RefinesAgents []string `json:"refines_agents,omitempty"`
+	// InventoryNames are spellings of this vendor an inventory source writes
+	// that neither the id, the display name nor the sysDescr markers cover (a
+	// NetBox manufacturer such as "Hewlett Packard Enterprise"). Compared as
+	// whole words, letters and digits only.
+	InventoryNames []string `json:"inventory_names,omitempty"`
 	// OSVersionPattern is the vendor's version-capture regexp (capture group 1).
 	// Anchored to the vendor's own version keyword so a model number can never
 	// be read as a version. Shared by every profile of the vendor.

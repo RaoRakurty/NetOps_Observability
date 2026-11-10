@@ -64,7 +64,7 @@ jobs:
           fetch-depth: 0 # full history — a secret in any past commit must surface
       - name: Install gitleaks (pinned)
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tgz
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 15 "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tgz
           tar -xzf gitleaks.tgz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version

@@ -27,6 +27,8 @@ expect_never:
   - log-confirmation
   - optics-degraded
 expect_select: ospf-adjacency
+expect_hypotheses:
+  - igp-adjacency=SUPPORTED
 
 ---
 
@@ -150,6 +152,8 @@ expect_never:
   - interface-down
   - log-confirmation
   - optics-degraded
+expect_never_tools:
+  - get_config_diff
 
 ---
 

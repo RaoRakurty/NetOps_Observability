@@ -72,9 +72,22 @@ check_vector(){
   if [ "$mode" = "vmauth-secret" ]; then
     mkdir -p "$stub/secrets/vector"
     printf 'preflight-stub-credential\n' > "$stub/secrets/vector/password"
+    # Tracker 384: the OpenSearch stats password resolves the same way.
+    mkdir -p "$stub/os/aggregator"
+    printf 'preflight-stub-credential\n' > "$stub/os/aggregator/password"
     secret_args=(-e 'VMAUTH_VECTOR_PASSWORD_REF=SECRET[vmauth.vector]'
+                 -e 'OPENSEARCH_STATS_PASSWORD=SECRET[opensearch.aggregator]'
                  -v "$ROOT/$(dirname "$rel"):/etc/vector/conf:ro"
-                 -v "$stub/secrets:/run/secrets/vmauth:ro")
+                 -v "$stub/secrets:/run/secrets/vmauth:ro"
+                 -v "$stub/os:/run/secrets/opensearch:ro")
+  elif [ "$mode" = "opensearch-secret" ]; then
+    # Tracker 384: the router's OpenSearch password, through the aggregator's
+    # script, which compose mounts at /etc/vector/shared.
+    mkdir -p "$stub/os/router"
+    printf 'preflight-stub-credential\n' > "$stub/os/router/password"
+    secret_args=(-e 'OPENSEARCH_PASSWORD=SECRET[opensearch.router]'
+                 -v "$ROOT/$(dirname "$(dirname "$rel")")/vector:/etc/vector/shared:ro"
+                 -v "$stub/os:/run/secrets/opensearch:ro")
   fi
   if [ -n "$extra" ]; then
     if [ ! -f "$ROOT/$extra" ]; then
@@ -289,6 +302,8 @@ check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator (T
 # generated file — exactly what install.py seeds on a cold start.
 check_vector "deployment/docker/vector-router/vector.yaml" "vector-router" \
              "deployment/docker/vector-router/processors-default.yaml"
+check_vector "deployment/docker/vector-router/vector.yaml" "vector-router (TLS: OpenSearch credential via SECRET[])" \
+             "deployment/docker/vector-router/processors-default.yaml" opensearch-secret
 check_nginx
 check_nginx_mtls
 check_metrics_configs

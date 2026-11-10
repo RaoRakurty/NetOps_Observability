@@ -427,6 +427,7 @@ jobs:
           go test -count=1 -timeout 20m -run '^TestCompilerAgainstTheGoldenCorpus$' ./internal/nlquery/
           go test -count=1 -timeout 20m -run '^(TestGoldenIncidentCorpus|TestGoldenDocsCitationCorrectness|TestGoldenInjectionPromptBlockFence|TestGoldenInjectionFabricatedDocCite|TestRoutingScoreboard)$' ./ai/
           go test -count=1 -timeout 20m -run '^(TestAIRoutesRefuseWithoutTheirEntitlementAndAdmitWithIt|TestAIAdminPlaneRoutesRefuseNonAdmins|TestIrisReleaseGateAuditCompleteness)$' .
+          go test -count=1 -timeout 20m -run '^TestReplayCorpus$' ./internal/irisreplay/
       - name: evaluate the gates
         if: always()
         run: go test -count=1 -v -run '^TestIrisReleaseGates$' ./internal/irisgate/

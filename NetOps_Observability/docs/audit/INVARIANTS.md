@@ -93,6 +93,8 @@ and thereby certified the blind scope as healthy.
 | A registry never falls back to an implicit ephemeral store | ✅ | **BUILD** (tracker 245) — `TestApplicationStoreNeverFallsBackToMemory`, `TestApplicationsRefuseOnUnsupportedBackend`: a configured persistent backend with no implementation for a registry yields a nil store and a 501 with `APPLICATION_REGISTRY_BACKEND_UNSUPPORTED`, never an in-memory store that acknowledges writes it loses on restart. Memory is reachable only by an explicit `STORE_BACKEND=memory`; an unknown value aborts the boot (`TestInitStoreBackendRejectsUnknownValue`) |
 | A store backend never fails over to another backend | ✅ | **BUILD** (tracker 245) — `TestApplicationsPostgresOutageDoesNotFailOverPG` (DATABASE_URL_TEST): with Postgres down the registry answers 503 `APPLICATIONS_STORAGE_UNAVAILABLE`, refuses the write, still reports `active_backend=postgres`, and after recovery holds exactly the pre-outage record. `TestUsePostgresFailureDoesNotSwitchBackends` pins the boot half |
 | Registry storage that cannot serve is distinguishable from an empty registry | ✅ | **BUILD** (tracker 245) — `TestRegistriesStatusReportsTheRealBackend` + the `storageBadge` / Registries UI tests: `GET /api/registries/status` reports configured vs active backend, persistence, availability and reason; the page renders "PostgreSQL · Persistent", "Memory · Ephemeral", "… · Unavailable" or "Unavailable · configured backend: File" from that answer, and shows no badge at all when the posture is unknown |
+| A rotated app-state password reaches the api's next connection with no restart | ✅ | **BUILD** (tracker 384) — `TestPGRotationReachesTheNextConnectionWithoutARestart` (DATABASE_URL_TEST, real Postgres): a DSN with no password boots from the mounted file; `ALTER ROLE` leaves an open connection working; a new connection is refused only until the file changes and then authenticates. `TestPGPassfileAloneDoesNotSurviveARotation` pins why the driver's own `PGPASSFILE` is not enough, and that an old api image can still authenticate through it. `TestPGNoCredentialAnywhereFailsBootClosed`: no credential, no login attempt |
+| No new service credential in a compose environment, a chart environment or a script argv | ✅ | **GATE** (tracker 384) — `tests/test_no_credential_in_url.py` holds a ratchet of the ones that remain (a new one fails, a removed one must be deleted from the list), `tests/test_helm_chart.py` checks every rendered workload (CI's helm-chart job has helm; a machine without it skips loudly) |
 | Applications survive an API restart | ✅ | **BUILD** (tracker 245) — `TestApplicationsSurviveAnAPIRestartPG`: two tenants' applications, the store closed and reopened, both records and their cross-tenant isolation intact |
 
 ### 2a. Security producer (P3-EMIT, 2026-09-02)
@@ -610,6 +612,23 @@ Not covered by a gate: the model path's live accuracy (stub oracle in CI;
 | Accuracy on real operator-labelled cases is measured | ❌ **not built** | No importer yet; the field split is empty |
 | The 73-example library performs as well as the previous 82 on a live model | ❌ **not measured** | `-tags nlqmodeleval` needs a provider key; no run since the change |
 
+**Incident Replay, offline leg (tracker 337 N-H2, 2026-11-09). BUILD, not PROVEN:** nothing here has run against a real incident, a live model or a production ledger. Details in `docs/ai/evals.md`.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Replay reads the case and nothing else; the package imports no store, network or process API | ✅ | **BUILD** — `TestReplayImportsNoStore` (AST), `TestExportWritesNoFile` |
+| A tool not in `allowed_tools` is not registered; a request for it is `not_registered`, never a live call | ✅ | **BUILD** — `TestUnlistedToolIsNotRegistered` |
+| Two runs of one input are identical but for timestamps and latency | ✅ | **BUILD** — `TestReplayIsDeterministic` |
+| The harness catches a prohibited tool, a forbidden string in a prompt alone, and a budget overrun | ✅ | **BUILD** — `TestProhibitedToolThatRanFailsTheCase`, `TestForbiddenAnywhereCoversPrompts`, `TestToolBudgetExceededFailsTheCase` |
+| The fingerprint moves on one byte of a skill file, a prompt builder, a tool contract, a pin or a model name | ✅ | **BUILD** — `TestFingerprintHashesBytes`. Prompts are hashed as rendered on a fixed input, so a builder change that does not alter that rendering is not seen |
+| A pin mismatch is reported, never substituted; cost without provider usage or a price is `censored` | ✅ | **BUILD** — `TestPinMismatchIsReportedNeverSubstituted`, `TestCostIsCensoredUnlessMeasured` |
+| Replay feeds only existing gates, adds no bar, and RCA agreement gates nothing | ✅ | **BUILD** — `TestReplayMeasuresFeedExistingGatesOnly`, `TestBarsArePinned` |
+| The export is own-tenant only: foreign and unknown are one 404, `as_tenant` is ignored, every string is redacted, `source` is `field` and held out | ✅ | **BUILD** — `iris_replay_export_isolation_test.go`, `TestExportRedactsEveryTextField`. The CH store is faked, and `pgintegration` does not cover this route |
+| Committed cases are synthetic only | ✅ | **BUILD** — `tests/test_iris_replay_customer_data.py` |
+| Replay with a live model, and re-running on a model, prompt, tool or runbook change | ❌ **not built** | The live-model leg, `IRIS_REPLAY_LIVE`, token budgets and the nightly workflow are out of this item; `ModelLeg` is the seam |
+| A re-read at capture equals what the decision saw | ❌ **cannot hold** | The ledger keeps hashes only. A capture compares and reports `live_data_moved`; a tool whose arguments it cannot name is `args_not_recoverable` |
+| Topology is replayed as of the incident | ❌ **not possible today** | The api has no versioned topology store: frozen as a tool result, and reports say so |
+
 ## 19. Iris routing — page-aware help, tie-break, scoreboard (tracker 337 N-G3/N-G4, 2026-10-17)
 
 | Invariant | Status | Proof |
@@ -647,6 +666,25 @@ and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
 | The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
 | Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |
 
+## 22. Usernames in device logs (owner decision D7, tracker 387, 2026-11-09)
+
+Device syslog carries usernames, retained on purpose for security attribution. There is no field-level redaction in the store or on an authorised read; the controls are around the read.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every log door (search, retention, indices, export, selected-row export, export status) needs `explore:read` and refuses before OpenSearch is touched | ✅ | **BUILD** — `TestEveryLogDoorRefusesARoleWithoutLogAccess` (ingest key, custom role, unknown role) |
+| Parser-coverage reads and proposals hand back raw lines, so they need `explore:read` too | ✅ | **BUILD** — `TestParserCoverageLinesNeedLogAccess` |
+| `reports:read` cannot fetch an export file by execution id | ✅ | **BUILD** — `TestReportHistoryRefusesAnExportByID` |
+| A caller reads its own tenant only; `as_tenant` into another org is ignored; another tenant's export id answers exactly as an unknown id does | ✅ | **BUILD** — `TestLogReadsCrossOrgIsolation`, through the real router |
+| Each read and export leaves who, the query and the row count, never a row, with credential-shaped query text masked | ✅ | **BUILD** — `TestLogSearchAuditHoldsWhoQueryAndCountsAndNoRow`, `TestSyncExportAuditHoldsWhoQueryAndRowsAndNoRow`, `TestQueuedExportAuditTrail`, `TestIrisLogSearchIsAuditedAndMasksEveryUsernameForm` |
+| An export the trail cannot record is not delivered | ✅ | **BUILD** — `TestAnExportTheTrailRefusesIsNotDelivered` (sync, rows, queued, download) |
+| A username never reaches an LLM provider in the forms the fixture lists | 🟡 | **BUILD** for the listed vendor shapes (`TestRedactMasksDeviceSyslogUsernames`). A regex filter cannot prove the negative for a line shape nobody has seen |
+| A stored export file ends at its retention on every read path, and the sweep removes it | ✅ | **BUILD** — `TestExportFileRetentionHoldsOnEveryReadPath`, `TestSweepRemovesOnlyFilesPastRetentionAndIsIdempotent`, plus `TestExportSubstratePG` through FORCE RLS |
+| `netops-syslog-*` is under the `netops-retention` ISM policy | ✅ | **BUILD** — `test_syslog_is_under_the_retention_policy`; **RUNTIME (partial)** — the lab node's log on 2026-11-09 shows `netops-syslog-*` indices being deleted, which fits the 3-day lab window but does not name ISM as the deleter. `_ism/explain` was not run: the node needs a credential |
+| The bootstrap reports ISM coverage, and says so when it cannot tell | ✅ | **BUILD** — `test_coverage_report_*`. It printed nothing until 2026-11-09: it piped into python3 in an image with no python |
+| A role with `explore:read` and no security need cannot read usernames | ❌ **not enforced** | Every built-in role except Ingest holds `explore:read`. Narrowing that is an owner decision (a role-model change) |
+| The raw console (`/search`) leaves who, the query and the row count | ❌ **not in this trail** | Entry is recorded (`CONSOLE`, once a minute per person). Queries go directly to OpenSearch; on the TLS profile the security plugin's audit log is the only record |
+
 ## 23. Admin link change — BUILT, not proven on the rig (tracker 385, 2026-11-09)
 
 **An admin link change opens no object alone and is scored as a change.** BUILD: unit
@@ -661,7 +699,7 @@ measurement has not run, so nothing here is PROVEN at scale.
   `sig.ent.access.admin-link-change-induced` scores it.
 - Evidence with no `link_cause=admin` is byte-identical bar `engine` and `catalog_version`.
 - Only trap link events carry `link_cause` today; the other sources are an open tracker row.
-## 22. Configurable source authority (tracker 337 N-F6, 2026-11-09)
+## 24. Configurable source authority (tracker 337 N-F6, 2026-11-09)
 
 Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
 reorder, Iris never picks silently. Design: `docs/architecture/iris-natural-language-platform.md` §4.2.1.
@@ -679,7 +717,7 @@ vManage and SNMP values normalise to agreement (and how often sources really dis
 **NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
 show a different value from the one Iris cites. The collectors and identity deliberately keep that row.
 
-## 24. Change ledger: Provider-owned devices (tracker 337 N-D2, 2026-11-09)
+## 25. Change ledger: Provider-owned devices (tracker 337 N-D2, 2026-11-09)
 
 Owner decision 2026-11-09: a config-change signal from a Provider-owned device goes in the change ledger.
 The bridge stamps `""` and `global` with `owner.Platform` (`global`) and still refuses `*`. The rows live in
@@ -703,3 +741,18 @@ Provider's ledger shows on `netops_change_ledger_writes_total{producer="device_t
   and `correlix_audit` still skips platform-scope actions. This decision changed neither.
 - `/api/changes` and the Iris NL change read do not apply the per-tenant operator-visibility restriction when
   the platform owner scopes into a restricted tenant. The DEM routes do. This predates the decision and is open.
+## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
+
+**Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**
+BUILD: raw frames through the real syslog-ng config and the shipped Vector transforms
+(`tests/test_syslog_edge_framing.py`), and stage [1] without docker
+(`src/correlation/test_syslog_framing_387.py`). Only Cisco SD-WAN has been seen on the wire;
+every other shape is `doc_claimed`.
+
+- One malformed or non-UTF-8 frame cannot stall the lane; each is stored and counted
+  (`netops_ingest_syslog_bad_frames{reason}`). BUILD.
+- A sender's structured data cannot land on an event field. BUILD.
+- The ratified V1 storm mixes classify byte-identically. BUILD, by digest. **NOT measured at
+  scale:** `scripts/scale-miniladder.py` injects to Kafka, so no rig leg has ever exercised
+  syslog-ng or the aggregator's syslog lane. An edge parity leg needs a raw-frame injector.
+

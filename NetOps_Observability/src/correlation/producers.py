@@ -43,7 +43,13 @@ from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
 from episodes import EpisodeDetector, EpisodeEvent
-from parser_rules import BAKED_RULES_HASH, RULES
+from parser_rules import (
+    BAKED_RULES_HASH,
+    PACK_DIGEST,
+    RULES,
+    SYSLOG_ENVELOPES,
+    SYSLOG_GRAMMARS,
+)
 from parser_rules import CATALOG_EVENT_FIDELITY as _CATALOG_EVENT_FIDELITY
 from parser_rules import PARSER_REV as _PARSER_REV
 from regex_screen import pattern_screen
@@ -68,6 +74,7 @@ from signals import (
     Source,
     observer_of,
 )
+from syslog_packs import PackTable
 from timenorm import parse_any_timestamp
 from verdicts import conservative_collection_path
 
@@ -194,13 +201,19 @@ _SEVERITY_NUM: dict[str, int] = {
 ALARM_SEVERITY_FLOOR = 4  # warning
 
 _TAG_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")  # Cisco %FAC-N-MNEMONIC
+# The same mnemonic where a correctly framed line carries it: at the START of the message
+# (`Rib: %BGP-3-NOTIFICATION: ...`, or an IOS line with no process tag). Anchored, because
+# text later in a line is the sender's to write and must not set a severity.
+_BODY_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")
+
+# Vendor-pack grammars (telemetry-catalog/vendor-packs/, tracker 387). Immutable after
+# import. The same rows compile into the aggregator's VRL.
+_PACKS = PackTable(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 
 
-def syslog_severity_num(ev: dict, tag: str) -> int | None:
-    """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
-    the RFC5424/SR-Linux `severity` keyword/char AND the Cisco %FAC-N-MNEMONIC tag
-    digit. None when neither parses (the generic-alarm fallback then abstains: no
-    severity, no guessed alarm)."""
+def _syslog_severity_parts(ev: dict, tag: str) -> tuple[int | None, int | None]:
+    """(most-severe number derivable from the event, the alarm floor a matching
+    pack grammar states, else None)."""
     cands: list[int] = []
     sev = str(ev.get("severity") or "").strip().lower()
     if sev in _SEVERITY_NUM:
@@ -208,7 +221,37 @@ def syslog_severity_num(ev: dict, tag: str) -> int | None:
     m = _TAG_SEV_RE.search(tag)
     if m:
         cands.append(int(m.group(1)))
-    return min(cands) if cands else None
+    msg = str(ev.get("message") or "")
+    m = _BODY_SEV_RE.match(msg)
+    if m:
+        cands.append(int(m.group(1)))
+    floor: int | None = None
+    hit = _PACKS.severity_hit(ev, msg)
+    if hit is not None:
+        cands.append(hit[0])
+        floor = hit[1]
+    return (min(cands) if cands else None), floor
+
+
+def syslog_severity_num(ev: dict, tag: str) -> int | None:
+    """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
+    the RFC5424/SR-Linux `severity` keyword/char, the Cisco %FAC-N-MNEMONIC digit in
+    the tag or at the start of the message, AND the severity a vendor-pack grammar
+    reads from the message. None when
+    none parses (the generic-alarm fallback then abstains: no severity, no guessed
+    alarm)."""
+    return _syslog_severity_parts(ev, tag)[0]
+
+
+def syslog_alarm_num(ev: dict, tag: str) -> int | None:
+    """The severity the anti-firehose gates may act on: `syslog_severity_num`,
+    unless a pack grammar matched the line and that severity is worse-numbered
+    than the grammar's `alarm_floor`. Reading a severity is not a licence to alarm
+    on it (owner D3): such a line reaches the engine only through a typed rule."""
+    n, floor = _syslog_severity_parts(ev, tag)
+    if n is not None and floor is not None and n > floor:
+        return None
+    return n
 
 
 def _severity_from_num(n: int) -> Severity:
@@ -248,6 +291,10 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "vtep_state_change", "evpn_mac_move",
     # trap lane
     "device_restart",
+    # trap and syslog packs (tracker 387): the standard BFD session kind a template
+    # already names, and the recoveries the device lane now reports (build_nodes skips them).
+    "bfd_session_flap", "bfd_session_flap_clear", "device_resource_anomaly_clear",
+    "controller_bfd_down_clear", "controller_control_connection_loss_clear",
     # generic-alarm keystone (#80 §4)
     "device_alarm",
     # metric episodes (main.py metric_identity + C6 flow)
@@ -409,7 +456,7 @@ if len(RULES_BY_ID) != len(RULES):                      # pragma: no cover - gua
 # The computed half of provenance. The full digest is the comparison value; the
 # 16-hex prefix is what rides on every signal (64 hex chars per row, times the
 # whole syslog firehose, buys nothing over 64 bits of collision resistance).
-RULES_HASH = rules_hash(RULES)
+RULES_HASH = rules_hash(RULES, PACK_DIGEST)
 RULES_HASH_TAG = RULES_HASH[:16]
 if RULES_HASH != BAKED_RULES_HASH:                      # pragma: no cover - guard
     raise RuntimeError(
@@ -448,6 +495,9 @@ GENERIC_FALLBACKS: dict[str, int] = {"syslog": 0, "trap": 0}
 # `corr_parser_rule_hits_total` in main.py, which this module does not own. No
 # shadow row ships today, so the map — and the series — are empty until one does.
 SHADOW_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.shadow}
+# Tracker 387: matches of a `known_benign` row. The count is what keeps the decision
+# honest: a benign row whose rate moves is a decision to revisit, not silence.
+KNOWN_BENIGN_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES if r.known_benign}
 
 # The semantic-promotion rate is measured over a ROLLING WINDOW of the last
 # PROMOTION_WINDOW ADMITTED lines — "admitted" meaning a line that produced a
@@ -506,6 +556,7 @@ def parser_stats() -> dict:
         ],
         "rule_hits": dict(RULE_HITS),
         "shadow_hits": dict(SHADOW_HITS),
+        "known_benign_hits": dict(KNOWN_BENIGN_HITS),
         "generic_fallbacks": dict(GENERIC_FALLBACKS),
         "semantic_promotion_rate": round(semantic_promotion_rate(), 6),
         "promotion_window": PROMOTION_WINDOW,
@@ -522,6 +573,8 @@ def reset_parser_counters() -> None:
         GENERIC_FALLBACKS[k] = 0
     for k in SHADOW_HITS:
         SHADOW_HITS[k] = 0
+    for k in KNOWN_BENIGN_HITS:
+        KNOWN_BENIGN_HITS[k] = 0
     _PROMO_RING.clear()
     _PROMO_POS = 0
     _PROMO_TYPED = 0
@@ -1028,6 +1081,14 @@ _SYSLOG_SCREEN_LITERALS: tuple[str, ...] | None = None
 
 PREFILTER_REJECTED = 0   # raw syslog lines the screen proved cannot promote
 PREFILTER_PASSED = 0     # raw syslog lines handed to the full classifiers
+# Lines whose own text stated error severity or worse, that a pack grammar's alarm floor
+# kept away from the generic net (owner D3), and that no typed or known_benign row took.
+# They are stored and searchable but reach RCA nowhere, so a rise is a fault nobody has
+# written a rule for. The two paths are one question: a pack's literal usually lets its
+# lines past the screen, so counting rejections alone would never see them. Telemetry
+# only: it decides nothing.
+HIGH_SEVERITY_NO_SIGNAL: dict[str, int] = {"screen": 0, "classifier": 0}
+HIGH_SEVERITY_NUM = 3    # err
 
 
 def prefilter_counts() -> tuple[int, int]:
@@ -1035,10 +1096,39 @@ def prefilter_counts() -> tuple[int, int]:
     return PREFILTER_PASSED, PREFILTER_REJECTED
 
 
+def high_severity_no_signal() -> dict[str, int]:
+    """Exposed as corr_syslog_high_severity_no_signal_total{path}."""
+    return dict(HIGH_SEVERITY_NO_SIGNAL)
+
+
+def _note_high_severity_no_signal(ev: dict, tag: str, sev_num: int | None, path: str) -> None:
+    # `sev_num` None means "no severity at all" or "a grammar withheld it", and only
+    # the second read tells them apart. An ordinary notice has a number and pays
+    # nothing here, which matters on a path that rejects 96 % of the lane.
+    if sev_num is None:
+        stated = syslog_severity_num(ev, tag)
+        if stated is not None and stated <= HIGH_SEVERITY_NUM:
+            HIGH_SEVERITY_NO_SIGNAL[path] += 1
+
+
+def note_classifier_no_signal(ev: dict) -> None:
+    """handle_syslog: a line passed the screen, and no rule emitted or dismissed it."""
+    tag = str(ev.get("appname") or "").upper()
+    _note_high_severity_no_signal(ev, tag, syslog_alarm_num(ev, tag), "classifier")
+
+
+def known_benign_total() -> int:
+    """How many lines a known_benign row has dismissed: handle_syslog compares this
+    around the classifier, because a dismissed line is a decision, not a question."""
+    return sum(KNOWN_BENIGN_HITS.values())
+
+
 def reset_prefilter_counts() -> None:
     """Test hook."""
     global PREFILTER_PASSED, PREFILTER_REJECTED
     PREFILTER_PASSED = PREFILTER_REJECTED = 0
+    for k in HIGH_SEVERITY_NO_SIGNAL:
+        HIGH_SEVERITY_NO_SIGNAL[k] = 0
 
 
 def syslog_promotable(ev: dict) -> bool:
@@ -1060,7 +1150,7 @@ def syslog_promotable(ev: dict) -> bool:
         return True
     tag = str(ev.get("appname") or "").upper()
     # The generic device-alarm net (bottom of the chain) fires on severity alone.
-    sev_num = syslog_severity_num(ev, tag)
+    sev_num = syslog_alarm_num(ev, tag)
     if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
         PREFILTER_PASSED += 1
         return True
@@ -1075,6 +1165,7 @@ def syslog_promotable(ev: dict) -> bool:
             PREFILTER_PASSED += 1
             return True
     PREFILTER_REJECTED += 1
+    _note_high_severity_no_signal(ev, tag, sev_num, "screen")
     return False
 
 
@@ -1102,6 +1193,7 @@ def syslog_promotable(ev: dict) -> bool:
 
 _ENTITY_TYPES: dict[str, EntityType] = {
     "device": EntityType.DEVICE, "interface": EntityType.INTERFACE,
+    "path": EntityType.PATH,
 }
 _MODALITIES: dict[str, ModalityClass] = {
     "control_plane": ModalityClass.CONTROL_PLANE,
@@ -1120,8 +1212,9 @@ _MODALITIES: dict[str, ModalityClass] = {
 
 
 def _syslog_sev(ctx: Ctx) -> int | None:
-    """RFC5424/SR-Linux keyword AND the Cisco %FAC-N-MNEMONIC tag digit."""
-    n = syslog_severity_num(ctx.base["ev"], ctx.base["tag"])
+    """RFC5424/SR-Linux keyword, the Cisco %FAC-N-MNEMONIC tag digit and the
+    vendor-pack severity, under the pack's alarm floor."""
+    n = syslog_alarm_num(ctx.base["ev"], ctx.base["tag"])
     return n if (n is not None and n <= ALARM_SEVERITY_FLOOR) else None
 
 
@@ -1363,6 +1456,11 @@ def _run(
             # change what the parser emits.
             SHADOW_HITS[rule.rule_id] = SHADOW_HITS.get(rule.rule_id, 0) + 1
             continue
+        if rule.known_benign:
+            # Tracker 387: counted, no signal, and nothing after it runs. The raw
+            # record is already durable upstream; only the evidence path ends here.
+            KNOWN_BENIGN_HITS[rule.rule_id] = KNOWN_BENIGN_HITS.get(rule.rule_id, 0) + 1
+            return None
         ctx.enter(rule.extract)
         return _build_signal(em, ctx, tenant, ts, observer, owner, source)
     return None

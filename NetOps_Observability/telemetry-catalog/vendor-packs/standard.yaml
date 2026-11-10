@@ -1,0 +1,412 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Vendor-neutral grammars (tracker 387, plan §6a layer 1). A pack with `vendor: null`
+# runs after every vendor pack and never stamps a vendor.
+pack: standard
+vendor: null
+description: Grammars that hold for any sender.
+
+# Frame shapes syslog-ng's legacy parser cannot read (tracker 387, PR 10). A row names a
+# SHAPE, never a vendor: `match` runs on the raw frame before the parser, `replace` turns
+# it into plain RFC 3164. Compiled into deployment/docker/syslog-ng/core.conf. The vendor
+# named in a row's `source` is where the shape was seen, and any sender with that shape
+# gets the same treatment. All cite documents except where marked: only Cisco is on the
+# lab (plan §6a), so they stay doc_claimed until a real capture promotes them.
+edge_shapes:
+  # `<PRI>date=2026-11-09 time=09:00:00 devname=fw01 ...`: no header at all. The legacy
+  # parser took `date=...` for a hostname and cut the body at the first colon.
+  - id: key_value_body
+    match: '^<[0-9]{1,3}>[a-zA-Z_][a-zA-Z0-9_]*="?[^ ]* [a-zA-Z_][a-zA-Z0-9_]*='
+    no_header: true
+    fidelity: doc_claimed
+    source: 'FortiOS default log format, per the FortiGate parser in vector.yaml and research VENDOR_PACK_SOURCES_2026-11-09 §4'
+
+  # `<166>:2018-06-27T12:17:46Z: %ASA-6-110002: ...`: a colon straight after the PRI.
+  - id: colon_after_pri
+    match: '^(<[0-9]{1,3}>):'
+    replace: '$1'
+    fidelity: doc_claimed
+    source: 'Cisco ASA 9.20 general configuration, "Monitor syslog", EMBLEM format'
+
+  # `<189>25166: Nov  9 09:00:01.123 UTC: %LINK-3-UPDOWN: ...`: a zone word after the
+  # time, which the parser took for the program. The word is dropped: `recv-time-zone`
+  # already states the platform's assumption (UTC), and a device logging in another zone
+  # is the per-site override core.conf records as a follow-up.
+  - id: zone_word_after_time
+    match: '^(<[0-9]{1,3}>(?:[0-9]+: )?[*.]?[A-Z][a-z]{2} +[0-9]{1,2} [0-9:]{8}(?:\.[0-9]+)?) [A-Z]{2,5}: '
+    replace: '$1: '
+    fidelity: doc_claimed
+    source: 'Cisco IOS `service timestamps log datetime show-timezone`, research VENDOR_PACK_SOURCES_2026-11-09 §2.1'
+
+  # `<190>sw01.pdx01: 2017 Jul 28 14:42:46 UTC: %AUTHPRIV-6-SYSTEM_MSG: ...`, and IOS with
+  # `logging origin-id`: the host comes first with a colon, and the parser took it for
+  # the program. The optional year is dropped: RFC 3164 has none, and the parser's own
+  # year logic is what every other frame gets.
+  - id: host_before_time
+    match: '^(<[0-9]{1,3}>)(?:[0-9]+: )?((?![0-9]+:)[A-Za-z0-9._-]+): [*.]?(?:[0-9]{4} )?([A-Z][a-z]{2} +[0-9]{1,2} [0-9:]{8}(?:\.[0-9]+)?)(?: [A-Z]{2,5})?: '
+    replace: '$1$3 $2 '
+    fidelity: doc_claimed
+    source: 'napalm-logs NX-OS syslog sample (Apache-2.0), research VENDOR_PACK_SOURCES_2026-11-09 §2.1'
+
+  # `<187>94307: gw2.acy1 LC/0/2/CPU0:Jul  7 20:16:14.834 : ifmgr[214]: %PKT_INFRA-...`:
+  # sequence, host, then a node name stuck to the time. The node stays in message_original.
+  - id: node_before_time
+    match: '^(<[0-9]{1,3}>)[0-9]+: ([A-Za-z0-9._-]+) [A-Za-z0-9/_-]+:([A-Z][a-z]{2} +[0-9]{1,2} [0-9:]{8}(?:\.[0-9]+)?)(?: [A-Z]{2,5})? ?: '
+    replace: '$1$3 $2 '
+    fidelity: doc_claimed
+    source: 'napalm-logs IOS-XR syslog sample (Apache-2.0), research VENDOR_PACK_SOURCES_2026-11-09 §2.1'
+
+  # `<PRI>2026-11-09T09:00:00.123456+00:00 host INFO bgp#bgpd[123]: ...`: the severity
+  # word stands where the program belongs. The tag after it must end in a colon, so a
+  # real program called INFO (`INFO: text`) is left alone.
+  - id: severity_word_as_program
+    match: '^(<[0-9]{1,3}>[0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ [^ ]+) (?:EMERG|ALERT|CRIT|ERR|WARNING|WARN|NOTICE|INFO|DEBUG) ([^ :]+: )'
+    replace: '$1 $2'
+    fidelity: doc_claimed
+    source: 'SONiC rsyslog template, sonic-buildimage files/image_config/rsyslog/rsyslog.conf.j2:62-70'
+
+grammars:
+  # Management audit (PR 11, owner D2), vendor-neutral: ConfD and OpenSSH run on many
+  # platforms, so these rows hold for any sender and stamp no vendor. Non-alarm: no
+  # severity, no rule row. `dedup_key` is (device, app, event_type); repeats are grouped
+  # at READ time and every record stays stored. A failed login is deliberately NOT here.
+  - id: confd_session_created
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ created new session via (?P<via>[a-z]+)'
+    event_type: 'audit_session_created_{via}'
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_groups
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ assigned to groups:'
+    event_type: audit_session_groups
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_session_terminated
+    parser_id: standard_mgmt_audit.v1
+    literal: 'audit user: '
+    apps: [confd]
+    pattern: '^audit user: \S+ terminated session'
+    event_type: audit_session_terminated
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_rpc
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ (?:got rpc|get attrs|sending rpc-reply|close-session)'
+    event_type: netconf_rpc
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_session
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ new tcp session'
+    event_type: netconf_session
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: confd_netconf_notification
+    parser_id: standard_mgmt_audit.v1
+    literal: 'netconf id='
+    apps: [confd]
+    pattern: '^netconf id=\d+ sending notification'
+    event_type: netconf_notification
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: sshd_accepted
+    parser_id: standard_mgmt_audit.v1
+    literal: 'Accepted '
+    apps: [sshd]
+    pattern: '^Accepted \S+ for '
+    event_type: ssh_login_accepted
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: sshd_banner_probe
+    parser_id: standard_mgmt_audit.v1
+    literal: 'kex_exchange_identification: '
+    apps: [sshd]
+    pattern: '^error: kex_exchange_identification: '
+    event_type: ssh_banner_probe
+    category: management_audit
+    fidelity: lab_validated
+
+  - id: sshd_session
+    parser_id: standard_mgmt_audit.v1
+    literal: 'pam_unix(sshd:session): session '
+    apps: [sshd]
+    pattern: 'pam_unix\(sshd:session\): session (?P<state>opened|closed) for '
+    event_type: 'ssh_session_{state}'
+    category: management_audit
+    fidelity: lab_validated
+
+rules:
+  # Real PRI makes this line err (`<35>`, auth.err), and it repeats on every vEdge sampled:
+  # 7 lines from 3 devices in 300 s of lab capture (2026-11-09). A TCP peer connected to
+  # :22 and hung up before the SSH banner, which is what a port probe or a load balancer's
+  # health check looks like. It says nothing about the device. The grammar above files it
+  # as a management record; this row keeps it off the generic net. The text shape is the
+  # whole guard, so any other sshd error still reaches the net.
+  - rule_id: syslog.standard.sshd_banner_probe
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [any]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: a TCP peer closed before the SSH banner (port probe or health check); no device state in the text
+    pattern_src: '^error: kex_exchange_identification: '
+    guard: {re: [msg, '^error: kex_exchange_identification: ', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|sshd_banner_probe|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+fixtures:
+  - name: a line that looks like the old RFC 5424 remnant is left alone
+    fidelity: lab_validated
+    hostname: spine1
+    appname: app
+    message: 'a genuine message that begins this way'
+    expect:
+      message: 'a genuine message that begins this way'
+    signal: null
+
+  - name: an SNMP poll session opening, with its key
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: audit_session_created_snmp
+      event_category: management_audit
+      dedup_key: 'vEdge-1|confd|audit_session_created_snmp'
+      normalized_severity: notice
+      message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+    signal: null
+
+  - name: a NETCONF session opening keeps its own key
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'audit user: svc-user/777135 created new session via netconf from 192.0.2.1:59170 with ssh'
+    expect:
+      parser_status: parsed
+      event_type: audit_session_created_netconf
+      dedup_key: 'vEdge-1|confd|audit_session_created_netconf'
+    signal: null
+
+  - name: group assignment
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'audit user: svc-user/777134 assigned to groups: basic'
+    expect:
+      parser_status: parsed
+      event_type: audit_session_groups
+      event_category: management_audit
+    signal: null
+
+  - name: session end
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'audit user: svc-user/777134 terminated session (reason: normal)'
+    expect:
+      parser_status: parsed
+      event_type: audit_session_terminated
+      event_category: management_audit
+    signal: null
+
+  - name: a NETCONF request
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'netconf id=987343 got rpc: {urn:ietf:params:xml:ns:netconf:base:1.0}get attrs: nc:message-id="1"'
+    expect:
+      parser_status: parsed
+      event_type: netconf_rpc
+      event_category: management_audit
+    signal: null
+
+  - name: a NETCONF reply
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'netconf id=987343 sending rpc-reply, attrs: nc:message-id="1"'
+    expect:
+      parser_status: parsed
+      event_type: netconf_rpc
+    signal: null
+
+  - name: a NETCONF close
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'netconf id=987343 close-session attrs: nc:message-id="2"'
+    expect:
+      parser_status: parsed
+      event_type: netconf_rpc
+    signal: null
+
+  - name: a NETCONF transport session
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'netconf id=987344 new tcp session for user svc-user from 192.0.2.1'
+    expect:
+      parser_status: parsed
+      event_type: netconf_session
+    signal: null
+
+  - name: an outbound NETCONF notification carrying a marker word stays silent
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    message: 'netconf id=987345 sending notification {http://viptela.com/system}cpu-usage'
+    expect:
+      parser_status: parsed
+      event_type: netconf_notification
+    signal: null
+
+  - name: an SSH login accepted
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: 'Accepted publickey for svc-user from 192.0.2.1 port 35112 ssh2: RSA SHA256:scrubbed'
+    expect:
+      parser_status: parsed
+      parser_id: standard_mgmt_audit.v1
+      event_type: ssh_login_accepted
+      event_category: management_audit
+      dedup_key: 'vEdge-1|sshd|ssh_login_accepted'
+    signal: null
+
+  - name: an SSH session opened
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: 'pam_unix(sshd:session): session opened for user svc-user by (uid=0)'
+    expect:
+      parser_status: parsed
+      event_type: ssh_session_opened
+    signal: null
+
+  - name: an SSH session closed
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    message: 'pam_unix(sshd:session): session closed for user svc-user'
+    expect:
+      parser_status: parsed
+      event_type: ssh_session_closed
+    signal: null
+
+  - name: a rejected password is not audit noise
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: sshd
+    message: 'Failed password for svc-user from 192.0.2.1 port 35112 ssh2'
+    expect: {}
+    signal: null
+
+  - name: the same words from another app are not classified
+    fidelity: doc_claimed
+    hostname: spine1
+    appname: otherd
+    message: 'audit user: svc-user/1 terminated session (reason: normal)'
+    expect: {}
+    signal: null
+
+  - name: Juniper sshd is classified by the neutral row and keeps its vendor guess
+    fidelity: doc_claimed
+    hostname: spine1
+    appname: sshd
+    message: 'Accepted publickey for svc-user from 192.0.2.1 port 2222 ssh2'
+    expect:
+      parser_status: parsed
+      event_type: ssh_login_accepted
+      event_category: management_audit
+    signal: null
+
+  - name: a peer that hangs up before the SSH banner is filed, and emits nothing at err
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: sshd
+    severity: err
+    message: 'error: kex_exchange_identification: Connection closed by remote host'
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: ssh_banner_probe
+      event_category: management_audit
+      dedup_key: 'vEdge-1|sshd|ssh_banner_probe'
+      normalized_severity: error
+    signal: null
+
+  - name: another sshd error is not the banner probe
+    fidelity: doc_claimed
+    hostname: vEdge-1
+    appname: sshd
+    severity: err
+    message: 'error: Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  # The mnemonic at the START of the message is a severity the line states, whichever
+  # app sent it. Text later in a line is the sender's to write and states nothing.
+  - name: a tagged line whose mnemonic is the only severity it states
+    fidelity: doc_claimed
+    hostname: edge01
+    appname: Rib
+    severity: notice
+    message: '%FOO-3-BAR: a line no rule knows'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: a mnemonic later in the line sets no severity
+    fidelity: doc_claimed
+    hostname: edge01
+    appname: unknown
+    severity: notice
+    message: 'a sender quoting %FOO-1-BAR in its own text'
+    expect: {}
+    signal: null
+
+  - name: a critical line with no pack still opens alone
+    fidelity: doc_claimed
+    hostname: edge01
+    appname: otherd
+    severity: crit
+    message: 'the fan tray has failed'
+    expect: {}
+    signal: {kind: device_alarm, severity: crit, opens_alone: true}
+
+  - name: an error line with no pack stays below the open floor
+    fidelity: doc_claimed
+    hostname: edge01
+    appname: otherd
+    severity: err
+    message: 'something this platform calls an error'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}

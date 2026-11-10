@@ -112,6 +112,9 @@ SEVERITY_HINT = {
     # against — the same fault/recovery split as bgpBackwardTransition/
     # bgpEstablished. They are typed by `trap.bgp.nokia_ng`.
     "tBgpNgBackwardTransition": "warning", "tBgpNgEstablished": "info",
+    # RFC 7331 (tracker 387): every vendor's BFD session, the same split again.
+    # They are typed by `trap.bfd.session`, so this only makes the stored level true.
+    "bfdSessDown": "warning", "bfdSessUp": "info",
 
     # ── CONFIG CHANGE (A9 follow-up) ─────────────────────────────────────────
     # "What changed?" is the first question of every real RCA, and a config
@@ -141,7 +144,9 @@ SEVERITY_HINT = {
     # BOUNDARY: CPU/memory pressure (cpmCPURisingThreshold,
     # ciscoMemoryPoolLowMemoryNotif) is deliberately NOT here — the metric
     # lane already carries it as `device_resource_anomaly` with a real
-    # magnitude, and a duplicate trap witness would double-count it.
+    # magnitude, and a generic alarm would be a second kind for one symptom. The
+    # typed rows that exist (`trap.resource.*`, `trap.sdwan.*`, tracker 387) land
+    # on that episode's own node, from the same observer, below the open floor.
     #   Cisco — ENVMON
     "ciscoEnvMonFanNotification": "warning",
     "ciscoEnvMonTemperatureNotification": "warning",
@@ -210,6 +215,21 @@ ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.4.1.9.2.2.1.1.20": ("locIfReason", "column"),
     "1.3.6.1.4.1.6527.3.1.3.14.0.8": ("tBgpNgBackwardTransition", "notification"),
     "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59": ("tBgpPeerNgConnState", "column"),
+    # tracker 387: the live vEdge trap and the varbinds recorded on the lab.
+    "1.3.6.1.4.1.41916.100.2.114": ("viptelaSystemCpuUsage", "notification"),
+    "1.3.6.1.4.1.41916.100.1.1": ("eventTime", "scalar"),
+    "1.3.6.1.4.1.41916.100.1.2": ("netconfNotificationSeverity", "scalar"),
+    "1.3.6.1.4.1.41916.100.1.54": ("viptelaSystemWarning", "scalar"),
+    "1.3.6.1.4.1.41916.100.1.190": ("viptelaSystemCpuUserPercentage", "scalar"),
+    "1.3.6.1.4.1.41916.100.1.191": ("viptelaSystemCpuSystemPercentage", "scalar"),
+    "1.3.6.1.4.1.41916.100.1.192": ("viptelaSystemCpuIdlePercentage", "scalar"),
+    # One symbol, several modules: each module's own OID must survive.
+    "1.3.6.1.4.1.9.9.1006.2.2": ("netconfNotificationSeverity", "scalar"),
+    "1.3.6.1.4.1.9.9.1006.0.1": ("ciscoSdwanSecurityControlConnectionStateChange", "notification"),
+    "1.3.6.1.4.1.9.9.1002.0.1": ("ciscoSdwanBfdStateChange", "notification"),
+    # RFC 7331.
+    "1.3.6.1.2.1.222.0.1": ("bfdSessUp", "notification"),
+    "1.3.6.1.2.1.222.0.2": ("bfdSessDown", "notification"),
 }
 
 
@@ -301,6 +321,22 @@ NETSNMP_ROOTS = (
     "1.3.6.1.4.1.9.2.2",         # OLD-CISCO-INTERFACES-MIB (locIfReason in linkDown)
     "1.3.6.1.4.1.6527.3.1.2.14",  # TIMETRA-BGP-MIB objects (tBgpPeerNg* varbinds)
     "1.3.6.1.4.1.6527.3.1.3.14",  # TIMETRA-BGP-MIB notifications (IPv6 sessions)
+    # RFC 7331 BFD-STD-MIB: the standard BFD session path, every vendor at once.
+    "1.3.6.1.2.1.222",
+    # Tracker 387, Cisco SD-WAN. Only the trap subtrees, never the operational
+    # tables: the index is what a TRAP needs decoded, and VIPTELA-TRAPS alone
+    # carries all of a vEdge's notifications and their varbinds.
+    "1.3.6.1.4.1.41916.100",      # VIPTELA-TRAPS (Viptela OS: vEdge + controllers)
+    # IOS XE SD-WAN (cEdge) sends from Cisco's own tree (ciscoMgmt), not 41916.
+    # `.0` = notifications, `.2` = their varbinds.
+    "1.3.6.1.4.1.9.9.1003.0", "1.3.6.1.4.1.9.9.1003.2",  # CISCO-SDWAN-OMP-MIB
+    "1.3.6.1.4.1.9.9.1006.0", "1.3.6.1.4.1.9.9.1006.2",  # CISCO-SDWAN-SECURITY-MIB
+    # CISCO-SDWAN-BFD-MIB: notifications ONLY, deliberately. The arcs of its
+    # varbinds (ciscoSdwanBfdLocalSystemIp, ...RemoteColor, ...) MOVE between
+    # releases (17.9 != 17.12 != 26.1, measured at the pinned commit), so naming
+    # them from one release would mislabel another release's values. They stay
+    # honestly numeric until a capture says which layout a device sends.
+    "1.3.6.1.4.1.9.9.1002.0",
 )
 _TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
 #: `snmptranslate -Td` block header: `MODULE-NAME::nodeName` alone on a line.
@@ -464,6 +500,63 @@ FETCH_PINS: dict[str, dict] = {
         "sha256": "72729fdd64382e64b255e2c2f64ae9e3167428755c231df1fa01ef763318b424",
         "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/nokia/TIMETRA-VRTR-MIB",),
     },
+    # Tracker 387 (owner D4, 2026-11-09): Cisco SD-WAN, from Cisco's OWN repo only,
+    # at ONE commit, never a branch name. The repo carries no licence file and the
+    # module text no grant, so: fetched, never vendored.
+    #
+    # WHICH RELEASE, deterministically: the highest-numbered release whose
+    # notification set contains every other release's. vEdge: 20.12 has all 123
+    # (20.9 lacks 3; 20.18 and 26.1 dropped viptelaSystemPseudoCommitStatus), and
+    # 20.15 ties it, so the lower of the tie, whose table the owner checked.
+    # Every notification and varbind keeps its arc from 20.9 to 26.1, so one
+    # release decodes them all. cEdge: 17.18, the superset of 17.9..26.1.
+    # A release is one file per module name, so two releases can never clash.
+    "VIPTELA-GLOBAL": {
+        "sha256": "e09867c3595a10ef910dfadc29db15cb2904716de4a7ff125165e0151e87cf1d",
+        "urls": ("https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/controller/20.12/VIPTELA-GLOBAL.mib",),
+    },
+    "VIPTELA-TRAPS": {
+        "sha256": "63c828762372bae49dd47a99c1a99e8c705ad4b8e9f50f883aa1bc86e0aea865",
+        "urls": ("https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/controller/20.12/VIPTELA-TRAPS.mib",),
+    },
+    "CISCO-SDWAN-BFD-MIB": {
+        "sha256": "9104b6b5b556a217f7871ea8a2b162d66c9a2bbe1ccf8d19351ba6bf4e7adf8f",
+        "urls": ("https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-BFD-MIB.my",),
+    },
+    "CISCO-SDWAN-OMP-MIB": {
+        "sha256": "8d6558a4caa8fd2f9e085160c0bf3bc7283f1dfb8435f437d3a007a5e3748f4c",
+        "urls": ("https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-OMP-MIB.my",),
+    },
+    "CISCO-SDWAN-SECURITY-MIB": {
+        "sha256": "691d6fe69ba36d5891e7961ee4a297d6f66f221fba3aeef3c3d121f138408f44",
+        "urls": ("https://raw.githubusercontent.com/cisco/cisco-mibs/c9ab98c03ee051de74edda72f6d5c43ee65cad91/sdwan/device/17.18/CISCO-SDWAN-SECURITY-MIB.my",),
+    },
+    # RFC 7331 / 7330 (IETF Simplified BSD), with the IANA TC module and imports,
+    # at the LibreNMS commit tracker 377 already pins: Cisco's repo has no copy.
+    "BFD-STD-MIB": {
+        "sha256": "2347ad90da66c030176469a048130f3bcb7f0baf55e4a6a89ee0d93be1aa75f9",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/BFD-STD-MIB",),
+    },
+    "BFD-TC-STD-MIB": {
+        "sha256": "bd5e1d5b3e1f8eb5e789eecec4fc8181fb7e8e1283f667fc463fba2eb7014c7a",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/BFD-TC-STD-MIB",),
+    },
+    "DIFFSERV-MIB": {
+        "sha256": "f4f7178ef2b45fe60bd7a5c498c89e82be95619ae5ddca3442ca7ac0acb9f7a8",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/DIFFSERV-MIB",),
+    },
+    "DIFFSERV-DSCP-TC": {
+        "sha256": "8b2f0df9f3ac448a7a9f3d20897fde4509a8d78d5dcf4a2c01f419dab66e7e6a",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/DIFFSERV-DSCP-TC",),
+    },
+    "INTEGRATED-SERVICES-MIB": {
+        "sha256": "da8fac25d2aaaf060f1c40e9f1682556203454d12ec9890f55f2323c1f92fc96",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/INTEGRATED-SERVICES-MIB",),
+    },
+    "IANA-BFD-TC-STD-MIB": {
+        "sha256": "5617e0077c1e21cce1e3fc318cd2d2d1ff49c495c7b8f405f226141f3176d02d",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/IANA-BFD-TC-STD-MIB",),
+    },
 }
 
 
@@ -563,6 +656,30 @@ def netsnmp_mib_dirs() -> list[str]:
     return [d for d in (VENDORED, FETCHED) if os.path.isdir(d)]
 
 
+def _td_blocks_by_oid(text: str) -> dict[str, str]:
+    """Split `snmptranslate -Td` output into blocks keyed by the OID each states.
+
+    A block opens with `MODULE::name` and closes with its `::= { iso(1) ... 7 }`
+    line, whose arcs are the OID. A block with no such line has no key: it is
+    dropped, and its node keeps whatever the floor index holds.
+    """
+    out: dict[str, str] = {}
+    lines: list[str] = []
+    for line in text.splitlines():
+        if _TD_HEAD_RE.match(line):
+            lines = []
+            continue
+        lines.append(line)
+        m = re.match(r"\s*::=\s*\{(.*)\}", line)
+        if m:
+            arcs = [a.group(1) or a.group(2)
+                    for a in re.finditer(r"\((\d+)\)|(?<![\w(-])(\d+)(?![\w)-])", m.group(1))]
+            if arcs:
+                out[".".join(arcs)] = "\n".join(lines) + "\n"
+            lines = []
+    return out
+
+
 def netsnmp_nodes() -> dict:
     """Compile the vendored MIB tree with net-snmp and extract nodes under the
     target subtrees (real OIDs/types/enums). Returns {} if snmptranslate or the
@@ -577,17 +694,22 @@ def netsnmp_nodes() -> dict:
                             capture_output=True, text=True, timeout=120).stdout
     except Exception:
         return {}
-    by_oid = {m.group(1): m.group(2) for m in _TZ_RE.finditer(tz)}  # name→oid
-    name_of = {v: k for k, v in by_oid.items()}                      # oid→name
+    # (name, oid) PAIRS, never a name->oid dict: one symbol may be defined by
+    # several modules at different OIDs (netconfNotificationSeverity is in
+    # VIPTELA-TRAPS and in four CISCO-SDWAN-* modules), and a dict would keep
+    # whichever the walk printed last and lose the others without a word.
+    pairs = [(m.group(1), m.group(2)) for m in _TZ_RE.finditer(tz)]
+    name_of = {oid: name for name, oid in pairs}                     # oid→name
     out: dict[str, dict] = {}
-    wanted = [(name, oid) for name, oid in by_oid.items()
+    wanted = [(name, oid) for name, oid in pairs
               if any(oid == r or oid.startswith(r + ".") for r in NETSNMP_ROOTS)]
     # BATCHED (tracker 377): every snmptranslate call re-parses the WHOLE -M tree
     # (~12 MB once the TIMETRA chain is fetched), so one call per node took ~2 s
     # x ~1,000 nodes and blew the run's budget. `-Td` takes many OIDs; each
     # block it prints starts with a `MODULE::name` header, which keys the block
-    # back to its OID by NAME (never by position, so a node net-snmp declines
-    # cannot shift every later block onto the wrong OID).
+    # back to its OID by the block's own `::= { ... }` line (never by position,
+    # so a node net-snmp declines cannot shift every later block onto the wrong
+    # OID; and never by name, which is not unique across modules).
     td_of: dict[str, str] = {}
     for i in range(0, len(wanted), NETSNMP_BATCH):
         chunk = wanted[i:i + NETSNMP_BATCH]
@@ -598,21 +720,16 @@ def netsnmp_nodes() -> dict:
             print(f"gen_index: net-snmp batch {i // NETSNMP_BATCH} failed ({exc}) — its "
                   f"{len(chunk)} node(s) keep their floor entries", file=sys.stderr)
             continue
-        cur = None
-        for line in text.splitlines():
-            m = _TD_HEAD_RE.match(line)
-            if m:
-                cur = m.group(1)
-                td_of[cur] = ""
-            elif cur is not None:
-                td_of[cur] += line + "\n"
+        td_of.update(_td_blocks_by_oid(text))
     for name, oid in wanted:
-        td = td_of.get(name)
+        td = td_of.get(oid)
         if td is None:
             continue
         if "NOTIFICATION-TYPE" in td:
             kind = "notification"
-        elif "OBJECT-TYPE" in td:
+        elif "OBJECT-TYPE" in td and "SYNTAX" in td and "SEQUENCE" not in td:
+            # net-snmp prints a bare OBJECT IDENTIFIER, a table and a row as
+            # OBJECT-TYPE too. Only something with a value syntax is a varbind.
             kind = "column" if name_of.get(oid.rsplit(".", 1)[0], "").endswith("Entry") else "scalar"
         else:
             continue  # OBJECT IDENTIFIER / module-identity / conformance group
@@ -620,7 +737,13 @@ def netsnmp_nodes() -> dict:
         msyn = re.search(r"SYNTAX\s+(\w+)(.*)", td)
         if msyn:
             node["type"] = msyn.group(1)
-            enum = dict(re.findall(r"(\w+)\((\d+)\)", msyn.group(2)))
+            # DateAndTime is the one textual convention the receiver decodes (RFC
+            # 2579 octets), so it keeps its name, as pysmi's nodes already do.
+            if re.search(r"TEXTUAL CONVENTION\s+DateAndTime\b", td):
+                node["type"] = "DateAndTime"
+            # A label may contain a hyphen (`init-in-gr(5)`). `\w+` alone took
+            # `gr` as the label, a wrong name for a real value.
+            enum = dict(re.findall(r"([A-Za-z][\w-]*)\((-?\d+)\)", msyn.group(2)))
             if enum:
                 node["enum"] = {v: k for k, v in enum.items()}  # int→label
         if kind == "notification" and name in SEVERITY_HINT:

@@ -142,6 +142,7 @@ case "$url" in
         GET) printf '%s' "$FAKE_SM_GET" ;;
         *)   printf '{"_id":"netops-daily-sm-policy","sm_policy":{"name":"netops-daily"}}' ;;
       esac ;;
+  */_plugins/_ism/explain/*) printf '%s' "${FAKE_ISM_EXPLAIN:-}" ;;
   */_plugins/_ism/*)   printf '{"_id":"netops-retention","_seq_no":1,"_primary_term":1}' ;;
   *)                   printf '{"acknowledged":true}' ;;
 esac
@@ -982,3 +983,55 @@ def test_scripts_parse(script, shell):
 def test_scripts_are_shellcheck_clean(script):
     r = subprocess.run(["shellcheck", str(script)], capture_output=True, text=True)
     assert r.returncode == 0, f"shellcheck {script.name}:\n{r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# Owner decision D7: netops-syslog-* carries usernames, so its retention has to
+# be visible. The coverage report piped into python3 with errors discarded, in
+# an image with no python, so it printed nothing on every install.
+# ---------------------------------------------------------------------------
+
+_POLICY = '"index.plugins.index_state_management.policy_id"'
+
+
+def _explain(**indices):
+    rows = []
+    for name, policy in indices.items():
+        value = "null" if policy is None else f'"{policy}"'
+        rows.append(f'"{name.replace("_", "-")}":{{{_POLICY}:{value},"enabled":true}}')
+    return "{" + ",".join(rows) + ',"total_managed_indices":1}'
+
+
+def test_coverage_report_counts_managed_indices_and_names_the_unmanaged(tmp_path):
+    r, _ = _run_apply_ism(tmp_path, _sm_get("true"), extra_env={"FAKE_ISM_EXPLAIN": _explain(
+        netops_syslog_acme_2026="netops-retention",
+        netops_flows_acme_2026="netops-retention",
+        netops_syslog_globex_2026=None)})
+    assert "2/3 netops indices managed" in r.stdout, r.stdout + r.stderr
+    assert "NO POLICY -> netops-syslog-globex-2026" in r.stderr, r.stderr
+    assert "netops-syslog-acme-2026" not in r.stderr, r.stderr
+
+
+def test_coverage_report_on_a_fully_managed_estate(tmp_path):
+    r, _ = _run_apply_ism(tmp_path, _sm_get("true"), extra_env={"FAKE_ISM_EXPLAIN": _explain(
+        netops_syslog_acme_2026="netops-retention")})
+    assert "1/1 netops indices managed" in r.stdout, r.stdout + r.stderr
+    assert "NO POLICY" not in r.stderr, r.stderr
+
+
+def test_coverage_report_says_so_when_it_cannot_tell(tmp_path):
+    r, _ = _run_apply_ism(tmp_path, _sm_get("true"), dead_url="/_plugins/_ism/explain")
+    assert "coverage is UNKNOWN" in r.stderr, r.stderr
+    assert r.returncode == 0, "a coverage report must not fail the bootstrap"
+
+
+def test_coverage_report_does_not_need_a_tool_the_image_lacks():
+    src = APPLY_ISM.read_text()
+    assert "python3" not in src.split('echo "ism: coverage check')[1], (
+        "the opensearch-init image is curlimages/curl, which has no python")
+
+
+def test_syslog_is_under_the_retention_policy():
+    src = APPLY_ISM.read_text()
+    assert '"netops-syslog-*"' in src.split("PATTERNS=")[1].split("\n")[0], (
+        "device syslog carries usernames and must stay under netops-retention (D7)")

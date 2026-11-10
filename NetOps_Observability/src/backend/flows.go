@@ -263,6 +263,7 @@ SELECT count()                                       AS flows,
        countIf(` + priv("src_addr") + ` AND ` + priv("dst_addr") + `) AS private_only_flows,
        countIf(exporter_app_id != '')                AS flows_with_app_id,
        countIf(exporter_app_name != '')              AS flows_with_app_name,
+       countIf(sampling_status = 'reported' OR (sampling_status = '' AND sampling_rate > 0)) AS flows_sampling_reported,
        uniqExact(sampler_address)                    AS exporters
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `

@@ -39,7 +39,7 @@ Proven by running live lines through `producers.syslog_promotable`. It rejected:
 - `%Viptela-vEdge-52-FTMD-3-ERRO-1000003: ...`
 - `DNS lookup failed for 0/vbond...`
 
-Cause: devices send every line at PRI `notice` and carry the real severity in the text. Neither parser reads that format:
+Cause: every line reaches storage at PRI `notice`, and the real severity survives only in the text. Devices do send real PRI (§3.3); our own syslog-ng resets it. Neither parser reads the text format:
 
 - `_TAG_SEV_RE` (`src/correlation/producers.py:196`) searches only the appname tag and expects `%FAC-N-MNEMONIC`.
 - The Vector regex (`deployment/docker/vector/vector.yaml`, vendor test ~580 and Stage B ~658) expects an uppercase facility and one hyphen.
@@ -60,7 +60,34 @@ The MIB defines 124 notifications, including the faults that matter: `viptelaBfd
 
 ### 3.3 Syslog framing
 
-`deployment/docker/syslog-ng/core.conf` uses the default legacy `syslog-parser()`, which ends PROGRAM at a space, so `confd 2939 - - audit...` becomes program `confd` and message `2939 - - audit...`. This matches the owner's diagnosis. What the device actually sends is **unverified** and needs a raw capture first. On cEdge the IOS-XE mnemonic (`%DMI-5-AUTH_PASSED`) never reaches storage and the hostname falls back to the sender address; the mechanism is also unverified.
+**Corrected 2026-11-09 from a 120 s capture of the lab's syslog stream.** Devices send real PRI. Syslog-ng throws it away.
+
+| Device | On the wire |
+|---|---|
+| vEdge | True RFC 5424 with real severity: `<187>1 <ts> vEdge-N FTMD 3875 - - %Viptela-...` (`<187>` is err, `<188>` warning, `<142>` and `<190>` info) |
+| cEdge | `<189>25165: <ts>: %DMI-5-AUTH_PASSED: R0/0: dmiauthd: ...`, with no hostname in the frame |
+
+The cause is two parses in `deployment/docker/syslog-ng/core.conf`. The `udp()` source parses once, then `parser(p_syslog)` re-parses `$MSG`, which no longer has a PRI, so every message becomes PRI 13 (`notice`). Run through the shipped config in an isolated container:
+
+- vEdge becomes program `FTMD`, message `3875 - - %Viptela-...`.
+- cEdge becomes host = sender address, program `R0/0`, and the `%DMI-5-AUTH_PASSED` mnemonic is discarded.
+
+Removing the second parser keeps PRI and the mnemonic, but RFC 5424 frames then become program `1` with host = sender, so the fix needs a real RFC 5424 parser, not just that deletion.
+
+**This is why PR 10 moves up, and it affects every vendor,** since all syslog passes through the same two parses.
+
+**Built in PR 10 (2026-11-09).** `core.conf` reads every frame with `no-parse` and branches on its bytes: a strict RFC 5424 parser for `<PRI>1 `, the legacy parser for the rest, after data-driven shape rewrites (`edge_shapes` in the packs). Vector's own parser was evaluated and rejected: it produced no record for 12 of 31 fixtures and let a structured-data element overwrite the hostname. Also found while fixing it, and fixed:
+
+- **One non-UTF-8 byte stalled the whole lane.** Vector's octet decoder treats it as a broken stream and syslog-ng waits 60 s to reconnect. The source now sanitises.
+- **Every RFC 3164 timestamp was the receive time,** since the second parse found no date, and that accident is what let a fleet logging local time correlate. Device time now survives within the 300 s skew tolerance. Past it a zone-less claim is not believed: event time is the edge's receive time, the claim stays as `device_timestamp`, `ts_source` says `edge_receive` and `clock_skew_s` is stamped. A frame stating `Z` or an offset keeps its time and is flagged: it can truly be old.
+- **`<>` reads as PRI 0, `kern.emerg`,** and a failed parse injects text at `err`. A frame with no valid PRI is now kept unparsed at `notice` and counted.
+- **Sender-written structured data reaches no field.** It travels as one text value, `structured_data`.
+
+The `NNNN - - ` envelope row is deleted: over 3,825 frames of real lab traffic it fired on 3,785 before the fix and on none after. `sshd error: kex_exchange_identification` got its row first. Result on real traffic: the same 113 signals and 3 objects before and after. Bad frames are counted in `netops_ingest_syslog_bad_frames{reason}`.
+
+**The generic net:** only emerg, alert and crit open an object alone; err arrives below the floor (D3). **Link lines:** `%LINEPROTO-*-UPDOWN` from a sender with no process tag is `warn`, because IOS logs it after a fault and after a `shutdown`; `%LINK-3-UPDOWN` opens. Telling a protocol-only fault from a shutdown needs both lines (tracker 388).
+
+**Still wrong, on purpose, for later streams:** IOS-XR, NX-OS `%ETHPORT-*`, Junos, SR OS and SONiC bodies stay `parser_status=unparsed` or generic, so their real link faults reach the engine as `device_alarm` at `warn` or not at all. The envelope is right; the grammar is theirs. SONiC's `{{os_version}}` template variant is not handled. The storm parity leg (§6 row 10) has not run: the rig injects directly to Kafka and never reaches syslog-ng or the aggregator.
 
 ### 3.4 Storage and API defects
 
@@ -272,7 +299,7 @@ Defects being fixed: all row text is monospaced at 11.5–12.5px, below the floo
 - **PR 11 (D2, rule 2):** deduplication is at read time over a stable key, so every stored audit document survives. The Logs page groups repeats with first seen, last seen and count.
 - **PR 8/9 (D3, rule 1):** a typed rule's catalogue severity decides whether a lone event can open an object. Only qualifying critical events carry `crit`; lower ones reach the engine below the open floor, where they can still join a component.
 - **PR 7 (D4):** `FETCH_PINS` URLs name a commit, not a branch. The licence question is resolved in that PR's report: `cisco-mibs` shows no licence file, so nothing is redistributed until it is settled.
-- **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs.
+- **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs. PR 10 delivers the field: `message_original` on every syslog frame, accepted at about +11.5% mean JSON per document on the lab (808 to 901 bytes over 3,825 frames). Still owed: the operator docs.
 - **New PR 16 (D7):** audit and close gaps in access, audit trail, export control and retention for syslog carrying usernames, with a §3a test.
 - **PR 4 (D6):** the label change also covers API filters and dashboards.
 
@@ -309,7 +336,6 @@ Rotating before PR 1 is live would write the new value to OpenSearch in clear as
 
 ## 11. Still unverified
 
-- What vEdge and cEdge send on the wire (PR 10 captures it).
 - Whether the lab's exporters sample (check the cflowd policy, §4).
 - That polling causes the `confd` and port-161 volume (strong correlation only).
 - The full Viptela syslog message-ID list, and the recovery wording for each.

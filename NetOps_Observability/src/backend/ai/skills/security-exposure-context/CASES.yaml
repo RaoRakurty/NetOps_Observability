@@ -49,6 +49,9 @@ expect_verdict:
 expect_never:
   - osi-bisection
   - path-seam-handoff
+expect_never_tools:
+  - run_protocol_diagnostic
+  - get_device_state
 
 ---
 

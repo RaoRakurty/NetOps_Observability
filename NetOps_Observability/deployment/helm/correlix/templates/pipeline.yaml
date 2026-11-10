@@ -55,6 +55,16 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_METRICS}}
             - name: INGEST_TOKEN_BUS
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_BUS}}
+            {{- if .Values.vmauth.enabled }}
+            # Tracker 384: the svc-vector identity. A reference that Vector's exec
+            # backend (cx-secret-exec.sh) resolves from the mounted file at every
+            # config load; an unreadable file refuses the config.
+            - {name: VM_REMOTE_WRITE_URL, value: "{{ include "correlix.metricsUrl" $ }}/api/v1/write"}
+            - {name: VMAUTH_VECTOR_PASSWORD_REF, value: "SECRET[vmauth.vector]"}
+            {{- if .Values.tls.enabled }}
+            - {name: SSL_CERT_FILE, value: "/tls/ca/ca.crt"}
+            {{- end }}
+            {{- end }}
           ports:
             - {name: api, containerPort: 8686}
             - {name: syslog-in, containerPort: 6601}
@@ -83,10 +93,22 @@ spec:
             {{- if .Values.sharedData.enabled }}
             - {name: shared, mountPath: /etc/vector/enrichment, subPath: enrichment, readOnly: true}
             {{- end }}
+            {{- if .Values.vmauth.enabled }}
+            - {name: vmauth-cred, mountPath: /run/secrets/vmauth/vector, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: mesh-ca, mountPath: /tls/ca, readOnly: true}
+            {{- end }}
+            {{- end }}
       volumes:
         - {name: conf, configMap: {name: correlix-vector-aggregator, defaultMode: 0555}}
         {{- if .Values.sharedData.enabled }}
         - {name: shared, persistentVolumeClaim: {claimName: api-data, readOnly: true}}
+        {{- end }}
+        {{- if .Values.vmauth.enabled }}
+{{ include "correlix.vmauthCredVolume" (dict "root" $ "key" "VMAUTH_VECTOR_PASSWORD") | indent 8 }}
+        {{- if .Values.tls.enabled }}
+{{ include "correlix.meshCAVolume" $ | indent 8 }}
+        {{- end }}
         {{- end }}
   volumeClaimTemplates:
     - metadata: {name: data}
@@ -345,9 +367,23 @@ spec:
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
 {{ include "correlix.containerSecurity" (dict) | indent 12 }}
+          {{- if .Values.vmauth.enabled }}
+          # Tracker 384: the svc-gnmic identity, the same wrapper as compose: it
+          # loads the mounted file into the process environment, which gnmic's
+          # output config expands, and exits 78 rather than start without it.
+          command:
+            - /bin/sh
+            - /app/conf/cx-secret-env.sh
+            - GNMIC_VMAUTH_PASSWORD=/run/secrets/vmauth/gnmic/password
+            - --
+            - /app/gnmic
+          {{- end }}
           args: ["subscribe", "--config", "/app/conf/{{ .Values.gnmic.configFile }}"]
           env:
-            - {name: VICTORIA_WRITE_URL, value: "http://victoria:8428/api/v1/write"}
+            - {name: VICTORIA_WRITE_URL, value: "{{ include "correlix.metricsUrl" $ }}/api/v1/write"}
+            {{- if and .Values.vmauth.enabled .Values.tls.enabled }}
+            - {name: SSL_CERT_FILE, value: "/tls/ca/ca.crt"}
+            {{- end }}
             # Tracker 212: the gnmic->Kafka hop has no mTLS shape and is OFF in
             # every shipped profile. Leave it off.
             - {name: ENABLE_GNMI_CORRELATION, value: "false"}
@@ -360,6 +396,18 @@ spec:
 {{ toYaml .Values.gnmic.resources | indent 12 }}
           volumeMounts:
             - {name: conf, mountPath: /app/conf, readOnly: true}
+            {{- if .Values.vmauth.enabled }}
+            - {name: vmauth-cred, mountPath: /run/secrets/vmauth/gnmic, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: mesh-ca, mountPath: /tls/ca, readOnly: true}
+            {{- end }}
+            {{- end }}
       volumes:
         - {name: conf, configMap: {name: correlix-gnmic}}
+        {{- if .Values.vmauth.enabled }}
+{{ include "correlix.vmauthCredVolume" (dict "root" $ "key" "VMAUTH_GNMIC_PASSWORD") | indent 8 }}
+        {{- if .Values.tls.enabled }}
+{{ include "correlix.meshCAVolume" $ | indent 8 }}
+        {{- end }}
+        {{- end }}
 {{- end }}

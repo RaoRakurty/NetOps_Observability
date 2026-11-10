@@ -238,6 +238,22 @@
             "procid": {
               "type": "keyword"
             },
+            "msgid": {
+              "type": "keyword"
+            },
+            "syslog_facility": {
+              "type": "keyword"
+            },
+            "frame_format": {
+              "type": "keyword"
+            },
+            "frame_problem": {
+              "type": "keyword"
+            },
+            "ingested_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
             "severity": {
               "type": "keyword"
             },
@@ -260,6 +276,33 @@
               "type": "keyword"
             },
             "event_type": {
+              "type": "keyword"
+            },
+            "vendor_source": {
+              "type": "keyword"
+            },
+            "device_id": {
+              "type": "keyword"
+            },
+            "model": {
+              "type": "keyword"
+            },
+            "site": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
+            },
+            "severity_native_text": {
+              "type": "keyword"
+            },
+            "severity_native_code": {
+              "type": "keyword"
+            },
+            "event_category": {
+              "type": "keyword"
+            },
+            "dedup_key": {
               "type": "keyword"
             },
             "cx_admission": {
@@ -411,6 +454,9 @@
             "sample_rate": {
               "type": "long"
             },
+            "sampling_status": {
+              "type": "keyword"
+            },
             "vlan_id": {
               "type": "long"
             },
@@ -456,7 +502,7 @@
       }
     },
     "netops-snmptrap": {
-      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor.",
+      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor. Tracker 387: the receiver's NormalizedEvent envelope (collectors/snmptrap.go TrapEvent) is declared so traps can be filtered and aggregated by what they mean; each TrapEvent field is either declared here or deliberately listed in tests/test_router_storage_labels.py. A credential is never declared.",
       "index_patterns": [
         "netops-snmptrap-*"
       ],
@@ -500,6 +546,9 @@
             "trap_name": {
               "type": "keyword"
             },
+            "snmp_community_present": {
+              "type": "boolean"
+            },
             "snmp_version": {
               "type": "keyword"
             },
@@ -540,6 +589,85 @@
             },
             "source_masked": {
               "type": "boolean"
+            },
+            "vendor": {
+              "type": "keyword"
+            },
+            "vendor_source": {
+              "type": "keyword"
+            },
+            "device_id": {
+              "type": "keyword"
+            },
+            "model": {
+              "type": "keyword"
+            },
+            "site": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
+            },
+            "parser_status": {
+              "type": "keyword"
+            },
+            "enrichment_status": {
+              "type": "keyword"
+            },
+            "event_type": {
+              "type": "keyword"
+            },
+            "category": {
+              "type": "keyword"
+            },
+            "family": {
+              "type": "keyword"
+            },
+            "summary": {
+              "type": "text"
+            },
+            "vendor": {
+              "type": "keyword"
+            },
+            "message_key": {
+              "type": "keyword"
+            },
+            "authenticated": {
+              "type": "boolean"
+            },
+            "sys_uptime_seconds": {
+              "type": "double"
+            },
+            "varbinds_dropped": {
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "event_state": {
+              "type": "keyword"
+            },
+            "event_state_fidelity": {
+              "type": "keyword"
+            },
+            "severity_native_text": {
+              "type": "keyword"
+            },
+            "severity_native_code": {
+              "type": "integer"
+            },
+            "mib_module": {
+              "type": "keyword"
+            },
+            "mib_bundle_version": {
+              "type": "keyword"
+            },
+            "device_event_time": {
+              "type": "keyword"
+            },
+            "values": {
+              "type": "object",
+              "dynamic": false
             }
           }
         }

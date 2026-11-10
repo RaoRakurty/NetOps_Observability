@@ -58,8 +58,12 @@ package ai
 //	  - is not available on this deployment
 //	expect_never:
 //	  - bgp-prefix-missing
+//	expect_never_tools:
+//	  - get_config_diff                # asserted from the tool audit
+//	expect_hypotheses:
+//	  - link-down=SUPPORTED            # <catalogue id>=<irishypo state>
 //
-// The runner (skill_cases_test.go) drives the REAL chain — the real embedded
+// The runner (skill_harness.go) drives the REAL chain — the real embedded
 // SKILL.md corpus, the real planner, the real Policy Engine, the real condition
 // evaluator — over a registry of fixture tools built from this file. Nothing
 // here mocks the thing under test.
@@ -71,6 +75,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"netops/backend/internal/irishypo"
 )
 
 //go:embed skills/*/CASES.yaml
@@ -111,6 +117,18 @@ type SkillCase struct {
 	ExpectNotes    []string         // substrings that must reach the operator as disclosures
 	ExpectNever    []string         // methods this evidence must NOT reach
 	ExpectSelect   string           // SelectSkill must pick this for Question ("none" = none)
+
+	// ExpectNeverTools are tools this evidence must never attempt, whatever came
+	// back. Asserted from the tool audit.
+	ExpectNeverTools []string
+	// ExpectHypotheses are the states the answer's hypotheses must end in.
+	ExpectHypotheses []SkillHypothesisExpect
+}
+
+// SkillHypothesisExpect is one hypothesis and the state it must end in.
+type SkillHypothesisExpect struct {
+	ID    string
+	State irishypo.State
 }
 
 // caseSelectNone is the ExpectSelect / ExpectSelected value meaning "nothing".
@@ -133,6 +151,7 @@ var caseScalarKeys = map[string]bool{
 var caseBlockKeys = map[string]bool{
 	"ui": true, "tools": true, "signals": true, "evidence": true, "notes": true,
 	"expect_chain": true, "expect_verdict": true, "expect_notes": true, "expect_never": true,
+	"expect_never_tools": true, "expect_hypotheses": true,
 }
 
 // loadSkillCases reads and validates one skill's CASES.yaml. Every error names
@@ -383,7 +402,50 @@ func parseSkillCase(sk *Skill, doc string, targets map[string]bool) (SkillCase, 
 			return SkillCase{}, named("expect_never lists %q, which expect_chain already takes", n)
 		}
 	}
+	for _, name := range blocks["expect_never_tools"] {
+		if !skillToolAllowlist[name] {
+			return SkillCase{}, named("expect_never_tools names %q, which is not on the skill tool allowlist", name)
+		}
+		c.ExpectNeverTools = append(c.ExpectNeverTools, name)
+	}
+	seenHyp := map[string]bool{}
+	for _, line := range blocks["expect_hypotheses"] {
+		h, herr := parseHypothesisExpect(line)
+		if herr != nil {
+			return SkillCase{}, named("%w", herr)
+		}
+		if seenHyp[h.ID] {
+			return SkillCase{}, named("expect_hypotheses gives %q twice", h.ID)
+		}
+		seenHyp[h.ID] = true
+		c.ExpectHypotheses = append(c.ExpectHypotheses, h)
+	}
 	return c, nil
+}
+
+// parseHypothesisExpect validates `<id>=<STATE>` against the hypothesis catalogue
+// and the state vocabulary, so a typo cannot quietly assert nothing.
+func parseHypothesisExpect(line string) (SkillHypothesisExpect, error) {
+	id, state, ok := strings.Cut(line, "=")
+	id, state = strings.TrimSpace(id), strings.TrimSpace(state)
+	if !ok || id == "" || state == "" {
+		return SkillHypothesisExpect{}, fmt.Errorf("expect_hypotheses %q must be <id>=<STATE>", line)
+	}
+	var ids []string
+	known := false
+	for _, d := range irishypo.Catalogue() {
+		ids = append(ids, d.ID)
+		known = known || d.ID == id
+	}
+	if !known {
+		return SkillHypothesisExpect{}, fmt.Errorf("expect_hypotheses names %q, which is not in the hypothesis catalogue %v", id, ids)
+	}
+	for _, s := range irishypo.States {
+		if string(s) == state {
+			return SkillHypothesisExpect{ID: id, State: s}, nil
+		}
+	}
+	return SkillHypothesisExpect{}, fmt.Errorf("expect_hypotheses state %q is not one of %v", state, irishypo.States)
 }
 
 // validateCaseSignal re-checks a fixture signal against the SAME closed

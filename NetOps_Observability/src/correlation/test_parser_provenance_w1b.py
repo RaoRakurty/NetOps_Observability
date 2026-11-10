@@ -164,6 +164,57 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
                    "value": "idle(1)"},
                   {"oid": "1.3.6.1.4.1.9.9.187.1.2.5.1.29.10.0.0.7", "name": "cbgpPeer2PrevState",
                    "value": "established(6)"}])),
+    "trap.sdwan.cpu_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.114", trap_name="viptelaSystemCpuUsage",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System cpu usage back to normal level"}, {"oid": "1.3.6.1.4.1.41916.100.1.190.0", "value": "12.23"}])),
+    "trap.sdwan.cpu_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.114", trap_name="viptelaSystemCpuUsage",
+        event_state="raise", severity_native_text="critical", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System cpu usage is above 90% (critically high)"}, {"oid": "1.3.6.1.4.1.41916.100.1.190.0", "value": "88.10"}])),
+    "trap.sdwan.memory_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.44", trap_name="viptelaSystemMemoryUsage",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System memory usage back to normal level"}, {"oid": "1.3.6.1.4.1.41916.100.1.55.0", "value": "4096"}])),
+    "trap.sdwan.memory_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.44", trap_name="viptelaSystemMemoryUsage",
+        event_state="raise", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.54.0", "value": "System memory usage is above 75%"}, {"oid": "1.3.6.1.4.1.41916.100.1.56.0", "value": "512"}])),
+    "trap.sdwan.control_connection.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.23", trap_name="viptelaSecurityControlConnectionStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.33.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.39.0", "value": "up(0)"}])),
+    "trap.sdwan.control_connection": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.27", trap_name="viptelaSecurityControlNoActiveVsmart",
+        event_state="raise", severity_native_text="critical", varbinds=[])),
+    "trap.sdwan.omp.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.20", trap_name="viptelaOmpOmpPeerStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.27.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.28.0", "value": "up(3)"}])),
+    "trap.sdwan.omp": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.20", trap_name="viptelaOmpOmpPeerStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.27.0", "value": "10.255.255.1"}, {"oid": "1.3.6.1.4.1.41916.100.1.28.0", "value": "down(4)"}])),
+    "trap.sdwan.omp_tloc_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.21", trap_name="viptelaOmpOmpTlocStateChange",
+        event_state="point", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.29.0", "value": "ipv4(1)"}])),
+    "trap.sdwan.bfd.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.4", trap_name="viptelaBfdBfdStateChange",
+        event_state="clear", severity_native_text="minor", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.9.0", "value": "10.255.255.52"}, {"oid": "1.3.6.1.4.1.41916.100.1.10.0", "value": "biz-internet"}, {"oid": "1.3.6.1.4.1.41916.100.1.11.0", "value": "10.255.255.20"}, {"oid": "1.3.6.1.4.1.41916.100.1.12.0", "value": "mpls"}, {"oid": "1.3.6.1.4.1.41916.100.1.13.0", "value": "up(0)"}])),
+    "trap.sdwan.bfd": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.4", trap_name="viptelaBfdBfdStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.9.0", "value": "10.255.255.52"}, {"oid": "1.3.6.1.4.1.41916.100.1.10.0", "value": "biz-internet"}, {"oid": "1.3.6.1.4.1.41916.100.1.11.0", "value": "10.255.255.20"}, {"oid": "1.3.6.1.4.1.41916.100.1.12.0", "value": "mpls"}, {"oid": "1.3.6.1.4.1.41916.100.1.13.0", "value": "down(1)"}])),
+    "trap.sdwan.interface": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.55", trap_name="viptelaVpnInterfaceStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.67.0", "value": "0"}, {"oid": "1.3.6.1.4.1.41916.100.1.73.0", "value": "ge0/1"}, {"oid": "1.3.6.1.4.1.41916.100.1.74.0", "value": "down(1)"}])),
+    "trap.sdwan.bgp_peer": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.41916.100.2.54", trap_name="viptelaVpnBgpPeerStateChange",
+        event_state="raise", severity_native_text="major", varbinds=[{"oid": "1.3.6.1.4.1.41916.100.1.67.0", "value": "1"}, {"oid": "1.3.6.1.4.1.41916.100.1.68.0", "value": "192.168.200.34"}, {"oid": "1.3.6.1.4.1.41916.100.1.69.0", "value": "active(2)"}])),
+    "trap.resource.cpu_threshold.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.109.2.0.2", trap_name="cpmCPUFallingThreshold",
+        varbinds=[])),
+    "trap.resource.cpu_threshold": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.109.2.0.1", trap_name="cpmCPURisingThreshold",
+        varbinds=[])),
+    "trap.bfd.session.clear": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.222.0.1", trap_name="bfdSessUp",
+        varbinds=[{"oid": "1.3.6.1.2.1.222.1.2.1.13.4", "name": "bfdSessDiag", "value": "up(4)"}])),
+    "trap.bfd.session": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.222.0.2", trap_name="bfdSessDown",
+        varbinds=[{"oid": "1.3.6.1.2.1.222.1.2.1.13.4", "name": "bfdSessDiag", "value": "down(2)"}])),
     "trap.bgp.nokia_ng": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.6527.3.1.3.14.0.8", trap_name="tBgpNgBackwardTransition",
         varbinds=[{"oid": "1.3.6.1.4.1.6527.3.1.2.14.4.7.1.59.1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.9",
@@ -216,6 +267,29 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
         varbinds=[{"oid": "1.3.6.1.4.1.9.9.43.1.1.6.1.8.7",
                    "name": "ccmHistoryEventTerminalUser", "value": "admin"}])),
 }
+
+# Tracker 387: a vendor pack's rows are fixtured by the corpus lines the pack's own
+# fixtures recorded (telemetry-catalog/record_pack_corpus.py), so adding a vendor adds no
+# entry here. Keyed by the rule that claims each line.
+def _pack_rule_fixtures() -> dict[str, tuple[str, dict]]:
+    out: dict[str, tuple[str, dict]] = {}
+    with open(GOLDEN, encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    for row in rows:
+        if not str(row.get("origin") or "").startswith("pack:"):
+            continue
+        before = dict(P.KNOWN_BENIGN_HITS)
+        sig = P.syslog_control_signal(dict(row["ev"]), "t1", T0)
+        if sig is not None:
+            out.setdefault(sig.attrs["rule_id"], ("control", row["ev"]))
+            continue
+        for rid, hits in P.KNOWN_BENIGN_HITS.items():
+            if hits > before.get(rid, 0):
+                out.setdefault(rid, ("control", row["ev"]))
+    return out
+
+
+RULE_FIXTURES.update(_pack_rule_fixtures())
 
 PRODUCERS = {
     "control": P.syslog_control_signal,
@@ -323,6 +397,12 @@ def test_every_rule_stamps_its_own_provenance(rule_id):
         assert P.SHADOW_HITS[rule_id] == before + 1, (
             f"the fixture for {rule_id!r} never reaches its guard")
         return
+    if rule.known_benign:
+        # Tracker 387: counted, no signal, and the walk ends.
+        before = P.KNOWN_BENIGN_HITS[rule_id]
+        assert fire(rule_id) is None, f"{rule_id} is known_benign and must emit nothing"
+        assert P.KNOWN_BENIGN_HITS[rule_id] == before + 1
+        return
     sig = fire(rule_id)
     assert sig is not None, f"fixture for {rule_id!r} classified as nothing"
     assert sig.attrs["rule_id"] == rule_id, (
@@ -341,7 +421,7 @@ def test_every_emitted_kind_carries_a_rule_id(kind):
     parser emits is ever anonymous."""
     fired = [fire(rid) for rid, r in
              ((rid, P.RULES_BY_ID[rid]) for rid in sorted(RULE_FIXTURES))
-             if r.kind == kind and not r.shadow]
+             if r.kind == kind and not r.shadow and not r.known_benign]
     assert fired, (
         f"no fixture emits {kind!r} — every rule that CAN emit it is a shadow "
         "row, so the kind is unreachable in production")
@@ -402,8 +482,8 @@ def test_the_tracker_198_pinned_identities_still_hold():
 def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
     """The whole point of keeping provenance out of the identity key: a rule
     revision must not orphan the signals already stored."""
-    if P.RULES_BY_ID[rule_id].shadow:
-        pytest.skip("shadow row: it emits no signal, so none can be re-identified")
+    if P.RULES_BY_ID[rule_id].shadow or P.RULES_BY_ID[rule_id].known_benign:
+        pytest.skip("this row emits no signal, so none can be re-identified")
     before = fire(rule_id)
     assert before is not None
     monkeypatch.setattr(P, "PARSER_REV", "9999-12-31-mutant")
@@ -489,7 +569,40 @@ RULES_HASH_NOKIA_NG = "236233760faf5ab4161af599678918420c59f464e2d7a8c9add76b9f7
 #: locIfReason, so every one replays byte-for-byte; five new entries record the
 #: new outputs (baseline-absent: the frozen code lacks the two keys).
 RULES_HASH_LINK_CAUSE = "57ca1621aa6729b30fdedf20303f26a95622311548c2a01de409196d86ed4735"
-RULES_HASH_A3 = RULES_HASH_LINK_CAUSE
+#:
+#: Trap packs (2026-11-09, tracker 387): 17 trap rows, and the BGP event_type rule
+#: excludes VIPTELA-TRAPS. Additive: every earlier corpus entry replays
+#: byte-for-byte; 17 new entries record the new rules' outputs (baseline-absent).
+RULES_HASH_TRAP_PACKS = "9d9f28ca5b30e1288358d5421f37faff70fa6e980ec29b58160e0f3baa477522"
+#:
+#: Vendor packs (2026-11-09, tracker 387): the hash now also covers the pack grammars
+#: and envelopes, because they change what the parser emits (severity, alarm floor).
+#: No rule row moved; every earlier corpus entry replays byte-for-byte.
+RULES_HASH_VENDOR_PACKS = "6ee65c7a91d889e221319fc03cef07efd9dabafa33ba9becf899b0918bda96d8"
+#:
+#: Cisco SD-WAN typed rows (2026-11-09, tracker 387 PR 9): the pack's CPU, DNS, control
+#: connection and BFD rows, the FTMD known_benign row and the below-floor rows, all behind
+#: the older rules, plus the known_benign digest field. No older rule's grammar moved.
+RULES_HASH_SDWAN_RULES = "60245d18d78bafc2e5232ab7b3292607c8f19a709f6e451b81b559dc0302e883"
+#:
+#: Management audit grammars (2026-11-09, tracker 387 PR 11): pack rows classify ConfD and
+#: SSH audit lines, non-alarm. No rule row and no severity moved; the hash covers the packs.
+RULES_HASH_MGMT_AUDIT = "567960e225d82b2f34e4a7673cf55b7d1a8dd49e7f71f508da4266f9fe58353e"
+#:
+#: vBond DNS as device_alarm (2026-11-09, tracker 387): syslog.sdwan.dns.failed moves off
+#: dns_failure_rate, which the ISP-owned dns-impairment template needs alone, and the
+#: success row is removed. No other row moved.
+RULES_HASH_VBOND_DNS_ALARM = "e3caac0e27f0ae5cc6159606a9365435c285cfcb71111b904073de1f3ec11d99"
+#:
+#: Train 2026-11-09-c (tracker 387): the trap packs and the syslog vendor packs together.
+#: Each stream's rows are pinned above on its own; this is the merged table.
+RULES_HASH_TRAIN_C = "72841087e8f1bce0d1296f4f5a2eb3d5b22a755eb3310adac6f3cc9bc1f43dd1"
+#:
+#: Syslog framing (2026-11-09, tracker 387 PR 10, owner D3): the generic net's err rung moves
+#: below the open floor, the IOS protocol line is `warn`, and the SSH banner probe gains a
+#: known_benign row and an audit grammar. The envelope row is deleted.
+RULES_HASH_SYSLOG_FRAMING = "d19827e7fab000f30aa0927227758436a2c9d4ce0c0d77685bc83da35062cdb4"
+RULES_HASH_A3 = RULES_HASH_SYSLOG_FRAMING
 
 
 def _guard_patterns(node) -> list[str]:
@@ -512,7 +625,7 @@ def test_rules_hash_is_stable_and_matches_the_exported_tag():
     assert P.RULES_HASH == RULES_HASH_A3, (
         "rules_hash moved — a rule changed. If that was intended, re-pin "
         "RULES_HASH_A3 and bump parser_rev in telemetry-catalog/events.yaml.")
-    assert P.rules_hash(RULES) == P.RULES_HASH
+    assert P.rules_hash(RULES, P.PACK_DIGEST) == P.RULES_HASH
     assert P.RULES_HASH_TAG == P.RULES_HASH[:16]
     assert len(P.RULES_HASH) == 64      # sha256 hex
 
@@ -552,7 +665,7 @@ def test_a_catalog_promotion_is_not_a_parser_edit():
     try:
         P.CATALOG_EVENT_FIDELITY.clear()
         P.CATALOG_EVENT_FIDELITY.update(promoted)
-        assert P.rules_hash(RULES) == P.RULES_HASH
+        assert P.rules_hash(RULES, P.PACK_DIGEST) == P.RULES_HASH
     finally:
         P.CATALOG_EVENT_FIDELITY.clear()
         P.CATALOG_EVENT_FIDELITY.update(original)

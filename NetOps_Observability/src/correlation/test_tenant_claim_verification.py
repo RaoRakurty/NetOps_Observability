@@ -613,7 +613,7 @@ def test_fortigate_log_body_can_no_longer_set_tenancy():
     """TENANT-HIGH-3: the second attribution, re-derived from `devname=` INSIDE
     the attacker-controlled log body, is gone."""
     src = _vector_src("vector", "syslog_normalized")
-    body = src.split("if vendor == \"fortinet\"", 1)[1]
+    body = src.split("if cx_parse_fortios {", 1)[1]
     # No line in the FortiGate branch may assign .tenant_id.
     offenders = [ln for ln in body.splitlines()
                  if ".tenant_id" in ln and "=" in ln.split("#", 1)[0]

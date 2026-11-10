@@ -2090,6 +2090,12 @@ groups:
         # tenant_id="". From the outside that is indistinguishable from a lab
         # whose devices genuinely have no tenant.
         #
+        # Tracker 387 D6: a registry hit with a blank tenant now counts as
+        # outcome="platform_owned", in the denominator and not the numerator, so
+        # `unmatched` means a device the registry does not know. A platform-only
+        # deployment reads 0 instead of a steady 1.0, and a broken table is a rise
+        # from 0 there too (rules-tests/tenant-enrichment.test.yaml).
+        #
         # So alert on the CHANGE, not the level. A deployment that never
         # matched anything stays silent forever (correct — nothing broke); a
         # deployment whose match rate collapses is a broken enrichment table,
@@ -2118,7 +2124,7 @@ groups:
         labels: { severity: warning, layer: ingest }
         annotations:
           summary: "Tenant enrichment miss rate on {{ $labels.topic }} jumped to {{ $value | humanizePercentage }} above its 6h baseline"
-          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
+          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted, so devices the registry should know are arriving as misses (`tenant_attribution=unmatched`). Platform devices read `platform_owned` and are not misses. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
 
       - alert: TenantAttributionLaneMissing
         # Meta-alert: the rule above is vacuous if the counter stops. An alert
@@ -2152,6 +2158,30 @@ groups:
           summary: "{{ $labels.topic }}: devices' sender addresses are being lost to the Docker bridge gateway — their events cannot be attributed to a device or tenant"
           description: "Some senders on {{ $labels.topic }} reach the receiver re-sourced from the bridge gateway (stale UDP conntrack after a container restart, or IPv6 senders). Their telemetry stays searchable but never correlates. Clear the stale UDP conntrack entries for the published telemetry ports."
           runbook: "docs/runbooks/ingest-sender-address-masked.md"
+
+      - alert: SyslogBadFramesRising
+        # Tracker 387 PR 10. Frames the edge could not read as syslog, or had to trim:
+        # stored and counted (frame_problem), and harmless to the lane. What is worth a
+        # look is a RISE: a new firmware or a misconfigured sender breaking framing for a
+        # whole site. So this compares the last 15 minutes to the 6 hours before, and a
+        # floor of 0.5 frames/s keeps a trickle out. It is a rate rule, not a level rule, on
+        # purpose: one sender that is simply always wrong stops alerting once it IS the
+        # baseline, about 2 hours in. The counter still shows it. A brand-new counter has
+        # no baseline, hence the `or ... * 0`. Vector's exporter adds no `_total`.
+        expr: |
+          sum by (reason) (rate(netops_ingest_syslog_bad_frames[15m])) > 0.5
+          and
+          sum by (reason) (rate(netops_ingest_syslog_bad_frames[15m]))
+            > 3 * (
+              sum by (reason) (rate(netops_ingest_syslog_bad_frames[6h] offset 15m))
+              or sum by (reason) (rate(netops_ingest_syslog_bad_frames[15m])) * 0
+            )
+        for: 10m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Syslog frames the platform cannot read are rising ({{ $labels.reason }})"
+          description: "Over {{ $value | printf \"%.1f\" }} frames per second are arriving as {{ $labels.reason }}, at least three times the last six hours. They are stored with their original text, but they carry no severity the engine can use, so a device sending them is not being read."
+          runbook: "docs/runbooks/syslog-bad-frames.md"
 
       - alert: VectorQuarantineSealFailures
         # F-11 (INV-F11-06): the quarantine seal stage is fail-closed by

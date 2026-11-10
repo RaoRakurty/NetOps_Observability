@@ -106,6 +106,7 @@ func setDefaultParam(rp map[string]string, key, val string) {
 
 type DB struct {
 	pool *pgxpool.Pool
+	cred *connCredential // nil unless PGPASSFILE is set (tracker 384)
 }
 
 // NewDB connects, verifies, and runs pending migrations. Fails fast (no silent
@@ -124,6 +125,13 @@ func NewDB(ctx context.Context, dsn string) (*DB, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
+	}
+	// Tracker 384: the password comes from the PGPASSFILE file, re-read for every
+	// new connection, so a rotation needs no restart. See passfile.go. A password
+	// still in DATABASE_URL is reported by secprofile's CRED-001 finding.
+	cred, err := attachPasswordFile(cfg, os.Getenv("PGPASSFILE"))
+	if err != nil {
+		return nil, fmt.Errorf("PGPASSFILE: %w", err)
 	}
 	// ── F-60: pool sizing + server-side statement bounds ─────────────────────
 	//
@@ -167,7 +175,7 @@ func NewDB(ctx context.Context, dsn string) (*DB, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	db := &DB{pool: pool}
+	db := &DB{pool: pool, cred: cred}
 	if err := db.assertRLSCapable(pctx); err != nil {
 		pool.Close()
 		return nil, err

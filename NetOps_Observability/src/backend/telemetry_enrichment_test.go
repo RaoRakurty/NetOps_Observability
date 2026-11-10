@@ -16,6 +16,17 @@ import (
 	"netops/backend/models"
 )
 
+// identityTenant is the attribution half of a row: what these tests pin.
+type identityTenant struct{ Identity, Tenant string }
+
+func identityTenants(rows []enrichmentRow) []identityTenant {
+	out := make([]identityTenant, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, identityTenant{r.Identity, r.Tenant})
+	}
+	return out
+}
+
 func TestBuildEnrichmentRows(t *testing.T) {
 	devices := []models.Device{
 		{ID: "d1", Name: "leaf1", Address: "10.0.0.1", TenantID: "Acme"}, // tenant normalized to lower
@@ -24,8 +35,8 @@ func TestBuildEnrichmentRows(t *testing.T) {
 		{ID: "d4", Name: "", Address: ""},                             // empty name/address skipped; the id still names it
 		{ID: "", Name: "", Address: ""},                               // no identity at all → no row
 	}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{
 		{"10.0.0.1", "acme"},
 		{"10.0.0.2", "acme"},
 		{"10.0.0.3", ""},
@@ -49,8 +60,8 @@ func TestBuildEnrichmentRows_AmbiguousIdentityOmitted(t *testing.T) {
 		{ID: "d1", Name: "r1", Address: "10.0.0.9", TenantID: "acme"},
 		{ID: "d2", Name: "r2", Address: "10.0.0.9", TenantID: "globex"},
 	}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{
 		{"d1", "acme"},
 		{"d2", "globex"},
 		{"r1", "acme"},
@@ -68,8 +79,8 @@ func TestBuildEnrichmentRows_SameTenantDuplicateAddressKept(t *testing.T) {
 		{ID: "d1", Name: "a", Address: "10.0.0.5", TenantID: "acme"},
 		{ID: "d2", Name: "b", Address: "10.0.0.5", TenantID: "acme"},
 	}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{
 		{"10.0.0.5", "acme"},
 		{"a", "acme"},
 		{"b", "acme"},
@@ -130,8 +141,8 @@ func TestBuildEnrichmentRows_IDCollidingAcrossTenantsIsOmitted(t *testing.T) {
 		{ID: "core-1", Name: "acme-core", Address: "10.0.0.1", TenantID: "acme"},
 		{ID: "globex-dev-7", Name: "core-1", Address: "10.0.0.2", TenantID: "globex"},
 	}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{
 		{"10.0.0.1", "acme"},
 		{"10.0.0.2", "globex"},
 		{"acme-core", "acme"},
@@ -146,8 +157,8 @@ func TestBuildEnrichmentRows_IDCollidingAcrossTenantsIsOmitted(t *testing.T) {
 // not a self-collision.
 func TestBuildEnrichmentRows_IDEqualToNameIsOneRow(t *testing.T) {
 	devices := []models.Device{{ID: "edge1", Name: "edge1", Address: "10.0.0.7", TenantID: "acme"}}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{{"10.0.0.7", "acme"}, {"edge1", "acme"}}
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{{"10.0.0.7", "acme"}, {"edge1", "acme"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("id==name mismatch:\n got=%v\nwant=%v", got, want)
 	}
@@ -160,8 +171,8 @@ func TestBuildEnrichmentRows_ControllerOnlyDeviceIDNotExported(t *testing.T) {
 		{ID: "vedge-20-1e95f00f", Name: "vEdge-20", Address: "192.168.222.20", TenantID: ""},
 		{ID: "vedge-20-1e95f00f", Name: "vEdge-20", Address: "192.168.222.20", TenantID: "retail", Source: devmon.SourceController},
 	}
-	got := buildEnrichmentRows(devices)
-	want := []enrichmentRow{{"192.168.222.20", ""}, {"vEdge-20", ""}, {"vedge-20-1e95f00f", ""}}
+	got := identityTenants(buildEnrichmentRows(devices))
+	want := []identityTenant{{"192.168.222.20", ""}, {"vEdge-20", ""}, {"vedge-20-1e95f00f", ""}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("controller-only device must not reach the registry:\n got=%v\nwant=%v", got, want)
 	}
@@ -170,8 +181,8 @@ func TestBuildEnrichmentRows_ControllerOnlyDeviceIDNotExported(t *testing.T) {
 func TestWriteEnrichmentCSV_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	rows := []enrichmentRow{
-		{"10.0.0.1", "acme"},
-		{"spine1", ""},
+		{Identity: "10.0.0.1", Tenant: "acme"},
+		{Identity: "spine1"},
 	}
 	if _, err := writeEnrichmentCSV(dir, rows); err != nil {
 		t.Fatalf("write: %v", err)
@@ -186,9 +197,9 @@ func TestWriteEnrichmentCSV_RoundTrip(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	want := [][]string{
-		{"identity", "tenant_id"},
-		{"10.0.0.1", "acme"},
-		{"spine1", ""},
+		{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role"},
+		{"10.0.0.1", "acme", "", "", "", "", ""},
+		{"spine1", "", "", "", "", "", ""},
 	}
 	if !reflect.DeepEqual(recs, want) {
 		t.Fatalf("csv mismatch:\n got=%v\nwant=%v", recs, want)
@@ -216,7 +227,7 @@ func TestWriteEnrichmentCSV_RoundTrip(t *testing.T) {
 // writer must skip the rename when the bytes are identical.
 func TestWriteEnrichmentCSV_UnchangedContentDoesNotRewrite(t *testing.T) {
 	dir := t.TempDir()
-	rows := []enrichmentRow{{"10.0.0.1", "acme"}, {"spine1", "globex"}}
+	rows := []enrichmentRow{{Identity: "10.0.0.1", Tenant: "acme"}, {Identity: "spine1", Tenant: "globex"}}
 
 	changed, err := writeEnrichmentCSV(dir, rows)
 	if err != nil {

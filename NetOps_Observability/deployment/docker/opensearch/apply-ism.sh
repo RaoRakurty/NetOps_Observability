@@ -796,15 +796,32 @@ else
   echo "ism: OPENSEARCH_SNAPSHOT_KEEP=0 — snapshots DISABLED. The search tier has no backup." >&2
 fi
 
-# Report coverage instead of asserting it. A lane with policy "null" here is a
-# lane that will grow forever; print it so the boot log carries the evidence.
+# Report coverage instead of asserting it. A lane with no policy here is a lane
+# that will grow forever, which on netops-syslog-* means usernames kept past the
+# retention limit (owner decision D7), so the boot log has to carry the evidence.
+#
+# This used to pipe into `python3 -c`, with stderr and the exit code discarded.
+# The image is curlimages/curl and has no python (see repos_at_location), so the
+# report printed NOTHING on every install while looking like a clean run. Shell
+# only now, and a reply it cannot read is said out loud (section 16.1).
 echo "ism: coverage check —"
-curl -s "$OS/_plugins/_ism/explain/netops-*" 2>/dev/null | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-missing=[k for k,v in d.items() if isinstance(v,dict) and not v.get("index.plugins.index_state_management.policy_id")]
-for k in sorted(missing): print("  ism: NO POLICY ->",k)
-print("  ism: %d/%d netops indices managed" % (len([k for k,v in d.items() if isinstance(v,dict)])-len(missing),
-                                               len([k for k,v in d.items() if isinstance(v,dict)])))
-' 2>/dev/null || true
+_cov=$(os_curl -s -m 30 --connect-timeout 5 "$OS/_plugins/_ism/explain/netops-*")
+case "$_cov" in
+  *'"index.plugins.index_state_management.policy_id"'*)
+    # One index per line: `},"` is the entry boundary in the compact reply.
+    _cov_lines=$(printf '%s' "$_cov" | sed -e 's/},"/}\
+"/g')
+    # grep -c exits 1 on zero matches, which is a count here and not a failure.
+    _cov_all=$(printf '%s\n' "$_cov_lines" | grep -c '"index.plugins.index_state_management.policy_id"') || _cov_all=0
+    _cov_none=$(printf '%s\n' "$_cov_lines" | grep -c '"index.plugins.index_state_management.policy_id":[[:space:]]*null') || _cov_none=0
+    printf '%s\n' "$_cov_lines" | grep '"index.plugins.index_state_management.policy_id":[[:space:]]*null' |
+      sed -n 's/^{*"\([^"]*\)".*/\1/p' |
+      while IFS= read -r _cov_idx || [ -n "$_cov_idx" ]; do
+        echo "ism: WARNING NO POLICY -> $_cov_idx (it will never be deleted)" >&2
+      done
+    echo "  ism: $((_cov_all - _cov_none))/$_cov_all netops indices managed"
+    ;;
+  *)
+    echo "ism: WARNING coverage check got no readable answer from _ism/explain, so retention coverage is UNKNOWN on this run" >&2
+    ;;
+esac

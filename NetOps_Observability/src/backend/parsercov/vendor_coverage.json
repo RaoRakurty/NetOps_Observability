@@ -1,0 +1,399 @@
+{
+  "schema": 1,
+  "vendors": [
+    {
+      "display_name": "Arista Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 10,
+          "mib_nodes": 122,
+          "mibs": 8,
+          "rules": {
+            "doc_claimed": 3
+          },
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 1,
+          "grammars": 1,
+          "rules": {
+            "doc_claimed": 1,
+            "unrated": 9
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "arista"
+    },
+    {
+      "display_name": "Aruba Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "aruba"
+    },
+    {
+      "display_name": "Check Point",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "checkpoint"
+    },
+    {
+      "display_name": "Cisco",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 12,
+          "mib_nodes": 1099,
+          "mibs": 14,
+          "rules": {
+            "doc_claimed": 19,
+            "lab_validated": 1,
+            "unrated": 1
+          },
+          "trap_definitions": 16
+        },
+        "syslog": {
+          "fixtures": 18,
+          "grammars": 5,
+          "rules": {
+            "doc_claimed": 6,
+            "lab_validated": 7,
+            "unrated": 13
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "cisco"
+    },
+    {
+      "display_name": "Dell",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "dell"
+    },
+    {
+      "display_name": "Extreme Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "extreme"
+    },
+    {
+      "display_name": "F5 Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "f5"
+    },
+    {
+      "display_name": "Fortinet",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 1,
+          "grammars": 1,
+          "rules": {
+            "unrated": 3
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "fortinet"
+    },
+    {
+      "display_name": "HP",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "hp"
+    },
+    {
+      "display_name": "Huawei",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "huawei"
+    },
+    {
+      "display_name": "Juniper Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 9,
+          "mib_nodes": 366,
+          "mibs": 4,
+          "rules": {
+            "doc_claimed": 4
+          },
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {
+            "doc_claimed": 1,
+            "unrated": 3
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "juniper"
+    },
+    {
+      "display_name": "MikroTik",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "mikrotik"
+    },
+    {
+      "display_name": "Nokia",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 2,
+          "mib_nodes": 3061,
+          "mibs": 5,
+          "rules": {
+            "doc_claimed": 2,
+            "unrated": 1
+          },
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 1,
+          "grammars": 1,
+          "rules": {
+            "unrated": 2
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "nokia"
+    },
+    {
+      "display_name": "Palo Alto Networks",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {
+            "unrated": 2
+          }
+        }
+      },
+      "standard": false,
+      "vendor": "paloalto"
+    },
+    {
+      "display_name": "Ruckus Wireless",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "ruckus"
+    },
+    {
+      "display_name": "SONiC",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "sonic"
+    },
+    {
+      "display_name": "Sophos",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "sophos"
+    },
+    {
+      "display_name": "Ubiquiti",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 0,
+          "mib_nodes": 0,
+          "mibs": 0,
+          "rules": {},
+          "trap_definitions": 0
+        },
+        "syslog": {
+          "fixtures": 0,
+          "grammars": 0,
+          "rules": {}
+        }
+      },
+      "standard": false,
+      "vendor": "ubiquiti"
+    },
+    {
+      "display_name": "Any vendor",
+      "lanes": {
+        "snmptrap": {
+          "fixtures": 16,
+          "mib_nodes": 1564,
+          "mibs": 25,
+          "rules": {
+            "doc_claimed": 6,
+            "unrated": 7
+          },
+          "trap_definitions": 6
+        },
+        "syslog": {
+          "fixtures": 14,
+          "grammars": 9,
+          "rules": {
+            "lab_validated": 1,
+            "unrated": 13
+          }
+        }
+      },
+      "standard": true,
+      "vendor": "standard"
+    }
+  ]
+}

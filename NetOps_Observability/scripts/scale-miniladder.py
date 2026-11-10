@@ -143,6 +143,7 @@ no workload and refuses an unreachable stack.
 from __future__ import annotations
 
 import argparse
+import csv
 import errno
 import hashlib
 import json
@@ -2013,10 +2014,11 @@ class Stack:
                             DOCKER_TIMEOUT)
         if rc != 0 or not out.strip():
             return "global"
-        for line in out.splitlines()[1:]:
-            parts = line.split(",", 1)
-            if len(parts) == 2 and parts[0].strip() == identity:
-                return parts[1].strip() or "global"
+        # csv, not split: the file has columns after tenant_id, and a model or site
+        # name may itself hold a quoted comma.
+        for row in list(csv.reader(out.splitlines()))[1:]:
+            if len(row) >= 2 and row[0].strip() == identity:
+                return row[1].strip() or "global"
         return "global"
 
     # -- ClickHouse ---------------------------------------------------------

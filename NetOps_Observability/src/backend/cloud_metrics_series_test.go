@@ -96,7 +96,7 @@ func TestVMQueryRangeByParsesAndCaps(t *testing.T) {
 		{"metric":{"resource_id":"i-a"},"values":[[1000,"1.5"],[1300,"2.5"],[1600,"not-a-number"]]},
 		{"metric":{"other_label":"x"},"values":[[1000,"9"]]}
 	]`)
-	t.Setenv("VM_QUERY_URL", srv.URL)
+	t.Setenv("VICTORIA_URL", srv.URL)
 	got, err := vmQueryRangeBy(context.Background(), `cloud_cpu_util{resource_id=~"i-a"}`, 900, 1700, 60, "resource_id")
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestVMQueryRangeByParsesAndCaps(t *testing.T) {
 }
 
 func TestVMQueryRangeByUnreachable(t *testing.T) {
-	t.Setenv("VM_QUERY_URL", "http://127.0.0.1:1") // nothing listens here
+	t.Setenv("VICTORIA_URL", "http://127.0.0.1:1") // nothing listens here
 	if _, err := vmQueryRangeBy(context.Background(), "cloud_cpu_util", 0, 1, 60, "resource_id"); err == nil {
 		t.Fatal("unreachable store must be an error, not an empty result")
 	}
@@ -144,7 +144,7 @@ func TestCloudMetricSeriesHandlerContract(t *testing.T) {
 	seedCloudResource(t, s, acme.Tenant.ID, "i-acme1", "acme-web-1")
 
 	vm, queries := fakeVM(t, `[{"metric":{"resource_id":"i-acme1"},"values":[[1000,"42"]]}]`)
-	t.Setenv("VM_QUERY_URL", vm.URL)
+	t.Setenv("VICTORIA_URL", vm.URL)
 
 	// Bad metric → 400 (closed vocabulary).
 	if st, _ := do(t, srv, "GET", "/api/cloud/metrics/series?metric=up&resource=i-acme1", tok, nil); st != 400 {
@@ -197,7 +197,7 @@ func TestCloudMetricSeriesHandlerContract(t *testing.T) {
 
 	// Honest empty: VM knows nothing about this resource → empty points, 200.
 	vm2, _ := fakeVM(t, `[]`)
-	t.Setenv("VM_QUERY_URL", vm2.URL)
+	t.Setenv("VICTORIA_URL", vm2.URL)
 	st, b = do(t, srv, "GET", "/api/cloud/metrics/series?metric=cloud_cpu_util&resource=i-acme1", tok, nil)
 	if st != 200 {
 		t.Fatalf("no-data: want 200, got %d", st)
@@ -210,7 +210,7 @@ func TestCloudMetricSeriesHandlerContract(t *testing.T) {
 	}
 
 	// Unreachable store → 502, never a fabricated empty chart.
-	t.Setenv("VM_QUERY_URL", "http://127.0.0.1:1")
+	t.Setenv("VICTORIA_URL", "http://127.0.0.1:1")
 	if st, _ := do(t, srv, "GET", "/api/cloud/metrics/series?metric=cloud_cpu_util&resource=i-acme1", tok, nil); st != 502 {
 		t.Fatalf("unreachable store: want 502, got %d", st)
 	}

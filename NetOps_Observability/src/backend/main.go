@@ -2535,7 +2535,11 @@ func initStoreBackend() error {
 		// larger than the sum of them for a healthy install.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		if err := platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL")); err != nil {
+		dsn, err := platformdb.ResolveDSN(os.Getenv)
+		if err != nil {
+			return err
+		}
+		if err := platformdb.UsePostgres(ctx, dsn); err != nil {
 			return err
 		}
 		logInfo("store", "state backend selected", map[string]any{
@@ -3975,6 +3979,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                  // Iris NL: recent questions (N-C8)
 	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)         // Iris NL: "that's not what I meant" (N-C8)
 	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
+	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)      // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
 	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
@@ -4123,7 +4128,19 @@ func evaluateSecurityPosture() (secprofile.Report, error) {
 	if err != nil {
 		return secprofile.Report{}, err
 	}
-	return secprofile.Evaluate(p, os.Getenv, func(path string) bool {
+	// A DSN mounted as a file (the chart, tracker 384) is still the DSN the
+	// sslmode rule has to see. An unreadable file reads as unset here: the boot
+	// fails on it anyway when the store opens, with the reason.
+	env := func(key string) string {
+		if key == "DATABASE_URL" {
+			if dsn, dsnErr := platformdb.ResolveDSN(os.Getenv); dsnErr == nil {
+				return dsn
+			}
+			return ""
+		}
+		return os.Getenv(key)
+	}
+	return secprofile.Evaluate(p, env, func(path string) bool {
 		_, statErr := os.Stat(path)
 		return statErr == nil
 	}), nil
@@ -5618,6 +5635,13 @@ func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate par
 	if !ok {
 		return parsercov.Principal{}, false
 	}
+	// The read and propose lanes hand back raw log lines and templates that keep
+	// any word with no digit in it, a username included (D7), so they need log
+	// access as well. The stats gate is engine counters, not lines.
+	if gate != parsercov.GateStats && !s.roles.Allows(claims.Role, logsReadModule, LevelRead) {
+		writeError(w, http.StatusForbidden, errors.New(logsReadModule+" read permission required"))
+		return parsercov.Principal{}, false
+	}
 	tenant, cross := principalTenant(claims)
 	keys, _ := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
@@ -5647,12 +5671,14 @@ func (s *server) parserCovDeps() parsercov.Deps {
 				envOr("CORRELATION_URL", "http://correlation:8000"),
 				os.Getenv(parsercov.EnvReplicaURLs))
 		},
-		Metrics:    s.parserCovMetrics,
-		Audit:      s.securityAudit,
-		WriteJSON:  writeJSON,
-		WriteError: writeError,
-		LogWarn:    func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
-		MaxLines:   envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
+		// Vendor-level counters only; the router's labels are closed sets.
+		QueryByVendor: func(ctx context.Context, q string) map[string]float64 { return vmQueryBy(ctx, q, "vendor") },
+		Metrics:       s.parserCovMetrics,
+		Audit:         s.securityAudit,
+		WriteJSON:     writeJSON,
+		WriteError:    writeError,
+		LogWarn:       func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
+		MaxLines:      envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
 	}
 }
 

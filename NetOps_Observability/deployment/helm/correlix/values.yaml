@@ -89,10 +89,12 @@ store:
   # and requires api.persistence to be a durable volume. `memory` is dev/test
   # only and loses everything on restart.
   backend: postgres
-  # DSN for the non-superuser, NOBYPASSRLS `netops_app` role. The password is
-  # read from the Secret key DATABASE_URL — set that key, not this one, unless
-  # you are pointing at an external PostgreSQL with no secret material in the
-  # DSN. When empty the api builds the DSN from DB_* env.
+  # DSN for the non-superuser, NOBYPASSRLS `netops_app` role. The Secret key
+  # DATABASE_URL is mounted into the api as a file (DATABASE_URL_FILE), so the DSN
+  # and its password are not in the pod's environment (tracker 384). It is read at
+  # boot: restart the api after changing that Secret. false: no DSN from the Secret;
+  # the api then needs DATABASE_URL set through `env` below, and refuses to start
+  # on postgres without one.
   databaseUrlFromSecret: true
 
 # ── ingress (replaces the host port publish; the gateway pod stays) ─────────
@@ -401,7 +403,10 @@ vmalert:
 
 vmauth:
   # SEC-010 authenticating TLS front for VictoriaMetrics. Off by default, same
-  # as its compose profile; only meaningful with tls.enabled.
+  # as its compose profile; only meaningful with tls.enabled. On (tracker 384):
+  # api, prober, vmalert, gnmic and vector-aggregator connect through it, each
+  # with its own VMAUTH_*_PASSWORD key mounted as a file, and the NetworkPolicy
+  # closes their direct path to victoria:8428. Requires those keys in the Secret.
   enabled: false
   image:
     repository: victoriametrics/vmauth

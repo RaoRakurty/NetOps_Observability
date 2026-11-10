@@ -4,6 +4,7 @@
   "display_name": "Linux",
   "notes": "A Linux host has no vendor running-config, so capture is intentionally empty. The sysDescr text rank is the LAST rung on purpose: a BIG-IP sysDescr embeds 'Linux' and must resolve to f5 first.",
   "detection": {
+    "agent_identity": true,
     "sysdescr_contains": [
       "linux"
     ],

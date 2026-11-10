@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for TenantEnrichmentMissRateJumped (rules.yaml,
+# ingest-integrity, tier warning; tracker 387 D6). The counter is vector-router's
+# netops_tenant_attribution_events{outcome,topic} (no `_total`: Vector's exporter
+# appends none). A registry hit with a blank tenant now counts as
+# outcome="platform_owned"; `unmatched` is a registry miss. Acceptance:
+#   * a platform-only deployment, all registry hits, stays SILENT;
+#   * the same deployment FIRES when the device table breaks and its hits turn
+#     into misses. Before D6 every one of those hits already read `unmatched`, a
+#     steady 1.0 with nothing to rise from, so this case could never fire;
+#   * the relabel itself (`unmatched` falling on the day this ships) stays SILENT;
+#   * one unknown device among many known ones stays SILENT: a rise, not a level.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+# 5m, not the usual 1m: the rule's baseline needs 7 h of history, and promtool
+# evaluates the whole rule file at every step.
+evaluation_interval: 5m
+
+tests:
+  # 1) Platform-only, healthy: 7.7 h of registry hits and no misses.
+  - interval: 5m
+    input_series:
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="platform_owned",topic="netops.snmptrap"}'
+        values: "0+300x92"
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="unmatched",topic="netops.snmptrap"}'
+        values: "0x92"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: TenantEnrichmentMissRateJumped
+        exp_alerts: []
+
+  # 2) The device table breaks at minute 420: every hit becomes a miss. Still
+  #    pending five minutes in; firing once for: 20m has passed.
+  - interval: 5m
+    input_series:
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="platform_owned",topic="netops.snmptrap"}'
+        values: "0+300x84 25200x12"
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="unmatched",topic="netops.snmptrap"}'
+        values: "0x84 0+300x12"
+    alert_rule_test:
+      - eval_time: 425m
+        alertname: TenantEnrichmentMissRateJumped
+        exp_alerts: []
+      - eval_time: 460m
+        alertname: TenantEnrichmentMissRateJumped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+              topic: netops.snmptrap
+            exp_annotations:
+              summary: "Tenant enrichment miss rate on netops.snmptrap jumped to 100% above its 6h baseline"
+              description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted, so devices the registry should know are arriving as misses (`tenant_attribution=unmatched`). Platform devices read `platform_owned` and are not misses. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
+
+  # 3) The day this change ships: the same traffic moves from `unmatched` to
+  #    `platform_owned`. The miss rate falls, which must never read as a fault.
+  - interval: 5m
+    input_series:
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="unmatched",topic="netops.syslog"}'
+        values: "0+300x84 25200x12"
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="platform_owned",topic="netops.syslog"}'
+        values: "0x84 0+300x12"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: TenantEnrichmentMissRateJumped
+        exp_alerts: []
+
+  # 4) One new unknown device, 5 % of the lane: quarantine's business, not this
+  #    alert's. It stays below the +0.25 margin.
+  - interval: 5m
+    input_series:
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="platform_owned",topic="netops.flows"}'
+        values: "0+300x92"
+      - series: 'netops_tenant_attribution_events{job="vector-router",outcome="unmatched",topic="netops.flows"}'
+        values: "0x84 0+15x8"
+    alert_rule_test:
+      - eval_time: 460m
+        alertname: TenantEnrichmentMissRateJumped
+        exp_alerts: []

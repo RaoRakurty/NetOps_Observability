@@ -47,8 +47,11 @@ def test_the_lanes_are_the_declared_ones(rows):
     assert {r["lane"] for r in rows} <= set(B.LANES)
     runtime = [r for r in rows if r["lane"] in B.RUNTIME_LANES]
     # 38 through A9 · 40 since A9b (`syslog.config.change`, `trap.config.change`)
-    # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since 377 (`trap.bgp.nokia_ng`).
-    assert len(runtime) == 42, (
+    # · 41 since tracker 376 (`trap.bgp.cisco_bgp4`) · 42 since 377 (`trap.bgp.nokia_ng`)
+    # · 59 with 387's trap-pack block (13 Cisco SD-WAN, 2 BFD-STD, 2 CISCO-PROCESS)
+    # · 71 with 387's syslog pack (the Cisco SD-WAN pack's 12 rows)
+    # · 72 with PR 10's known_benign row for the SSH banner probe.
+    assert len(runtime) == 72, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 
@@ -225,7 +228,14 @@ def test_the_two_link_rows_are_the_only_ones_that_drop_an_attr(rows):
     assert declaring == {"trap.link.state_change",
                          "trap.link.state_change.event_type",
                          "trap.bgp.cisco_bgp4",
-                         "trap.bgp.nokia_ng"}
+                         "trap.bgp.nokia_ng",
+                         # tracker 387: the same meaning, per optional varbind.
+                         "trap.sdwan.cpu_threshold", "trap.sdwan.cpu_threshold.clear",
+                         "trap.sdwan.memory_threshold", "trap.sdwan.memory_threshold.clear",
+                         "trap.sdwan.control_connection", "trap.sdwan.control_connection.clear",
+                         "trap.sdwan.omp", "trap.sdwan.omp.clear", "trap.sdwan.omp_tloc_change",
+                         "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface",
+                         "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear"}
 
 
 def test_a_pattern_src_must_be_a_live_node_of_its_own_guard(loaded):
