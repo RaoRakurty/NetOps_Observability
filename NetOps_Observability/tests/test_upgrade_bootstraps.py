@@ -295,6 +295,8 @@ for a in "$@"; do
   case "$a" in
     */_cluster/health) exit 0 ;;
     */_index_template/*) printf '{"acknowledged":true}\\n'; exit 0 ;;
+    # The current-index mapping sync lists indices; this cluster has none yet.
+    */_settings/index.creation_date*) printf '{}\\n'; exit 0 ;;
   esac
 done
 exit 0
@@ -306,6 +308,8 @@ def _fake_repo(tmp_path: Path, env_lines: str) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "scripts" / SCRIPT.name)
+    # The current-index mapping sync helper ships beside the script (tracker 387).
+    shutil.copy(SCRIPT.parent / "opensearch_mapping_sync.py", repo / "scripts")
     osdir = repo / "deployment" / "docker" / "opensearch"
     osdir.mkdir(parents=True)
     (repo / "deployment" / "docker" / "docker-compose.yml").write_text("services: {}\n")

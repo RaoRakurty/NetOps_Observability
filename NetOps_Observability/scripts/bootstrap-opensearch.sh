@@ -437,12 +437,95 @@ print(json.dumps(resolve(t)))
     echo
 done
 
+# ── Current-index mapping sync (tracker 387, 2026-11-10) ─────────────────────
+# Every lane is `dynamic: false`, so a field a template just gained is stored in
+# _source but NOT indexed until tomorrow's index is created from the template:
+# after a deploy, syslog `title`/`correlation_key` were on every new record yet
+# unsearchable until midnight UTC. Add each applied template's NEW fields to the
+# newest index of every series it covers. Only absent fields are sent (the
+# helper never re-types a live field), so each PUT is additive and a refusal is
+# a real failure, counted and made loud below.
+SYNC_HELPER="$ROOT/scripts/opensearch_mapping_sync.py"
+SYNCED=()
+SYNC_FAILED=()
+for name in "${APPLIED[@]}"; do
+    patterns=$(python3 -c "
+import json
+print(','.join(json.load(open('$TEMPLATES'))['templates']['$name'].get('index_patterns', [])))
+")
+    [[ -n "$patterns" ]] || continue
+    set +e
+    resp=$(os_curl -s --max-time 15 \
+        "$OS_BASE/$patterns/_settings/index.creation_date?expand_wildcards=open" 2>&1)
+    rc=$?
+    targets=""
+    trc=0
+    if [[ $rc -eq 0 ]]; then
+        targets=$(printf '%s' "$resp" | python3 "$SYNC_HELPER" targets 2>&1)
+        trc=$?
+    fi
+    set -e
+    if [[ $rc -ne 0 || $trc -ne 0 ]]; then
+        echo "!! mapping sync: could not list the indices of $name (curl/exec exit=$rc): $(redact "${targets:-$resp}")" >&2
+        SYNC_FAILED+=("$name")
+        continue
+    fi
+    for idx in $targets; do
+        set +e
+        live=$(os_curl -s --max-time 15 "$OS_BASE/$idx/_mapping" 2>&1)
+        rc=$?
+        body=""
+        brc=0
+        notes=""
+        if [[ $rc -eq 0 ]]; then
+            errf=$(mktemp)
+            body=$(printf '%s' "$live" | python3 "$SYNC_HELPER" missing "$TEMPLATES" "$name" 2>"$errf")
+            brc=$?
+            notes=$(cat "$errf")
+            rm -f "$errf"
+        fi
+        set -e
+        if [[ $rc -ne 0 || $brc -ne 0 ]]; then
+            echo "!! mapping sync: could not read the mapping of $idx (curl/exec exit=$rc): $(redact "${notes:-$live}")" >&2
+            SYNC_FAILED+=("$idx")
+            continue
+        fi
+        # Type differences are expected after a deliberate template change;
+        # they apply from the next index and are named, not attempted.
+        if [[ -n "$notes" ]]; then
+            printf '   %s: %s\n' "$idx" "$notes"
+        fi
+        [[ -n "$body" ]] || continue
+        set +e
+        resp=$(printf '%s' "$body" | os_curl -s --max-time 30 -X PUT "$OS_BASE/$idx/_mapping" \
+            -H 'Content-Type: application/json' -d @- 2>&1)
+        rc=$?
+        set -e
+        resp="$(redact "$resp")"
+        case "$resp" in
+          *'"acknowledged":true'*|*'"acknowledged": true'*)
+            echo "→ $idx: added $(printf '%s' "$body" | python3 -c 'import json,sys; print(", ".join(sorted(json.load(sys.stdin)["properties"])))')"
+            SYNCED+=("$idx") ;;
+          *)
+            echo "!! mapping sync: $idx refused the new fields (curl/exec exit=$rc): $resp" >&2
+            SYNC_FAILED+=("$idx") ;;
+        esac
+    done
+done
+
 # Name what actually landed. "Done." on its own has hidden a fully-failed run.
 echo "APPLIED  (${#APPLIED[@]}): ${APPLIED[*]:-<none>}"
 echo "FAILED   (${#FAILED_NAMES[@]}): ${FAILED_NAMES[*]:-<none>}"
+echo "SYNCED   (${#SYNCED[@]}): ${SYNCED[*]:-<none>}"
+echo "SYNC FAILED (${#SYNC_FAILED[@]}): ${SYNC_FAILED[*]:-<none>}"
 
 if [[ ${#FAILED_NAMES[@]} -ne 0 ]]; then
   echo "One or more templates FAILED to apply." >&2
+  exit 1
+fi
+if [[ ${#SYNC_FAILED[@]} -ne 0 ]]; then
+  echo "Templates applied, but new fields could not be added to the current index of: ${SYNC_FAILED[*]}." >&2
+  echo "Those fields stay unsearchable on today's records until the next daily index." >&2
   exit 1
 fi
 echo "Done."
