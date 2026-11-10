@@ -130,3 +130,25 @@ func TestRouterRepairsAreDisclosed(t *testing.T) {
 		}
 	}
 }
+
+// TestLabQuestionsRoute pins the router's reading of the lab's real questions
+// (query log 2026-11-10, hybrid NLU plan A8). The data arm answers the
+// inventory, severity and lookup questions before the router's intent
+// matters; what is pinned here is that a misspelling no longer changes the
+// intent, and that the NOC questions keep their explicit intents (so a data
+// attempt on them is recorded as not_data, never as a dead end).
+func TestLabQuestionsRoute(t *testing.T) {
+	for q, want := range map[string]string{
+		"What is going on right now? What should the NOC focus on first?": "noc_focus",
+		"What is going on right now?":                                     "current_state",
+		"show me the critical incidents":                                  "incident_list",
+		"show me the critical incidentes":                                 "incident_list",
+		"list top isues today":                                            "incident_list",
+		"open incidents at dalas":                                         "incident_list",
+		"what's wrong with edge-1":                                        "incident_list",
+	} {
+		if got := Classify(q, nil).Intent; got != want {
+			t.Errorf("Classify(%q) = %q, want %q", q, got, want)
+		}
+	}
+}

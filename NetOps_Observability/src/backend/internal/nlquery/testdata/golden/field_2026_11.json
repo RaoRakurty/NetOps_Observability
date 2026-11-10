@@ -1,0 +1,283 @@
+{
+ "schema": "correlix.nlquery.golden/v1",
+ "category": "field_2026_11",
+ "cases": [
+  {
+   "id": "field-2026-11-001",
+   "category": "incidents",
+   "question": "show me the critical incidents",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "list_incidents",
+    "ast": {
+     "v": 1,
+     "query_type": "incident_list",
+     "target": "incident",
+     "filters": [
+      {
+       "field": "verdict_tier",
+       "op": "eq",
+       "values": [
+        "confirmed"
+       ]
+      }
+     ],
+     "time_range": {},
+     "order_by": [
+      {
+       "field": "created_at",
+       "dir": "desc"
+      }
+     ]
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "incident_rows",
+     "must_include_refs": [
+      "incident:3f2a9c1e-7b4d-4e8a-9c01-5d6e7f8a9b0c"
+     ]
+    }
+   },
+   "paraphrases": [
+    "show me the critical incidentes",
+    "show me only critical",
+    "list the critical incidents",
+    "any severe incidents?"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-002",
+   "category": "devices",
+   "question": "how many devices are onboarded?",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "count_entities",
+    "ast": {
+     "v": 1,
+     "query_type": "entity_count",
+     "target": "device",
+     "time_range": {}
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "entity_count",
+     "must_include_refs": []
+    }
+   },
+   "paraphrases": [
+    "how many devices can you see ?",
+    "how many devices do we have",
+    "how many devcies are onboarded",
+    "number of devices"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-003",
+   "category": "sites",
+   "question": "I cannot find RETAIL",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "lookup",
+    "not_found": "RETAIL"
+   },
+   "paraphrases": [
+    "where is RETAIL",
+    "find retail",
+    "i can't find RETAIL"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-004",
+   "category": "devices",
+   "question": "shwo cpu on DFW-EDGE-1",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "show_metric",
+    "entities": [
+     {
+      "input": "DFW-EDGE-1",
+      "type": "device",
+      "id": "device:dfw-edge-1",
+      "method": "discovery"
+     }
+    ],
+    "ast": {
+     "v": 1,
+     "query_type": "metric_series",
+     "target": "device",
+     "metric": "cpu_util_pct",
+     "aggregation": "avg",
+     "entities": [
+      {
+       "type": "device",
+       "id": "device:dfw-edge-1"
+      }
+     ],
+     "time_range": {}
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "timeseries",
+     "must_include_refs": [
+      "device:dfw-edge-1"
+     ]
+    }
+   },
+   "paraphrases": [
+    "show cpu on dfw-edge1",
+    "show cpu on DFW_EDGE_1",
+    "cpu on dfwedge1"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-005",
+   "category": "sites",
+   "question": "open incidents at dalas",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "did_you_mean",
+    "did_you_mean": [
+     "site:dfw-hq"
+    ]
+   },
+   "paraphrases": [
+    "incidents at dalas",
+    "show open incidents at dalas",
+    "open incidents in dallsa"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-006",
+   "category": "interfaces",
+   "question": "which 5 interfaces are busiest",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "rank",
+    "ast": {
+     "v": 1,
+     "query_type": "metric_topk",
+     "target": "interface",
+     "metric": "if_util_max_pct",
+     "aggregation": "max",
+     "time_range": {},
+     "order_by": [
+      {
+       "field": "value",
+       "dir": "desc"
+      }
+     ],
+     "limit": 5
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "ranking",
+     "must_include_refs": []
+    }
+   },
+   "paraphrases": [
+    "which interfaces are busiest",
+    "top 5 busiest interfaces",
+    "which 5 intefaces are busiest"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-007",
+   "category": "incidents",
+   "question": "list top isues today",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "list_incidents",
+    "ast": {
+     "v": 1,
+     "query_type": "incident_list",
+     "target": "incident",
+     "time_range": {
+      "kind": "absolute",
+      "from": "2026-09-24T05:00:00Z",
+      "to": "2026-09-24T15:00:00Z"
+     },
+     "order_by": [
+      {
+       "field": "created_at",
+       "dir": "desc"
+      }
+     ]
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "incident_rows",
+     "must_include_refs": []
+    }
+   },
+   "paraphrases": [
+    "list top issues today",
+    "list the top isues for today",
+    "top incidnets today"
+   ],
+   "source": "lab"
+  },
+  {
+   "id": "field-2026-11-008",
+   "category": "devices",
+   "question": "where is dfw-edge1",
+   "context": {
+    "tz": "America/Chicago"
+   },
+   "expect": {
+    "intent": "lookup",
+    "entities": [
+     {
+      "input": "dfw-edge1",
+      "type": "device",
+      "id": "device:dfw-edge-1",
+      "method": "discovery"
+     }
+    ],
+    "ast": {
+     "v": 1,
+     "query_type": "entity_list",
+     "target": "device",
+     "entities": [
+      {
+       "type": "device",
+       "id": "device:dfw-edge-1"
+      }
+     ],
+     "time_range": {}
+    },
+    "alternates": [],
+    "result_semantics": {
+     "kind": "inventory_rows",
+     "must_include_refs": [
+      "device:dfw-edge-1"
+     ]
+    }
+   },
+   "paraphrases": [
+    "find DFW_EDGE_1",
+    "where is dfwedge1"
+   ],
+   "source": "lab"
+  }
+ ]
+}

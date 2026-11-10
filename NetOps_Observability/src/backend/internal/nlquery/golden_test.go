@@ -75,6 +75,9 @@ var intentTypes = map[string][]ast.QueryType{
 	"change_diff":      {ast.ChangeList},
 	"list_incidents":   {ast.IncidentList},
 	"explain_incident": {ast.IncidentExplain},
+	"count_entities":   {ast.EntityCount},
+	"list_entities":    {ast.EntityList},
+	"lookup":           {ast.EntityList},
 }
 
 // result kind → the query types that can produce it.
@@ -88,6 +91,8 @@ var kindTypes = map[string][]ast.QueryType{
 	"group_counts":    {ast.ChangeList, ast.IncidentList},
 	"incident_rows":   {ast.IncidentList},
 	"incident_detail": {ast.IncidentExplain},
+	"entity_count":    {ast.EntityCount},
+	"inventory_rows":  {ast.EntityList},
 }
 
 var declines = map[string]bool{
@@ -135,7 +140,17 @@ type caseExpect struct {
 	RejectedAST     json.RawMessage   `json:"rejected_ast,omitempty"`
 	Decline         string            `json:"decline,omitempty"`
 	ForeignProbe    bool              `json:"foreign_probe,omitempty"`
+	// NotFound: the question asks for one named thing the caller cannot see;
+	// the answer is "not found" naming these words (lab cases, plan A4).
+	NotFound string `json:"not_found,omitempty"`
+	// DidYouMean: the question is not understood, and these tenant-A ids are
+	// the candidates offered for it (confirm-only, plan A2/A7).
+	DidYouMean []string `json:"did_you_mean,omitempty"`
 }
+
+// offered reports a case answered by an offer (not found / did you mean)
+// rather than a query.
+func (e caseExpect) offered() bool { return e.NotFound != "" || len(e.DidYouMean) > 0 }
 
 type expectEntity struct {
 	Input  string `json:"input"`
@@ -462,10 +477,12 @@ func loadCases(t *testing.T) []*goldenCase {
 		if f.Schema != "correlix.nlquery.golden/v1" {
 			t.Errorf("%s: schema %q", p, f.Schema)
 		}
+		// field_*.json: lab regression cases (owner D7), any category, dev split.
+		field := strings.HasPrefix(stem, "field_")
 		if f.Category != stem {
 			t.Errorf("%s: file category %q must equal the file name", p, f.Category)
 		}
-		if stem != "unsupported" && !known[stem] {
+		if stem != "unsupported" && !field && !known[stem] {
 			t.Errorf("%s: %q is not a corpus category", p, stem)
 		}
 		if len(f.Cases) == 0 {
@@ -477,7 +494,10 @@ func loadCases(t *testing.T) []*goldenCase {
 			if _, err := evalsplit.ParseSource(c.Source); err != nil {
 				t.Errorf("%s: case %s: %v", p, c.ID, err)
 			}
-			if stem != "unsupported" && c.Category != stem {
+			if field && c.Source != string(evalsplit.SourceLab) {
+				t.Errorf("%s: case %s: a field_ file holds lab cases (source %q)", p, c.ID, evalsplit.SourceLab)
+			}
+			if stem != "unsupported" && !field && c.Category != stem {
 				t.Errorf("%s: case %s has category %q", p, c.ID, c.Category)
 			}
 			if !known[c.Category] {
@@ -582,6 +602,10 @@ func TestGoldenCorpus(t *testing.T) {
 			checkIsolation(t, w, c)
 			if c.file == "unsupported" {
 				checkUnsupported(ctx, t, cat, w, c)
+				return
+			}
+			if c.Expect.offered() {
+				checkOffered(t, w, c)
 				return
 			}
 			checkSupported(ctx, t, cat, w, c)
@@ -731,7 +755,7 @@ func checkSupported(ctx context.Context, t *testing.T, cat *catalog.Catalog, w *
 	if !res.Valid {
 		t.Fatalf("expect.ast does not validate: %s", errCodes(res))
 	}
-	if a.Time.Kind == "" && a.Type != ast.IncidentExplain {
+	if a.Time.Kind == "" && a.Type != ast.IncidentExplain && !a.Type.IsInventory() {
 		found := false
 		for _, k := range res.Constraints {
 			found = found || k.Reason == "default_window"
@@ -867,6 +891,43 @@ func checkSupported(ctx context.Context, t *testing.T, cat *catalog.Catalog, w *
 			}
 		}
 	}
+}
+
+// checkOffered: a case answered by an offer carries no query, and everything
+// it offers is tenant A's; a not-found name is no name tenant A can see.
+func checkOffered(t *testing.T, w *world, c *goldenCase) {
+	e := c.Expect
+	if len(e.AST) > 0 || len(e.Alternates) > 0 || e.ResultSemantics != nil || e.RejectCode != "" || e.Decline != "" {
+		t.Error("an offered case has no query, result, reject or decline")
+	}
+	if e.Intent != "lookup" && e.Intent != "did_you_mean" {
+		t.Errorf("an offered case's intent is lookup or did_you_mean, got %q", e.Intent)
+	}
+	for _, id := range e.DidYouMean {
+		if w.owner[id] != w.a.Tenant {
+			t.Errorf("did_you_mean %s is not a tenant-A id", id)
+		}
+	}
+	if e.NotFound != "" {
+		for _, n := range fixtureNamesOf(w.a) {
+			if strings.EqualFold(n, e.NotFound) {
+				t.Errorf("not_found %q is a name tenant A can see", e.NotFound)
+			}
+		}
+	}
+}
+
+// fixtureNamesOf lists every name and alias an inventory's sites and devices
+// answer to.
+func fixtureNamesOf(inv *inventory) []string {
+	var out []string
+	for _, s := range inv.Sites {
+		out = append(append(out, s.Name, tail(s.ID)), s.Aliases...)
+	}
+	for _, d := range inv.Devices {
+		out = append(out, d.Name, tail(d.ID))
+	}
+	return out
 }
 
 func checkUnsupported(ctx context.Context, t *testing.T, cat *catalog.Catalog, w *world, c *goldenCase) {

@@ -55,7 +55,7 @@ const (
 	// minKeyPathReach: of every answerable phrasing, the share answered by the
 	// grammar or accepted by the model path behind it (the key path end to
 	// end). Ratchet: raise, never lower.
-	minKeyPathReach          = 0.82
+	minKeyPathReach          = 0.825
 	minOracleAnsweredPrec    = 0.99
 	minRepairAcceptanceRatio = 0.95 // repaired acceptances / oracle acceptances
 	// maxUnguardedWidening caps phrasings where a widened answer passes because

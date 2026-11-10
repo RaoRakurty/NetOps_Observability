@@ -272,3 +272,29 @@ func wordTableLeaks(held []evalsplit.Case, table []catalog.SynonymEntry) []evals
 	}
 	return evalsplit.FindLeaks(held, tuning)
 }
+
+// TestFieldCasesNeverQuoteHeldOut: the lab regression cases (source "lab",
+// always dev) were written to be fixed against; none of their texts may be a
+// held-out case, or fixing it would tune on the held-out split.
+func TestFieldCasesNeverQuoteHeldOut(t *testing.T) {
+	cases := loadCases(t)
+	held := heldOutCases(cases)
+	var tuning []evalsplit.Tuning
+	for _, c := range cases {
+		if c.Source != string(evalsplit.SourceLab) {
+			continue
+		}
+		if c.split() != evalsplit.Dev {
+			t.Errorf("%s: a lab case must be dev, is %s", c.ID, c.split())
+		}
+		for _, q := range append([]string{c.Question}, c.Paraphrases...) {
+			tuning = append(tuning, evalsplit.Tuning{Where: "testdata/golden/" + c.file + ".json", ID: c.ID, Text: q})
+		}
+	}
+	if len(tuning) == 0 {
+		t.Fatal("no lab cases found — the guard is checking nothing")
+	}
+	for _, l := range evalsplit.FindLeaks(held, tuning) {
+		t.Error(l)
+	}
+}

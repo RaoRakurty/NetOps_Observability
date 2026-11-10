@@ -37,14 +37,17 @@ import (
 
 // Accuracy floors (ratchet: raise when the measured value rises; never lower).
 const (
-	minQuestionAccuracy   = 0.70
-	minParaphraseAccuracy = 0.43
+	minQuestionAccuracy   = 0.73
+	minParaphraseAccuracy = 0.45
 	// Per-metric floors (N-C6). Coverage is reported, not floored: an honesty
 	// fix that turns a wrong compile into "not understood" LOWERS coverage and
 	// raises answered precision, which is the trade this design wants.
 	minEntityPrecision   = 0.88
 	minExecutableRate    = 0.97
-	minAnsweredPrecision = 0.875
+	minAnsweredPrecision = 0.885
+	// minOfferedAccuracy: of the phrasings the corpus answers with an offer
+	// (not found / did you mean), the share that got exactly that offer.
+	minOfferedAccuracy = 0.90
 )
 
 // fixtureLookups is tenant A's world as the root would present it.
@@ -155,15 +158,15 @@ func (s score) plus(o score) score { return score{ok: s.ok + o.ok, total: s.tota
 // answerable phrasing (N-C6); refused and the foreign counts are the SAFETY
 // checks as numbers for the release gates (N-H5).
 type compileMetrics struct {
-	qScore, pScore, entityP, executable, answeredP, coverage, refused score
-	foreignChecks, foreignBad                                         int64
+	qScore, pScore, entityP, executable, answeredP, coverage, refused, offered score
+	foreignChecks, foreignBad                                                  int64
 }
 
 func (m *compileMetrics) plus(o *compileMetrics) *compileMetrics {
 	return &compileMetrics{
 		qScore: m.qScore.plus(o.qScore), pScore: m.pScore.plus(o.pScore), entityP: m.entityP.plus(o.entityP),
 		executable: m.executable.plus(o.executable), answeredP: m.answeredP.plus(o.answeredP),
-		coverage: m.coverage.plus(o.coverage), refused: m.refused.plus(o.refused),
+		coverage: m.coverage.plus(o.coverage), refused: m.refused.plus(o.refused), offered: m.offered.plus(o.offered),
 		foreignChecks: m.foreignChecks + o.foreignChecks, foreignBad: m.foreignBad + o.foreignBad,
 	}
 }
@@ -253,6 +256,27 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 					t.Errorf("SAFETY %s %q: corpus expects %s, compiled query validates: %s", c.ID, question, c.Expect.RejectCode, canon(res.AST))
 				}
 			}
+			// SAFETY 4: a did-you-mean never offers another tenant's entity.
+			for _, d := range res.DidYouMean {
+				for _, r := range d.Refs {
+					m.foreignChecks++
+					if w.owner[r.EntityID] != "" && w.owner[r.EntityID] != w.a.Tenant {
+						m.foreignBad++
+						t.Errorf("SAFETY %s %q: offered a foreign entity %s", c.ID, question, r.EntityID)
+					}
+				}
+			}
+			if c.Expect.offered() {
+				// An offered answer: the right not-found, or exactly the
+				// expected candidates — and never a query.
+				m.offered.total++
+				if res.AST == nil && offeredHit(c.Expect, res) {
+					m.offered.ok++
+				} else if testing.Verbose() {
+					t.Logf("OFFER-MISS %s [%s] %q → %s", c.ID, c.split(), question, orUnparsed("", res))
+				}
+				continue
+			}
 			if len(c.Expect.AST) == 0 {
 				continue // accuracy is only scored on answerable cases
 			}
@@ -340,6 +364,7 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 	for _, k := range cats {
 		fmt.Fprintf(&b, "  %-18s %d/%d\n", k, perCat[k].ok, perCat[k].total)
 	}
+	fmt.Fprintf(&b, "offered (not found / did you mean) %d/%d\n", all.offered.ok, all.offered.total)
 	for _, x := range []struct {
 		name string
 		m    *compileMetrics
@@ -372,10 +397,35 @@ func TestCompilerAgainstTheGoldenCorpus(t *testing.T) {
 			t.Errorf("%s fell below its ratchet floor: %.3f < %.2f", f.name, f.got, f.floor)
 		}
 	}
+	if all.offered.total > 0 && all.offered.rate() < minOfferedAccuracy {
+		t.Errorf("offered accuracy fell below its floor: %.3f < %.2f", all.offered.rate(), minOfferedAccuracy)
+	}
 	if qScore.rate() < minQuestionAccuracy || pScore.rate() < minParaphraseAccuracy {
 		t.Fatalf("accuracy fell below its ratchet floor (questions %.2f < %.2f or paraphrases %.2f < %.2f)",
 			qScore.rate(), minQuestionAccuracy, pScore.rate(), minParaphraseAccuracy)
 	}
+}
+
+// offeredHit: the compile answered with the case's offer.
+func offeredHit(e caseExpect, r compile.Result) bool {
+	if e.NotFound != "" {
+		return r.NotFound != nil && strings.EqualFold(r.NotFound.Name, e.NotFound)
+	}
+	got := map[string]bool{}
+	for _, d := range r.DidYouMean {
+		for _, ref := range d.Refs {
+			got[ref.EntityID] = true
+		}
+	}
+	if len(got) != len(e.DidYouMean) {
+		return false
+	}
+	for _, id := range e.DidYouMean {
+		if !got[id] {
+			return false
+		}
+	}
+	return true
 }
 
 func orUnparsed(got string, r compile.Result) string {
