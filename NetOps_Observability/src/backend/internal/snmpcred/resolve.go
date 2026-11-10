@@ -94,6 +94,28 @@ func betterNameMatch(c, cur Credential, tenantID string) bool {
 // (case-insensitive) then id — the order the SNMP Profiles list shows, so the
 // operator can see exactly what the sweep will do.
 func (s *Store) ScanCandidates() []Credential {
+	return s.scanCandidates(PlatformOwned)
+}
+
+// ScanCandidatesFor returns the profiles a discovery scope OWNED BY tenantID
+// may try, in the same order as ScanCandidates. It is the symmetric rule (owner
+// decision D2, 2026-11-10): a tenant's scope tries ONLY that tenant's own
+// profiles — never a platform profile (the platform's secret is not sprayed at
+// a customer's addresses) and never another tenant's — and the platform scope
+// ("" or the global tenant) gets ScanCandidates, platform-owned only.
+func (s *Store) ScanCandidatesFor(tenantID string) []Credential {
+	if PlatformOwned(tenantID) {
+		return s.ScanCandidates()
+	}
+	want := strings.TrimSpace(tenantID)
+	return s.scanCandidates(func(owner string) bool {
+		return !PlatformOwned(owner) && strings.EqualFold(strings.TrimSpace(owner), want)
+	})
+}
+
+// scanCandidates lists the profiles whose owner passes keep, by name
+// (case-insensitive) then id.
+func (s *Store) scanCandidates(keep func(owner string) bool) []Credential {
 	if s == nil {
 		return nil
 	}
@@ -101,7 +123,7 @@ func (s *Store) ScanCandidates() []Credential {
 	defer s.mu.RUnlock()
 	out := make([]Credential, 0, len(s.creds))
 	for _, c := range s.creds {
-		if PlatformOwned(c.TenantID) {
+		if keep(c.TenantID) {
 			out = append(out, c)
 		}
 	}

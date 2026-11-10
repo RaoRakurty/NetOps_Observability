@@ -189,11 +189,9 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 			continue
 		}
 		ts := vmTime(int64(d.LastUpd))
-		edge := strings.EqualFold(d.DeviceType, "vedge")
-		role := "controller"
-		if edge {
-			role = "edge"
-		}
+		// The vendor-neutral facts come from the vManage mapper (facts.go).
+		facts := VManageFacts{}.MapFacts(NativeDeviceFacts{Model: d.Model, SiteID: string(d.SiteID), DeviceType: d.DeviceType})
+		edge := facts.Role == RoleEdge
 		b.Devices = append(b.Devices, ControllerDevice{
 			TenantID: tenant, IntegrationID: integrationID, SourceSystem: "vmanage",
 			KeyKind: KeySystemIP, Key: d.SystemIP,
@@ -204,8 +202,8 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 			MgmtAddr: d.SystemIP,
 			// board-serial is the board/SUDI identity on a cEdge, not necessarily
 			// the chassis serial a support case asks for — an alias, not a claim.
-			Vendor: "cisco", Model: d.Model, OS: "Catalyst SD-WAN", OSVersion: d.Version,
-			SiteID: string(d.SiteID), Role: role, Managed: edge,
+			Vendor: "cisco", Model: facts.Model, OS: "Catalyst SD-WAN", OSVersion: d.Version,
+			SiteID: facts.Site, Role: facts.Role, Managed: edge,
 			Reachable: strings.ToLower(d.Reachability),
 			Aliases:   map[string]string{"system_ip": d.SystemIP, "uuid": d.UUID, "board_serial": d.BoardSerial, "personality": d.Personality},
 			LastSeen:  ts,

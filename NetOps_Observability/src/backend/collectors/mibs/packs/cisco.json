@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "pack": "cisco-ios",
+  "source": "CISCO-BGP4-MIB (IOS, IOS-XE, NX-OS). Object meanings from the MIB; the cbgpPeer2Table bare-address index form is IOS-XE's, recorded on the lab (cEDGE-81, 2026-11-01 and 2026-11-10).",
+  "objects": {
+    "1.3.6.1.4.1.9.9.187.1.2.1.1.7": {
+      "name": "cbgpPeerLastErrorTxt",
+      "attr": "bgp_last_error_text"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.1.1.8": {
+      "name": "cbgpPeerPrevState",
+      "attr": "bgp_prev_state"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.1": {
+      "name": "cbgpPeer2Type",
+      "attr": "peer_afi"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.2": {
+      "name": "cbgpPeer2RemoteAddr",
+      "attr": "peer_address"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.3": {
+      "name": "cbgpPeer2State",
+      "attr": "bgp_state"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.6": {
+      "name": "cbgpPeer2LocalAddr",
+      "attr": "local_address"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.11": {
+      "name": "cbgpPeer2RemoteAs",
+      "attr": "peer_as"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.17": {
+      "name": "cbgpPeer2LastError",
+      "attr": "bgp_last_error"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.28": {
+      "name": "cbgpPeer2LastErrorTxt",
+      "attr": "bgp_last_error_text"
+    },
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.29": {
+      "name": "cbgpPeer2PrevState",
+      "attr": "bgp_prev_state"
+    }
+  },
+  "notifications": {},
+  "tables": {
+    "1.3.6.1.4.1.9.9.187.1.2.5.1": {
+      "name": "cbgpPeer2Entry",
+      "bare_address_index": true,
+      "fidelity": "lab_validated"
+    }
+  },
+  "titles": {
+    "1.3.6.1.4.1.9.9.187.0.1": {
+      "name": "cbgpFsmStateChange",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.9.9.187.0.2": {
+      "name": "cbgpBackwardTransition",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.9.9.187.0.5": {
+      "name": "cbgpPeer2EstablishedNotification",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.9.9.187.0.6": {
+      "name": "cbgpPeer2BackwardTransNotification",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.9.9.187.0.7": {
+      "name": "cbgpPeer2FsmStateChange",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.9.9.187.0.8": {
+      "name": "cbgpPeer2BackwardTransition",
+      "template": "bgp_transition"
+    }
+  }
+}

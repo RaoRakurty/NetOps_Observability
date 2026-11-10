@@ -752,6 +752,330 @@ def netsnmp_nodes() -> dict:
     return out
 
 
+# ── table INDEX clauses (tracker 387, trap semantics) ─────────────────────────
+# A trap's varbinds name a ROW by their instance suffix: bgpPeerState.10.0.0.1 is
+# the bgpPeerTable row of peer 10.0.0.1. Which arcs mean what is stated by the
+# row's INDEX (or AUGMENTS) clause and the SYNTAX of each index object, so that is
+# what the index records on every column, and the receiver decodes the suffix
+# from it with no table named in code:
+#   index          the index objects' names, in order (the clause as written)
+#   index_oids     their OIDs (a pack keys a meaning, e.g. peer_address, by OID)
+#   index_syntax   how each one is encoded in an instance suffix (RFC 2578 §7.7):
+#                    ipv4          IpAddress: 4 arcs
+#                    int           any INTEGER-based syntax: 1 arc
+#                    inet_type     InetAddressType (RFC 4001): 1 arc
+#                    inet_address  InetAddress: a length arc, then that many octets
+#                                  (the type before it says which length is legal)
+#                    string        a variable OCTET STRING: length arc, then octets
+#                    fixed:N       a fixed-size OCTET STRING: N arcs, no length
+#                    unknown       anything else: the receiver will not guess
+#   index_implied  the last object is IMPLIED (no length arc)
+# Two compilers state it: pysmi's JSON (`indices` / `augmention` on a row) for the
+# modules it compiles, net-snmp's `-Td` (INDEX / AUGMENTS lines) for the rest.
+_INDEX_INT_BASES = {"INTEGER", "Integer32", "Unsigned32", "Gauge32", "Counter32",
+                    "TimeTicks", "Integer", "Gauge", "Counter"}
+_INDEX_FIXED_TCS = {"InetAddressIPv4": 4, "InetAddressIPv6": 16, "InetAddressIPv4z": 8,
+                    "InetAddressIPv6z": 20, "MacAddress": 6}
+INDEX_ONLY_ENV = "INDEX_ONLY"
+
+
+def index_token(base: str, tc: str, fixed: int | None) -> str:
+    """The suffix encoding of one index object, from its SYNTAX (see above)."""
+    if tc == "InetAddressType":
+        return "inet_type"
+    if tc == "InetAddress":
+        return "inet_address"
+    if tc in _INDEX_FIXED_TCS:
+        return f"fixed:{_INDEX_FIXED_TCS[tc]}"
+    b = (base or "").strip()
+    if b == "IpAddress":
+        return "ipv4"
+    if b in _INDEX_INT_BASES:
+        return "int"
+    if b in ("OCTET STRING", "OCTET", "OctetString"):
+        return f"fixed:{fixed}" if fixed else "string"
+    return "unknown"
+
+
+def _pysmi_fixed(constraints: dict | None) -> int | None:
+    c = constraints or {}
+    if isinstance(c.get("fixed"), int):
+        return int(c["fixed"])
+    sizes = c.get("size") or []
+    if len(sizes) == 1 and isinstance(sizes[0], dict) and sizes[0].get("min") == sizes[0].get("max") \
+            and isinstance(sizes[0].get("min"), int) and sizes[0]["min"] > 0:
+        return int(sizes[0]["min"])
+    return None
+
+
+def pysmi_index_clauses(outdir: str) -> dict[str, dict]:
+    """{column OID: clause} from the rows pysmi compiled into `outdir`."""
+    symtab: dict[tuple[str, str], dict] = {}
+    tcs: dict[str, dict] = {}
+    for fn in sorted(os.listdir(outdir)) if os.path.isdir(outdir) else []:
+        if not fn.endswith(".json"):
+            continue
+        try:
+            data = json.load(open(os.path.join(outdir, fn)))
+        except (OSError, ValueError) as exc:
+            print(f"gen_index: index clauses: {fn} unreadable ({exc}) — skipped", file=sys.stderr)
+            continue
+        for sym, obj in data.items():
+            if isinstance(obj, dict):
+                symtab[(fn[:-5], obj.get("name", sym))] = obj
+                if obj.get("class") == "textualconvention":
+                    tcs.setdefault(obj.get("name", sym), obj)
+
+    def token(obj: dict) -> str:
+        syn = obj.get("syntax") or {}
+        t = str(syn.get("type") or "")
+        cons = syn.get("constraints")
+        tc = ""
+        if t in tcs:
+            tc = t
+            tsyn = tcs[t].get("type") or {}
+            t = str(tsyn.get("type") or "")
+            cons = cons or tsyn.get("constraints")
+        return index_token(t, tc, _pysmi_fixed(cons))
+
+    def indices(row: dict, depth: int = 0) -> list[dict] | None:
+        if depth > 4:
+            return None
+        if row.get("indices"):
+            return list(row["indices"])
+        aug = row.get("augmention") or row.get("augments")
+        if isinstance(aug, dict) and aug.get("object"):
+            target = symtab.get((aug.get("module", ""), aug["object"]))
+            return indices(target, depth + 1) if target else None
+        return None
+
+    rows: dict[str, dict] = {}
+    for (mod, _name), obj in symtab.items():
+        if obj.get("nodetype") != "row" or not obj.get("oid"):
+            continue
+        idx = indices(obj)
+        if not idx:
+            continue
+        names, oids, toks = [], [], []
+        for i in idx:
+            comp = symtab.get((i.get("module", mod), i.get("object", "")))
+            if not comp or not comp.get("oid"):
+                names = []
+                break
+            names.append(comp.get("name", i.get("object")))
+            oids.append(str(comp["oid"]))
+            toks.append(token(comp))
+        if names:
+            clause = {"index": names, "index_oids": oids, "index_syntax": toks}
+            if idx[-1].get("implied"):
+                clause["index_implied"] = True
+            rows[str(obj["oid"])] = clause
+    out: dict[str, dict] = {}
+    for obj in symtab.values():
+        oid = str(obj.get("oid") or "")
+        if obj.get("nodetype") == "column" and "." in oid and oid.rsplit(".", 1)[0] in rows:
+            out[oid] = rows[oid.rsplit(".", 1)[0]]
+    return out
+
+
+_TD_NAMED_HEAD_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*)::([A-Za-z][A-Za-z0-9-]*)$")
+
+
+def _td_named_blocks(text: str) -> list[tuple[str, str, str]]:
+    """`snmptranslate -Td` output as (module, name, block) per printed object."""
+    out: list[tuple[str, str, str]] = []
+    head: tuple[str, str] | None = None
+    lines: list[str] = []
+    for line in text.splitlines():
+        m = _TD_NAMED_HEAD_RE.match(line)
+        if m:
+            if head:
+                out.append((head[0], head[1], "\n".join(lines)))
+            head, lines = (m.group(1), m.group(2)), []
+            continue
+        lines.append(line)
+    if head:
+        out.append((head[0], head[1], "\n".join(lines)))
+    return out
+
+
+def _td_oid(block: str) -> str:
+    for line in block.splitlines():
+        m = re.match(r"\s*::=\s*\{(.*)\}", line)
+        if m:
+            arcs = [a.group(1) or a.group(2)
+                    for a in re.finditer(r"\((\d+)\)|(?<![\w(-])(\d+)(?![\w)-])", m.group(1))]
+            return ".".join(arcs)
+    return ""
+
+
+def _td_header(block: str) -> str:
+    """The clauses before DESCRIPTION: prose there may say anything."""
+    return block.split("DESCRIPTION", 1)[0]
+
+
+def _td_token(block: str) -> str:
+    head = _td_header(block)
+    tc = (re.search(r"--\s*TEXTUAL CONVENTION\s+(\S+)", head) or [None, ""])[1]
+    msyn = re.search(r"SYNTAX\s+(OCTET STRING|OBJECT IDENTIFIER|\w+)\s*(.*)", head)
+    base = msyn.group(1) if msyn else ""
+    fixed = None
+    if msyn and base == "OCTET STRING":
+        rest = msyn.group(2)
+        m1 = re.match(r"\(\s*(\d+)\s*\)", rest)
+        m2 = re.match(r"\(\s*(\d+)\s*\.\.\s*(\d+)\s*\)", rest)
+        if m1 and int(m1.group(1)) > 0:
+            fixed = int(m1.group(1))
+        elif m2 and m2.group(1) == m2.group(2) and int(m2.group(1)) > 0:
+            fixed = int(m2.group(1))
+    return index_token(base, tc, fixed)
+
+
+def _netsnmp_td_run(exe: str, mpath: str, objs: list[str]) -> list[tuple[str, str, str]]:
+    try:
+        # -IR looks a bare name (an AUGMENTS target) up across modules, but reads
+        # a numeric OID as a name too, so a call carries one kind or the other.
+        bare = all(o[:1].isalpha() and "::" not in o for o in objs)
+        flags = ["-IR"] if bare else []
+        text = subprocess.run([exe, "-M", mpath, "-m", "ALL", *flags, "-Td", *objs],
+                              capture_output=True, text=True, timeout=300).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"gen_index: index clauses: net-snmp batch failed ({exc}) — "
+              f"{len(objs)} object(s) get no clause from it", file=sys.stderr)
+        return []
+    return _td_named_blocks(text)
+
+
+def _netsnmp_td(exe: str, mpath: str, objs: list[str]) -> list[tuple[str, str, str]]:
+    """-Td blocks for `objs`. snmptranslate stops at the first object it cannot
+    resolve, so a short batch is retried one object at a time (each failure then
+    costs only itself, and is named)."""
+    out: list[tuple[str, str, str]] = []
+    bare = [o for o in objs if o[:1].isalpha() and "::" not in o]
+    rest = [o for o in objs if o not in set(bare)]
+    batches = [rest[i:i + NETSNMP_BATCH] for i in range(0, len(rest), NETSNMP_BATCH)]
+    batches += [bare[i:i + NETSNMP_BATCH] for i in range(0, len(bare), NETSNMP_BATCH)]
+    for chunk in batches:
+        got = _netsnmp_td_run(exe, mpath, chunk)
+        if len(got) >= len(chunk):
+            out.extend(got)
+            continue
+        unresolved = 0
+        for one in chunk:
+            single = _netsnmp_td_run(exe, mpath, [one])
+            unresolved += not single
+            out.extend(single)
+        if unresolved:
+            print(f"gen_index: index clauses: net-snmp resolved no definition for {unresolved} "
+                  f"of {len(chunk)} object(s) — those columns keep no clause", file=sys.stderr)
+    return out
+
+
+def netsnmp_index_clauses(columns: list[str]) -> dict[str, dict]:
+    """{column OID: clause} for `columns`, read through net-snmp from each
+    column's row (its OID minus the last arc). {} without net-snmp."""
+    exe = shutil.which("snmptranslate")
+    if not exe or not columns:
+        return {}
+    mpath = ":".join(netsnmp_mib_dirs())
+    parents = sorted({c.rsplit(".", 1)[0] for c in columns if "." in c})
+    rows: dict[str, tuple[str, list[str], bool, str]] = {}  # oid → (module, comps, implied, augments)
+    for mod, _name, block in _netsnmp_td(exe, mpath, parents):
+        head = _td_header(block)
+        oid = _td_oid(block)
+        mi = re.search(r"^\s*INDEX\s*\{([^}]*)\}", head, re.M)
+        ma = re.search(r"^\s*AUGMENTS\s*\{\s*([A-Za-z][\w-]*)\s*\}", head, re.M)
+        if mi:
+            raw = [c.strip() for c in mi.group(1).split(",") if c.strip()]
+            implied = bool(raw) and raw[-1].startswith("IMPLIED ")
+            comps = [c.replace("IMPLIED ", "").strip() for c in raw]
+            rows[oid] = (mod, comps, implied, "")
+        elif ma:
+            rows[oid] = (mod, [], False, ma.group(1))
+    # AUGMENTS: the augmented row's own clause (one level; a chain is resolved
+    # by the next pass of the same loop, bounded).
+    for _ in range(3):
+        pending = {o: r[3] for o, r in rows.items() if r[3]}
+        if not pending:
+            break
+        for mod, name, block in _netsnmp_td(exe, mpath, sorted(set(pending.values()))):
+            mi = re.search(r"^\s*INDEX\s*\{([^}]*)\}", _td_header(block), re.M)
+            ma = re.search(r"^\s*AUGMENTS\s*\{\s*([A-Za-z][\w-]*)\s*\}", _td_header(block), re.M)
+            for o, target in pending.items():
+                if target != name:
+                    continue
+                if mi:
+                    raw = [c.strip() for c in mi.group(1).split(",") if c.strip()]
+                    implied = bool(raw) and raw[-1].startswith("IMPLIED ")
+                    rows[o] = (mod, [c.replace("IMPLIED ", "").strip() for c in raw], implied, "")
+                elif ma:
+                    rows[o] = (rows[o][0], [], False, ma.group(1))
+                else:
+                    rows[o] = (rows[o][0], [], False, "")
+    want = sorted({f"{r[0]}::{c}" for r in rows.values() for c in r[1]})
+    comp: dict[str, tuple[str, str]] = {}  # MODULE::name → (oid, token)
+    for mod, name, block in _netsnmp_td(exe, mpath, want):
+        oid = _td_oid(block)
+        if oid:
+            comp[f"{mod}::{name}"] = (oid, _td_token(block))
+    out: dict[str, dict] = {}
+    for c in columns:
+        r = rows.get(c.rsplit(".", 1)[0])
+        if not r or not r[1]:
+            continue
+        resolved = [comp.get(f"{r[0]}::{n}") for n in r[1]]
+        if any(x is None for x in resolved):
+            continue
+        clause = {"index": list(r[1]), "index_oids": [x[0] for x in resolved],
+                  "index_syntax": [x[1] for x in resolved]}
+        if r[2]:
+            clause["index_implied"] = True
+        out[c] = clause
+    return out
+
+
+INDEX_FIELDS = ("index", "index_oids", "index_syntax", "index_implied")
+
+
+def apply_index_clauses(nodes: dict, clauses: dict[str, dict]) -> int:
+    """Set the clause on every COLUMN node it names; return how many changed.
+    A node the clause does not reach keeps nothing stale: its fields are cleared
+    only when a compiler stated a different clause."""
+    n = 0
+    for oid, clause in clauses.items():
+        node = nodes.get(oid)
+        if not node or node.get("kind") != "column":
+            continue
+        before = {k: node.get(k) for k in INDEX_FIELDS}
+        for k in INDEX_FIELDS:
+            node.pop(k, None)
+        node.update(clause)
+        if {k: node.get(k) for k in INDEX_FIELDS} != before:
+            n += 1
+    return n
+
+
+# What a trap needs decoded today, and the forms each MIB states (regression
+# guard; mirrors collectors/trap_index_test.go).
+INDEX_ASSERTIONS = {
+    "1.3.6.1.2.1.15.3.1.2": (["bgpPeerRemoteAddr"], ["ipv4"]),                      # bgpPeerState
+    "1.3.6.1.4.1.9.9.187.1.2.1.1.8": (["bgpPeerRemoteAddr"], ["ipv4"]),             # cbgpPeerPrevState (AUGMENTS)
+    "1.3.6.1.4.1.9.9.187.1.2.5.1.3": (["cbgpPeer2Type", "cbgpPeer2RemoteAddr"],
+                                      ["inet_type", "inet_address"]),               # cbgpPeer2State
+    "1.3.6.1.2.1.2.2.1.8": (["ifIndex"], ["int"]),                                  # ifOperStatus
+}
+
+
+def validate_index_clauses(nodes: dict) -> list[str]:
+    errs = []
+    for oid, (names, toks) in INDEX_ASSERTIONS.items():
+        n = nodes.get(oid) or {}
+        if n.get("index") != names or n.get("index_syntax") != toks:
+            errs.append(f"{oid} ({n.get('name')}): index {n.get('index')} {n.get('index_syntax')}, "
+                        f"want {names} {toks}")
+    return errs
+
+
 def validate(nodes: dict) -> list[str]:
     errs = []
     for oid, (name, kind) in ASSERTIONS.items():
@@ -789,9 +1113,14 @@ def main() -> int:
             base = json.load(open(INDEX)).get("nodes", {})
         except Exception:
             pass
+    # INDEX_ONLY=1: add the table INDEX clauses to the CHECKED-IN nodes and change
+    # nothing else (no node added, renamed or re-typed). The full run computes the
+    # same clauses after its merge, so the two cannot disagree.
+    index_only = os.environ.get(INDEX_ONLY_ENV) == "1"
     with tempfile.TemporaryDirectory() as tmp:
         mibdump(mibs, tmp)
-        gen = flatten(tmp)
+        gen = {} if index_only else flatten(tmp)
+        clauses = pysmi_index_clauses(tmp)
     for oid, n in gen.items():
         if oid in base:
             hint = base[oid].get("severity_hint")  # keep curated severity overlay
@@ -801,7 +1130,7 @@ def main() -> int:
         else:
             base[oid] = n
     # net-snmp pass: authoritative for the SMIv1 bridge family pysmi can't compile.
-    ns = netsnmp_nodes()
+    ns = {} if index_only else netsnmp_nodes()
     for oid, n in ns.items():
         base[oid] = n  # override — real compiled MIB beats pysmi/overlay
     for oid, n in STD_OVERLAY.items():
@@ -818,8 +1147,16 @@ def main() -> int:
         if n.get("kind") == "notification" and n.get("name") in SEVERITY_HINT:
             n["severity_hint"] = SEVERITY_HINT[n["name"]]
     nodes = base
-    print(f"gen_index: pysmi={len(gen)} net-snmp={len(ns)} nodes; index now {len(nodes)}.")
-    errs = validate(nodes)
+    # INDEX clauses last, over the merged nodes: pysmi's where it compiled the
+    # row, net-snmp's for every other column (it reads the vendored tree and the
+    # pinned cache, so a module neither can load keeps whatever the floor holds).
+    missing = [o for o, n in nodes.items() if n.get("kind") == "column" and o not in clauses]
+    clauses.update(netsnmp_index_clauses(missing))
+    changed = apply_index_clauses(nodes, clauses)
+    print(f"gen_index: pysmi={len(gen)} net-snmp={len(ns)} nodes; index now {len(nodes)}; "
+          f"INDEX clauses on {sum(1 for n in nodes.values() if n.get('index_syntax'))} column(s) "
+          f"({changed} changed).")
+    errs = validate(nodes) + validate_index_clauses(nodes)
     if errs:
         print("gen_index: VALIDATION FAILED:\n  " + "\n  ".join(errs), file=sys.stderr)
         return 1

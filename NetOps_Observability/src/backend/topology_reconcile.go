@@ -167,7 +167,7 @@ func (s *server) refreshSDWANOverlay(ctx context.Context) {
 	for _, d := range devs {
 		in.DevTenant[d.ID] = normTenant(d.TenantID)
 	}
-	ifaddr, ierr := collectors.FetchIfAddrMap(ctx)
+	ifaddr, ierr := fetchIfAddrMap(ctx)
 	if ierr != nil {
 		logWarn("topology", "interface addresses unread — SD-WAN edges that answer no SD-WAN MIB cannot be resolved this cycle", map[string]any{"error": ierr.Error()})
 	}
@@ -215,7 +215,7 @@ func (s *server) observeTopology(ctx context.Context) (topology.GraphRecords, er
 	// duplicate id appears beside it. Renaming ports is not a reason to refuse a
 	// reconcile, but an operator reading two ids for one link must be able to find
 	// out why.
-	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
+	ifaddr, ifaddrErr := fetchIfAddrMap(ctx)
 	reportIfRegistryUnread("topology", "BGP-LS edge ports stay raw interface IPs this cycle, so those edges reconcile under a different id and the previous one ages toward Stale", ifaddrErr,
 		map[string]any{"devices": len(devs)})
 	links := observeTopoLinks(devs, neighbors, ifaddr)

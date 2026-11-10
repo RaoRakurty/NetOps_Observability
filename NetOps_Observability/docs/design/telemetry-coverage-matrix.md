@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-09-vendor-packs-wave1`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-10-process-snapshot`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -54,7 +54,7 @@ engine treats them as such. Fidelity is the catalog's ladder
 | **`isis_adjacency_change`** | `syslog.isis.adjacency_change`, `syslog.junos.isis.adjacency` | `trap.isis.adjacency_change` | `igp_state_anomaly` | `cisco`, `juniper`, `nokia`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |
 | `link_down_no_light` | `syslog.port.link_down_no_light` | — | — | `generic` | syslog: code |
 | `link_flap_on_insert` | `syslog.port.link_flap_on_insert` | — | — | `generic` | syslog: code |
-| **`link_state_change`** | `syslog.cisco.link.admin_down`, `syslog.junos.link.state_change`, `syslog.link.state_change`, `syslog.nxos.link.down`, `syslog.nxos.link.up`, `syslog.sros.link.state_change` | `trap.link.state_change`, `trap.link.state_change.event_type`, `trap.sdwan.interface` | `if_metric_anomaly` | `any`, `arista`, `cisco`, `juniper`, `nokia`, `standard` | syslog: code/doc_claimed · trap: code/doc_claimed |
+| **`link_state_change`** | `syslog.cisco.link.admin_down`, `syslog.junos.link.state_change`, `syslog.link.state_change`, `syslog.nxos.link.down`, `syslog.nxos.link.up`, `syslog.sonic.link.state_change`, `syslog.sros.link.state_change` | `trap.link.state_change`, `trap.link.state_change.event_type`, `trap.sdwan.interface` | `if_metric_anomaly` | `any`, `arista`, `cisco`, `juniper`, `nokia`, `sonic`, `standard` | syslog: code/doc_claimed · trap: code/doc_claimed |
 | **`lldp_neighbor_change`** | `syslog.lldp.neighbor_change` | — | `if_metric_anomaly` | `arista`, `nokia` | syslog: code |
 | **`mac_flap`** | `syslog.mac.flap` | — | `if_metric_anomaly` | `arista`, `cisco` | syslog: doc_claimed |
 | **`ospf_adjacency_change`** | `syslog.junos.ospf.neighbor`, `syslog.ospf.adjacency_change`, `syslog.sros.ospf.neighbor_state` | `trap.ospf.adjacency_change` | `igp_state_anomaly` | `arista`, `cisco`, `juniper`, `nokia`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |

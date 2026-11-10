@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "pack": "arista",
+  "source": "ARISTA-BGP4V2-MIB (EOS), modelled on draft-ietf-idr-bgp4-mibv2: aristaBgp4V2PeerTable INDEX { Instance, RemoteAddrType, RemoteAddr }. doc_claimed: no capture.",
+  "platform": "EOS",
+  "objects": {
+    "1.3.6.1.4.1.30065.4.1.1.2.1.1": {
+      "name": "aristaBgp4V2PeerInstance",
+      "attr": "routing_instance"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.2": {
+      "name": "aristaBgp4V2PeerLocalAddrType",
+      "attr": "local_afi"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.3": {
+      "name": "aristaBgp4V2PeerLocalAddr",
+      "attr": "local_address"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.4": {
+      "name": "aristaBgp4V2PeerRemoteAddrType",
+      "attr": "peer_afi"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.5": {
+      "name": "aristaBgp4V2PeerRemoteAddr",
+      "attr": "peer_address"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.10": {
+      "name": "aristaBgp4V2PeerRemoteAs",
+      "attr": "peer_as"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.2.1.13": {
+      "name": "aristaBgp4V2PeerState",
+      "attr": "bgp_state"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.3.1.1": {
+      "name": "aristaBgp4V2PeerLastErrorCodeReceived",
+      "attr": "bgp_error_code"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.3.1.2": {
+      "name": "aristaBgp4V2PeerLastErrorSubCodeReceived",
+      "attr": "bgp_error_subcode"
+    },
+    "1.3.6.1.4.1.30065.4.1.1.3.1.4": {
+      "name": "aristaBgp4V2PeerLastErrorReceivedText",
+      "attr": "bgp_last_error_text"
+    }
+  },
+  "notifications": {},
+  "titles": {
+    "1.3.6.1.4.1.30065.4.1.0.1": {
+      "name": "aristaBgp4V2EstablishedNotification",
+      "template": "bgp_transition"
+    },
+    "1.3.6.1.4.1.30065.4.1.0.2": {
+      "name": "aristaBgp4V2BackwardTransitionNotification",
+      "template": "bgp_transition"
+    }
+  }
+}

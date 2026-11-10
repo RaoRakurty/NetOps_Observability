@@ -56,8 +56,13 @@ const (
 	MaxExamples      = 4
 	MaxMetrics       = 6
 	MaxMentions      = 12
-	DefaultTimeout   = 45 * time.Second
-	DefaultCallLimit = 20 * time.Second
+	// DefaultTimeout bounds the whole fallback and DefaultCallLimit one model
+	// call. Both were 45 s / 20 s until the 2026-11-10 lab measurement showed
+	// every Unparsed question waiting the full 20 s on a provider that never
+	// answered: the fallback is a rescue for a question the grammar missed,
+	// not something an operator should wait a third of a minute for.
+	DefaultTimeout   = 20 * time.Second
+	DefaultCallLimit = 8 * time.Second
 )
 
 // Refusal reasons (closed vocabulary, for logs and the offline harness).

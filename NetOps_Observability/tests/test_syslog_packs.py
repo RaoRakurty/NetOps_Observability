@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -140,19 +141,37 @@ _SKIP = ("docker is unavailable, so the pack suites DID NOT RUN against the ship
          "transform. Run them before shipping.")
 
 
+#: Cases per `vector test` process. Vector 0.40 keeps every case's built topology
+#: until the run ends (~110 MB each on this transform, measured 2026-11-10), so one
+#: process over the whole pack suite peaked past 10 GB and was OOM-killed on a 15 GB
+#: host; it also ran close to the 900 s budget. Chunks bound both.
+CASES_PER_RUN = 25
+
+
 def _vector_test(label: str, config: Path, suite_dir: Path, suite: str,
                  expected: int) -> None:
-    cmd = ["docker", "run", "--rm", "--entrypoint", "vector"]
-    for kv in ENV_STUBS:
-        cmd += ["-e", kv]
-    for src, dst in ((config, "/etc/vector/vector.yaml"),
-                     (suite_dir, "/etc/vector/tests"),
-                     (FIXTURES, "/etc/vector/enrichment")):
-        cmd += ["-v", f"{src}:{dst}:ro"]
-    cmd += [VECTOR_IMAGE, "test", "/etc/vector/vector.yaml", f"/etc/vector/tests/{suite}"]
-    run = run_vector_test(cmd, label=label, timeout=900)
-    assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
-    assert run.output.count("... passed") == expected, run.output
+    cases = yaml.safe_load((suite_dir / suite).read_text(encoding="utf-8"))["tests"]
+    assert len(cases) == expected
+    passed = 0
+    with tempfile.TemporaryDirectory(prefix="cx-vector-suite-") as tmp:
+        for n, start in enumerate(range(0, len(cases), CASES_PER_RUN)):
+            chunk = Path(tmp) / f"{n:02d}-{suite}"
+            chunk.write_text(yaml.safe_dump({"tests": cases[start:start + CASES_PER_RUN]},
+                                            sort_keys=False), encoding="utf-8")
+            chunk.chmod(0o644)
+            cmd = ["docker", "run", "--rm", "--entrypoint", "vector"]
+            for kv in ENV_STUBS:
+                cmd += ["-e", kv]
+            for src, dst in ((config, "/etc/vector/vector.yaml"),
+                             (Path(tmp), "/etc/vector/tests"),
+                             (FIXTURES, "/etc/vector/enrichment")):
+                cmd += ["-v", f"{src}:{dst}:ro"]
+            cmd += [VECTOR_IMAGE, "test", "/etc/vector/vector.yaml",
+                    f"/etc/vector/tests/{chunk.name}"]
+            run = run_vector_test(cmd, label=f"{label} part {n + 1}", timeout=900)
+            assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
+            passed += run.output.count("... passed")
+    assert passed == expected, f"{passed} of {expected} cases passed"
 
 
 def _cases(path: Path) -> int:

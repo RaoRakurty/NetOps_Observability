@@ -62,6 +62,9 @@ type metricsCollector struct {
 	ifRows             ifRowState
 	ifRowsLoaded       bool
 	ifRowsLastRetained string
+	// ifAliases is each device's last-read ifAlias table (if_rows_nms.go),
+	// published for the interface bridge's descriptions. Owned by pollOnce.
+	ifAliases ifAliasRows
 
 	mu     sync.RWMutex
 	status Status
@@ -77,6 +80,7 @@ func NewSNMPMetrics(targets TargetFunc) Collector {
 
 		ifRowStore: valkeyIfRowStore{},
 		ifRows:     newIfRowState(),
+		ifAliases:  ifAliasRows{},
 	}
 	c.pollFn = c.pollDevice
 	return c
@@ -185,6 +189,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	// is what keeps a device that has stopped answering resolvable.
 	ifRowsNow := c.publishIfRows(ctx, start, targets, results)
 
+	// deviceID → ifIndex → ifAlias, the operator's interface descriptions, for
+	// the interface bridge (netops.iface_names.ifalias). Same TTL discipline.
+	if aliases := c.ifAliases.update(targets, results); len(aliases) > 0 || len(targets) > 0 {
+		if b, err := json.Marshal(aliases); err == nil {
+			redisPublish(ctx, "interface-alias", ifAliasKey, string(b), ifAliasTTLSec)
+		}
+	}
+
 	// deviceID → sysLocation, read by the inventory to show the site the device
 	// itself is configured with. Same replace+TTL discipline.
 	if len(locations) > 0 {
@@ -254,11 +266,15 @@ type deviceOutcome struct {
 	// empty map without the flag says nothing about the device.
 	ifaddrComplete  bool
 	ifindexComplete bool
-	location        string           // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
-	softwareRev     string           // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
-	chassis         *ChassisIdentity // ENTITY-MIB chassis serial + model (nil = none reported)
-	lastErr         string
-	enrichErr       string
+	// ifalias is ifIndex → ifAlias; ifaliasRead says the walk finished, so an
+	// empty map means "no descriptions configured", not "not read".
+	ifalias     map[string]string
+	ifaliasRead bool
+	location    string           // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
+	softwareRev string           // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
+	chassis     *ChassisIdentity // ENTITY-MIB chassis serial + model (nil = none reported)
+	lastErr     string
+	enrichErr   string
 }
 
 // pollDevice does ALL SNMP work for one device and stamps its samples with THIS
@@ -309,6 +325,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
 	// names; empty when the operator configured no interface description.
 	var ifAliases map[string]string
+	ifAliasesOK := false
 	// Memory pools reported as used/free bytes (Cisco CISCO-MEMORY-POOL and
 	// every other vendor in that shape) carry no percentage, and every
 	// consumer — the device popup, the health score, topology and the memory
@@ -335,7 +352,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 				isIface := strings.HasPrefix(m.Name, "device_if_")
 				if isIface && ifNames == nil {
 					ifNames, ifNamesOK = ifNameMapChecked(dctx, addr, creds)
-					ifAliases = ifAliasMap(dctx, addr, creds)
+					ifAliases, ifAliasesOK = ifAliasMapChecked(dctx, addr, creds)
 				}
 				for idx, v := range rows {
 					if isIface {
@@ -457,6 +474,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 			out.ifaddr = m
 		}
 		out.ifindex = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
+		out.ifalias, out.ifaliasRead = ifAliases, ifAliasesOK && ifNamesOK
 		// An address whose port has no name is left out of m, so without the whole
 		// name table the address walk is not the device's whole answer either.
 		namesAnswered := ifNamesOK && len(ifNames) > 0
@@ -520,24 +538,30 @@ func ipIfNameMap(ctx context.Context, addr string, creds snmpCreds, ifNames map[
 	return out, nil
 }
 
-// ifAliasMap walks ifAlias keyed by ifIndex — the operator-assigned interface
+// ifAliasMapChecked walks ifAlias keyed by ifIndex — the operator-assigned interface
 // description / circuit ID (RFC 2863). Unlike ifName/ifDescr it is the human's
 // own label ("WAN-to-AWS", "Circuit ID 7Y-XYZ"), reboot-persistent, and a
 // grounding token that can intersect a seam/intent. Best-effort: a device with
 // no descriptions configured yields an empty map and metrics carry ifAlias="".
-func ifAliasMap(ctx context.Context, addr string, creds snmpCreds) map[string]string {
+//
+// It also says whether the walk finished, so the interface bridge never
+// replaces a device's descriptions with a failed walk's empty answer (the
+// metric labels treat both as "no description").
+func ifAliasMapChecked(ctx context.Context, addr string, creds snmpCreds) (map[string]string, bool) {
 	out := map[string]string{}
-	if rows, err := snmpWalkColumn(ctx, addr, creds, ifAliasOID); err == nil {
-		for idx, v := range rows {
-			// sanitizeLabel, not TrimSpace: ifAlias is operator-typed free text that
-			// becomes a VictoriaMetrics LABEL. Unbounded length/control chars there
-			// are a cardinality + exposition hazard (caps.go, audit PIPE-MED-11).
-			if s := sanitizeLabel(string(v.raw)); s != "" {
-				out[idx] = s
-			}
+	rows, err := snmpWalkColumn(ctx, addr, creds, ifAliasOID)
+	if err != nil {
+		return out, false
+	}
+	for idx, v := range rows {
+		// sanitizeLabel, not TrimSpace: ifAlias is operator-typed free text that
+		// becomes a VictoriaMetrics LABEL. Unbounded length/control chars there
+		// are a cardinality + exposition hazard (caps.go, audit PIPE-MED-11).
+		if s := sanitizeLabel(string(v.raw)); s != "" {
+			out[idx] = s
 		}
 	}
-	return out
+	return out, true
 }
 
 // ifNameMap walks ifName keyed by ifIndex, filling any blank from ifDescr, so

@@ -14755,6 +14755,14 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_parser_known_benign_total counter",]
     for _rid, _hits in sorted(_parser["known_benign_hits"].items()):
         lines.append(f'corr_parser_known_benign_total{{rule_id="{_rid}"}} {_hits}')
+    # Tracker 387, trap semantics: BGP "backward" notifications of a session that was
+    # never established. Stored and searchable, never a session-failure signal.
+    # Bounded: the two classes of producers.BGP_NOT_A_SESSION_FAILURE.
+    lines += [
+        "# HELP corr_trap_bgp_not_session_failure_total BGP transition traps of a session that was never established, which emit NO signal, by class.",
+        "# TYPE corr_trap_bgp_not_session_failure_total counter",]
+    for _cls, _hits in sorted(_parser["trap_bgp_not_session_failure"].items()):
+        lines.append(f'corr_trap_bgp_not_session_failure_total{{class="{_cls}"}} {_hits}')
     _proactive = proactive_stats()
     lines += [
         # A4 proactive checks. The SAME split as the parser's shadow series and

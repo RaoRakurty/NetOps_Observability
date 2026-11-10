@@ -157,6 +157,7 @@ and thereby certified the blind scope as healthy.
 | The security producer keys every bus record by the owning tenant | ✅ | **BUILD** — `internal/seclane`: `TestScanAllIteratesTenantsAndKeysEveryRecordByTenant` (partition key == event tenant, and a device never ships under another tenant's key), `TestScanNamesOnlyTheCallersOwnIndicesAndCHScope` |
 | One tenant's disabled detection cannot change another tenant's scan | ✅ | **BUILD** — `TestDisabledRuleIsPerTenant` (P3-EMIT, 2026-09-02) |
 | Monitoring state, counts and the over-limit list are per tenant; there is no monitoring write | ✅ | **BUILD** — `TestMonitoringCrossOrgIsolation` (two orgs through the real router: own-only device list and over-limit list, owner stamped from the token not the body, another tenant's status and delete → 404, `?as_tenant` into the other org ignored, per-tenant usage counts own devices only), `TestMonitoringWithheldIsScopedToTheCallersTenant`, `TestThereIsNoSwitch` (every non-GET verb is 405) |
+| A customer's discovery scan is the customer's: read only by that customer (another's scan is the same 404 on GET/PUT/DELETE, `as_tenant` ignored), written only by the platform owner with the customer chosen explicitly, never re-homed, never using another owner's SNMP profile; two owners' copies of one box never overwrite, merge or suppress each other | ✅ | **BUILD** — `TestDiscoveryScopeCrossOrgIsolation` (real router, orgs A/B/C, operator and tenant admin), `TestDiscoveryScopesRLSIsolationPG` (FORCE-RLS, WITH CHECK, CHECKs, UNIQUE id), `TestSiblingNeverOverwritesAnotherOwnersRow`, `TestPlatformDeleteNeverSuppressesTheTenantSibling`, `TestTenantScopeTriesOnlyItsOwnCredentials`; §26 |
 | The Provider scope shows only the platform's own data; "All tenants" labels every row | ✅ | **BUILD** — `TestProviderScopeIsolation` (tracker 365: owner + `X-Acting-Tenant: global` / `?as_tenant=global` lists only platform devices, saved objects, alerts, episodes and NMS integrations in both owner spellings `""`/`global`; another tenant's device / saved object / integration → 404 and its delete refused; no header or `all` lists every tenant's rows, each with its tenant; a tenant user or an org-admin not bound to Global sending `global` is ignored), `TestAuthorizeProviderScopeOwnerAliasing` (data resources: the Provider scope `global` also reads `""` rows — directional, an unbound `""` principal never reads `global`; identity resources stay strict), `TestScopeReadsIsDirectional`, `TestCollectionPlatformOwnerAliasing`; **pgintegration** `TestPGPlatformAliasScopes` / `TestPGPlatformAliasPolicyCatalogue` / `TestPGPlatformAliasRollback` (migration 0062: `global` reads `''` rows on exactly ten data tables, never on `users`; WITH CHECK refuses a tenant row) |
 | Log search applies the ONE owner rule: under the Provider scope untagged telemetry (platform devices and unknown senders) is the Provider's own; a tenant reads its stamped rows plus untagged rows its own devices emitted; an unbound non-cross caller reads nothing; and every tenant-readable log family maps a device-identity field the filter can match | ✅ | **BUILD** — `internal/oslog`: `TestTenantFilterVisibility` (the generated clause is EVALUATED against the 2026-11-01 lab documents — flows from a Provider edge, a trap from an unknown sender, a tenant-stamped row, another tenant's row with a colliding host name — not compared by shape), `TestScopedLogFamiliesSatisfyIdentityContract` (both shipped `index-templates.json` copies: each family in `ScopedLogFamilies` maps `tenant_id` keyword and at least one `DeviceIdentityFields` entry with its kind's type, and the copies agree), `TestIsProviderScope`, `TestTenantFilterCrossIsUnrestricted`; root: `TestLogsSearchProviderScopeReadsPlatformTelemetry` (handler, owner acting as `global`, every signal, expectation written literally) and `TestLogsSearchTenantScopeIsNotProvider`. Proven to fire: dropping the Provider branch, the unbound fail-closed, `sampler_address`, or the ip-value validation each fails a named test (the flows gap, 2026-11-01: tracker 365 made Provider a real scope and the filter then matched no flow, because the flows family maps only `sampler_address`) |
 | Digital Experience is per tenant, derivation included | ✅ | **BUILD** — `TestDEMExperienceJourneysCrossOrgIsolation`, `TestDEMExperienceChangesCrossOrgIsolation`, `TestDEMExperienceDerivedViewsAreScopedAndHonest`, `TestDEMExperienceIncidentIDsAreNeverConfirmed` (own-only lists, foreign journey/change/incident id → 404, `as_tenant` narrows only, the platform owner in the Global view refused on every route, and an incident id derived under another tenant's scope never resolves — incident ids are a function of the tenant) |
@@ -741,6 +742,61 @@ Provider's ledger shows on `netops_change_ledger_writes_total{producer="device_t
   and `correlix_audit` still skips platform-scope actions. This decision changed neither.
 - `/api/changes` and the Iris NL change read do not apply the per-tenant operator-visibility restriction when
   the platform owner scopes into a restricted tenant. The DEM routes do. This predates the decision and is open.
+## 26. Tenant-owned discovery scopes (tracker 396, 2026-11-10)
+
+Owner decisions D1–D5, 2026-11-10: the platform owner points a scan at a customer's network on its
+behalf, with the customer's own SNMP profiles, and every device found belongs to the customer. The scope
+is the channel: the tenant comes from server configuration, never from a device's answer.
+Runbook: `docs/runbooks/tenant-discovery-scope.md`.
+
+**PROVEN by tests:**
+- One box found by two owners is two devices with two ids. The platform's ids are unchanged; tenant ids
+  are salted by tenant (`TestScanDeviceIDForKeepsPlatformIDsAndSaltsTenants`,
+  `TestTwoOwnersScopesOnOneAddressAreTwoDevices`). The restore keeps both (`TestRestoreKeepsEveryOwnersRecordForOneAddress`).
+- A record never replaces another owner's row in the aggregator cache. The guard is counted
+  (`netops_discovery_cross_owner_refused_total`, `TestSiblingNeverOverwritesAnotherOwnersRow`).
+- Deleting the platform's copy never suppresses the customer's, and a tombstone stamped by another owner
+  does not either (`TestPlatformDeleteNeverSuppressesTheTenantSibling`).
+- A customer's scan tries only the customer's profiles (`TestTenantScopeTriesOnlyItsOwnCredentials`,
+  `TestScanCandidatesForIsOwnerStrict`). A customer's scan treats only the customer's own devices as already
+  known; the platform scan keeps its any-owner rule (`TestTenantScopeKnownSetIsItsOwnPartition`).
+- Each scope is refused on its own, and all scopes share one 4096-address budget, charged to the platform
+  first (`TestEachScopeIsRefusedOnItsOwn`, `TestScopesShareOneSweepBudgetPlatformFirst`). One owner's silent
+  sweep prunes nothing of its own (`TestOneOwnersSilentSweepPrunesNothingOfItsOwn`).
+- While both copies exist, the shared address and name are left out of `device_tenant.csv` (fail-closed);
+  after the platform copy is retired, all of them attribute to the customer
+  (`TestTenantScopeSiblingRegistryRowsFailClosedThenMoveToTheTenant`).
+- The platform scan's own PUT respects the shared budget, with the same refusal text
+  (`TestPlatformScanPutHonoursTheSharedBudget`). Two concurrent reloads of the stored scans never put an
+  older set back in force (`TestConcurrentReloadsNeverPublishAStaleSet`). A customer's read carries
+  neither `created_by` nor the budget-refusal detail, but keeps the "also found by the platform scan" flag
+  (`TestACustomerReadLeavesOutPlatformSideDetail`). The 0067 rollback deletes exactly the customers' SNMP
+  rows from `discovered_devices`, running as the RLS-bound application role, so an older binary cannot
+  collapse them over the platform's copy (`TestDiscoveryScopesMigrationDownUpPG`).
+- Isolation through the real router, and on a real Postgres (§6 row above). Mutation-checked: removing the
+  overwrite guard, the owner tombstone, the restore key, the per-owner known set, the tenant salt, the body
+  tenant rule, the write gate, the profile-owner check or `FORCE ROW LEVEL SECURITY` each fails a test.
+
+**BUILT, NOT PROVEN:** nothing has run on the lab. The RETAIL-WALMART cut-over (runbook §2–§6) has not been
+run, and neither the vManage-twin merge by name nor the trap attribution by interface address has been
+observed.
+
+**NOT COVERED:** the trap receiver has no test yet for a trap sent from the sibling's interface address
+(tracker 396 b). Customers cannot write their own ranges until collector tier C3 (D1).
+
+**Known limits (advisor review 2026-11-10; not fixed):**
+- **One global scan-memory bound.** `maxFound` = 2×MaxScanHosts covers every owner together. New finds are
+  admitted in (tenant, address) order, and the restore keeps the most recently answered records first. So
+  when restored stale records plus a full sweep exceed the bound, the records dropped are the ones last in
+  that order: the alphabetically-last tenant's new finds, or the least recently answered restored records.
+  It is reached only through accumulated stale memory, never by a tenant's own action, because only the
+  platform owner writes scopes. Each drop is counted (`netops_discovery_found_dropped_total`). Eventual fix:
+  a per-partition share of the bound.
+- **Overlapping scopes of one tenant try only the first scope's credentials.** When two of a tenant's
+  scopes cover one address, the address is probed once, with the first scope's credentials (scopes are
+  ordered by id). If those fail, the second scope's credentials never reach that address. Workaround: do
+  not overlap a tenant's scopes, or give the overlap one profile. Eventual fix: try the union.
+
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
 **Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**

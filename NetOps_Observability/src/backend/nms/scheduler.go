@@ -98,6 +98,10 @@ type Sinks struct {
 	// engine's metric lane, stamped with the integration's tenant (E3). Nil =
 	// not wired: skipped, the samples still reach VictoriaMetrics.
 	EmitMetricEvents func(ctx context.Context, tenant string, metrics []ControllerMetric) error
+	// UpsertInterfaces hands one integration's resolved interface records to
+	// the interface bridge (interfaces.go). In memory, so it cannot fail; nil =
+	// not wired, skipped.
+	UpsertInterfaces func(tenant, integrationID, sourceSystem string, ifaces []ControllerInterface)
 }
 
 // rateBucket is an integration's persistent limiter and the rate it was
@@ -231,6 +235,12 @@ func (rt *Runtime) SetWirelessStore(ws wireless.Store) { rt.wireless = ws }
 // SetDeviceResolver installs the controller→inventory device join. Call before
 // Start: pipelines pick it up when they are first built.
 func (rt *Runtime) SetDeviceResolver(r DeviceResolver) { rt.resolver = r }
+
+// SetInterfaceSink installs the interface bridge's sink (interfaces.go).
+// Called once at start-up, before Run.
+func (rt *Runtime) SetInterfaceSink(fn func(tenant, integrationID, sourceSystem string, ifaces []ControllerInterface)) {
+	rt.sinks.UpsertInterfaces = fn
+}
 
 // Registry exposes the connector registry (vendor list / spec lookups).
 func (rt *Runtime) Registry() *Registry { return rt.reg }
@@ -1016,6 +1026,11 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 			applog.Warn("nms", "state sink", map[string]any{"integration": ic.ID, "error": err.Error()})
 			rep.fail(LaneStates, err)
 		}
+	}
+	// Interface identity (interfaces.go): sixth sink. The owner is the
+	// integration's, never the batch's.
+	if len(routed.Interfaces) > 0 && rt.sinks.UpsertInterfaces != nil {
+		rt.sinks.UpsertInterfaces(ic.Tenant, ic.ID, spec.SourceSystem, routed.Interfaces)
 	}
 	// Controller-sourced inventory (inventory.go): fifth sink. Applied ONLY for
 	// a complete snapshot; the owner is the integration's, never the batch's.

@@ -436,7 +436,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 94  # parser_rules.RULES since tracker 387 wave 1 + SD-WAN SNMP-agent poll row
+PINNED_RULE_COUNT = 95  # parser_rules.RULES since tracker 387 wave 2 (SONiC link row)
 
 
 def test_control_digest_frozen_before_the_change():
@@ -471,10 +471,11 @@ def test_the_parser_is_untouched():
     line. The admin severity this file protects did not move: a trap link-down stays
     high (test below), and only the protocol line, which carries no cause, went to warn.
     Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
-    behind every older one; the trap link rows this file protects did not move."""
-    assert parser_rules.PARSER_REV == "2026-11-09-vendor-packs-wave1"
+    behind every older one; the trap link rows this file protects did not move.
+    Re-pinned for the tracker 387 process snapshot: the SD-WAN `ps` row only."""
+    assert parser_rules.PARSER_REV == "2026-11-10-process-snapshot"
     assert parser_rules.BAKED_RULES_HASH == (
-        "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a")
+        "d2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

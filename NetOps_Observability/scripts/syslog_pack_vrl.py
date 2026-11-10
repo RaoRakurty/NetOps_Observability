@@ -25,7 +25,7 @@ def group_expr(result: str, group: str) -> str:
 
 
 #: `{group}`, or a `[` / `]` optional-clause bound (syslog_packs.template_parts).
-_TEMPLATE_TOKEN_RE = re.compile(r"\{(\w+)\}|\[|\]")
+_TEMPLATE_TOKEN_RE = re.compile(r"\{(\w+(?:\|\w+)?)\}|\[|\]")
 
 
 def _template_tokens(template: str) -> list[tuple[str, str]]:
@@ -42,20 +42,43 @@ def _template_tokens(template: str) -> list[tuple[str, str]]:
     return out
 
 
-def _concat(parts: list[tuple[str, str]], result: str) -> str:
-    exprs = [json.dumps(t) if k == "lit" else group_expr(result, t) for k, t in parts]
+def _var_expr(result: str, name: str, record: dict[str, str] | None,
+              labels: dict[str, dict[str, str]] | None = None) -> str:
+    """A template name: a record name (`host`, `device`) when `record` maps it, else the
+    regex group of that name. `group|table` reads the group through the row's label
+    table: the label when the table names the value, else the value. The table is JSON
+    text, so its type stays one string in the VRL type state."""
+    name, _, table = name.partition("|")
+    if record and name in record:
+        return record[name]
+    base = group_expr(result, name)
+    if not table:
+        return base
+    tbl = json.dumps(json.dumps((labels or {})[table], sort_keys=True))
+    return (f"(string(get(object(parse_json({tbl}) ?? {{}}) ?? {{}}, [{base}]) ?? null) "
+            f"?? {base})")
+
+
+def _concat(parts: list[tuple[str, str]], result: str,
+            record: dict[str, str] | None = None,
+            labels: dict[str, dict[str, str]] | None = None) -> str:
+    exprs = [json.dumps(t) if k == "lit" else _var_expr(result, t, record, labels)
+             for k, t in parts]
     return " + ".join(exprs) if exprs else '""'
 
 
-def template_expr(template: str, result: str) -> str:
+def template_expr(template: str, result: str,
+                  labels: dict[str, dict[str, str]] | None = None) -> str:
     """A `{group}` template with no optional clause, as one VRL string expression."""
     toks = _template_tokens(template)
     if any(k in "[]" for k, _ in toks):
         raise ValueError("a template with an optional clause needs template_lines")
-    return _concat(toks, result)
+    return _concat(toks, result, None, labels)
 
 
-def template_lines(template: str, result: str, target: str, indent: str) -> list[str]:
+def template_lines(template: str, result: str, target: str, indent: str,
+                   record: dict[str, str] | None = None,
+                   labels: dict[str, dict[str, str]] | None = None) -> list[str]:
     """Assign a template to `target` as VRL statements.
 
     `[ by {user}]` is an optional clause: appended only when every group in it matched
@@ -63,27 +86,28 @@ def template_lines(template: str, result: str, target: str, indent: str) -> list
     an expression, so a template with a clause is built up in statements."""
     toks = _template_tokens(template)
     if not any(k in "[]" for k, _ in toks):
-        return [f"{indent}{target} = {_concat(toks, result)}"]
+        return [f"{indent}{target} = {_concat(toks, result, record, labels)}"]
     out = [f'{indent}{target} = ""']
     plain: list[tuple[str, str]] = []
     clause: list[tuple[str, str]] | None = None
     for kind, text in toks:
         if kind == "[":
             if plain:
-                out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+                out.append(f"{indent}{target} = {target} + {_concat(plain, result, record, labels)}")
                 plain = []
             clause = []
         elif kind == "]":
             body = clause or []
-            cond = " && ".join(f'{group_expr(result, t)} != ""' for k, t in body if k == "var")
+            cond = " && ".join(f'{_var_expr(result, t, record, labels)} != ""'
+                               for k, t in body if k == "var")
             out += [f"{indent}if {cond} {{",
-                    f"{indent}  {target} = {target} + {_concat(body, result)}",
+                    f"{indent}  {target} = {target} + {_concat(body, result, record, labels)}",
                     f"{indent}}}"]
             clause = None
         else:
             (plain if clause is None else clause).append((kind, text))
     if plain:
-        out.append(f"{indent}{target} = {target} + {_concat(plain, result)}")
+        out.append(f"{indent}{target} = {target} + {_concat(plain, result, record, labels)}")
     return out
 
 

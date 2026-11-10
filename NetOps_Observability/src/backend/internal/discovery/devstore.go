@@ -676,6 +676,28 @@ func (s *DevStore) Devices() []models.Device {
 	return out
 }
 
+// IsSuppressedOwned is IsSuppressed for a device of a known owner: the
+// tombstone counts only when it was stamped with that same tenant (normalized),
+// i.e. the delete was issued against that owner's device. Used for the devices
+// a tenant's discovery scope finds, whose tombstones are all stamped (they did
+// not exist before tracker 175). A hit is recorded like IsSuppressed's.
+// COUPLING: the legacy whole-blob mode reloads every tombstone with tenant ""
+// (load), so a tenant scan device's tombstone would not survive a restart there
+// — safe only because blob mode has no scope store (newDiscoveryScopeRegistry →
+// discoveryscope.Unavailable), so no tenant scan device can exist in it.
+func (s *DevStore) IsSuppressedOwned(tenant, id string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	ts, ok := s.suppressed[id]
+	s.mu.RUnlock()
+	if !ok || ts.tenant != strings.ToLower(strings.TrimSpace(tenant)) {
+		return false
+	}
+	return s.IsSuppressed(id)
+}
+
 // isSuppressed reports whether an id was explicitly deleted by an operator.
 //
 // When unreadable() != nil the tombstone set is UNKNOWN rather than empty: this

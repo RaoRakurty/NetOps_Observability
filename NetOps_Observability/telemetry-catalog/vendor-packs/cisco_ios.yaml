@@ -38,6 +38,9 @@ grammars:
     native_code: sev
     # D3: only a critical line may alarm on severity alone; err and below need a row.
     alarm_floor: 2
+    fields:
+      title: '{cat}-{grp}-{code} on {host}: {text}'
+      correlation_key: '{grp}:{device}:{code}'
     fidelity: doc_claimed
     source: 'napalm-logs IOS-XR syslog samples (Apache-2.0), https://napalm-logs.readthedocs.io/en/latest/syslog/iosxr.html'
 
@@ -379,3 +382,18 @@ fixtures:
     message: '%SYS-5-CONFIG_I: Configured from console by admin on vty0'
     expect: {}
     signal: null
+
+# What an operator checks first per fault family (tracker 387 event model; `guidance`,
+# `basis: pack_guidance`). Advice, never evidence. Commands are the IOS XR CLI.
+guidance:
+  - event_types: [updown]
+    impact:
+      - An interface or its line protocol changed state; services and adjacencies over it stop or move.
+    next_checks:
+      - Run show interfaces for the interface named in the line and check whether it was shut administratively.
+      - Check the optics and the far end of the link.
+  - event_types: [adjchange, adjchg]
+    impact:
+      - A routing adjacency changed state; routes through it are withdrawn while it is down.
+    next_checks:
+      - Run show bgp neighbor, show ospf neighbor or show isis adjacency for the neighbour named in the line.

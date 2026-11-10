@@ -91,6 +91,14 @@ func TestExpandCIDRSkipsNetworkAndBroadcast(t *testing.T) {
 // credential selection (the sweep refuses to run with none).
 var oneProfile = []discovery.ScanCredential{{ProfileID: "lab-ro", Target: collectors.Target{Community: "lab"}}}
 
+// platformScanSettings is the pre-scope operator config as scanner settings:
+// one platform scope.
+func platformScanSettings(enabled bool, ranges []string, creds []discovery.ScanCredential) discovery.ScanSettings {
+	return discovery.ScanSettings{Enabled: enabled, Scopes: []discovery.ScanScope{{
+		ID: discovery.PlatformScopeID, Ranges: ranges, Credentials: creds,
+	}}}
+}
+
 func fakeProbe(alive map[string]string) discovery.Probe {
 	return func(_ context.Context, tg collectors.Target) (string, string, string, bool) {
 		name, ok := alive[tg.Address]
@@ -102,7 +110,7 @@ func fakeProbe(alive map[string]string) discovery.Probe {
 }
 
 func TestSNMPSourceDiscoversOnlyUnknownHosts(t *testing.T) {
-	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/29"}, Credentials: oneProfile}
+	cfg := platformScanSettings(true, []string{"10.20.0.0/29"}, oneProfile)
 	known := []models.Device{{ID: "existing", Address: "10.20.0.2"}}
 	src := discovery.NewSNMPSource(
 		func() discovery.ScanSettings { return cfg },
@@ -139,7 +147,7 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 	var probed bool
 	src := discovery.NewSNMPSource(
 		func() discovery.ScanSettings {
-			return discovery.ScanSettings{Enabled: false, Ranges: []string{"10.20.0.0/29"}}
+			return platformScanSettings(false, []string{"10.20.0.0/29"}, nil)
 		},
 		nil,
 	)
@@ -154,7 +162,7 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 	// The shipped env default (10.0.0.0/8) must be refused, not swept.
 	src2 := discovery.NewSNMPSource(
 		func() discovery.ScanSettings {
-			return discovery.ScanSettings{Enabled: true, Ranges: []string{"10.0.0.0/8"}, Credentials: oneProfile}
+			return platformScanSettings(true, []string{"10.0.0.0/8"}, oneProfile)
 		},
 		nil,
 	)
@@ -168,7 +176,7 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 }
 
 func TestSNMPSourceCooldownServesCache(t *testing.T) {
-	cfg := discovery.ScanSettings{Enabled: true, Ranges: []string{"10.20.0.0/30"}, Credentials: oneProfile}
+	cfg := platformScanSettings(true, []string{"10.20.0.0/30"}, oneProfile)
 	var probeCount atomic.Int64 // probes run concurrently — unsynced counter races
 	src := discovery.NewSNMPSource(func() discovery.ScanSettings { return cfg }, nil)
 	src.SetProbeForTest(func(_ context.Context, tg collectors.Target) (string, string, string, bool) {

@@ -47,7 +47,7 @@ for _p in (os.path.join(REPO_ROOT, "telemetry-catalog"),
         sys.path.insert(0, _p)
 
 import bake_rules
-from syslog_packs import PackTable
+from syslog_packs import PackTable, field_is_observed, template_parts, var_name
 
 import syslog_pack_vrl as V
 
@@ -65,7 +65,13 @@ EDGE_CONFIG_RELS = ("deployment/docker/syslog-ng/core.conf",
 ASSERTED = ("vendor", "vendor_source", "parser_id", "parser_status", "facility",
             "event_type", "summary", "severity_native_text", "severity_native_code",
             "normalized_severity", "event_category", "dedup_key", "procid", "message",
-            "message_original")
+            "message_original", "title", "correlation_key", "audit_user", "audit_action",
+            "audit_source", "audit_via", "session_id", "audit_groups", "dump_id", "metrics",
+            "guidance", "enrichment")
+
+
+#: The event time of a fixture that states none (see decide_fixtures).
+DEFAULT_FIXTURE_TIME = "2026-01-01T00:00:00Z"
 
 
 class GenerationError(RuntimeError):
@@ -111,6 +117,13 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         "cx_pk_sev = 99",
         'cx_pk_msg = string(.message) ?? ""',
         "cx_pk_app = downcase(.appname)",
+        # The rich event fields (tracker 387, the trap lane's names): a branch only
+        # names its grammar; the epilogue renders every field from one table, once.
+        # VRL type-checks each branch against every local in scope, so per-branch
+        # template code made the transform about 2x slower to compile, and a table
+        # declared up here about 10x (a 2-case `vector test` went from 20 s to 193 s).
+        'cx_pk_gid = ""',
+        'cx_pk_capj = "{}"',
     ]
     if any(g.get("with_msgid") for g in rows):
         # `<MSGID>: <message>` for the rows that read a tag from RFC 5424 MSGID; `-`
@@ -134,12 +147,13 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
             f"    cx_pk_parser = {json.dumps(g['parser_id'])}",
             f"    cx_pk_vendor = {json.dumps(g['vendor'])}",
         ]
+        labels = g.get("labels") or {}
         if g["facility"]:
-            out.append(f"    cx_pk_fac = {V.template_expr(g['facility'], 'cx_pk_m')}")
+            out.append(f"    cx_pk_fac = {V.template_expr(g['facility'], 'cx_pk_m', labels)}")
         if g["event_type"]:
-            out.append(f"    cx_pk_et = downcase({V.template_expr(g['event_type'], 'cx_pk_m')})")
+            out.append(f"    cx_pk_et = downcase({V.template_expr(g['event_type'], 'cx_pk_m', labels)})")
         if g["summary"]:
-            out += V.template_lines(g["summary"], "cx_pk_m", "cx_pk_sum", "    ")
+            out += V.template_lines(g["summary"], "cx_pk_m", "cx_pk_sum", "    ", labels=labels)
         if g["native_text"]:
             out.append(f"    cx_pk_ntxt = {V.group_expr('cx_pk_m', g['native_text'])}")
         if g["native_code"]:
@@ -147,7 +161,197 @@ def _grammar_lines(rows: list[dict]) -> list[str]:
         if g["category"]:
             out.append(f"    cx_pk_cat = {json.dumps(g['category'])}")
         out += V.severity_lines(g, "cx_pk_m", "cx_pk_sev", "    ")
+        out += [f"    cx_pk_gid = {json.dumps(g['id'])}",
+                "    cx_pk_capj = encode_json(cx_pk_m)"]
         out += ["  }", "}"]
+    out += _event_model_epilogue(rows, _guidance_tables(rows))
+    return out
+
+
+#: syslog_packs._OBSERVED_ORDER, as the locals that hold each value here.
+_OBSERVED_LOCALS = (("facility", "cx_pk_fac"), ("event_type", "cx_pk_et"),
+                    ("summary", "cx_pk_sum"), ("severity_native_text", "cx_pk_ntxt"),
+                    ("severity_native_code", "cx_pk_ncode"))
+
+
+def _guidance_tables(rows: list[dict]) -> dict[str, dict]:
+    """`<pack>|<event_type>` -> guidance, one literal for every pack that states any."""
+    out: dict[str, dict] = {}
+    for g in rows:
+        for et, guide in (g.get("guidance") or {}).items():
+            out[f"{g['pack']}|{et}"] = guide
+    return out
+
+
+def _fields_used(rows: list[dict]) -> list[str]:
+    seen: dict[str, None] = {}
+    for g in rows:
+        for name in g.get("fields") or {}:
+            seen.setdefault(name, None)
+    return list(seen)
+
+
+def _event_model_atoms(template: str) -> list[dict]:
+    """A template as segments the epilogue renders without parsing: `{"c": clause,
+    "a": atoms}`, an atom `=text` (literal), `@group`, `@group|table` (read through a
+    label table) or `%host` / `%device` / `%minute` (the record's reserved names). A
+    clause segment renders only when none of its groups is empty
+    (syslog_packs._render)."""
+    segs: list[dict] = []
+    cur: dict = {"c": False, "a": []}
+    for kind, text in template_parts(template):
+        if kind in ("[", "]"):
+            if cur["a"]:
+                segs.append(cur)
+            cur = {"c": kind == "[", "a": []}
+        elif kind == "lit":
+            cur["a"].append("=" + text)
+        else:
+            reserved = var_name(text)[0] in bake_rules.RESERVED_TEMPLATE_VARS
+            cur["a"].append(("%" if reserved else "@") + text)
+    if cur["a"]:
+        segs.append(cur)
+    return segs
+
+
+def _event_model_table(rows: list[dict]) -> dict[str, dict]:
+    """grammar id -> its pack, its label tables (`l`) and its declared fields then
+    metrics, in order: `k` is `o` (observed field), `d` (derived field) or `m` (metric;
+    `t` when it keeps the matched text rather than a number)."""
+    table: dict[str, dict] = {}
+    for g in rows:
+        entries: list[dict] = []
+        for name, tmpl in (g.get("fields") or {}).items():
+            entries.append({"k": "o" if field_is_observed(name, tmpl) else "d", "n": name,
+                            "s": _event_model_atoms(tmpl)})
+        for name, spec in (g.get("metrics") or {}).items():
+            if isinstance(spec, dict):
+                entries.append({"k": "m", "n": name, "g": spec["text"], "t": True})
+            else:
+                entries.append({"k": "m", "n": name, "g": spec})
+        table[g["id"]] = {"pack": g["pack"], "e": entries,
+                          **({"l": g["labels"]} if g.get("labels") else {})}
+    return table
+
+
+def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str]:
+    """Once, after the grammars: the matched grammar's fields rendered from its
+    captures, the line's own fields first in `fields_observed`
+    (syslog_packs._OBSERVED_ORDER), each declared name into observed / derived /
+    unknown in declaration order, pack guidance by `<pack>|<event_type>`, the
+    metrics and the enrichment object. The matched grammar hands over its id and its
+    captures as JSON text, and each grammar's spec is JSON text in the table: an
+    object or table literal here is type-checked field by field, and carried through
+    every branch, which is what made the transform slow to compile."""
+    fields = _fields_used(rows)
+    # `cx_pk_out` is read by the hand-written applier whether or not a grammar matched.
+    # The table literals are declared here, after the grammars, never in the prologue:
+    # a large literal is part of the type state VRL carries through every branch.
+    out = ["cx_pk_out = {}",
+           # Spelled apart from the hand-written applier's `if cx_pk_parser != "" {`,
+           # which a test locates by that text to prove that code names no vendor.
+           "if length(cx_pk_parser) > 0 {",
+           "  cx_pk_emt = " + json.dumps({k: json.dumps(v, sort_keys=True) for k, v
+                                         in sorted(_event_model_table(rows).items())}),
+           '  cx_pk_spec = object(parse_json(string(get(cx_pk_emt, [cx_pk_gid]) ?? "") ?? "") ?? {}) ?? {}',
+           '  cx_pk_pack = string(cx_pk_spec.pack) ?? ""',
+           "  cx_pk_caps = object(parse_json(cx_pk_capj) ?? {}) ?? {}",
+           "  cx_pk_host = .hostname",
+           '  cx_pk_device = string(cx_inv.device_id) ?? ""',
+           '  if cx_pk_device == "" { cx_pk_device = cx_pk_host }',
+           # The record's event time as its UTC minute (syslog_packs.record_minute); a
+           # string time must state its zone, as the Python executor requires.
+           "  cx_pk_ts = .timestamp",
+           '  if is_string(cx_pk_ts) { cx_pk_ts = parse_timestamp(string!(cx_pk_ts), "%+") ?? null }',
+           '  cx_pk_minute = ""',
+           "  cx_pk_tsv, cx_pk_tserr = timestamp(cx_pk_ts)",
+           '  if cx_pk_tserr == null { cx_pk_minute = format_timestamp!(cx_pk_tsv, "%Y-%m-%dT%H:%M", timezone: "UTC") }',
+           "  cx_pk_lbl = object(cx_pk_spec.l) ?? {}",
+           '  cx_pk_obs = ""',
+           '  cx_pk_der = ""',
+           '  cx_pk_unk = ""',
+           "  cx_pk_fo = {}",
+           "  cx_pk_met = {}",
+           "  for_each(array(cx_pk_spec.e) ?? []) -> |_cx_pk_i, cx_pk_ent| {",
+           "    cx_pk_eo = object(cx_pk_ent) ?? {}",
+           '    cx_pk_name = string(cx_pk_eo.n) ?? ""',
+           '    if cx_pk_eo.k == "m" {',
+           '      cx_pk_raw = string(get(cx_pk_caps, [string(cx_pk_eo.g) ?? ""]) ?? "") ?? ""',
+           "      cx_pk_mf, cx_pk_mferr = to_float(cx_pk_raw)",
+           '      if cx_pk_eo.t == true && cx_pk_raw != "" {',
+           '        cx_pk_met = set!(cx_pk_met, [cx_pk_name], {"value": cx_pk_raw, "basis": "observed"})',
+           '        cx_pk_obs = cx_pk_obs + "metrics." + cx_pk_name + ","',
+           '      } else if cx_pk_eo.t != true && cx_pk_mferr == null && cx_pk_raw != "" {',
+           '        cx_pk_met = set!(cx_pk_met, [cx_pk_name], {"value": cx_pk_mf, "basis": "observed"})',
+           '        cx_pk_obs = cx_pk_obs + "metrics." + cx_pk_name + ","',
+           "      } else {",
+           '        cx_pk_unk = cx_pk_unk + "metrics." + cx_pk_name + ","',
+           "      }",
+           '    } else if cx_pk_name != "" {',
+           '      cx_pk_v = ""',
+           "      for_each(array(cx_pk_eo.s) ?? []) -> |_cx_pk_j, cx_pk_seg| {",
+           "        cx_pk_so = object(cx_pk_seg) ?? {}",
+           '        cx_pk_sv = ""',
+           "        cx_pk_miss = false",
+           "        for_each(array(cx_pk_so.a) ?? []) -> |_cx_pk_k, cx_pk_at| {",
+           '          cx_pk_as = string(cx_pk_at) ?? ""',
+           '          cx_pk_ar = slice(cx_pk_as, 1) ?? ""',
+           '          if starts_with(cx_pk_as, "=") {',
+           "            cx_pk_sv = cx_pk_sv + cx_pk_ar",
+           "          } else {",
+           '            cx_pk_vt = split(cx_pk_ar, "|")',
+           '            cx_pk_vn = string(cx_pk_vt[0]) ?? ""',
+           '            cx_pk_x = string(get(cx_pk_caps, [cx_pk_vn]) ?? "") ?? ""',
+           '            if cx_pk_as == "%host" { cx_pk_x = cx_pk_host }',
+           '            if cx_pk_as == "%device" { cx_pk_x = cx_pk_device }',
+           '            if cx_pk_as == "%minute" { cx_pk_x = cx_pk_minute }',
+           '            if length(cx_pk_vt) > 1 && cx_pk_x != "" {',
+           '              cx_pk_x = string(get(cx_pk_lbl, [string(cx_pk_vt[1]) ?? "", cx_pk_x]) ?? null) ?? cx_pk_x',
+           "            }",
+           '            if cx_pk_x == "" { cx_pk_miss = true }',
+           "            cx_pk_sv = cx_pk_sv + cx_pk_x",
+           "          }",
+           "        }",
+           "        if !(cx_pk_miss && cx_pk_so.c == true) { cx_pk_v = cx_pk_v + cx_pk_sv }",
+           "      }",
+           '      if cx_pk_v == "" {',
+           '        cx_pk_unk = cx_pk_unk + cx_pk_name + ","',
+           "      } else {",
+           "        cx_pk_fo = set!(cx_pk_fo, [cx_pk_name], cx_pk_v)",
+           '        if cx_pk_eo.k == "o" {',
+           '          cx_pk_obs = cx_pk_obs + cx_pk_name + ","',
+           "        } else {",
+           '          cx_pk_der = cx_pk_der + cx_pk_name + ","',
+           "        }",
+           "      }",
+           "    }",
+           "  }"]
+    # One static key per field, so the record keeps a known type after the applier's
+    # merge (a set! object merged onto it would make every field unknown).
+    for name in fields:
+        out += [f'  cx_pk_fx = string(cx_pk_fo.{name}) ?? ""',
+                f'  if cx_pk_fx != "" {{ cx_pk_out = merge(cx_pk_out, {{"{name}": cx_pk_fx}}) }}']
+    out += ['  if length(cx_pk_met) > 0 { cx_pk_out = merge(cx_pk_out, {"metrics": cx_pk_met}) }',
+            '  cx_pk_base = ""']
+    for name, local in _OBSERVED_LOCALS:
+        out.append(f'  if {local} != "" {{ cx_pk_base = cx_pk_base + "{name}," }}')
+    out += ['  cx_pk_derv = "normalized_severity," + cx_pk_der',
+            '  if cx_pk_cat != "" { cx_pk_derv = cx_pk_derv + "dedup_key," }',
+            '  cx_pk_gfl = ""']
+    if tables:
+        out += ["  cx_pk_gt = " + json.dumps({k: json.dumps(v, sort_keys=True)
+                                          for k, v in sorted(tables.items())}),
+                '  cx_pk_g = parse_json(string(get(cx_pk_gt, [cx_pk_pack + "|" + cx_pk_et]) ?? "") ?? "") ?? null',
+                "  if is_object(cx_pk_g) {",
+                '    cx_pk_out = merge(cx_pk_out, {"guidance": merge(object!(cx_pk_g), {"basis": "pack_guidance"})})',
+                '    cx_pk_gfl = "guidance,"',
+                "  }"]
+    out += [('  cx_pk_out = merge(cx_pk_out, {"enrichment": {'
+             '"fields_observed": compact(split(cx_pk_base + cx_pk_obs, ",")), '
+             '"fields_derived": compact(split(cx_pk_derv, ",")), '
+             '"fields_guidance": compact(split(cx_pk_gfl, ",")), '
+             '"unknown": compact(split(cx_pk_unk, ","))}})'),
+            "}"]
     return out
 
 
@@ -210,14 +414,24 @@ def _yaml_str(value: object) -> str:
     return json.dumps(value if isinstance(value, str) else str(value))
 
 
+def _vrl_literal(value: object) -> str:
+    """A fixture's expected value as VRL: JSON is a VRL literal for objects and arrays."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return _yaml_str(value)
+
+
 def decide_fixtures(packs: list[dict], table: PackTable) -> list[tuple[str, dict, dict]]:
     """(case name, input event, expected doc fields) for every fixture of every
     pack, refusing one whose `expect:` the Python executor does not reproduce."""
     cases: list[tuple[str, dict, dict]] = []
     for pack in packs:
         for fx in pack["fixtures"]:
-            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid")
-                  if k in fx}
+            ev = {k: fx[k] for k in ("hostname", "appname", "severity", "message", "msgid",
+                                     "timestamp") if k in fx}
+            # Vector stamps a test event with the current time when it states none, so
+            # every case states one: the same input for both executors, run to run.
+            ev.setdefault("timestamp", DEFAULT_FIXTURE_TIME)
             ev.setdefault("hostname", "spine1")
             ev.setdefault("appname", "unknown")
             ev.setdefault("severity", "notice")
@@ -265,7 +479,7 @@ def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> 
             "        type: log",
             "        log_fields:",
         ]
-        for key in ("hostname", "appname", "severity", "message", "msgid"):
+        for key in ("hostname", "appname", "severity", "message", "msgid", "timestamp"):
             if key in ev:
                 body.append(f"          {key}: {_yaml_str(ev[key])}")
         body += [
@@ -278,7 +492,7 @@ def render_tests(cases: list[tuple[str, dict, dict]], parser_ids: list[str]) -> 
         for key in ASSERTED:
             if key not in want:
                 continue
-            body.append(f'              assert_eq!(.{key}, {_yaml_str(want[key])}, '
+            body.append(f'              assert_eq!(.{key}, {_vrl_literal(want[key])}, '
                         f'"wrong {key}")')
         if not want:
             # A fixture with nothing to assert claims that no pack has an opinion.

@@ -211,11 +211,62 @@ type ProviderStatusError struct {
 	Provider   string
 	Status     int
 	RetryAfter time.Duration // the provider's Retry-After hint, 0 when absent
+	// Reason is the provider's own machine-readable error class from the error
+	// body (Google "status": NOT_FOUND / INVALID_ARGUMENT / PERMISSION_DENIED /
+	// RESOURCE_EXHAUSTED; Anthropic/OpenAI "type"/"code"). A closed enum on the
+	// provider's side, so it is safe to log; the message text is not kept.
+	Reason string
 }
 
 func (e *ProviderStatusError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("%s: status %d (%s)", e.Provider, e.Status, e.Reason)
+	}
 	return fmt.Sprintf("%s: status %d", e.Provider, e.Status)
 }
+
+// providerErrorReason extracts the provider's error CLASS from an error body:
+// Google's {"error":{"code":404,"message":…,"status":"NOT_FOUND"}}, Anthropic's
+// {"type":"error","error":{"type":"not_found_error",…}}, OpenAI's
+// {"error":{"type":…,"code":"model_not_found"}}. Only a short identifier-shaped
+// value is returned — never the message.
+func providerErrorReason(body []byte) string {
+	var env struct {
+		Error struct {
+			Status  string `json:"status"`
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+			Details []struct {
+				Reason string `json:"reason"` // google.rpc.ErrorInfo, e.g. API_KEY_INVALID
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &env) != nil {
+		return ""
+	}
+	// The ErrorInfo reason is the most specific (Gemini: API_KEY_INVALID under
+	// a generic 400 INVALID_ARGUMENT), so it wins.
+	cands := make([]string, 0, len(env.Error.Details)+3)
+	for _, d := range env.Error.Details {
+		cands = append(cands, d.Reason)
+	}
+	cands = append(cands, env.Error.Status, codeString(env.Error.Code), env.Error.Type)
+	for _, v := range cands {
+		if reasonToken.MatchString(v) {
+			return v
+		}
+	}
+	return ""
+}
+
+// codeString keeps a string error code (OpenAI "model_not_found"); Google's
+// numeric code repeats the HTTP status and is dropped.
+func codeString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+var reasonToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,63}$`)
 
 // Provider retry policy (CLAUDE.md §9: every network call retries with backoff
 // + jitter, bounded). A completion is a read — replaying it cannot change
@@ -346,7 +397,7 @@ func providerDoOnce(ctx context.Context, urlStr string, headers map[string]strin
 			snippet = snippet[:512]
 		}
 		applog.Error("copilot", "provider returned error", map[string]any{"provider": provider, "status": resp.StatusCode, "body": string(snippet)})
-		se := &ProviderStatusError{Provider: provider, Status: resp.StatusCode}
+		se := &ProviderStatusError{Provider: provider, Status: resp.StatusCode, Reason: providerErrorReason(rb)}
 		if secs, perr := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); perr == nil && secs > 0 {
 			se.RetryAfter = time.Duration(secs) * time.Second
 		}
@@ -376,6 +427,7 @@ func parseOpenAI(rb []byte) (Completion, error) {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
 			PromptTokens     int64 `json:"prompt_tokens"`
@@ -387,6 +439,9 @@ func parseOpenAI(rb []byte) (Completion, error) {
 	}
 	if len(out.Choices) == 0 {
 		return Completion{}, fmt.Errorf("openai: empty response")
+	}
+	if strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+		return Completion{}, &ProviderEmptyError{Provider: "openai", FinishReason: enumOnly(out.Choices[0].FinishReason)}
 	}
 	c := Completion{Text: out.Choices[0].Message.Content}
 	if out.Usage != nil {
@@ -422,38 +477,88 @@ func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessa
 	// string: a transport error (*url.Error) embeds the full request URL in its
 	// message, and a key in the URL was written to the logs on every failed call
 	// (found live 2026-11-10). The header never appears in an error.
-	endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent"
-	rb, err := ProviderDo(ctx, endpoint, map[string]string{"x-goog-api-key": key}, body, "gemini")
+	rb, err := ProviderDo(ctx, GeminiEndpoint(model), GeminiAuthHeader(key), body, "gemini")
 	if err != nil {
 		return Completion{}, err
 	}
 	return parseGemini(rb)
 }
 
+// geminiBase is the Generative Language API root (a var so a test can point it
+// at a fake server; production never changes it).
+var geminiBase = "https://generativelanguage.googleapis.com/v1beta/models/"
+
+// GeminiEndpoint is the generateContent URL for a model. It carries NO key:
+// the key travels in the x-goog-api-key header (GeminiAuthHeader). With the key
+// in the query string, as before 2026-11-10, Go's *url.Error put it into every
+// transport-error message ("Post \"…?key=AIza…\": context deadline exceeded"),
+// i.e. into the log line that is supposed to explain the failure.
+func GeminiEndpoint(model string) string {
+	return geminiBase + url.PathEscape(strings.TrimPrefix(strings.TrimSpace(model), "models/")) + ":generateContent"
+}
+
+// GeminiAuthHeader is the header that authenticates a Gemini API call.
+func GeminiAuthHeader(key string) map[string]string {
+	return map[string]string{"x-goog-api-key": key}
+}
+
+// SwapGeminiBaseForTest points Gemini calls at base and returns a restore func
+// — tests only.
+func SwapGeminiBaseForTest(base string) (restore func()) {
+	prev := geminiBase
+	geminiBase = base
+	return func() { geminiBase = prev }
+}
+
 // parseGemini extracts the assistant text from a Gemini generateContent body.
+// A body with no text is an error that names the provider's own reason: the
+// prompt was blocked (promptFeedback.blockReason), the answer was stopped
+// (finishReason SAFETY/RECITATION/…), or — on a thinking model — the output cap
+// was spent on thinking before any text (finishReason MAX_TOKENS with
+// thoughtsTokenCount > 0). Returning "" as success hid all three.
 func parseGemini(rb []byte) (Completion, error) {
 	var out struct {
 		Candidates []struct {
 			Content struct {
 				Parts []struct {
-					Text string `json:"text"`
+					Text    string `json:"text"`
+					Thought bool   `json:"thought"`
 				} `json:"parts"`
 			} `json:"content"`
+			FinishReason string `json:"finishReason"`
 		} `json:"candidates"`
+		PromptFeedback *struct {
+			BlockReason string `json:"blockReason"`
+		} `json:"promptFeedback"`
 		UsageMetadata *struct {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
 			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+			ThoughtsTokenCount   int64 `json:"thoughtsTokenCount"`
 		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return Completion{}, err
 	}
+	empty := &ProviderEmptyError{Provider: "gemini"}
+	if out.PromptFeedback != nil {
+		empty.BlockReason = enumOnly(out.PromptFeedback.BlockReason)
+	}
+	if out.UsageMetadata != nil {
+		empty.ThoughtTok = out.UsageMetadata.ThoughtsTokenCount
+	}
 	if len(out.Candidates) == 0 {
-		return Completion{}, fmt.Errorf("gemini: empty response")
+		return Completion{}, empty
 	}
 	var sb strings.Builder
 	for _, p := range out.Candidates[0].Content.Parts {
+		if p.Thought {
+			continue // a thought summary is not the answer
+		}
 		sb.WriteString(p.Text)
+	}
+	if strings.TrimSpace(sb.String()) == "" {
+		empty.FinishReason = enumOnly(out.Candidates[0].FinishReason)
+		return Completion{}, empty
 	}
 	c := Completion{Text: sb.String()}
 	if out.UsageMetadata != nil {
@@ -484,7 +589,8 @@ func parseAnthropic(rb []byte) (Completion, error) {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		Usage *struct {
+		StopReason string `json:"stop_reason"`
+		Usage      *struct {
 			InputTokens  int64 `json:"input_tokens"`
 			OutputTokens int64 `json:"output_tokens"`
 		} `json:"usage"`
@@ -498,14 +604,23 @@ func parseAnthropic(rb []byte) (Completion, error) {
 			sb.WriteString(c.Text)
 		}
 	}
-	if sb.Len() == 0 {
-		return Completion{}, fmt.Errorf("anthropic: empty response")
+	if strings.TrimSpace(sb.String()) == "" {
+		return Completion{}, &ProviderEmptyError{Provider: "anthropic", FinishReason: enumOnly(out.StopReason)}
 	}
 	c := Completion{Text: sb.String()}
 	if out.Usage != nil {
 		c.Usage = TokenUsage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens, Reported: true}
 	}
 	return c, nil
+}
+
+// enumOnly keeps a provider enum value (finish/stop/block reason) only when it
+// is identifier-shaped, so nothing free-form reaches a log line.
+func enumOnly(v string) string {
+	if reasonToken.MatchString(v) {
+		return v
+	}
+	return ""
 }
 
 func DefaultSystemPrompt() string {

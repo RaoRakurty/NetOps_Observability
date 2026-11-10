@@ -121,7 +121,7 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) ([]t
 	// does not travel — it is REPORTED HERE and the links stand without the port
 	// names (tracker 307).
 	neighbors, err := s.fetchTopoLinks(ctx)
-	ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
+	ifaddr, ifaddrErr := fetchIfAddrMap(ctx)
 	reportIfRegistryUnread("topology", "BGP-LS links keep the raw interface IP where a port name belongs, and links that join to interface metrics by ifName will not join", ifaddrErr,
 		map[string]any{"devices": len(devs)})
 	links := topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
@@ -655,7 +655,7 @@ func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filte
 			out.systemIP[dev] = f.SystemIP
 		}
 	}
-	ifIdx, err := collectors.FetchIfIndexMap(ctx)
+	ifIdx, err := fetchIfIndexMap(ctx)
 	if err != nil {
 		logWarn("topology", "interface names unread — SD-WAN interface markers unavailable to the role classifier",
 			map[string]any{"devices": len(devs), "error": err.Error()})
@@ -665,7 +665,7 @@ func (s *server) gatherWANFacts(ctx context.Context, devs []models.Device, filte
 			out.ifNames[dev] = topology.SortedIfNames(byIndex)
 		}
 	}
-	ifAddr, err := collectors.FetchIfAddrMap(ctx)
+	ifAddr, err := fetchIfAddrMap(ctx)
 	if err != nil {
 		logWarn("topology", "interface addresses unread — a BGP peer on an inventory interface may count as external this cycle",
 			map[string]any{"devices": len(devs), "error": err.Error()})

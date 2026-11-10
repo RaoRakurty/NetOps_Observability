@@ -44,6 +44,8 @@ export interface IrisFake {
   live: Set<string>;
   /** The Accept header of every /api/ai/ask (N-E2). */
   accepts: string[];
+  /** Every POST /api/copilot/config/test body (tracker 337 C3). */
+  connTests: Json[];
 }
 
 export interface IrisBackendOptions {
@@ -51,6 +53,10 @@ export interface IrisBackendOptions {
   me?: Json;
   /** GET /api/ai/tenant-config; null = the caller is not a tenant admin (403). */
   tenantConfig?: Json | null;
+  /** GET /api/copilot/config; absent/null = the caller is not the platform admin (403). */
+  copilotConfig?: Json | null;
+  /** POST /api/copilot/config/test verdict (tracker 337 C3). */
+  connTest?: Json;
   /** The /api/ai/ask answer for a question (conversation_id is stamped by the fake). */
   answer?: (question: string) => Json | { status: number; body: Json };
   /** The conversation-message answer (IrisConversationAnswer minus conversation_id/turn). */
@@ -186,7 +192,7 @@ export function clarifyAnswer(): Json {
 // ---- the fake ------------------------------------------------------------------
 
 export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promise<IrisFake> {
-  const fake: IrisFake = { asks: [], started: [], messages: [], aliasPuts: [], resolves: [], live: new Set(), accepts: [] };
+  const fake: IrisFake = { asks: [], started: [], messages: [], aliasPuts: [], resolves: [], live: new Set(), accepts: [], connTests: [] };
   const aliases: Json[] = [];
   let convSeq = 0;
   const turns = new Map<string, Json[]>();
@@ -208,8 +214,13 @@ export async function bootIris(page: Page, opts: IrisBackendOptions = {}): Promi
       return json({ scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "org-acme", org_name: "Acme", region: "us" }], all_tenants: false });
     }
     if (p === "/api/features") return json({ copilot: true });
-    if (p === "/api/copilot/config") return json({ error: "forbidden" }, 403);
-    if (p === "/api/ai/tenants") return json({ error: "forbidden" }, 403);
+    if (p === "/api/copilot/config/test" && method === "POST") {
+      if (!opts.copilotConfig) return json({ error: "forbidden" }, 403);
+      fake.connTests.push(body());
+      return json(opts.connTest ?? { ok: true, provider: "gemini", model: "gemini-flash-lite-latest", latency_ms: 420, tested_at: FIXED_NOW });
+    }
+    if (p === "/api/copilot/config") return opts.copilotConfig ? json(opts.copilotConfig) : json({ error: "forbidden" }, 403);
+    if (p === "/api/ai/tenants") return opts.copilotConfig ? json({ tenants: [] }) : json({ error: "forbidden" }, 403);
     if (p === "/api/ai/tenant-config") {
       return opts.tenantConfig ? json(opts.tenantConfig) : json({ error: "forbidden" }, 403);
     }

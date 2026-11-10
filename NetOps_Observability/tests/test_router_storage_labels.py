@@ -94,6 +94,7 @@ TRAP_FIELDS_NOT_DECLARED = {
     "snmp_community",     # a credential: never searchable (tracker 387 D1)
     "snmp_user",          # v3 security name: identity data, see D7 before widening
     "sys_uptime_human",   # display form of sys_uptime_seconds
+    "device_uptime_human",  # display form of device_uptime_s (tracker 387, trap semantics)
     "fields",             # vendor-controlled free-form map, like varbinds
 }
 
@@ -116,6 +117,60 @@ def test_trap_envelope_fields_are_declared():
     wrong = {k: props.get(k, {}).get("type") for k, t in expected.items()
              if props.get(k, {}).get("type") != t}
     assert not wrong, f"netops-snmptrap field types: {wrong}"
+
+
+# Tracker 387, trap semantics: the operator-facing meaning, filterable by value.
+# bgp.peer_address is a keyword ON PURPOSE: an RFC 4001 zoned address
+# (2001:db8::1%3) is not an OpenSearch `ip` and would reject the whole document.
+def test_trap_semantic_fields_are_declared_with_their_types():
+    props = _props("netops-snmptrap")
+    flat = {
+        "title": "text", "title_basis": "keyword", "device_name": "keyword",
+        "native_severity": "keyword", "metrics_invalid": "keyword",
+        "threshold_reported_percent": "double", "threshold_basis": "keyword",
+        "received_time": "keyword", "observed_delay_s": "double", "delay_basis": "keyword",
+        "device_uptime_s": "double", "correlation_key": "keyword", "event_id": "keyword",
+        "lifecycle_state": "keyword", "lifecycle_basis": "keyword", "recovery_verified": "boolean",
+        "auth_model": "keyword", "event_severity": "keyword", "op_state": "keyword",
+        "impact": "keyword", "if_admin_status": "keyword", "if_oper_status": "keyword",
+        "transition_id": "keyword", "transition_seq": "integer",
+        "transition_representative": "boolean", "occurrence_count": "integer",
+        "first_seen": "keyword", "last_seen": "keyword",
+        "platform": "keyword", "device_type": "keyword",
+    }
+    wrong = {k: props.get(k, {}).get("type") for k, t in flat.items() if props.get(k, {}).get("type") != t}
+    assert not wrong, f"netops-snmptrap semantic field types: {wrong}"
+    bgp = props["bgp"]
+    assert bgp.get("dynamic") is False, "bgp must not grow fields from the wire"
+    bgp_types = {"peer_address": "keyword", "peer_afi": "keyword", "peer_as": "long",
+                 "vrf": "keyword", "prev_state": "keyword", "state": "keyword",
+                 "transition_class": "keyword", "peer_basis": "keyword",
+                 "last_error_code": "integer"}
+    wrong = {k: bgp["properties"].get(k, {}).get("type") for k, t in bgp_types.items()
+             if bgp["properties"].get(k, {}).get("type") != t}
+    assert not wrong, f"bgp sub-field types: {wrong}"
+    m = props["metrics"]
+    assert m.get("dynamic") is False
+    assert m["properties"]["cpu_total_percent"]["properties"]["value"]["type"] == "double"
+    assert m["properties"]["cpu_total_percent"]["properties"]["basis"]["type"] == "keyword"
+    # Pack text: kept in the document, never a mapping a pack edit could grow.
+    assert props["guidance"] == {"type": "object", "enabled": False}
+    assert props["enrichment"]["properties"]["unknown"]["type"] == "keyword"
+
+
+def test_the_metrics_mapping_covers_every_pack_metric():
+    """A pack metric the template does not declare is unsearchable by value."""
+    import glob
+    import json as _json
+    packs = ROOT / "src" / "backend" / "collectors" / "mibs" / "packs"
+    names = set()
+    for f in glob.glob(str(packs / "*.json")):
+        pack = _json.loads(open(f, encoding="utf-8").read())
+        names |= {o["field"] for o in pack.get("objects", {}).values()
+                  if o.get("type") in ("float", "int")}
+        names |= {d["field"] for d in pack.get("derived", [])}
+    declared = set(_props("netops-snmptrap")["metrics"]["properties"])
+    assert names <= declared, f"pack metrics not declared: {sorted(names - declared)}"
 
 
 def test_every_trap_event_field_is_declared_or_deliberately_not():
@@ -392,3 +447,60 @@ def test_storage_label_suite_passes_on_the_shipped_config():
     assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
     expected = len(yaml.safe_load(SUITE.read_text(encoding="utf-8"))["tests"])
     assert run.output.count("... passed") == expected, run.output
+
+
+def test_the_timeline_keys_are_searchable_on_both_event_lanes():
+    """The event panel's Timeline queries records by these keys through the logs
+    search: undeclared under `dynamic: false`, they would match nothing."""
+    for lane in ("netops-snmptrap", "netops-syslog"):
+        props = _props(lane)
+        for k in ("correlation_key", "event_id", "transition_id", "platform", "device_type"):
+            assert props.get(k, {}).get("type") == "keyword", (lane, k, props.get(k))
+
+# Tracker 387, the syslog event model: the same names and types the trap lane uses, so
+# the event panel and the Timeline read one contract on both lanes.
+def test_syslog_event_model_fields_are_declared_with_their_types():
+    props = _props("netops-syslog")
+    flat = {
+        "title": "text", "correlation_key": "keyword",
+        "audit_user": "keyword", "audit_action": "keyword", "audit_source": "keyword",
+        "audit_via": "keyword", "session_id": "keyword", "audit_groups": "keyword",
+        "dump_id": "keyword", "event_category": "keyword",
+    }
+    wrong = {k: props.get(k, {}).get("type") for k, t in flat.items() if props.get(k, {}).get("type") != t}
+    assert not wrong, f"netops-syslog event-model field types: {wrong}"
+    m = props["metrics"]
+    assert m.get("dynamic") is False, "metrics must not grow fields from the wire"
+    for name, spec in m["properties"].items():
+        assert spec["properties"]["value"]["type"] in ("double", "keyword"), name
+        assert spec["properties"]["basis"]["type"] == "keyword", name
+    # Pack text: kept in the document, never a mapping a pack edit could grow.
+    assert props["guidance"] == {"type": "object", "enabled": False}
+    for k in ("fields_observed", "fields_derived", "fields_guidance", "unknown"):
+        assert props["enrichment"]["properties"][k]["type"] == "keyword", k
+
+
+def test_the_syslog_metrics_mapping_covers_every_pack_metric():
+    """A pack metric the template does not declare is unsearchable by value."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "telemetry-catalog"))
+    import bake_rules
+    grammars, _ = bake_rules.pack_tables(bake_rules.load_packs())
+    names = {m for g in grammars for m in (g.get("metrics") or {})}
+    declared = _props("netops-syslog")["metrics"]["properties"]
+    assert names and names <= set(declared), f"pack metrics not declared: {sorted(names - set(declared))}"
+    # A number is a double, a `{text: group}` metric a keyword: the value's own type.
+    for g in grammars:
+        for name, spec in (g.get("metrics") or {}).items():
+            want = "keyword" if isinstance(spec, dict) else "double"
+            got = declared[name]["properties"]["value"]["type"]
+            assert got == want, f"metrics.{name}.value is {got}, the pack states a {want}"
+
+
+def test_every_event_field_a_pack_can_state_is_declared_for_syslog():
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "telemetry-catalog"))
+    import bake_rules
+    props = _props("netops-syslog")
+    missing = [f for f in bake_rules.EVENT_FIELDS if f not in props]
+    assert not missing, f"event fields a pack may write but the template drops: {missing}"

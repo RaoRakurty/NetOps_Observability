@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"netops/backend/collectors"
 	"netops/backend/models"
 )
 
@@ -112,11 +111,11 @@ func (s *server) startEntityResolverEnrichment(ctx context.Context) {
 		// engine simply resolves fewer IPs / ifIndexes to entities and every
 		// direction source that needs them quietly weakens. The device rows above
 		// come from discovery and are unaffected, so the export still happens.
-		ifaddr, ifaddrErr := collectors.FetchIfAddrMap(ctx)
-		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO interface-IP rows, so the correlation engine cannot resolve an interface IP to device:ifName this cycle", ifaddrErr, nil)
-		ifidx, ifidxErr := collectors.FetchIfIndexMap(ctx)
-		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO ifIndex rows, so NetFlow/gNMI ifIndexes cannot be resolved to device:ifName this cycle", ifidxErr, nil)
-		out := buildEntityResolverExport(s.discovery.Devices(), ifaddr, ifidx)
+		// One read of the merged interface bridge (if_bridge.go): the SNMP
+		// collector's rows and the controllers' (tracker 387 PR 13a).
+		bridge, bridgeErr := fetchIfBridge(ctx)
+		reportIfRegistryUnread("enrichment", "entity_resolver.json is exported with NO interface-IP or ifIndex rows, so the correlation engine cannot resolve an interface IP or a NetFlow/gNMI ifIndex to device:ifName this cycle", bridgeErr, nil)
+		out := buildEntityResolverExport(s.discovery.Devices(), bridge.Addr, bridge.Index)
 		data, err := json.Marshal(out)
 		if err != nil {
 			log.Printf("entity-resolver-enrichment: marshal: %v", err)

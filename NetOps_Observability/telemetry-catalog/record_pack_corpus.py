@@ -32,6 +32,8 @@ import parser_branch_baseline as frozen
 import producers as P
 
 GOLDEN = os.path.join(CORRELATION, "fixtures", "parser_golden_corpus.jsonl")
+#: The pack table with the event model, as Stage B writes the record the engine reads.
+_FULL = P.PackTable(*bake_rules.pack_tables(bake_rules.load_packs()))
 #: The corpus replays every entry at this instant (test_parser_provenance_w1b.T0).
 T0 = datetime(2026, 9, 2, 10, 0, 0, tzinfo=timezone.utc)
 TS = "2026-09-02T10:00:00.000Z"
@@ -69,7 +71,7 @@ def engine_event(fx: dict) -> dict:
            "timestamp": TS}
     if "msgid" in fx:
         raw["msgid"] = fx["msgid"]
-    ev = {**raw, **P._PACKS.parse(raw)}
+    ev = {**raw, **_FULL.parse(raw)}
     # Stage B's envelope fallback: MSGID is the event_type when no grammar stated one.
     if fx.get("msgid") and fx["msgid"] != "-" and "event_type" not in ev:
         ev["event_type"] = str(fx["msgid"]).lower()
