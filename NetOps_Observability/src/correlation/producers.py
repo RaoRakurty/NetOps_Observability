@@ -1657,7 +1657,19 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         _TRAP_LANE_FNS,
     )
     sig = _run(_TRAP_PLAN, ctx, tenant, ts, observer, device, Source.TRAP)
-    if sig is not None and sig.kind == "bgp_adjacency_change" and sig.attrs.get("state") == "down":
+    if sig is None:
+        # The catalog's own gates (trap.bgp.cisco_bgp4, trap.sdwan.bgp_peer) may
+        # already have refused a never-established transition before any signal
+        # was built. Count it here too, so the counter keeps its meaning — every
+        # BGP transition of a session that was never established and emitted no
+        # signal — whichever layer refused it.
+        bgp = ev.get("bgp")
+        if isinstance(bgp, dict):
+            cls = str(bgp.get("transition_class") or "")
+            if cls in BGP_NOT_A_SESSION_FAILURE:
+                BGP_NOT_A_SESSION_FAILURE[cls] += 1
+        return None
+    if sig.kind == "bgp_adjacency_change" and sig.attrs.get("state") == "down":
         cls = bgp_transition_class(ev, sig)
         if cls in BGP_NOT_A_SESSION_FAILURE:
             # Stage [1] normalize: the rule saw a "backward" notification, but the
