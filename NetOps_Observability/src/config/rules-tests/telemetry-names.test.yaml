@@ -6,7 +6,9 @@
 #   * an exporter uncovered for 2 h fires; one covered after 1 h never does;
 #   * "not measured" (-1) never fires, though the series is present;
 #   * a trap lane mostly basis="none" fires; a mostly-attributed lane and a lane
-#     below the volume floor stay silent.
+#     below the volume floor stay silent;
+#   * the controller answering its interface lists with nothing bridged fires;
+#     rows bridged, or a controller that is not answering, stay silent.
 rule_files:
   - /etc/prometheus/rules-scale-slo.yaml
 
@@ -32,7 +34,7 @@ tests:
               layer: ingest
             exp_annotations:
               summary: "2 flow exporter(s) have sent flows for 2 hours with no interface name"
-              description: "The flows views show these exporters' interfaces as bare ifIndex numbers. Names come from the device's IF-MIB walk (and, once tracker 387 PR 13a lands, from the controller). The usual cause is a device that answers no SNMP walk, or one whose flow source address is not its inventory address."
+              description: "The flows views show these exporters' interfaces as bare ifIndex numbers. Names come from the device's IF-MIB walk and from its controller's interface list. The usual cause is a device that answers no SNMP walk and whose controller does not report it under the same owner, or one whose flow source address is not its inventory address."
               runbook: "docs/runbooks/telemetry-names.md#flowexporterwithoutinterfacenames"
 
   # 2) Covered after an hour, and "not measured": never fires.
@@ -140,3 +142,53 @@ tests:
         alertname: TrapTitleFallbackRatioRising
         exp_alerts: []
 
+  # 9) NMS answers (interface_realtime ok every minute) and nothing is bridged.
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_poll_runs_total{job="netops-api",tenant_id="t1",integration_id="nmsi-1",vendor="vmanage",stream="interface_realtime",result="ok"}'
+        values: "0+1x120"
+      - series: 'netops_nms_iface_bridge_rows{job="netops-api",source="nms",outcome="bridged"}'
+        values: "0x120"
+      - series: 'netops_nms_iface_bridge_rows{job="netops-api",source="nms",outcome="device_unresolved"}'
+        values: "8x120"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NMSInterfaceBridgeEmpty
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: NMSInterfaceBridgeEmpty
+        exp_alerts:
+          - exp_labels:
+              alertname: NMSInterfaceBridgeEmpty
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the controller answers its interface lists, but none of them reached the interface bridge"
+              description: "Devices known only through their controller have no interface names on flows and traps, and a trap sent from one of their interface addresses names no device. Read netops_nms_iface_bridge_rows by outcome: device_unresolved means the controller's devices match no inventory device of the integration's owner (an integration owned by a tenant while the devices belong to the platform, or the reverse), device_ambiguous means a key matched more than one device."
+              runbook: "docs/runbooks/telemetry-names.md#nmsinterfacebridgeempty"
+
+  # 10) Rows bridged: silent. 11) The controller is not answering (no ok runs):
+  # silent here (NMSIngestSilent / NMSIntegrationDown own that).
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_poll_runs_total{job="netops-api",tenant_id="t1",integration_id="nmsi-1",vendor="vmanage",stream="interface_realtime",result="ok"}'
+        values: "0+1x120"
+      - series: 'netops_nms_iface_bridge_rows{job="netops-api",source="nms",outcome="bridged"}'
+        values: "66x120"
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: NMSInterfaceBridgeEmpty
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'netops_nms_poll_runs_total{job="netops-api",tenant_id="t1",integration_id="nmsi-1",vendor="vmanage",stream="interface_realtime",result="ok"}'
+        values: "5x120"
+      - series: 'netops_nms_poll_runs_total{job="netops-api",tenant_id="t1",integration_id="nmsi-1",vendor="vmanage",stream="interface_realtime",result="unreachable"}'
+        values: "0+1x120"
+      - series: 'netops_nms_iface_bridge_rows{job="netops-api",source="nms",outcome="bridged"}'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: NMSInterfaceBridgeEmpty
+        exp_alerts: []

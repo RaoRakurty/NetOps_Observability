@@ -174,6 +174,7 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			if routed.Devices != nil {
 				res.Routed.Devices = append(res.Routed.Devices, routed.Devices...)
 			}
+			res.Routed.Interfaces = append(res.Routed.Interfaces, routed.Interfaces...)
 			if routed.Wireless != nil {
 				if res.Routed.Wireless == nil {
 					res.Routed.Wireless = &wireless.Inventory{}
