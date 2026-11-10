@@ -4069,6 +4069,17 @@
       "usage": "bundled-runtime",
       "version": "path data, in-tree copy"
     },
+    "iana-protocol-registries": {
+      "license": "CC0-1.0",
+      "note": "IP protocol keywords and (transport, port) service names reduced from the IANA Protocol Numbers and Service Name and Transport Protocol Port Number registries by scripts/gen-iana-tables.py (sha256-pinned sources, fetch date in each file header; tracker 387 PR 13). IANA and the IETF dedicate the Protocol Registries to the public domain under CC0 1.0 (https://www.iana.org/help/licensing-terms, revised 2021-11-10); no attribution is required. Only the number, transport and name columns are kept: the registry's assignee and contact columns are never copied.",
+      "paths": [
+        "src/backend/internal/iana/protocols.tsv",
+        "src/backend/internal/iana/services.tsv"
+      ],
+      "unit": "api image (netops-api) — embedded in the binary",
+      "usage": "bundled-runtime",
+      "version": "registries fetched 2026-11-09"
+    },
     "ietf-rfc-mibs": {
       "license": "BSD-3-Clause",
       "note": "MIB modules reproduced from IETF RFCs are Code Components; the IETF Trust Legal Provisions license them under the Simplified/Modified BSD terms set out in section 4.e, so redistribution is permitted with the notice. Each file carries an ASCII header naming its RFC, the rfc-editor.org URL, the 'Code Component' status, the IETF Trust licence pointer (https://trustee.ietf.org/license-info) and the Internet Society copyright line. P-BRIDGE-MIB and Q-BRIDGE-MIB carry the Internet Society (2006) / RFC 4363 notice inline in the module text. SNMPv2-TC (RFC 2579, STD 58) and SNMPv2-CONF (RFC 2580, STD 58) joined this entry on 2026-09-04 under decision D3, replacing Cisco's edited extracts of the obsoleted RFC 1903/1904; the replacements were verified line-for-line against net-snmp's own upstream IETF copies.",
