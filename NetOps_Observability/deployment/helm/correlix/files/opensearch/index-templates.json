@@ -502,7 +502,7 @@
       }
     },
     "netops-snmptrap": {
-      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor. Tracker 387: the receiver's NormalizedEvent envelope (collectors/snmptrap.go TrapEvent) is declared so traps can be filtered and aggregated by what they mean; each TrapEvent field is either declared here or deliberately listed in tests/test_router_storage_labels.py. A credential is never declared.",
+      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor. Tracker 387: the receiver's NormalizedEvent envelope (collectors/snmptrap.go TrapEvent) is declared so traps can be filtered and aggregated by what they mean; each TrapEvent field is either declared here or deliberately listed in tests/test_router_storage_labels.py. A credential is never declared. Tracker 387 trap semantics: title, metrics (typed, with basis), the reported threshold, times and delay, lifecycle, the bgp object, transition grouping and the enrichment provenance are declared; `guidance` is pack text, stored not indexed. bgp.peer_address is a keyword, not an ip: an RFC 4001 zoned address (2001:db8::1%3) is not an OpenSearch ip and would reject the document.",
       "index_patterns": [
         "netops-snmptrap-*"
       ],
@@ -638,9 +638,6 @@
             "summary": {
               "type": "text"
             },
-            "vendor": {
-              "type": "keyword"
-            },
             "message_key": {
               "type": "keyword"
             },
@@ -680,6 +677,268 @@
             "values": {
               "type": "object",
               "dynamic": false
+            },
+            "title": {
+              "type": "text"
+            },
+            "title_basis": {
+              "type": "keyword"
+            },
+            "device_name": {
+              "type": "keyword"
+            },
+            "native_severity": {
+              "type": "keyword"
+            },
+            "metrics": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "cpu_total_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_user_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_system_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_idle_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "free_mb": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "total_mb": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    },
+                    "formula": {
+                      "type": "keyword"
+                    },
+                    "unit": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            },
+            "metrics_invalid": {
+              "type": "keyword"
+            },
+            "threshold_reported_percent": {
+              "type": "double"
+            },
+            "threshold_basis": {
+              "type": "keyword"
+            },
+            "received_time": {
+              "type": "keyword"
+            },
+            "observed_delay_s": {
+              "type": "double"
+            },
+            "delay_basis": {
+              "type": "keyword"
+            },
+            "device_uptime_s": {
+              "type": "double"
+            },
+            "correlation_key": {
+              "type": "keyword"
+            },
+            "event_id": {
+              "type": "keyword"
+            },
+            "lifecycle_state": {
+              "type": "keyword"
+            },
+            "lifecycle_basis": {
+              "type": "keyword"
+            },
+            "recovery_verified": {
+              "type": "boolean"
+            },
+            "auth_model": {
+              "type": "keyword"
+            },
+            "event_severity": {
+              "type": "keyword"
+            },
+            "op_state": {
+              "type": "keyword"
+            },
+            "impact": {
+              "type": "keyword"
+            },
+            "if_admin_status": {
+              "type": "keyword"
+            },
+            "if_oper_status": {
+              "type": "keyword"
+            },
+            "bgp": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "peer_address": {
+                  "type": "keyword"
+                },
+                "peer_afi": {
+                  "type": "keyword"
+                },
+                "peer_as": {
+                  "type": "long"
+                },
+                "local_address": {
+                  "type": "keyword"
+                },
+                "vrf": {
+                  "type": "keyword"
+                },
+                "prev_state": {
+                  "type": "keyword"
+                },
+                "prev_state_basis": {
+                  "type": "keyword"
+                },
+                "state": {
+                  "type": "keyword"
+                },
+                "transition_class": {
+                  "type": "keyword"
+                },
+                "peer_basis": {
+                  "type": "keyword"
+                },
+                "last_error_code": {
+                  "type": "integer"
+                },
+                "last_error_subcode": {
+                  "type": "integer"
+                },
+                "last_error": {
+                  "type": "keyword"
+                },
+                "last_error_text": {
+                  "type": "text"
+                }
+              }
+            },
+            "transition_id": {
+              "type": "keyword"
+            },
+            "transition_seq": {
+              "type": "integer"
+            },
+            "transition_representative": {
+              "type": "boolean"
+            },
+            "occurrence_count": {
+              "type": "integer"
+            },
+            "first_seen": {
+              "type": "keyword"
+            },
+            "last_seen": {
+              "type": "keyword"
+            },
+            "guidance": {
+              "type": "object",
+              "enabled": false
+            },
+            "enrichment": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "fields_observed": {
+                  "type": "keyword"
+                },
+                "fields_derived": {
+                  "type": "keyword"
+                },
+                "fields_guidance": {
+                  "type": "keyword"
+                },
+                "unknown": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "event_category": {
+              "type": "keyword"
+            },
+            "normalized_severity": {
+              "type": "keyword"
             }
           }
         }

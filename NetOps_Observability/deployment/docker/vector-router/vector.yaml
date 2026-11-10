@@ -1671,6 +1671,46 @@ transforms:
           basis: "{{ basis }}"
           outcome: "{{ outcome }}"
 
+  # Tracker 387, trap semantics: could the receiver say what each trap MEANS?
+  # title = templated (a pack wording was filled) | fallback (the old summary stands
+  # in); peer = parsed (a BGP peer decoded, from the row index or a varbind) |
+  # unparsed (one was sent and did not decode) | absent (none named). family is the
+  # trap's taxonomy family. Every label is a closed set, anything else reads
+  # `other`: at most 14 x 2 x 3 = 84 series, no device, tenant or address. Rule:
+  # TrapTitleFallbackRatioRising (rules-scale-slo.yaml, warning tier).
+  trap_semantics_labels:
+    type: remap
+    inputs: [snmptrap_tagged]
+    source: |
+      cx_family = string(.family) ?? ""
+      if cx_family == "" {
+        cx_family = "none"
+      } else if !includes(["bgp", "ospf", "isis", "link_state", "restart", "auth_fail", "mac_fdb", "cpu", "memory", "bfd", "omp", "control_connection"], cx_family) {
+        cx_family = "other"
+      }
+      cx_title = "fallback"
+      if (string(.title_basis) ?? "") == "templated" { cx_title = "templated" }
+      cx_basis = string(.bgp.peer_basis) ?? ""
+      cx_peer = "absent"
+      if includes(["index", "index_vendor_form", "varbind"], cx_basis) {
+        cx_peer = "parsed"
+      } else if cx_basis == "unparsed" {
+        cx_peer = "unparsed"
+      }
+      . = { "family": cx_family, "title": cx_title, "peer": cx_peer }
+
+  trap_semantics_metric:
+    type: log_to_metric
+    inputs: [trap_semantics_labels]
+    metrics:
+      - type: counter
+        field: family
+        name: netops_trap_semantics_events
+        tags:
+          family: "{{ family }}"
+          title: "{{ title }}"
+          peer: "{{ peer }}"
+
   # Tracker 373: events whose sender address was lost to the Docker bridge
   # gateway (stamped source_masked by the trap receiver, the aggregator's
   # syslog_sender and flows_decoded). Counted per topic only — no device or
@@ -1738,7 +1778,7 @@ sinks:
     # --config): one counter per Pipeline Processor that fired, so per-processor
     # match rates are observable without an execution-log row per event. Listed
     # here because the generated file cannot edit this sink's inputs.
-    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, trap_attribution_metric, flow_enrichment_metric, cx_processor_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric, source_masked_metric, syslog_bad_frame_metric, parse_status_metric, trap_varbind_metric, trap_attribution_metric, trap_semantics_metric, flow_enrichment_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

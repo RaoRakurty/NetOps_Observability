@@ -92,3 +92,51 @@ tests:
       - eval_time: 110m
         alertname: TrapSourceUnattributedRatioHigh
         exp_alerts: []
+
+  # 6) Trap titles: 5 % fallback for six hours, then half of all traps (a new
+  #    notification no pack words): fires after the hold.
+  - interval: 1m
+    input_series:
+      - series: 'netops_trap_semantics_events{job="vector-router",family="bgp",title="templated",peer="parsed"}'
+        values: "0+10x600"
+      - series: 'netops_trap_semantics_events{job="vector-router",family="other",title="fallback",peer="absent"}'
+        values: "0+0.5x420 210+10x180"
+    alert_rule_test:
+      - eval_time: 440m
+        alertname: TrapTitleFallbackRatioRising
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: TrapTitleFallbackRatioRising
+        exp_alerts:
+          - exp_labels:
+              alertname: TrapTitleFallbackRatioRising
+              severity: warning
+              tier: warning
+              layer: ingest
+            exp_annotations:
+              summary: "50% of SNMP traps have no readable title, up from their usual share"
+              description: "These traps are stored and searchable, but the Logs page shows them by MIB name instead of a sentence, and their peer, metrics and guidance may be missing. A new vendor or notification sending traps that no trap pack words, or a pack or MIB-index change that stopped matching, are the usual causes. The family label says which kind of trap."
+              runbook: "docs/runbooks/telemetry-names.md#traptitlefallbackratiorising"
+
+  # 7) Half untitled for eight hours: a level, not a rise. Silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_trap_semantics_events{job="vector-router",family="bgp",title="templated",peer="parsed"}'
+        values: "0+10x600"
+      - series: 'netops_trap_semantics_events{job="vector-router",family="other",title="fallback",peer="absent"}'
+        values: "0+10x600"
+    alert_rule_test:
+      - eval_time: 500m
+        alertname: TrapTitleFallbackRatioRising
+        exp_alerts: []
+
+  # 8) Every trap untitled, but below the volume floor: silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_trap_semantics_events{job="vector-router",family="other",title="fallback",peer="absent"}'
+        values: "0+0.3x200"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: TrapTitleFallbackRatioRising
+        exp_alerts: []
+

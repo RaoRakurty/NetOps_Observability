@@ -53,6 +53,28 @@ device's own, never derived from the address.
 3. If the device is known by that address, check the community: a mismatch drops the
    identity on purpose (`guardTrapCommunity`).
 
+## TrapTitleFallbackRatioRising
+
+More than a quarter of the traps of the last 30 minutes have no readable title, and
+that share is more than twice what it was over the six hours before
+(`netops_trap_semantics_events{title="fallback"}`). They are stored and searchable; the
+Logs page shows them by MIB name, and their peer, metrics and guidance may be missing.
+
+A title comes from the trap packs (`src/backend/collectors/mibs/packs/*.json`,
+`title_templates` and `titles`): a notification with no `titles` row, or one whose
+templates all need a field the trap did not carry, falls back to the old summary.
+
+1. Group the untitled traps on the Logs page (signal: SNMP traps,
+   `title_basis:fallback`) by `trap_name` and `family`. One notification carrying most
+   of them is the usual shape.
+2. A notification no pack words: add a `titles` row naming a template (or a new
+   template) in the vendor's pack. No code change; `go test ./collectors/` checks the
+   OID, the name and the template syntax.
+3. A notification that IS worded: compare a stored trap with the template's fields. A
+   peer that stopped decoding shows as `bgp.peer_basis:unparsed` (the same counter's
+   `peer` label): check the MIB index's INDEX clause for that table, or a vendor form a
+   pack `tables` row should declare.
+
 ## AS numbers: the iptoasn dataset
 
 Cisco SD-WAN cflowd (and many exporters) sends no BGP AS elements, so `src_as`/`dst_as`

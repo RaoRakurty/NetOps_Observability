@@ -1338,6 +1338,9 @@ groups:
   #    `_total`): which rung of the receiver's ladder named the trap's device.
   #    basis="none" is a trap no rung could attribute: evidence filed under its
   #    source address, which RCA cannot bind to a device.
+  #  - netops_trap_semantics_events{family,title,peer} (vector-router counter,
+  #    tracker 387 trap semantics): whether a pack worded the trap and decoded
+  #    its BGP peer. A rise in title="fallback" is the alert below.
   # ============================================================================
   - name: telemetry-names
     rules:
@@ -1368,3 +1371,38 @@ groups:
           summary: "{{ $value | humanizePercentage }} of SNMP traps reach no device"
           description: "These traps are stored under their source address, and RCA cannot bind them to a device. A device trapping from an address that is neither its management address nor a unique interface address it reports, a community that does not match, or a device that answers no SNMP walk are the usual causes."
           runbook: "docs/runbooks/telemetry-names.md#trapsourceunattributedratiohigh"
+
+      - alert: TrapTitleFallbackRatioRising
+        # Tracker 387, trap semantics. netops_trap_semantics_events{family,title,peer}
+        # (vector-router counter, no `_total`): title="fallback" is a trap no pack
+        # wording could describe, shown to the operator as its MIB name. A RISE, not a
+        # level: an estate full of undecoded vendors has a high steady ratio and that is
+        # the coverage scorecard's business. Fires when the last 30 minutes' fallback
+        # share is above a quarter AND more than twice its share over the 6 hours
+        # before (or there is no history), with a volume floor of 20 traps.
+        expr: |
+          (
+            sum(increase(netops_trap_semantics_events{title="fallback"}[30m]))
+            /
+            sum(increase(netops_trap_semantics_events[30m]))
+          ) > 0.25
+          and
+          (
+            sum(increase(netops_trap_semantics_events{title="fallback"}[30m]))
+            /
+            sum(increase(netops_trap_semantics_events[30m]))
+          ) > 2 * (
+            (
+              sum(increase(netops_trap_semantics_events{title="fallback"}[6h] offset 30m))
+              /
+              sum(increase(netops_trap_semantics_events[6h] offset 30m))
+            ) or vector(0)
+          )
+          and
+          sum(increase(netops_trap_semantics_events[30m])) > 20
+        for: 30m
+        labels: { severity: warning, tier: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of SNMP traps have no readable title, up from their usual share"
+          description: "These traps are stored and searchable, but the Logs page shows them by MIB name instead of a sentence, and their peer, metrics and guidance may be missing. A new vendor or notification sending traps that no trap pack words, or a pack or MIB-index change that stopped matching, are the usual causes. The family label says which kind of trap."
+          runbook: "docs/runbooks/telemetry-names.md#traptitlefallbackratiorising"
