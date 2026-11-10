@@ -570,7 +570,7 @@ describe("one severity authority", () => {
   });
 
   it("shows a spelling it does not know as the record gave it", () => {
-    expect(severityLabel("minor")).toBe("minor");
+    expect(severityLabel("p3-urgent")).toBe("p3-urgent");
     expect(severityLabel(null)).toBe("");
   });
 

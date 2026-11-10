@@ -125,13 +125,23 @@
   --glass-scrim: rgba(17, 24, 39, 0.22);            /* gentle, non-grey dim */
 
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
-  --sev-critical: #f43f5e;  --sev-critical-bg: rgba(244, 63, 94, 0.10);
-  --sev-error:    #f97316;  --sev-error-bg:    rgba(249, 115, 22, 0.10);
-  --sev-warning:  #d97706;  --sev-warning-bg:  rgba(217, 119, 6, 0.12);
-  --sev-notice:   #8b5cf6;  --sev-notice-bg:   rgba(139, 92, 246, 0.10);
-  --sev-info:     #2563eb;  --sev-info-bg:     rgba(37, 99, 235, 0.10);
-  --sev-debug:    #64748b;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
-  --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
+  /* THE severity → tone map (theme/severity.ts SEVERITY_TONES, owner 2026-11-10).
+     Light theme: deep cuts of the owner's hues, so accent text clears 4.5:1 on white.
+     -solid/-on are a solid pill and the text that holds AA on it (same in every theme). */
+  --sev-critical: #DC2626;  --sev-critical-bg: rgba(220, 38, 38, 0.10);
+  --sev-error:    #C2410C;  --sev-error-bg:    rgba(194, 65, 12, 0.10);
+  --sev-warning:  #B45309;  --sev-warning-bg:  rgba(245, 158, 11, 0.14);
+  --sev-notice:   #0369A1;  --sev-notice-bg:   rgba(56, 189, 248, 0.14);
+  --sev-info:     #2F7A7A;  --sev-info-bg:     rgba(95, 179, 179, 0.16);
+  --sev-debug:    #5B6779;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
+  --sev-ok:       #15803D;  --sev-ok-bg:       rgba(34, 197, 94, 0.12);
+  --sev-critical-solid: #DC2626; --sev-critical-on: #FFFFFF;
+  --sev-error-solid:    #C2410C; --sev-error-on:    #FFFFFF;
+  --sev-warning-solid:  #F59E0B; --sev-warning-on:  #1A1203;
+  --sev-notice-solid:   #38BDF8; --sev-notice-on:   #04141D;
+  --sev-info-solid:     #5FB3B3; --sev-info-on:     #061515;
+  --sev-debug-solid:    #94A3B8; --sev-debug-on:    #0B1220;
+  --sev-ok-solid:       #22C55E; --sev-ok-on:       #04140A;
 
   /* ----- Design tokens (Phase 0) — reference these instead of hardcoding ----- */
   /* Type scale: dense but legible. Dense NOC tools run a 13–14px body in
@@ -3481,14 +3491,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --glass-tint-b: rgba(16, 185, 129, 0.14);
   --glass-scrim: rgba(4, 8, 16, 0.60);
 
-  /* Severity hues stay vivid; lift the translucent fills for the darker canvas. */
-  --sev-critical-bg: rgba(244, 80, 107, 0.18);
-  --sev-error-bg:    rgba(251, 146, 60, 0.18);
-  --sev-warning-bg:  rgba(251, 191, 36, 0.18);
-  --sev-notice-bg:   rgba(167, 139, 250, 0.18);
-  --sev-info-bg:     rgba(96, 165, 250, 0.18);
-  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
-  --sev-ok-bg:       rgba(52, 211, 153, 0.18);
+  /* The owner's palette on the dark canvas (theme/severity.ts SEVERITY_TONES), with
+     the translucent fills lifted for the darker surfaces. */
+  --sev-critical: #EF4444;  --sev-critical-bg: rgba(239, 68, 68, 0.18);
+  --sev-error:    #F97316;  --sev-error-bg:    rgba(249, 115, 22, 0.18);
+  --sev-warning:  #F59E0B;  --sev-warning-bg:  rgba(245, 158, 11, 0.18);
+  --sev-notice:   #38BDF8;  --sev-notice-bg:   rgba(56, 189, 248, 0.18);
+  --sev-info:     #5FB3B3;  --sev-info-bg:     rgba(95, 179, 179, 0.18);
+  --sev-debug:    #94A3B8;  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
+  --sev-ok:       #22C55E;  --sev-ok-bg:       rgba(34, 197, 94, 0.18);
 
   /* Brighter indigo accent — reserved for true signal (active/focus). */
   --accent: #a5b4fc;
@@ -3536,6 +3547,16 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --ack:  #8957e5;
   --viz-1:#4c8dff; --viz-2:#3fb6b2; --viz-3:#e2a03f;
   --viz-4:#c76fe0; --viz-5:#6fcf97; --viz-6:#f2785c;
+}
+:root[data-theme="oled"] {
+  /* oled is outside the first dark block, so it takes the owner's dark severity hues here. */
+  --sev-critical: #EF4444;  --sev-critical-bg: rgba(239, 68, 68, 0.18);
+  --sev-error:    #F97316;  --sev-error-bg:    rgba(249, 115, 22, 0.18);
+  --sev-warning:  #F59E0B;  --sev-warning-bg:  rgba(245, 158, 11, 0.18);
+  --sev-notice:   #38BDF8;  --sev-notice-bg:   rgba(56, 189, 248, 0.18);
+  --sev-info:     #5FB3B3;  --sev-info-bg:     rgba(95, 179, 179, 0.18);
+  --sev-debug:    #94A3B8;  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
+  --sev-ok:       #22C55E;  --sev-ok-bg:       rgba(34, 197, 94, 0.18);
 }
 :root[data-theme="oled"] {
   -webkit-font-smoothing: antialiased;
