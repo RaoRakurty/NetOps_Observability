@@ -153,3 +153,50 @@ def test_two_tenants_reusing_an_address_are_never_guessed(tmp_path, monkeypatch,
 
     assert main.TENANT_REFUSALS == {"snmptrap:identity_unattributable": 1}
     assert _clean == []
+
+
+# ── tracker 387 PR 13c': the receiver's refusal stands ───────────────────────
+
+def test_a_trap_the_receiver_refused_is_not_reattributed(tmp_path, monkeypatch, _clean):
+    """A receiver that stamps attribution_basis tried every rung WITH the device's
+    credential. basis none from it is a refusal (a wrong community, say): the engine
+    must not grant by address what the receiver refused on proof."""
+    _export(tmp_path, monkeypatch, [
+        {"tenant_id": TENANT, "device": DEVICE, "ip": SOURCE, "ifname": "GigabitEthernet2"},
+    ])
+    assert main.cached_entity_resolver_all().device_for_ip(SOURCE) == DEVICE
+    monkeypatch.setattr(main, "TRAPS_RECANON_DECLINED", 0)
+
+    asyncio.run(main.handle_snmptrap(_trap(attribution_basis="none")))
+
+    assert main.TRAPS_RECANON == 0
+    assert main.TRAPS_RECANON_DECLINED == 1
+    assert main.TENANT_REFUSALS == {"snmptrap:identity_unattributable": 1}
+    assert _clean == []
+
+
+def test_an_old_shape_record_still_recovers(tmp_path, monkeypatch, _clean):
+    """No attribution_basis: an older receiver, which never tried the interface
+    rung. Today's recovery stands for it, byte for byte."""
+    _export(tmp_path, monkeypatch, [
+        {"tenant_id": TENANT, "device": DEVICE, "ip": SOURCE, "ifname": "GigabitEthernet2"},
+    ])
+    monkeypatch.setattr(main, "TRAPS_RECANON_DECLINED", 0)
+    asyncio.run(main.handle_snmptrap(_trap()))
+    asyncio.run(main.handle_snmptrap(_trap(attribution_basis="")))
+
+    assert main.TRAPS_RECANON == 2
+    assert main.TRAPS_RECANON_DECLINED == 0
+    assert [r["tenant_id"] for r in _clean] == [TENANT, TENANT]
+
+
+def test_a_receiver_attributed_trap_keeps_its_device(tmp_path, monkeypatch, _clean):
+    """The receiver's own answer (interface_ip with proof) is used as is."""
+    _export(tmp_path, monkeypatch, [
+        {"tenant_id": TENANT, "device": DEVICE, "ip": SOURCE, "ifname": "GigabitEthernet2"},
+    ])
+    monkeypatch.setattr(main, "TRAPS_RECANON_DECLINED", 0)
+    asyncio.run(main.handle_snmptrap(_trap(device=DEVICE, attribution_basis="interface_ip")))
+
+    assert main.TRAPS_RECANON == 0 and main.TRAPS_RECANON_DECLINED == 0
+    assert [r["tenant_id"] for r in _clean] == [TENANT]
