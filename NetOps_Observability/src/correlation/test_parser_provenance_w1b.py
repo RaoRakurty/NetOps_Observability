@@ -613,7 +613,27 @@ RULES_HASH_VENDOR_PACKS_WAVE1 = "dbdb40fd72cf71f6360acf8788350afdcc3942d8830117a
 #: known_benign row; the vEdge daemon `<function>[<line>]:` lines gain a grammar; the
 #: SYSMGR process-table dump and the confd NETCONF action are classified (no rule row).
 RULES_HASH_SDWAN_SNMP_POLL = "8cb2e8c96dbc50e28d9a36f1a08638d721797bd096a6c5a0d21307043272bf0a"
-RULES_HASH_A3 = RULES_HASH_SDWAN_SNMP_POLL
+#:
+#: Syslog event model (2026-11-10, tracker 387): two grammars join the SD-WAN pack (the
+#: cpu-usage notification with its CPU numbers, the vBond DNS lines with their own event
+#: types), the generic vEdge daemon grammar leaves, and audit grammars capture the session
+#: id and port. Titles, metrics and guidance are presentation and stay out of the hash.
+RULES_HASH_SYSLOG_EVENTS = "cefbeeaad8aad30602f755d299f952abbe9f8162f348edad7eca482ec788ad36"
+#:
+#: SONiC (2026-11-10, tracker 387 wave 2): the orchagent interface line, one link row.
+RULES_HASH_SONIC = "4ec6197fc47602455a8b3fd9e224ff71bf36394e08d529e37f0ba724f282399d"
+#:
+#: Trap BGP classes (2026-11-10, tracker 387 trap semantics): cisco_bgp4 backward is
+#: 6>[1-5] or a backward notification with no/established prior state and no
+#: never_established/progressing class; sdwan.bgp_peer gated on the class; the event_type
+#: BGP row reads bgp.peer_address instead of the varbind-name scan.
+RULES_HASH_TRAP_BGP_CLASSES = "69f51d4ca5c71595989d4be57b13e2c2dcaa6f5997de6e5da2ebb466ff945342"
+#:
+#: Process snapshot (2026-11-10, tracker 387 owner feedback): the SD-WAN `ps` row reads
+#: every column and the process basename; its summary reads the pack's `process` label
+#: table, so the labels ride in the hash. dump_id and the typed metrics are presentation.
+RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be566d521804f8a6e7f"
+RULES_HASH_A3 = RULES_HASH_PROCESS_SNAPSHOT
 
 
 def _guard_patterns(node) -> list[str]:

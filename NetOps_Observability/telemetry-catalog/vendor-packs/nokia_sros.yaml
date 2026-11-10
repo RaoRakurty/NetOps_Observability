@@ -53,6 +53,9 @@ grammars:
     severity: {word: word}
     native_text: word
     alarm_floor: 2
+    fields:
+      title: '{app} {name} on {host}: {text}'
+      correlation_key: '{app}:{device}:{name}[:{subject}]'
     fidelity: doc_claimed
     source: 'Nokia 7750 SR 22.2.R1 System Management Guide, "Syslog implementation" (format and literal), infocenter.nokia.com'
 
@@ -779,3 +782,36 @@ fixtures:
     message: 'BGP-WARNING-tBgpNgBackwardTransition-2020: a sender quoting a Nokia name'
     expect: {}
     signal: null
+
+# What an operator checks first per fault family (tracker 387 event model; `guidance`,
+# `basis: pack_guidance`). Advice, never evidence. Commands are the SR OS classic CLI.
+guidance:
+  - event_types: [bgp_2020, bgp_2039, bgp_2005, bgp_2006]
+    impact:
+      - A BGP session left Established or was closed by a NOTIFICATION; routes learned from that peer are withdrawn.
+    next_checks:
+      - Run show router bgp neighbor for the peer and read the last error and the event that moved it.
+      - Check reachability to the peer and the interface or LSP it runs over.
+  - event_types: [ospf_2042]
+    impact:
+      - An OSPF neighbour changed state; routes through it are recalculated.
+    next_checks:
+      - Run show router ospf neighbor and show router ospf interface for the neighbour.
+      - Check the link to the neighbour and matching timers, area and MTU.
+  - event_types: [snmp_2004]
+    impact:
+      - An interface stopped being operational; services and adjacencies over it stop or move.
+    next_checks:
+      - Run show router interface and show port for the interface, and check whether it was shut administratively.
+      - Check the optics and the far end of the link.
+  - event_types: [chassis_2144, chassis_2146, chassis_2148, chassis_2005, chassis_2001]
+    impact:
+      - A chassis component failed or overheated; the router may lose redundancy or shut cards down.
+    next_checks:
+      - Run show chassis environment and show chassis power-supply (or show card for a card failure).
+      - Check the room temperature and airflow, and plan a replacement of the failed part.
+  - event_types: [system_2010]
+    impact:
+      - A software module could not allocate memory; protocols in that module may fail.
+    next_checks:
+      - Run show system memory-pools and look for the module named in the line.

@@ -200,7 +200,7 @@
       "_comment": "Platform-infra self-health logs (log_class=platform), split from netops-applogs-* so they stay out of the device-monitoring GUI. Same field contract as applogs."
     },
     "netops-syslog": {
-      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed. Tracker 387 trap semantics: correlation_key, event_id and transition_id are declared with the trap lane's names and types, so the event panel's Timeline can query both lanes by one key; platform and device_type likewise.",
+      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed. Tracker 387 trap semantics: correlation_key, event_id and transition_id are declared with the trap lane's names and types, so the event panel's Timeline can query both lanes by one key; platform and device_type likewise. Tracker 387 syslog event model (the trap lane's names): title, the typed audit fields, metrics (typed, with basis, every pack metric declared) and the enrichment provenance are declared; `guidance` is pack text, stored not indexed.",
       "index_patterns": [
         "netops-syslog-*"
       ],
@@ -323,6 +323,169 @@
             "summary": {
               "type": "text"
             },
+            "title": {
+              "type": "text"
+            },
+            "correlation_key": {
+              "type": "keyword"
+            },
+            "audit_user": {
+              "type": "keyword"
+            },
+            "audit_action": {
+              "type": "keyword"
+            },
+            "audit_source": {
+              "type": "keyword"
+            },
+            "audit_via": {
+              "type": "keyword"
+            },
+            "session_id": {
+              "type": "keyword"
+            },
+            "audit_groups": {
+              "type": "keyword"
+            },
+            "dump_id": {
+              "type": "keyword"
+            },
+            "metrics": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "cpu_idle_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_system_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_user_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cpu_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "cputime": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "mem_percent": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "process": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "rss_kb": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "start": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "state": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "vsz_kb": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            },
+            "guidance": {
+              "type": "object",
+              "enabled": false
+            },
+            "enrichment": {
+              "properties": {
+                "fields_observed": {
+                  "type": "keyword"
+                },
+                "fields_derived": {
+                  "type": "keyword"
+                },
+                "fields_guidance": {
+                  "type": "keyword"
+                },
+                "unknown": {
+                  "type": "keyword"
+                }
+              }
+            },
             "app_id": {
               "type": "keyword"
             },
@@ -375,9 +538,6 @@
             },
             "source_masked": {
               "type": "boolean"
-            },
-            "correlation_key": {
-              "type": "keyword"
             },
             "event_id": {
               "type": "keyword"

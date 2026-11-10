@@ -457,3 +457,50 @@ def test_the_timeline_keys_are_searchable_on_both_event_lanes():
         for k in ("correlation_key", "event_id", "transition_id", "platform", "device_type"):
             assert props.get(k, {}).get("type") == "keyword", (lane, k, props.get(k))
 
+# Tracker 387, the syslog event model: the same names and types the trap lane uses, so
+# the event panel and the Timeline read one contract on both lanes.
+def test_syslog_event_model_fields_are_declared_with_their_types():
+    props = _props("netops-syslog")
+    flat = {
+        "title": "text", "correlation_key": "keyword",
+        "audit_user": "keyword", "audit_action": "keyword", "audit_source": "keyword",
+        "audit_via": "keyword", "session_id": "keyword", "audit_groups": "keyword",
+        "dump_id": "keyword", "event_category": "keyword",
+    }
+    wrong = {k: props.get(k, {}).get("type") for k, t in flat.items() if props.get(k, {}).get("type") != t}
+    assert not wrong, f"netops-syslog event-model field types: {wrong}"
+    m = props["metrics"]
+    assert m.get("dynamic") is False, "metrics must not grow fields from the wire"
+    for name, spec in m["properties"].items():
+        assert spec["properties"]["value"]["type"] in ("double", "keyword"), name
+        assert spec["properties"]["basis"]["type"] == "keyword", name
+    # Pack text: kept in the document, never a mapping a pack edit could grow.
+    assert props["guidance"] == {"type": "object", "enabled": False}
+    for k in ("fields_observed", "fields_derived", "fields_guidance", "unknown"):
+        assert props["enrichment"]["properties"][k]["type"] == "keyword", k
+
+
+def test_the_syslog_metrics_mapping_covers_every_pack_metric():
+    """A pack metric the template does not declare is unsearchable by value."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "telemetry-catalog"))
+    import bake_rules
+    grammars, _ = bake_rules.pack_tables(bake_rules.load_packs())
+    names = {m for g in grammars for m in (g.get("metrics") or {})}
+    declared = _props("netops-syslog")["metrics"]["properties"]
+    assert names and names <= set(declared), f"pack metrics not declared: {sorted(names - set(declared))}"
+    # A number is a double, a `{text: group}` metric a keyword: the value's own type.
+    for g in grammars:
+        for name, spec in (g.get("metrics") or {}).items():
+            want = "keyword" if isinstance(spec, dict) else "double"
+            got = declared[name]["properties"]["value"]["type"]
+            assert got == want, f"metrics.{name}.value is {got}, the pack states a {want}"
+
+
+def test_every_event_field_a_pack_can_state_is_declared_for_syslog():
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "telemetry-catalog"))
+    import bake_rules
+    props = _props("netops-syslog")
+    missing = [f for f in bake_rules.EVENT_FIELDS if f not in props]
+    assert not missing, f"event fields a pack may write but the template drops: {missing}"
