@@ -36,6 +36,10 @@ func Summarize(cat *catalog.Catalog, q *ast.AST, rs *ResultSet) string {
 		summarizeList(&b, rs, "change", changeLine)
 	case q.Type == ast.IncidentList:
 		summarizeList(&b, rs, "incident", incidentLine)
+	case q.Type == ast.EntityCount:
+		summarizeCount(&b, q, rs)
+	case q.Type == ast.EntityList:
+		summarizeInventory(&b, q, rs)
 	default:
 		summarizeList(&b, rs, "row", genericLine)
 	}
@@ -295,4 +299,63 @@ func capitalizeFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// summarizeCount: "You can see 12 devices." or, grouped, "12 devices across 3
+// sites:" with the largest groups first. Zero is a real count here (the
+// caller's inventory was read), so it is said as zero.
+func summarizeCount(b *strings.Builder, q *ast.AST, rs *ResultSet) {
+	noun := q.Target
+	if len(q.GroupBy) == 0 {
+		n := 0
+		if len(rs.Rows) == 1 {
+			n, _ = rs.Rows[0]["count"].(int)
+		}
+		fmt.Fprintf(b, "You can see %d %s%s.", n, noun, plural(n, "", "s"))
+		writeNotes(b, rs)
+		return
+	}
+	total := 0
+	for _, r := range rs.Rows {
+		c, _ := r["count"].(int)
+		total += c
+	}
+	g := q.GroupBy[0]
+	fmt.Fprintf(b, "You can see %d %s%s across %d %s%s:", total, noun, plural(total, "", "s"), len(rs.Rows), g, plural(len(rs.Rows), "", "s"))
+	for i, r := range rs.Rows {
+		if i == summaryItems {
+			fmt.Fprintf(b, "\n… and %d more.", len(rs.Rows)-summaryItems)
+			break
+		}
+		fmt.Fprintf(b, "\n• %v: %v", r[g], r["count"])
+	}
+	writeNotes(b, rs)
+}
+
+// summarizeInventory lists the visible entities ("3 devices: …").
+func summarizeInventory(b *strings.Builder, q *ast.AST, rs *ResultSet) {
+	noun := q.Target
+	n := len(rs.Rows)
+	if n == 0 {
+		fmt.Fprintf(b, "You can see no %ss here.", noun)
+		writeNotes(b, rs)
+		return
+	}
+	more := ""
+	if rs.Truncated {
+		more = " (more exist; showing the first)"
+	}
+	fmt.Fprintf(b, "%d %s%s%s:", n, noun, plural(n, "", "s"), more)
+	for i, r := range rs.Rows {
+		if i == summaryItems {
+			fmt.Fprintf(b, "\n… and %d more.", n-summaryItems)
+			break
+		}
+		line := str(r[noun])
+		if site := str(r["site"]); site != "" && noun != "site" {
+			line += " (" + site + ")"
+		}
+		b.WriteString("\n• " + line)
+	}
+	writeNotes(b, rs)
 }

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"netops/backend/internal/evalsplit"
+	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/modelc"
 )
 
@@ -242,5 +243,58 @@ func TestCapPerSplit(t *testing.T) {
 		if d, h := len(phrasingsOfSplit(got, evalsplit.Dev)), len(phrasingsOfSplit(got, evalsplit.HeldOut)); d != tc.wantDev || h != tc.wantHeld {
 			t.Errorf("%+v: got dev %d, held %d", tc, d, h)
 		}
+	}
+}
+
+// TestHeldOutCasesNeverReachTheWordTable extends the leak guard to the
+// generated word table (hybrid NLU plan A3): no entry may be a held-out case,
+// by id or by text, and the guard's own negative control proves the check.
+func TestHeldOutCasesNeverReachTheWordTable(t *testing.T) {
+	held := heldOutCases(loadCases(t))
+	table := catalog.Synonyms()
+	if len(table) == 0 {
+		t.Fatal("the word table did not load — the guard is checking nothing")
+	}
+	for _, l := range wordTableLeaks(held, table) {
+		t.Error(l)
+	}
+	planted := append(append([]catalog.SynonymEntry{}, table...), catalog.SynonymEntry{From: held[0].Texts[0], To: "x", Kind: catalog.SynVariant})
+	if len(wordTableLeaks(held, planted)) == 0 {
+		t.Error("a held-out question planted in the word table was not reported")
+	}
+}
+
+func wordTableLeaks(held []evalsplit.Case, table []catalog.SynonymEntry) []evalsplit.Leak {
+	tuning := make([]evalsplit.Tuning, 0, 2*len(table))
+	for _, e := range table {
+		tuning = append(tuning, evalsplit.Tuning{Where: "catalog/synonyms.v1.json", Text: e.From},
+			evalsplit.Tuning{Where: "catalog/synonyms.v1.json", Text: e.To})
+	}
+	return evalsplit.FindLeaks(held, tuning)
+}
+
+// TestFieldCasesNeverQuoteHeldOut: the lab regression cases (source "lab",
+// always dev) were written to be fixed against; none of their texts may be a
+// held-out case, or fixing it would tune on the held-out split.
+func TestFieldCasesNeverQuoteHeldOut(t *testing.T) {
+	cases := loadCases(t)
+	held := heldOutCases(cases)
+	var tuning []evalsplit.Tuning
+	for _, c := range cases {
+		if c.Source != string(evalsplit.SourceLab) {
+			continue
+		}
+		if c.split() != evalsplit.Dev {
+			t.Errorf("%s: a lab case must be dev, is %s", c.ID, c.split())
+		}
+		for _, q := range append([]string{c.Question}, c.Paraphrases...) {
+			tuning = append(tuning, evalsplit.Tuning{Where: "testdata/golden/" + c.file + ".json", ID: c.ID, Text: q})
+		}
+	}
+	if len(tuning) == 0 {
+		t.Fatal("no lab cases found — the guard is checking nothing")
+	}
+	for _, l := range evalsplit.FindLeaks(held, tuning) {
+		t.Error(l)
 	}
 }

@@ -86,7 +86,7 @@ func Explain(cat *catalog.Catalog, q *ast.AST, name Namer) Explanation {
 	add(FacetFilters, x.filters(q.Target, q.Filters))
 	add(FacetCondition, x.condition(q))
 	win := x.window(q.Time)
-	if q.Type != ast.IncidentExplain || q.Time.Kind != "" {
+	if (q.Type != ast.IncidentExplain && !q.Type.IsInventory()) || q.Time.Kind != "" {
 		add(FacetWindow, "Time window: "+win+".")
 	}
 	if q.CompareTo != nil {
@@ -128,6 +128,10 @@ func (x explainer) what(q *ast.AST) string {
 		return "Lists incidents."
 	case ast.IncidentExplain:
 		return "Explains one incident: what happened and the likely cause."
+	case ast.EntityCount:
+		return fmt.Sprintf("Counts the %s you can see.", t)
+	case ast.EntityList:
+		return fmt.Sprintf("Lists the %s you can see.", t)
 	case ast.FlowTop, ast.LogSearch:
 		return fmt.Sprintf("A %s question — this kind of query is not supported yet.", strings.ReplaceAll(string(q.Type), "_", " "))
 	}

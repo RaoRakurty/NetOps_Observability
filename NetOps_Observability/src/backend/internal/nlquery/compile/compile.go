@@ -26,6 +26,7 @@ import (
 
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/lex"
 	"netops/backend/internal/nlquery/resolve"
 )
 
@@ -64,6 +65,27 @@ type Result struct {
 	Unparsed bool `json:"unparsed,omitempty"`
 	// NotUnderstood lists the words that made it Unparsed.
 	NotUnderstood []string `json:"not_understood,omitempty"`
+	// Readings are the reinterpretations the compiler APPLIED (a misspelt
+	// vocabulary word, …). Every one is disclosed with the answer; none is
+	// applied silently.
+	Readings []lex.Reading `json:"readings,omitempty"`
+	// DidYouMean offers candidates for words that were NOT understood: a
+	// name close to one the caller can see (confirm-only, never applied) or a
+	// word with several equally close vocabulary words.
+	DidYouMean []Suggestion `json:"did_you_mean,omitempty"`
+	// NotFound is set when the question asked for one named thing and
+	// nothing the caller can see has that name (the answer is "not found",
+	// identical for a name that exists elsewhere and one that exists nowhere).
+	NotFound *NotFound `json:"not_found,omitempty"`
+}
+
+// Suggestion is the did-you-mean for one word not understood. Refs are entity
+// candidates from the caller's own scope (resolver rungs 6/6b, each
+// NeedsConfirmation); Words are vocabulary candidates.
+type Suggestion struct {
+	Word  string        `json:"word"`
+	Refs  []resolve.Ref `json:"refs,omitempty"`
+	Words []string      `json:"words,omitempty"`
 }
 
 // Compiler compiles questions.
@@ -73,7 +95,6 @@ type Compiler struct {
 }
 
 var (
-	punctRe  = regexp.MustCompile(`[^a-z0-9:/._@%&' -]+`)
 	actionRe = regexp.MustCompile(`^(?:please\s+|can you\s+|could you\s+|go\s+)?(?:restart|reboot|reload|shut ?down|shutdown|disable|enable|delete|remove|clear|apply|push|rollback|roll back|revert|undo|configure|set|change|modify|update|create|add|fix|bounce|reset|deploy|move|shift|reroute|re-route|fail ?over|block|allow|open a ticket|escalate|install|upgrade|downgrade|kill|stop|start)\b`)
 	injectRe = regexp.MustCompile(`ignore (?:all |the )?(?:previous|prior|above) instructions|system prompt|you are now|disregard (?:your|all) (?:rules|instructions)|developer mode|admin mode|act as|^system\b|\boverride\b|jailbreak`)
 	crossRe  = regexp.MustCompile(`\b(?:all tenants|every tenant|other tenants?|another tenant|tenant [a-z0-9-]+'s|other customers?|every customer'?s?|all customers'?|customers' )`)
@@ -84,16 +105,9 @@ var (
 	perRe    = regexp.MustCompile(`\b(?:per|by|grouped by|group by|broken down by|break down by|for each|each)\s+(site|device|provider|actor|person|type|seam|owner|seam class|state)\b`)
 )
 
-// normalize lower-cases, strips punctuation that carries no meaning here and
-// collapses whitespace.
-func normalize(q string) string {
-	q = strings.ToLower(strings.TrimSpace(q))
-	q = strings.NewReplacer("’", "'", "‘", "'", "“", " ", "”", " ", "?", " ", "!", " ", ",", " ", ";", " ").Replace(q)
-	q = strings.NewReplacer("sd-wan", "sdwan", "sd wan", "sdwan", "'s ", " ", "’s ", " ").Replace(q + " ")
-	q = punctRe.ReplaceAllString(q, " ")
-	q = strings.TrimRight(q, ". ")
-	return strings.Join(strings.Fields(q), " ")
-}
+// normalize is the shared normaliser's reading (lex.Normalize): the grammar,
+// the model compiler and the question router fold text the same way.
+func normalize(q string) string { return lex.Normalize(q).Norm }
 
 // Compile compiles one question.
 func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Result, error) {
@@ -107,9 +121,90 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	if text == "" {
 		return Result{Unparsed: true}, nil
 	}
-	if injectRe.MatchString(text) || crossRe.MatchString(text) || actionRe.MatchString(text) {
+	if declined(text) {
 		return Result{Decline: DeclineNotAQuery}, nil
 	}
+	rep, err := c.repairText(ctx, text)
+	if err != nil {
+		return Result{}, err
+	}
+	// A misspelt action or instruction is still one ("restrat edge-1").
+	if rep.Text != text && declined(rep.Text) {
+		return Result{Decline: DeclineNotAQuery}, nil
+	}
+	text = rep.Text
+	res, err := c.compileText(ctx, question, text, cx)
+	if err != nil {
+		return res, err
+	}
+	res = withRepairs(res, rep)
+	if res.Unparsed {
+		if res, err = c.nameSuggestions(ctx, res); err != nil {
+			return Result{}, err
+		}
+	}
+	return res, nil
+}
+
+// nameSuggestions offers, for each word left not understood, the names in the
+// caller's OWN scope it is probably a misspelling or a fragment of (resolver
+// rungs 6 and 6b). They are candidates for the operator to pick — the
+// question stays Unparsed, nothing is applied.
+func (c Compiler) nameSuggestions(ctx context.Context, res Result) (Result, error) {
+	offered := map[string]bool{}
+	for _, d := range res.DidYouMean {
+		offered[d.Word] = true
+	}
+	for _, w := range res.NotUnderstood {
+		if offered[w] || strings.Contains(w, " ") || len(w) < 3 {
+			continue
+		}
+		r, err := c.R.Resolve(ctx, w, nil)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(r.Refs) == 0 || !allNeedConfirmation(r.Refs) {
+			continue
+		}
+		refs := r.Refs
+		if len(refs) > resolve.MaxSuggestions {
+			refs = refs[:resolve.MaxSuggestions]
+		}
+		res.DidYouMean = append(res.DidYouMean, Suggestion{Word: w, Refs: refs})
+	}
+	return res, nil
+}
+
+func allNeedConfirmation(refs []resolve.Ref) bool {
+	for _, r := range refs {
+		if !r.NeedsConfirmation {
+			return false
+		}
+	}
+	return true
+}
+
+func declined(text string) bool {
+	return injectRe.MatchString(text) || crossRe.MatchString(text) || actionRe.MatchString(text)
+}
+
+// withRepairs discloses the typo repairs on a result and offers the tied
+// vocabulary candidates of any word left not understood.
+func withRepairs(res Result, rep lex.Repair) Result {
+	if res.Decline != "" {
+		return res
+	}
+	res.Readings = append(rep.Readings, res.Readings...)
+	for _, w := range res.NotUnderstood {
+		if ties, ok := rep.Ties[w]; ok {
+			res.DidYouMean = append(res.DidYouMean, Suggestion{Word: w, Words: ties})
+		}
+	}
+	return res
+}
+
+// compileText compiles one normalised, repaired question.
+func (c Compiler) compileText(ctx context.Context, question, text string, cx Context) (Result, error) {
 	if res, ok, err := c.followUp(ctx, text, cx); ok || err != nil {
 		return res, err
 	}
@@ -153,6 +248,12 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	if m == nil {
 		m, alias = c.stateMetric(text)
 	}
+	if m == nil {
+		// "which interfaces are busiest": the superlative names the metric.
+		if hits, word := c.superlativeMetric(text); hits != nil {
+			m, alias, st.sup = hits, word, word
+		}
+	}
 	if m != nil {
 		st.e.phrase(alias)
 		r, err := st.metric(m)
@@ -161,8 +262,14 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 		}
 		return st.done(r), err
 	}
-	if isIncidentQuestion(text) {
+	if isIncidentQuestion(text) || severityRe.MatchString(text) {
 		r, err := st.incidents()
+		return st.done(r), err
+	}
+	if r, ok, err := st.inventory(); ok || err != nil {
+		return st.done(r), err
+	}
+	if r, ok, err := c.lookup(st); ok || err != nil {
 		return st.done(r), err
 	}
 	return Result{Unparsed: true, NotUnderstood: st.e.leftovers(text)}, nil
@@ -177,6 +284,11 @@ type state struct {
 	e    *eaten
 	refs []reference
 	raw  string // the question as asked, for values whose casing is data (owner names)
+	// sup is the catalog superlative that named the metric ("busiest").
+	sup string
+	// readings are the interpretations this compile applied (severity, an
+	// implicit top N), disclosed with the result.
+	readings []lex.Reading
 }
 
 // threshold reads the number a comparison regexp captured. A number too large
@@ -195,6 +307,7 @@ func (s *state) done(r Result) Result {
 	if left := s.e.leftovers(s.text); len(left) > 0 {
 		return Result{Intent: r.Intent, Unparsed: true, NotUnderstood: left, Entities: r.Entities}
 	}
+	r.Readings = append(r.Readings, s.readings...)
 	return r
 }
 
@@ -204,7 +317,7 @@ func isChangeQuestion(t string) bool {
 	return changeWords.MatchString(t) && !strings.Contains(t, "changed most")
 }
 
-var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|what happened|what's wrong|whats wrong|what is wrong|why is|why are|slow|broken|down)\b`)
+var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|what happened|what's wrong|whats wrong|what is wrong|what wrong|anything wrong|something wrong|why is|why are|slow|broken|down)\b`)
 
 func isIncidentQuestion(t string) bool { return incidentWords.MatchString(t) }
 
@@ -542,6 +655,19 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 		s.e.phrase(g[0])
 	}
 	switch {
+	case s.sup != "":
+		// A superlative with no metric word ranks by the metric it names;
+		// with no number, the top DefaultSuperlativeN — and says so.
+		q.Type, q.Limit = ast.MetricTopK, s.topN()
+		s.e.re(topNRe, s.text)
+		if q.Limit == 0 {
+			q.Limit = DefaultSuperlativeN
+			s.readings = append(s.readings, lex.Reading{From: s.sup, To: "top 5", Kind: lex.KindImplicitN})
+		}
+		q.OrderBy = []ast.OrderKey{{Field: "value", Dir: "desc"}}
+	case len(q.GroupBy) > 0 && !topNRe.MatchString(s.text) && s.perGroupExtreme(m, q):
+		// "worst interface errors per device": the extreme OF each group, not
+		// a ranking of the groups (no number, no "top").
 	case s.e.re(topNRe, s.text) || s.e.re(regexp.MustCompile(`\b(?:top|busiest|highest|worst|most|lowest|best)\b`), s.text):
 		q.Type, q.Limit = ast.MetricTopK, s.topN() // 0 = the validator's default
 		dir := "desc"
@@ -572,6 +698,30 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 		q.Type, q.Predicate = ast.MetricFilter, &ast.Predicate{Op: "gt", Value: 0}
 	}
 	return Result{Intent: "query_metric", AST: q, Entities: refs}, nil
+}
+
+// perGroupExtremeRe is a lone superlative that, next to "per <dimension>",
+// names the aggregation of each group: worst/highest → max, lowest → min.
+var perGroupExtremeRe = regexp.MustCompile(`\b(worst|highest|lowest)\b`)
+
+func (s *state) perGroupExtreme(m *catalog.Metric, q *ast.AST) bool {
+	if regexp.MustCompile(`\b(?:top|which|rank|ranked|busiest|most)\b`).MatchString(s.text) {
+		return false
+	}
+	g := perGroupExtremeRe.FindStringSubmatch(s.text)
+	if g == nil {
+		return false
+	}
+	agg := "max"
+	if g[1] == "lowest" || (g[1] == "worst" && m.Unit == "score") {
+		agg = "min"
+	}
+	if !contains(m.Aggregations, agg) {
+		return false
+	}
+	q.Agg = agg
+	s.e.phrase(g[1])
+	return true
 }
 
 // stateQuestion handles "which interfaces are down" / "which bgp sessions are
@@ -879,6 +1029,7 @@ func (s *state) incidents() (Result, error) {
 			q.Filters = append(q.Filters, ast.Filter{Field: r.field, Op: "eq", Values: []string{r.value}})
 		}
 	}
+	s.severityFilter(q, filterText)
 	if m := confRe.FindStringSubmatch(s.text); m != nil && s.e.re(confRe, s.text) {
 		q.Filters = append(q.Filters, ast.Filter{Field: "top_confidence", Op: "gt", Values: []string{m[1]}})
 	}
@@ -989,6 +1140,14 @@ func (c Compiler) followUp(ctx context.Context, text string, cx Context) (Result
 	case onlyRe.MatchString(text):
 		what := onlyRe.FindStringSubmatch(text)[1]
 		st := &state{c: c, ctx: ctx, text: what, cx: cx}
+		// "only critical" over an incident list: the severity reading (D1).
+		if q.Type == ast.IncidentList && severityRe.MatchString(what) && strings.TrimSpace(severityRe.ReplaceAllString(what, "")) == "" {
+			st.e = newEaten()
+			sq := &ast.AST{}
+			st.severityFilter(sq, what)
+			q.Filters = replaceFilter(q.Filters, sq.Filters[0])
+			return Result{Intent: "refine_filter", AST: q, Readings: st.readings}, true, nil
+		}
 		if q.Type == ast.ChangeList {
 			st.text = what + " changes"
 			if f := st.changeTypeFilter(); f != nil {

@@ -54,6 +54,10 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 	if err != nil {
 		return Record{}, fmt.Errorf("irisquerylog: encode entities: %w", err)
 	}
+	readings, err := json.Marshal(r.Readings)
+	if err != nil {
+		return Record{}, fmt.Errorf("irisquerylog: encode readings: %w", err)
+	}
 	var conv *string
 	if r.ConversationID != "" {
 		conv = &r.ConversationID
@@ -82,11 +86,12 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO iris_query_log (tenant_id, id, principal_sub, conversation_id, source,
 		        created_at, question, intent, outcome, query_type, ast_hash, catalog_version,
-		        validation_codes, entities, row_count, series_count, duration_ms, corrections, query, compiled_by)
+		        validation_codes, entities, row_count, series_count, duration_ms, corrections, query, compiled_by, readings)
 		    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, '[]'::jsonb,
-		            $18::jsonb, $19)`,
+		            $18::jsonb, $19, $20::jsonb)`,
 			tenant, r.ID, r.Principal, conv, r.Source, r.At, r.Question, r.Intent, r.Outcome, r.QueryType,
-			r.ASTHash, r.CatalogVersion, string(codes), string(ents), r.Rows, r.Series, r.DurationMs, query, r.CompiledBy)
+			r.ASTHash, r.CatalogVersion, string(codes), string(ents), r.Rows, r.Series, r.DurationMs, query, r.CompiledBy,
+			string(readings))
 		return err
 	})
 	if err != nil {
@@ -97,7 +102,7 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 
 const pgColumns = `id::text, principal_sub, COALESCE(conversation_id::text, ''), source, created_at, question, intent,
         outcome, query_type, ast_hash, catalog_version, validation_codes, entities, row_count, series_count,
-        duration_ms, corrections, query, compiled_by`
+        duration_ms, corrections, query, compiled_by, readings`
 
 // List returns the tenant's live records, newest first.
 func (p *PGStore) List(ctx context.Context, tenant string, f ListFilter) ([]Record, error) {
@@ -215,10 +220,10 @@ func (p *PGStore) Correct(ctx context.Context, tenant, principal, id string, c C
 // store does not trust it to still hold what was written.
 func scanRecord(row pgx.Row, tenant string) (Record, error) {
 	var r Record
-	var codes, ents, corr, query []byte
+	var codes, ents, corr, query, readings []byte
 	if err := row.Scan(&r.ID, &r.Principal, &r.ConversationID, &r.Source, &r.At, &r.Question, &r.Intent,
 		&r.Outcome, &r.QueryType, &r.ASTHash, &r.CatalogVersion, &codes, &ents, &r.Rows, &r.Series,
-		&r.DurationMs, &corr, &query, &r.CompiledBy); err != nil {
+		&r.DurationMs, &corr, &query, &r.CompiledBy, &readings); err != nil {
 		return Record{}, err
 	}
 	// The stored query is decoded STRICTLY (bounded, no unknown fields) and
@@ -245,6 +250,10 @@ func scanRecord(row pgx.Row, tenant string) (Record, error) {
 	if err := json.Unmarshal(corr, &r.Corrections); err != nil {
 		return Record{}, fmt.Errorf("irisquerylog: stored corrections unreadable: %w", err)
 	}
+	if err := json.Unmarshal(readings, &r.Readings); err != nil {
+		return Record{}, fmt.Errorf("irisquerylog: stored readings unreadable: %w", err)
+	}
+	r.Readings = boundedReadings(r.Readings)
 	r.ValidationCodes = boundedCodes(r.ValidationCodes)
 	r.Entities = boundedEntities(r.Entities)
 	if len(r.Corrections) > MaxCorrections {

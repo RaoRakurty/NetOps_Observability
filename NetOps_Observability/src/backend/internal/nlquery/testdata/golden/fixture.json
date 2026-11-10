@@ -120,7 +120,8 @@
     "tenant": "t-globex",
     "sites": [
       {"id": "site:gx-chi-hq", "name": "Globex Chicago HQ", "aliases": ["chicago", "chi"]},
-      {"id": "site:gx-mia-br", "name": "Globex Miami Branch", "aliases": ["miami", "mia"]}
+      {"id": "site:gx-mia-br", "name": "Globex Miami Branch", "aliases": ["miami", "mia"]},
+      {"id": "site:gx-retail", "name": "RETAIL", "aliases": ["retail", "retail stores"]}
     ],
     "devices": [
       {"id": "device:gx-core-1", "name": "GX-CORE-1", "site": "gx-chi-hq", "role": "core-switch"},

@@ -428,6 +428,16 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 		rec := c.record(irisquerylog.SourceRouter, question)
 		rec.ConversationID = convID
 		ledger.Add(nlqPlanEntry(ledger, question, c, rec))
+		if !nlqAdmits(c, opts) {
+			// Not this arm's question (hybrid NLU plan A4): the router knows
+			// another arm answers it, or a symptom phrasing did not compile to
+			// one entity's incidents. Recorded as not_data, not as a dead end.
+			if rec.Outcome != irisquerylog.OutcomeDeclined {
+				rec.Outcome = irisquerylog.OutcomeNotData
+			}
+			s.nlqCapture(rq, claims, &rec, start)
+			return ai.DataAnswer{Status: ai.DataNotData}, nil
+		}
 		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
 		if err != nil {
 			rec.Outcome = irisquerylog.OutcomeError
@@ -502,13 +512,79 @@ var nlqAnswerable = map[string]bool{
 	validate.CodeScopeUnavailable: true, validate.CodeUnmappedProvider: true,
 }
 
+// nlqEveryWordOffered reports that each word left not understood has at
+// least one did-you-mean candidate.
+func nlqEveryWordOffered(res compile.Result) bool {
+	offered := map[string]bool{}
+	for _, d := range res.DidYouMean {
+		if len(d.Refs) > 0 || len(d.Words) > 0 {
+			offered[d.Word] = true
+		}
+	}
+	for _, w := range res.NotUnderstood {
+		if !offered[w] {
+			return false
+		}
+	}
+	return len(res.NotUnderstood) > 0
+}
+
+// nlqDidYouMeanText is the clarifying sentence of a did-you-mean answer.
+func nlqDidYouMeanText(c nlqCompiled) string {
+	var labels []string
+	for _, a := range c.asks {
+		labels = append(labels, a.Label)
+	}
+	return "I couldn't place \"" + strings.Join(c.res.NotUnderstood, "\", \"") + "\". Did you mean " + strings.Join(labels, " or ") + "? Pick one below to ask again."
+}
+
+// nlqAdmits applies the router's options to a compiled question:
+//   - IncidentRefOnly ("what's wrong with X"): only an incident list about a
+//     resolved entity is this arm's;
+//   - an explicit router intent: a question the grammar could not parse, or a
+//     lookup that found nothing, is left to the classic path (not_data).
+func nlqAdmits(c nlqCompiled, opts ai.DataOpts) bool {
+	if opts.IncidentRefOnly && (c.checked == nil || c.checked.Type != nlqast.IncidentList || len(c.checked.Refs) == 0) {
+		return false
+	}
+	explicit := opts.ClassicIntent != "" && opts.ClassicIntent != "capability"
+	// A question whose every unplaced word has a did-you-mean candidate stays
+	// here even then: the classic path would answer it without that word
+	// ("open incidents at dalas" → every incident), which is a different
+	// question.
+	offered := c.res.Unparsed && len(c.asks) > 0 && nlqEveryWordOffered(c.res)
+	if explicit && ((c.res.Unparsed && !offered) || c.res.NotFound != nil) {
+		return false
+	}
+	return true
+}
+
 // nlqDataAnswer turns one compiled question into the data arm's answer; rec
 // (never nil) receives what the run produced — counts only.
 func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan, rec *irisquerylog.Record) (ai.DataAnswer, error) {
 	notData := ai.DataAnswer{Status: ai.DataNotData}
 	switch {
+	case c.res.Unparsed && c.res.Decline == "" && len(c.asks) > 0 && nlqEveryWordOffered(c.res):
+		// Every word Iris could not place has candidates: offer them as
+		// did-you-mean chips (D2: a name is confirmed by the operator, never
+		// applied) instead of a dead end.
+		payload, err := json.Marshal(c.body())
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return ai.DataAnswer{Status: ai.DataClarify, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
+			Text: nlqDidYouMeanText(c)}, nil
 	case c.res.Decline != "" || c.res.Unparsed:
 		return notData, nil
+	case c.res.NotFound != nil:
+		// A bare name the caller cannot see: said so, with the caller's own
+		// near matches — identical for a foreign name and a missing one.
+		payload, err := json.Marshal(c.body())
+		if err != nil {
+			return ai.DataAnswer{}, err
+		}
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
+			Text: compile.NotFoundAnswer(c.res)}, nil
 	case len(c.res.Clarify) > 0:
 		var names []string
 		for _, ref := range c.res.Clarify {
@@ -534,7 +610,7 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		if err != nil {
 			return ai.DataAnswer{}, err
 		}
-		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload,
+		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
 			Text: "I understood the question but can't run it as asked: " + strings.Join(msgs, "; ") + "."}, nil
 	}
 	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
@@ -564,6 +640,8 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		// The query shown with the answer is what ran — say so, first.
 		notes = append(notes, nlqModelDisclosure)
 	}
+	// Every word read differently from how it was typed is said (D2).
+	notes = append(notes, c.readingNotes()...)
 	for _, k := range c.vr.Constraints {
 		notes = append(notes, "Adjusted: "+k.Reason)
 	}
@@ -1479,6 +1557,10 @@ type nlqCompiled struct {
 	// view is the model's raw, untrusted layout suggestion (tracker 337 N-E1);
 	// only present.Select reads it. Nil unless the model compiled the query.
 	view json.RawMessage
+	// asks are the did-you-mean chips for the words not understood (hybrid
+	// NLU plan A7): server-written rephrasings, candidates from the caller's
+	// own scope only.
+	asks []chips.Ask
 }
 
 // presentation is the server's PresentationPlan for rs (tracker 337 N-E1): the
@@ -1529,6 +1611,9 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 		}
 	}
 	out := nlqCompiled{res: res}
+	if len(res.DidYouMean) > 0 {
+		out.asks = chips.DidYouMean(question, res.DidYouMean, s.nlqCandidateNamer(r, claims, res.DidYouMean))
+	}
 	if res.AST != nil {
 		checked, vr := validate.Validate(r.Context(), s.nlqCatalog, s.nlqScopeFor(r, claims), res.AST)
 		out.vr = &vr
@@ -1550,6 +1635,50 @@ func (c nlqCompiled) record(source, question string) irisquerylog.Record {
 	return rec
 }
 
+// nlqCandidateNamer names did-you-mean candidates by their display name, read
+// from the caller's OWN inventory (the same scoped lookups the resolver used);
+// a candidate it cannot name is shown by its id.
+func (s *server) nlqCandidateNamer(r *http.Request, claims jwtClaims, sugg []compile.Suggestion) func(string) string {
+	want := map[string]bool{}
+	for _, d := range sugg {
+		for _, ref := range d.Refs {
+			want[ref.EntityType] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	types := make([]string, 0, len(want))
+	for t := range want {
+		types = append(types, t)
+	}
+	inv, err := newNLQLookups(s, r, claims).Inventory(r.Context(), types)
+	if err != nil {
+		logError("iris.nlquery", "did-you-mean names unavailable", errf(err))
+		return nil
+	}
+	names := make(map[string]string, len(inv))
+	for _, n := range inv {
+		for _, nm := range n.Names {
+			if strings.TrimSpace(nm) != "" {
+				names[n.ID] = nm
+				break
+			}
+		}
+	}
+	return func(id string) string { return names[id] }
+}
+
+// readingNotes are the disclosure lines of the readings the compiler applied
+// ("I read \"shwo\" as \"show\".").
+func (c nlqCompiled) readingNotes() []string {
+	var out []string
+	for _, rd := range c.res.Readings {
+		out = append(out, rd.Note())
+	}
+	return out
+}
+
 // body is the compile answer: what was understood, and the query — the
 // validated one, or the invalid one shown (never executed) so the operator
 // sees what was understood.
@@ -1558,6 +1687,20 @@ func (c nlqCompiled) body() map[string]any {
 		"decline": c.res.Decline, "unparsed": c.res.Unparsed, "not_understood": c.res.NotUnderstood}
 	if c.source != "" {
 		out["source"] = c.source // "model": interpreted by the model, not the grammar
+	}
+	// Disclosure (D2): every reading applied, and the candidates offered for
+	// the words not understood (names from the caller's own scope only).
+	if len(c.res.Readings) > 0 {
+		out["readings"] = c.res.Readings
+	}
+	if len(c.res.DidYouMean) > 0 {
+		out["did_you_mean"] = c.res.DidYouMean
+	}
+	if c.res.NotFound != nil {
+		out["not_found"] = c.res.NotFound
+	}
+	if len(c.asks) > 0 {
+		out["did_you_mean_asks"] = c.asks
 	}
 	if c.res.AST != nil {
 		out["validation"] = *c.vr
@@ -2484,6 +2627,10 @@ func nlqNoQueryReason(outcome string) string {
 		return "The query Iris built did not pass its checks, so it was never run. The check codes say why."
 	case irisquerylog.OutcomeError:
 		return "Iris failed while answering this question, before a query was kept."
+	case irisquerylog.OutcomeNotData:
+		return "This question was answered by another part of Iris, not by a data query."
+	case irisquerylog.OutcomeNotFound:
+		return "Iris found nothing you can see by that name, so no query was built."
 	}
 	return "No query was kept for this question."
 }

@@ -527,6 +527,13 @@
     "congestion",
     "saturation"
    ],
+   "superlatives": [
+    "busiest",
+    "most utilized",
+    "most utilised",
+    "most congested",
+    "most saturated"
+   ],
    "entity_types": [
     "interface"
    ],
@@ -641,6 +648,9 @@
     "flapping",
     "flaps",
     "flap"
+   ],
+   "superlatives": [
+    "flappiest"
    ],
    "entity_types": [
     "interface"
@@ -1038,6 +1048,9 @@
     "flaps",
     "resets"
    ],
+   "superlatives": [
+    "flappiest"
+   ],
    "entity_types": [
     "bgp_peer"
    ],
@@ -1134,6 +1147,9 @@
     "cpu usage",
     "processor"
    ],
+   "superlatives": [
+    "busiest"
+   ],
    "entity_types": [
     "device"
    ],
@@ -1185,7 +1201,8 @@
     "memory",
     "memory utilization",
     "memory usage",
-    "ram"
+    "ram",
+    "mem"
    ],
    "entity_types": [
     "device"
@@ -1240,6 +1257,9 @@
     "dropping packets",
     "losing traffic"
    ],
+   "superlatives": [
+    "lossiest"
+   ],
    "entity_types": [
     "circuit"
    ],
@@ -1292,6 +1312,9 @@
     "delay",
     "wan latency",
     "rtt"
+   ],
+   "superlatives": [
+    "slowest"
    ],
    "entity_types": [
     "circuit"
@@ -1431,6 +1454,9 @@
     "round trip",
     "probe latency"
    ],
+   "superlatives": [
+    "slowest"
+   ],
    "entity_types": [
     "probe_target"
    ],
@@ -1474,6 +1500,9 @@
     "packet loss",
     "loss",
     "probe loss"
+   ],
+   "superlatives": [
+    "lossiest"
    ],
    "entity_types": [
     "probe_target"

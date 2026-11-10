@@ -466,6 +466,38 @@ describe("Iris — sends the current page as the route context", () => {
   });
 });
 
+describe("Iris — did-you-mean chips (hybrid NLU plan A7)", () => {
+  it("offers the server's candidates and asks the server's rephrasing when one is picked", async () => {
+    aiAsk.mockResolvedValueOnce(citedAnswer({
+      mode: "data_query", intent: "list_incidents",
+      text: "I couldn't place \"dalas\". Did you mean Dallas HQ? Pick one below to ask again.",
+      data: { did_you_mean_asks: [
+        { word: "dalas", label: "Dallas HQ", question: "open incidents at site:dfw-hq" },
+        { label: "", question: "dropped: no label" },
+        { label: "bad", question: 7 },
+      ] },
+    }));
+    aiAsk.mockResolvedValueOnce(citedAnswer());
+    await renderOpsis();
+    await ask("open incidents at dalas");
+    const row = await screen.findByTestId("iris-did-you-mean");
+    const chips = row.querySelectorAll("button");
+    expect(chips.length).toBe(1); // malformed entries are dropped
+    expect(chips[0].textContent).toBe("Dallas HQ");
+    await act(async () => { fireEvent.click(chips[0]); });
+    await waitFor(() => expect(aiAsk).toHaveBeenCalledTimes(2));
+    expect(aiAsk.mock.calls[1][0]).toBe("open incidents at site:dfw-hq");
+  });
+
+  it("shows no chips on an answer without candidates", async () => {
+    aiAsk.mockResolvedValue(citedAnswer({ mode: "data_query", text: "CPU on edge-1: peak 48%.", data: {} }));
+    await renderOpsis();
+    await ask("cpu on edge-1");
+    await screen.findByText(/peak 48%/);
+    expect(screen.queryByTestId("iris-did-you-mean")).toBeNull();
+  });
+});
+
 describe("Iris — the per-answer footnote names who answered (tracker 337 C6)", () => {
   const foot = () => document.querySelector(".op-provnote")?.textContent ?? "";
   it("a model answer names the provider and model, based on the customer's data", async () => {

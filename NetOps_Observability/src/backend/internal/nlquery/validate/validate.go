@@ -30,6 +30,8 @@ const (
 	MaxChangeRows       = 500
 	DefaultIncidentRows = 20
 	MaxIncidentRows     = 200
+	DefaultEntityRows   = 100
+	MaxEntityRows       = 500
 	MaxCompareOffset    = 30 * 24 * time.Hour
 	MaxAnchorIncidents  = 50
 	MaxAnchorSpan       = 24 * time.Hour
@@ -126,14 +128,20 @@ func (c *checker) run() {
 		c.incidentID("incident_id", q.IncidentID)
 	}
 	c.refs()
-	c.times()
+	if !q.Type.IsInventory() { // the visible inventory has no window
+		c.times()
+	}
 	c.groupOrder()
 	c.limits()
 }
 
+// inventoryTargets are the entity types an inventory query counts or lists:
+// the ones the caller's scope can enumerate (plan.Scope Devices / Circuits).
+var inventoryTargets = map[string]bool{"device": true, "site": true, "circuit": true}
+
 func queryTypes() []string {
 	return []string{string(ast.MetricSeries), string(ast.MetricTopK), string(ast.MetricFilter), string(ast.CompareWindows),
-		string(ast.ChangeList), string(ast.IncidentList), string(ast.IncidentExplain)}
+		string(ast.ChangeList), string(ast.IncidentList), string(ast.IncidentExplain), string(ast.EntityCount), string(ast.EntityList)}
 }
 
 // fieldMatrix enforces which fields each query type requires and forbids.
@@ -170,6 +178,18 @@ func (c *checker) fieldMatrix() {
 		forbid(q.Predicate != nil, "predicate")
 		forbid(q.CompareTo != nil, "compare_to")
 		forbid(q.IncidentID != "", "incident_id")
+	case q.Type.IsInventory():
+		if !inventoryTargets[q.Target] {
+			c.fail("target", CodeInvalidValue, q.Target, "an inventory query counts or lists devices, sites or circuits", "device", "site", "circuit")
+		}
+		forbid(q.Metric != "" || q.Agg != "", "metric")
+		forbid(q.Predicate != nil, "predicate")
+		forbid(q.CompareTo != nil, "compare_to")
+		forbid(q.IncidentID != "", "incident_id")
+		forbid(len(q.Filters) > 0, "filters")
+		forbid(len(q.OrderBy) > 0, "order_by")
+		forbid(q.Time.Kind != "", "time_range")
+		forbid(q.Type == ast.EntityCount && q.Limit != 0, "limit")
 	case q.Type == ast.IncidentExplain:
 		need(q.IncidentID != "", "incident_id")
 		forbid(q.Metric != "" || q.Predicate != nil || q.CompareTo != nil || len(q.Filters) > 0 || len(q.GroupBy) > 0, "fields")
@@ -539,6 +559,13 @@ func (c *checker) groupOrder() {
 	}
 	for i, g := range q.GroupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
+		if q.Type.IsInventory() {
+			// A count groups by site, once; a list is not grouped.
+			if q.Type != ast.EntityCount || len(q.GroupBy) > 1 || g != "site" || q.Target == "site" {
+				c.fail(path, CodeUnknownDimension, g, "a device or circuit count groups by site only", "site")
+			}
+			continue
+		}
 		if q.Type.IsMetric() {
 			// Metrics group by ONE related entity the planner can place every
 			// result in: site, device or provider. Anything else is refused,
@@ -600,6 +627,8 @@ func (c *checker) limits() {
 		clamp(DefaultChangeRows, MaxChangeRows, "max_rows")
 	case ast.IncidentList:
 		clamp(DefaultIncidentRows, MaxIncidentRows, "max_rows")
+	case ast.EntityList:
+		clamp(DefaultEntityRows, MaxEntityRows, "max_rows")
 	}
 	if q.Type.IsMetric() {
 		m, _ := c.cat.Metric(q.Metric)

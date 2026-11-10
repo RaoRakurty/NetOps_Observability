@@ -102,6 +102,11 @@ type Metric struct {
 	Emitters []Emitter `json:"emitters"`
 	Quality  []string  `json:"quality,omitempty"`
 	Examples []string  `json:"examples,omitempty"`
+	// Superlatives are the words that rank BY this metric when the question
+	// names no metric ("busiest" interfaces → utilization, top first). One
+	// word may belong to several metrics only for disjoint entity types, like
+	// an alias.
+	Superlatives []string `json:"superlatives,omitempty"`
 }
 
 // Emitter pins where a physical metric is produced: File (relative to the

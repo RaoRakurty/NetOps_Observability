@@ -44,7 +44,18 @@ import (
 
 // Model-path floors (ratchet: raise when the measured value rises).
 const (
-	minOracleAcceptance      = 0.60
+	// minOracleAcceptance is measured over what the GRAMMAR leaves Unparsed,
+	// so it moves when the grammar grows: lowered 0.60 → 0.58 on 2026-11-10
+	// (hybrid NLU plan A1–A3) after the grammar took 23 more answerable
+	// phrasings, 19 of which the oracle had accepted. On the 276 phrasings
+	// left Unparsed both before and after, the oracle's verdict changed for
+	// exactly one, refused → accepted: no guard became stricter. The
+	// population-stable floor is minKeyPathReach below, which only rises.
+	minOracleAcceptance = 0.58
+	// minKeyPathReach: of every answerable phrasing, the share answered by the
+	// grammar or accepted by the model path behind it (the key path end to
+	// end). Ratchet: raise, never lower.
+	minKeyPathReach          = 0.825
 	minOracleAnsweredPrec    = 0.99
 	minRepairAcceptanceRatio = 0.95 // repaired acceptances / oracle acceptances
 	// maxUnguardedWidening caps phrasings where a widened answer passes because
@@ -63,7 +74,10 @@ type phrasing struct {
 
 // harness runs the grammar over the corpus and returns the phrasings it left
 // Unparsed, with the grammar's own tallies.
-func unparsedPhrasings(t *testing.T, cat *catalog.Catalog, w *world) (out []phrasing, total int) {
+// phrasingsByGrammar returns the phrasings the grammar left Unparsed (the
+// model path's input) and the total phrasings, plus the answerable totals:
+// every answerable phrasing, and those the grammar compiled.
+func phrasingsByGrammar(t *testing.T, cat *catalog.Catalog, w *world) (out []phrasing, total, answerable, grammarAnswered int) {
 	t.Helper()
 	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}, Topo: fixtureLookups{w: w}}}
 	for _, c := range loadCases(t) {
@@ -81,12 +95,18 @@ func unparsedPhrasings(t *testing.T, cat *catalog.Catalog, w *world) (out []phra
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(c.Expect.AST) > 0 {
+				answerable++
+				if res.AST != nil && !res.Unparsed {
+					grammarAnswered++
+				}
+			}
 			if res.Unparsed {
 				out = append(out, phrasing{c: c, question: q, cx: cx, sc: fixtureScope{w: w, cross: c.Context.Cross}, det: res})
 			}
 		}
 	}
-	return out, total
+	return out, total, answerable, grammarAnswered
 }
 
 // phrasingsOfSplit keeps one split's phrasings, in order.
@@ -245,7 +265,7 @@ func mutated(p phrasing, mut func(q *ast.AST)) string {
 func TestModelPathAgainstTheGoldenCorpus(t *testing.T) {
 	cat := catalog.MustLoad()
 	w := loadWorld(t)
-	ps, total := unparsedPhrasings(t, cat, w)
+	ps, total, answerable, grammarAnswered := phrasingsByGrammar(t, cat, w)
 	if len(ps) == 0 {
 		t.Fatal("the grammar left nothing to the model — the harness is not looking")
 	}
@@ -338,6 +358,11 @@ func TestModelPathAgainstTheGoldenCorpus(t *testing.T) {
 	}
 	for _, s := range append(or.safety, rp.safety...) {
 		t.Errorf("SAFETY: %s", s)
+	}
+	reach := ratio(grammarAnswered+or.accepted, answerable)
+	t.Logf("key path: grammar %d + model %d of %d answerable phrasings (%.3f)", grammarAnswered, or.accepted, answerable, reach)
+	if reach < minKeyPathReach {
+		t.Errorf("key-path reach %.3f fell below its floor %.2f", reach, minKeyPathReach)
 	}
 	if got := ratio(or.accepted, or.answerable); got < minOracleAcceptance {
 		t.Errorf("oracle acceptance %.3f fell below its floor %.2f — a guard is refusing right answers", got, minOracleAcceptance)

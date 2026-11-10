@@ -44,6 +44,11 @@ const (
 	ChangeList      QueryType = "change_list"
 	IncidentList    QueryType = "incident_list"
 	IncidentExplain QueryType = "incident_explain"
+	// Inventory (hybrid NLU plan A4): how many / which devices, sites or
+	// circuits the caller can see. No window, no metric — the caller's own
+	// visible inventory, read through the same scoped Scope as every query.
+	EntityCount QueryType = "entity_count"
+	EntityList  QueryType = "entity_list"
 	// Reserved: decodable so the validator can say "not yet" precisely.
 	FlowTop   QueryType = "flow_top"
 	LogSearch QueryType = "log_search"
@@ -52,11 +57,15 @@ const (
 // Known reports whether t is a query type this build recognises at all.
 func (t QueryType) Known() bool {
 	switch t {
-	case MetricSeries, MetricTopK, MetricFilter, CompareWindows, ChangeList, IncidentList, IncidentExplain, FlowTop, LogSearch:
+	case MetricSeries, MetricTopK, MetricFilter, CompareWindows, ChangeList, IncidentList, IncidentExplain,
+		EntityCount, EntityList, FlowTop, LogSearch:
 		return true
 	}
 	return false
 }
+
+// IsInventory reports a count or list of the caller's visible entities.
+func (t QueryType) IsInventory() bool { return t == EntityCount || t == EntityList }
 
 // IsMetric reports whether the query reads metric series.
 func (t QueryType) IsMetric() bool {

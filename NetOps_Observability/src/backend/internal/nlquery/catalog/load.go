@@ -141,6 +141,11 @@ func (c *Catalog) index() error {
 				return fmt.Errorf("catalog: metric %q: operator %q outside the closed set", m.Name, o)
 			}
 		}
+		for _, sup := range m.Superlatives {
+			if sup == "" || NormalizeAlias(sup) != sup {
+				return fmt.Errorf("catalog: metric %q: superlative %q must be lower-case words", m.Name, sup)
+			}
+		}
 		if m.FanoutHint <= 0 {
 			return fmt.Errorf("catalog: metric %q: fanout_hint must be positive", m.Name)
 		}
@@ -179,6 +184,9 @@ func (c *Catalog) index() error {
 		}
 	}
 	if err := c.checkAliasCollisions(); err != nil {
+		return err
+	}
+	if err := c.checkSuperlativeCollisions(); err != nil {
 		return err
 	}
 	return c.indexSynonyms()
@@ -246,6 +254,30 @@ func (c *Catalog) addAliases(kind, name, forWhat string, words []string) {
 			c.aliases[n] = append(c.aliases[n], hit)
 		}
 	}
+}
+
+// checkSuperlativeCollisions: a superlative shared by two metrics must name
+// disjoint entity types (the target word then decides), and it must not be an
+// alias of anything (it would be read twice).
+func (c *Catalog) checkSuperlativeCollisions() error {
+	owner := map[string]map[string]string{} // word → entity type → metric
+	for _, m := range c.Metrics {
+		for _, sup := range m.Superlatives {
+			if len(c.aliases[sup]) > 0 {
+				return fmt.Errorf("catalog: superlative %q of %q is also an alias", sup, m.Name)
+			}
+			if owner[sup] == nil {
+				owner[sup] = map[string]string{}
+			}
+			for _, et := range m.EntityTypes {
+				if prev, ok := owner[sup][et]; ok && prev != m.Name {
+					return fmt.Errorf("catalog: superlative %q names %q and %q for the same entity type %q", sup, prev, m.Name, et)
+				}
+				owner[sup][et] = m.Name
+			}
+		}
+	}
+	return nil
 }
 
 // checkAliasCollisions enforces the design's rule: one word may name two

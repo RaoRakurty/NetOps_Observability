@@ -4,6 +4,7 @@
 package compile
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,5 +42,30 @@ func TestParseTime(t *testing.T) {
 	}
 	if _, ok := parseTime("show cpu on edge-1", now, loc); ok {
 		t.Error("no time phrase must parse as none")
+	}
+}
+
+// "since <day>" is from that local day's midnight until now; the most recent
+// such day is meant.
+func TestSinceADay(t *testing.T) {
+	loc, _ := time.LoadLocation("America/Chicago")
+	now := time.Date(2026, 9, 24, 15, 0, 0, 0, time.UTC) // Thursday 10:00 CDT
+	for _, c := range []struct {
+		text string
+		from time.Time
+	}{
+		{"cpu since midnight", time.Date(2026, 9, 24, 0, 0, 0, 0, loc)},
+		{"cpu since yesterday", time.Date(2026, 9, 23, 0, 0, 0, 0, loc)},
+		{"cpu since monday", time.Date(2026, 9, 21, 0, 0, 0, 0, loc)},
+		{"cpu since thursday", time.Date(2026, 9, 24, 0, 0, 0, 0, loc)},
+		{"cpu since friday", time.Date(2026, 9, 18, 0, 0, 0, 0, loc)},
+	} {
+		tp, ok := parseTime(c.text, now, loc)
+		if !ok || tp.tr.Kind != "absolute" || !tp.tr.From.Equal(c.from) || !tp.tr.To.Equal(now) {
+			t.Errorf("%q → %+v (ok=%v), want from %v to now", c.text, tp.tr, ok, c.from)
+		}
+		if !strings.HasPrefix(tp.span, "since ") {
+			t.Errorf("%q: the span must include \"since\" so the word is explained: %q", c.text, tp.span)
+		}
 	}
 }

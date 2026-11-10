@@ -11,6 +11,11 @@
 //
 //	source "field"      → always held out. A case labelled by an operator is the
 //	                      only evidence the system was not authored against.
+//	source "lab"        → always DEV. A regression case written from a failure
+//	                      seen in the owner's own lab and deliberately fixed
+//	                      against (owner decision D7, 2026-11-09): it was tuned
+//	                      on by construction, so it can never measure
+//	                      generalisation, and it must never be held out.
 //	source "synthetic"  → held out when SHA-256 of
 //	                      "correlix.evalsplit.v1\x00<corpus>\x00<group>", read
 //	                      as a big-endian uint64 from its first 8 bytes, modulo
@@ -41,6 +46,7 @@ type Source string
 const (
 	SourceSynthetic Source = "synthetic"
 	SourceField     Source = "field"
+	SourceLab       Source = "lab"
 )
 
 // Split is the partition a case belongs to.
@@ -70,8 +76,10 @@ func ParseSource(s string) (Source, error) {
 		return SourceSynthetic, nil
 	case SourceField:
 		return SourceField, nil
+	case SourceLab:
+		return SourceLab, nil
 	}
-	return "", fmt.Errorf("evalsplit: unknown source %q (want %q or %q)", s, SourceSynthetic, SourceField)
+	return "", fmt.Errorf("evalsplit: unknown source %q (want %q, %q or %q)", s, SourceSynthetic, SourceField, SourceLab)
 }
 
 // ValidSplit reports whether s is a known split. Used by report writers.
@@ -83,6 +91,9 @@ func ValidSplit(s string) bool {
 // An unrecognised source is held out: the safe direction is that a case of
 // unknown origin never reaches a tuning source.
 func Assign(corpus, group string, src Source) Split {
+	if src == SourceLab {
+		return Dev // fixed against by construction: never a held-out measure
+	}
 	if src != SourceSynthetic {
 		return HeldOut
 	}

@@ -15,6 +15,7 @@
 //	5 catalog synonym  "SFDC" → the caller's Salesforce   confidence 0.95
 //	                   "Xfinity" → provider:comcast (seed) confidence 0.90
 //	6 partial name     "dall" → the ONE match            confidence 0.70, needs confirmation
+//	6b fuzzy name      "dalas" → "Dallas" (one typo)     confidence 0.60, needs confirmation
 //	7 model suggestion "dalas" → model says "Dallas"     confidence 0.50, needs confirmation
 //
 // A rung that yields more than one candidate is AMBIGUOUS and returns them
@@ -23,7 +24,7 @@
 // core-1"), which names every neighbour on purpose: its result is a Set — the
 // same type is a list (OR), never a guess between its members.
 //
-// Rungs 6 and 7 never decide anything: their candidates carry
+// Rungs 6, 6b and 7 never decide anything: their candidates carry
 // NeedsConfirmation and the query compiler does not use them. A model may only
 // SUGGEST a name (rung 7); the suggestion goes back through rungs 1–5 like any
 // other text, so it can only ever land on an entity the caller can already
@@ -46,6 +47,7 @@ import (
 	"unicode"
 
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/lex"
 )
 
 // Resolution methods (closed vocabulary).
@@ -57,6 +59,7 @@ const (
 	MethodCatalogSynonym  = "catalog_synonym"
 	MethodCatalogSeed     = "catalog_seed"
 	MethodPartialName     = "partial_name"
+	MethodFuzzyName       = "fuzzy_name"
 	MethodModelSuggestion = "model_suggestion"
 )
 
@@ -71,6 +74,7 @@ const (
 	confSeed       = 0.9
 	confTopoUnsure = 0.8
 	confPartial    = 0.7
+	confFuzzy      = 0.6
 	confModel      = 0.5
 )
 
@@ -205,6 +209,12 @@ func (r Resolver) Resolve(ctx context.Context, text string, types []string) (Res
 		return finish(hits), nil
 	}
 
+	// 6b. fuzzy name — a misspelling of a name the caller can see ("dalas"
+	// for Dallas), offered for confirmation, never used on its own.
+	if hits := r.fuzzy(text, aliasesOf(ctx, r.L), inv); len(hits) > 0 {
+		return finish(hits), nil
+	}
+
 	// 7. model suggestion — the last resort, asked only when wired.
 	return r.suggest(ctx, text, norm, types)
 }
@@ -241,6 +251,16 @@ func (r Resolver) deterministic(ctx context.Context, text string, types []string
 			hits = append(hits, Ref{InputText: text, EntityID: a.EntityID, EntityType: a.EntityType, Confidence: confAlias, Method: MethodTenantAlias})
 		}
 	}
+	if len(hits) == 0 {
+		// The same alias written with other separators ("dfw1" for "DFW-1").
+		if sq := squashKey(text); sq != "" {
+			for _, a := range aliases {
+				if allowed(a.EntityType) && lex.Squash(a.Alias) == sq {
+					hits = append(hits, Ref{InputText: text, EntityID: a.EntityID, EntityType: a.EntityType, Confidence: confAlias, Method: MethodTenantAlias})
+				}
+			}
+		}
+	}
 	if len(hits) > 0 {
 		return finish(hits), nil, nil
 	}
@@ -253,6 +273,19 @@ func (r Resolver) deterministic(ctx context.Context, text string, types []string
 	for _, n := range inv {
 		if nameIs(n, norm) {
 			hits = append(hits, Ref{InputText: text, EntityID: n.ID, EntityType: n.Type, Confidence: confInventory, Method: MethodInventoryName})
+		}
+	}
+	if len(hits) == 0 {
+		// The same name written with other separators: "edge1", "EDGE_1" and
+		// "edge 1" all name the device called "edge-1". Two visible names
+		// that differ only in separators are BOTH returned (ambiguous), never
+		// one picked.
+		if sq := squashKey(text); sq != "" {
+			for _, n := range inv {
+				if nameSquashes(n, sq) {
+					hits = append(hits, Ref{InputText: text, EntityID: n.ID, EntityType: n.Type, Confidence: confInventory, Method: MethodInventoryName})
+				}
+			}
 		}
 	}
 	if len(hits) > 0 {
@@ -412,6 +445,122 @@ func (r Resolver) synonym(text, norm string, types []string, aliases []Alias, in
 	return Result{}, false
 }
 
+// Fuzzy-name bounds (rung 6b, hybrid NLU plan A2). Names are compared word
+// by word (catalog.NormalizeAlias): the same number of words, all equal but
+// ONE, and that one a word of at least minFuzzyWord letters within the edit
+// budget of the whole name's key — at most one edit for 5–7 characters, two
+// for 8 or more, a different first character counting double. At most
+// MaxSuggestions candidates, closest first. A key with a digit is never
+// fuzzed, and neither is a short word: "edge-3" and "edge-b" are different
+// devices from "edge-1" and "edge-a", not typos of them.
+const (
+	minFuzzy     = 5
+	minFuzzyWord = 4
+)
+
+// fuzzyDistance is the typo distance between two names, or -1 when they are
+// not one misspelt word apart.
+func fuzzyDistance(text, name string) int {
+	tw, nw := strings.Fields(catalog.NormalizeAlias(lex.Fold(text))), strings.Fields(catalog.NormalizeAlias(lex.Fold(name)))
+	if len(tw) == 0 || len(tw) != len(nw) {
+		return -1
+	}
+	diff := -1
+	for i := range tw {
+		if tw[i] != nw[i] {
+			if diff >= 0 {
+				return -1 // two words differ: not one typo
+			}
+			diff = i
+		}
+	}
+	if diff < 0 {
+		return 0
+	}
+	a, b := tw[diff], nw[diff]
+	if len(a) < minFuzzyWord || len(b) < minFuzzyWord {
+		return -1
+	}
+	d := lex.Distance(a, b)
+	if a[0] != b[0] {
+		d++
+	}
+	return d
+}
+
+func fuzzyLimit(n int) int {
+	switch {
+	case n < minFuzzy:
+		return 0
+	case n < 8:
+		return 1
+	}
+	return 2
+}
+
+// aliasesOf reads the caller's aliases for the fuzzy rung; an unreadable
+// alias table only narrows the candidates (the deterministic rungs already
+// read it successfully, or returned the error).
+func aliasesOf(ctx context.Context, l Lookups) []Alias {
+	as, err := l.Aliases(ctx)
+	if err != nil {
+		return nil
+	}
+	return as
+}
+
+// fuzzy runs rung 6b over the caller's OWN aliases and inventory — the same
+// scoped candidates rungs 2–3 read, so another tenant's name can never be a
+// candidate.
+func (r Resolver) fuzzy(text string, aliases []Alias, inv []Named) []Ref {
+	key := lex.Squash(text)
+	limit := fuzzyLimit(len(key))
+	if limit == 0 || strings.ContainsAny(key, "0123456789") || r.Cat.IsVocabulary(catalog.NormalizeAlias(text)) {
+		return nil
+	}
+	type cand struct {
+		ref Ref
+		d   int
+	}
+	best := map[string]cand{}
+	consider := func(typ, id, name string) {
+		d := fuzzyDistance(text, name)
+		if d <= 0 || d > limit {
+			return
+		}
+		k := typ + "\x1f" + id
+		if c, ok := best[k]; !ok || d < c.d {
+			best[k] = cand{ref: Ref{InputText: text, EntityID: id, EntityType: typ, Confidence: confFuzzy, Method: MethodFuzzyName, NeedsConfirmation: true}, d: d}
+		}
+	}
+	for _, a := range aliases {
+		consider(a.EntityType, a.EntityID, a.Alias)
+	}
+	for _, n := range inv {
+		for _, name := range n.Names {
+			consider(n.Type, n.ID, name)
+		}
+	}
+	cs := make([]cand, 0, len(best))
+	for _, c := range best {
+		cs = append(cs, c)
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].d != cs[j].d {
+			return cs[i].d < cs[j].d
+		}
+		if cs[i].ref.EntityType != cs[j].ref.EntityType {
+			return cs[i].ref.EntityType < cs[j].ref.EntityType
+		}
+		return cs[i].ref.EntityID < cs[j].ref.EntityID
+	})
+	var out []Ref
+	for i := 0; i < len(cs) && i < MaxSuggestions; i++ {
+		out = append(out, cs[i].ref)
+	}
+	return out
+}
+
 // suggest runs rung 7.
 func (r Resolver) suggest(ctx context.Context, text, norm string, types []string) (Result, error) {
 	if r.Suggest == nil || len([]rune(norm)) < minPartial || len([]rune(text)) > MaxSuggestTextRunes || r.Cat.IsVocabulary(norm) {
@@ -446,6 +595,29 @@ func (r Resolver) suggest(ctx context.Context, text, norm string, types []string
 	res := finish(hits)
 	res.Disclosure = SuggestionDisclosure
 	return res, nil
+}
+
+// minSquash is the shortest name key the separator-insensitive match uses:
+// below it, different short names collide.
+const minSquash = 3
+
+// squashKey is the separator-insensitive key of text, or "" when it is too
+// short to identify anything or carries no separator-free letters at all.
+func squashKey(text string) string {
+	sq := lex.Squash(text)
+	if len(sq) < minSquash {
+		return ""
+	}
+	return sq
+}
+
+func nameSquashes(n Named, sq string) bool {
+	for _, name := range n.Names {
+		if name != "" && lex.Squash(name) == sq {
+			return true
+		}
+	}
+	return false
 }
 
 func nameIs(n Named, norm string) bool {

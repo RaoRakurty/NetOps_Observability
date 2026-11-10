@@ -10,7 +10,7 @@ import (
 )
 
 func TestParseSource(t *testing.T) {
-	for in, want := range map[string]Source{"": SourceSynthetic, "synthetic": SourceSynthetic, "field": SourceField} {
+	for in, want := range map[string]Source{"": SourceSynthetic, "synthetic": SourceSynthetic, "field": SourceField, "lab": SourceLab} {
 		got, err := ParseSource(in)
 		if err != nil || got != want {
 			t.Errorf("ParseSource(%q) = %q, %v; want %q", in, got, err, want)
@@ -183,5 +183,14 @@ func TestRecorded(t *testing.T) {
 	un, stale = Recorded(leaks, map[string]string{"a|other.go": "another file"})
 	if len(un) != 2 || len(stale) != 1 {
 		t.Errorf("a record covers one case in one source only: %v %v", un, stale)
+	}
+}
+
+// A lab regression case is always dev: it was written to be fixed against.
+func TestLabCasesAreAlwaysDev(t *testing.T) {
+	for i := 0; i < 500; i++ {
+		if got := Assign("nlquery", fmt.Sprintf("field-%d", i), SourceLab); got != Dev {
+			t.Fatalf("a lab case was put in %s", got)
+		}
 	}
 }

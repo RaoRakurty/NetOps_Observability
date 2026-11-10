@@ -217,17 +217,6 @@ func TestSuggestionsAreDeterministicAndPreferTheTarget(t *testing.T) {
 	}
 }
 
-func TestOSADistance(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		d    int
-	}{{"", "", 0}, {"abc", "abc", 0}, {"abc", "acb", 1}, {"kitten", "sitting", 3}, {"cpu", "cpu_util_pct", 9}} {
-		if got := osaDistance(c.a, c.b); got != c.d {
-			t.Errorf("osa(%q,%q)=%d want %d", c.a, c.b, got, c.d)
-		}
-	}
-}
-
 func TestCompoundIDsNeedTheirDeviceAndName(t *testing.T) {
 	base := `{"v":1,"query_type":"metric_series","target":"interface","metric":"if_in_bps","entities":[{"type":"interface","id":"%s"}]}`
 	for _, bad := range []string{"interface:edge-1", "interface:edge/1/Gi0/0x y", "interface:/Gi0/0"} {

@@ -129,6 +129,7 @@ func TestFromCompileOutcomes(t *testing.T) {
 		{"no ast", compile.Result{Intent: "x"}, nil, nil, OutcomeUnparsed},
 		{"invalid", compile.Result{AST: q}, nil, bad, OutcomeInvalid},
 		{"compiled", compile.Result{AST: q, Entities: []resolve.Ref{ref}}, q, ok, OutcomeCompiled},
+		{"not found", compile.Result{Intent: "lookup", NotFound: &compile.NotFound{Name: "RETAIL"}}, nil, nil, OutcomeNotFound},
 	}
 	for _, c := range cases {
 		r := FromCompile(SourceQueryCompile, "q", c.res, c.checked, c.vr)
@@ -488,4 +489,21 @@ func TestMetricsRenderEverySeries(t *testing.T) {
 	nilM.Captured(true)
 	nilM.Corrected(KindOther)
 	nilM.Write(&b) // nil-safe
+}
+
+// The two outcomes the data arm's accounting added are part of the closed set.
+func TestNotDataAndNotFoundAreRecordable(t *testing.T) {
+	st := NewMemStore()
+	for _, o := range []string{OutcomeNotData, OutcomeNotFound} {
+		r := rec("alice", "q")
+		r.Outcome = o
+		if _, err := st.Record(bg, "acme", r); err != nil {
+			t.Errorf("%s: %v", o, err)
+		}
+	}
+	r := rec("alice", "q")
+	r.Outcome = "dead_end"
+	if _, err := st.Record(bg, "acme", r); err == nil {
+		t.Error("an outcome outside the closed set must be refused")
+	}
 }

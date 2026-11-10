@@ -228,6 +228,14 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Incidents in this window"
 	case ast.IncidentExplain:
 		p.PrimaryView, p.SecondaryView, p.Title = IncidentCard, EvidenceList, "Why this incident happened"
+	case ast.EntityCount:
+		if len(q.GroupBy) > 0 {
+			p.PrimaryView, p.SecondaryView, p.Title = Bar, Table, Humanize(q.Target)+"s by "+Humanize(q.GroupBy[0])
+		} else {
+			p.PrimaryView, p.SecondaryView, p.Title = Summary, Table, Humanize(q.Target)+"s you can see"
+		}
+	case ast.EntityList:
+		p.PrimaryView, p.Title = Table, Humanize(q.Target)+"s you can see"
 	}
 	return p
 }
@@ -268,6 +276,10 @@ func Fits(v View, q *ast.AST, rs *plan.ResultSet) bool {
 		}
 	case ast.IncidentExplain:
 		return v == IncidentCard || v == EvidenceList
+	case ast.EntityCount:
+		return v == Table || (v == Bar && len(q.GroupBy) > 0)
+	case ast.EntityList:
+		return v == Table || v == EvidenceList
 	}
 	return false
 }
