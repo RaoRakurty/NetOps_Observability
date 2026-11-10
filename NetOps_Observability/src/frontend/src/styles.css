@@ -1014,6 +1014,48 @@ code, kbd, pre, .mono, td.mono {
 .lv-actions-label { color: var(--fg-muted); font-size: var(--fs-meta); }
 .lv-sep { color: var(--border); }
 
+/* Severity tiles (tracker 387, owner screenshot A): counted by the store across every
+   match, re-tinted by the one severity map, icon and word beside every number. */
+.lv-tiles-wrap { margin: var(--sp-3) 0 0; }
+.lv-tiles { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.lv-tile {
+  display: inline-flex; align-items: center; gap: 10px; min-width: 132px; padding: 8px 14px 8px 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--fg); font-family: var(--font-ui);
+}
+.lv-tile:hover { border-color: var(--border-strong); }
+.lv-tile[aria-pressed="true"] { border-color: var(--lt-tone); box-shadow: inset 0 0 0 1px var(--lt-tone); background: var(--lt-bg); }
+.lv-tile-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--lt-bg); color: var(--lt-tone); flex: none; }
+.lv-tile-txt { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; }
+.lv-tile-n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--fg); }
+.lv-tile-k { font-size: var(--fs-sm); color: var(--fg-muted); }
+.lv-tile-critical { --lt-tone: var(--sev-critical); --lt-bg: var(--sev-critical-bg); }
+.lv-tile-error { --lt-tone: var(--sev-error); --lt-bg: var(--sev-error-bg); }
+.lv-tile-warning { --lt-tone: var(--sev-warning); --lt-bg: var(--sev-warning-bg); }
+.lv-tile-info { --lt-tone: var(--sev-info); --lt-bg: var(--sev-info-bg); }
+.lv-tile-ok { --lt-tone: var(--sev-ok); --lt-bg: var(--sev-ok-bg); }
+.lv-tiles-note { margin: 6px 0 0; color: var(--fg-muted); font-size: var(--fs-meta); }
+/* Sub-tabs: Events (N) · Logs · Traps · … */
+.lv-subtabs { display: flex; gap: 4px; margin-top: var(--sp-3); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.lv-subtab {
+  padding: 8px 14px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer;
+  color: var(--fg-muted); font-size: 15px; white-space: nowrap;
+}
+.lv-subtab:hover { color: var(--fg); }
+.lv-subtab[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent-bright); font-weight: 600; }
+.lv-subtab-n { font-variant-numeric: tabular-nums; }
+/* Pager: "Showing 1–200 of 7,547 events" and numbered pages over the exact total. */
+.lv-pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.lv-pager-txt { color: var(--fg-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.lv-pages { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.lv-page {
+  min-width: 34px; height: 32px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.lv-page:hover:not(:disabled) { border-color: var(--accent); }
+.lv-page[aria-current="page"] { background: var(--accent-soft); border-color: var(--accent); font-weight: 700; }
+.lv-page:disabled { opacity: .55; cursor: default; }
+.lv-page-gap { color: var(--fg-muted); padding: 0 4px; }
+
 /* Quick filters: counted over the rows on screen, and labelled as such. */
 .lv-facets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--sp-2); margin: var(--sp-2) 0; }
 .lv-facets-label { color: var(--fg-muted); font-size: var(--fs-meta); }

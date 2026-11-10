@@ -20,6 +20,8 @@ import { act, render, screen, cleanup, waitFor, fireEvent, within } from "@testi
 const searchLogs = vi.fn();
 const logsRetention = vi.fn();
 const exportLogRows = vi.fn();
+const logSeverityCounts = vi.fn();
+const exportLogQuery = vi.fn();
 const openInspector = vi.fn();
 let wsEnabled = false;
 
@@ -29,7 +31,8 @@ vi.mock("../services/api", () => ({
     logsRetention: (...a: unknown[]) => logsRetention(...a),
     createSaved: vi.fn(),
     exportLogRows: (...a: unknown[]) => exportLogRows(...a),
-    exportLogQuery: vi.fn(),
+    exportLogQuery: (...a: unknown[]) => exportLogQuery(...a),
+    logSeverityCounts: (...a: unknown[]) => logSeverityCounts(...a),
     exportStatus: vi.fn(),
     createIncident: vi.fn(),
     metricsQueryRange: vi.fn().mockResolvedValue({ status: "success", data: { resultType: "matrix", result: [] } }),
@@ -109,6 +112,9 @@ beforeEach(() => {
   searchLogs.mockReset();
   logsRetention.mockReset();
   exportLogRows.mockReset();
+  exportLogQuery.mockReset();
+  logSeverityCounts.mockReset();
+  logSeverityCounts.mockResolvedValue({ signal: "", total: 0, counts: [], unrated: 0, other: 0 });
   openInspector.mockReset();
   wsEnabled = false;
 });
@@ -462,5 +468,107 @@ describe("hostile values", () => {
       expect(document.querySelector("img")).toBeNull();
     }
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+});
+
+describe("severity tiles, filters and pages (tracker 387)", () => {
+  const SEV = { signal: "", total: 5000, unrated: 12, other: 0, counts: [
+    { field: "severity", value: "crit", count: 128 }, { field: "severity", value: "warning", count: 412 },
+    { field: "severity", value: "notice", count: 1026 }, { field: "level", value: "error", count: 3 },
+  ] };
+
+  it("tiles show the store's counts for every match, not the loaded rows", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    respond([syslogHit, trapHit], 5000);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    expect(within(tiles).getByRole("button", { name: /^Critical: 128 matching/ })).toBeTruthy();
+    expect(within(tiles).getByRole("button", { name: /^Info: 1,026 matching/ })).toBeTruthy();
+    expect(tiles.textContent).toContain("Counted by the store across all 5,000 matching records");
+    expect(tiles.textContent).toContain("12 carry no severity");
+    // The facets keep counting only the loaded rows, and say so.
+    await grid();
+    expect((await screen.findByTestId("logs-facets")).textContent).toContain("In these 2 loaded rows");
+    const call = logSeverityCounts.mock.calls[0][0];
+    expect(call.query).toBe("*");
+    expect(call.from).toBeTruthy();
+  });
+
+  it("no counts endpoint answer, no tiles", async () => {
+    logSeverityCounts.mockRejectedValue(new Error("404"));
+    respond([syslogHit]);
+    render(<Logs />);
+    await grid();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("logs-severity-tiles")).toBeNull();
+  });
+
+  it("a tile narrows the search on the server with the words it counted; the tiles keep their siblings", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    respond([syslogHit]);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    searchLogs.mockClear();
+    logSeverityCounts.mockClear();
+    fireEvent.click(within(tiles).getByRole("button", { name: /^Critical:/ }));
+    await waitFor(() => expect(searchLogs).toHaveBeenCalled());
+    expect(lastQuery().query).toContain('severity:("emerg" OR "emergency" OR "alert" OR "crit" OR "critical"');
+    expect(logSeverityCounts.mock.calls[0][0].query).toBe("*");
+    expect(within(tiles).getByRole("button", { name: /^Critical:/ }).getAttribute("aria-pressed")).toBe("true");
+    // The dropdown shows the same pick.
+    expect((screen.getByRole("combobox", { name: "Severity" }) as HTMLSelectElement).value).toBe("critical");
+  });
+
+  it("type and family dropdowns offer the loaded values and filter on the mapped field, quoted", async () => {
+    const t = { ...trapHit, _source: { ...trapHit._source, event_type: "viptela_system_cpu_usage", family: "cpu" } };
+    respond([t, syslogHit]);
+    render(<Logs />);
+    await grid();
+    const types = screen.getByRole("combobox", { name: "Event type" }) as HTMLSelectElement;
+    expect(types.textContent).toContain("Viptela System CPU Usage · 1 loaded");
+    searchLogs.mockClear();
+    fireEvent.change(screen.getByRole("combobox", { name: "Family" }), { target: { value: "family\u0000cpu" } });
+    await waitFor(() => expect(searchLogs).toHaveBeenCalled());
+    expect(lastQuery().query).toBe('(family:"cpu")');
+  });
+
+  it("the sub-tabs read Events, Logs, Traps; the active one carries the total", async () => {
+    respond([syslogHit], 7547);
+    render(<Logs />);
+    await grid();
+    const tabs = screen.getByRole("group", { name: "Log type" });
+    const events = within(tabs).getByRole("button", { name: "Events" });
+    expect(events.getAttribute("aria-pressed")).toBe("true");
+    expect(events.textContent).toBe("Events (7,547)");
+    fireEvent.click(within(tabs).getByRole("button", { name: "Logs" }));
+    await waitFor(() => expect(lastQuery().signal).toBe("syslog"));
+  });
+
+  it("pages: 'Showing a–b of N events', and a page re-runs the same request with an offset", async () => {
+    respond([syslogHit, trapHit], 7547);
+    render(<Logs />);
+    await grid();
+    expect(screen.getByTestId("logs-pager-text").textContent).toContain("Showing 1–2 of 7,547 events");
+    const nav = screen.getByRole("navigation", { name: "Result pages" });
+    expect(within(nav).getByRole("button", { name: "Page 1" }).getAttribute("aria-current")).toBe("page");
+    const before = lastQuery();
+    searchLogs.mockClear();
+    fireEvent.click(within(nav).getByRole("button", { name: "Page 2" }));
+    await waitFor(() => expect(searchLogs).toHaveBeenCalledTimes(1));
+    expect(lastQuery()).toEqual({ ...before, offset: 200 });
+    await waitFor(() => expect(within(nav).getByRole("button", { name: "Page 2" }).getAttribute("aria-current")).toBe("page"));
+  });
+
+  it("export all carries the same filters as the screen", async () => {
+    logSeverityCounts.mockResolvedValue(SEV);
+    exportLogQuery.mockResolvedValue({ executionId: "", matched: 1 });
+    respond([syslogHit]);
+    render(<Logs />);
+    const tiles = await screen.findByTestId("logs-severity-tiles");
+    fireEvent.click(within(tiles).getByRole("button", { name: /^Warning:/ }));
+    await waitFor(() => expect(lastQuery().query).toContain('"warning"'));
+    fireEvent.click(screen.getByTitle("Export the entire result set as CSV"));
+    await waitFor(() => expect(exportLogQuery).toHaveBeenCalled());
+    expect(exportLogQuery.mock.calls[0][0].query).toBe(lastQuery().query);
   });
 });

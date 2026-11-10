@@ -506,6 +506,18 @@ export type LogSearchOpts = {
   offset?: number;
 };
 
+// Severity counts for a log search (tracker 387): how many records of each STORED
+// severity word match the query in the window, counted by the store over the same
+// tenant-scoped surface the search reads. The UI maps words to tiles itself.
+export type LogSeverityCounts = {
+  signal: string;
+  total: number;
+  counts: { field: "severity" | "level"; value: string; count: number }[];
+  unrated: number;
+  other: number;
+  sampling?: LogSampling;
+};
+
 // Retention floor for the caller's visible log store: exact doc count + oldest
 // timestamp ("logs go back to <date>, N days"). Tenant-scoped server-side.
 // `sampling` present (flows) ⇒ `total` counts a 1:N sample, not the stream.
@@ -5982,6 +5994,13 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
+  // Severity counts for the Logs summary tiles (tenant-scoped server-side, the
+  // search's own surface). Same query/signal/window as the search it summarises.
+  logSeverityCounts: (opts: { query: string; signal?: string; from: string; to: string }) => {
+    const p = new URLSearchParams({ query: opts.query, from: opts.from, to: opts.to });
+    if (opts.signal) p.set("signal", opts.signal);
+    return request<LogSeverityCounts>(`/api/logs/severity-counts?${p.toString()}`);
+  },
   // Retention floor: how far back the caller's visible log store goes + exact
   // total stored (tenant-scoped server-side; owner directive: DON'T HIDE).
   logsRetention: (signal = "") =>
