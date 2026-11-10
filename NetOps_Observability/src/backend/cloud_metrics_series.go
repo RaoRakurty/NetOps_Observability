@@ -33,7 +33,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -59,22 +58,17 @@ type cloudSeriesPoint [2]float64
 // handler turns that into an explicit "metric store unreachable" error rather
 // than an empty chart pretending the resource is silent.
 func vmQueryRangeBy(ctx context.Context, q string, start, end int64, stepSec int, keyLabel string) (map[string][]cloudSeriesPoint, error) {
-	base := os.Getenv("VM_QUERY_URL")
-	if base == "" {
-		base = "http://victoria:8428"
-	}
 	v := url.Values{}
 	v.Set("query", q)
 	v.Set("start", strconv.FormatInt(start, 10))
 	v.Set("end", strconv.FormatInt(end, 10))
 	v.Set("step", strconv.Itoa(stepSec)+"s")
-	u := strings.TrimRight(base, "/") + "/api/v1/query_range?" + v.Encode()
+	u := strings.TrimRight(cloudVMBase(), "/") + "/api/v1/query_range?" + v.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	cl := &http.Client{Timeout: cloudSeriesQueryTimeout}
-	resp, err := cl.Do(req)
+	resp, err := backendHTTPClient(cloudSeriesQueryTimeout).Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -109,6 +109,12 @@ dynamic:
       (`/api/protocols/${proto}/...`, services/api.ts); IS-IS is the other value
       the proto argument takes.
 
+  - route: /api/ai/replay
+    reason: >-
+      Operator-pulled export of one correlation as a frozen replay case for
+      `cmd/irisreplay` (tracker 337 N-H2). A machine surface for the eval
+      tooling; the result is a file, and there is nothing for a screen to show.
+
 missing_ui:
   - route: /api/ai/modules
     reason: >-

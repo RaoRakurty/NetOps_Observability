@@ -253,15 +253,27 @@ services:
       - ../../data/tls/services/correlation:/certs/svid:ro
 
   # SEC-008: OSD authenticates with its own read-scoped identity.
+  # Tracker 384: the password is in a second config file, rendered from .env by
+  # scripts/install.py. The image's entrypoint turns an OPENSEARCH_PASSWORD env
+  # into `--opensearch.password=<value>` on the process's argv (readable in `ps`
+  # as well as `docker inspect`), and it has no __FILE form. Naming the image's
+  # own config first keeps its defaults; the entrypoint rewrites that file when
+  # the security plugin is disabled, so it stays out of any read-only mount.
   opensearch-dashboards:
+    command:
+      - opensearch-dashboards
+      - --config
+      - /usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+      - --config
+      - /run/secrets/opensearch/dashboards/opensearch_dashboards.secret.yml
     environment:
       OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
       OPENSEARCH_USERNAME: svc_dashboards
-      OPENSEARCH_PASSWORD: ${OS_DASHBOARDS_PASSWORD}
       OPENSEARCH_SSL_VERIFICATIONMODE: certificate
       OPENSEARCH_SSL_CERTIFICATEAUTHORITIES: '["/certs/ca.pem"]'
     volumes:
       - ../../data/tls/services/opensearch/ca.pem:/certs/ca.pem:ro
+      - ../../data/secrets/opensearch/dashboards:/run/secrets/opensearch/dashboards:ro
 
   # SEC-008: template/ISM/snapshot bootstrap authenticates too.
   # Tracker 367 layer 1: the credential comes from a mounted file; apply-ism.sh
@@ -449,7 +461,11 @@ services:
       OPENSEARCH_STATS_URL: "https://opensearch:9200/_nodes/stats/indices/indexing"
       OPENSEARCH_HEALTH_URL: "https://opensearch:9200/_cluster/health"
       OPENSEARCH_STATS_USER: svc_aggregator
-      OPENSEARCH_STATS_PASSWORD: ${OS_AGGREGATOR_PASSWORD}
+      # Tracker 384: a REFERENCE, resolved like the vmauth one above through the
+      # `opensearch` exec backend from the mounted file. The variable keeps its
+      # name so a running container and a newer vector.yaml still agree during a
+      # partial deploy.
+      OPENSEARCH_STATS_PASSWORD: "SECRET[opensearch.aggregator]"
       # SEC-013.2: the four ingest lanes serve the aggregator SVID and REQUIRE
       # a mesh client certificate (verify_certificate on a server, proven
       # 2026-08-06); per-lane tokens arrive via the tracked compose chain.
@@ -474,6 +490,7 @@ services:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/vector-aggregator:/tls/svid:ro
       - ../../data/secrets/vmauth/vector:/run/secrets/vmauth/vector:ro
+      - ../../data/secrets/opensearch/aggregator:/run/secrets/opensearch/aggregator:ro
 
   # F-1 (SEC-014.1): the forward hop into the aggregator rides mesh TLS —
   # the TLS variant conf verifies the aggregator SVID against the mesh CA and
@@ -537,7 +554,10 @@ services:
       CLICKHOUSE_ENDPOINT: "https://clickhouse:8443"
       OPENSEARCH_ENDPOINT: "https://opensearch:9200"
       OPENSEARCH_USER: svc_router
-      OPENSEARCH_PASSWORD: ${OS_ROUTER_PASSWORD}
+      # Tracker 384: a REFERENCE, resolved by the `opensearch` exec backend from
+      # the mounted file. Same variable name as before, on purpose: see the
+      # aggregator above.
+      OPENSEARCH_PASSWORD: "SECRET[opensearch.router]"
       SSL_CERT_FILE: /tls/ca.pem
       # SEC-006.2 client 3/5: every kafka source/sink dials the mTLS listener
       # presenting the router SVID (tls blocks in vector.yaml, env-driven).
@@ -555,6 +575,7 @@ services:
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/vector-router:/tls/svid:ro
+      - ../../data/secrets/opensearch/router:/run/secrets/opensearch/router:ro
 
   # victoria scrapes the mTLS API with its boot-minted client SVID (#149).
   # command REPLACES the base list (compose semantics), so it is repeated

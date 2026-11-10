@@ -541,7 +541,7 @@ func runSkillWith(t *testing.T, c *goldenIncidentCase) Answer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return o.ans
+	return o.Ans
 }
 
 // TestSkillConfirmedVerdictForADifferentCause: the engine confirmed an optical
@@ -597,7 +597,7 @@ func TestGoldenCoincidentChangeCarriesTheExactWording(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ans := o.ans
+			ans := o.Ans
 			if joinStatements(ans.Statements) != ans.Text {
 				t.Fatalf("statements must spell the text:\n%q\n%q", joinStatements(ans.Statements), ans.Text)
 			}

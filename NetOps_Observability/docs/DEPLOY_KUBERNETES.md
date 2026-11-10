@@ -97,8 +97,8 @@ out of your shell history.**
 
 | Key | Needed by | Notes |
 |---|---|---|
-| `DB_USER`, `DB_PASSWORD` | postgres, api | |
-| `DATABASE_URL` | api, when `store.backend=postgres` | DSN for the **non-superuser, NOBYPASSRLS** `netops_app` role. A superuser (or any `BYPASSRLS` role) ignores RLS even under `FORCE ROW LEVEL SECURITY`, and the api refuses to start as one. |
+| `DB_USER`, `DB_PASSWORD` | postgres; `DB_USER` also api | |
+| `DATABASE_URL` | api, when `store.backend=postgres` | DSN for the **non-superuser, NOBYPASSRLS** `netops_app` role. A superuser (or any `BYPASSRLS` role) ignores RLS even under `FORCE ROW LEVEL SECURITY`, and the api refuses to start as one. Mounted into the api as a file (`DATABASE_URL_FILE`), not its environment, and read at boot: restart the api after changing it. |
 | `REDIS_PASSWORD` | redis, api, prober | |
 | `CLICKHOUSE_PASSWORD` | clickhouse, api, correlation, vector-router | |
 | `KAFKA_CLUSTER_ID` | kafka | Generate **once** per install (22-char base64url UUID). The data volume is formatted with it; changing it makes the broker refuse its own volume. |
@@ -110,7 +110,7 @@ out of your shell history.**
 | `CORR_DEBUG_TOKEN` | api, correlation | Unset ⇒ the debug routes answer 503 and a trace honestly reports the bus stage as "not observable". |
 | `GRAFANA_ADMIN_PASSWORD` | grafana | Only when `grafana.enabled`. |
 | `OS_API_PASSWORD`, `OS_ROUTER_PASSWORD`, `OS_CORRELATION_PASSWORD`, `OS_BOOTSTRAP_PASSWORD`, `OS_DASHBOARDS_PASSWORD`, `OS_AGGREGATOR_PASSWORD` | opensearch-security-init | Only when `bootstrap.opensearchSecurityInit.enabled`. |
-| `VMAUTH_*_PASSWORD` (api, gnmic, vector, vmalert, grafana, prober) | vmauth | Only when `vmauth.enabled`. |
+| `VMAUTH_API_PASSWORD`, `_PROBER_`, `_VMALERT_`, `_GNMIC_`, `_VECTOR_`, `_GRAFANA_` | vmauth, and each named client | Only when `vmauth.enabled`. With it on, api, prober, vmalert, gnmic and vector-aggregator connect through vmauth, each with its own key mounted as a file, and the NetworkPolicy closes their direct path to `victoria:8428`. vmauth itself must keep these six in its environment: it cannot read a password from a file, and the chart has no renderer. The watchdog CronJob still queries `victoria:8428` directly (read-only, no vmauth identity). |
 
 Integration credentials (Slack, PagerDuty, SMTP, ServiceNow, Jira, Teams,
 `COPILOT_API_KEY`) go in a **second** Secret named by

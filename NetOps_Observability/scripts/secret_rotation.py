@@ -157,9 +157,8 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     # SEC-008: applied to the security index by the opensearch-init bootstrap,
     # which re-runs on every stack start — a changed env var converges without
-    # operator action (hence FREE, not ALTER). OS_API_PASSWORD and
-    # OS_BOOTSTRAP_PASSWORD also reach their clients as re-rendered files
-    # (tracker 367 layer 1).
+    # operator action (hence FREE, not ALTER). Every OS_* value also reaches its
+    # client as a re-rendered file (tracker 367 layer 1, tracker 384).
     # NOT OVERLAP (investigated for tracker 367 layer 3): the security
     # plugin's internalusers type holds exactly ONE bcrypt hash per user and
     # apply-security.sh rewrites the whole index with securityadmin, so a user
@@ -186,6 +185,17 @@ POLICY: dict[str, Policy] = {
         ALTER, "postgres",
         "Postgres provisions POSTGRES_PASSWORD only on the first boot of an "
         "empty data dir; the running server still validates the old one.",
+        "start the database and re-run:  cd deployment/docker && "
+        "docker compose up -d postgres"),
+    # Tracker 384: the role the api connects as. The api re-reads its password
+    # file for every new connection, so no restart. NOT OVERLAP: a Postgres role
+    # holds one password, so a NEW connection opened between the ALTER and the file
+    # change is refused (open ones are unaffected; rotate_secrets keeps the window
+    # to the two steps being adjacent).
+    "APP_DB_PASSWORD": Policy(
+        ALTER, "postgres",
+        "The app-state role keeps the password it was provisioned with; the "
+        "running server still validates the old one.",
         "start the database and re-run:  cd deployment/docker && "
         "docker compose up -d postgres"),
     "NETBOX_DB_PASSWORD": Policy(
@@ -546,8 +556,8 @@ def provision_app_state_role(runner, *, service: str = "postgres", db_user: str,
     such a role on purpose).
 
     Idempotent in every direction: it creates the role when absent, re-aligns an
-    existing one to NOSUPERUSER NOBYPASSRLS, sets the password to whatever the
-    DSN carries, and returns early when the credential already works. The
+    existing one to NOSUPERUSER NOBYPASSRLS, sets the password to APP_DB_PASSWORD,
+    and returns early when the credential already works. The
     password is piped in on stdin (never argv), so it cannot appear in the
     host's process table.
     """
@@ -677,7 +687,7 @@ def preflight(runner, name: str, env: dict[str, str],
     (e.g. a half-finished rotation from the old --reset-env): reachability is
     the gate, because re-applying is exactly the repair.
     """
-    if name == "DB_PASSWORD":
+    if name in ("DB_PASSWORD", "APP_DB_PASSWORD"):
         r = _pg_probe(runner, "postgres", env.get("DB_USER", "netops"),
                       env.get("DB_NAME", "netops"))
         if r.returncode != 0:

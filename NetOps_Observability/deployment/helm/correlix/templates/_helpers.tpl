@@ -104,6 +104,47 @@ The Secret every workload draws credentials from. Referenced, never created.
 {{- end -}}
 
 {{/*
+Where a metrics client connects. With vmauth on, every client presents its own
+scoped credential to it; https when the mesh is on, because vmauth then serves
+TLS and a Basic credential must not cross the wire in clear. Tracker 384.
+*/}}
+{{- define "correlix.metricsUrl" -}}
+{{- if .Values.vmauth.enabled -}}
+{{- ternary "https" "http" .Values.tls.enabled }}://vmauth:8427
+{{- else -}}
+http://victoria:8428
+{{- end -}}
+{{- end -}}
+
+{{/*
+One vmauth identity's password as a mounted file: a Secret volume holding only
+that key, under the path the compose stack also uses. Secret volumes change by
+atomic symlink swap, so a client that re-reads its file (internal/credfile,
+vmalert's passwordFile) follows a changed Secret with no restart.
+Args: root, key (the Secret key), id (the identity).
+*/}}
+{{- define "correlix.vmauthCredVolume" -}}
+- name: vmauth-cred
+  secret:
+    secretName: {{ include "correlix.secretName" .root }}
+    defaultMode: 0440
+    items:
+      - {key: {{ .key }}, path: password}
+{{- end -}}
+
+{{/*
+The mesh CA for a client of https://vmauth:8427. Only with tls.enabled.
+*/}}
+{{- define "correlix.meshCAVolume" -}}
+- name: mesh-ca
+  secret:
+    secretName: {{ .Values.tls.caSecret }}
+    defaultMode: 0444
+    items:
+      - {key: ca.crt, path: ca.crt}
+{{- end -}}
+
+{{/*
 Bootstrap broker list. Kept as a helper so an external Kafka-compatible cluster
 is a one-line override rather than an edit in six places.
 */}}

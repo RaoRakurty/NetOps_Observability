@@ -19,12 +19,15 @@ package ai
 //     loader (and therefore CI), so the method cannot drift away from the
 //     platform's actual capabilities.
 //
-// Security stance (CLAUDE.md §15). A skill is server-owned content, never
-// client-supplied: it is compiled in, it cannot be uploaded, and nothing in a
-// skill can widen what the caller may run. Every gather step is re-gated at
-// execution by the Policy Engine and the caller's Principal, and every tool it
-// may name is read-only by construction (§4/LLM07 least privilege, LLM08 no
-// excessive agency).
+// Security stance (CLAUDE.md §15). A skill loaded here is server-owned content:
+// it is compiled in, and nothing in a skill can widen what the caller may run.
+// Every gather step is re-gated at execution by the Policy Engine and the
+// caller's Principal, and every tool it may name is read-only by construction
+// (§4/LLM07 least privilege, LLM08 no excessive agency).
+//
+// A customer's runbook (skill_source.go, tracker 337 N-F2) passes the SAME parser
+// and the SAME closed vocabularies, but carries Origin tenant: its text is DATA
+// and never reaches a system-prompt position (skill_run.go, LLM01).
 //
 // FORMAT (a deliberately tiny, strict dialect — not general YAML, so there is no
 // parser surface to be surprised by):
@@ -205,6 +208,34 @@ var skillToolAllowlist = map[string]bool{
 	"get_problem_evidence":       true,
 	"get_active_major_incidents": true,
 }
+
+// SkillOrigin says who wrote a skill, which decides where its text may go.
+type SkillOrigin string
+
+const (
+	// SkillOriginCompiled is embedded in the binary and reviewed with the code.
+	// Its text is a system instruction. LoadSkills is the only thing that stamps
+	// it, so a skill built any other way is treated as customer text (see
+	// customerAuthored): the unsafe mistake is not available by omission.
+	SkillOriginCompiled SkillOrigin = "compiled"
+	// SkillOriginTenant is a customer's. Its text is DATA, in the user message.
+	SkillOriginTenant SkillOrigin = "tenant"
+)
+
+// SkillKind says what a skill is FOR. It is a kind and not an "executable" flag
+// because the safe reading has to be the one a reader reaches first.
+type SkillKind string
+
+const (
+	// SkillKindInvestigative is a method Iris runs: it gathers and it hands off.
+	SkillKindInvestigative SkillKind = "investigative"
+	// SkillKindMOP is a procedure a human follows. Nothing executes one: it never
+	// enters an overlay, is never a next= target and is never selected.
+	SkillKindMOP SkillKind = "mop"
+)
+
+// maxMOPSteps bounds a MOP's steps: block.
+const maxMOPSteps = 30
 
 // GatherStep is one planned tool call: which tool, which arguments bind from
 // resolved entities, and which are literals the skill author fixed.
@@ -577,12 +608,47 @@ type Skill struct {
 	// from `skills/<name>/CASES.yaml` by the same loader on the same terms: a
 	// method that ships with none does not load at all.
 	Cases []SkillCase
+	// Origin says who wrote this skill. Stamped by the loader that produced it,
+	// never by anything in the source text.
+	Origin SkillOrigin
+	// TenantID owns a tenant-origin skill. It is stamped by the caller from the
+	// authenticated principal (§3a rule 2) and has no frontmatter key.
+	TenantID string
+	// Kind is investigative unless the source says `kind: mop`.
+	Kind SkillKind
+	// Steps are a MOP's ordered steps, for a human. Never dispatched.
+	Steps []string
+}
+
+// customerAuthored reports whether this skill's text is DATA. Only the compiled
+// stamp makes it an instruction, so a skill nobody stamped fails closed.
+func (s *Skill) customerAuthored() bool { return s.Origin != SkillOriginCompiled }
+
+// isMOP reports whether this skill is a procedure for a human.
+func (s *Skill) isMOP() bool { return s.Kind == SkillKindMOP }
+
+// hopAllowed is the one-directional reach rule, applied at Overlay time and again
+// by the running chain: a customer's runbook may hand off to Correlix's methods
+// or to its own tenant's runbooks; a compiled method can never reach a customer's
+// text; and a MOP is nobody's next step.
+func hopAllowed(from, to *Skill) bool {
+	if to.isMOP() {
+		return false
+	}
+	if !to.customerAuthored() {
+		return true
+	}
+	return from.customerAuthored() && from.TenantID == to.TenantID
 }
 
 // Ref is the provenance stamp returned with an answer so the UI can show which
 // method produced it.
 func (s *Skill) Ref() SkillRef {
-	return SkillRef{Name: s.Name, Layer: string(s.Layer), Version: s.Version}
+	ref := SkillRef{Name: s.Name, Layer: string(s.Layer), Version: s.Version}
+	if s.customerAuthored() {
+		ref.Origin = string(SkillOriginTenant)
+	}
+	return ref
 }
 
 // NextSkills lists the skills this one hands off to, in authored order.
@@ -596,11 +662,14 @@ func (s *Skill) NextSkills() []string {
 	return out
 }
 
-// SkillRef is the answer-level provenance stamp (name + layer + version).
+// SkillRef is the answer-level provenance stamp (name + layer + version). Origin
+// is set only on a customer's runbook, so a UI can label it; a compiled method's
+// JSON is byte-for-byte what it always was.
 type SkillRef struct {
 	Name    string `json:"name"`
 	Layer   string `json:"layer"`
 	Version int    `json:"version"`
+	Origin  string `json:"origin,omitempty"`
 }
 
 // SkillSet is the loaded, validated skill catalog. Immutable after load.
@@ -671,6 +740,7 @@ func LoadSkills() (*SkillSet, error) {
 			return nil, fmt.Errorf("skills: %s: %w", sk.Name, cerr)
 		}
 		sk.Cases = cases
+		sk.Origin = SkillOriginCompiled
 		if _, dup := set.byName[sk.Name]; dup {
 			return nil, fmt.Errorf("skills: duplicate skill %q", sk.Name)
 		}
@@ -679,15 +749,8 @@ func LoadSkills() (*SkillSet, error) {
 	}
 	sort.Strings(set.order)
 	// Whole-set drift check: every `next=` must name a skill that exists.
-	for _, n := range set.order {
-		for _, d := range set.byName[n].Decisions {
-			if d.Kind != DecisionNext {
-				continue
-			}
-			if _, ok := set.byName[d.Target]; !ok {
-				return nil, fmt.Errorf("skills: %s: decision next=%q names a skill that does not exist", n, d.Target)
-			}
-		}
+	if err := validateNextGraph(set); err != nil {
+		return nil, err
 	}
 	// Exactly one entry method, so selection always has a deterministic default.
 	methods := 0
@@ -707,6 +770,27 @@ func LoadSkills() (*SkillSet, error) {
 	return set, nil
 }
 
+// validateNextGraph is the whole-set `next=` check: every target exists and may be
+// reached from where it is named (hopAllowed).
+func validateNextGraph(set *SkillSet) error {
+	for _, n := range set.order {
+		from := set.byName[n]
+		for _, d := range from.Decisions {
+			if d.Kind != DecisionNext {
+				continue
+			}
+			to, ok := set.byName[d.Target]
+			if !ok {
+				return fmt.Errorf("skills: %s: decision next=%q names a skill that does not exist", n, d.Target)
+			}
+			if !hopAllowed(from, to) {
+				return fmt.Errorf("skills: %s: decision next=%q may not be reached from here: a compiled method never hands off to a customer's runbook, a runbook only reaches its own tenant's, and a MOP is nobody's next step", n, d.Target)
+			}
+		}
+	}
+	return nil
+}
+
 // parseSkill splits frontmatter from body and validates one skill.
 func parseSkill(dir, raw string) (*Skill, error) {
 	front, body, err := splitSkillFrontmatter(raw)
@@ -721,6 +805,18 @@ func parseSkill(dir, raw string) (*Skill, error) {
 		return nil, err
 	}
 	sk := &Skill{Body: strings.TrimSpace(body)}
+
+	sk.Kind = SkillKind(strings.TrimSpace(fields["kind"]))
+	switch sk.Kind {
+	case "":
+		sk.Kind = SkillKindInvestigative
+	case SkillKindInvestigative, SkillKindMOP:
+	default:
+		return nil, fmt.Errorf("kind %q is not one of %s, %s", sk.Kind, SkillKindInvestigative, SkillKindMOP)
+	}
+	if err := parseSkillSteps(sk, fields, blocks); err != nil {
+		return nil, err
+	}
 
 	sk.Name = strings.TrimSpace(fields["name"])
 	switch {
@@ -753,7 +849,7 @@ func parseSkill(dir, raw string) (*Skill, error) {
 	}
 
 	sk.Tools = splitCommaList(fields["tools"])
-	if len(sk.Tools) == 0 {
+	if len(sk.Tools) == 0 && !sk.isMOP() {
 		return nil, fmt.Errorf("tools is required — declare the skill's read-only allowlist")
 	}
 	declared := make(map[string]bool, len(sk.Tools))
@@ -779,7 +875,7 @@ func parseSkill(dir, raw string) (*Skill, error) {
 		}
 		sk.Gather = append(sk.Gather, step)
 	}
-	if len(sk.Gather) == 0 {
+	if len(sk.Gather) == 0 && !sk.isMOP() {
 		return nil, fmt.Errorf("gather is required — a skill must say what evidence it collects")
 	}
 	if len(sk.Gather) > MaxSkillToolCalls {
@@ -808,7 +904,33 @@ func parseSkill(dir, raw string) (*Skill, error) {
 	if !hasVerdict {
 		return nil, fmt.Errorf("decisions must include a verdict= line stating what a conclusion says")
 	}
+	if sk.isMOP() && len(sk.NextSkills()) > 0 {
+		return nil, fmt.Errorf("a %s hands off to nothing: nothing runs one, so a next= line could never be taken", SkillKindMOP)
+	}
 	return sk, nil
+}
+
+// parseSkillSteps reads the steps: block, which only a MOP has and every MOP must.
+func parseSkillSteps(sk *Skill, fields map[string]string, blocks map[string][]string) error {
+	_, scalar := fields["steps"]
+	_, block := blocks["steps"]
+	if !sk.isMOP() {
+		if scalar || block {
+			return fmt.Errorf("steps: belongs to kind: %s — an %s method gathers, it has no steps", SkillKindMOP, SkillKindInvestigative)
+		}
+		return nil
+	}
+	if scalar {
+		return fmt.Errorf("steps: takes a list of \"  - \" items, not a value")
+	}
+	sk.Steps = blocks["steps"]
+	if len(sk.Steps) == 0 {
+		return fmt.Errorf("kind: %s requires a steps: block (1-%d lines)", SkillKindMOP, maxMOPSteps)
+	}
+	if len(sk.Steps) > maxMOPSteps {
+		return fmt.Errorf("steps: declares %d lines; a %s has at most %d", len(sk.Steps), SkillKindMOP, maxMOPSteps)
+	}
+	return nil
 }
 
 // splitSkillFrontmatter returns the text between the leading `---` fence and

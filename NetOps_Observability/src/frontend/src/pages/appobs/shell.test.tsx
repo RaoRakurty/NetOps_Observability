@@ -124,6 +124,9 @@ describe("SourceStatusBadge", () => {
     render(<SourceStatusBadge status="not_supported" />);
     expect(screen.getByText("Not collected here")).toBeTruthy();
     cleanup();
+    render(<SourceStatusBadge status="unknown" />);
+    expect(screen.getByText("Could not be checked")).toBeTruthy();
+    cleanup();
     render(<SourceStatusBadge status="flowing" />);
     expect(screen.getByText("Flowing")).toBeTruthy();
   });

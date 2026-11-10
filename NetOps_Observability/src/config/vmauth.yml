@@ -8,9 +8,10 @@
 # layer 1): scripts/install.py render_service_secrets() substitutes the
 # quoted percent-brace tokens below and writes the result to
 # data/secrets/vmauth/vmauth/auth.yml, which vmauth reads (re-checked every
-# 10 s) — so no password sits in vmauth's container env. The helm chart still
-# hands this file to vmauth unrendered and lets vmauth expand the tokens from
-# its env (helm cutover is a follow-up). NOTE: vmauth expands percent-brace
+# 10 s) — so no password sits in vmauth's container env. The helm chart hands
+# this file to vmauth unrendered and lets vmauth expand the tokens from its env,
+# which holds these six keys only (tracker 384); its clients read their own key
+# from a mounted file. NOTE: vmauth expands percent-brace
 # tokens EVERYWHERE in this file, comments included — never write a literal
 # one here.
 #

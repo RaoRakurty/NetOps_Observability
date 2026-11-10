@@ -13,6 +13,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/irisreplay"
 )
 
 // ai_datasource.go — the server-side implementation of ai.DataSource. It is the
@@ -104,6 +105,35 @@ SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
 	// narrates the engine's phrase instead of re-deriving a cause statement.
 	pr.OperatorPhrase, pr.ConfidenceLabel = ai.TopHypothesisVoice(r["hypotheses"])
 	return pr, nil
+}
+
+// replaySnapshot reads the engine's stored output for one correlation, exactly
+// as stored, for a replay capture (tracker 337 N-H2). Same tenant rule as
+// GetProblem: unknown and another tenant's are both ErrNotFound.
+func (d aiDataSource) replaySnapshot(ctx context.Context, id string) (irisreplay.Snapshot, error) {
+	d = d.with(ctx)
+	if !isUUIDToken(id) {
+		return irisreplay.Snapshot{}, ai.ErrNotFound
+	}
+	sql := `
+SELECT hypotheses, tenant_id, engine_version, catalog_version
+  FROM netops.corr_objects
+ WHERE correlation_id = '` + id + `'
+ ORDER BY version DESC
+ LIMIT 1
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return irisreplay.Snapshot{}, err
+	}
+	if len(rows) == 0 || !d.corrRowVisible(rows[0]) {
+		return irisreplay.Snapshot{}, ai.ErrNotFound
+	}
+	r := rows[0]
+	return irisreplay.Snapshot{
+		TenantID: asStr(r["tenant_id"]), Hypotheses: asStr(r["hypotheses"]),
+		EngineVersion: asStr(r["engine_version"]), CatalogVersion: asStr(r["catalog_version"]),
+	}, nil
 }
 
 // GetProblemEvidence derives bounded, cited evidence items for the problem from

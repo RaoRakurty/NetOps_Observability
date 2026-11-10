@@ -90,4 +90,4 @@ datasources:
       username: grafana
     secureJsonData:
       tlsCACert: $__file{/tls/ca.pem}
-      password: ${GRAFANA_CH_PASSWORD}
+      password: $__file{/run/secrets/clickhouse/grafana/password}

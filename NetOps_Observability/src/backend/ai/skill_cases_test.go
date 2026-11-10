@@ -14,148 +14,29 @@ package ai
 // diagnostic would have made the investigation one hop shallower with CI green.
 //
 // So every case in every skills/<name>/CASES.yaml is replayed here through the
-// REAL machinery: the real embedded SKILL.md corpus, the real gather planner,
-// the real Policy Engine, the real condition evaluator and the real chain loop.
-// The ONLY thing substituted is what the governed tools returned — which is
-// exactly the input a fixture is supposed to own.
+// REAL machinery (skill_harness.go): the real embedded SKILL.md corpus, the real
+// gather planner, the real Policy Engine, the real condition evaluator and the
+// real chain loop. The ONLY thing substituted is what the governed tools returned
+// — which is exactly the input a fixture is supposed to own.
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 )
 
-// ---- the fixture registry --------------------------------------------------
+// ---- the fixture -----------------------------------------------------------
 
-// caseTool is a governed tool with a SCRIPTED result. It embeds the REAL tool,
-// so its name, module, capability, permissions and freshness — everything the
-// Policy Engine reads — are the production ones; only Run is fixture.
-type caseTool struct {
-	AITool
-	res ToolResult
-	err error
-}
+// caseDeps is the harness's registration-shaped troubleshoot seams.
+func caseDeps() TroubleshootDeps { return harnessDeps(harnessEnv{}, SkillCase{}) }
 
-func (t caseTool) Run(_ context.Context, _ Principal, _ ToolArgs) (ToolResult, error) {
-	if t.err != nil {
-		return ToolResult{}, t.err
-	}
-	return t.res, nil
-}
-
-// errCaseToolFailed is the generic failure behind a `= error` outcome.
-var errCaseToolFailed = errors.New("fixture tool failure")
-
-// caseDeps wires every troubleshoot seam so the REAL registry registers every
-// tool on the skill allowlist. The functions are never called — caseTool
-// replaces Run — but their presence is what makes registration production-shaped.
-func caseDeps() TroubleshootDeps {
-	d := stubDeps()
-	d.ProtocolDiagnostic = func(context.Context, Principal, DiagnosticRequest) (DiagnosticReport, error) {
-		return DiagnosticReport{}, nil
-	}
-	d.SecurityFindings = func(context.Context, Principal, FindingsQuery) ([]SecurityFinding, error) {
-		return nil, nil
-	}
-	d.TopologyContext = func(context.Context, Principal, string) (TopologyContext, error) {
-		return TopologyContext{}, nil
-	}
-	d.CaseTimeline = func(context.Context, Principal, string) ([]TimelineEvent, error) {
-		return nil, nil
-	}
-	d.DeviceState = func(context.Context, Principal, DeviceStateRequest) (DeviceStateReport, error) {
-		return DeviceStateReport{}, nil
-	}
-	d.BGPWatchlist = func(context.Context, Principal) (BGPWatchlistReport, error) {
-		return BGPWatchlistReport{}, nil
-	}
-	d.BGPRPKI = func(context.Context, Principal) (BGPRPKIReport, error) {
-		return BGPRPKIReport{}, nil
-	}
-	d.BGPFeedRecent = func(context.Context, Principal, string, int) (BGPFeedReport, error) {
-		return BGPFeedReport{}, nil
-	}
-	d.RecallInvestigations = func(context.Context, Principal, InvestigationQuery) ([]InvestigationRow, error) {
-		return nil, nil
-	}
-	d.RecentChanges = func(context.Context, Principal, ChangeQuery) (ChangeReport, error) {
-		return ChangeReport{}, nil
-	}
-	d.ConfigDiff = func(context.Context, Principal, ConfigDiffRequest) (ConfigDiffReport, error) {
-		return ConfigDiffReport{}, nil
-	}
-	return d
-}
-
-// casePayload is what every ANSWERING tool returns for a case: the evidence
-// kinds, the collection notes and the machine signals the fixture declares.
-// Facts are turn-global in the chain (chainFacts), so which answering tool
-// carries them cannot change a routing decision — only WHETHER they arrived can,
-// and that is what the case states.
-func casePayload(c SkillCase) ToolResult {
-	res := ToolResult{Notes: append([]string(nil), c.Notes...), Signals: append([]string(nil), c.Signals...)}
-	for i, kind := range c.Evidence {
-		res.Items = append(res.Items, EvidenceItem{
-			CitationID: fmt.Sprintf("case-%s-%d", kind, i),
-			Kind:       kind,
-			Text:       "fixture " + kind + " evidence for " + c.Name,
-			Href:       "#/fixture",
-		})
-	}
-	return res
-}
-
-// caseOrchestrator builds the turn: the real skill set, the real policy engine,
-// and one fixture tool per allowlisted tool carrying this case's scripted
-// outcome. `not_wired` is modelled the way production models it — the tool is
-// simply not registered on this deployment.
-func caseOrchestrator(t *testing.T, set *SkillSet, c SkillCase) (*Orchestrator, *scriptLLM, *[]ToolAuditEntry) {
+// caseOrchestrator builds one case's turn, exactly as the runner does.
+func caseOrchestrator(t *testing.T, set *SkillSet, c SkillCase) (*Orchestrator, *harnessProvider, *[]ToolAuditEntry) {
 	t.Helper()
-	replies := []string(nil)
-	if c.ModelNext != "" {
-		replies = []string{"Routing this step.\nNEXT: " + c.ModelNext}
+	o, llm, audit, err := newHarnessTurn(set, c, harnessEnv{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	llm := &scriptLLM{replies: replies, fallback: "Fixture narrative for " + c.Name + "."}
-
-	ds := newMockDS()
-	var audit []ToolAuditEntry
-	o := &Orchestrator{
-		DS: ds, LLM: llm,
-		Flags:        func(string) bool { return true },
-		Troubleshoot: caseDeps(),
-		ToolAudit:    func(e ToolAuditEntry) { audit = append(audit, e) },
-	}
-	real := Tools(ds)
-	real.AddTroubleshootTools(ds, o.Troubleshoot)
-
-	payload := casePayload(c)
-	reg := &ToolRegistry{byName: map[string]AITool{}}
-	var denied []string
-	for _, name := range sortedKeys(skillToolAllowlist) {
-		rt, ok := real.Get(name)
-		if !ok {
-			t.Fatalf("%s is on the skill tool allowlist but the registry does not wire it", name)
-		}
-		switch c.Tools[name] {
-		case "not_wired":
-			continue // not registered on this deployment — the runner discloses it
-		case "not_found":
-			reg.add(caseTool{AITool: rt, err: ErrNotFound})
-		case "error":
-			reg.add(caseTool{AITool: rt, err: errCaseToolFailed})
-		case "denied":
-			denied = append(denied, name)
-			reg.add(caseTool{AITool: rt, res: payload})
-		default: // "" or "ok"
-			reg.add(caseTool{AITool: rt, res: payload})
-		}
-	}
-	o.Tools = reg
-	o.Policy = NewPolicyEngine(PolicyConfig{DenyTools: denied}, o.Flags)
-	o.Skills = set
-	return o, llm, &audit
+	return o, llm, audit
 }
 
 // ---- the runner ------------------------------------------------------------
@@ -178,156 +59,17 @@ func TestSkillCasesPinTheChain(t *testing.T) {
 	}
 }
 
+// runSkillCase is the production runner's verdict on one case: there is one
+// runner, so the suite and a customer's submission cannot disagree.
 func runSkillCase(t *testing.T, set *SkillSet, sk *Skill, c SkillCase) {
 	t.Helper()
-	o, llm, audit := caseOrchestrator(t, set, c)
-
-	// The ENTRY METHOD: when the case states it, deterministic selection must
-	// reach this skill from the operator's own words, with no model involved.
-	if c.ExpectSelect != "" {
-		m, ok := SelectSkill(set, c.Question, Plan{Intent: c.Intent})
-		switch {
-		case c.ExpectSelect == caseSelectNone:
-			if ok {
-				t.Errorf("SelectSkill picked %q for %q; the case says no method applies", m.Skill.Name, c.Question)
-			}
-		case !ok:
-			t.Errorf("SelectSkill picked nothing for %q; the case expects %q", c.Question, c.ExpectSelect)
-		case m.Skill.Name != c.ExpectSelect:
-			t.Errorf("SelectSkill picked %q for %q; the case expects %q", m.Skill.Name, c.Question, c.ExpectSelect)
-		}
+	res := runCaseGuarded(set, sk, c, harnessEnv{})
+	for _, f := range res.Failures {
+		t.Error(f)
 	}
-
-	ans, handled := o.answerSkill(context.Background(), runPrincipal(), c.Question,
-		Plan{Intent: firstNonEmpty(c.Intent, "troubleshoot")},
-		SkillMatch{Skill: sk, Reason: "the case fixture selected " + sk.Name},
-		c.UI, nil)
-	if !handled {
-		t.Fatalf("the turn was not handled — no method in the chain gathered anything")
+	if res.Passed == (len(res.Failures) > 0) {
+		t.Errorf("Passed = %v with %d failures", res.Passed, len(res.Failures))
 	}
-
-	// ── the hop path, and HOW each hop was chosen ────────────────────────
-	if len(ans.Chain) != len(c.ExpectChain) {
-		t.Fatalf("chain = %v, want %v", renderChain(ans.Chain), renderExpect(c.ExpectChain))
-	}
-	for i, want := range c.ExpectChain {
-		got := ans.Chain[i]
-		if got.Name != want.Skill || got.Selected != want.Selected {
-			t.Fatalf("hop %d = %s (%s), want %s (%s) — full chain %v",
-				i+1, got.Name, got.Selected, want.Skill, want.Selected, renderChain(ans.Chain))
-		}
-		if got.Round != i+1 {
-			t.Errorf("hop %d ran in round %d", i+1, got.Round)
-		}
-	}
-	last := ans.Chain[len(ans.Chain)-1]
-	wantSelected := caseSelectNone
-	if len(ans.Chain) > 1 {
-		wantSelected = last.Selected
-	}
-	if wantSelected != c.ExpectSelected {
-		t.Errorf("the last hop was selected by %q, the case says %q", wantSelected, c.ExpectSelected)
-	}
-	if c.ExpectReason != "" {
-		if !strings.Contains(strings.ToLower(last.Reason), strings.ToLower(c.ExpectReason)) {
-			t.Errorf("the hop reason shown to the operator is %q, which does not contain %q", last.Reason, c.ExpectReason)
-		}
-	}
-	// A hop must be reconstructible from the audit alone.
-	for i, h := range ans.Chain[1:] {
-		want := "rule_selected"
-		if h.Selected == ChainSelectedModel {
-			want = "model_selected"
-		}
-		if !hasSelectionAudit(*audit, h.Name, h.Selected, want, i+1) {
-			t.Errorf("hop to %s (%s) is not in the audit as %s in round %d: %+v", h.Name, h.Selected, want, i+1, selections(*audit))
-		}
-	}
-
-	// ── the method this evidence must NOT reach ──────────────────────────
-	for _, never := range c.ExpectNever {
-		for _, h := range ans.Chain {
-			if h.Name == never {
-				t.Errorf("the chain reached %q, which this evidence must never reach: %v", never, renderChain(ans.Chain))
-			}
-		}
-	}
-
-	// ── the verdict the operator is promised ─────────────────────────────
-	final, ok := set.Get(last.Name)
-	if !ok {
-		t.Fatalf("the final hop %q is not a loaded skill", last.Name)
-	}
-	if ans.Skill == nil || ans.Skill.Name != final.Name {
-		t.Errorf("Answer.Skill = %+v, want the last hop %q", ans.Skill, final.Name)
-	}
-	var verdictLines []string
-	for _, d := range final.Decisions {
-		if d.Kind == DecisionVerdict {
-			verdictLines = append(verdictLines, d.Reason)
-		}
-	}
-	joined := strings.ToLower(strings.Join(verdictLines, " | "))
-	for _, tok := range c.ExpectVerdict {
-		if !strings.Contains(joined, strings.ToLower(tok)) {
-			t.Errorf("%s's verdict= says %q, which no longer states %q", final.Name, joined, tok)
-		}
-	}
-	if len(llm.systems) == 0 {
-		t.Fatal("the narration turn never reached the provider seam")
-	}
-	system := llm.systems[len(llm.systems)-1]
-	for _, vl := range verdictLines {
-		if !strings.Contains(system, vl) {
-			t.Errorf("the verdict requirement %q never reached the narration prompt", vl)
-		}
-	}
-
-	// ── the disclosures ──────────────────────────────────────────────────
-	disclosed := strings.Join(append(append([]string(nil), ans.MissingEvidence...), ans.Disclaimers...), "\n")
-	if len(llm.prompts) > 0 {
-		disclosed += "\n" + llm.prompts[len(llm.prompts)-1]
-	}
-	for _, want := range c.ExpectNotes {
-		if !strings.Contains(disclosed, want) {
-			t.Errorf("the operator was never told %q; disclosures were:\n%s", want, disclosed)
-		}
-	}
-}
-
-func renderChain(chain []SkillHop) []string {
-	out := make([]string, 0, len(chain))
-	for _, h := range chain {
-		out = append(out, h.Name+"("+h.Selected+")")
-	}
-	return out
-}
-
-func renderExpect(chain []SkillHopExpect) []string {
-	out := make([]string, 0, len(chain))
-	for _, h := range chain {
-		out = append(out, h.Skill+"("+h.Selected+")")
-	}
-	return out
-}
-
-func selections(entries []ToolAuditEntry) []ToolAuditEntry {
-	var out []ToolAuditEntry
-	for _, e := range entries {
-		if e.Tool == "next_skill" {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-func hasSelectionAudit(entries []ToolAuditEntry, skill, selected, reason string, round int) bool {
-	for _, e := range selections(entries) {
-		if e.Skill == skill && e.Selected == selected && e.Reason == reason && e.Round == round && e.Allowed {
-			return true
-		}
-	}
-	return false
 }
 
 // ---- no authored rule may go untested --------------------------------------

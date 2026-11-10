@@ -33,6 +33,8 @@ expect_never:
   - log-confirmation
   - path-seam-handoff
 expect_select: bgp-prefix-missing
+expect_hypotheses:
+  - bgp-session=SUPPORTED
 
 ---
 
@@ -129,6 +131,8 @@ expect_never:
   - bgp-session-down
   - log-confirmation
   - path-seam-handoff
+expect_never_tools:
+  - get_config_diff
 
 ---
 

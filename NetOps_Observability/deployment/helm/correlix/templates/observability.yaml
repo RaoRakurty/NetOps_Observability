@@ -41,9 +41,24 @@ spec:
             # vmalert-ONLY on purpose: the scale-SLO rules keep firing when the
             # api is the thing that is down, so they must not depend on it.
             - -rule=/etc/vmalert/config/rules-scale-slo.yaml
-            - -datasource.url=http://victoria:8428
-            - -remoteWrite.url=http://victoria:8428
-            - -remoteRead.url=http://victoria:8428
+            - -datasource.url={{ include "correlix.metricsUrl" $ }}
+            - -remoteWrite.url={{ include "correlix.metricsUrl" $ }}
+            - -remoteRead.url={{ include "correlix.metricsUrl" $ }}
+            {{- if .Values.vmauth.enabled }}
+            # Tracker 384: the svc-vmalert identity on all three hops, read from a
+            # file vmalert re-reads on use, never a flag value.
+            - -datasource.basicAuth.username=svc-vmalert
+            - -datasource.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password
+            - -remoteWrite.basicAuth.username=svc-vmalert
+            - -remoteWrite.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password
+            - -remoteRead.basicAuth.username=svc-vmalert
+            - -remoteRead.basicAuth.passwordFile=/run/secrets/vmauth/vmalert/password
+            {{- if .Values.tls.enabled }}
+            - -datasource.tlsCAFile=/tls/ca/ca.crt
+            - -remoteWrite.tlsCAFile=/tls/ca/ca.crt
+            - -remoteRead.tlsCAFile=/tls/ca/ca.crt
+            {{- end }}
+            {{- end }}
             - -evaluationInterval={{ .Values.vmalert.evaluationInterval }}
             - -configCheckInterval=60s
             - -external.label=stack={{ .Release.Name }}
@@ -75,6 +90,12 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /etc/vmalert/config, readOnly: true}
             - {name: notifier-secret, mountPath: /run/secrets, readOnly: true}
+            {{- if .Values.vmauth.enabled }}
+            - {name: vmauth-cred, mountPath: /run/secrets/vmauth/vmalert, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: mesh-ca, mountPath: /tls/ca, readOnly: true}
+            {{- end }}
+            {{- end }}
       volumes:
         - {name: config, configMap: {name: correlix-config}}
         - name: notifier-secret
@@ -82,6 +103,12 @@ spec:
             secretName: {{ include "correlix.secretName" $ }}
             items:
               - {key: VMALERT_WEBHOOK_TOKEN, path: vmalert_notifier_password}
+        {{- if .Values.vmauth.enabled }}
+{{ include "correlix.vmauthCredVolume" (dict "root" $ "key" "VMAUTH_VMALERT_PASSWORD") | indent 8 }}
+        {{- if .Values.tls.enabled }}
+{{ include "correlix.meshCAVolume" $ | indent 8 }}
+        {{- end }}
+        {{- end }}
 {{- end }}
 {{- if .Values.vmauth.enabled }}
 ---
@@ -120,9 +147,17 @@ spec:
             - -tlsKeyFile=/tls/tls.key
             {{- end }}
             - -httpListenAddr=:8427
-          envFrom:
-            # vmauth.yml expands the per-identity credentials with %{ENV}.
-            - secretRef: {name: {{ include "correlix.secretName" $ }}}
+          # vmauth.yml expands the per-identity credentials with %{ENV}, and this
+          # is the one credential the chart must keep in env: there is no renderer
+          # here, unlike compose (install.py -> data/secrets/vmauth/vmauth/auth.yml),
+          # and vmauth cannot read a password from a file. Only these six keys:
+          # it used to take the whole Secret through envFrom, every other
+          # service's credentials included (tracker 384).
+          env:
+            {{- range $k := list "VMAUTH_API_PASSWORD" "VMAUTH_GNMIC_PASSWORD" "VMAUTH_VECTOR_PASSWORD" "VMAUTH_VMALERT_PASSWORD" "VMAUTH_GRAFANA_PASSWORD" "VMAUTH_PROBER_PASSWORD" }}
+            - name: {{ $k }}
+              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: {{ $k }}}}
+            {{- end }}
           ports:
             - {name: http, containerPort: 8427}
           readinessProbe:
@@ -258,11 +293,10 @@ spec:
             - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
             - name: GF_SECURITY_ADMIN_USER
               value: "admin"
-            - name: GF_SECURITY_ADMIN_PASSWORD
-              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: GRAFANA_ADMIN_PASSWORD}}
-            # The ClickHouse datasource credential the provisioning files read.
-            - name: GRAFANA_CH_PASSWORD
-              valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: GRAFANA_CH_PASSWORD}}
+            # Tracker 384: the image's __FILE form, from the Secret volume below.
+            # GRAFANA_CH_PASSWORD is gone: this chart mounts no provisioning
+            # files, so nothing here ever read it.
+            - {name: GF_SECURITY_ADMIN_PASSWORD__FILE, value: "/run/secrets/grafana/admin/password"}
           ports:
             - {name: http, containerPort: 3000}
           readinessProbe:
@@ -281,9 +315,16 @@ spec:
 {{ toYaml .Values.grafana.resources | indent 12 }}
           volumeMounts:
             - {name: data, mountPath: /var/lib/grafana}
+            - {name: admin-cred, mountPath: /run/secrets/grafana/admin, readOnly: true}
       volumes:
         - name: data
           persistentVolumeClaim: {claimName: grafana-data}
+        - name: admin-cred
+          secret:
+            secretName: {{ include "correlix.secretName" $ }}
+            defaultMode: 0440
+            items:
+              - {key: GRAFANA_ADMIN_PASSWORD, path: password}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -421,6 +462,9 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        {{- if .Values.vmauth.enabled }}
+        fsGroup: 65532 # the Secret volume below is 0440, group-readable only
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: prober
@@ -442,8 +486,15 @@ spec:
             - {name: REDIS_PORT, value: "6379"}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: REDIS_PASSWORD}}
-            - {name: VICTORIA_URL, value: "http://victoria:8428"}
-            - {name: METRICS_URL, value: "http://victoria:8428"}
+            - {name: VICTORIA_URL, value: {{ include "correlix.metricsUrl" $ | quote }}}
+            - {name: METRICS_URL, value: {{ include "correlix.metricsUrl" $ | quote }}}
+            {{- if .Values.vmauth.enabled }}
+            - {name: VICTORIA_AUTH_USER, value: "svc-prober"}
+            - {name: VICTORIA_AUTH_PASSWORD_FILE, value: "/run/secrets/vmauth/prober/password"}
+            {{- if .Values.tls.enabled }}
+            - {name: TLS_BACKEND_CA_FILE, value: "/tls/ca/ca.crt"}
+            {{- end }}
+            {{- end }}
             - {name: PROBE_EVENT_SINK_URL, value: "http://vector-aggregator:8689/"}
             - {name: INGEST_USER, value: "netops-ingest"}
             - name: INGEST_TOKEN_PROBES
@@ -462,6 +513,18 @@ spec:
             failureThreshold: 6
           resources:
 {{ toYaml .Values.prober.resources | indent 12 }}
+          {{- if .Values.vmauth.enabled }}
+          volumeMounts:
+            - {name: vmauth-cred, mountPath: /run/secrets/vmauth/prober, readOnly: true}
+            {{- if .Values.tls.enabled }}
+            - {name: mesh-ca, mountPath: /tls/ca, readOnly: true}
+            {{- end }}
+      volumes:
+{{ include "correlix.vmauthCredVolume" (dict "root" $ "key" "VMAUTH_PROBER_PASSWORD") | indent 8 }}
+        {{- if .Values.tls.enabled }}
+{{ include "correlix.meshCAVolume" $ | indent 8 }}
+        {{- end }}
+          {{- end }}
 {{- end }}
 {{- if .Values.hostExporters.enabled }}
 ---

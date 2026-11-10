@@ -64,4 +64,4 @@ datasources:
       secure: false
       username: grafana
     secureJsonData:
-      password: ${GRAFANA_CH_PASSWORD}
+      password: $__file{/run/secrets/clickhouse/grafana/password}

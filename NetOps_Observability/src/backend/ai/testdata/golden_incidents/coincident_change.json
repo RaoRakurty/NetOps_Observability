@@ -29,6 +29,9 @@
       }
     },
     "model_reply": "The link loss on edge-1 was caused by the configuration change pushed at 10:02 [hypothesis:cc01aaaa:1]. Next: roll back the change on edge-1.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "confirmed", "leading_hypothesis": "optic-los", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "confirmed",
       "status": "Confirmed",
@@ -67,6 +70,9 @@
       }
     },
     "model_reply": "A configuration change on edge-1 at 10:02 triggered the BGP session loss [controller:cc02bbbb]. Next: review the change with its owner.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "bgp-loss", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "status": "Suspected",
@@ -104,6 +110,9 @@
       }
     },
     "model_reply": "edge-1 lost its BGP session and the controller reported a configuration change in the same window [controller:cc03cccc]. The BGP outage was caused by that configuration change. Next: compare the running configuration with the previous capture.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_actionable_incidents", "get_active_major_incidents", "get_problem", "get_problem_evidence"],
+    "expected": {"verdict": "suspected", "leading_hypothesis": "bgp-loss", "prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 2},
     "expect": {
       "verdict": "suspected",
       "status": "Suspected",
@@ -132,6 +141,9 @@
       ], "notes": ["window: last 24h"]}
     },
     "model_reply": "The root cause is the configuration change on edge-1 at 10:02 [config:dev-a:9f2c4e1a7b3d]; Ethernet1/1 went down four minutes later [log:os:1]. Next: roll back the change.",
+    "model": {"provider": "mock", "name": "scripted"},
+    "allowed_tools": ["get_active_major_incidents", "get_bgp_feed_recent", "get_bgp_rpki", "get_bgp_watchlist", "get_case_timeline", "get_config_diff", "get_device_health", "get_device_state", "get_metric_anomalies", "get_problem_evidence", "get_rca_verdict", "get_recent_changes", "get_security_findings", "get_topology_context", "recall_investigations", "run_protocol_diagnostic", "search_logs"],
+    "expected": {"prohibited_tools": ["get_device_state", "run_protocol_diagnostic"], "max_tools": 4},
     "expect": {
       "required_citations": ["config:dev-a:9f2c4e1a7b3d", "log:os:1"],
       "forbidden_claims": ["root cause is the configuration change"],

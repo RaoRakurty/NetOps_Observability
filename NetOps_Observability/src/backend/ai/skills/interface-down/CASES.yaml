@@ -25,6 +25,9 @@ expect_never:
   - log-confirmation
   - ospf-adjacency
   - bgp-session-down
+expect_hypotheses:
+  - interface-errors=SUPPORTED
+  - link-down=INCONCLUSIVE
 
 ---
 
@@ -101,6 +104,8 @@ expect_never:
   - bgp-session-down
   - path-seam-handoff
 expect_select: interface-down
+expect_never_tools:
+  - run_protocol_diagnostic
 
 ---
 
