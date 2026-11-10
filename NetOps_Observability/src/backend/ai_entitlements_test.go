@@ -81,6 +81,9 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/tenants":          adminPlane, // requirePlatformAdmin: per-tenant AI switches
 	"/api/ai/tenants/":         adminPlane, // requirePlatformAdmin
 	"/api/copilot/config":      adminPlane, // requirePlatformAdmin: provider + platform key
+	// Test connection (tracker 337 C3): the same gates as the settings they test.
+	"/api/ai/tenant-config/test": adminPlane, // requireAdmin: the tenant's own key only
+	"/api/copilot/config/test":   adminPlane, // requirePlatformAdmin: the platform key
 }
 
 // aiHandlerName matches a handler that implements an AI surface, wherever its
@@ -332,6 +335,8 @@ var adminPlaneProbes = []aiProbe{
 	{"/api/ai/tenants", http.MethodGet, "/api/ai/tenants", "", adminPlane},
 	{"/api/ai/tenants/", http.MethodPut, "/api/ai/tenants/t-a", `{"assistant_enabled":true}`, adminPlane},
 	{"/api/copilot/config", http.MethodGet, "/api/copilot/config", "", adminPlane},
+	{"/api/ai/tenant-config/test", http.MethodPost, "/api/ai/tenant-config/test", `{}`, adminPlane},
+	{"/api/copilot/config/test", http.MethodPost, "/api/copilot/config/test", `{"provider":"gemini","key":"x"}`, adminPlane},
 	{"/api/ai/decisions", http.MethodGet, "/api/ai/decisions", "", adminPlane},
 	{"/api/ai/source-authority", http.MethodPut, "/api/ai/source-authority", `{"order":["manual","controller","discovered","declared"]}`, adminPlane},
 	{"/api/ai/replay/export/", http.MethodGet, "/api/ai/replay/export/" + probeID, "", adminPlane},
@@ -360,7 +365,7 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
-		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" || p.route == "/api/ai/replay/export/" {
+		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/tenant-config/test" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" || p.route == "/api/ai/replay/export/" {
 			// A tenant admin legitimately configures their OWN tenant's key, sets
 			// their OWN source order (source_authority_isolation_test.go), and
 			// reads their OWN workspace's decision ledger and incidents
