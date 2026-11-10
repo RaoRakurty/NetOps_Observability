@@ -2948,6 +2948,7 @@ func Run() {
 	srv.startEntityResolverEnrichment(ctx)
 	// (tenant, exporter, ifIndex)→ifName rows in netops.iface_names, the table the
 	// flows API names interfaces through (tracker 387 PR 13b).
+	settlePlatformAddrs(outboundSourceAddr)
 	srv.workers.start("iface-names-export", func() { srv.runIfaceNamesExport(ctx) })
 	// The SNMP trap receiver's interface-address rung and ifIndex names
 	// (tracker 387 PR 13c', 13c).

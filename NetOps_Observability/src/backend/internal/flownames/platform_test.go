@@ -62,3 +62,27 @@ func TestLogsFlowDocsLabelPlatformMonitoring(t *testing.T) {
 		t.Errorf("customer traffic labelled platform: %v", r1)
 	}
 }
+
+// Configuration wins; with none, the outbound address; with no route, nothing.
+func TestResolvePlatformAddrs(t *testing.T) {
+	out := func() string { return "172.18.0.5" }
+	p, src := ResolvePlatformAddrs("10.70.245.122", "", out)
+	if src != PlatformSourceConfigured || !p.Contains("10.70.245.122") || p.Contains("172.18.0.5") {
+		t.Errorf("configured: %v %v", src, p.IPs())
+	}
+	p, src = ResolvePlatformAddrs("", "prober=10.70.245.123", out)
+	if src != PlatformSourceConfigured || !p.Contains("10.70.245.123") {
+		t.Errorf("vantage is configuration too: %v %v", src, p.IPs())
+	}
+	p, src = ResolvePlatformAddrs(" , bogus", "", out)
+	if src != PlatformSourceOutbound || !p.Contains("172.18.0.5") {
+		t.Errorf("fallback: %v %v", src, p.IPs())
+	}
+	p, src = ResolvePlatformAddrs("", "", func() string { return "" })
+	if src != PlatformSourceNone || !p.Empty() {
+		t.Errorf("no route: %v %v", src, p.IPs())
+	}
+	if _, src = ResolvePlatformAddrs("", "", func() string { return "not-an-ip" }); src != PlatformSourceNone {
+		t.Errorf("a garbage fallback must not count: %v", src)
+	}
+}

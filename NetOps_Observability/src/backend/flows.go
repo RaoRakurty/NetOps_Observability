@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -975,8 +976,51 @@ func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status
 // platformAddrsFromEnv is the live platform-address configuration: the
 // appliance's own sender addresses (CX_PLATFORM_ADDRESSES) and the probers'
 // (PATH_GRAPH_VANTAGE_ADDRESSES). See flownames/platform.go.
+// With neither set, start-up (settlePlatformAddrs) has already written the
+// api's own outbound source address into CX_PLATFORM_ADDRESSES.
 func platformAddrsFromEnv() flownames.PlatformAddrs {
 	return flownames.ParsePlatformAddrs(os.Getenv("CX_PLATFORM_ADDRESSES"), os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"))
+}
+
+// outboundSourceAddr is the source address the kernel picks for off-box
+// traffic: a UDP connect to a documentation address (RFC 5737) sends no packet.
+// "" when there is no route. Bounded: a connect on UDP does not block.
+func outboundSourceAddr() string {
+	d := net.Dialer{Timeout: time.Second}
+	c, err := d.Dial("udp", "192.0.2.1:9")
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = c.Close() }() // best-effort: a UDP socket that never sent
+	if ua, ok := c.LocalAddr().(*net.UDPAddr); ok && !ua.IP.IsLoopback() {
+		return ua.IP.String()
+	}
+	return ""
+}
+
+// settlePlatformAddrs decides ONCE, at start-up, which platform addresses the
+// flows views separate, and logs where they came from so a fallback is never
+// silent. With nothing configured it falls back to the api's own outbound
+// source address and records it in CX_PLATFORM_ADDRESSES, the one place every
+// reader looks: deciding per request would make each view depend on the routing
+// table of the moment.
+func settlePlatformAddrs(outbound func() string) {
+	p, source := flownames.ResolvePlatformAddrs(os.Getenv("CX_PLATFORM_ADDRESSES"), os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"), outbound)
+	fields := map[string]any{"source": source, "addresses": p.IPs()}
+	if source == flownames.PlatformSourceOutbound {
+		if err := os.Setenv("CX_PLATFORM_ADDRESSES", strings.Join(p.IPs(), ",")); err != nil {
+			logError("flows", "could not record the fallback platform address; Correlix's own monitoring traffic is not separated", map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	switch source {
+	case flownames.PlatformSourceOutbound:
+		logWarn("flows", "CX_PLATFORM_ADDRESSES is empty: using the api's own outbound address for Correlix's monitoring traffic; behind Docker NAT devices see the host's address instead, so set CX_PLATFORM_ADDRESSES (the installer does)", fields)
+	case flownames.PlatformSourceNone:
+		logWarn("flows", "no platform address is known: Correlix's own monitoring traffic is not separated in the flows views", fields)
+	default:
+		logInfo("flows", "platform addresses for the flows views", fields)
+	}
 }
 
 // includePlatformTraffic reads the visible toggle: ?traffic=all includes it.

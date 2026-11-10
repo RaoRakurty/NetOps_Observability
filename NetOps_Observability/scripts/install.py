@@ -260,6 +260,26 @@ def _route_source_address() -> str | None:
     return addr if addr and not addr.startswith("127.") else None
 
 
+def platform_addresses_default() -> str:
+    """CX_PLATFORM_ADDRESSES for a .env that does not set it (tracker 387 PR 13).
+
+    The address this appliance's pollers and collectors send from, as devices
+    see it: the default route's source. Flows to or from it are Correlix's own
+    monitoring and the flows views leave them out by default. An operator's
+    explicit value always wins (from the environment on a fresh install, or the
+    value already in .env, which nothing here rewrites). No default route ->
+    empty, and the api then falls back to its own outbound address at run time.
+    The environment value is validated: it is written into .env verbatim."""
+    explicit = (os.environ.get("CX_PLATFORM_ADDRESSES") or "").strip()
+    if explicit:
+        for part in explicit.split(","):
+            part = part.strip()
+            if part and not re.fullmatch(r"[0-9A-Fa-f.:/]{2,49}", part):
+                fail(f"CX_PLATFORM_ADDRESSES has an entry that is not an IP or CIDR: {part!r}")
+        return explicit
+    return _route_source_address() or ""
+
+
 def _first_host_address() -> str | None:
     """The host's first non-loopback IPv4 per `hostname -I`, or None.
 
@@ -1249,6 +1269,12 @@ def _env_migration_lines(env: dict, profiles: str = DEFAULT_PROFILES,
     # gate. bootstrap_grafana reconciles the ClickHouse user to it.
     if "GRAFANA_CH_PASSWORD" not in env:
         additions.append(f"GRAFANA_CH_PASSWORD={generate_password(24)}")
+    # Migration (tracker 387 PR 13): the appliance's own sender address, so the
+    # flows views can separate Correlix's polling from customer traffic on an
+    # upgraded install too. Seeded once; a value already in .env (even empty) is
+    # the operator's and is never rewritten.
+    if "CX_PLATFORM_ADDRESSES" not in env:
+        additions.append(f"CX_PLATFORM_ADDRESSES={platform_addresses_default()}")
     # Tracker 384. Only reached with no password in DATABASE_URL to move
     # (migrate_env_credentials runs first): a file-backend install, say. It stays
     # unused until such an install switches to Postgres.
@@ -1859,6 +1885,14 @@ OS_AGGREGATOR_PASSWORD={secrets_map["OS_AGGREGATOR_PASSWORD"]}
 #   prober        raw-socket active-measurement sidecar
 #   osd           OpenSearch Dashboards (omitted by --core bundles)
 COMPOSE_PROFILES={profiles}
+
+# The address(es) this appliance's pollers and collectors send from, as devices
+# see them (comma-separated IPs or CIDRs). Flows to or from them are Correlix's
+# own monitoring and the flows views leave them out by default (nothing is
+# deleted). Detected from the default route at install; edit if the appliance
+# sends through NAT or from more than one address. Empty: the api uses its own
+# outbound address.
+CX_PLATFORM_ADDRESSES={platform_addresses_default()}
 """
     write_env_text(env_path, body, what="write .env")
     ok(f"wrote {env_path} (mode 0600)")

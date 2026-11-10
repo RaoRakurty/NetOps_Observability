@@ -74,6 +74,33 @@ func ParsePlatformAddrs(platform, vantage string) PlatformAddrs {
 	return out
 }
 
+// Platform-address sources, as ResolvePlatformAddrs reports them.
+const (
+	PlatformSourceConfigured = "configured"
+	PlatformSourceOutbound   = "outbound_fallback"
+	PlatformSourceNone       = "none"
+)
+
+// ResolvePlatformAddrs is the configuration, or, when nothing is configured,
+// the process's own outbound source address (outbound returns "" when there is
+// no route). Behind Docker NAT that address is the container's, which devices
+// never see: the installer writes the host's address into .env for exactly that
+// reason, and the fallback only covers an install that has none.
+func ResolvePlatformAddrs(platform, vantage string, outbound func() string) (PlatformAddrs, string) {
+	if p := ParsePlatformAddrs(platform, vantage); !p.Empty() {
+		return p, PlatformSourceConfigured
+	}
+	if outbound != nil {
+		if p := ParsePlatformAddrs(outbound(), ""); !p.Empty() {
+			return p, PlatformSourceOutbound
+		}
+	}
+	return PlatformAddrs{}, PlatformSourceNone
+}
+
+// IPs lists the exact addresses (for the start-up log).
+func (p PlatformAddrs) IPs() []string { return append([]string(nil), p.ips...) }
+
 // contains reports whether a flow endpoint is a platform address.
 func (p PlatformAddrs) Contains(addr string) bool {
 	ip := net.ParseIP(strings.TrimSpace(addr))
