@@ -142,7 +142,7 @@ func TestLabQuestionsRoute(t *testing.T) {
 		"What is going on right now? What should the NOC focus on first?": "noc_focus",
 		"What is going on right now?":                                     "current_state",
 		"show me the critical incidents":                                  "incident_list",
-		"show me the critical incidentes":                                 "incident_list",
+		"show me the critical incidentes":                                 "incident_list", //nolint:misspell // the lab's own typo, under test
 		"list top isues today":                                            "incident_list",
 		"open incidents at dalas":                                         "incident_list",
 		"what's wrong with edge-1":                                        "incident_list",

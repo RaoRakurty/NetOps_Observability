@@ -31,7 +31,7 @@ func readingOf(r Result, kind string) *lex.Reading {
 // D1: a severity word reads as confirmed incidents, disclosed every time; an
 // explicit tier wins over it.
 func TestSeverityReadsAsConfirmedAndIsDisclosed(t *testing.T) {
-	for _, q := range []string{"show me the critical incidents", "show me the critical incidentes", "any major outages", "show me only critical", "urgent issues today"} {
+	for _, q := range []string{"show me the critical incidents", "show me the critical incidentes", "any major outages", "show me only critical", "urgent issues today"} { //nolint:misspell // the lab's own typo, under test
 		r := run(t, q, cx)
 		if r.AST == nil || r.AST.Type != ast.IncidentList || !hasFilter(r.AST, "verdict_tier", "confirmed") {
 			t.Errorf("%q → %+v", q, r)

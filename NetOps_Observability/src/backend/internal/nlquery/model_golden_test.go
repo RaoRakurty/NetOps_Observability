@@ -74,13 +74,9 @@ type phrasing struct {
 
 // harness runs the grammar over the corpus and returns the phrasings it left
 // Unparsed, with the grammar's own tallies.
-func unparsedPhrasings(t *testing.T, cat *catalog.Catalog, w *world) (out []phrasing, total int) {
-	out, total, _, _ = phrasingsByGrammar(t, cat, w)
-	return out, total
-}
-
-// phrasingsByGrammar is unparsedPhrasings plus the answerable totals: every
-// answerable phrasing, and those the grammar compiled.
+// phrasingsByGrammar returns the phrasings the grammar left Unparsed (the
+// model path's input) and the total phrasings, plus the answerable totals:
+// every answerable phrasing, and those the grammar compiled.
 func phrasingsByGrammar(t *testing.T, cat *catalog.Catalog, w *world) (out []phrasing, total, answerable, grammarAnswered int) {
 	t.Helper()
 	comp := compile.Compiler{Cat: cat, R: resolve.Resolver{Cat: cat, L: fixtureLookups{w: w}, Topo: fixtureLookups{w: w}}}

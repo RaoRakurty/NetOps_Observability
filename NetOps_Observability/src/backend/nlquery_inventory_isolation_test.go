@@ -86,7 +86,7 @@ func TestNotFoundNeverRevealsAForeignName(t *testing.T) {
 			t.Fatalf("%s: tenant A's device leaked: %v", name, out)
 		}
 	}
-	if strings.Replace(nlqJSON(foreign), "edge-a", "X", -1) != strings.Replace(nlqJSON(missing), "edge-zz", "X", -1) {
+	if strings.ReplaceAll(nlqJSON(foreign), "edge-a", "X") != strings.ReplaceAll(nlqJSON(missing), "edge-zz", "X") {
 		t.Fatalf("foreign and missing must answer identically:\n%v\n%v", foreign, missing)
 	}
 }

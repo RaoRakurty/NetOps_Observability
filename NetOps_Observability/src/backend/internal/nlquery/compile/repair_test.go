@@ -148,12 +148,12 @@ func TestMisspeltNameIsOfferedNotApplied(t *testing.T) {
 // Free-text values are data: an owner's name is copied as typed, never
 // "corrected" into a vocabulary word.
 func TestValuesAreNeverRepaired(t *testing.T) {
-	r := run(t, "show incidents owned by Netwrok Team this week", cx)
-	if r.AST == nil || len(r.AST.Filters) == 0 || r.AST.Filters[len(r.AST.Filters)-1].Values[0] != "Netwrok Team" {
+	r := run(t, "show incidents owned by Netwrk Team this week", cx)
+	if r.AST == nil || len(r.AST.Filters) == 0 || r.AST.Filters[len(r.AST.Filters)-1].Values[0] != "Netwrk Team" {
 		t.Fatalf("owner value must be kept as typed: %+v", r.AST)
 	}
 	for _, rd := range r.Readings {
-		if rd.From == "netwrok" {
+		if rd.From == "netwrk" {
 			t.Fatalf("a value word was repaired: %+v", rd)
 		}
 	}

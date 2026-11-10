@@ -6,7 +6,7 @@ package compile
 // repair.go — typo tolerance over the grammar's CLOSED vocabulary (hybrid NLU
 // plan A2, owner decision D2).
 //
-// A misspelt vocabulary word ("shwo", "incidentes", "isues") is corrected and
+// A misspelt vocabulary word ("shwo", "incidnets", "isues") is corrected and
 // DISCLOSED as a Reading ("I read 'shwo' as 'show'"); a word with several
 // equally close candidates is offered, never applied. The guards live in
 // lex (length, distance, first letter, letters only, uniqueness, plain

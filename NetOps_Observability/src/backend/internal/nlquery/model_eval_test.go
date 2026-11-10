@@ -53,7 +53,7 @@ func TestModelPathLiveProvider(t *testing.T) {
 	}
 	cat := catalog.MustLoad()
 	w := loadWorld(t)
-	ps, total := unparsedPhrasings(t, cat, w)
+	ps, total, _, _ := phrasingsByGrammar(t, cat, w)
 	ps = capPerSplit(ps, limit)
 	start := time.Now()
 	// Dev and held-out are reported separately: a model doing better on dev is

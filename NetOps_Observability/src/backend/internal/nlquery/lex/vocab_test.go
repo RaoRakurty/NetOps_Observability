@@ -12,7 +12,7 @@ var testVocab = NewVocab([]string{"show", "issues", "incidents", "latency", "int
 
 func TestCorrectRepairsUnambiguousTypos(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"shwo", "show"}, {"isues", "issues"}, {"incidentes", "incidents"}, {"latnecy", "latency"},
+		{"shwo", "show"}, {"isues", "issues"}, {"incidentes", "incidents"}, {"latnecy", "latency"}, //nolint:misspell // typos under test
 		{"interfacse", "interfaces"}, {"memroy", "memory"}, {"incidnets", "incidents"},
 	} {
 		if fix, ties := testVocab.Correct(c.in); fix != c.want || ties != nil {

@@ -111,7 +111,7 @@ func TestDistance(t *testing.T) {
 		a, b string
 		d    int
 	}{{"", "", 0}, {"abc", "abc", 0}, {"abc", "acb", 1}, {"kitten", "sitting", 3}, {"cpu", "cpu_util_pct", 9},
-		{"shwo", "show", 1}, {"isues", "issues", 1}, {"incidentes", "incidents", 1}, {"dalas", "dallas", 1}} {
+		{"shwo", "show", 1}, {"isues", "issues", 1}, {"incidentes", "incidents", 1}, {"dalas", "dallas", 1}} { //nolint:misspell // typos under test
 		if got := Distance(c.a, c.b); got != c.d {
 			t.Errorf("Distance(%q,%q)=%d want %d", c.a, c.b, got, c.d)
 		}
