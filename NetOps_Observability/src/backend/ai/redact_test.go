@@ -353,3 +353,39 @@ func TestRedactSecretsLeavesDeviceUsernamesAlone(t *testing.T) {
 		t.Errorf("RedactSecrets masked an identifier: %q", got)
 	}
 }
+
+// Found live 2026-11-10: vEdge confd logs a refused SNMP request with the
+// attempted community twice. reSecretCLI alone masked the word "name:" and left
+// both copies, so the line looked redacted while the credential survived.
+func TestRedactSecretsMasksTheRefusedCommunityInBothPlaces(t *testing.T) {
+	comm := "fixture-comm-" + strings.Repeat("q", 6)
+	for _, in := range []string{
+		"audit user: " + comm + "/0 SNMP authentication failed: PDU discarded: bad community name: " + comm + " 127.0.0.1.198.53",
+		"audit user: public/0 SNMP authentication failed: PDU discarded: bad community name: public 10.0.0.1.4.1",
+		"snmpd[812]: Received SNMP packet from 192.0.2.7: bad community name: " + comm,
+		"Bad community name " + comm + " from 192.0.2.9",
+	} {
+		got := RedactSecrets(in)
+		for _, secret := range []string{comm, "public"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("community %q survived: %q", secret, got)
+			}
+		}
+		if !strings.Contains(strings.ToLower(got), "community name") {
+			t.Errorf("the label was masked instead of the value: %q", got)
+		}
+	}
+	want := "audit user: ***/0 SNMP authentication failed: PDU discarded: bad community name: *** 127.0.0.1.198.53"
+	if got := RedactSecrets("audit user: public/0 SNMP authentication failed: PDU discarded: bad community name: public 127.0.0.1.198.53"); got != want {
+		t.Errorf("RedactSecrets = %q, want %q", got, want)
+	}
+}
+
+// A successful SNMP session names a real account in the same slot; that stays
+// (owner D7). Only the refused request's "user" is a credential.
+func TestRedactSecretsKeepsTheAccountOfASuccessfulSNMPSession(t *testing.T) {
+	in := "audit user: fixture-person/0 assigned to groups: operator"
+	if got := RedactSecrets(in); got != in {
+		t.Errorf("an account name was masked: %q", got)
+	}
+}

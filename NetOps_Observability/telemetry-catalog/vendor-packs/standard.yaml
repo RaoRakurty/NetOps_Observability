@@ -70,7 +70,10 @@ grammars:
   # Management audit (PR 11, owner D2), vendor-neutral: ConfD and OpenSSH run on many
   # platforms, so these rows hold for any sender and stamp no vendor. Non-alarm: no
   # severity, no rule row. `dedup_key` is (device, app, event_type); repeats are grouped
-  # at READ time and every record stays stored. A failed login is deliberately NOT here.
+  # at READ time and every record stays stored. A failed login is deliberately NOT filed as
+  # management_audit: the one refusal classified here (an SNMP request with a bad
+  # community) has its own category, security_audit, so it never groups with the routine
+  # records.
   - id: confd_session_created
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
@@ -156,6 +159,50 @@ grammars:
       audit_user: '{user}'
       audit_action: 'session_terminated'
       session_id: '{usid}'
+    fidelity: lab_validated
+
+  # ConfD's SNMP agent refusing a v1/v2c request whose community it does not know. Live on
+  # every lab vEdge (2026-11-10, confd info/local1, about every 20 s, from 127.0.0.1: a
+  # poller on the box itself holding a wrong community). The same text is a ConfD
+  # AuditNotification on non-Cisco platforms (Broadcom KB 184838), so the row is neutral.
+  #
+  # THE COMMUNITY IS A CREDENTIAL (owner D1). ConfD prints it twice: as the session's user
+  # (`audit user: <community>/0`: a v1/v2c request has no user, so the agent names it by
+  # the community it carried) and after `bad community name:`. No group captures either,
+  # so no title, summary, typed field or key can carry it, and `audit_user` stays unset on
+  # purpose. The stored `message` still holds it: syslog has no community redaction today.
+  #
+  # The tail is the request's transport address as SNMPv2-TM's snmpUDPAddress prints it:
+  # six octets, the IPv4 address then the port in two bytes (`127.0.0.1.198.53` is
+  # 127.0.0.1, port 198*256+53 = 50741). Only the address is read, and only when the last
+  # word of the line is exactly six octets: a longer run (an IPv6 transport prints 18) or
+  # any other text reads none. A pack pattern cannot use an end anchor (`$` is Vector's
+  # interpolation sign), so the alternatives are ordered instead: six octets followed by
+  # more of the word first (no address), then six octets (the address), then any word (no
+  # address), each tried at the line's last space, so a match never reaches back into the
+  # community. The port would need arithmetic a template lacks. One case no reader can
+  # tell apart: a community ending in a space and six dotted numbers, with the address
+  # missing; ConfD prints the address on every line seen.
+  #
+  # Security-relevant, not routine: its own category, so it never groups with the poll
+  # session records. No rule row: it states nothing about the network, every vEdge sends
+  # it every 20 s, and the security evidence class is fed by the platform evaluator on
+  # netops.security, not by a syslog row (the trap twin, authenticationFailure, is the
+  # same call in coverage_matrix.py). At info nothing alarms, as before this row.
+  - id: confd_snmp_auth_failed
+    parser_id: standard_mgmt_audit.v1
+    literal: ' SNMP authentication failed: PDU discarded: bad community name:'
+    apps: [confd]
+    pattern: '^audit user: .{1,256}?/\d{1,12} SNMP authentication failed: PDU discarded: bad community name:(?: .{0,256} (?:\d{1,3}(?:\.\d{1,3}){5}[^ \d]|(?P<src>\d{1,3}(?:\.\d{1,3}){3})\.\d{1,3}\.\d{1,3}|[^ ]{0,64}))?'
+    event_type: snmp_auth_failed_community
+    summary: 'SNMP request refused: unknown community[ from {src}]'
+    category: security_audit
+    fields:
+      title: 'SNMP request refused on {host}: unknown community[ from {src}]'
+      correlation_key: 'audit:{device}:snmp_auth_failed'
+      audit_action: 'auth_failed'
+      audit_source: '{src}'
+      audit_via: 'snmp'
     fidelity: lab_validated
 
   - id: confd_netconf_rpc
@@ -391,6 +438,84 @@ fixtures:
       parser_status: parsed
       event_type: audit_session_terminated
       event_category: management_audit
+    signal: null
+
+  # The community below is fabricated, so a test can prove it reaches no parsed field.
+  - name: an SNMP request with a wrong community is a security record that names no community
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: confd
+    severity: info
+    message: 'audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 127.0.0.1.198.53'
+    expect:
+      parser_id: standard_mgmt_audit.v1
+      parser_status: parsed
+      event_type: snmp_auth_failed_community
+      summary: 'SNMP request refused: unknown community from 127.0.0.1'
+      title: 'SNMP request refused on vEdge-1: unknown community from 127.0.0.1'
+      event_category: security_audit
+      dedup_key: 'vEdge-1|confd|snmp_auth_failed_community'
+      correlation_key: 'audit:vEdge-1:snmp_auth_failed'
+      audit_action: auth_failed
+      audit_source: 127.0.0.1
+      audit_via: snmp
+      normalized_severity: info
+      enrichment:
+        fields_observed: [event_type, summary, audit_source]
+        fields_derived: [normalized_severity, title, correlation_key, audit_action, audit_via, dedup_key]
+        fields_guidance: []
+        unknown: []
+    signal: null
+
+  - name: a wrong community with a space in it and no address still names neither
+    fidelity: doc_claimed
+    source: 'the lab line with a community holding a space and the transport address cut off; ConfD prints the community as given'
+    hostname: vEdge-1
+    appname: confd
+    severity: info
+    message: 'audit user: wrong community 7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong community 7f3a'
+    expect:
+      parser_status: parsed
+      event_type: snmp_auth_failed_community
+      summary: 'SNMP request refused: unknown community'
+      title: 'SNMP request refused on vEdge-1: unknown community'
+      event_category: security_audit
+    signal: null
+
+  - name: an IPv6 transport address is not read as an IPv4 source
+    fidelity: doc_claimed
+    source: 'SNMPv2-TM / RFC 3419: an IPv6 UDP transport address is 18 octets (16 address, 2 port), printed as the IPv4 one is; not seen on the lab'
+    hostname: vEdge-1
+    appname: confd
+    severity: info
+    message: 'audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1.198.53'
+    expect:
+      parser_status: parsed
+      event_type: snmp_auth_failed_community
+      title: 'SNMP request refused on vEdge-1: unknown community'
+    signal: null
+
+  - name: six dotted numbers inside the community are never read as the source
+    fidelity: doc_claimed
+    source: 'the lab line with a community holding six dotted numbers and a last word that is not an address'
+    hostname: vEdge-1
+    appname: confd
+    severity: info
+    message: 'audit user: x 10.9.8.7.6.5 y/0 SNMP authentication failed: PDU discarded: bad community name: x 10.9.8.7.6.5 y'
+    expect:
+      parser_status: parsed
+      event_type: snmp_auth_failed_community
+      summary: 'SNMP request refused: unknown community'
+    signal: null
+
+  - name: the same refusal from another app is not classified
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    severity: info
+    message: 'audit user: wrong-community-7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong-community-7f3a 127.0.0.1.198.53'
+    expect: {}
     signal: null
 
   - name: a NETCONF request

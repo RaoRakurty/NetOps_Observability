@@ -319,6 +319,70 @@ def test_usernames_stay_in_the_message():
     assert not any("svc-user" in str(v) for k, v in parsed.items() if k not in allowed)
 
 
+#: A fabricated community: the value must reach no field the parse adds.
+_COMMUNITY = "fabricated-community-7f3a"
+
+
+@pytest.mark.parametrize(("community", "tail", "src"), [
+    (_COMMUNITY, " 127.0.0.1.198.53", "127.0.0.1"),
+    (_COMMUNITY, " 192.0.2.10.0.161", "192.0.2.10"),
+    (_COMMUNITY, "", None),
+    (_COMMUNITY, " 32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1.198.53", None),
+    (_COMMUNITY, " 127.0.0.1.198.53x", None),
+    ("fabricated cmty 7f3a", " 127.0.0.1.198.53", "127.0.0.1"),
+    ("fabricated 10.9.8.7.6.5 7f3a", "", None),
+    ("10.9.8.7.6.5", "", None),
+], ids=["lab-shape", "other-port", "no-address", "ipv6-transport", "run-on-word",
+        "spaces", "numbers-inside", "numeric-community"])
+def test_a_refused_community_reaches_no_parsed_field(community, tail, src):
+    """Owner D1: an SNMP community is a credential. ConfD prints the refused one twice, as
+    the session's user and after `bad community name:`. The parse is security-relevant
+    (its own category, the source when the line's last word is a six-octet transport
+    address) and copies the community into no title, summary, typed field or key."""
+    line = (f"audit user: {community}/0 SNMP authentication failed: PDU discarded: "
+            f"bad community name: {community}{tail}")
+    parsed = _audit(line, host="vEdge-1")
+    assert parsed["event_type"] == "snmp_auth_failed_community"
+    assert parsed["event_category"] == "security_audit"
+    assert parsed["audit_action"] == "auth_failed"
+    assert parsed.get("audit_source") == src
+    assert "audit_user" not in parsed and "session_id" not in parsed
+    assert "message" not in parsed  # the parse never rewrites the stored message
+    tokens = {community, *community.split()}
+    leaked = {k: v for k, v in parsed.items() for t in tokens if t in repr(v)}
+    assert not leaked, f"the community reached {sorted(leaked)}"
+
+
+def test_a_refused_community_never_opens_or_joins_at_the_level_it_is_sent():
+    """No rule row: the line states nothing about the network, and the security evidence
+    class is fed by the platform evaluator, not by syslog. At the info ConfD sends it at,
+    no signal, so the community also never reaches a signal's attrs."""
+    line = (f"audit user: {_COMMUNITY}/0 SNMP authentication failed: PDU discarded: "
+            f"bad community name: {_COMMUNITY} 127.0.0.1.198.53")
+    raw = {"hostname": "vEdge-1", "appname": "confd", "severity": "info", "message": line}
+    ev = {"timestamp": "2026-11-10T10:00:00Z", **_stage_b(raw)}
+    assert P.syslog_control_signal(dict(ev), "t1", datetime.now(timezone.utc)) is None
+
+
+def test_the_vbond_success_path_groups_with_its_lookup():
+    """The tracker's cache expiry and the resolver's answer carry the lookup lines' own
+    correlation key, so one vBond lookup is one group, success and failure alike."""
+    lines = [
+        ("dnsclient_ares_callback[258]: DNS lookup failed for 0/vbond.example.net via none, "
+         "reason: Timeout while contacting DNS servers"),
+        "dnsclient_ares_callback[224]: DNS lookup succeeded for 0/vbond.example.net via none",
+        ("monitor_req_send_cb[537]: DNS cache expired for 0/vbond.example.net/0 via none, "
+         "resolving DNS again"),
+        "dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3",
+    ]
+    parsed = [_audit(line, host="vEdge-1", app="VTRACKER") for line in lines]
+    assert {p["correlation_key"] for p in parsed} == {"dns:vEdge-1:vbond.example.net"}
+    assert [p["event_type"] for p in parsed] == [
+        "dns_lookup_failed", "dns_lookup_succeeded", "dns_cache_expired", "dns_resolved"]
+    assert parsed[3]["title"] == ("DNS lookup succeeded for vbond.example.net on vEdge-1: "
+                                  "resolved to 192.0.2.3")
+
+
 def test_every_typed_grammar_renders_a_human_summary():
     """Owner, live review 2026-11-10: a parsed line with no summary shows raw text. Every
     pack grammar that types an event states a summary, and every fixture it parses

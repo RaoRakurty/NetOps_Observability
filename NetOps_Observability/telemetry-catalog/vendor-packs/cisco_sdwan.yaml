@@ -143,6 +143,37 @@ grammars:
       correlation_key: 'dns:{device}:{target}'
     fidelity: lab_validated
 
+  # The vBond lookup's routine success path (live 2026-11-10, VTRACKER notice/local7, 72
+  # lines in 11 minutes across the lab's vEdges): the tracker's cache entry for the vBond
+  # name expires and it resolves again, then the resolver's cache takes the answer. The
+  # target is read without the `0/` prefix and the `/0` suffix the tracker prints, so both
+  # lines carry the lookup lines' correlation key and one vBond lookup groups as one. No
+  # rule row, as for `DNS lookup succeeded`: a success has no honest clear to send. The
+  # resolved address is in the title and summary; no typed field holds a DNS answer today.
+  - id: vedge_dns_cache_expired
+    parser_id: cisco_sdwan.v1
+    literal: ']: DNS cache expired for '
+    apps: [vtracker]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: DNS cache expired for (?:\d{1,3}/)?(?P<target>[^\s,/]{1,253})(?:/\d{1,5})?(?: via (?P<via>[^\s,]{0,64}))?'
+    event_type: dns_cache_expired
+    summary: 'DNS cache expired for {target}[ via {via}], resolving again'
+    fields:
+      title: 'DNS cache expired for {target} on {host}, resolving again'
+      correlation_key: 'dns:{device}:{target}'
+    fidelity: lab_validated
+
+  - id: vedge_dns_resolved
+    parser_id: cisco_sdwan.v1
+    literal: ']: FQDN '
+    apps: [vtracker]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: FQDN (?P<target>[^\s,/()]{1,253})(?: \(via (?P<via>[^\s,()]{0,64})\))? resolved to (?P<addr>[0-9A-Fa-f.:]{2,45})'
+    event_type: dns_resolved
+    summary: 'DNS lookup succeeded for {target}[ via {via}]: resolved to {addr}'
+    fields:
+      title: 'DNS lookup succeeded for {target} on {host}: resolved to {addr}'
+      correlation_key: 'dns:{device}:{target}'
+    fidelity: lab_validated
+
   # Poll-induced management-plane records (PR 11 shape, owner D2). The vEdge confd SNMP
   # agent logs these while answering OUR poller's interfaceTable walk: about 45 an hour
   # across the lab's vEdges (measured live 2026-11-10). Non-alarm: no severity, a stable
@@ -786,6 +817,48 @@ fixtures:
       parser_id: cisco_sdwan.v1
       parser_status: parsed
       event_type: dns_resolution_successful
+    signal: null
+
+  - name: the vBond cache entry expiring is the lookup's own success path, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: 'monitor_req_send_cb[537]: DNS cache expired for 0/vbond.example.net/0 via none, resolving DNS again'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      vendor: cisco
+      event_type: dns_cache_expired
+      summary: 'DNS cache expired for vbond.example.net via none, resolving again'
+      title: 'DNS cache expired for vbond.example.net on vEdge-1, resolving again'
+      correlation_key: 'dns:vEdge-1:vbond.example.net'
+      normalized_severity: notice
+      message: 'monitor_req_send_cb[537]: DNS cache expired for 0/vbond.example.net/0 via none, resolving DNS again'
+    signal: null
+
+  - name: the resolver caching the vBond answer is a success with its address, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: 'dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      vendor: cisco
+      event_type: dns_resolved
+      summary: 'DNS lookup succeeded for vbond.example.net via none: resolved to 192.0.2.3'
+      title: 'DNS lookup succeeded for vbond.example.net on vEdge-1: resolved to 192.0.2.3'
+      correlation_key: 'dns:vEdge-1:vbond.example.net'
+      normalized_severity: notice
+    signal: null
+
+  - name: the vBond cache words from a daemon outside the tracker are not classified
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    message: 'dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3'
+    expect: {}
     signal: null
 
   - name: the same DNS words from a daemon outside this pack mean nothing
