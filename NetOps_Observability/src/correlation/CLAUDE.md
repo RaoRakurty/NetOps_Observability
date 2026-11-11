@@ -53,6 +53,17 @@ Size caps (S:37, S:52-55): strings 256/128/512, tokens ≤32, attrs ≤4 KiB.
 | cloud · app.edge · verification · app identities · wireless | M:12995 · 13088 · 12817 · 13048 · 12841/12920 | cloud (via_cloud_api) · app-edge · active_verification · APP_IDENTITY (enrichment only, never a node, E:471-474) | — |
 | netops.security · netops.bgp | handle_evidence_event M:13120 | evidence classes (S:1092-1150) | platform evaluator |
 
+**Security evidence clears (owner D2, 2026-11-11).** The security class
+(`signals.EVIDENCE_CLASSES["security"]`) registers `security_posture_clear`,
+`security_exposure_clear` and `security_signal_clear` beside its three finding kinds, for
+the lane's findings-on-change emitter (feat/seclane-findings-on-change, which withholds
+clears behind `SECURITY_EMIT_CLEARS=false` until this registration ships). Before it, a
+clear was an unknown kind and dead-lettered. The recovery convention applies: a clear
+binds to the finding's entity, is written to `corr_signals` and enters the window, and
+`build_nodes` skips every `*_clear` kind, so it never forms a node, evidence, a template
+input or an object (D3). `coverage.INTENTIONAL_BLIND` declares all three. No template,
+gate or constant moved.
+
 **SNMP allowlist.** `rcaMetricFamilies` names 17 metrics; everything else stays in
 VictoriaMetrics only (`collectors/metric_events.go:75-108`).
 

@@ -205,20 +205,65 @@ def test_evidence_refs_are_bounded():
     assert len(refs) == signals.EVIDENCE_REFS_MAX
 
 
+# ══ 1b. clears (owner D2, findings-on-change) ═══════════════════════════════
+CLEAR_KINDS = ("security_posture_clear", "security_exposure_clear", "security_signal_clear")
+
+
+@pytest.mark.parametrize("kind", CLEAR_KINDS)
+def test_a_clear_is_a_signal_on_the_findings_entity_never_a_dead_letter(kind):
+    sig = evidence_signal_from_event(envelope(kind=kind), "acme")
+    assert sig.kind == kind
+    assert sig.modality_class is ModalityClass.SECURITY
+    # The recovery convention: the clear binds to the finding's own entity.
+    finding = evidence_signal_from_event(envelope(kind=kind.removesuffix("_clear")), "acme")
+    assert (sig.entity_type, sig.entity_id) == (finding.entity_type, finding.entity_id)
+
+
+@pytest.mark.parametrize("kind", CLEAR_KINDS)
+def test_a_clear_opens_no_node_and_no_object(kind):
+    from engine import build_nodes
+    sig = security_signal(kind=kind)
+    assert build_nodes((sig,)) == ()
+    assert run_window([sig], CAT, (), EngineConfig()) == []
+
+
+def test_a_clear_beside_its_finding_adds_nothing_to_the_finding_node():
+    from engine import build_nodes
+    finding, clear = security_signal(kind="security_signal"), security_signal(kind="security_signal_clear", secs=60)
+    nodes = build_nodes((finding, clear))
+    assert len(nodes) == 1 and {s.kind for s in nodes[0].signals} == {"security_signal"}
+
+
+def test_a_clear_through_the_handler_is_kept_and_windowed_but_opens_nothing(rig):
+    drive(envelope(kind="security_posture_clear",
+                   entity_tokens=["edge-r1", "device:edge-r1"]))
+    rows = evidence_rows(rig)
+    assert len(rows) == 1 and rows[0]["kind"] == "security_posture_clear", \
+        "raw evidence is never dropped: corr_signals keeps the clear"
+    assert [s.kind for s in main.WINDOW_BUFFER] == ["security_posture_clear"]
+    assert run_window(list(main.WINDOW_BUFFER), CAT, (), EngineConfig()) == []
+
+
 # ══ 2. registration ═════════════════════════════════════════════════════════
 def test_kinds_modality_and_layer_are_registered():
     # The SECURITY class's own vocabulary. Scoped to the class deliberately:
     # the bus registry is shared, and a second class registering its kinds must
     # not make this suite red (it must not make it PASS vacuously either, which
     # is why the row is read from the registry rather than restated).
-    assert SECURITY_KINDS == {
-        "security_posture", "security_exposure", "security_signal"}
+    findings = {"security_posture", "security_exposure", "security_signal"}
+    clears = {f"{k}_clear" for k in findings}   # owner D2: a finding that cleared
+    assert SECURITY_KINDS == findings | clears
     assert SECURITY_KINDS <= signals.EVIDENCE_BUS_KINDS
     for kind in SECURITY_KINDS:
         assert kind in EMITTED_KINDS
         assert KIND_MODALITY[kind] is ModalityClass.SECURITY
+    cat = load_catalog(BUILTIN_TEMPLATES)
+    for kind in findings:
         # consumed by the Exposure Story family -> never a dead template/orphan
-        assert classify_kind(kind, load_catalog(BUILTIN_TEMPLATES)) == "fully_connected"
+        assert classify_kind(kind, cat) == "fully_connected"
+    for kind in clears:
+        # a recovery: declared, consumed by no template on purpose
+        assert classify_kind(kind, cat) == "intentional_blind"
     # a standing property of the device orders ROOT-WARD of the symptoms it
     # could explain; a detection has no fixed layer, so the prior abstains.
     assert layers.layer_of("security_exposure") is layers.CausalLayer.DEVICE

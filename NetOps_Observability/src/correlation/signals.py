@@ -1311,7 +1311,14 @@ EVIDENCE_CLASSES: dict[str, EvidenceClassSpec] = {
     "security": EvidenceClassSpec(
         name="security",
         topic="netops.security",
-        kinds=frozenset({"security_posture", "security_exposure", "security_signal"}),
+        # The three `*_clear` kinds: a finding that cleared (owner D2,
+        # feat/seclane-findings-on-change, withheld behind SECURITY_EMIT_CLEARS
+        # until this row registers them). The recovery convention: it binds to
+        # the finding's entity, build_nodes skips every *_clear kind, so it
+        # never becomes a node, evidence, a template input or an object (D3).
+        kinds=frozenset({"security_posture", "security_exposure", "security_signal",
+                         "security_posture_clear", "security_exposure_clear",
+                         "security_signal_clear"}),
         source=Source.SECURITY,
         modality=ModalityClass.SECURITY,
         # The witness is the platform's rule/feed evaluator — never the device
