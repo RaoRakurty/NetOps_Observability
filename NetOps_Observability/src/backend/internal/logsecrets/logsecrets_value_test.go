@@ -15,13 +15,19 @@ import (
 // A fabricated community, built at run time.
 var configured = "fixture-comm-" + strings.Repeat("q", 6)
 
-func scrubberFor(t *testing.T, values ...string) *credscrub.Scrubber {
+// scrubberFor is the mask set of a caller of tenant "acme" whose communities
+// are values.
+func scrubberFor(t *testing.T, values ...string) credscrub.View {
 	t.Helper()
-	s := credscrub.New(func(context.Context) ([]string, error) { return values, nil })
+	vs := make([]credscrub.Value, 0, len(values))
+	for _, v := range values {
+		vs = append(vs, credscrub.Value{Tenant: "acme", Text: v})
+	}
+	s := credscrub.New(func(context.Context) ([]credscrub.Value, error) { return vs, nil })
 	if err := s.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s.For("acme", false)
 }
 
 // The three ConfD session records of one SNMP poll, as the packs stored them
@@ -171,7 +177,8 @@ func TestStripSourceMasksTheConfdSNMPSessionUserWithoutAScrubber(t *testing.T) {
 
 // A typed-nil scrubber (no credential store wired) is a no-op, not a panic.
 func TestStripWithATypedNilScrubber(t *testing.T) {
-	var vm *credscrub.Scrubber
+	var nilScrubber *credscrub.Scrubber
+	vm := nilScrubber.For("acme", false) // the zero View
 	doc := confdSessionDoc(configured)
 	out, err := StripSource(json.RawMessage(doc), vm)
 	if err != nil {

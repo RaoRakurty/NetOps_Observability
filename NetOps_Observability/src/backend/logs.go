@@ -230,15 +230,18 @@ func logsForbiddenErr(signal string) error {
 	return errors.New("app logs are restricted to the platform owner")
 }
 
-// logValueMasker is the by-value credential mask every log read path hands to
-// internal/logsecrets (the configured SNMP communities, internal/credscrub). A
-// server without one (a test, or a build that never wired the store) masks no
-// value: an untyped nil, never a typed-nil interface.
-func (s *server) logValueMasker() logsecrets.ValueMasker {
+// logValueMasker is the by-value credential mask a log read path hands to
+// internal/logsecrets for ONE caller (internal/credscrub): the caller's own
+// tenant's SNMP communities plus the platform's, or every tenant's for a
+// cross-tenant caller. Never another tenant's: that would tell a tenant whether
+// a string it logged is someone else's community (§3a). tenant and cross come
+// from principalTenant, or from a frozen export spec. A server without a
+// scrubber (a test, or a build that never wired the store) masks no value.
+func (s *server) logValueMasker(tenant string, cross bool) logsecrets.ValueMasker {
 	if s == nil || s.credScrub == nil {
 		return nil
 	}
-	return s.credScrub
+	return s.credScrub.For(tenant, cross)
 }
 
 // credScrubRefresh re-reads the configured communities after a credential
@@ -431,7 +434,8 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, errors.New("log search response is too large: narrow the query, time range or page size"))
 		return
 	}
-	raw, err = logsecrets.StripSearchResponse(raw, s.logValueMasker())
+	maskTenant, maskCross := principalTenant(claims)
+	raw, err = logsecrets.StripSearchResponse(raw, s.logValueMasker(maskTenant, maskCross))
 	if err != nil {
 		logError("logs", "search response refused by the credential strip", map[string]any{"err": err.Error()})
 		writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be checked"))

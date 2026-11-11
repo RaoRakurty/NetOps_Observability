@@ -14,14 +14,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/credscrub"
+	"netops/backend/internal/logexport"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/snmpcred"
 )
@@ -29,9 +32,20 @@ import (
 // A fabricated community, built at run time.
 var labCommunityFixture = "fixture-comm-" + strings.Repeat("q", 6)
 
+// withCommunities configures values as acme's own communities (the tests'
+// caller is acme()).
 func withCommunities(t *testing.T, s *server, values ...string) {
 	t.Helper()
-	s.credScrub = credscrub.New(func(context.Context) ([]string, error) { return values, nil })
+	vs := make([]credscrub.Value, 0, len(values))
+	for _, v := range values {
+		vs = append(vs, credscrub.Value{Tenant: "acme", Text: v})
+	}
+	withTenantCommunities(t, s, vs...)
+}
+
+func withTenantCommunities(t *testing.T, s *server, values ...credscrub.Value) {
+	t.Helper()
+	s.credScrub = credscrub.New(func(context.Context) ([]credscrub.Value, error) { return values, nil })
 	if err := s.credScrub.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +206,7 @@ func TestIrisLogSearchMasksAConfiguredCommunity(t *testing.T) {
 		t.Errorf("a configured community reached the rendered tool reply: %s", rendered)
 	}
 	// The grounded-prompt redactor masks it too.
-	if got := s.irisRedactor()("prompt: poller " + labCommunityFixture + " answered"); strings.Contains(got, labCommunityFixture) {
+	if got := s.irisRedactor(claims)("prompt: poller " + labCommunityFixture + " answered"); strings.Contains(got, labCommunityFixture) {
 		t.Errorf("irisRedactor left the community: %q", got)
 	}
 }
@@ -205,7 +219,7 @@ func TestProviderPayloadUnderARequestContextMasksAConfiguredCommunity(t *testing
 	cap := &capturingTransport{}
 	restore := ai.SwapProviderHTTPForTest(&http.Client{Transport: cap})
 	defer restore()
-	ctx := ai.WithEgressScrub(context.Background(), s.credScrub.MaskJSON)
+	ctx := ai.WithEgressScrub(context.Background(), s.credScrub.Union().MaskJSON)
 	raw := []byte(`{"model":"m","messages":[{"role":"user","content":"poller ` + labCommunityFixture + ` answered"}],"max_tokens":12345678901234567890}`)
 	if _, err := ai.ProviderDo(ctx, "https://api.openai.com/v1/chat/completions", nil, raw, "openai"); err != nil {
 		t.Fatalf("ProviderDo: %v", err)
@@ -240,7 +254,7 @@ func TestACredentialWriteRefreshesTheMask(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := "audit user: " + labCommunityFixture + "/1 terminated session (reason: normal)"
-	if got := s.credScrub.Mask(line); got != line {
+	if got := s.credScrub.For("acme", false).Mask(line); got != line {
 		t.Fatalf("masked before it was configured: %q", got)
 	}
 	admin := jwtClaims{Sub: "a@acme", Role: RoleSuperAdmin, Tenant: "acme"}
@@ -252,7 +266,7 @@ func TestACredentialWriteRefreshesTheMask(t *testing.T) {
 	if strings.Contains(w.Body.String(), labCommunityFixture) {
 		t.Fatalf("the API answer carries the community: %s", w.Body.String())
 	}
-	if got := s.credScrub.Mask(line); strings.Contains(got, labCommunityFixture) {
+	if got := s.credScrub.For("acme", false).Mask(line); strings.Contains(got, labCommunityFixture) {
 		t.Fatalf("a saved community is not masked on the next read: %q", got)
 	}
 	w = httptest.NewRecorder()
@@ -260,7 +274,7 @@ func TestACredentialWriteRefreshesTheMask(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
 	}
-	if got := s.credScrub.Mask(line); strings.Contains(got, labCommunityFixture) {
+	if got := s.credScrub.For("acme", false).Mask(line); strings.Contains(got, labCommunityFixture) {
 		t.Fatalf("a deleted community became readable in stored lines: %q", got)
 	}
 }
@@ -288,13 +302,17 @@ func TestSNMPCommunityValuesReadsEveryConfiguredSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{a: true, b: true, "fixture-legacy1": true, "fixture-legacy2": true}
+	// Each profile keeps its tenant; platform configuration is global ("").
+	want := map[credscrub.Value]bool{
+		{Tenant: "acme", Text: a}: true, {Tenant: "globex", Text: b}: true,
+		{Text: "fixture-legacy1"}: true, {Text: "fixture-legacy2"}: true,
+	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d values, want %d", len(got), len(want))
 	}
 	for _, v := range got {
 		if !want[v] {
-			t.Errorf("unexpected source value of length %d", len(v))
+			t.Errorf("unexpected source value (tenant %q, length %d)", v.Tenant, len(v.Text))
 		}
 	}
 
@@ -303,7 +321,188 @@ func TestSNMPCommunityValuesReadsEveryConfiguredSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[2] != "fixture-env-cccc" {
-		t.Errorf("SNMP_COMMUNITY not read: %d values", len(got))
+	if len(got) != 3 || got[2] != (credscrub.Value{Text: "fixture-env-cccc"}) {
+		t.Errorf("SNMP_COMMUNITY not read as a global value: %d values", len(got))
+	}
+}
+
+// ---- §3a: each caller masks with its own set -------------------------------
+
+// fourTenantValuesReply holds acme's community, globex's, and a platform one in
+// one acme record. The fake store ignores scoping on purpose: this is about the
+// mask set, not the query.
+func fourTenantValuesReply(acmeV, globexV, globalV string) string {
+	msg := "poller " + acmeV + " and " + globexV + " and " + globalV
+	return `{"took":1,"hits":{"total":{"value":1,"relation":"eq"},"hits":[` +
+		`{"_index":"netops-syslog-acme-2026.11.11","_id":"1","sort":[1,"1"],"_source":{"timestamp":"2026-11-11T09:00:00Z",` +
+		`"hostname":"acme-core","tenant_id":"acme","audit_user":"` + globexV + `","message":"` + msg + `"}}]},` +
+		`"aggregations":{"users":{"buckets":[{"key":"` + acmeV + `"},{"key":"` + globexV + `"}]}}}`
+}
+
+func tenantMaskFixture(t *testing.T, s *server) (acmeV, globexV, globalV string) {
+	t.Helper()
+	acmeV = "fixture-acme-" + strings.Repeat("a", 5)
+	globexV = "fixture-globex-" + strings.Repeat("b", 5)
+	globalV = "fixture-platform-" + strings.Repeat("c", 5)
+	withTenantCommunities(t, s,
+		credscrub.Value{Tenant: "acme", Text: acmeV},
+		credscrub.Value{Tenant: "globex", Text: globexV},
+		credscrub.Value{Tenant: "", Text: globalV})
+	return acmeV, globexV, globalV
+}
+
+// Masking another tenant's value would answer "is this string some tenant's
+// community?" for any string a tenant can get into its own logs. acme's search
+// masks acme's own value and the platform's; globex's value stays as text.
+func TestLogSearchMasksOnlyTheCallersOwnCommunities(t *testing.T) {
+	s := logsTestServer(t)
+	acmeV, globexV, globalV := tenantMaskFixture(t, s)
+	fakeOS(t, fourTenantValuesReply(acmeV, globexV, globalV))
+
+	w := httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodGet, "/api/logs/search?signal=syslog&include_routine_mgmt=true", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, acmeV) || strings.Contains(body, globalV) {
+		t.Errorf("acme's own or the platform's community was served to acme:\n%s", body)
+	}
+	if strings.Count(body, globexV) != 3 {
+		t.Errorf("CROSS-TENANT ORACLE: globex's value must reach acme unmasked (audit_user, message, bucket), got %d:\n%s",
+			strings.Count(body, globexV), body)
+	}
+
+	// as_tenant cannot borrow another tenant's set.
+	w = httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodGet, "/api/logs/search?signal=syslog&as_tenant=globex", "", acme()))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), globexV) || strings.Contains(w.Body.String(), acmeV) {
+		t.Errorf("as_tenant changed acme's mask set: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The platform owner reads every tenant's records, so it masks every tenant's
+// communities.
+func TestLogSearchCrossTenantCallerMasksEveryTenantsCommunities(t *testing.T) {
+	s := logsTestServer(t)
+	acmeV, globexV, globalV := tenantMaskFixture(t, s)
+	fakeOS(t, fourTenantValuesReply(acmeV, globexV, globalV))
+	w := httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodGet, "/api/logs/search?signal=syslog", "", superA()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	for _, v := range []string{acmeV, globexV, globalV} {
+		if strings.Contains(w.Body.String(), v) {
+			t.Errorf("a cross-tenant caller was served a community:\n%s", w.Body.String())
+		}
+	}
+}
+
+// The export freezes the requester's principal, so the queued worker masks with
+// the REQUESTER's set, not the union and not nothing.
+func TestExportFreezesTheRequestersMaskSet(t *testing.T) {
+	s := logsTestServer(t)
+	acmeV, globexV, globalV := tenantMaskFixture(t, s)
+
+	spec := s.exportSpecFor(acme(), "", "", "", "syslog", "json")
+	if spec.MaskTenant != "acme" || spec.MaskCross {
+		t.Fatalf("acme's spec froze mask scope %q/%v", spec.MaskTenant, spec.MaskCross)
+	}
+	if owner := s.exportSpecFor(superA(), "", "", "", "syslog", "json"); !owner.MaskCross {
+		t.Fatal("the platform owner's spec did not freeze a cross-tenant mask scope")
+	}
+	// Round-trip the spec the way the queue does, then fetch as the worker does.
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozen logexport.Spec
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	reply := fourTenantValuesReply(acmeV, globexV, globalV)
+	calls := 0
+	search := func(_, _ string, _ any) (*http.Response, error) {
+		calls++
+		r := `{"hits":{"hits":[]}}`
+		if calls == 1 {
+			r = reply
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(r))}, nil
+	}
+	start, end := time.Now().Add(-time.Hour), time.Now()
+	data, err := logexport.FetchBounded(context.Background(), search, frozen, start, end, 100, 1<<20,
+		s.logValueMasker(frozen.MaskTenant, frozen.MaskCross))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data.Raw[0])
+	if strings.Contains(out, acmeV) || strings.Contains(out, globalV) || !strings.Contains(out, globexV) {
+		t.Errorf("the queued export did not mask with acme's set: %s", out)
+	}
+
+	// And the sync door, end to end.
+	fakeOS(t, reply)
+	s.exportLimiter = ratelimit.New()
+	w := httptest.NewRecorder()
+	s.handleLogsExport(w, req(http.MethodGet, "/api/logs/export?signal=syslog&mode=sync&format=json", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if b := w.Body.String(); strings.Contains(b, acmeV) || !strings.Contains(b, globexV) {
+		t.Errorf("the sync export did not mask with acme's set: %s", b)
+	}
+}
+
+// Iris: acme's tool result and grounded prompt mask acme's set only.
+func TestIrisMasksOnlyTheCallersOwnCommunities(t *testing.T) {
+	s := idpServer(t)
+	acmeV, globexV, globalV := tenantMaskFixture(t, s)
+	line := "poller " + acmeV + " and " + globexV + " and " + globalV
+	reply, err := json.Marshal(map[string]any{"hits": map[string]any{"total": map[string]any{"value": 1},
+		"hits": []map[string]any{{"_id": "0", "_source": map[string]any{"message": line, "timestamp": "2026-11-11T00:00:00Z", "host": "acme-core"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeOS(t, string(reply))
+	claims := acme()
+	d := aiDataSource{srv: s, ctx: context.Background(), claims: claims}
+	tr, err := d.ModuleQuery(context.Background(), s.aiPrincipal(claims), "search_logs", ai.ToolArgs{"window": "1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Items) != 1 {
+		t.Fatalf("items: %+v", tr.Items)
+	}
+	text := tr.Items[0].Text
+	if strings.Contains(text, acmeV) || strings.Contains(text, globalV) || !strings.Contains(text, globexV) {
+		t.Errorf("the tool result was not masked with acme's set: %q", text)
+	}
+	got := s.irisRedactor(claims)(line)
+	if strings.Contains(got, acmeV) || strings.Contains(got, globalV) || !strings.Contains(got, globexV) {
+		t.Errorf("irisRedactor did not mask with acme's set: %q", got)
+	}
+	if got := s.irisRedactor(superA())(line); strings.Contains(got, acmeV) || strings.Contains(got, globexV) {
+		t.Errorf("the platform owner's redactor did not mask every tenant's value: %q", got)
+	}
+}
+
+// LLM06 last line without a request: a background job's provider call is
+// still scrubbed by the boot-time default (every tenant's values).
+func TestProviderPayloadFromABackgroundContextIsScrubbed(t *testing.T) {
+	s := &server{}
+	acmeV, globexV, _ := tenantMaskFixture(t, s)
+	ai.SetDefaultEgressScrub(func(b []byte) []byte { return s.credScrub.Union().MaskJSON(b) })
+	t.Cleanup(func() { ai.SetDefaultEgressScrub(nil) })
+	cap := &capturingTransport{}
+	restore := ai.SwapProviderHTTPForTest(&http.Client{Transport: cap})
+	defer restore()
+	raw := []byte(`{"model":"m","messages":[{"role":"user","content":"poller ` + acmeV + ` and ` + globexV + `"}]}`)
+	if _, err := ai.ProviderDo(context.Background(), "https://api.openai.com/v1/chat/completions", nil, raw, "openai"); err != nil {
+		t.Fatalf("ProviderDo: %v", err)
+	}
+	if p := string(cap.body); p == "" || strings.Contains(p, acmeV) || strings.Contains(p, globexV) {
+		t.Fatalf("a background provider call was not scrubbed:\n%s", p)
 	}
 }

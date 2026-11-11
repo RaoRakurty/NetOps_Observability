@@ -200,14 +200,20 @@ func (s *discoveryConfigStore) migrateLegacyCommunity(creds *snmpcred.Store) err
 // and a discovery community an older build saved that has not migrated into a
 // profile yet. The protocol default "public" the poller falls back to when
 // SNMP_COMMUNITY is unset is NOT configured by anyone and is not included.
+//
+// Each profile's value carries its owning tenant, so a read masks only the
+// caller's own tenant's communities (credscrub: Tenancy). SNMP_COMMUNITY and the
+// legacy discovery community are platform configuration: global.
 func snmpCommunityValues(creds *snmpcred.Store, disc *discoveryConfigStore) credscrub.Source {
-	return func(context.Context) ([]string, error) {
-		var out []string
+	return func(context.Context) ([]credscrub.Value, error) {
+		var out []credscrub.Value
 		if creds != nil {
-			out = append(out, creds.Communities()...)
+			for _, c := range creds.Communities() {
+				out = append(out, credscrub.Value{Tenant: c.TenantID, Text: c.Community})
+			}
 		}
 		if v := os.Getenv("SNMP_COMMUNITY"); v != "" {
-			out = append(out, v)
+			out = append(out, credscrub.Value{Text: v})
 		}
 		if disc != nil {
 			disc.mu.RLock()
@@ -215,7 +221,7 @@ func snmpCommunityValues(creds *snmpcred.Store, disc *discoveryConfigStore) cred
 			disc.mu.RUnlock()
 			for _, comm := range strings.Split(pending, ",") {
 				if comm = strings.TrimSpace(comm); comm != "" {
-					out = append(out, comm)
+					out = append(out, credscrub.Value{Text: comm})
 				}
 			}
 		}

@@ -1187,14 +1187,20 @@ func newServer() *server {
 	if err := discoveryCfg.migrateLegacyCommunity(snmpCreds); err != nil {
 		logError("discovery", "discovery community migration failed — subnet discovery has no credential until it succeeds or an SNMP profile is added", errf(err))
 	}
-	// Every configured community, masked by value on every log read path
-	// (internal/credscrub): ConfD names an SNMP session by its community, in a
-	// slot that holds a person on every other session. Refreshed on every
-	// credential write and every minute (the credscrub-refresh worker).
+	// Every configured community, masked by value on every log read path with
+	// the CALLER's set (internal/credscrub): ConfD names an SNMP session by its
+	// community, in a slot that holds a person on every other session.
+	// Refreshed on every credential write and every minute (the
+	// credscrub-refresh worker).
 	credScrub := credscrub.New(snmpCommunityValues(snmpCreds, discoveryCfg))
 	if err := credScrub.Refresh(context.Background()); err != nil {
 		logError("credscrub", "configured SNMP communities could not be read; log reads mask none until the next refresh", errf(err))
 	}
+	// LLM06 last line: every provider payload, from a request or a background
+	// job, is masked with every tenant's communities on its way out (union: the
+	// pass returns nothing to any caller). Read at call time, so it follows
+	// refreshes.
+	ai.SetDefaultEgressScrub(func(body []byte) []byte { return credScrub.Union().MaskJSON(body) })
 	credOverrides, err := newCredOverrideStore(envOr("CRED_OVERRIDES_FILE", "/data/credential_overrides.json"))
 	if err != nil {
 		log.Fatalf("credential overrides store: %v", err)
@@ -3170,12 +3176,6 @@ func Run() {
 	}
 
 	httpSrv := newAPIServer(addr, handler)
-	// LLM06 last line: every request context carries the configured-community
-	// masker, which ai.ProviderDo applies to each provider payload.
-	if srv.credScrub != nil {
-		egress := ai.WithEgressScrub(context.Background(), srv.credScrub.MaskJSON)
-		httpSrv.BaseContext = func(net.Listener) context.Context { return egress }
-	}
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
 		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
@@ -5763,7 +5763,7 @@ func (s *server) parserCovDeps() parsercov.Deps {
 		WriteError:    writeError,
 		LogWarn:       func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
 		MaxLines:      envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
-		Mask:          s.credScrub.Mask, // nil-safe: a nil scrubber masks nothing
+		Mask:          func(tenant string, cross bool, text string) string { return s.credScrub.For(tenant, cross).Mask(text) },
 	}
 }
 
@@ -5951,7 +5951,7 @@ func (s *server) debugDeps() pipedebug.Deps {
 		WriteJSON:    writeJSON,
 		WriteError:   writeError,
 		Now:          func() time.Time { return time.Now().UTC() },
-		MaskValue:    s.credScrub.MaskValue, // nil-safe: a nil scrubber masks nothing
+		MaskValue:    func(tenant string, cross bool, v any) (any, bool) { return s.credScrub.For(tenant, cross).MaskValue(v) },
 	}
 }
 

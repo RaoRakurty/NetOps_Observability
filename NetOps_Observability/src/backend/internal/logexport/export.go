@@ -62,6 +62,15 @@ type Spec struct {
 	// only ever ANDed out (must_not), so it can narrow the export, never widen it.
 	RoutineMgmtExclusion map[string]any `json:"routine_mgmt_exclusion,omitempty"`
 
+	// MaskTenant / MaskCross are the requester's principal (principalTenant),
+	// frozen so the async worker masks the configured SNMP communities with
+	// the REQUESTER's set (internal/credscrub: its own tenant's plus the
+	// platform's, every tenant's only for a cross-tenant requester). A spec
+	// frozen without them masks the platform's values only: never another
+	// tenant's.
+	MaskTenant string `json:"mask_tenant,omitempty"`
+	MaskCross  bool   `json:"mask_cross,omitempty"`
+
 	// Who asked and under which execution id, frozen for the audit record the
 	// async worker writes when the file is done (the worker has no request).
 	RequestedBy string `json:"requested_by,omitempty"`

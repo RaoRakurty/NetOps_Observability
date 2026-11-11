@@ -198,13 +198,13 @@ func TestCommunitiesListsEveryTenantsCommunityAndNoUSMKey(t *testing.T) {
 		}
 	}
 	got := cs.Communities()
-	if len(got) != 2 || got[0] != a || got[1] != b {
-		t.Fatalf("Communities = %d values, want the two communities in order", len(got))
+	if len(got) != 2 || got[0] != (TenantCommunity{"acme", a}) || got[1] != (TenantCommunity{"globex", b}) {
+		t.Fatalf("Communities = %d values, want the two communities with their tenants, in order", len(got))
 	}
 	if err := cs.Delete("acme"); err != nil {
 		t.Fatal(err)
 	}
-	if got := cs.Communities(); len(got) != 1 || got[0] != b {
+	if got := cs.Communities(); len(got) != 1 || got[0].Community != b {
 		t.Fatalf("a deleted profile's community is still listed (%d values)", len(got))
 	}
 }

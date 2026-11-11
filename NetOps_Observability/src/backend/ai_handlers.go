@@ -324,13 +324,17 @@ func (a aiTraceToStream) Trace(e ai.TraceEvent) {
 
 // irisRedactor is the orchestrator's outbound DLP: the package dialect
 // (ai.Redact) and then the configured SNMP communities by value
-// (internal/credscrub), which no pattern can find in a ConfD session line.
-func (s *server) irisRedactor() func(string) string {
+// (internal/credscrub), which no pattern can find in a ConfD session line. The
+// set is the caller's own (its tenant's plus the platform's; every tenant's for
+// a cross-tenant caller): the answer comes back to the caller, so masking
+// another tenant's value here would tell the caller it is one.
+func (s *server) irisRedactor(claims jwtClaims) func(string) string {
 	cs := s.credScrub
 	if cs == nil {
 		return ai.Redact
 	}
-	return func(text string) string { return cs.Mask(ai.Redact(text)) }
+	tenant, cross := principalTenant(claims)
+	return func(text string) string { return cs.For(tenant, cross).Mask(ai.Redact(text)) }
 }
 
 // newOrchestrator builds the grounded engine for one request — shared by
@@ -356,7 +360,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		LLM:      aiLLM{srv: s, claims: claims},
 		Flags:    envFlagLookup,
 		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		Redactor: s.irisRedactor(),                                     // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
+		Redactor: s.irisRedactor(claims),                               // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
 		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
 		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
 		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering

@@ -504,19 +504,19 @@ func (d aiDataSource) ModuleQuery(ctx context.Context, p ai.Principal, query str
 	if err != nil {
 		return tr, err
 	}
-	var cs *credscrub.Scrubber
+	var cs credscrub.View
 	if d.srv != nil {
-		cs = d.srv.credScrub
+		// The caller's own set: its tenant's communities plus the platform's
+		// (every tenant's only for a cross-tenant caller), never another
+		// tenant's (credscrub: Tenancy).
+		cs = d.srv.credScrub.For(p.Tenant, p.Cross)
 	}
 	return maskToolResult(cs, tr), nil
 }
 
 // maskToolResult masks the configured communities in every text a tool result
-// carries (item text, links, notes). A nil scrubber masks nothing.
-func maskToolResult(cs *credscrub.Scrubber, tr ai.ToolResult) ai.ToolResult {
-	if cs == nil {
-		return tr
-	}
+// carries (item text, links, notes). A zero View masks nothing.
+func maskToolResult(cs credscrub.View, tr ai.ToolResult) ai.ToolResult {
 	if len(tr.Items) > 0 {
 		items := make([]ai.EvidenceItem, len(tr.Items))
 		for i, it := range tr.Items {
