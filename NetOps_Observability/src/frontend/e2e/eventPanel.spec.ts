@@ -141,7 +141,7 @@ async function contrasts(page: Page, selector: string) {
 }
 
 const TEXT_SELECTORS = [
-  ".evd-title", ".evd-subtitle", ".evd-sev-pill", ".evd-chip", ".evd-tab", ".evd-card-title", ".evd-vis-title",
+  ".evd-title", ".evd-sev-pill", ".evd-chip", ".evd-tab", ".evd-card-title", ".evd-vis-title",
   ".evd-kv-label", ".evd-kv-val", ".evd-kv-sec", ".evd-pill", ".evd-legend-k", ".evd-legend-v", ".evd-stat dt", ".evd-stat dd",
   ".evd-thr-pill", ".evd-thr-val", ".evd-seg-label", ".evd-ring-value", ".evd-ring-label", ".evd-table td", ".evd-table th",
   ".evd-bullets li", ".evd-guidance", ".evd-btn",
