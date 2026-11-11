@@ -98,6 +98,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
   Features: () => import("./pages/platform/Features"),
+  PlatformAlerts: () => import("./pages/platform/PlatformAlerts"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -184,6 +185,7 @@ const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ de
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
+const PlatformAlerts = lazy(ROUTE_CHUNKS["PlatformAlerts"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -583,6 +585,11 @@ export const NAV: NavSection[] = [
       // features → feature_flags.go handlePlatformFeatures / handlePlatformRestart,
       //            requirePlatformAdmin (the switches are platform-global)
       { id: "features", label: "Features", group: "Configuration", render: () => <Features /> },
+      // platform-alerts → internal/platformalert via platformAlertAPI,
+      //                   requirePlatformAdmin on GET/PUT and the test send
+      //                   (where Correlix's OWN alerts go; owner 2026-11-11:
+      //                   GUI, not env)
+      { id: "platform-alerts", label: "Platform alerts", group: "Configuration", render: () => <PlatformAlerts /> },
       // Tools — the provider's operational instruments and the raw-backend
       // escape hatches.
       // health     → stack_health.go, requireCrossTenant
