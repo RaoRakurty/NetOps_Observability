@@ -219,7 +219,8 @@ def test_vmalert_webhook_token_is_passed_through_and_fail_closed():
     EMPTY — empty is the fail-closed state (the api refuses to register the
     receiver rather than serving an unauthenticated alert fan-out). It is
     kept out of API_ENV_DEFAULTS because it has no code default to match:
-    install.py mints it and update.sh backfills it."""
+    install.py mints it and its migration (install.py --migrate-env, run by
+    update.sh and deploy.sh) backfills it."""
     env = service_env("api")
     assert env["VMALERT_WEBHOOK_TOKEN"] == "${VMALERT_WEBHOOK_TOKEN:-}", (
         "VMALERT_WEBHOOK_TOKEN must be a defaulted pass-through on the api; "
@@ -400,8 +401,25 @@ def test_env_template_ships_the_flags_commented_out():
     assert "\nCORR_EVIDENCE_TOPICS=" not in src
 
 
-def test_update_reconciliation_enumerates_the_new_keys():
+def _install_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("install_for_compose_test", INSTALL_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _update_knobs() -> dict[str, str]:
+    """update.sh's discoverability-knob table, parsed out of the script."""
     src = UPDATE_SH.read_text()
+    m = re.search(r"\nKNOBS = \{\n(.*?)\n\}\n", src, re.DOTALL)
+    assert m, "update.sh's KNOBS table moved — update this test"
+    return dict(re.findall(r'^\s*"([A-Z0-9_]+)":\s*"([^"]*)",', m.group(1), re.MULTILINE))
+
+
+def test_update_reconciliation_enumerates_the_new_keys():
+    knobs = _update_knobs()
+    upgraded = set(knobs) | _install_module().migrated_env_keys()
     for key in ("FEATURE_SECURITY_LANE", "SECURITY_SCAN_INTERVAL",
                 "SECURITY_MAX_FINDINGS_PER_TENANT", "FEATURE_CONFIG_BACKUP",
                 "CONFIG_BACKUP_INTERVAL", "CONFIG_BACKUP_KEEP_VERSIONS",
@@ -412,41 +430,64 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL",
                 "PLATFORM_ALERTS_PUSH_BUDGET",
                 "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE", "FEATURE_BGP_LIVE_FEED",
-                "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED", "BGP_FEED_LOOKBACK"):
-        assert f'"{key}":' in src, (
-            f"{key} is missing from update.sh's EXPECTED list — an upgraded "
-            f"install would never learn the knob exists.")
-    # The secret is the one key that must NOT be reconciled to the compose
-    # default: compose defaults it to EMPTY (fail-closed), and materializing an
-    # empty value would leave an upgraded install delivering nothing forever.
-    # update.sh mints a URL-safe token instead (it rides URL userinfo).
-    assert '"VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",' in src, (
-        "VMALERT_WEBHOOK_TOKEN must be reconciled as a GENERATED url-safe "
-        "secret, not as the empty compose default — empty means the api never "
-        "registers the receiver and the upgrade silently keeps delivering "
-        "nothing.")
-    assert "urlsafe_alphabet" in src and '"-_"' in src, (
-        "the __URLSAFE__ generator is gone; a token containing @ # % would "
-        "break the notifier URL's userinfo and every alert POST with it.")
-    assert '"CORR_EVIDENCE_TOPICS":' not in src, (
+                "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED", "BGP_FEED_LOOKBACK",
+                "CX_PLATFORM_ADDRESSES"):
+        assert key in upgraded, (
+            f"{key} reaches an upgraded .env through neither install.py's "
+            f"migration nor update.sh's knob table — an upgraded install would "
+            f"never learn the knob exists.")
+    # The secrets must NOT be reconciled to the compose default: compose
+    # defaults them to EMPTY (fail-closed), and materializing an empty value
+    # would leave an upgraded install delivering nothing forever. install.py's
+    # migration mints them with generate_token (URL-safe: it rides URL userinfo).
+    lines = dict(line.split("=", 1) for line in _install_module()._env_migration_lines({}))
+    for secret in ("VMALERT_WEBHOOK_TOKEN", "CORR_DEBUG_TOKEN"):
+        assert secret not in knobs, f"{secret} is a minted secret, not a knob"
+        assert re.fullmatch(r"[A-Za-z0-9_-]{40,}", lines[secret]), (
+            f"{secret} must be migrated as a GENERATED url-safe secret, not as "
+            "the empty compose default.")
+    assert "CORR_EVIDENCE_TOPICS" not in upgraded, (
         "CORR_EVIDENCE_TOPICS must NOT be reconciled: appending it with an "
         "empty default would unsubscribe every evidence class on the next "
         "restart (unset != empty).")
 
 
+def test_update_runs_the_installer_migration_and_has_no_second_copy():
+    """2026-11-11: update.sh used to carry its own partial copy of install.py's
+    migration list, so keys added there (CX_PLATFORM_ADDRESSES) never reached an
+    upgraded install. The installer's migration now runs first, and the knob
+    table names nothing the installer owns (no key in two places)."""
+    src = UPDATE_SH.read_text()
+    migrate = src.find("python3 scripts/install.py --migrate-env")
+    knobs = src.find("\nKNOBS = {")
+    assert migrate != -1, "update.sh no longer runs install.py --migrate-env"
+    assert migrate < knobs < src.find("render_service_secrets(root)") \
+        < src.find("&& docker compose up -d --remove-orphans)")
+    mod = _install_module()
+    owned = mod.migrated_env_keys() | set(mod.generate_secrets())
+    both = sorted(set(_update_knobs()) & owned)
+    assert not both, (
+        f"update.sh's knob table duplicates keys install.py owns: {both}. Add a "
+        "key to ONE place: _env_migration_lines (anything minted, or whose "
+        "absence changes behaviour) or update.sh's KNOBS (a compose default "
+        "made visible).")
+
+
 def test_update_reconciliation_defaults_match_compose():
     """A reconciled key must materialize the SAME value compose already
-    defaults to, or a fresh install and an upgraded install diverge."""
-    src = UPDATE_SH.read_text()
+    defaults to, or a fresh install and an upgraded install diverge. Both
+    sources: update.sh's knobs and install.py's migration lines."""
+    knobs = _update_knobs()
+    migrated = dict(line.split("=", 1) for line in _install_module()._env_migration_lines({}))
     env = service_env("api")
     for var, expected in API_ENV_DEFAULTS.items():
         default = expected.split(":-", 1)[1].rstrip("}")
-        m = re.search(rf'"{var}":\s*"([^"]*)"', src)
-        if m is None:
-            continue                      # covered by the enumeration test
-        assert m.group(1) == default, (
-            f"{var}: update.sh would append {m.group(1)!r} but compose defaults "
-            f"to {default!r} — an upgrade would change behaviour silently.")
+        for where, table in (("update.sh", knobs), ("install.py's migration", migrated)):
+            if var not in table:
+                continue                  # covered by the enumeration test
+            assert table[var] == default, (
+                f"{var}: {where} would append {table[var]!r} but compose defaults "
+                f"to {default!r} — an upgrade would change behaviour silently.")
         assert str(env[var]) == expected
 
 

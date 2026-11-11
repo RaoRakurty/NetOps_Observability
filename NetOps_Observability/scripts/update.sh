@@ -91,7 +91,8 @@ This script will:
 EOF
 [[ $NO_BACKUP -eq 0 ]] && echo "  1) Snapshot data/ + .env  →  $BACKUP_DIR/"
 echo "  2) Validate the new scaffold (scripts/install.py validator)"
-echo "  3) Reconcile $ENV_FILE with any new variables introduced upstream"
+echo "  3) Add the variables this release introduced to $ENV_FILE"
+echo "     (install.py --migrate-env: backs it up first, never changes a set value)"
 echo "     then render the service credential files under data/secrets from it"
 [[ $NO_BUILD -eq 0 ]]  && echo "  4) docker compose pull   (refresh pinned images)"
 [[ $NO_BUILD -eq 0 ]]  && echo "  5) docker compose build  (rebuild api / frontend / correlation)"
@@ -122,36 +123,45 @@ PY
 # ---- 2: reconcile .env  ---  MUST happen before any `docker compose`
 # invocation, because compose parses docker-compose.yml at startup and
 # fails with "variable XYZ required" if .env is missing keys the YAML
-# references via ${...:?required}. Reconciliation appends missing keys
-# with safe defaults; existing values are never touched.
+# references via ${...:?required}. Existing values are never touched.
+#
+# 2a (2026-11-11): the installer's OWN migration. `install.py --migrate-env`
+# runs write_env's existing-.env branch, the code a re-run of the installer
+# runs, so an upgraded install gains every key a newer release introduced
+# (CX_PLATFORM_ADDRESSES, the per-lane ingest tokens, STORE_BACKEND, ...) with
+# no manual step. Before 2026-11-11 this script carried its own partial copy of
+# that list and those keys never arrived. It takes the install lock, refuses a
+# truncated .env instead of minting store credentials into it, backs .env up
+# (0600) before writing, prints key names only, and exits non-zero on any
+# error, which aborts the upgrade here with the containers untouched (set -e).
 
-step "reconciling .env with current installer template"
+step "adding the .env keys this release introduced (install.py --migrate-env)"
+python3 scripts/install.py --migrate-env
+
+# 2a': discoverability knobs. Every value is BYTE-IDENTICAL to the default
+# docker-compose.yml interpolates, so materializing a key changes nothing: it
+# only makes the knob visible in .env after an upgrade. This table holds ONLY
+# such knobs. Every key install.py's migration or secret generator owns is
+# appended (or minted) by 2a, and tests/test_compose_new_modules.py fails if a
+# key appears in both places.
+
+step "adding the discoverable configuration knobs"
 python3 - <<'PY'
-"""Append any vars in the installer's current template that are missing
-from the live .env, with safe defaults. Does NOT touch existing values.
-Secrets that need to be cryptographically random get one generated."""
-import os, pathlib, re, secrets, string, sys
+"""Append the knobs below that the live .env lacks. Never touches an existing
+value; writes through install.py's atomic owner-only writer; prints names only."""
+import datetime, importlib.util, pathlib, sys
+
+spec = importlib.util.spec_from_file_location("install", "scripts/install.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
 
 env_path = pathlib.Path("deployment/docker/.env")
-existing = {}
-with env_path.open() as f:
-    body = f.read()
-for line in body.splitlines():
-    line = line.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    k, _, v = line.partition("=")
-    existing[k.strip()] = v.strip()
+body = env_path.read_text(encoding="utf-8")
+existing = mod._parse_env_text(body)
 
-# Keys we expect in the current template. Update this list when adding new
-# config; the canonical source is scripts/install.py's write_env() body.
-EXPECTED = {
-    # auth bootstrap (new in the auth landing)
+KNOBS = {
     "ADMIN_USERNAME":            "admin",
-    "ADMIN_INITIAL_PASSWORD":    "__RANDOM__",
-    # clickhouse (new in the OLAP landing)
     "CLICKHOUSE_USER":           "netops",
-    "CLICKHOUSE_PASSWORD":       "__RANDOM__",
     # copilot (new in the AI Copilot landing)
     "FEATURE_COPILOT":           "false",
     "COPILOT_PROVIDER":          "anthropic",
@@ -163,13 +173,7 @@ EXPECTED = {
     "NETFLOW_PORT":              "2055",
     "IPFIX_PORT":                "4739",
     "SFLOW_PORT":                "6343",
-    # event bus (Redpanda→Apache Kafka swap, #97)
-    "BROKER_URLS":               "kafka:9092",
-    "KAFKA_CLUSTER_ID":          "__KAFKA_UUID__",
-    "COMPOSE_PROFILES":          "embedded-bus,prober,osd,self-monitoring",
     "GRAFANA_URL":               "http://grafana:3000",
-    "CORRELIX_UID":              "__UID__",
-    "CORRELIX_GID":              "__GID__",
     # expanded notifier (new in the alert-channels landing)
     "SMTP_USER":                 "",
     "SMTP_PASS":                 "",
@@ -185,9 +189,7 @@ EXPECTED = {
     "AWS_REGION":                "",
     "SNS_PHONE_NUMBERS":         "",
     "SNS_TOPIC_ARN":             "",
-    # optional modules (Project 3). Every value here is BYTE-IDENTICAL to the
-    # default docker-compose.yml interpolates, so materializing the key changes
-    # nothing — it only makes the knob discoverable in .env after an upgrade.
+    # optional modules (Project 3).
     # DELIBERATELY ABSENT: CORR_EVIDENCE_TOPICS. For that one variable "unset"
     # and "empty" are different contracts (unset = every registered evidence
     # class; empty = subscribe to none), so appending it with an empty default
@@ -213,18 +215,14 @@ EXPECTED = {
     "PROTOCOL_DIAG_SSH_PASSWORD":    "",
     "PROTOCOL_DIAG_SSH_KEY":         "",
     "PROTOCOL_DIAG_SSH_PORT":        "22",
-    # BMP receiver (the live BGP feed). Byte-identical to the docker-compose
-    # defaults, so materializing these keys changes nothing — it only makes the
-    # knob discoverable in .env after an upgrade. BMP_PORT is the HOST port the
-    # compose ports: mapping publishes; BMP_LISTEN is the in-container bind.
+    # BMP receiver (the live BGP feed). BMP_PORT is the HOST port the compose
+    # ports: mapping publishes; BMP_LISTEN is the in-container bind.
     "FEATURE_BMP":                   "false",
     "BMP_LISTEN":                    ":11019",
     "BMP_PORT":                      "11019",
-    # BGP depth/alerting flags. Byte-identical to the docker-compose defaults,
-    # so materializing them changes nothing — it only makes the knobs
-    # discoverable in .env after an upgrade, which is the whole point: the
-    # three passthroughs were missing from compose entirely until 2026-09-03,
-    # so no .env value could turn any of them on.
+    # BGP depth/alerting flags: the three passthroughs were missing from
+    # compose entirely until 2026-09-03, so no .env value could turn any of
+    # them on.
     "FEATURE_BGP_LIVE_FEED":         "false",
     "FEATURE_BGP_ALERTS":            "false",
     "FEATURE_BGP_BOGON_FEED":        "false",
@@ -235,76 +233,19 @@ EXPECTED = {
     "CORRELATION_REPLICA_URLS":      "",
     "CORR_SYSLOG_TOPIC":             "netops.syslog",
     "CORR_FIDELITY_WEIGHTING":       "0",
-    # vmalert alert DELIVERY (internal/alertwebhook). An upgraded install must
-    # get a REAL secret here, not the compose fallback: the compose default is
-    # empty, and empty means the api refuses to register the receiver
-    # (fail-closed) — i.e. the upgrade would keep delivering nothing, which is
-    # the whole defect. __URLSAFE__ (not __RANDOM__) kept for compatibility:
-    # since 2026-09-03 vmalert reads this value from a basicAuth.passwordFile
-    # (compose secret) rather than URL userinfo, but an installation that
-    # pins an older compose still embeds it in the notifier URL, where
-    # randpw's @ # % + = would break the url vmalert parses. Plaintext by design — vmalert has to send
-    # it, so it can never be vault-sealed (same as INGEST_TOKEN).
-    "VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",
-    # Byte-identical to the docker-compose default and to
-    # alertwebhook.DefaultCooldown.
-    "VMALERT_WEBHOOK_COOLDOWN":      "30m",
-    # Pipeline debugger (correlix-debug) sidecar secret. Like the vmalert
-    # token, the compose default is EMPTY and empty is fail-closed: the
-    # correlation sidecar's bounded bus peek and log-level switch answer 503,
-    # so an upgraded install would ship a debugger that goes blind at the bus —
-    # the one hop the 2026-09-02 outage turned on. Minted here instead, ONCE:
-    # this loop only fills keys the .env does not already have, so an
-    # operator-set value is never overwritten (overwriting would desynchronise
-    # the api from the correlation container, which must hold the SAME value).
-    # __URLSAFE__, not __RANDOM__: it travels as an Authorization: Bearer
-    # credential, so randpw's @ # % ^ & + = have no business in it.
-    "CORR_DEBUG_TOKEN":              "__URLSAFE__",
     # Platform self-health alert DESTINATIONS are no longer env (owner decision
     # 2026-11-11): they are set in the web console, Platform -> Platform alerts.
     # PLATFORM_ALERTS_NTFY_TOPIC/_SERVER/_TOKEN are therefore NOT materialized;
     # RETIRED below reports a leftover value instead of silently keeping it.
-    # Alert-noise + rate-limit control (2026-09-03). Byte-identical to the
-    # docker-compose defaults and to alertwebhook's DefaultWarningDigestInterval
-    # / DefaultPushBudget / DefaultPageReserve. Materialized so an UPGRADED
-    # install can see and tune the knobs that stop a 429 storm — the digest
-    # window and the page-reserved push budget.
+    # Alert-noise + rate-limit control (2026-09-03). Byte-identical to
+    # alertwebhook's DefaultWarningDigestInterval / DefaultPushBudget /
+    # DefaultPageReserve.
     "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL":  "30m",
     "PLATFORM_ALERTS_PUSH_BUDGET":              "30",
     "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE": "10",
 }
 
-alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"
-def randpw(n=24): return "".join(secrets.choice(alphabet) for _ in range(n))
-
-# Credentials that ride URL userinfo (http://user:pw@host) must not contain
-# @ # % ^ & + = — see install.py's _URLSAFE_PASSWORD_ALPHABET note. Mirrors
-# install.py's generate_token (secrets.token_urlsafe) alphabet.
-urlsafe_alphabet = string.ascii_letters + string.digits + "-_"
-def randtoken(n=43): return "".join(secrets.choice(urlsafe_alphabet) for _ in range(n))
-
-def kafka_uuid():
-    # kafka-storage random-uuid format: 22-char base64url uuid, no padding.
-    import base64, uuid
-    return base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("=")
-
-missing = []
-for k, default in EXPECTED.items():
-    if k in existing:
-        continue
-    if default == "__RANDOM__":
-        v = randpw(20)
-    elif default == "__URLSAFE__":
-        v = randtoken(43)
-    elif default == "__KAFKA_UUID__":
-        v = kafka_uuid()
-    elif default == "__UID__":
-        v = str(os.getuid())
-    elif default == "__GID__":
-        v = str(os.getgid())
-    else:
-        v = default
-    missing.append((k, v))
+missing = [k for k in KNOBS if k not in existing]
 
 # Retired keys: still in an upgraded .env, read by nothing. Named (values are
 # never printed — a topic or token is a credential) so the operator knows the
@@ -319,22 +260,17 @@ RETIRED = {
 for k, where in RETIRED.items():
     if existing.get(k, "").strip():
         print(f"  NOTICE: {k} is set in .env but is no longer read — configure it in {where}, then remove the line.")
-
 if not missing:
-    print("  no new variables to add — .env is already current.")
+    print("  no new knobs to add: .env is already current.")
     sys.exit(0)
 
-# Append a clearly labelled block.
-with env_path.open("a") as f:
-    f.write("\n# ---- added by update.sh on " + __import__("datetime").datetime.now().isoformat() + " ----\n")
-    for k, v in missing:
-        f.write(f"{k}={v}\n")
-
-env_path.chmod(0o600)
-print(f"  added {len(missing)} new variable(s):")
-for k, v in missing:
-    redacted = v if "PASSWORD" not in k and "TOKEN" not in k and "KEY" not in k else f"<{len(v)} chars>"
-    print(f"    {k}={redacted}")
+mod.write_env_text(
+    env_path,
+    body.rstrip("\n") + "\n\n# ---- added by update.sh on "
+    + datetime.datetime.now().isoformat() + " ----\n"
+    + "".join(f"{k}={KNOBS[k]}\n" for k in missing),
+    what="add the discoverable configuration knobs")
+print(f"  added {len(missing)} knob(s): {', '.join(missing)}")
 PY
 
 # ---- 2b: render the service credential files ---------------------------------
