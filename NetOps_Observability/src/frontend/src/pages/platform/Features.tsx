@@ -25,6 +25,7 @@ import { Modal } from "../../components/ui";
 import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue } from "./featuresModel";
 import { useFeatureSwitches } from "./useFeatureSwitches";
 import ConnectModelStep from "../../iris/ConnectModelStep";
+import { PlatformAlertsNotice } from "../../components/PlatformAlertsNotice";
 
 export default function Features() {
   const { load, busy, rowError, save: saveEnv, restart, requestRestart } = useFeatureSwitches();
@@ -52,6 +53,8 @@ export default function Features() {
       <h2 style={{ margin: "0 0 4px" }}>Features</h2>
       {/* The first-login landing for a platform admin with no model key (D5). */}
       <ConnectModelStep />
+      {/* Correlix's own alerts reaching nobody is platform-admin business. */}
+      <PlatformAlertsNotice />
       <ol className="fact-line" style={{ margin: "0 0 16px", paddingLeft: 20, lineHeight: 1.7 }}>
         <li>Turn a feature on or off below. It is saved at once.</li>
         <li>Most features apply at once. Some apply after a restart — they say so.</li>

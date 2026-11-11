@@ -854,11 +854,11 @@
       "question": "Where can I see syslog and SNMP traps on one timeline?",
       "expect": {
         "slugs": [
-          "explore/events"
+          "explore/logs"
         ]
       },
-      "nav": "explore/events",
-      "notes": "nav-leaf coverage (N-G1): Explore \u2192 Events"
+      "nav": "explore/logs",
+      "notes": "Explore \u2192 Logs, Events tab (the separate Explore \u2192 Events page was removed 2026-11-11)"
     },
     {
       "id": "docs-073",
@@ -1447,6 +1447,18 @@
       },
       "nav": "platform/features",
       "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Features"
+    },
+    {
+      "id": "docs-124",
+      "category": "docs",
+      "question": "Where do I set up where Correlix sends alerts about its own health, by ntfy or text message?",
+      "expect": {
+        "slugs": [
+          "monitoring/host-monitoring"
+        ]
+      },
+      "nav": "platform/platform-alerts",
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Platform alerts"
     },
     {
       "id": "intent-001",

@@ -1,7 +1,7 @@
 ---
 title: Monitor Correlix itself
 sidebar_label: Monitor Correlix itself
-description: Route Correlix's own platform self-health alerts to a phone topic, and run the external watchdog that survives the stack dying.
+description: Send Correlix's own platform self-health alerts to ntfy or text messages from the Platform alerts page, and run the external watchdog that survives the stack dying.
 page_type: task
 sidebar_position: 6
 ---
@@ -12,92 +12,125 @@ Correlix has two alert audiences, and they are not the same people.
 
 | Audience | What it carries | Where it goes |
 |---|---|---|
-| Platform self-health | Everything the rule evaluator sends through the alert receiver: engine liveness, ingest, bus, storage, host and platform layers. | The host-monitoring route in this page, which pushes to the operator's phone topic. |
+| Platform self-health | Everything the rule evaluator sends through the alert receiver: engine liveness, ingest, bus, storage, host and platform layers. | The host-monitoring route on this page: ntfy and/or text messages, set up on Platform → Platform alerts. |
 | Product and tenant alerts | Monitor rules, BGP watch, per-tenant security findings. | The configured [notification channels](/incident-response/notifications), unchanged. |
 
-The stack reporting on itself belongs on the same phone channel the external
-watchdog already uses. A tenant-facing channel can never be pointed at the
-operator's host-monitoring topic, and the refusal that enforces that is
+A tenant-facing channel can never be pointed at the operator's host-monitoring
+topic or at the watchdog's topic, and the refusal that enforces that is
 described under [Configure a notification channel](/incident-response/notifications).
 
 ## Why this is a route and not another channel
 
-The product channel set is operator-configured state. It can be empty, disabled
-or misconfigured, and it lives behind the same api this route reports on. A stack
-that can only tell you it is broken through a channel someone had to configure
-first is not self-reporting.
+The product channel set is tenant-facing alert routing, with severity gates and
+contact points. The host-monitoring route is the stack reporting on itself to
+the operator, by tier. It is a different audience with a different policy, so it
+has its own page and its own settings.
 
-The host-monitoring route depends on nothing but an environment-provided topic.
-It works on a fresh install with no notification configuration at all, which is
-exactly the install where "the correlation engine has consumed nothing for three
-hours" most needs to reach a human.
+The route is set up in the web console only. There is no environment variable
+for it: `PLATFORM_ALERTS_NTFY_TOPIC`, `PLATFORM_ALERTS_NTFY_SERVER` and
+`PLATFORM_ALERTS_NTFY_TOKEN` were retired on 2026-11-11 and are ignored. If one
+is still set, the api logs a warning at start-up and the page lists it.
+`WATCHDOG_NTFY_TOPIC` is no longer a fallback destination either. It only stops
+a product channel from reusing the watchdog's topic.
+
+Until a channel is set up, the route is loud rather than quiet: the api logs that
+platform alerts reach nobody, `netops_alert_webhook_host_route_enabled` reads 0,
+and the platform administrator sees a banner.
 
 ## Before you begin
 
-- An ntfy topic you subscribe to on your phone. On the public `https://ntfy.sh`
-  service the topic name is the only secret: anyone who learns or guesses it can
-  read and publish your alerts. Mint a high-entropy name with
+- The platform administrator account. Tenant and organisation administrators do
+  not see this page.
+- For ntfy: a topic you subscribe to on your phone. On the public
+  `https://ntfy.sh` service the topic name is the only secret: anyone who learns
+  or guesses it can read and publish your alerts. Mint a high-entropy name with
   `openssl rand -hex 16`, or run a self-hosted ntfy server with authentication.
-- Shell access to the deployment's `.env`, and the ability to restart the api
-  container.
+  The server address must start with `https://`, and Correlix refuses a server
+  on a private address unless the installation allows it (`SSRF_ALLOWED_HOSTS`).
+- For text messages: a Twilio Account SID, auth token, a Twilio number to send
+  from, and up to five numbers to text, all in international format such as
+  `+14155550100`. Text messages cost money; see the limit below.
 - `VMALERT_WEBHOOK_TOKEN` set, so the alert receiver exists at all. Without it
   the receiver is not registered and nothing reaches this route.
 
 ## Steps
 
-### Step 1: set the topic
+### Step 1: open the page
 
-1. Set `PLATFORM_ALERTS_NTFY_TOPIC` in `deployment/docker/.env` to the topic you
-   want platform self-health pushed to.
-2. Leave it empty to fall back to `WATCHDOG_NTFY_TOPIC`, the topic the external
-   watchdog already publishes to. That fallback is the default destination.
+Go to **Platform → Platform alerts**.
 
-| Variable | What it sets |
-|---|---|
-| `PLATFORM_ALERTS_NTFY_TOPIC` | The host-monitoring topic. Empty falls back to `WATCHDOG_NTFY_TOPIC`. |
-| `PLATFORM_ALERTS_NTFY_SERVER` | The ntfy server for this route. Empty falls back to `NTFY_ALERT_SERVER`, then to `https://ntfy.sh`. |
-| `PLATFORM_ALERTS_NTFY_TOKEN` | The bearer token for an authenticated server. Empty falls back to `NTFY_ALERT_TOKEN`. |
+### Step 2: set up one or both channels
 
-The server and token fall back to the product ntfy wiring. The topic never does.
-A platform alert must not land on a product topic.
+1. Under **ntfy**, turn it on, keep or change the server, enter the topic and,
+   for a protected topic, the access token.
+2. Under **Text messages (Twilio)**, turn it on and enter the Account SID, auth
+   token, the number to send from and the numbers to text.
+3. Choose what each channel receives: **Pages** (the four page conditions and
+   the all-clear after each) and **Warning summary** (everything else, sent at
+   most once per digest window). By default ntfy receives both and text messages
+   receive pages only.
+4. Select **Save**. The change applies at once, with no restart, and is audited.
 
-### Step 2: tune the noise controls
+Secrets are write-only. After saving, the page shows that a token is set but
+never shows it. Leave a secret field empty to keep the saved value.
 
-1. Set `PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` to how often the accumulated
+### Step 3: send a test
+
+Select **Send test** for each channel. The page answers in plain words: sent,
+credentials refused, rate limited, could not reach the service, or the service
+refused the message. A test uses the saved settings, and a text message test
+counts against the hourly limit.
+
+### Text-message limit
+
+At most the configured number of text messages leave per hour, across all
+numbers (default 10, one message per number). Half of the limit is kept for
+pages, so the warning summary can never use up what a page needs. Past the
+limit, the text message is not sent and the api logs an error for a page; ntfy
+still carries it if it is turned on.
+
+### Tune the noise controls (install defaults)
+
+These remain install-time defaults in `.env`:
+
+1. `PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` is how often the accumulated
    warning tier may be summarised into a single push. It takes a Go duration such
    as `30m` or `1h`, and the compose default is `30m`.
-2. Set `PLATFORM_ALERTS_PUSH_BUDGET` to the sustained outbound push allowance per
-   hour for this topic. The compose default is `30`. A value of `0` or lower
-   disables the guard, which is the escape hatch for a self-hosted ntfy with no
-   limits of its own.
-3. Set `PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE` to how many of those tokens
-   only a page may spend, so a warning digest can never be the reason a page is
-   refused. The compose default is `10`, and the value is clamped into
-   `[0, budget-1]`.
+2. `PLATFORM_ALERTS_PUSH_BUDGET` is the sustained outbound ntfy push allowance
+   per hour for the push server, shared with the product ntfy channel. The
+   compose default is `30`. A value of `0` or lower disables the guard, which is
+   the escape hatch for a self-hosted ntfy with no limits of its own.
+3. `PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE` is how many of those tokens only a
+   page may spend. The compose default is `10`, clamped into `[0, budget-1]`.
 
 An invalid duration or a non-numeric count falls back to the default and logs a
 warning. A typo never silently turns the digest off.
 
-### Step 3: restart and confirm the wiring
+### If the saved settings cannot be read
 
-1. Restart the api service.
-2. Read the boot log line for the route. It reports the server, whether a token
-   is set, and which variable supplied the topic. The topic itself is never a log
-   field: knowing an ntfy topic is enough to read every alert published to it and
-   to publish forgeries.
+The api keeps the last settings it read and retries every minute;
+`netops_platform_alert_store_readable` reads 0 and the page says so. If the
+settings cannot be read when the api starts, it uses the sealed copy it keeps on
+the server (`data/platform_alert_route.lastgood.json`), so pages still reach your
+channels. Opening that copy still needs the vault. If neither can be read,
+nothing is in force: re-enter the settings and tick **Replace the saved
+settings** to overwrite the unreadable record.
 
-If no topic is configured, the api logs one warning, once, saying that platform
-alerts are not pushed to host monitoring and naming the two variables to set. It
-is logged once rather than per alert, because one warning per alert per cool-down
-is its own outage.
+### When platform alerts reach nobody
+
+If no channel receives pages, or nothing could be read, for 15 minutes, the
+`PlatformAlertsReachNobody` page rule fires, and the external watchdog pushes a
+`PLATFORM_ALERTS_UNROUTED` alert over its own ntfy topic after 10 minutes. A fresh
+install that never sets up this page therefore pages through the watchdog. That
+is intended: set up a channel.
 
 ## Result
 
-Platform self-health alerts arrive on your phone, classified by tier.
+Platform self-health alerts arrive on the channels you chose, classified by tier.
 
 | Tier | What it is | Priority | How it is sent |
 |---|---|---|---|
-| `page` | One of the nine `tier: page` rules. | High | Pushed immediately, and retried. |
+| `page` | One of the eleven `tier: page` rules. | High | Pushed immediately, and retried. |
 | `resolved` | The resolution of any alert. | Low | Pushed immediately when it resolves a page. |
 | warning | Every other firing alert. | Default | Folded into the periodic digest. |
 
@@ -149,6 +182,9 @@ anything slow, so a blocking push turns into a self-inflicted request storm.
   remaining trace.
 
 ## The external watchdog
+
+The watchdog is set up on the host, not on the Platform alerts page, on purpose:
+it is the layer that must keep working when the whole stack is down.
 
 `scripts/stack-watchdog.sh` runs outside the stack, from cron, once a minute. It
 is the only layer that survives the whole stack dying, and it is deliberately

@@ -18,7 +18,7 @@ you have, and how much a given surface is entitled to assert.
 | Stage | Where you see it | What it adds |
 |---|---|---|
 | Collection | Nowhere directly. Inspect the planes on **Explore → Metrics**, **Explore → Logs** and **Explore → Flows**. | The measurements. Everything downstream cites these. |
-| Events | **Explore → Events** | One time-sorted stream of syslog, SNMP traps and firing alerts, with Time, Type, Severity, Source and Event. Nothing is judged here. |
+| Events | The **Events** tab on **Explore → Logs**, and **Operations → Active Alerts** for firing alerts | One time-sorted stream of syslog, SNMP traps, flow records and firewall logs. Nothing is judged here. |
 | Findings | **Investigate → Findings** | A judgement against the device's own baseline. A row carries a severity, a kind, a device, a component, a summary and a score. |
 | Correlation | **Investigate → RCA** | The grouping. Related findings and events become one candidate with a **Linked by** relationship, a count of evidence types and an observation count. |
 | The RCA case | The RCA workspace, opened from a candidate | The verdict, the ranked hypotheses, the evidence matrix, the confidence ladder and the causal path. |

@@ -115,7 +115,6 @@ var navPageDocs = map[string]navPage{
 	"explore/metrics": {Label: "Explore → Metrics", Docs: []pageDoc{wholePage("explore/metrics")}},
 	"explore/logs":    {Label: "Explore → Logs", Docs: []pageDoc{wholePage("explore/logs"), wholePage("noc-guide/reading-logs")}},
 	"explore/flows":   {Label: "Explore → Flows", Docs: []pageDoc{wholePage("explore/flows")}},
-	"explore/events":  {Label: "Explore → Events", Docs: []pageDoc{wholePage("explore/events")}},
 	"explore/saved":   {Label: "Explore → Saved Searches", Docs: []pageDoc{wholePage("explore/saved-searches")}},
 
 	// Security
@@ -160,6 +159,7 @@ var navPageDocs = map[string]navPage{
 	"platform/auth":              {Label: "Platform → Security → Authentication", Docs: []pageDoc{wholePage("administration/authentication"), wholePage("administration/okta-sso"), wholePage("administration/tenant-sign-in")}},
 	"platform/data-protection":   {Label: "Platform → Security → Data Protection", Docs: []pageDoc{wholePage("administration/data-protection"), wholePage("deploy/back-up-and-restore")}},
 	"platform/features":          {Label: "Platform → Configuration → Features", Docs: []pageDoc{wholePage("administration/features")}},
+	"platform/platform-alerts":   {Label: "Platform → Configuration → Platform alerts", Docs: []pageDoc{wholePage("monitoring/host-monitoring")}},
 	"platform/health":            {Label: "Platform → Tools → Stack Health", Docs: []pageDoc{wholePage("administration/stack-health")}},
 	"platform/grafana":           {Label: "Platform → Tools → Self-Monitoring", Docs: []pageDoc{wholePage("administration/self-monitoring")}},
 	"platform/opensearch":        {Label: "Platform → Tools → Search Dashboards", Docs: []pageDoc{wholePage("administration/search-dashboards")}},

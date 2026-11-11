@@ -47,7 +47,7 @@ The board starts fleet-wide and narrows through the scope bar: choose a device, 
 
 Answers whether routing is converged and stable. Also at **Analytics → Metric Dashboards → Protocol Monitoring**. It covers three routing planes: BGP session health with peer state, established-state transitions and prefixes received; OSPF neighbor and interface state; and IS-IS adjacency state and adjacency counts per device. A device-context row carries system uptime and interfaces up.
 
-The state panels are stepped lines. A flat line at the top value is healthy, and any step down is a session or adjacency event worth correlating against **Explore → Events**.
+The state panels are stepped lines. A flat line at the top value is healthy, and any step down is a session or adjacency event worth correlating against the **Events** tab on **Explore → Logs**.
 
 **Analytics → Metric Dashboards → BGP Operations** is the consolidated routing-outage screen: routing status, RPKI, AS paths, churn and ownership in one place. See [BGP operations](/bgp/overview).
 
@@ -69,7 +69,7 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 |---|---|---|
 | Troubleshooting | **Investigate → Troubleshooting** | The platform watching its own collection: flow sources seen in the last hour by protocol and exporter, fleet counts, collector reachability and poll timings, SNMP reachable versus configured, the flow pipeline, and traps received. Open this first when a monitoring board looks empty, because it says whether data is arriving at all. |
 | Data Sources | **Administration → Discovery → Collection Coverage** | The ingestion inventory. See [Data sources](/onboard-devices/data-sources). |
-| Events | **Explore → Events** | The merged event timeline. See [Review the event feed](/explore/events). |
+| Logs & events | **Explore → Logs** | Syslog, SNMP traps, flow records and firewall logs on one timeline, on the default **Events** tab. See [Search logs](/explore/logs). |
 | Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 
 **Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).

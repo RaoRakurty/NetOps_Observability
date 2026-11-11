@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"netops/backend/notify"
@@ -138,7 +139,8 @@ func (r *receiver) foldDigest(name, summary, severity, tier string, at time.Time
 // digest goes out next window with the accumulated content — which is the
 // whole reason a digest may not retry: re-sending is free and automatic.
 func (r *receiver) maybeFlushDigest(now time.Time) {
-	if r.deps.HostRoute == nil {
+	targets := r.hostTargets(tierDigest)
+	if len(targets) == 0 {
 		return
 	}
 	r.digestMu.Lock()
@@ -148,9 +150,19 @@ func (r *receiver) maybeFlushDigest(now time.Time) {
 	}
 	r.digestMu.Unlock()
 
-	if !r.budget.Take(false) {
-		r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
-		r.logBudgetRefusal(tierDigest, "digest", now)
+	// One token per TARGET. A target whose bucket is spent misses this digest
+	// (and says so); only when EVERY target is refused does the accumulator
+	// stay untouched for the next window.
+	admitted := make([]HostTarget, 0, len(targets))
+	for _, t := range targets {
+		if !t.Budget.Take(false) {
+			r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
+			r.logBudgetRefusal(tierDigest, "digest", now)
+			continue
+		}
+		admitted = append(admitted, t)
+	}
+	if len(admitted) == 0 {
 		return
 	}
 
@@ -175,18 +187,49 @@ func (r *receiver) maybeFlushDigest(now time.Time) {
 	r.digestMu.Unlock()
 
 	push := renderDigest(entries, overflow, window)
-	r.enqueueHost(hostJob{
-		name: "PlatformWarningDigest", tier: tierDigest, push: push,
-		// A DIGEST THAT DID NOT LAND MUST NOT TAKE ITS CONTENT WITH IT. The
-		// digest is not retried, and the reason for that rule is that it is
-		// "re-sent next window with the accumulated content" — true only for
-		// conditions STILL FIRING, which vmalert re-sends and which re-fold
-		// here. A warning that fired and cleared inside the failed window is
-		// re-sent by nobody, and it is precisely the case the digest exists to
-		// show. The budget-refusal path above already leaves the accumulator
-		// alone for this reason; so does the failure path now (review 3.9-09).
-		onFail: func() { r.restoreDigest(entries, overflow) },
-	})
+	// A DIGEST THAT DID NOT LAND MUST NOT TAKE ITS CONTENT WITH IT. The digest
+	// is not retried, and the reason for that rule is that it is "re-sent next
+	// window with the accumulated content" — true only for conditions STILL
+	// FIRING, which vmalert re-sends and which re-fold here. A warning that
+	// fired and cleared inside the failed window is re-sent by nobody, and it is
+	// precisely the case the digest exists to show. The budget-refusal path
+	// above already leaves the accumulator alone for this reason; so does the
+	// failure path (review 3.9-09). Fanned out to several targets, the content
+	// comes back only when it reached NONE of them: restoring after a partial
+	// success would re-send the whole window to the target that already has it.
+	fo := newFanout(len(admitted), func() { r.restoreDigest(entries, overflow) })
+	for _, t := range admitted {
+		r.enqueueHost(hostJob{
+			name: "PlatformWarningDigest", tier: tierDigest, push: push, target: t,
+			onFail: func() { fo.done(false) },
+			onOK:   func() { fo.done(true) },
+		})
+	}
+}
+
+// fanout joins the outcomes of one piece of content sent to several targets:
+// restore runs exactly once, after the LAST outcome, and only when no target
+// delivered.
+type fanout struct {
+	mu        sync.Mutex
+	pending   int
+	delivered bool
+	restore   func()
+}
+
+func newFanout(n int, restore func()) *fanout { return &fanout{pending: n, restore: restore} }
+
+func (f *fanout) done(ok bool) {
+	f.mu.Lock()
+	f.pending--
+	if ok {
+		f.delivered = true
+	}
+	fire := f.pending == 0 && !f.delivered
+	f.mu.Unlock()
+	if fire {
+		f.restore()
+	}
 }
 
 // restoreDigest folds a failed digest's entries back into the accumulator as

@@ -274,7 +274,7 @@ function WhatChanged() {
   const items: FeedItem[] = data?.items ?? [];
   if (items.length === 0) return <Panel title="What changed" state="inactive" note="No changes in the last 24h." hint="Topology, inventory, and alert-state changes appear here." />;
   return (
-    <Panel title="What changed" to="explore/events">
+    <Panel title="What changed" to="explore/logs">
       <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>

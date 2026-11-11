@@ -47,9 +47,10 @@ type Metrics struct {
 	hostPushedResolved atomic.Int64
 	hostPushedDigest   atomic.Int64
 	hostFailed         atomic.Int64 // the push was attempted and errored
-	hostNotConfigured  atomic.Int64 // no topic wired: nothing was attempted
+	hostNotConfigured  atomic.Int64 // no channel configured: nothing was attempted
 	hostQueueFull      atomic.Int64 // bounded queue full: the push was dropped
-	hostRouteEnabled   atomic.Int64 // 0/1 — is the host route wired at all
+	hostRouteEnabled   atomic.Int64 // 0/1 — does the PAGE tier reach any channel
+	hostUnrouted       atomic.Int64 // tier routed nowhere by the administrator's choice
 
 	// Noise + rate-limit control (2026-09-03, digest.go / pushbudget.go).
 	hostRateLimited     atomic.Int64 // the server answered 429: budget, not fault
@@ -233,7 +234,8 @@ func (m *Metrics) Write(w io.Writer) {
 	} {
 		fmt.Fprintf(w, "netops_alert_webhook_push_failures_total{route=%q,reason=%q} %d\n", RouteHostMonitoring, s.reason, s.v)
 	}
-	g("netops_alert_webhook_host_route_enabled", "1 when platform alerts are pushed to the host-monitoring channel, 0 when no topic is configured (PLATFORM_ALERTS_NTFY_TOPIC / WATCHDOG_NTFY_TOPIC unset).", m.hostRouteEnabled.Load())
+	g("netops_alert_webhook_host_route_enabled", "1 when page-tier platform alerts reach at least one host-monitoring channel, 0 when none is configured for pages (set it up in Platform → Platform alerts).", m.hostRouteEnabled.Load())
+	c("netops_alert_webhook_host_unrouted_total", "Platform alerts not pushed because the administrator routed their tier to no channel (a choice, not a failure).", m.hostUnrouted.Load())
 
 	// ── noise + rate-limit control (digest.go / pushbudget.go) ──────────────
 	c("netops_alert_webhook_push_retries_total", "Page-tier host-route pushes re-sent after a transient failure (429/5xx/transport), with capped backoff.", m.hostRetries.Load())

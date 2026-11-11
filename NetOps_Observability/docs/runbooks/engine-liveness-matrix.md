@@ -50,12 +50,15 @@ rather than minting duplicates.
 
 | Alert class | Route | Destination |
 |---|---|---|
-| **Platform self-health** (everything in this matrix: layers stack/host/clickhouse/platform, the four page conditions, the watch tier) | `internal/alertwebhook` host route → the existing ntfy sender | the **host-monitoring topic** — the same phone channel as the watchdog. `PLATFORM_ALERTS_NTFY_TOPIC`, defaulting to `WATCHDOG_NTFY_TOPIC`; server/token from `PLATFORM_ALERTS_NTFY_SERVER`/`_TOKEN`, else `NTFY_ALERT_SERVER`/`_TOKEN` |
+| **Platform self-health** (everything in this matrix: layers stack/host/clickhouse/platform, the four page conditions, the watch tier) | `internal/alertwebhook` host route → ntfy and/or Twilio SMS | the channels set on **Platform → Platform alerts** (GUI only since 2026-11-11; `PLATFORM_ALERTS_NTFY_*` retired, `WATCHDOG_NTFY_TOPIC` no longer a fallback). Default: pages to every enabled channel, the warning digest to ntfy only |
 | **Product / tenant** (monitor rules, BGP watch, per-tenant security findings) | `notify.Dispatcher` | the channels an operator configured, which still **refuse** the watchdog topic (#101) |
 
 The platform route is deliberately independent of the product channel config —
-it must work on an install where nobody has configured a channel, because it is
-how the stack reports on **itself**. Tier → priority: `page` → high, `watch` →
+it is how the stack reports on **itself**. It needs one channel set on the
+Platform alerts page; until then it is LOUD, not quiet
+(`netops_alert_webhook_host_route_enabled 0`, a boot WARN, a banner for the
+platform admin), and the external watchdog (layer B below) still covers the
+stack's death from outside. Tier → priority: `page` → high, `watch` →
 default, a resolution → low; the **heartbeat is never pushed** (it exists for
 the watchdog's freshness probe). Counted in
 `netops_alert_webhook_pushed_total{route="host_monitoring",tier}` /
@@ -124,7 +127,7 @@ stale warning summary.
 | **opensearch** | Cluster not red; documents accepted, not rejected; indexing advancing | `opensearch_cluster_status`, `opensearch_indexing_doc_status{code}`, `opensearch_indexing_index_failed` — **polled by vector, not by a scrape job**, so there is deliberately no `up{job="opensearch"}` (see G1) | `LogIngestRateDegraded` self-baselines over 6 h with a `> 100` floor — **median**, not mean (2026-09-03: a restart's catch-up spike poisoned a mean baseline and held a false CRITICAL for ~4 h) | **page** | A: `OpenSearchClusterRed`, `OpenSearchFloodStageBlock`, `OpenSearchDocumentsRejected`, `OpenSearchRejectionRatioHigh`, `LogIngestStalled`, `OpenSearchStatsMissing` (the meta-alert for the lane itself disappearing) |
 | **clickhouse** | Accepts write batches; queries not failing; memory bounded | `netops_clickhouse_write_outcomes_total{outcome="rejected"}`, `ClickHouseProfileEvents_*`, `up{job="clickhouse"}` | `increase(...) > 0` | **page** | A: `ClickHouseWritesRejected` **NEW**, `CHMemoryLimitExceeded`, `CHFailedQueriesRising`, `StorageBackendDown`, `StorageExporterAbsent` **NEW** · B: `check_clickhouse_health` |
 | **victoria** | Ingesting rows; series cardinality stable; fast path holding | `vm_rows_inserted_total`, `vm_slow_row_inserts_total`, `vm_cache_entries` | Ratio-based | watch | A: `VMSlowInsertRatioHigh`, `VMActiveSeriesSurge`, `ScrapeTargetDown`, `StorageBackendDown`, `StorageExporterAbsent` **NEW** · B: telemetry-freshness probe |
-| **vmalert** | Evaluating rules **and delivering** them | `netops_alert_webhook_heartbeat_timestamp_seconds` (end-to-end, **NEW**) | Gated on `netops_alert_webhook_enabled == 1` — delivery switched off on purpose is not "broken" | **page** | A: `AlertingHeartbeat` **NEW** + `AlertDeliveryBroken` **NEW** · B: watchdog heartbeat probe **NEW** · C: `/health` on 8880 |
+| **vmalert** | Evaluating rules **and delivering** them | `netops_alert_webhook_heartbeat_timestamp_seconds` (end-to-end, **NEW**) | Gated on `netops_alert_webhook_enabled == 1` — delivery switched off on purpose is not "broken" | **page** | A: `AlertingHeartbeat` **NEW** + `AlertDeliveryBroken` **NEW** + `PlatformAlertsReachNobody` (the last hop: pages reach no channel set on Platform → Platform alerts; 2026-11-11) · B: watchdog heartbeat probe **NEW** + `PLATFORM_ALERTS_UNROUTED` (critical) · C: `/health` on 8880 |
 | **prober** | Synthetic probes keep arriving at the engine | `corr_ingest_events{counter="probes_received"}` — **no `prober` scrape job exists**, so the lane is only observable at the engine end | **Trailing-24h activity** (`increase(...[24h]) > 0`). The original premise here — "the prober ticks 24/7, so a flat line is unambiguous" — was **FALSE and is corrected**: `prober` is a compose *profile* whose `FEATURE_ACTIVE_PROBE` / `FEATURE_SYNTHETICS` / `FEATURE_WAN_ECHO` default `false` with empty `*_TARGETS`, so a lab with no probe targets is legitimately silent and was paging for it | **page**-equivalent | A: `CorrProbeLaneFlatlined` (guarded 2026-09-03; annotations name "engine not consuming" first). Cold-start blind spot (an install that has never had a probe) is covered by `CorrelationConsumerDead` + the watchdog consumer probe, which read Kafka group membership rather than lane traffic |
 
 ## Tier-2 — supporting services. Failure degrades, it does not lose data.

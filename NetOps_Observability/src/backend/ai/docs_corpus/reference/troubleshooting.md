@@ -118,7 +118,7 @@ Causes and solutions.
 2. Confirm the source address the device sends from is one Correlix knows for that device, normally its management address. A message sourced from a loopback, or one that crosses NAT, arrives and attaches to no device. Fix it with the device's source-interface setting.
 3. Confirm the path allows the port inbound. UDP drops silently, so a firewall block looks identical to a device that is not sending.
 4. For traps specifically, confirm `FEATURE_SNMP_TRAPS` is on. The host port is published either way, so a port scan showing 162 open is not evidence that the receiver is running.
-5. Generate a test event, then look for it under **Explore → Logs** and **Explore → Events** within a minute.
+5. Generate a test event, then look for it under **Explore → Logs**, on the **Events** tab, within a minute.
 
 ## No flows {#no-flows}
 
