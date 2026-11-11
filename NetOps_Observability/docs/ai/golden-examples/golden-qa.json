@@ -1449,6 +1449,18 @@
       "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Features"
     },
     {
+      "id": "docs-124",
+      "category": "docs",
+      "question": "Where do I set up where Correlix sends alerts about its own health, by ntfy or text message?",
+      "expect": {
+        "slugs": [
+          "monitoring/host-monitoring"
+        ]
+      },
+      "nav": "platform/platform-alerts",
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Platform alerts"
+    },
+    {
       "id": "intent-001",
       "category": "intent",
       "question": "show me the top talkers",

@@ -815,8 +815,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/token-policy":    "platform",
 	"/api/platform/features":    "platform",
 	"/api/platform/restart":     "platform",
-	"/api/copilot/config":       "platform",
-	"/api/copilot/config/test":  "platform", // requirePlatformAdmin: tests the platform provider key (C3)
+	// Platform self-health alert route (owner 2026-11-11: GUI, not env): ONE
+	// platform-global record, requirePlatformAdmin on GET/PUT and on the test
+	// send; tenant/org admins refused (platform_alert_route_test.go).
+	"/api/platform/alerting/host-route":      "platform",
+	"/api/platform/alerting/host-route/test": "platform",
+	"/api/copilot/config":                    "platform",
+	"/api/copilot/config/test":               "platform", // requirePlatformAdmin: tests the platform provider key (C3)
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
 	// poller across EVERY tenant's connectors, so it is platform plumbing by
