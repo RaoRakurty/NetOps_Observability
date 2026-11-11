@@ -106,7 +106,12 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # differing leaf is `ranking/catalog_version`. The durable form of that proof is
 # test_sdwan_controller_fan_in.py::
 # test_no_control_loss_evidence_is_byte_identical_with_and_without_the_change.
-FIXTURE_GOLDEN = "4d155b6650f11505"
+#
+# RE-FROZEN, 2026-11-11, Fable review fixes on the same branch (was
+# "4d155b6650f11505"): the controller template's operator phrase / blast radius
+# became conditional, so catalog_version moved. JSON diff of the blob against
+# 68abe8a6: the only differing leaf is `ranking/catalog_version`.
+FIXTURE_GOLDEN = "0c87be7cb31b263f"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

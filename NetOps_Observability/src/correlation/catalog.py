@@ -414,6 +414,23 @@ class Catalog(BaseModel):
                     raise ValueError(f"{t.id}: else_prefer {d.else_prefer!r} not in catalog")
                 if d.else_prefer == t.id:
                     raise ValueError(f"{t.id}: discriminator prefers itself")
+                # A discriminator whose `absent` clause can be satisfied by the
+                # very evidence the template's mandatory clause needs would
+                # contradict the template every time it matched — unless it is
+                # narrowed: by a clause predicate (attrs / attrs_not /
+                # min_deviation, tracker 385) or by a structure (`attested`,
+                # the SD-WAN controller fan-in). Unnarrowed, it is an authoring
+                # slip that silently caps the template at x0.2: refuse it.
+                mandatory = {k for c in t.requires if not c.optional for k in c.kinds()}
+                overlap = d.absent.kinds() & mandatory
+                narrowed = (d.attested is not None or d.absent.attrs is not None
+                            or d.absent.attrs_not is not None
+                            or d.absent.min_deviation is not None)
+                if overlap and not narrowed:
+                    raise ValueError(
+                        f"{t.id}: discriminator absent clause {sorted(overlap)} overlaps "
+                        f"the template's mandatory clause and is not narrowed — set "
+                        f"`attested` (or a clause predicate) or it contradicts every match")
             # v1 NOC-catalog lint: a template that declares seams opted into the
             # voice contract — both phrasings are mandatory, and a confirmable
             # template must not be confirmable from a single evidence plane
@@ -2058,9 +2075,12 @@ BUILTIN_TEMPLATES: list[dict] = [
                 "When the controller is back, confirm overlay routes, BFD tunnels and flow export return on the edges",
             ],
         },
-        "operator_phrase": "Possibly an SD-WAN controller outage: several edges lost their control connection to the same controller at once. Without it the edges lose overlay routing and centralized policy, so tunnels and policy-driven features such as flow export stop.",
+        # Conditional on purpose: an edge that still holds a session to a second
+        # controller keeps its overlay routes and policy, and no producer tells
+        # the engine whether one survived.
+        "operator_phrase": "Possibly an SD-WAN controller outage: several edges lost their control connection to the same controller at once. If it was their only controller of that kind, the edges may lose overlay routing and centralized policy, and with them tunnels and policy-driven features such as flow export.",
         "manager_phrase": "The SD-WAN control system appears to have lost contact with several sites at once; tunnels, traffic steering and traffic reporting can stop until it is back.",
-        "blast_radius": "every edge attached to that controller: overlay routes, centralized policy (including flow export) and BFD tunnels",
+        "blast_radius": "the edges that lost that controller; where it was their only one, their overlay routes, centralized policy (including flow export) and BFD tunnels",
         "false_positives": [
             "planned controller maintenance or upgrade",
             "a shared transport outage at the affected edges' sites (those edges lose every controller, not just this one)",

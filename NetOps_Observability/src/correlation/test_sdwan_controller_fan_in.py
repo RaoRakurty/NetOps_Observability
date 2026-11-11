@@ -131,10 +131,10 @@ def trap_control_down(device: str, off: float, peer: str = VSMART):
 
 
 def vmanage_control_down(system_ip: str, off: float, peer: str = VSMART, *,
-                         rewritten_to: str = "", site: str = ""):
+                         rewritten_to: str = "", site: str = "", ptype: str = "vsmart"):
     """A normalized vManage control-connection transition (nms/vmanage_events.go).
     `rewritten_to` mimics nms/identity.go replacing the peer with an inventory id."""
-    hints = {"component": "Control", "system_ip": system_ip, "peer_type": "vsmart"}
+    hints = {"component": "Control", "system_ip": system_ip, "peer_type": ptype}
     peer_id = peer
     if rewritten_to:
         hints["controller_peer_id"] = peer
@@ -334,6 +334,11 @@ def test_the_outage_reads_possibly_because_of_the_controller():
     assert top.confidence_label() != "confirmed"
     assert top.operator_phrase.startswith("Possibly an SD-WAN controller outage")
     assert "flow export" in top.operator_phrase
+    # Conditional: an edge that keeps a second vSmart keeps its routes and policy,
+    # and no producer says whether one survived.
+    assert "If it was their only controller of that kind" in top.operator_phrase
+    assert "may lose overlay routing and centralized policy" in top.operator_phrase
+    assert "the edges lose overlay routing" not in top.operator_phrase
     assert top.seams == ("WAN_SDWAN",)
     assert top.owner == "sdwan_vendor"
     assert any(n == (f"controller fan-in: 3 edges lost their control connection to "
@@ -558,9 +563,115 @@ def test_engine_semver_moved():
 
 
 def test_the_structure_gate_refuses_without_fan_in():
-    """The template is excluded from ranking, with the refusal on the record."""
-    ranking = rank(CAT, (control_down("vEdge-20", 0),))
-    row = next((h for h in ranking.hypotheses if h.template_id == CONTROLLER), None)
-    assert row is None or (row.confidence_rank == 0.0 and row.notes
-                           and "controller_fan_in" in row.notes[0])
+    """One edge's control loss: the anchor holds, so the template is reachable,
+    and the STRUCTURE gate is what refuses it — counted as ungrounded, scored as
+    the analytic zero with the refusal note, and so not in the visible rows."""
+    ev = (control_down("vEdge-20", 0),)
+    assert "controller_fan_in" not in evidence_structure(ev, evidence_kinds(ev))
+    scoring.reset_template_scoring_stats()
+    ranking = rank(CAT, ev)
+    assert scoring.template_scoring_stats()["ungrounded"] == 1, \
+        "exactly this template was refused for lack of structure"
+    assert CONTROLLER not in {h.template_id for h in ranking.hypotheses}
+    assert ranking.top_hypothesis == LOCAL
+    refused = scoring._catalog_structure_plan(CAT)[1][CONTROLLER]
+    assert refused.confidence_rank == 0.0
+    assert refused.notes and "controller_fan_in" in refused.notes[0]
     assert scoring.STRUCTURE_FAN_IN_ATTESTED == frozenset({"controller_fan_in"})
+
+
+# ══ the transport look-alike: fail closed ═══════════════════════════════════
+
+
+def test_the_same_edges_losing_two_controller_types_is_not_a_fan_in():
+    """Edges whose transport failed lose the vSmart AND the vManage at once: a
+    shared-transport signature, not a controller outage."""
+    ev = tuple(control_down(h, i) for i, h in enumerate(EDGES)) + tuple(
+        control_down(h, 10 + i, peer=VMANAGE, ptype="vmanage") for i, h in enumerate(EDGES))
+    assert controller_fan_in(ev) == ()
+    assert "controller_fan_in" not in evidence_structure(ev, evidence_kinds(ev))
+
+
+def test_the_transport_look_alike_opens_no_controller_verdict_and_no_demotion():
+    win = [control_down(h, i) for i, h in enumerate(EDGES)]
+    win += [control_down(h, 10 + i, peer=VMANAGE, ptype="vmanage") for i, h in enumerate(EDGES)]
+    win += [bfd_down(h, 20 + i) for i, h in enumerate(EDGES)]
+    for snap in _objects(win):
+        assert snap.ranking.top_hypothesis != CONTROLLER
+        for h in snap.ranking.hypotheses:
+            assert not any("@controller_fan_in" in c for c in h.contradictions), \
+                "the edge-local reading must not be demoted by a fan-in that is not attested"
+
+
+def test_vsmart_and_vbond_together_is_the_look_alike_too():
+    ev = (control_down("vEdge-20", 0), control_down("vEdge-21", 1),
+          control_down("vEdge-20", 2, peer="10.255.255.3", ptype="vbond"),
+          control_down("vEdge-21", 3, peer="10.255.255.3", ptype="vbond"))
+    assert controller_fan_in(ev) == ()
+
+
+def test_one_controller_type_on_two_edges_still_fans_in():
+    """Two vSmarts lost by the same two edges is still ONE kind of controller."""
+    ev = (control_down("vEdge-20", 0), control_down("vEdge-21", 1),
+          control_down("vEdge-20", 2, peer="10.255.255.4"),
+          control_down("vEdge-21", 3, peer="10.255.255.4"))
+    assert {r[0] for r in controller_fan_in(ev)} == {VSMART, "10.255.255.4"}
+    assert "controller_fan_in" in evidence_structure(ev, evidence_kinds(ev))
+
+
+def test_a_transport_edge_beside_a_vsmart_outage_does_not_hide_it():
+    """Two edges lose only the vSmart; a third loses everything (its own WAN).
+    The third is left out; the other two still fan in."""
+    ev = (control_down("vEdge-20", 0), control_down("vEdge-21", 1),
+          control_down("vEdge-22", 2), control_down("vEdge-22", 3, peer=VMANAGE, ptype="vmanage"))
+    assert controller_fan_in(ev) == ((VSMART, "vsmart", 2),)
+
+
+def test_the_look_alike_is_judged_per_edge_spelling():
+    """The same box's vManage loss under ANOTHER spelling (the controller's
+    system-ip) cannot be joined to the syslog hostname, so it withdraws nothing."""
+    ev = (control_down("vEdge-20", 0), control_down("vEdge-21", 1),
+          vmanage_control_down("10.255.255.20", 2, peer=VMANAGE, ptype="vmanage"))
+    assert controller_fan_in(ev)[0][:2] == (VSMART, "vsmart")
+
+
+def test_one_edge_id_losing_two_types_across_lanes_is_withdrawn():
+    """Under one spelling (as identity canonicalisation makes the lanes share
+    ids), an edge that lost the vSmart in its syslog and the vManage in the
+    controller's relay is the transport look-alike: it is not counted."""
+    relay = replace(vmanage_control_down("10.255.255.20", 2, peer=VMANAGE, ptype="vmanage"),
+                    entity_id="vEdge-20")
+    ev = (control_down("vEdge-20", 0), control_down("vEdge-21", 1), relay)
+    assert controller_fan_in(ev) == ()
+
+
+# ══ catalog load: an overlapping discriminator must be narrowed ═════════════
+
+
+def _with_local_discriminators(discs: list[dict]) -> list[dict]:
+    raw = []
+    for t in C.BUILTIN_TEMPLATES:
+        if t["id"] == LOCAL:
+            t = {**t, "discriminators": discs}
+        raw.append(t)
+    return raw
+
+
+def test_an_unnarrowed_discriminator_overlapping_the_mandatory_clause_fails_to_load():
+    bad = [{"absent": {"kind": "controller_control_connection_loss"},
+            "else_prefer": CONTROLLER}]
+    with pytest.raises(ValueError, match="overlaps the template's mandatory clause"):
+        load_catalog(_with_local_discriminators(bad))
+
+
+@pytest.mark.parametrize("disc", [
+    {"absent": {"kind": "controller_control_connection_loss"}, "attested": "controller_fan_in",
+     "else_prefer": CONTROLLER},
+    {"absent": {"kind": "controller_control_connection_loss", "attrs": {"link_cause": "admin"}},
+     "else_prefer": CONTROLLER},
+    {"absent": {"kind": "controller_control_connection_loss", "min_deviation": 3.0},
+     "else_prefer": CONTROLLER},
+    {"absent": {"kind": "tunnel_degraded"}, "else_prefer": CONTROLLER},   # no overlap
+], ids=["attested", "attrs", "min_deviation", "disjoint"])
+def test_a_narrowed_or_disjoint_discriminator_loads(disc):
+    load_catalog(_with_local_discriminators([disc]))

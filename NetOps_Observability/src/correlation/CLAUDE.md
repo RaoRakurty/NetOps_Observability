@@ -546,10 +546,22 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   `sdwan-control-connection-loss` (now matchable: its mandatory kind was the
   producer-less `sdwan_control_down`). Stage [1]: the syslog control-connection rows emit
   the controller as a token (trap rows already did); vManage events read
-  `peer-system-ip` + `peer-type` (nms/vmanage_events.go). The edges meet only on that
-  rank-7 token, so past `CORR_TOKEN_HUB_CAP` (64) edges they stop meeting. The rank-memo
-  projection carries `(source, peer, peer_type)` for control-loss kinds only. No
-  exporter-silence signal exists: a fully silent exporter never reaches the CUSUM.
+  `peer-system-ip` + `peer-type` (nms/vmanage_events.go). **Fleet-scale limit:** the
+  edges meet ONLY on that rank-7 token, and a token on more than `CORR_TOKEN_HUB_CAP` = 64
+  NODES never grounds — about 32 edges when each reports through two lanes (one node per
+  spelling while `CORR_IDENTITY_CANON` is off). Past it there is no controller verdict at
+  all: syslog/trap control-loss rows are `warn`, below the open floor, so control loss
+  alone opens NOTHING (measured: 64 nodes → one controller object, 65 → zero); an edge
+  whose own BFD loss grounds to it, or a vManage-relayed (`high`) row, opens its OWN
+  edge-local object instead — N symptoms again. Tracker: export controller↔edge
+  control-session rows into `topology_links` (rank 3). **Transport look-alike, fail
+  closed:** an edge id that lost controllers of ≥2 distinct peer types (vSmart AND
+  vManage/vBond — its own transport failed) is not counted toward any fan-in; when that is
+  every edge, nothing is attested and the edge-local reading is not demoted. A catalog
+  load refuses a discriminator whose `absent` clause overlaps the template's mandatory
+  clause unless it is narrowed (`attested`, `attrs`/`attrs_not`, `min_deviation`). The
+  rank-memo projection carries `(source, peer, peer_type)` for control-loss kinds only.
+  No exporter-silence signal exists: a fully silent exporter never reaches the CUSUM.
 - **Tunnel identity (T0, 2026-10-25).** A BFD transition carries `tunnel_id` =
   the sorted TLOC pair `<ipA>/<colA>|<ipB>/<colB>` (nms/sdwan_tunnel.go) plus `peer_id`;
   controller_events.py binds PATH kinds to `<tunnel_id>@<controller_instance>` when

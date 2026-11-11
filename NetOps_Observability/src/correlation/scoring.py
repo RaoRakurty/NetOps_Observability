@@ -897,10 +897,20 @@ def _attests_transit_leg(evidence: tuple[Signal, ...]) -> bool:
 # a missed fan-in when each edge is seen through a different lane only — fail
 # closed: the edge-local reading stays.
 #
-# WHAT IT DOES NOT ATTEST. Contrast. Edges that lose EVERY controller at once (a
-# shared transport outage at their sites) fan in on each controller too; the
-# template discloses that look-alike under `false_positives`. Positive "the
-# other sessions stayed up" evidence is not on the bus today.
+# THE TRANSPORT LOOK-ALIKE, FAIL-CLOSED. An edge whose own transport fails loses
+# EVERY controller at once: the vSmart AND the vManage/vBond. So an edge id that
+# reports losing controllers of two or more distinct peer types (in any lane: one
+# id is one box, and canonicalisation makes the lanes share ids) is a
+# shared-transport signature, not a witness of one controller failing, and it is
+# not counted toward any fan-in. When the same edges lose a vSmart and a vManage
+# together, nothing is attested: no controller verdict, and the edge-local
+# reading is not demoted. Edges that lost only one kind of controller still
+# count, so a vSmart outage seen beside one site's WAN failure still fans in.
+#
+# WHAT IT STILL DOES NOT ATTEST. Positive contrast: "the other sessions stayed
+# up" is not on the bus, and an edge reporting only its vSmart loss (its vManage
+# loss unreported, or typed "") is indistinguishable from a vSmart outage. The
+# template keeps the look-alike under `false_positives`.
 #
 # MEMO SOUNDNESS. Reads kind, entity_type, entity_id (already keyed) plus
 # `source` and the (peer, peer_type) pair, which rank_memo.signal_projection
@@ -914,12 +924,15 @@ def controller_fan_in(evidence: tuple[Signal, ...]) -> tuple[tuple[str, str, int
     """Every controller ≥ CONTROLLER_FAN_IN_MIN_EDGES distinct edges lost, as
     ``(peer, peer_type, edges)`` sorted by (-edges, peer).
 
-    ``edges`` is the largest per-lane count of distinct reporting devices;
-    ``peer_type`` joins the distinct types the reports gave ("" when none did).
-    DEBUG_ONLY evidence is excluded, as everywhere in the scorer. Pure and total:
-    malformed attrs name no controller (`signals.controller_peer`)."""
+    ``edges`` is the largest per-lane count of distinct reporting devices,
+    leaving out every edge id that lost controllers of >=2 distinct peer types,
+    in any lane (the transport look-alike, above); ``peer_type`` joins the distinct
+    types the reports gave ("" when none did). DEBUG_ONLY evidence is excluded,
+    as everywhere in the scorer. Pure and total: malformed attrs name no
+    controller (`signals.controller_peer`)."""
     lanes: dict[tuple[str, str], set[str]] = {}
     types: dict[str, set[str]] = {}
+    edge_types: dict[str, set[str]] = {}
     for s in evidence:
         if s.kind not in CONTROL_LOSS_KINDS or s.entity_type is not EntityType.DEVICE:
             continue
@@ -928,12 +941,15 @@ def controller_fan_in(evidence: tuple[Signal, ...]) -> tuple[tuple[str, str, int
         peer, ptype = controller_peer(s)
         if not peer:
             continue
-        lanes.setdefault((s.source.value, peer), set()).add(s.entity_id)
+        lane = s.source.value
+        lanes.setdefault((lane, peer), set()).add(s.entity_id)
         if ptype:
             types.setdefault(peer, set()).add(ptype)
+            edge_types.setdefault(s.entity_id, set()).add(ptype)
     best: dict[str, int] = {}
     for (_lane, peer), edges in lanes.items():
-        best[peer] = max(best.get(peer, 0), len(edges))
+        counted = sum(1 for e in edges if len(edge_types.get(e, ())) < 2)
+        best[peer] = max(best.get(peer, 0), counted)
     return tuple(sorted(
         ((peer, "|".join(sorted(types.get(peer, ()))), n)
          for peer, n in best.items() if n >= CONTROLLER_FAN_IN_MIN_EDGES),
@@ -975,7 +991,9 @@ def evidence_structure(evidence: tuple[Signal, ...],
       * FAN-IN-attested (`controller_fan_in`) — ≥2 edges lost the same
         controller. Scanned only when a control-loss kind is present.
 
-    Pure, total, and monotone: adding evidence can only add classes."""
+    Pure and total. Monotone (adding evidence can only add classes) for every
+    class but `controller_fan_in`, which an edge's second controller type
+    withdraws on purpose (the transport look-alike)."""
     attested = {cls for cls, ks in STRUCTURE_ATTESTING_KINDS.items()
                 if ks & present}
     if _attests_transit_leg(evidence):
