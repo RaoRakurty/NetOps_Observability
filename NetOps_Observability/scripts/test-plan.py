@@ -149,6 +149,11 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("src/config/*", ("backend", BOOT)),
     # Everything that builds, installs or starts the stack.
     ("deployment/*", (BOOT,)),
+    # The index templates are read by the frontend's field lists (eventModel,
+    # logFilters) and their tests, and by the backend's oslog: a mapping change
+    # must run both suites. Found 2026-11-11: #180 mapped transition_id and
+    # correlation_key, the frontend group was skipped, and main went red.
+    ("deployment/docker/opensearch/index-templates.json", ("backend", "frontend")),
     ("deployment/docker/Dockerfile.backend", ("backend",)),
     ("deployment/docker/Dockerfile.correlation", ("correlation",)),
     ("deployment/docker/Dockerfile.frontend", ("frontend",)),
