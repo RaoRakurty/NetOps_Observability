@@ -144,6 +144,21 @@ const SIG_NOC_TITLE: Record<string, string> = {
   "sig.sp.core.mpls-lsp-down": "MPLS LSP down",
   "sig.dc.fabric.uplink-fault": "Fabric uplink fault",
   "sig.ent.security.fw-policy-drop": "Firewall policy drop",
+  // Security family (owner review 2026-11-11): every security template has a
+  // NOC title, so a raw template title never reaches an operator. The two
+  // posture/exposure stories are BACKGROUND titles — they describe the device,
+  // never a fault. Mirror of sigTitle in backend/internal/noclabel/labels.go.
+  "sig.ent.security.exposure-story": "Known security exposure on this device",
+  "sig.ent.security.hardening-drift-story": "Hardening gap on this device",
+  "sig.ent.security.threat-signal-story": "Security detection on a failing device",
+  "sig.ent.security.fw-ha-failover-drift": "Firewall HA failover or session drift",
+  "sig.ent.security.fw-aa-session-owner-mismatch": "Firewall session-owner mismatch",
+  "sig.ent.security.nat-snat-exhaustion": "NAT / SNAT port exhaustion",
+  "sig.ent.security.waf-rule-false-positive": "WAF blocking legitimate traffic",
+  "sig.ent.security.waf-body-limit-block": "WAF request-size block",
+  "sig.ent.security.proxy-pac-wpad-failure": "Proxy auto-config (PAC/WPAD) failure",
+  "sig.ent.security.proxy-swg-egress-failure": "Web proxy egress failure",
+  "sig.ent.app.edge-firewall-reject": "Cloud security group rejecting application traffic",
 };
 // Dominant evidence plane → NOC headline when no signature has matched.
 // Titles describe the OBSERVED condition factually — the NOT CONFIRMED / Confidence

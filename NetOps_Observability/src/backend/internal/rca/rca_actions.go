@@ -116,6 +116,16 @@ var rcaActionFamilies = []rcaActionFamily{
 		EvidenceKinds:  []string{"cloud", "route"},
 		ExpectedOutput: "the route-table entries for the affected prefix, next-hop/attachment state, and any recent route changes",
 	},
+	{
+		// Security family (owner review 2026-11-11): a security finding's own
+		// steps (open the exposure, compare the capture time with the fault
+		// onset) apply only when security evidence took part.
+		Name:           "security",
+		StepTokens:     []string{"exposure", "advisory", "hardening", "posture", "telnet"},
+		EvidenceKinds:  []string{"security_"},
+		Lanes:          []string{"security"},
+		ExpectedOutput: "the finding's rule, the configuration evidence it cites, and when the finding was first seen compared with the fault onset",
+	},
 }
 
 // rcaTokenize splits an action step into lower-case word tokens (letters and

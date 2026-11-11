@@ -50,7 +50,22 @@ var reasonTokenLabel = map[string]string{
 	"internal_self_probe": "internal self-probe",
 	"customer_path":       "customer-path probe",
 	"synthetic_lab_probe": "lab probe",
+	// The two verdict planes (owner review 2026-11-11): a raw `security` or
+	// `management_plane` token never reaches an operator.
+	"security":            "a security rule",
+	"management_plane":    "the controller's own statement",
+	"active_verification": "a read-only device check",
 }
+
+// reasonTokenRe matches one raw token as a WHOLE word (underscores are word
+// characters, so "security_exposure" is not rewritten as "security").
+var reasonTokenRe = func() map[string]*regexp.Regexp {
+	out := make(map[string]*regexp.Regexp, len(reasonTokenLabel))
+	for t := range reasonTokenLabel {
+		out[t] = regexp.MustCompile(`\b` + regexp.QuoteMeta(t) + `\b`)
+	}
+	return out
+}()
 
 // FriendlyReasons rewrites engine reason strings into operator language. The
 // known verdict-gate shapes are rewritten WHOLE (owner directive 2026-07-18: a
@@ -103,7 +118,7 @@ func friendlyReason(r string) string {
 		return "A second independent source is needed to confirm."
 	}
 	for t, label := range reasonTokenLabel {
-		r = strings.ReplaceAll(r, t, label)
+		r = reasonTokenRe[t].ReplaceAllLiteralString(r, label)
 	}
 	r = reGteNotation.ReplaceAllString(r, "$1 or more")
 	return strings.ReplaceAll(strings.ReplaceAll(r, "modality", "source"), "Modality", "Source")

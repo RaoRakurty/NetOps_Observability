@@ -31,6 +31,10 @@ func TestRcaLibraryPrefilterSQLIsBounded(t *testing.T) {
 		"state != 'merged'",
 		// duration reuses the promotion constant (owner-tuned 2m) — never drifts
 		fmt.Sprintf("dateDiff('second', window_start, window_end) >= %d", int(rca.PromotionMinDuration.Seconds())),
+		// owner D3: the prefilter is a superset over all three triggers
+		fmt.Sprintf("JSONLength(affected, 'sites') >= %d", rca.MultiSiteMin),
+		fmt.Sprintf("HAVING count() >= %d", rca.RepeatOffenderMin),
+		"window_end >= now() - INTERVAL 3196800 SECOND", // 30 days + the 7-day repeat lookback
 		"window_end >= now() - INTERVAL 2592000 SECOND", // 30 days, bounded window
 		"ORDER BY window_end DESC",
 		fmt.Sprintf("LIMIT %d", rcaLibraryEvalCap),
@@ -54,8 +58,12 @@ type libFakeObj struct {
 func libAutoMeta(owner, trigger string) map[string]any {
 	hyp, _ := json.Marshal(map[string]any{"ranking": map[string]any{"hypotheses": []any{map[string]any{
 		"id": "sig.ent.wan-edge.bgp-peer-down", "confidence": 0.9, "confidence_label": "confirmed",
-		"satisfied": []string{"app_error_rate_high"}, "missing": []string{}, "contradicted": false,
-		"verdict": map[string]any{"verdict_tier": "confirmed", "owner": "isp"},
+		"satisfied": []string{"app_error_rate_high", "bgp_adjacency_change"}, "missing": []string{}, "contradicted": false,
+		// owner D3: the confirming pair is two MEASUREMENT sources — the edge
+		// router's routing events and the load balancer's traffic records.
+		"verdict": map[string]any{"verdict_tier": "confirmed", "owner": "isp",
+			"independent_pair":   []string{"lb-1", "wan-r2"},
+			"trusted_modalities": []string{"control_plane", "passive_flow"}},
 	}}}})
 	return map[string]any{
 		"version": "3", "tenant_id": owner, "state": "open", "merged_into": "",
@@ -92,13 +100,23 @@ func libImpactSigs(trigger string) []map[string]any {
 	return []map[string]any{
 		libSig(trigger, "2026-07-12 18:11:00", "app_error_rate_high"),
 		libSig("22222222-2222-2222-2222-222222222222", "2026-07-12 18:26:00", "app_error_rate_high"),
+		libRouterSig("33333333-3333-3333-3333-333333333333", "2026-07-12 18:12:00"),
 	}
+}
+
+// libRouterSig — the edge router's own routing event: the second measurement
+// plane of the confirming pair.
+func libRouterSig(id, ts string) map[string]any {
+	s := libSig(id, ts, "bgp_adjacency_change")
+	s["source"], s["observer_id"], s["modality_class"] = "trap", "wan-r2", "control_plane"
+	s["entity_type"], s["entity_id"] = "device", "wan-r2"
+	return s
 }
 
 // libFakeCH emulates the row-policy-scoped reads: the corr_current prefilter
 // answers per scope; per-object slice reads answer only when the object is
 // visible to the request's tenant_scope. Captures every scope seen.
-func libFakeCH(t *testing.T, prefilter map[string][]string, objs map[string]libFakeObj) *[]string {
+func libFakeCH(t *testing.T, prefilter map[string][]string, objs map[string]libFakeObj, repeat ...int) *[]string {
 	t.Helper()
 	var scopes []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +133,14 @@ func libFakeCH(t *testing.T, prefilter map[string][]string, objs map[string]libF
 		visible := func(owner string) bool { return scope == owner || scope == "__all__" }
 
 		switch {
+		case strings.Contains(sql, "AS repeat_count"):
+			// owner D3 repeat-offender count — answered only for a real tenant
+			// scope (the row policies would return nothing to "__none__").
+			n := 0
+			if len(repeat) > 0 && scope != "" && scope != "__none__" {
+				n = repeat[0]
+			}
+			rows([]map[string]any{{"repeat_count": fmt.Sprint(n)}})
 		case strings.Contains(sql, "FROM netops.corr_current"):
 			var out []map[string]any
 			for _, id := range prefilter[scope] {
@@ -330,5 +356,36 @@ func TestRcaLibraryTenantIsolation(t *testing.T) {
 		if sc == "" {
 			t.Fatal("a library read reached ClickHouse without a tenant_scope")
 		}
+	}
+}
+
+// Owner D3 (2026-11-11): a SUSPECTED object the same cause hit on the same
+// device ≥ 3 times in 7 days is a repeat offender — the library lists it with
+// basis auto, trigger repeat_offender. The count is read under the caller's
+// tenant scope.
+func TestRcaLibraryRepeatOffenderPromotes(t *testing.T) {
+	m := libSuspectedMeta("acme", "11111111-1111-1111-1111-111111111111")
+	m["affected"] = `{"devices":["wan-r2"]}`
+	objs := map[string]libFakeObj{libSuspectID: {owner: "acme", meta: m, sigs: libImpactSigs("11111111-1111-1111-1111-111111111111")}}
+	scopes := libFakeCH(t, map[string][]string{"acme": {libSuspectID}}, objs, rca.RepeatOffenderMin)
+	s := promoServer(t)
+	w := httptest.NewRecorder()
+	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
+	reports, _, _ := libResponse(t, w)
+	if len(reports) != 1 || reports[0].Promotion.Basis != "auto" || reports[0].Promotion.Trigger != "repeat_offender" {
+		t.Fatalf("repeat offender must list as auto/repeat_offender: %+v", reports)
+	}
+	for _, sc := range *scopes {
+		if sc == "__all__" {
+			t.Fatalf("a tenant caller's reads must never run cross-tenant: %v", *scopes)
+		}
+	}
+
+	// two occurrences are not enough
+	libFakeCH(t, map[string][]string{"acme": {libSuspectID}}, objs, rca.RepeatOffenderMin-1)
+	w = httptest.NewRecorder()
+	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
+	if reports, _, _ := libResponse(t, w); len(reports) != 0 {
+		t.Fatalf("2 of 3 must not promote: %+v", reports)
 	}
 }

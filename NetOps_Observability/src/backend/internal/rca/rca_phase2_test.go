@@ -50,18 +50,21 @@ func fixtureSnapshotBytes(t *testing.T, name string, got []byte) {
 }
 
 var rcaPhase2SectionBands = []string{
-	"1 · Executive summary",
-	"2 · Impact",
-	"3 · What happened",
-	"4 · Trigger",
-	"5 · Root cause and contributing factors",
-	"6 · Detection and response",
-	"7 · Mitigation and service recovery",
-	"8 · Corrective actions",
-	"9 · Lessons learned",
-	"10 · Detailed timeline",
-	"11 · Evidence appendix",
-	"12 · Glossary",
+	"1 · What broke",
+	"2 · Who is affected",
+	"3 · When",
+	"4 · Cause and how sure we are",
+	"5 · How we know",
+	"6 · Where the break is",
+	"7 · Background on this device (not a cause)",
+	"8 · Other explanations considered",
+	"9 · Who owns the fix",
+	"10 · What to do now · Watch for recurrence",
+	"Appendix A · Evidence",
+	"Appendix B · Detailed timeline",
+	"Appendix C · Glossary",
+	"Appendix D · Integrity",
+	"How to read this RCA",
 }
 
 // ---- A. report layout: the 12-section order -----------------------------------

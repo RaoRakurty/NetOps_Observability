@@ -141,6 +141,23 @@ var sigTitle = map[string]string{
 	// substring cascade, where the bare "ipsec" token routed them to the
 	// SD-WAN group — a live report titled an underlay-root case "SD-WAN").
 	"sig.ent.middle-mile.ipsec-underlay-down": "Underlay path to VPN peer down",
+	// Security family (owner review 2026-11-11): every security template has a
+	// NOC title, so a raw template title ("Exposed device is also failing
+	// (exposure + network fault on one node)") never reaches an operator. The
+	// two posture/exposure stories are BACKGROUND titles — they describe the
+	// device, never a fault. Mirror of SIG_NOC_TITLE in labels.ts.
+	"sig.ent.security.exposure-story":               "Known security exposure on this device",
+	"sig.ent.security.hardening-drift-story":        "Hardening gap on this device",
+	"sig.ent.security.threat-signal-story":          "Security detection on a failing device",
+	"sig.ent.security.fw-policy-drop":               "Firewall policy drop",
+	"sig.ent.security.fw-ha-failover-drift":         "Firewall HA failover or session drift",
+	"sig.ent.security.fw-aa-session-owner-mismatch": "Firewall session-owner mismatch",
+	"sig.ent.security.nat-snat-exhaustion":          "NAT / SNAT port exhaustion",
+	"sig.ent.security.waf-rule-false-positive":      "WAF blocking legitimate traffic",
+	"sig.ent.security.waf-body-limit-block":         "WAF request-size block",
+	"sig.ent.security.proxy-pac-wpad-failure":       "Proxy auto-config (PAC/WPAD) failure",
+	"sig.ent.security.proxy-swg-egress-failure":     "Web proxy egress failure",
+	"sig.ent.app.edge-firewall-reject":              "Cloud security group rejecting application traffic",
 }
 
 // SignatureTitle humanizes a signature id (server mirror of the UI). Returns

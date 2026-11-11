@@ -27,6 +27,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"strings"
 )
 
@@ -89,8 +90,19 @@ type RCAResult struct {
 	Impact              []RCAImpact     `json:"impact,omitempty"`
 	Owner               RCAOwner        `json:"owner,omitempty"`
 	// Missing is the evidence the engine says it still needs.
-	Missing   []string `json:"missing,omitempty"`
-	Truncated bool     `json:"truncated,omitempty"`
+	Missing []string `json:"missing,omitempty"`
+	// Background: background on the device (owner D1) — standing findings and
+	// background stories, narrated as background, never as the cause.
+	Background []string `json:"background,omitempty"`
+	Truncated  bool     `json:"truncated,omitempty"`
+}
+
+// rcaLeadingTitle — the leading hypothesis in NOC words, "" when none.
+func rcaLeadingTitle(res RCAResult) string {
+	if len(res.Hypotheses) > 0 {
+		return firstNonEmpty(res.Hypotheses[0].Title, res.Hypotheses[0].Problem)
+	}
+	return ""
 }
 
 // RCARootCause mirrors the engine's root-cause block, including its honesty
@@ -343,12 +355,13 @@ func projectOwner(res RCAResult, tr *ToolResult) {
 // evidence FOR and AGAINST each (Part 1 §12: contradictions are never hidden).
 func projectConfidence(res RCAResult, tr *ToolResult) {
 	tr.Items = append(tr.Items, rcaItem(res, "confidence", "finding",
-		fmt.Sprintf("engine analysis %s, root cause %s; leading candidate %s (%.0f%% engine confidence)",
+		fmt.Sprintf("engine analysis %s, root cause %s; leading candidate: %s",
 			firstNonEmpty(res.Verdict, "inconclusive"), firstNonEmpty(res.RootCauseState, "not_identified"),
-			firstNonEmpty(res.ConfidenceLabel, "unlabelled"), res.Confidence*100)))
+			noclabel.PhraseFor(noclabel.LevelForAnalysis(res.Verdict), rcaLeadingTitle(res)))))
 	for _, h := range res.Hypotheses {
-		text := fmt.Sprintf("#%d %s — %s; %s (%.0f%%)", h.Rank, firstNonEmpty(h.Title, h.Problem), firstNonEmpty(h.CausalRole, "candidate"),
-			firstNonEmpty(h.Label, "unlabelled"), h.Confidence*100)
+		title := firstNonEmpty(h.Title, h.Problem)
+		text := fmt.Sprintf("#%d %s — %s; %s", h.Rank, title, firstNonEmpty(h.CausalRole, "candidate"),
+			noclabel.PhraseFor(noclabel.LevelFor("", h.Label), title))
 		if len(h.Supporting) > 0 {
 			text += "; FOR: " + strings.Join(h.Supporting, "; ")
 		}
@@ -370,6 +383,14 @@ func projectConfidence(res RCAResult, tr *ToolResult) {
 	}
 	if len(res.Missing) > 0 {
 		tr.Items = append(tr.Items, rcaItem(res, "missing", "finding", "evidence the engine still needs: "+strings.Join(res.Missing, "; ")))
+	}
+	for i, b := range res.Background {
+		if i >= 3 {
+			break
+		}
+		// no cause role: background is context, never a candidate cause
+		tr.Items = append(tr.Items, rcaItem(res, fmt.Sprintf("background-%d", i), "finding",
+			"background on this device (not a cause): "+b))
 	}
 	tr.Notes = append(tr.Notes, "the confidence is the ENGINE's, not yours — report it, never raise it; always state the evidence AGAINST the leading candidate when there is any")
 }
