@@ -57,7 +57,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/cloud/business-services/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings":            "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/cloud/resource-mappings/":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/correlations/rca-reports":           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/findings":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/by-proto":                     "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/flows/fanout":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",

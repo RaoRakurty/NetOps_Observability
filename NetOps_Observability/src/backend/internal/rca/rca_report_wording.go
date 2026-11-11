@@ -49,6 +49,18 @@ var sigProblemStatement = map[string]string{
 	"sig.ent.app.lb-target-health-failure":     "The load balancer is marking backend targets unhealthy, so requests fail or drain away.",
 	"sig.ent.app.tls-cert-expired":             "The service's TLS certificate expired, so clients refuse the connection.",
 	"sig.ent.app.dns-failover-wrong-target":    "DNS failover moved the service name to a wrong or unhealthy target.",
+	// Security family (owner review 2026-11-11). The two background stories say
+	// what they are — a standing property of the device, not a fault.
+	"sig.ent.security.exposure-story":               "The device carries a known security exposure while also showing a network fault; the exposure is a standing property, not a proven cause.",
+	"sig.ent.security.hardening-drift-story":        "The device is outside its hardening baseline while also showing a network fault; the gap is a standing property, not a proven cause.",
+	"sig.ent.security.threat-signal-story":          "A security detection fired on the device while it was also showing a network fault; the two may be one story or a coincidence.",
+	"sig.ent.security.fw-policy-drop":               "A firewall policy is dropping the affected traffic.",
+	"sig.ent.security.fw-ha-failover-drift":         "The firewall pair failed over or its session state drifted, breaking stateful sessions through it.",
+	"sig.ent.security.fw-aa-session-owner-mismatch": "The active/active firewall pair disagrees about which unit owns the sessions, so return traffic is dropped.",
+	"sig.ent.security.nat-snat-exhaustion":          "The NAT/SNAT port pool is exhausted, so new connections cannot be translated.",
+	"sig.ent.security.waf-rule-false-positive":      "A web application firewall rule is blocking legitimate application traffic.",
+	"sig.ent.security.waf-body-limit-block":         "The web application firewall is blocking requests larger than its inspection limit.",
+	"sig.ent.security.proxy-pac-wpad-failure":       "Clients cannot fetch the proxy auto-configuration (PAC/WPAD), so web traffic does not reach the proxy.",
 }
 
 // rcaProblemFor returns the possible-problem sentence for a signature id.
@@ -845,6 +857,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 		last  time.Time
 		times []time.Time
 		n     int
+		dated bool
 	}
 	byKind := map[string]*agg{}
 	var order []string
@@ -857,6 +870,9 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 			order = append(order, kind)
 		}
 		a.n++
+		if rcaFindingFirstSeen(s) != "" {
+			a.dated = true
+		}
 		if ts, ok := parseChTS(fmt.Sprintf("%v", s["ts"])); ok {
 			if a.first.IsZero() || ts.Before(a.first) {
 				a.first = ts
@@ -890,6 +906,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 			Source:       orDefault(rcaLaneLabel[a.lane], rcaTitleCase(a.lane)),
 			Observations: a.n,
 			Buckets:      bucketObservationTimes(a.times, firstObs, lastObs, rcaSymptomBuckets),
+			standing:     rcaIsStandingFindingKind(k) && !a.dated,
 		}
 		if !a.first.IsZero() {
 			row.First = a.first.UTC().Format("15:04") + " UTC"
@@ -919,7 +936,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 	case (analysis == "suspected" || analysis == "probable") && soloLane != "":
 		es.VerdictReason = fmt.Sprintf("Suspected — only %s saw this; a second independent source is needed to confirm.", soloLane)
 	case analysis == "suspected" || analysis == "probable":
-		es.VerdictReason = "Suspected — sources agree, but no independent pair confirms customer impact yet."
+		es.VerdictReason = "Suspected — sources agree, but no independent pair confirms the fault yet."
 	default:
 		es.VerdictReason = "Not confirmed — no cause has enough supporting evidence yet."
 	}
@@ -928,7 +945,12 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 
 // ---- decision --------------------------------------------------------------------------------
 
-func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol ticketing.IncidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
+// buildDecision — the policy decision. Impact wording reads ONLY the impact
+// axis (owner review 2026-11-11, gap 1): a confirmed fault never implies that
+// customer impact is confirmed. Escalation triggers on measured impact, or on a
+// confirmed fault whose recorded confirming pair is not refuted (measuredPair:
+// no security rule or controller statement in the pair).
+func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol ticketing.IncidentPolicy, configured bool, monitorWindow time.Duration, measuredPair bool) rcaDecision {
 	polName := pol.Name
 	if !configured {
 		polName = pol.Name + " (platform default — no tenant policy configured)"
@@ -946,7 +968,7 @@ func buildDecision(analysis, incident, recoveryState, impact, monitoring string,
 	}
 	// The escalation conditions are EVALUATED at report time — conditions that
 	// already hold render as an executed trigger, never as a future promise.
-	if impact == "confirmed" || analysis == "confirmed" {
+	if impact == "confirmed" || (analysis == "confirmed" && measuredPair) {
 		d.EscalationState = "triggered"
 		d.EscalationAt = generatedAt
 	}
@@ -957,7 +979,7 @@ func buildDecision(analysis, incident, recoveryState, impact, monitoring string,
 	switch {
 	case analysis == "confirmed" && incident == "active":
 		d.Decision = "Open incident"
-		d.Reason = "Customer impact and fault are confirmed by independent evidence; restoration workflow should begin."
+		d.Reason = "The fault is confirmed by independent evidence; " + rcaImpactClause(impact) + " Restoration workflow should begin."
 	case incident == "recovered" || incident == "closed" || incident == "no_longer_observed":
 		// Monitoring copy is RECOVERY-STATE-AWARE (P1.5/P1.6 residue): "has
 		// recovered" may only ever render on observed recovery evidence. A
@@ -981,6 +1003,22 @@ func buildDecision(analysis, incident, recoveryState, impact, monitoring string,
 		d.Reason = "The evidence does not meet the ticket-open policy. Auto-ticketing holds until the policy threshold is met."
 	}
 	return d
+}
+
+// rcaImpactClause — the impact half of a decision sentence, read ONLY from the
+// overall impact axis (never from the verdict).
+func rcaImpactClause(impact string) string {
+	switch impact {
+	case "confirmed":
+		return "customer impact is measured."
+	case "detected":
+		return "impact is detected (failed checks or real-user errors) but not confirmed for real users."
+	case "indicator_detected":
+		return "real traffic changed, which indicates impact but does not confirm it."
+	case "none_detected":
+		return "no customer impact was measured across the window."
+	}
+	return "customer impact is not measured."
 }
 
 // rcaSeverityIncidentBasis renders the INCIDENT severity's reasoning from policy
@@ -1069,6 +1107,7 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 		"control_plane":    "routing/link event cluster",
 		"device_telemetry": "device-health anomaly",
 		"management_plane": "controller-reported anomaly",
+		"security":         "security finding",
 	}[dominant]
 	if noun == "" {
 		noun = "telemetry anomaly"

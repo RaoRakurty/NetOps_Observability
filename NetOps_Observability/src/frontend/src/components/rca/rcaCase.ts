@@ -8,6 +8,12 @@ import { kindForRole, type ShapeKind } from "../graph/shapes";
 import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
 import { readServicePath } from "./servicePath";
+import { phraseFor, isContextStory as isContextStoryId, type ConfidenceLevel } from "./rcaPhrases";
+import {
+  parseRanking, splitRanking, headlineTier, headlineOf, buildHowWeKnow, buildBackground, buildOthers,
+  buildAffectedAxes, impactSentence, isStandingFindingKind, hasFirstSeen,
+  type KnowRow, type BackgroundItem, type OtherExplanation, type AffectedAxis, type ImpactAxesFromReport,
+} from "./rcaDocument";
 
 // rcaCase.ts — the data contract for the RCA workspace + the adapter that maps a
 // real correlation object/timeline into it. The workspace component is pure
@@ -184,7 +190,7 @@ export function buildEvidenceSummary(
   } else if (streams.length === 1) {
     verdictReason = `Only ${streams[0].toLowerCase()} saw this — a second independent source is needed to confirm.`;
   } else if (verdict === "suspected" || verdict === "recovered") {
-    verdictReason = "Sources agree, but no independent pair confirms customer impact yet.";
+    verdictReason = "Sources agree, but no independent pair confirms the fault yet.";
   } else {
     verdictReason = "Not confirmed — no cause has enough supporting evidence yet.";
   }
@@ -210,6 +216,12 @@ export interface CaseEvent {
 // — used ONLY to add honestly-recorded milestones to the event timeline.
 export interface CaseEventExtras {
   times?: { recovered_at?: string; component_recovered_at?: string };
+  // The server report's impact axes (impact_real_user / impact_synthetic) —
+  // when present, "Who is affected" reads them instead of re-deriving.
+  impact?: ImpactAxesFromReport;
+  // The Security Overview's exposure chronology IS about the findings, so it
+  // keeps them as events; the RCA timeline does not (they are background).
+  includeStandingFindings?: boolean;
   promotion?: { manual?: { promoted_by: string; promoted_at: string } };
   verification?: VerificationRun | null;
 }
@@ -239,6 +251,9 @@ export function buildCaseEvents(timeline: CorrTimeline, obj: CorrObject, extras?
       continue;
     }
     if (!s.attached) continue;
+    // A standing security finding (posture / exposure) has no start time — it
+    // is background (section 7), never a dated event, unless it carries one.
+    if (!extras?.includeStandingFindings && isStandingFindingKind(s.kind) && !hasFirstSeen(s)) continue;
     const prev = firstByKind.get(s.kind);
     if (!prev || (t(s.ts) ?? 0) < (t(prev.ts) ?? 0)) firstByKind.set(s.kind, s);
   }
@@ -356,6 +371,27 @@ export interface RcaCase {
   // Application Impact (#81 P5) — omitted when no fused identity is attached.
   appImpact?: RcaAppImpact;
   debug: { accounting: DebugRow[]; promotion: KV[]; reasoning: string; model: unknown };
+  // ── The NOC RCA document (owner 2026-11-11, D1/D3/D4) ──────────────────────
+  // 1 · What broke — object, symptom, site; never a raw template title.
+  whatBroke: string;
+  // 4 · Cause and how sure we are — exactly one of the four fixed phrases.
+  confidence: { level: ConfidenceLevel; phrase: string; cause?: string };
+  wouldConfirm: string[];
+  // 5 · How we know — each observation names its source in plain words.
+  howWeKnow: KnowRow[];
+  oneWitness?: string;
+  // 7 · Background on this device (not a cause).
+  background: BackgroundItem[];
+  // 8 · Other explanations considered — each with why it is not the answer.
+  others: OtherExplanation[];
+  // 2 · Who is affected — each axis measured / indicated / not measured.
+  affected: AffectedAxis[];
+  // 9 · Who owns the fix.
+  ownerSection: { owner: string; why: string };
+  // 10 · Watch for recurrence.
+  watch: string[];
+  // 6 · Where the break is — "Break here" only for a break on a measured plane.
+  measuredBreak: boolean;
 }
 
 // ── EXAMPLE_CASE — synthetic golden scenario (confirmed multi-evidence) ───────
@@ -487,13 +523,32 @@ export const EXAMPLE_CASE: RcaCase = {
       { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "customer-impact evidence tied to same scope" },
       { k: "Current score", v: "0.92 / 1.00" }, { k: "Conflict penalty", v: "0.00" },
     ],
-    reasoning: "The RCA promoted to confirmed because the application impact was independently observed and temporally/spatially tied to the network path event.",
+    reasoning: "The RCA promoted to confirmed because two independent sources measured the same fault in the same window and scope.",
     model: {
       rca_id: "RCA-20260616-0427", verdict: { status: "confirmed", confidence: "high", state: "recovering", priority: "P2" },
       root_cause: { type: "routing_adjacency", device: "wan-r2", peer: "192.168.100.5", event: "BGP Established → Idle → Established" },
       blast_radius: { site: "Dallas Branch", application: "Checkout API", users_affected: 184 },
     },
   },
+  whatBroke: "Routing adjacency change on wan-r2 · site Dallas Branch",
+  confidence: { level: "confirmed", phrase: "Confirmed cause", cause: "Routing adjacency change" },
+  wouldConfirm: [],
+  howWeKnow: [
+    { source: "The device's own alarm reported", text: "The device's own alarm reported BGP neighbor change (one observation)." },
+    { source: "Active checks from dallas-probe measured", text: "Active checks from dallas-probe measured packet loss (3 observations)." },
+  ],
+  background: [],
+  others: [{ title: "Application / service experience change", why: "Describes what was seen, not why — it is not a cause." }],
+  affected: [
+    { axis: "Real users", state: "measured", detail: "Checkout API errors for Dallas users show users were affected; the number of users is not measured." },
+    { axis: "Synthetic checks", state: "measured", detail: "Configured checks failed (3 failed observations)." },
+    { axis: "Real traffic (flow records)", state: "indicated", detail: "Traffic volume changed. This is an indicator — demand shifts and collection loss look the same." },
+    { axis: "Sites", state: "indicated", detail: "Dallas Branch — named by the evidence; other sites are not counted." },
+    { axis: "Applications", state: "indicated", detail: "Checkout API — named by the evidence." },
+  ],
+  ownerSection: { owner: "NetOps", why: "The confirmed cause is on the WAN edge this team operates; carrier escalation follows once the hand-off point is proven." },
+  watch: ["Monitoring window: 30m after recovery.", "Reopens if the same condition recurs within 30m."],
+  measuredBreak: true,
 };
 
 // ── adapter: real correlation object/timeline → RcaCase ──────────────────────
@@ -598,6 +653,18 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     att[p] = (att[p] ?? 0) + 1;
   }
   const dominant = Object.entries(att).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "control_plane";
+  // The dominant MEASUREMENT plane — security never names what broke.
+  const dominantMeasured = Object.entries(att).filter(([p]) => p !== SECURITY_MODALITY).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+
+  // Owner D1 (2026-11-11): background stories (standing security posture or
+  // exposure findings) leave the causal ranking before anything is worded.
+  // When the persisted top was one, the headline tier is the causal leader's
+  // own gate, capped at the object tier — or undetermined when none exists.
+  const ranked = parseRanking(obj.hypotheses);
+  const { causal: causalRanked, background: backgroundRanked } = splitRanking(ranked);
+  const effTier = headlineTier(timeline.verdict_tier, ranked, causalRanked, timeline.top_hypothesis);
+  const headline = headlineOf(timeline.top_hypothesis, causalRanked);
+  const headlineId = headline?.id ?? (causalRanked.length || backgroundRanked.length || !timeline.top_hypothesis || isContextStoryId(timeline.top_hypothesis) ? "undetermined" : timeline.top_hypothesis);
   const hasDevice = (att.device_telemetry ?? 0) > 0;
   const hasRouting = (att.control_plane ?? 0) > 0;
   const attachedCount = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).length;
@@ -607,14 +674,15 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // the same fault. "Confirmed root cause" is NEVER shown on fewer than two — a
   // single stream, however strong, reads as suspected, not confirmed. This guard
   // sits in the UI on top of the engine verdict so the page can never overclaim.
-  // Security evidence (T2b) is the FOURTH independent class: a rule/advisory
-  // verdict is not a wire measurement, so it corroborates a network plane rather
-  // than duplicating it. It counts exactly like the others — and, exactly like
-  // the others, it can never reach two sources on its own.
+  // Security evidence (T2b) is the FOURTH evidence class: a rule/advisory
+  // verdict is not a wire measurement. It is shown and counted as a SOURCE, but
+  // (owner D3, 2026-11-11) "Confirmed cause" means two independent sources
+  // MEASURED the same fault — so it never counts toward the two measurement
+  // streams, and it is never an impact stream.
   const hasSecurity = (att.security ?? 0) > 0;
-  const streamCount = [hasRouting || hasDevice, (att.passive_flow ?? 0) > 0, (att.active_probe ?? 0) > 0, hasSecurity].filter(Boolean).length;
-  const confirmed = timeline.verdict_tier === "confirmed" && streamCount >= 2;
-  const suspected = !confirmed && (timeline.verdict_tier === "suspected" || timeline.verdict_tier === "confirmed");
+  const streamCount = [hasRouting || hasDevice, (att.passive_flow ?? 0) > 0, (att.active_probe ?? 0) > 0].filter(Boolean).length;
+  const confirmed = effTier === "confirmed" && streamCount >= 2;
+  const suspected = !confirmed && (effTier === "suspected" || effTier === "confirmed");
 
   // routing context (device + peer)
   let device = "", peer = "", routeKind = "";
@@ -641,9 +709,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   })();
   const hasCloudEarly = cloudAppEarly !== "" || timeline.signals.some((s) => s.source === "cloud" && s.attached && !s.kind.endsWith("_clear"));
 
-  let title = timeline.top_hypothesis !== "undetermined" ? signatureNocTitle(timeline.top_hypothesis)
+  let title = headlineId !== "undetermined" ? signatureNocTitle(headlineId)
     : hasCloudEarly ? (cloudAppEarly ? `Cloud application issue — ${cloudAppEarly}` : "Cloud service issue")
-      : (PLANE_NOC_TITLE[dominant] ?? "Telemetry anomaly — cause undetermined");
+      : (PLANE_NOC_TITLE[dominantMeasured || dominant] ?? "Telemetry anomaly — cause undetermined");
   if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Device & routing change";
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
@@ -668,8 +736,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   let fidelityMin = "";
   let cascade: CascadeStage[] | undefined;
   try {
-    const ranked = JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses ?? [];
-    const top = ranked.find((h: any) => h.id === timeline.top_hypothesis) ?? ranked[0];
+    const rankedRaw = (JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses ?? [])
+      .filter((h: any) => !isContextStoryId(h?.id, h?.context_story));
+    const top = rankedRaw.find((h: any) => h.id === headlineId) ?? rankedRaw[0];
     if (top) {
       contradicted = !!top.contradicted;
       if (Array.isArray(top.contradictions)) ruledOut = top.contradictions.map((c: string) => kindLabel(c));
@@ -740,7 +809,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   if (hasRouting) faultPhrases.push("routing instability");
   if ([...kindsSeen].some((k) => k.includes("dns"))) faultPhrases.push("DNS trouble");
   const seamWhere = SEAM_PHRASE[owner] ?? (owner ? `the ${ownerLabel(owner).toLowerCase()} side` : "");
-  const possiblyCause = !confirmed && !contradicted && timeline.top_hypothesis !== "undetermined"
+  const possiblyCause = !confirmed && !contradicted && headlineId !== "undetermined"
     ? (faultPhrases.length
       ? `${faultPhrases.slice(0, 2).join(" or ")} on ${seamWhere || "the network path"}`
       : seamWhere ? `an issue on ${seamWhere}` : "")
@@ -765,46 +834,57 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     }
     return out.slice(0, 2).join(" ");
   })();
-  const verdictTone: Tone = confirmed ? "green" : verdictState === "recovered" ? "blue" : verdictState === "contradicted" ? "gray" : suspected ? "orange" : "gray";
 
   // ticket decision → exact global NOC phrase (consistent wording across the app).
   // confirmed → OPEN; cleared/recovered with no impact → MONITOR; >=2 aligned but
   // unconfirmed streams → INVESTIGATE; otherwise → HOLD.
   const decisionKind: "open" | "monitor" | "investigate" | "hold" =
     confirmed ? "open" : lifecycle === "recovered" ? "monitor" : streamCount >= 2 ? "investigate" : "hold";
+  // Who is affected — read ONLY from impact evidence (or the server report's
+  // impact axes), never from the verdict (owner review 2026-11-11, gap 1).
+  const affectedSites: string[] = (() => {
+    try { const a = JSON.parse(obj.affected || "{}") as { sites?: unknown }; return Array.isArray(a.sites) ? a.sites.map(String).filter(Boolean) : []; } catch { return []; }
+  })();
+  const affectedApps: string[] = (() => {
+    try { const a = JSON.parse(obj.app_impact || "{}") as { apps?: Array<{ app?: unknown }> }; return Array.isArray(a.apps) ? a.apps.map((x) => String(x?.app ?? "")).filter(Boolean) : []; } catch { return []; }
+  })();
+  const affectedAxes = buildAffectedAxes(timeline.signals, affectedSites, affectedApps, extras?.impact);
+  const impactLine = impactSentence(affectedAxes);
   const DECISION_TEXT: Record<typeof decisionKind, string> = {
-    open: "OPEN INCIDENT — customer impact is confirmed by independent evidence. Assign ownership and begin restoration workflow.",
-    investigate: "INVESTIGATE — evidence is aligned but not sufficient to confirm customer impact. Validate the missing evidence before opening a customer incident.",
+    open: `OPEN INCIDENT — the fault is confirmed by independent evidence from two sources. ${impactLine} Assign ownership and begin restoration workflow.`,
+    investigate: "INVESTIGATE — evidence is aligned but not independently confirmed. Work the \"What would confirm it\" list before opening a customer incident.",
     monitor: "MONITOR — the triggering anomaly has cleared and no customer-impacting evidence was observed within available telemetry coverage. Auto-closes after the monitoring window if there is no recurrence and no customer-impact evidence.",
-    hold: "HOLD — suspected only. Customer impact is not confirmed. Auto-ticketing remains on hold until independent evidence confirms impact.",
+    hold: `HOLD — not confirmed. ${impactLine} Auto-ticketing remains on hold until independent evidence confirms the fault.`,
   };
 
   const summary = confirmed
-    ? `${title.replace(/^Possible /, "")} — independent evidence confirms a real issue.`
+    ? `${title.replace(/^Possible /, "")} — independent evidence confirms the fault. ${impactLine}`
     : (hasRouting && device)
-      ? `A ${kindLabel(routeKind)} was observed on ${device}${peer ? ` with peer ${peer}` : ""}. Customer impact is not confirmed yet.`
+      ? `A ${kindLabel(routeKind)} was observed on ${device}${peer ? ` with peer ${peer}` : ""}. ${impactLine}`
       : hasCloudEarly
-        ? `A cloud issue was observed${cloudAppEarly ? ` for ${cloudAppEarly}` : ""}. Customer impact is not confirmed yet.`
+        ? `A cloud issue was observed${cloudAppEarly ? ` for ${cloudAppEarly}` : ""}. ${impactLine}`
         : dominant === "active_probe"
-          ? "Automated checks detected loss or latency in this window. No independent routing, device, traffic-flow, or application evidence confirmed the same failure, so customer impact is not confirmed."
-          : `Anomalous ${modalityLabel(dominant).toLowerCase()} evidence was observed in this window. No independent evidence class confirmed the same failure, so customer impact is not confirmed.`;
+          ? `Automated checks detected loss or latency in this window. No independent routing, device, traffic-flow, or application evidence confirmed the same failure. ${impactLine}`
+          : `Anomalous ${modalityLabel(dominant).toLowerCase()} evidence was observed in this window. No independent evidence class confirmed the same failure. ${impactLine}`;
 
   const why: WhyLine[] = [{
-    tone: "orange", label: "Why suspected",
+    tone: "orange", label: "What the evidence shows",
     text: (hasDevice && hasRouting) ? "Device health and routing/link evidence were observed on the same device area."
       : hasRouting ? "A routing/link change was observed on the affected routing adjacency."
         : dominant === "active_probe" ? "Active-check sources reported degradation to the same target during an overlapping time window."
           : `Anomalous ${modalityLabel(dominant).toLowerCase()} evidence was observed in the same time window and scope.`,
   }];
-  if (confirmed) why.push({ tone: "green", label: "Why confirmed", text: "Independent evidence aligns to the same time window and affected scope." });
+  if (confirmed) why.push({ tone: "green", label: "Why confirmed", text: "Two independent sources measured the same fault in the same time window and affected scope." });
   else why.push({
     tone: "green", label: "Why not confirmed",
     text: attachedCount <= 1
-      ? "This issue currently rests on a single observation. Independent evidence is needed before confirming customer impact."
-      : `The supporting observations come from the ${modalityLabel(dominant).toLowerCase()} evidence class. No independent routing, device, traffic-flow, or application evidence confirmed the same failure.`,
+      ? "This issue currently rests on a single observation. A second, independent source is needed before the cause can be confirmed."
+      : hasSecurity && streamCount < 2
+        ? "A security rule or a controller's statement supports this, but it is not a measurement of the fault. Two independent measurement sources are needed to confirm."
+        : `The supporting observations come from the ${modalityLabel(dominantMeasured || dominant).toLowerCase()} evidence class. No independent routing, device, traffic-flow, or application evidence confirmed the same failure.`,
   });
   why.push({
-    tone: "blue", label: "To confirm",
+    tone: "blue", label: "What would confirm it",
     text: dominant === "active_probe" && !hasRouting && !hasDevice
       ? "Identify whether the checks failed during DNS, TCP, TLS, or HTTP; validate vantage independence; and compare the incident window with real-user traffic, load-balancer health, application errors, and network telemetry."
       : hasDevice
@@ -847,20 +927,21 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // telemetry-qualified impact: "no impact" may only be said relative to the
   // coverage that actually existed in the window (owner directive 2026-07-12).
   const impactLanesPresent = (att.active_probe ?? 0) > 0 || (att.passive_flow ?? 0) > 0;
-  const impact: KV[] = [
-    {
-      k: "Impact",
-      v: confirmed ? "Confirmed customer impact"
+  const axisState = (a: string) => affectedAxes.find((x) => x.axis === a)?.state ?? "not measured";
+  const impactHead = impactLine === "Customer impact is measured." ? "Customer impact measured"
+    : impactLine.startsWith("Failed checks") ? "Failed checks measured — real-user impact not measured"
+      : impactLine.startsWith("Impact is indicated") ? "Impact indicated, not measured"
         : impactLanesPresent ? "No customer impact confirmed within available telemetry coverage"
-          : "Impact not observable — no impact telemetry in this window",
-      tone: confirmed ? "red" : "orange",
-    },
+          : "Impact not observable — no impact telemetry in this window";
+  const impact: KV[] = [
+    { k: "Impact", v: impactHead, tone: impactHead === "Customer impact measured" ? "red" : "orange" },
+    { k: "Real users", v: axisState("Real users") },
+    { k: "Synthetic checks", v: axisState("Synthetic checks") },
+    { k: "Real traffic (flow records)", v: axisState("Real traffic (flow records)") },
     ...(device ? [{ k: "Affected device", v: device, mono: true }] : []),
     ...(affectedDeviceLabel ? [{ k: "Affected devices", v: affectedDeviceLabel }] : []),
     ...(peer ? [{ k: "Affected peer", v: peer, mono: true }] : []),
     { k: "Scope type", v: device && peer ? "Routing adjacency" : "Device area" },
-    { k: "Service / application", v: confirmed ? "Under assessment" : "Not confirmed" },
-    { k: "Path impact", v: confirmed ? "Under assessment" : "Not confirmed" },
   ];
 
   // evidence cards per plane
@@ -911,7 +992,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     { state: "done", label: "✓ Detected", caption: "Anomaly detected" },
     { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to area" },
     { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent evidence aligned" },
-    { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Customer impact confirmed" : "Independent evidence missing" },
+    { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Independently measured" : "Independent evidence missing" },
   ];
 
   // timeline lanes per plane
@@ -945,10 +1026,13 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     if (hasRouting) hypotheses.push({ rank: `#${hypotheses.length + 1}`, hypo: "Customer-impacting routing issue", sub: device || "routing", conf: { tone: "gray", text: "Low" }, reason: "Possible, but peer-side or downstream evidence is missing." });
   }
 
-  const nextActions: NextAction[] = (steps.length ? steps.slice(0, 5).map((s, i) => ({ badge: i === 0 ? "INVESTIGATE" : "CHECK", text: s })) : [
+  // Steps come from the CAUSAL headline when the caller passed none, never from
+  // a background story.
+  const planSteps = steps.length ? steps : (headline?.firstSteps ?? []);
+  const nextActions: NextAction[] = (planSteps.length ? planSteps.slice(0, 5).map((s, i) => ({ badge: i === 0 ? "INVESTIGATE" : "CHECK", text: s })) : [
     { badge: "INVESTIGATE", text: "Check the affected device/interface state and recent changes around the event window." },
   ]);
-  if (!confirmed) nextActions.push({ badge: "HOLD", tone: "green", text: "Hold ticketing/escalation until independent impact evidence appears." });
+  if (!confirmed) nextActions.push({ badge: "HOLD", tone: "green", text: "Hold ticketing/escalation until a second independent source confirms the fault." });
 
   // causal topology — a compact, honest chain. Only placed when a real device is
   // known; the peer node appears when the routing adjacency resolved one. Suspected
@@ -1120,23 +1204,63 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     return parts.length ? parts.join(" · ") : "Not yet determined";
   })();
 
+  // ── The NOC RCA document (owner 2026-11-11) ─────────────────────────────────
+  // 4 · the one phrase. Confirmed only when the UI confirms (two measurement
+  // streams); likely from the causal leader's label; suspected names the cause
+  // in NOC words; nothing to name → Cause not determined.
+  const causeWords = headlineId !== "undetermined" ? signatureNocTitle(headlineId) : "";
+  const level: ConfidenceLevel = confirmed ? "confirmed"
+    : (headline && !contradicted && headline.confidenceLabel.toLowerCase() === "likely" && suspected) ? "likely"
+      : (suspected && !contradicted && (possiblyCause || causeWords)) ? "suspected"
+        : "undetermined";
+  const confidencePhraseText = phraseFor(level, level === "suspected" ? (possiblyCause || causeWords) : causeWords);
+  const phraseTone: Tone = level === "confirmed" ? "green" : level === "undetermined" ? "gray" : "orange";
+  const wouldConfirm: string[] = level === "confirmed" ? [] : (() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const t of [why[why.length - 1].text, ...evidenceGaps.map((g) => nocVerdictReason(g.replace(/^sig[\w.-]*:\s*/i, "")))]) {
+      const k = t.trim().toLowerCase();
+      if (k && !seen.has(k)) { seen.add(k); out.push(t.trim()); }
+    }
+    return out.slice(0, 6);
+  })();
+  const know = buildHowWeKnow(timeline.signals, headline);
+  // A blob without a ranking still names its top: a background-story top is
+  // recorded in the band even when the ranking itself was not persisted.
+  const backgroundStories = backgroundRanked.length || !isContextStoryId(timeline.top_hypothesis) ? backgroundRanked
+    : [{ ...parseRanking(JSON.stringify({ ranking: { hypotheses: [{ id: timeline.top_hypothesis, confidence: 1 }] } }))[0] }];
+  const background = buildBackground(backgroundStories, timeline.signals);
+  const others = buildOthers(causalRanked, headline);
+  const whatBroke = `${title}${device ? ` on ${device}` : affectedDevices[0] ? ` on ${affectedDevices[0]}` : ""}${affectedSites[0] ? ` · site ${affectedSites[0]}${affectedSites.length > 1 ? ` (+${affectedSites.length - 1} more)` : ""}` : ""}`;
+  const ownerSection = owner
+    ? { owner: ownerDisplay(owner), why: confirmed ? "The confirmed cause sits in this party's domain." : "Named by the leading explanation — unconfirmed, so treat it as the likely owner, not the accountable one." }
+    : { owner: "NOC triage", why: "No explanation has narrowed the fault to a party yet." };
+
   return {
     synthetic: false,
+    whatBroke,
+    confidence: { level, phrase: confidencePhraseText, ...(causeWords ? { cause: causeWords } : {}) },
+    wouldConfirm,
+    howWeKnow: know.rows,
+    ...(know.oneWitness ? { oneWitness: know.oneWitness } : {}),
+    background,
+    others,
+    affected: affectedAxes,
+    ownerSection,
+    watch: [
+      "Monitoring window: 30 minutes after recovery.",
+      "Reopens if the same condition recurs inside that window.",
+    ],
+    measuredBreak: confirmed,
     title, subtitle,
     // Four independent dimensions (owner directive 2026-07-12): the verdict pill
     // carries the ANALYSIS, the incident pill carries the LIFECYCLE — "Recovered"
     // is an incident state and never an analysis state.
+    // Owner D4 (2026-11-11): one certainty vocabulary — the phrase pill — and
+    // the lifecycle pill. "Recovered" is an incident state, never an analysis.
     pills: [
-      {
-        tone: verdictTone,
-        text: confirmed ? "✓ CONFIRMED"
-          : verdictState === "recovered" ? "● RECOVERED"
-            : verdictState === "contradicted" ? "✕ RULED OUT"
-              : "NOT CONFIRMED",
-      },
-      { tone: "blue", text: `Confidence: ${confidence}` },
+      { tone: phraseTone, text: confidencePhraseText },
       { tone: "orange", text: `Incident: ${lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : "Active"}` },
-      { tone: "purple", text: `Analysis: ${confirmed ? "Confirmed" : contradicted ? "Inconclusive" : suspected ? "Suspected" : "Detected"}` },
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     verdictState, ruledOut, whyNot,
@@ -1149,10 +1273,10 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       // "possibly because of X" + the evidence state, never a bare dead-end
       // "Not identified" (#113 point 4 — cause honesty).
       {
-        k: "Root cause",
-        v: confirmed && device ? `${device}${peer ? ` ↔ ${peer}` : ""}`
-          : possiblyCause ? `Not confirmed — possibly because of ${possiblyCause}`
-            : "Not identified — no cause hypothesis has supporting evidence yet",
+        k: "Cause",
+        v: level === "undetermined" ? `${confidencePhraseText} — no cause hypothesis has supporting evidence yet`
+          : level === "suspected" ? confidencePhraseText
+            : `${confidencePhraseText}: ${causeWords}${confirmed && device ? ` on ${device}${peer ? ` ↔ ${peer}` : ""}` : ""}`,
       },
       ...(!confirmed && evidenceState ? [{ k: "Evidence state", v: evidenceState }] : []),
       ...(!confirmed && device ? [{ k: "Evidence localizes to", v: `${device}${peer ? ` ↔ ${peer}` : ""}`, mono: true }] : []),
@@ -1188,13 +1312,13 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     possiblyCause,
     timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
-      callout: confirmed ? { tone: "red", strong: "Open incident:", text: "Customer impact is confirmed." } : { tone: "", strong: "Not opened —", text: "impact not confirmed. Auto-ticketing holds until independent evidence confirms customer impact." },
+      callout: confirmed ? { tone: "red", strong: "Open incident:", text: `The fault is confirmed by independent evidence. ${impactLine}` } : { tone: "", strong: "Not opened —", text: "the fault is not confirmed. Auto-ticketing holds until a second independent source confirms it." },
       rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: ownerDisplay(owner) || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],
     },
     nextActions,
     assistant: {
       questions: ["Why is this not confirmed?", "What would confirm it?", `What should ${ownerLabel(owner) || "the team"} check first?`, "Why were active checks ignored?", "Should a ticket be opened?"],
-      sampleAnswer: confirmed ? "Independent evidence aligns in the same window and scope, so customer impact is confirmed." : "This rests on a single observation; independent evidence (peer-side routing, traffic-flow loss, downstream impact, or an active check) is needed before confirming customer impact.",
+      sampleAnswer: confirmed ? `Two independent sources measured the same fault in the same window and scope, so the cause is confirmed. ${impactLine}` : "This is not confirmed yet; a second independent source (peer-side routing, traffic-flow loss, downstream impact, or an active check) is needed before the cause can be confirmed.",
     },
     cloud,
     appImpact,
@@ -1202,10 +1326,10 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       accounting: timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).slice(0, 8).map((s) => ({ signal: kindLabel(s.kind), used: { tone: "green", text: "Used" }, weight: "—", reason: `Attached ${isRoutingKind(s.kind) ? "routing/link" : modalityLabel(s.modality_class).toLowerCase()} evidence.` })),
       promotion: [
         { k: "Observed threshold", v: "1 trusted event" }, { k: "Suspected threshold", v: "localized object" },
-        { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "customer-impact tied to scope" },
+        { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "2 independent measurement sources" },
         { k: "Verdict tier", v: timeline.verdict_tier }, { k: "Attached observers", v: String(timeline.signals.filter((s) => s.attached).length) },
       ],
-      reasoning: confirmed ? "Promoted to confirmed: independent customer-impact evidence tied to the network path event." : "Held at suspected: a single device-area source cannot confirm customer impact without an independent observer.",
+      reasoning: confirmed ? "Promoted to confirmed: two independent sources measured the same fault." : "Held below confirmed: the fault has not been measured by two independent sources.",
       model: { correlation_id: obj.correlation_id, verdict_tier: timeline.verdict_tier, top_hypothesis: timeline.top_hypothesis, signal_count: obj.signal_count },
     },
   };

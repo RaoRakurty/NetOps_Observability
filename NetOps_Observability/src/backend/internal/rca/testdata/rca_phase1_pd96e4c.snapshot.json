@@ -303,7 +303,7 @@
     ]
   },
   "summary": {
-    "management": "At 2026-07-12 18:00:00 UTC, One automated check detected a condition of “ipsec tunnel down — cloud private path” affecting lab-svc. The condition is ongoing (2h 00m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation. Decision: Open incident — Customer impact and fault are confirmed by independent evidence; restoration workflow should begin. Escalation follows the policy thresholds stated in the decision section.",
+    "management": "At 2026-07-12 18:00:00 UTC, One automated check detected a condition of “ipsec tunnel down — cloud private path” affecting lab-svc. The condition is ongoing (2h 00m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation. Decision: Open incident — The fault is confirmed by independent evidence; impact is detected (failed checks or real-user errors) but not confirmed for real users. Restoration workflow should begin. Escalation follows the policy thresholds stated in the decision section.",
     "noc": [
       {
         "k": "Incident",
@@ -766,7 +766,7 @@
   },
   "decision": {
     "decision": "Open incident",
-    "reason": "Customer impact and fault are confirmed by independent evidence; restoration workflow should begin.",
+    "reason": "The fault is confirmed by independent evidence; impact is detected (failed checks or real-user errors) but not confirmed for real users. Restoration workflow should begin.",
     "policy_id": "default",
     "policy_name": "Default ServiceNow incident policy (platform default — no tenant policy configured)",
     "open_threshold": "verdict ≥ suspected, customer-facing evidence required, suspected additionally requires critical severity",
@@ -830,5 +830,113 @@
   "topology": {
     "available": false,
     "stale": false
+  },
+  "background": null,
+  "confirming_pair": {
+    "measured": false,
+    "basis": "No independent confirming pair was recorded for the leading explanation."
+  },
+  "document_eligibility": {
+    "causal_headline": true,
+    "context_only": false,
+    "never_established": false,
+    "controller_or_hub": false,
+    "sites": 0,
+    "headline_id": "sig.ent.cloud.ipsec-tunnel-down"
+  },
+  "recurrence": {
+    "known": false,
+    "count_7d": 0
+  },
+  "document": {
+    "what_broke": "IPsec tunnel down — cloud private path on lab-svc",
+    "who_affected": [
+      {
+        "axis": "Real users",
+        "state": "not measured",
+        "detail": "No real-user telemetry covered this case. Not measured is not the same as not affected."
+      },
+      {
+        "axis": "Synthetic checks",
+        "state": "measured",
+        "detail": "1 of 1 synthetic check observations failed (directly measured). Validation scenario: the value describes the injected/validation condition, never production impact."
+      },
+      {
+        "axis": "Real traffic (flow records)",
+        "state": "not measured",
+        "detail": "No traffic-flow change is attached to this case."
+      },
+      {
+        "axis": "Sites",
+        "state": "not measured",
+        "detail": "No site is named by the evidence."
+      },
+      {
+        "axis": "Applications",
+        "state": "not measured",
+        "detail": "No application is named by the evidence."
+      }
+    ],
+    "when": {
+      "first_seen": "2026-07-12 18:00:00 UTC",
+      "status": "Still active",
+      "duration": "2h 00m so far (still active)",
+      "note": "Only dated events are listed. A standing finding with no start time is in section 7, not here."
+    },
+    "cause": {
+      "level": "confirmed",
+      "phrase": "Confirmed cause",
+      "cause": "IPsec tunnel down — cloud private path",
+      "meaning": "The IPsec tunnel's IKE/DPD keepalives failed, so every application behind the tunnel lost its private path.",
+      "statement": "The fault condition is confirmed. The underlying root cause remains under investigation."
+    },
+    "how_we_know": [
+      {
+        "source": "The device's routing events showed",
+        "observation": "Ipsec tunnel status",
+        "text": "The device's routing events showed ipsec tunnel status (one observation)."
+      }
+    ],
+    "path": {
+      "available": false,
+      "break_measured": false,
+      "note": "The network path was not measured for this case, so no break is drawn."
+    },
+    "background": null,
+    "other_explanations": null,
+    "owner": {
+      "owner": "NOC",
+      "why": "Default triage owner until the failure stage and fault domain are identified. NetOps is the leading candidate domain; the fault is not yet localized to a specific component"
+    },
+    "do_now": [
+      "Check the tunnel's IKE_SA on the VPN gateway (owner: NOC)",
+      "Inspect the most recent failed check transaction (owner: NOC)",
+      "Compare real traffic, load-balancer target health and application errors during the incident window (owner: NOC)",
+      "Run the same check from an independent vantage (only prober-lab has reported this) (owner: NOC)"
+    ],
+    "watch": [
+      "Monitoring window: 30m 00s after recovery.",
+      "Reopens when the same condition recurs within 30m 00s (flap suppression)."
+    ],
+    "how_to_read": [
+      "Read sections 1 and 2 first: is this mine, and who is hurting?",
+      "Take section 4's phrase literally. \"Confirmed cause\" means two independent sources measured the same fault. \"Possibly because of X\" means work the \"What would confirm it\" list before escalating.",
+      "Section 5 names the sources. Several observations that all came through one controller count as one witness.",
+      "On the path, red is a measured break and dotted is inferred.",
+      "Section 7 is background and may be unrelated: do not file it as the cause.",
+      "Section 9 says who to call."
+    ],
+    "section_names": [
+      "What broke",
+      "Who is affected",
+      "When",
+      "Cause and how sure we are",
+      "How we know",
+      "Where the break is",
+      "Background on this device (not a cause)",
+      "Other explanations considered",
+      "Who owns the fix",
+      "What to do now · Watch for recurrence"
+    ]
   }
 }

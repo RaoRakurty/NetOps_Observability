@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { isContextStory } from "./rcaPhrases";
 import { useMemo } from "react";
 import type { CorrTimeline, RcaPathAttribution, RcaTypedSegment, RcaPathKeyDevice } from "../../services/api";
 import {
@@ -176,13 +177,25 @@ function OwnershipLine({ ownership, possibleCause }: { ownership?: string; possi
   );
 }
 
-export default function RcaPathCausality({ data, timeline, ownership, possibleCause }: {
+export default function RcaPathCausality({ data, timeline, ownership, possibleCause, measuredBreak }: {
   data: RcaPathAttribution | null | undefined;
   timeline?: CorrTimeline | null;   // fallback derivation (measured spine / routing adjacency)
   ownership?: string;               // seam-ownership display ("Lumen (DIA #12345) · ISP / carrier")
   possibleCause?: string;           // honest "possibly because of X" phrase (unconfirmed cases only)
+  // Owner review 2026-11-11 (gap 3): "Break here" is claimed only for a break
+  // confirmed on MEASUREMENT planes. A verdict that rests on a background story
+  // or a security rule never paints a definitive break. Absent → derived: false
+  // whenever the object's top is a background story.
+  measuredBreak?: boolean;
 }) {
-  const model: PathModel = useMemo(() => derivePathModel(data, timeline), [data, timeline]);
+  const rawModel: PathModel = useMemo(() => derivePathModel(data, timeline), [data, timeline]);
+  const measured = measuredBreak ?? !isContextStory(timeline?.top_hypothesis);
+  // An unmeasured break never reads "Confirmed" on the path, however the
+  // object's tier was reached.
+  const model: PathModel = useMemo(
+    () => (!measured && rawModel.verdict === "confirmed" ? { ...rawModel, verdict: "suspected" } : rawModel),
+    [rawModel, measured],
+  );
   const cause = model.cause;
 
   // When the SEAM is the suspect (model.causeBoundary), the hero renders on the
@@ -273,7 +286,7 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
   const head = model.head;
   const dstName = model.dstName;
   const verdict = model.verdict;
-  const breakText = verdict === "confirmed" ? "Break here" : "Possible break here";
+  const breakText = verdict === "confirmed" && measured ? "Break here" : "Possible break here";
 
   return (
     <div className="rpc">

@@ -126,7 +126,13 @@ func TestCausalChainLabelsRelationAndContradictions(t *testing.T) {
 
 func TestConfidenceBreakdownAlwaysShowsEvidenceAgainst(t *testing.T) {
 	out := joinTexts(runRCATool(t, rcaFixture(), "get_confidence_breakdown"))
-	for _, want := range []string{"91% engine confidence", "FOR: loss starts after provider handoff", "AGAINST: one Comcast site remains healthy", "MISSING: remote probe data", "never raise it"} {
+	// Owner D4 (2026-11-11): the fixed phrase, never a percentage.
+	for _, banned := range []string{"engine confidence", "91%", "(91"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("confidence output carries a number %q:\n%s", banned, out)
+		}
+	}
+	for _, want := range []string{"leading candidate: Likely cause", "FOR: loss starts after provider handoff", "AGAINST: one Comcast site remains healthy", "MISSING: remote probe data", "never raise it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("confidence output missing %q:\n%s", want, out)
 		}

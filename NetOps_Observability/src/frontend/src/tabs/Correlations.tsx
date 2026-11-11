@@ -15,6 +15,7 @@ import RcaTicketCard from "../components/rca/RcaTicketCard";
 import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
+import { isContextStory } from "../components/rca/rcaPhrases";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
@@ -706,6 +707,11 @@ export function CorrelationDetail({ id }: { id: string }) {
             component_recovered_at: r.times?.component_recovered_at,
           },
           promotion: r.promotion?.manual ? { manual: r.promotion.manual } : undefined,
+          // The server's impact axes — "Who is affected" reads them (never the verdict).
+          impact: {
+            real_user: typeof r.states?.impact_real_user === "string" ? r.states.impact_real_user : undefined,
+            synthetic: typeof r.states?.impact_synthetic === "string" ? r.states.impact_synthetic : undefined,
+          },
         }));
       })
       .catch(() => { if (alive) setPathLoaded(true); }); // report JSON is best-effort; the rest of the inspector still renders
@@ -744,8 +750,12 @@ export function CorrelationDetail({ id }: { id: string }) {
   const { recommendedSteps, recommendedOwner } = useMemo(() => {
     const hyp = parseJSON<any>(obj?.hypotheses, {});
     const ranking = hyp?.ranking ?? {};
-    const topHyp = (ranking.hypotheses ?? []).find((h: any) => h.id === obj?.top_hypothesis)
-      ?? (obj && obj.top_hypothesis !== "undetermined" ? (ranking.hypotheses ?? [])[0] : undefined);
+    // Owner D1 (2026-11-11): the owner and first steps come from the CAUSAL
+    // leader — a background story (standing security finding) never assigns the
+    // fix or sets the first steps.
+    const causalHyps = (ranking.hypotheses ?? []).filter((h: any) => !isContextStory(h?.id, h?.context_story));
+    const topHyp = causalHyps.find((h: any) => h.id === obj?.top_hypothesis)
+      ?? (obj && obj.top_hypothesis !== "undetermined" ? causalHyps[0] : undefined);
     return { recommendedSteps: (topHyp?.verdict?.first_steps ?? []) as string[], recommendedOwner: (topHyp?.verdict?.owner ?? "") as string };
   }, [obj]);
 
@@ -841,7 +851,8 @@ export function CorrelationDetail({ id }: { id: string }) {
       debugExtra={replayPanel}
       pathSlot={pathLoaded ? (
         <RcaPathCausality data={pathAttr} timeline={timeline}
-          ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause} />
+          ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause}
+          measuredBreak={rcaCase.measuredBreak} />
       ) : null}
       aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
       verifySlot={obj.correlation_id

@@ -27,6 +27,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"sort"
 	"strconv"
 	"strings"
@@ -772,17 +773,30 @@ func (t rcaVerdictTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 		tr.Signals = append(tr.Signals, CondVerdictTier+"="+tier)
 	}
 	tr.Signals = append(tr.Signals, verdictPhraseSignals(what, maxVerdictPhraseTokens)...)
-	conf := firstNonEmpty(pr.ConfidenceLabel, StatusLabel(pr.Verdict))
+	// Owner D4 (2026-11-11): one of the four fixed phrases, never a percentage —
+	// the ranking number is a heuristic rank, not a probability.
+	phrase := noclabel.ConfidencePhrase(pr.Verdict, pr.ConfidenceLabel, pr.Title)
 	tr.Items = append(tr.Items, EvidenceItem{
 		CitationID: "verdict:" + pr.ID, Kind: "finding",
-		Text: clampText(fmt.Sprintf("%s — %s; verdict %s (%s, %.0f%% engine confidence); %s across %s",
-			pr.Display(), what, pr.Verdict, conf, pr.Confidence*100,
+		Text: clampText(fmt.Sprintf("%s — %s; %s; %s across %s",
+			pr.Display(), what, phrase,
 			plural(pr.SignalCount, "signal"), plural(pr.NodeCount, "node")), maxToolTextChars),
 		Href: href,
 		// The engine's own conclusion (N-B4 grounding fact).
 		CauseRole: CauseRoleEngine,
 		Verdict:   pr.Verdict,
 	})
+	// Background on the device (owner D1): narrated as background, never as the
+	// cause, never as confirmed — no cause role, no verdict.
+	for i, b := range pr.Background {
+		if i >= 3 {
+			break
+		}
+		tr.Items = append(tr.Items, EvidenceItem{
+			CitationID: fmt.Sprintf("verdict-background:%s:%d", pr.ID, i), Kind: "finding",
+			Text: clampText(b, maxToolTextChars), Href: href,
+		})
+	}
 	// 3. What is affected.
 	if len(pr.Devices) > 0 {
 		devs := pr.Devices

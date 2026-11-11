@@ -2141,6 +2141,14 @@ func projectRCAReport(rep rca.Report) ai.RCAResult {
 		})
 	}
 	out.Verdict, out.RootCauseState = rep.States.Analysis, rep.States.RootCauseState
+	// Owner D1: background on the device rides separately, never as a hypothesis.
+	for i, b := range rep.Background {
+		if i == ai.MaxRCAHypotheses {
+			trunc = true
+			break
+		}
+		out.Background = append(out.Background, strings.TrimSpace(b.Title+" — "+b.Detail))
+	}
 	for i, m := range rep.ImpactProvenance.Measures {
 		if i == ai.MaxRCAImpactMeasures {
 			trunc = true

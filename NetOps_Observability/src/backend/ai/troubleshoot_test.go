@@ -653,10 +653,14 @@ func TestRCAVerdictProjectsTheEngineConclusion(t *testing.T) {
 	for _, it := range res.Items {
 		joined += it.Text + " | "
 	}
-	for _, want := range []string{"confirmed", "edge-1", "missing evidence", "neteng"} {
+	for _, want := range []string{"Confirmed cause", "edge-1", "missing evidence", "neteng"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the RCA header must carry %q; got %q", want, joined)
 		}
+	}
+	// Owner D4 (2026-11-11): one of the four phrases, never "% engine confidence".
+	if strings.Contains(joined, "engine confidence") || strings.Contains(joined, "%") {
+		t.Errorf("the RCA header must not carry a percentage: %q", joined)
 	}
 	if !strings.Contains(strings.Join(res.Notes, " "), "ENGINE's conclusion") {
 		t.Errorf("the tool must tell the model not to re-derive a cause, notes = %v", res.Notes)
