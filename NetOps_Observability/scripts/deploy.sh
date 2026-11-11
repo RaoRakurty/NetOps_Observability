@@ -35,6 +35,12 @@
 #   always recreates every changed service.) The first deploy with no fingerprint
 #   record recreates nothing extra: it records a baseline and says so.
 #
+# .ENV MIGRATION (2026-11-11): before anything is built or recreated, an installed
+# stack's deployment/docker/.env gains the keys this tree introduced, through the
+# installer's own migration (`python3 scripts/install.py --migrate-env`, the same
+# step update.sh runs). Only missing keys are appended, never a value changed;
+# .env is backed up 0600 first; names only are printed. See step 2a.
+#
 # Usage:  scripts/deploy.sh [--reload-changed-config] [service ...]
 #                                              (default services: frontend api)
 #         scripts/deploy.sh api                (backend only — skips dist build)
@@ -219,9 +225,26 @@ done
 # silently. With a .env (every install), a render failure aborts the deploy.
 # Tracker 384: an old-form .env (a password in DATABASE_URL) is moved to its
 # file-backed key first, in the same step. Idempotent; no manual step.
+#
+# 2a (2026-11-11) runs first, in the same branch: `install.py --migrate-env`,
+# the installer's own .env migration (the same one update.sh runs), so a key a
+# newer release introduced (CX_PLATFORM_ADDRESSES, …) reaches .env on the
+# operator path too instead of being added by hand. Decision: yes on deploy.sh
+# as well — a deploy of a new tree IS an upgrade of that install, and without
+# it the recreated services start with the compose fallback for every new key.
+# Same guarantees as on update.sh: it takes the install lock, appends only
+# missing keys (an existing value is never changed), backs .env up 0600 first
+# (.env.pre-migrate-<stamp>, only when it changes anything), prints key names
+# only, and is idempotent — a deploy with nothing new changes nothing. It edits
+# deployment/docker/.env in place, so the COMPOSE_FILE overlay chain that .env
+# carries is kept as it is. A failure aborts here, BEFORE the stack is touched.
 if [ ! -f "$COMPOSE_DIR/.env" ]; then
-  warn "no $COMPOSE_DIR/.env — not an installed stack; service credential files not rendered"
+  warn "no $COMPOSE_DIR/.env — not an installed stack; .env not migrated, service credential files not rendered"
 else
+  log "adding the .env keys this release introduced (install.py --migrate-env)…"
+  if ! ( cd "$ROOT" && python3 scripts/install.py --migrate-env ); then
+    die ".env migration failed (see the [fail ] line above) — running stack left UNTOUCHED."; exit 1
+  fi
   log "rendering service credential files…"
   if ! ( cd "$ROOT" && python3 - <<'PY'
 import importlib.util, pathlib

@@ -39,6 +39,34 @@ func TestParsePlatformAddrs(t *testing.T) {
 	}
 }
 
+// A multi-homed appliance (2026-11-11): the installer writes every host address
+// as one comma list — the lab's default-route and lab-network addresses plus an
+// IPv6 one — and every entry classifies, in both directions.
+func TestParsePlatformAddrsMultiHomed(t *testing.T) {
+	p, src := ResolvePlatformAddrs("10.70.245.122,192.168.172.1,2001:db8:70::122", "",
+		func() string { return "172.18.0.5" })
+	if src != PlatformSourceConfigured {
+		t.Fatalf("source = %q, want configured", src)
+	}
+	if got := strings.Join(p.IPs(), ","); got != "10.70.245.122,192.168.172.1,2001:db8:70::122" {
+		t.Errorf("ips = %s", got)
+	}
+	for _, a := range []string{"10.70.245.122", "192.168.172.1", "2001:db8:70::122", "2001:DB8:70:0::122"} {
+		if !p.Contains(a) {
+			t.Errorf("%s not classified as platform", a)
+		}
+	}
+	if p.Contains("172.18.0.5") || p.Contains("192.168.172.2") {
+		t.Error("an address outside the list was classified as platform")
+	}
+	cond := p.SQLCond()
+	for _, want := range []string{"'10.70.245.122'", "'192.168.172.1'", "'2001:db8:70::122'"} {
+		if strings.Count(cond, want) != 2 { // src_addr IN (...) and dst_addr IN (...)
+			t.Errorf("cond does not match %s in both directions: %s", want, cond)
+		}
+	}
+}
+
 // The Logs page labels a platform-monitoring flow and deletes nothing.
 func TestLogsFlowDocsLabelPlatformMonitoring(t *testing.T) {
 	resp := map[string]any{}

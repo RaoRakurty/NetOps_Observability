@@ -331,11 +331,15 @@ elif sub[:1] == ["up"]:
 sys.exit(0)
 '''
 
-INSTALL_STUB = '''"""Stand-in for scripts/install.py: update.sh only calls these four."""
+INSTALL_STUB = '''"""Stand-in for scripts/install.py: update.sh and deploy.sh only call these,
+plus `install.py --migrate-env` (running this file does nothing: exit 0)."""
 def validate_scaffold(root): pass
 def migrate_env_credentials(path): pass
 def render_service_secrets(root): pass
 def prepare_tls_custody(root): pass
+def _parse_env_text(text):
+    return dict(l.split("=", 1) for l in text.splitlines() if "=" in l and not l.startswith("#"))
+def write_env_text(path, text, *, what): path.write_text(text)
 '''
 
 RUNNING = {"vector-aggregator": "va-1", "syslog-ng": "sy-1", "vmalert": "vm-1",
@@ -559,6 +563,109 @@ def test_update_with_a_corrupt_record_recreates_every_tracked_service(rig):
     calls = rig.force_recreated()
     assert len(calls) == 1
     assert set(calls[0].split()) >= {"vector-aggregator", "syslog-ng", "vmalert", "nginx", "api"}
+
+
+# ── the .env migration step (2026-11-11) ─────────────────────────────────────
+#
+# Both paths run `install.py --migrate-env` (the installer's own migration) so a
+# key a newer release introduced reaches an upgraded .env with no manual step —
+# BEFORE the credential files are rendered and before compose touches anything,
+# and a failure stops the run there. The stub below records every install.py
+# call into the fake docker's call log, so the order is read off one timeline.
+
+RECORDING_INSTALL_STUB = '''"""Recording stand-in for scripts/install.py."""
+import os, sys
+def _log(what):
+    with open(os.path.join(os.environ["FAKE_DOCKER_STATE"], "calls.log"), "a") as fh:
+        fh.write(os.getcwd() + "|install.py " + what + "\\n")
+def validate_scaffold(root): _log("validate_scaffold")
+def migrate_env_credentials(path): _log("migrate_env_credentials")
+def render_service_secrets(root): _log("render_service_secrets")
+def prepare_tls_custody(root): pass
+def _parse_env_text(text):
+    return dict(l.split("=", 1) for l in text.splitlines() if "=" in l and not l.startswith("#"))
+def write_env_text(path, text, *, what):
+    _log("write_env_text")
+    path.write_text(text)
+if __name__ == "__main__":
+    _log(" ".join(sys.argv[1:]))
+    if os.environ.get("FAKE_MIGRATE_FAIL"):
+        print("[fail ] could not back up .env: Permission denied", file=sys.stderr)
+        sys.exit(1)
+'''
+
+
+def _timeline(rig: Rig) -> list[str]:
+    log = rig.state_dir / "calls.log"
+    return [ln.split("|", 1)[1] for ln in log.read_text().splitlines()] if log.exists() else []
+
+
+def _first(lines: list[str], pred) -> int:
+    return next((i for i, ln in enumerate(lines) if pred(ln)), -1)
+
+
+def _recording(rig: Rig, with_env: bool = True) -> None:
+    (rig.repo / "scripts" / "install.py").write_text(RECORDING_INSTALL_STUB)
+    if with_env:
+        (rig.repo / "deployment" / "docker" / ".env").write_text("COMPOSE_FILE=docker-compose.yml\n")
+
+
+def test_update_migrates_env_before_rendering_and_before_compose(rig):
+    _recording(rig)
+    r = rig.update()
+    assert r.returncode == 0, _out(r)
+    t = _timeline(rig)
+    mig = _first(t, lambda ln: ln == "install.py --migrate-env")
+    knobs = _first(t, lambda ln: ln == "install.py write_env_text")
+    render = _first(t, lambda ln: ln == "install.py render_service_secrets")
+    up = _first(t, lambda ln: ln.startswith("compose up"))
+    assert -1 < mig < knobs < render < up, t
+    assert t.count("install.py --migrate-env") == 1
+
+
+def test_update_stops_before_compose_when_the_migration_fails(rig):
+    _recording(rig)
+    r = rig.update(FAKE_MIGRATE_FAIL="1")
+    assert r.returncode != 0, _out(r)
+    assert "could not back up .env" in r.stderr
+    t = _timeline(rig)
+    assert t[-1] == "install.py --migrate-env", f"something ran after a failed migration: {t}"
+    # Before it, only the read-only preflight (`docker compose version`).
+    assert [ln for ln in t if ln.startswith("compose")] == ["compose version"], t
+
+
+def test_deploy_migrates_env_before_rendering_and_before_build(rig):
+    _recording(rig)
+    r = rig.deploy("api")
+    assert r.returncode == 0, _out(r)
+    t = _timeline(rig)
+    mig = _first(t, lambda ln: ln == "install.py --migrate-env")
+    render = _first(t, lambda ln: ln == "install.py render_service_secrets")
+    build = _first(t, lambda ln: ln.startswith("compose build"))
+    up = _first(t, lambda ln: ln.startswith("compose up"))
+    assert -1 < mig < render < build < up, t
+    # From the repo root, the same entry point update.sh uses.
+    log = (rig.state_dir / "calls.log").read_text().splitlines()
+    cwd = next(ln.split("|", 1)[0] for ln in log if ln.endswith("|install.py --migrate-env"))
+    assert Path(cwd).resolve() == rig.repo.resolve()
+
+
+def test_deploy_leaves_the_stack_untouched_when_the_migration_fails(rig):
+    _recording(rig)
+    r = rig.deploy("api", FAKE_MIGRATE_FAIL="1")
+    assert r.returncode == 1, _out(r)
+    assert ".env migration failed" in r.stderr and "running stack left UNTOUCHED" in r.stderr
+    t = _timeline(rig)
+    assert not any(ln.startswith(("compose build", "compose up")) for ln in t), t
+    assert "install.py render_service_secrets" not in t
+
+
+def test_deploy_without_an_env_says_it_did_not_migrate(rig):
+    _recording(rig, with_env=False)
+    r = rig.deploy("api")
+    assert r.returncode == 0, _out(r)
+    assert "install.py --migrate-env" not in _timeline(rig)
+    assert ".env not migrated" in _out(r)
 
 
 # ── hygiene ──────────────────────────────────────────────────────────────────
