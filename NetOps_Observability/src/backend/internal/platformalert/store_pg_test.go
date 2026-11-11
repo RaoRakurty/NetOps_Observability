@@ -8,29 +8,73 @@ package platformalert
 // store_pg_test.go — the record against a REAL Postgres through the platform
 // kv (app_kv), as the Postgres backend runs it in production: written as the
 // NOBYPASSRLS app role, sealed at rest, read back by a second store (a second
-// api replica). Runs in CI's pg-integration leg (PG_TEST_DSN).
+// api replica). Runs in CI's pg-integration leg: DATABASE_URL_TEST is the
+// superuser DSN, and the test provisions its own app role on a clean schema
+// (the house pattern). The shared PG_TEST_DSN role cannot be used here: another
+// package's test may have recreated the schema under a different owner, and
+// the migration then fails with "permission denied for table schema_migrations".
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"netops/backend/internal/platformdb"
 )
 
+// provisionAppRole is the root package's helper of the same name (tests there
+// are not importable from here): a clean schema and a non-superuser DSN.
+func provisionAppRole(ctx context.Context, t *testing.T, adminDSN string) string {
+	t.Helper()
+	admin, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Fatalf("admin connect: %v", err)
+	}
+	defer func() {
+		if err := admin.Close(ctx); err != nil {
+			t.Logf("admin close: %v", err)
+		}
+	}()
+	const role, pass = "netops_app_test", "apppw"
+	for _, s := range []string{
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
+		"DO $do$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + role + "') THEN EXECUTE 'DROP OWNED BY " + role + "'; END IF; END $do$",
+		"DROP SCHEMA IF EXISTS public CASCADE",
+		"CREATE SCHEMA public",
+		"GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC",
+		"DROP ROLE IF EXISTS " + role,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + pass + "' NOSUPERUSER NOBYPASSRLS",
+		"GRANT ALL ON SCHEMA public TO " + role,
+	} {
+		if _, err := admin.Exec(ctx, s); err != nil {
+			t.Fatalf("provision (%s): %v", s, err)
+		}
+	}
+	u, err := url.Parse(adminDSN)
+	if err != nil {
+		t.Fatalf("parse adminDSN: %v", err)
+	}
+	u.User = url.UserPassword(role, pass)
+	return u.String()
+}
+
 func TestStoreRoundTripOnPostgres(t *testing.T) {
-	dsn := os.Getenv("PG_TEST_DSN")
-	if dsn == "" {
-		t.Skip("PG_TEST_DSN not set")
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("DATABASE_URL_TEST not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute) // a fresh database runs every migration first
 	defer cancel()
-	pg, err := platformdb.NewPGStore(ctx, dsn)
+	pg, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("NewPGStore: %v", err)
 	}
+	t.Cleanup(pg.DB().Close) // a lingering app-role pool would hold the next package's schema reset
 	key := "/data/platform_alert_route.pgtest-" + time.Now().UTC().Format("150405.000000000") + ".json"
 	deps := StoreDeps{Key: key, Load: pg.Load, Save: pg.Save, Seal: fakeSeal, Open: fakeOpen}
 
