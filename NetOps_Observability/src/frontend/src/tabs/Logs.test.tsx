@@ -133,9 +133,9 @@ describe("Logs flows sample honesty", () => {
     const note = await screen.findByTestId("flows-sampling-note");
     expect(note.textContent).toContain("1:50 sample");
     expect(note.textContent).toContain("totals are estimates (×50)");
-    // The retention line also carries the sample caveat, not a bare count.
-    await waitFor(() => expect(logsRetention).toHaveBeenCalled());
-    expect((await screen.findByText(/This store holds/)).textContent).toContain("1:50 sample");
+    // The store-size line is gone (owner 2026-11-11); the sampling note above is
+    // the one disclosure, and the page no longer asks for the retention floor.
+    expect(screen.queryByText(/This store holds/)).toBeNull();
   });
 
   it("falls back to the pinned rate when a response carries no metadata", async () => {
@@ -177,8 +177,14 @@ describe("event stream", () => {
     respond([flowHit]);
     render(<Logs />);
     const table = within(await grid());
-    expect(table.getByText("10.0.0.5 → 10.0.0.9")).toBeTruthy();
-    expect(table.getByText("UDP 161 → 38204 · 1,003 bytes · 13 packets")).toBeTruthy();
+    // Owner 2026-11-11: coloured parts, not a bare tuple.
+    const title = table.getByTestId("flow-title");
+    expect(title.querySelector(".fl-ep-src")?.textContent).toBe("10.0.0.5:161");
+    expect(title.querySelector(".fl-ep-dst")?.textContent).toBe("10.0.0.9:38204");
+    expect(within(title).getByTestId("flow-proto").textContent).toBe("UDP");
+    const detail = table.getByTestId("flow-detail").textContent ?? "";
+    expect(detail).toContain("1,003 B");
+    expect(detail).toContain("13 packets");
     expect((await grid()).textContent).not.toContain("{");
   });
 
@@ -607,7 +613,8 @@ describe("routine management sessions", () => {
     expect(lastQuery().include_routine_mgmt).toBe(false);
     expect(logSeverityCounts.mock.calls[0][0].include_routine_mgmt).toBe(false);
     expect((await screen.findByTestId("logs-routine-note")).textContent).toBe("10,203 routine management sessions hidden.");
-    expect(screen.getByTestId("logs-routine").textContent).toContain("Security records, failed logins and people's logins are always shown.");
+    // No explanatory sentence beside the toggle (owner 2026-11-11: too verbose).
+    expect(screen.getByTestId("logs-routine").textContent).not.toContain("always shown");
   });
 
   it("the toggle re-runs the search, the tiles and the export with them, and is remembered", async () => {

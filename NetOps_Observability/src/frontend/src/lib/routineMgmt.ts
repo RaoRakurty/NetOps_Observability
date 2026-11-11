@@ -43,7 +43,6 @@ export function routineReason(matched: readonly string[] | null | undefined): st
 export type RoutineSummary = { included: boolean; count: number };
 
 export const ROUTINE_TOGGLE_LABEL = "Show routine management sessions";
-export const ROUTINE_TOGGLE_HINT = "Monitoring polls and SD-WAN controller sessions. Security records, failed logins and people's logins are always shown.";
 
 const fmt = (x: number) => x.toLocaleString("en-US");
 const sessions = (x: number) => `${fmt(x)} routine management ${x === 1 ? "session" : "sessions"}`;

@@ -1009,7 +1009,6 @@ code, kbd, pre, .mono, td.mono {
 .lv-routine label { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); cursor: pointer; }
 .lv-routine input { width: 16px; height: 16px; margin: 0; }
 .lv-routine-note { color: var(--fg); font-weight: 600; }
-.lv-routine-hint { flex-basis: 100%; color: var(--fg-muted); }
 .lv-error { color: var(--bad); font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
 .lv-flow-sample { color: color-mix(in srgb, var(--sev-warning) 58%, var(--fg)); font-size: var(--fs-meta); margin: 6px 0 0; }
 .lv-more { display: flex; justify-content: center; margin-top: var(--sp-2); }
@@ -7931,3 +7930,32 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
   border-radius: 4px; background: var(--surface-2, rgba(127,127,127,.12)); }
 .topo-notice-action { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; justify-self: start; }
 .topo-notice-action:hover, .topo-notice-action:focus-visible { text-decoration: underline; }
+
+/* ── flows in the Logs stream (owner 2026-11-11: colour, not a bare tuple) ── */
+.fl-title, .fl-detail { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; row-gap: 2px; }
+.fl-ep {
+  display: inline-flex; align-items: baseline; max-width: 100%; padding: 1px 8px; border-radius: 6px;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fl-ep-src { background: color-mix(in srgb, var(--accent) 12%, transparent); color: color-mix(in srgb, var(--accent) 70%, var(--fg)); }
+.fl-ep-dst { background: color-mix(in srgb, var(--accent-2) 12%, transparent); color: color-mix(in srgb, var(--accent-2) 70%, var(--fg)); }
+.fl-ep-none { color: var(--fg-muted); }
+.fl-port { color: var(--fg-muted); }
+.fl-arrow { color: var(--accent); font-weight: 700; }
+.fl-proto {
+  flex: none; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+}
+.fl-proto-tcp { background: color-mix(in srgb, var(--accent) 16%, transparent); color: color-mix(in srgb, var(--accent) 75%, var(--fg)); }
+.fl-proto-udp { background: var(--sev-info-bg); color: color-mix(in srgb, var(--sev-info) 80%, var(--fg)); }
+.fl-proto-icmp { background: var(--sev-warning-bg); color: color-mix(in srgb, var(--sev-warning) 80%, var(--fg)); }
+.fl-proto-other { background: var(--sev-debug-bg); color: var(--fg-muted); }
+.fl-service {
+  flex: none; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  background: color-mix(in srgb, var(--accent-2) 14%, transparent); color: color-mix(in srgb, var(--accent-2) 75%, var(--fg));
+}
+.fl-own { flex: none; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; border: 1px dashed var(--border-strong); color: var(--fg-muted); }
+.fl-detail { color: var(--fg-muted); font-size: 13px; column-gap: 12px; }
+.fl-detail .fl-ifaces, .fl-detail .fl-exp { font-family: var(--font-mono); }
+.fl-detail .fl-vol strong { color: var(--fg); font-weight: 600; }
+.fl-k { color: var(--fg-muted); font-family: var(--font-body, inherit); font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
