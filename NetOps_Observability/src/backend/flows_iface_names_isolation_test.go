@@ -72,10 +72,20 @@ func TestFlowsTopNIfaceNameKeyUsesRowTenant(t *testing.T) {
 				t.Errorf("%s: SQL missing %q:\n%s", by, want, c.sql)
 			}
 		}
-		// The principal's tenant reaches ClickHouse ONLY as the scope setting,
-		// never as a literal in the name lookup.
-		if strings.Contains(c.sql, "'acme'") || strings.Contains(c.sql, "globex") || strings.Contains(c.sql, "10.2.0.1") {
+		// The principal's tenant reaches the NAME LOOKUP only as the scope
+		// setting, never as a literal: the join keys on the row's own tenant.
+		// The one literal allowed is the row filter's own-stamped-rows branch
+		// (tracker 370), and it must appear exactly once.
+		at := strings.Index(c.sql, "LEFT JOIN")
+		if at < 0 {
+			t.Fatalf("%s: no name lookup join in the SQL:\n%s", by, c.sql)
+		}
+		join := c.sql[at:]
+		if strings.Contains(join, "'acme'") || strings.Contains(c.sql, "globex") || strings.Contains(c.sql, "10.2.0.1") {
 			t.Errorf("%s: TENANT LEAK: a tenant literal or foreign address in the SQL:\n%s", by, c.sql)
+		}
+		if strings.Count(c.sql, "'acme'") != 1 || !strings.Contains(c.sql, "(tenant_id = 'acme' OR src_addr IN") {
+			t.Errorf("%s: the row filter must carry the own-tenant branch exactly once:\n%s", by, c.sql)
 		}
 		if c.scope != "acme" {
 			t.Errorf("%s: tenant_scope = %q, want acme", by, c.scope)

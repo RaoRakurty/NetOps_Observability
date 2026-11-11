@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/saved"
+	"netops/backend/internal/untaggedclaim"
 	"sort"
 	"strings"
 
@@ -998,25 +999,6 @@ func (s *server) visibleDeviceIDs(c jwtClaims) (ids map[string]bool, cross bool)
 	return ids, false
 }
 
-// visibleDeviceAddrs returns the distinct non-empty management addresses of the
-// devices a scoped principal may view, plus a cross-tenant flag (when true the
-// slice is nil and means "all"). Used to scope ClickHouse flow rows, which key
-// on src_addr/dst_addr rather than a device id.
-func (s *server) visibleDeviceAddrs(c jwtClaims) (addrs []string, cross bool) {
-	tenant, cross := principalTenant(c)
-	if cross {
-		return nil, true
-	}
-	seen := map[string]bool{}
-	for _, d := range s.discovery.Devices() {
-		if canSeeDevice(d, tenant, cross) && d.Address != "" && !seen[d.Address] {
-			seen[d.Address] = true
-			addrs = append(addrs, d.Address)
-		}
-	}
-	return addrs, false
-}
-
 // visibleDeviceMetricLabels returns the distinct device ids and device names a
 // scoped principal may view, plus a cross-tenant flag (when true both slices are
 // nil and mean "all"). Used to scope time-series metrics, where the device is
@@ -1048,27 +1030,55 @@ func (s *server) visibleDeviceMetricLabels(c jwtClaims) (ids, names []string, cr
 	return ids, names, false
 }
 
-// visibleDeviceKeys returns the distinct identifiers (id and name) of the devices
-// a scoped principal may view, plus a cross-tenant flag (when true the slice is
-// nil and means "all"). Used to scope ClickHouse findings, whose `device` column
-// may carry either a device id or hostname depending on the producer.
-func (s *server) visibleDeviceKeys(c jwtClaims) (keys []string, cross bool) {
+// ---- the untagged-row claim (tracker 370) ----------------------------------
+
+// untaggedClaimFor is the ONE answer to "which device identities may this
+// principal use to claim a telemetry row that carries no tenant_id?" — its own
+// devices' identities that NO other owner's device also holds (the rule lives
+// in internal/untaggedclaim). Every OpenSearch tenant filter and ClickHouse
+// clause builder asks it.
+//
+// visibleDeviceKeys / visibleDeviceAddrs used to answer from the caller's own
+// devices alone, which let a tenant claim another owner's rows through a
+// colliding name or address; they were removed so no call site can reach for
+// the ambiguous form again.
+//
+// cross=true is the platform owner's cross-tenant view: no narrowing at all, so
+// the claim is empty and means "everything" (the old pair's contract).
+func (s *server) untaggedClaimFor(c jwtClaims) (claim untaggedclaim.Claim, cross bool) {
 	tenant, cross := principalTenant(c)
 	if cross {
-		return nil, true
+		return untaggedclaim.Claim{}, true
 	}
-	seen := map[string]bool{}
-	add := func(v string) {
-		if v != "" && !seen[v] {
-			seen[v] = true
-			keys = append(keys, v)
-		}
+	return s.untaggedClaimForTenant(tenant), false
+}
+
+// untaggedClaimForTenant is the same rule for a caller that holds a tenant id
+// rather than claims (the report scheduler, the security lane). It never
+// returns the cross-tenant answer: a background reader is always one scope.
+//
+// Default-closed: with no device registry there is no ownership index to prove
+// an identity unambiguous, so nothing is claimed. The registry snapshot is the
+// one read the old helpers already made per request — no cache, so a device
+// reassigned between owners is never claimed from a stale index.
+func (s *server) untaggedClaimForTenant(tenant string) untaggedclaim.Claim {
+	if s == nil || s.discovery == nil {
+		return untaggedclaim.Claim{}
 	}
-	for _, d := range s.discovery.Devices() {
-		if canSeeDevice(d, tenant, cross) {
-			add(d.ID)
-			add(d.Name)
-		}
+	return unambiguousClaim(s.discovery.Devices(), tenant)
+}
+
+// unambiguousClaim binds the pure rule to this package's device-visibility rule
+// (canSeeDevice — so the Provider scope "global" owns the untagged platform
+// devices, exactly as the device list shows them). The Provider scope is the
+// platform's own realm and keeps every one of its devices; an unbound scope
+// ("") claims nothing, even though "" is the platform's ROW owner.
+func unambiguousClaim(devices []models.Device, tenant string) untaggedclaim.Claim {
+	t := normTenant(tenant)
+	if t == "" {
+		return untaggedclaim.Claim{}
 	}
-	return keys, false
+	return untaggedclaim.Unambiguous(devices,
+		func(d models.Device) bool { return canSeeDevice(d, t, false) },
+		owner.IsPlatform(t))
 }

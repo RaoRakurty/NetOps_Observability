@@ -241,6 +241,14 @@ type Deps struct {
 	// Devices returns ONE tenant's own devices. Required (§3a: the caller
 	// applies the tenant filter; this package never widens it).
 	Devices func(tenant string) []Device
+	// UntaggedClaims returns the device identities (keys = id/name, addrs =
+	// management address) the tenant may use to claim an UNTAGGED syslog
+	// document: its own identities that NO other owner also holds (tracker 370
+	// — a name or address two owners share is ambiguous and claims nothing).
+	// The device-log source intersects it with the scanned devices. Optional:
+	// nil claims nothing (default-closed), so the log lane reads only documents
+	// stamped with the tenant.
+	UntaggedClaims func(tenant string) (keys, addrs []string)
 	// RuleStates returns the tenant's stored rule enable/disable overrides.
 	// Required — a failure here fails the run CLOSED (assessing under an unknown
 	// enablement set would run rules a tenant disabled).

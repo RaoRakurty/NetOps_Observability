@@ -633,12 +633,11 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
-	if keys, cross := s.visibleDeviceKeys(claims); !cross {
-		if len(keys) == 0 {
-			writeEmptyClickHouse(w)
-			return
-		}
-		conds = append(conds, "device IN ("+sqlInList(keys)+")")
+	if cond, empty := s.chDeviceClaimCond(claims, "device"); empty {
+		writeEmptyClickHouse(w)
+		return
+	} else if cond != "" {
+		conds = append(conds, cond)
 	} else if len(rt.keys) > 0 {
 		conds = append(conds, "device NOT IN ("+sqlInList(rt.keys)+")")
 	}
@@ -785,8 +784,16 @@ func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (c
 
 // addrTenantClauseCols matches the principal's device addresses against the
 // endpoint columns and, when exporterCol is set, the exporter column too.
+//
+// A scoped principal reads its OWN stamped rows (tenant_id = its tenant) plus
+// the untagged rows its UNAMBIGUOUS addresses claim (untaggedClaimFor, tracker
+// 370): an address another owner also holds — overlapping RFC 1918 space, the
+// same router listed by a tenant's controller and polled by the platform —
+// claims nothing. The own-tenant branch is what keeps a tenant's stamped rows
+// visible when every one of its addresses is ambiguous; the row policy already
+// limits a scoped read to {own, untagged}, so it widens nothing.
 func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporterCol string) (clause string, empty bool) {
-	addrs, cross := s.visibleDeviceAddrs(claims)
+	claim, cross := s.untaggedClaimFor(claims)
 	// Compliance (operator-visibility): deny if the operator scoped into a
 	// restricted tenant; in the Global view exclude restricted tenants' devices
 	// — as endpoints, and as the exporter that saw the traffic.
@@ -803,34 +810,62 @@ func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporter
 		}
 		return "", false
 	}
-	if len(addrs) == 0 {
+	if claim.Devices == 0 {
 		return "", true
 	}
-	in := sqlInList(addrs)
-	c := " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + ")"
-	if exporterCol != "" {
-		c += " OR " + exporterCol + " IN (" + in + ")"
+	parts := []string{ownTenantCond(claims)}
+	if len(claim.Addrs) > 0 {
+		in := sqlInList(claim.Addrs)
+		parts = append(parts, srcCol+" IN ("+in+")", dstCol+" IN ("+in+")")
+		if exporterCol != "" {
+			parts = append(parts, exporterCol+" IN ("+in+")")
+		}
 	}
-	return c + ")", false
+	return " AND (" + strings.Join(parts, " OR ") + ")", false
+}
+
+// ownTenantCond is the stamped-row half of every scoped ClickHouse clause:
+// tenant_id equal to the caller's own tenant, as an escaped literal. Only ever
+// built for a scoped principal whose tenant resolved (the claim of an unbound
+// scope sees no device, so the builders return empty before reaching here).
+func ownTenantCond(claims jwtClaims) string {
+	tenant, _ := principalTenant(claims)
+	return "tenant_id = " + chStringLiteral(normTenant(tenant))
+}
+
+// chDeviceClaimCond is the scoped half of deviceTenantCondFor, shared with the
+// findings handler: own stamped rows OR untagged rows whose device column names
+// an UNAMBIGUOUS key of the caller's (tracker 370). ("", false) for a
+// cross-tenant principal; empty=true when the scope can see no device at all
+// (default-closed).
+func (s *server) chDeviceClaimCond(claims jwtClaims, col string) (cond string, empty bool) {
+	claim, cross := s.untaggedClaimFor(claims)
+	if cross {
+		return "", false
+	}
+	if claim.Devices == 0 {
+		return "", true
+	}
+	if len(claim.Keys) == 0 {
+		return "(" + ownTenantCond(claims) + ")", false
+	}
+	return "(" + ownTenantCond(claims) + " OR " + col + " IN (" + sqlInList(claim.Keys) + "))", false
 }
 
 // deviceTenantCondFor is the device-keyed sibling of addrTenantClauseFor for
 // tables keyed by a device name column (findings). Same hybrid-model contract:
-// scoped principal → only its own devices' rows; no devices → nothing.
+// scoped principal → its own stamped rows and the untagged rows its unambiguous
+// device keys claim; no devices → nothing.
 func (s *server) deviceTenantCondFor(claims jwtClaims, col string) (cond string, empty bool) {
-	keys, cross := s.visibleDeviceKeys(claims)
 	if rt := s.restrictedTelemetry(claims); rt.deny {
 		return "", true
-	} else if cross {
+	} else if _, cross := principalTenant(claims); cross {
 		if len(rt.keys) > 0 {
 			return col + " NOT IN (" + sqlInList(rt.keys) + ")", false
 		}
 		return "", false
 	}
-	if len(keys) == 0 {
-		return "", true
-	}
-	return col + " IN (" + sqlInList(keys) + ")", false
+	return s.chDeviceClaimCond(claims, col)
 }
 
 // deviceTenantPairCondFor is the TWO-ENDPOINT form of deviceTenantCondFor, for a
@@ -845,11 +880,13 @@ func (s *server) deviceTenantCondFor(claims jwtClaims, col string) (cond string,
 // INSIDE the chokepoints, never reached the tunnel QoE surface. One shape per
 // table layout, all of them here, is what stops the next one drifting.
 //
-// Same hybrid-model contract as its siblings: a scoped principal with no visible
-// devices reads nothing (default-closed), and the operator scoped INTO a
-// restricted tenant reads nothing at all.
+// Same hybrid-model contract as its siblings: a scoped principal reads its own
+// stamped rows plus the untagged rows its UNAMBIGUOUS device keys claim at
+// either end (tracker 370); with no visible devices it reads nothing
+// (default-closed), and the operator scoped INTO a restricted tenant reads
+// nothing at all.
 func (s *server) deviceTenantPairCondFor(claims jwtClaims, localCol, remoteCol string) (cond string, empty bool) {
-	keys, cross := s.visibleDeviceKeys(claims)
+	claim, cross := s.untaggedClaimFor(claims)
 	if rt := s.restrictedTelemetry(claims); rt.deny {
 		return "", true
 	} else if cross {
@@ -859,11 +896,14 @@ func (s *server) deviceTenantPairCondFor(claims jwtClaims, localCol, remoteCol s
 		}
 		return "", false
 	}
-	if len(keys) == 0 {
+	if claim.Devices == 0 {
 		return "", true
 	}
-	in := sqlInList(keys)
-	return "(" + localCol + " IN (" + in + ") OR " + remoteCol + " IN (" + in + "))", false
+	if len(claim.Keys) == 0 {
+		return "(" + ownTenantCond(claims) + ")", false
+	}
+	in := sqlInList(claim.Keys)
+	return "(" + ownTenantCond(claims) + " OR " + localCol + " IN (" + in + ") OR " + remoteCol + " IN (" + in + "))", false
 }
 
 // sqlInList renders values as a quoted, comma-separated ClickHouse list.

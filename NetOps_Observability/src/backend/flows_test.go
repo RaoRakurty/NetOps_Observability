@@ -469,8 +469,9 @@ func TestFlowTenantClauseMatchesTheExporter(t *testing.T) {
 	if !strings.Contains(clause, "sampler_address IN ('10.1.0.1')") {
 		t.Fatalf("flow clause must match acme's exporter: %q", clause)
 	}
-	if !strings.HasPrefix(clause, " AND (") || !strings.HasSuffix(clause, ")") || strings.Count(clause, " OR ") != 2 {
-		t.Fatalf("the three matches must be ONE parenthesised OR group, or the AND binds wrong: %q", clause)
+	// Own stamped rows + the three address matches (tracker 370): ONE group.
+	if !strings.HasPrefix(clause, " AND (tenant_id = 'acme' OR ") || !strings.HasSuffix(clause, ")") || strings.Count(clause, " OR ") != 3 {
+		t.Fatalf("own-tenant + the three matches must be ONE parenthesised OR group, or the AND binds wrong: %q", clause)
 	}
 	for _, leak := range []string{"'10.2.0.1'", "'10.9.0.1'"} {
 		if strings.Contains(clause, leak) {
