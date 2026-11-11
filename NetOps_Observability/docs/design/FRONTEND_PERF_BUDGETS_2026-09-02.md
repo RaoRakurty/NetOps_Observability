@@ -123,12 +123,16 @@ same payload was fed to both, from the same generators, in one harness file.
 
 | Surface | mount ms | poll ms | DOM nodes |
 |---|---:|---:|---:|
-| `events-feed` | 500 | 120 | 900 |
 | `rca-list` | 700 | 90 | 1 200 |
 | `log-search` | 500 | 120 | 1 000 |
 | `device-inventory` | 600 | 110 | 1 350 |
 | `topology-device-list` | 250 | 40 | 600 |
 | `bgp-ops` | 900 | 150 | 2 000 |
+
+Update 2026-11-11: the `events-feed` budget (500 / 120 / 900) was removed with the
+Explore → Events page it measured (owner decision). That timeline is now the Logs
+page's Events tab, the view `log-search` already measures. The measurements in §2
+are kept as history.
 
 Rationale: **node budgets sit ~25 % above the measured value** — tight, because the number is
 exact and because the failure they guard against (de-virtualizing a list) multiplies it by

@@ -62,26 +62,6 @@ export function syslogHits(n: number, indexName = "netops-syslog"): OsHit[] {
   return out;
 }
 
-/** `n` SNMP-trap hits in the same envelope. */
-export function trapHits(n: number): OsHit[] {
-  const out: OsHit[] = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const dev = `${pick(SITES)}-${pick(ROLES)}-${i % 250}`;
-    out[i] = {
-      _id: `tr-${i}`,
-      _index: "netops-snmptrap",
-      _source: {
-        "@timestamp": new Date(T0 - i * 211).toISOString(),
-        device: dev,
-        normalized_severity: pick(SEVERITIES),
-        trap_name: "linkDown",
-        summary: `Interface Gi0/${i % 48} reported linkDown on ${dev}`,
-      },
-    };
-  }
-  return out;
-}
-
 /** The full search envelope (`hits.hits` + `hits.total`). */
 export function osEnvelope(hits: OsHit[], total = hits.length) {
   return { hits: { hits, total: { value: total } } };

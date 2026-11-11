@@ -38,7 +38,9 @@ const LEGACY: [string, string, string][] = [
   ["#/monitoring/triggered", "operations", "alerts"],
   ["#/monitoring/maintenance", "operations", "maintenance"],
   ["#/monitoring/quality", "operations", "network-health"],
-  ["#/monitoring/events", "explore", "events"],
+  // The Events page was removed (owner 2026-11-11); the Logs page's Events tab
+  // replaces it, so both of its old addresses land on Explore → Logs.
+  ["#/monitoring/events", "explore", "logs"],
   ["#/monitoring/incidents", "operations", "incidents"],
   ["#/monitoring/anomalies", "investigate", "findings"],
   ["#/monitoring/correlations", "investigate", "rca"],
@@ -161,6 +163,9 @@ const LEGACY: [string, string, string][] = [
   // land on Home; now they land where the panel meant to send the operator)
   ["#/explore/metrics", "explore", "metrics"],
   ["#/explore/flows", "explore", "flows"],
+  // Explore → Events itself (removed 2026-11-11): a CURRENT section whose leaf
+  // is gone. Without the alias it would fall back to Explore → Metrics.
+  ["#/explore/events", "explore", "logs"],
   ["#/alerts/active", "operations", "alerts"],
   ["#/alerts/incidents", "operations", "incidents"],
   ["#/topology/map", "infrastructure", "sites"],
@@ -203,6 +208,8 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/monitoring/appobs/investigations")).toBe("#/operations/cloud/investigations");
     expect(canonicalHash("#/logs/cloud")).toBe("#/explore/logs/cloud");
     expect(canonicalHash("#/infrastructure/geomap")).toBe("#/infrastructure/sites/map");
+    expect(canonicalHash("#/explore/events")).toBe("#/explore/logs");
+    expect(canonicalHash("#/monitoring/events")).toBe("#/explore/logs");
   });
 
   it("preserves ?query deep-link params", () => {

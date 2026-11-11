@@ -854,11 +854,11 @@
       "question": "Where can I see syslog and SNMP traps on one timeline?",
       "expect": {
         "slugs": [
-          "explore/events"
+          "explore/logs"
         ]
       },
-      "nav": "explore/events",
-      "notes": "nav-leaf coverage (N-G1): Explore \u2192 Events"
+      "nav": "explore/logs",
+      "notes": "Explore \u2192 Logs, Events tab (the separate Explore \u2192 Events page was removed 2026-11-11)"
     },
     {
       "id": "docs-073",
