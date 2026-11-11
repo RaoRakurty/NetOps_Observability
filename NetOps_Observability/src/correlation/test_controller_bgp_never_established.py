@@ -101,14 +101,24 @@ def test_the_classes_are_the_trap_lanes():
     assert set(CE.BGP_NOT_A_SESSION_FAILURE) < P.BGP_TRANSITION_CLASSES
 
 
-def test_every_recorded_report_is_never_established():
-    evs = [e for e in recorded() if e["normalized_event_type"] == "bgp_adjacency_change"]
+def test_the_recorded_reports_follow_the_peer_history_not_the_router_id():
+    """One poll of the lab's idle <-> active neighbour, with no memory from an
+    earlier poll. The FIRST report has no prior report: peer-routerid 0.0.0.0
+    decides nothing (IOS clears it on teardown, so a real drop looks the same),
+    so it is unknown and reads as a down. Every later report follows a
+    below-established one and is never_established."""
+    evs = sorted((e for e in recorded() if e["normalized_event_type"] == "bgp_adjacency_change"),
+                 key=lambda e: e["event_time"])
     assert len(evs) == 4
+    got = []
     for ev in evs:
         assert "peer-routerid=0.0.0.0" in ev["message"]
+        assert ev["correlation_hints"]["bgp_peer_routerid"] == "unset"
         sig = controller_event_to_signal(ev, INGEST)
         assert sig is not None and sig.kind == "bgp_adjacency_change"
-        assert bgp_not_a_session_failure(sig) == "never_established", ev["correlation_hints"]
+        got.append(bgp_not_a_session_failure(sig))
+    assert got == ["", "never_established", "never_established", "never_established"], \
+        [e["correlation_hints"] for e in evs]
 
 
 @pytest.mark.parametrize("cls", ["never_established", "progressing"])

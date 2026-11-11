@@ -24,8 +24,9 @@
   "dedupe_key": "i-parity:hUQNmKEBnpPPzZIM2u5o",
   "evidence_role": "supporting",
   "correlation_hints": {
-   "bgp_transition_basis": "peer_routerid_unset",
-   "bgp_transition_class": "never_established",
+   "bgp_peer_routerid": "unset",
+   "bgp_transition_basis": "new_state",
+   "bgp_transition_class": "unknown",
    "component": "VPN",
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
@@ -59,6 +60,7 @@
   "dedupe_key": "i-parity:i0QOmKEBnpPPzZIMEe4a",
   "evidence_role": "supporting",
   "correlation_hints": {
+   "bgp_peer_routerid": "unset",
    "bgp_transition_basis": "peer_history",
    "bgp_transition_class": "never_established",
    "component": "VPN",
@@ -94,6 +96,7 @@
   "dedupe_key": "i-parity:nEQOmKEBnpPPzZIMhu5I",
   "evidence_role": "supporting",
   "correlation_hints": {
+   "bgp_peer_routerid": "unset",
    "bgp_transition_basis": "peer_history",
    "bgp_transition_class": "never_established",
    "component": "VPN",
@@ -129,6 +132,7 @@
   "dedupe_key": "i-parity:n0QOmKEBnpPPzZIMte4c",
   "evidence_role": "supporting",
   "correlation_hints": {
+   "bgp_peer_routerid": "unset",
    "bgp_transition_basis": "peer_history",
    "bgp_transition_class": "never_established",
    "component": "VPN",

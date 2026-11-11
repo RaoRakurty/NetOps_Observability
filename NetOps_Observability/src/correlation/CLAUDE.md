@@ -152,12 +152,19 @@ template, gate or constant moved: ENGINE_SEMVER does not move.
 one Go package, `internal/bgpfsm` (the trap receiver's `classifyBGPTransition` delegates to
 it; its own test reads the same pinned fixture). vManage's `bgp-peer-state-change` carries
 only the new state, so `nms/vmanage_events.go` takes the prior state from the same
-device|peer's previous report in that poll (basis `peer_history`, direct evidence, wins);
-failing that, a new state below established with `peer-routerid=0.0.0.0` (no OPEN ever
-received) is `never_established` (basis `peer_routerid_unset`); otherwise the new state
-alone (`new_state`: session_up or unknown). It stamps `correlation_hints.
-bgp_transition_class` / `bgp_transition_basis`; the event, its kind and severity are
-unchanged. Stage [1] (`main.handle_controller_event`): the corr_signals row is written as
+device|peer's previous report — in that poll, or remembered ACROSS polls by
+`nms/vmanage_bgp_memory.go` (basis `peer_history`). The memory is owned by the
+registered transformer (one per Runtime), keyed tenant + integration + device|peer
+(§3a), bounded (16384 peers LRU, 32 reports each) with a 24 h TTL on the controller's
+event times; a report re-polled in the 2-minute overlap is one report. With no such
+report the new state alone decides (`new_state`): session_up, or `unknown`, which reads
+as a down (fail-open). `peer-routerid=0.0.0.0` decides NOTHING: IOS / IOS-XE clears the
+remote router-id on teardown, so a session up for days drops with one idle report and
+0.0.0.0 — the session failure the rule counts (Fable review of P-424934). It is only an
+annotation (`correlation_hints.bgp_peer_routerid=unset`). So the lab's idle <-> active
+neighbour reads `unknown` once per process start and `never_established` after. It
+stamps `correlation_hints.bgp_transition_class` / `bgp_transition_basis`; the event, its
+kind and severity are unchanged. Stage [1] (`main.handle_controller_event`): the corr_signals row is written as
 before, then a `bgp_adjacency_change` whose class is never_established or progressing
 (`controller_events.bgp_not_a_session_failure`) is NOT buffered and is counted
 (`corr_controller_bgp_not_session_failure_total{class}`, /healthz

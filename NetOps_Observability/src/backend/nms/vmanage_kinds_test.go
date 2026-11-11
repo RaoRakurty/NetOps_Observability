@@ -123,7 +123,7 @@ func TestRecordedAlarmsTakeCanonicalKinds(t *testing.T) {
 // controller_alarm. They are bgp_adjacency_change with the peer, and a session
 // that is not established is a fault.
 func TestRecordedBGPEventsAreBGPAdjacencyChanges(t *testing.T) {
-	b, err := vmanageEventsTransform("t1", "i1", readFixture(t, "events.json"))
+	b, err := vmanageEventsTransform("t1", "i1", readFixture(t, "events.json"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestBGPEstablishedIsARecovery(t *testing.T) {
 	raw := `{"data":[{"id":"x1","eventname":"bgp-peer-state-change","component":"VPN","severity_level":"major",
 	 "entry_time":1793500000000,"system_ip":"10.255.255.81","host_name":"cEDGE-81",
 	 "details":"host-name=cEDGE-81; peer=192.168.200.34; bgp-new-state=established; vpn-id=200"}]}`
-	b, err := vmanageEventsTransform("t1", "i1", []byte(raw))
+	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

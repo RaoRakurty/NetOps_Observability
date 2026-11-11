@@ -28,7 +28,7 @@ func (t VManageAutoTransformer) TransformStream(tenant, integrationID, stream st
 	case "alarms":
 		return VManageTransformer{}.Transform(tenant, integrationID, raw)
 	case "events":
-		return vmanageEventsTransform(tenant, integrationID, raw)
+		return vmanageEventsTransform(tenant, integrationID, raw, t.bgp)
 	case "inventory":
 		return vmanageInventoryTransform(tenant, integrationID, raw)
 	case "approute", "statistics":
@@ -96,12 +96,11 @@ func vmBGPState(s string) string {
 // vManage's bgp-peer-state-change bases for the `bgp_transition_basis` hint: where
 // the transition's prior state, or the fact that it had none, came from.
 const (
-	vmBGPBasisPeerHistory  = "peer_history"        // the same peer's previous report in this poll
-	vmBGPBasisRouterIDZero = "peer_routerid_unset" // no OPEN ever received from the peer
-	vmBGPBasisNewState     = "new_state"           // the new state alone
+	vmBGPBasisPeerHistory = "peer_history" // the peer's previous report, this poll or remembered
+	vmBGPBasisNewState    = "new_state"    // the new state alone
 )
 
-// vmBGPReport is one bgp-peer-state-change of one device|peer in a poll batch.
+// vmBGPReport is one bgp-peer-state-change of one device|peer.
 type vmBGPReport struct {
 	at    int64 // entry_time, ms
 	state string
@@ -127,33 +126,31 @@ func vmBGPPrevState(reports []vmBGPReport, at int64) string {
 // vmBGPTransition names one vManage bgp-peer-state-change with the classifier the
 // trap receiver uses (internal/bgpfsm; tracker 387). Owner rule: only an
 // ESTABLISHED session going down is a session failure. vManage reports only the
-// NEW state, so the prior one comes from, in order:
-//  1. the same peer's previous report in this poll (peer_history), which is
-//     direct evidence and wins even over the router id below;
-//  2. a new state below established with peer-routerid 0.0.0.0 (peer_routerid_unset):
-//     no OPEN has been received from the peer in this session, so the session
-//     was not established when the report was made — never_established;
-//  3. the new state alone (new_state): session_up, or unknown, which leaves the
-//     reading as it was (a down).
+// NEW state, so the prior one comes from the same peer's previous report — in
+// this poll, or remembered across polls (vmBGPMemory) — and bgpfsm names the
+// move (peer_history). With no such report the new state alone decides
+// (new_state): session_up, or unknown, which reads as a down (fail-open).
+//
+// peer-routerid 0.0.0.0 decides NOTHING: IOS / IOS-XE clears the remote
+// router-id on teardown, so an established session that drops reports exactly
+// that (P-424934 review). It is carried as an annotation only.
 //
 // class "" when the new state is not an FSM state.
-func vmBGPTransition(prev, newState, peerRouterID string) (class, basis string) {
+func vmBGPTransition(prev, newState string) (class, basis string) {
 	if prev != "" {
 		if c := bgpfsm.Classify(prev, newState); c != "" {
 			return c, vmBGPBasisPeerHistory
 		}
 	}
-	rank, ok := bgpfsm.Rank(newState)
-	if !ok {
+	if _, ok := bgpfsm.Rank(newState); !ok {
 		return "", ""
-	}
-	if rank < 6 && strings.TrimSpace(peerRouterID) == "0.0.0.0" {
-		return bgpfsm.NeverEstablished, vmBGPBasisRouterIDZero
 	}
 	return bgpfsm.Classify("", newState), vmBGPBasisNewState
 }
 
-func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, error) {
+// vmanageEventsTransform maps /dataservice/event rows. mem (nil = none) carries
+// each BGP peer's reports across polls; the reports of this batch are added to it.
+func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGPMemory) (Batch, error) {
 	var resp struct {
 		Data []struct {
 			ID        string `json:"id"`
@@ -182,8 +179,20 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 			bgpHistory[key] = append(bgpHistory[key], vmBGPReport{at: int64(r.EntryTime), state: strings.ToLower(strings.TrimSpace(det[k.StateKey]))})
 		}
 	}
-	for _, reports := range bgpHistory {
-		sort.SliceStable(reports, func(i, j int) bool { return reports[i].at < reports[j].at })
+	// Each peer's history = what the memory remembers (within its TTL of this
+	// batch's earliest report) ∪ this batch, sorted and de-duplicated, so a
+	// report re-polled in the overlap is one report. This batch is then
+	// remembered for the next poll.
+	for key, reports := range bgpHistory {
+		earliest := reports[0].at
+		for _, r := range reports {
+			if r.at < earliest {
+				earliest = r.at
+			}
+		}
+		memKey := vmBGPMemoryKey(tenant, integrationID, key)
+		bgpHistory[key] = mergeVMBGPReports(mem.recall(memKey, earliest), reports)
+		mem.remember(memKey, reports)
 	}
 	var b Batch
 	for _, r := range resp.Data {
@@ -221,9 +230,14 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 		if stateKind == "bgp" && det["peer"] != "" && det["bgp-new-state"] != "" {
 			newState := strings.ToLower(strings.TrimSpace(det["bgp-new-state"]))
 			prev := vmBGPPrevState(bgpHistory[r.SystemIP+"|"+det["peer"]], int64(r.EntryTime))
-			if class, basis := vmBGPTransition(prev, newState, det["peer-routerid"]); class != "" {
+			if class, basis := vmBGPTransition(prev, newState); class != "" {
 				e.CorrelationHints["bgp_transition_class"] = class
 				e.CorrelationHints["bgp_transition_basis"] = basis
+			}
+			if strings.TrimSpace(det["peer-routerid"]) == "0.0.0.0" {
+				// Annotation only: no OPEN in the CURRENT session, which is also
+				// what a just-torn-down established session reports.
+				e.CorrelationHints["bgp_peer_routerid"] = "unset"
 			}
 		}
 		if recovery {
