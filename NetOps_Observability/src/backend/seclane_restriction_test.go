@@ -73,6 +73,7 @@ func newRestrictedSecLaneFixture(t *testing.T) *restrictedSecLaneFixture {
 	deps.CHQuery = func(context.Context, string, string) ([]map[string]any, error) { return nil, nil }
 	deps.Seams = func(context.Context, string) ([]seclane.SeamRow, error) { return nil, nil }
 	deps.Spool = nil
+	deps.Episodes = seclane.NewMemEpisodes() // never the host's /data
 
 	lane, err := seclane.New(deps)
 	if err != nil {

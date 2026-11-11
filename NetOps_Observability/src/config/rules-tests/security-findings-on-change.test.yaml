@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for the security lane's findings-on-change rules
+# (owner D2, 2026-11-11; rules-scale-slo.yaml, engine-liveness group).
+#
+# Each rule must FIRE on the real failure shape and stay SILENT on the
+# look-alikes: a healthy steady state (only unchanged verdicts), a healthy run
+# with changes, and an idle lane that published nothing. Paths are as mounted
+# by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) An episode-state load failure fires; a zero counter does not.
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_episode_state_errors_total{op="load"}'
+        values: "0x10 1x30"
+      - series: 'netops_security_episode_state_errors_total{op="commit"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SecurityEpisodeStateErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: security
+              tier: warning
+            exp_annotations:
+              summary: "The security lane could not read or save its finding-episode state — correlation is not being told about new or changed security findings"
+              description: "netops_security_episode_state_errors_total moved (op=load|seed|commit). Verdicts are still stored for audit, but while state is unreadable the engine hears nothing from the security lane. Check the episode store (Postgres security_finding_episodes, or SECURITY_EPISODE_DIR on the file backend) and the api log for security.lane episode-state errors."
+              runbook: "docs/runbooks/engine-liveness-matrix.md"
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_episode_state_errors_total{op="load"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SecurityEpisodeStateErrors
+        exp_alerts: []
+
+  # (b) Verdicts published every 15 min, but neither D2 path moves: fires.
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_findings_emitted_total{class="posture"}'
+        values: "0+10x120"
+      - series: 'netops_security_transitions_total{transition="appear",outcome="emitted"}'
+        values: "0x120"
+      - series: 'netops_security_unchanged_suppressed_total'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SecurityLaneTransitionsStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: security
+              tier: warning
+            exp_annotations:
+              summary: "The security lane is publishing verdicts but neither telling correlation about changes nor recognising unchanged findings — change tracking has stopped"
+              description: "For an hour netops_security_findings_emitted_total climbed while netops_security_transitions_total and netops_security_unchanged_suppressed_total stayed flat. The verdicts reach the findings store (stamped unclassified) but the engine hears nothing from the security lane. See SecurityEpisodeStateErrors and the api log for security.lane episode-state errors."
+              runbook: "docs/runbooks/engine-liveness-matrix.md"
+
+  # (b) The healthy steady state: verdicts published, all unchanged — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_findings_emitted_total{class="posture"}'
+        values: "0+10x120"
+      - series: 'netops_security_transitions_total{transition="appear",outcome="emitted"}'
+        values: "0x120"
+      - series: 'netops_security_unchanged_suppressed_total'
+        values: "0+10x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SecurityLaneTransitionsStalled
+        exp_alerts: []
+
+  # (b) A run with changes and nothing unchanged (first scan) — silent.
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_findings_emitted_total{class="posture"}'
+        values: "0+10x120"
+      - series: 'netops_security_transitions_total{transition="appear",outcome="emitted"}'
+        values: "0+10x120"
+      - series: 'netops_security_unchanged_suppressed_total'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SecurityLaneTransitionsStalled
+        exp_alerts: []
+
+  # (b) An idle lane that published nothing — silent (nothing to classify).
+  - interval: 1m
+    input_series:
+      - series: 'netops_security_findings_emitted_total{class="posture"}'
+        values: "50x120"
+      - series: 'netops_security_transitions_total{transition="appear",outcome="emitted"}'
+        values: "0x120"
+      - series: 'netops_security_unchanged_suppressed_total'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SecurityLaneTransitionsStalled
+        exp_alerts: []
+
+  # (b) The lane is off: no series at all — silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="netops-api"}'
+        values: "1x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SecurityLaneTransitionsStalled
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: SecurityEpisodeStateErrors
+        exp_alerts: []

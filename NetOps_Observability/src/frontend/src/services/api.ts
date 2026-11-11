@@ -10354,6 +10354,12 @@ export type SecLaneScanStatus = {
   trigger: string; // ticker | manual
   duration_ms: number;
   findings_emitted: number;
+  /** Owner D2 (2026-11-11): what correlation was told this run — findings that
+   *  are new, changed or (when clears are on) cleared. Optional: a lane older
+   *  than D2 does not send it, and absent is not zero. */
+  transitions_emitted?: number;
+  /** Findings this run re-confirmed without change: stored, not re-sent. */
+  unchanged_suppressed?: number;
   findings_truncated: number;
   devices_assessed: number;
   errors?: string[];
