@@ -179,7 +179,7 @@ export default function PlatformAlerts() {
       <ol style={{ paddingLeft: 20, margin: 0 }}>
         <li style={{ marginBottom: 16 }}>
           <section className="cc-panel" style={{ padding: "12px 14px" }} aria-labelledby="pa-ntfy">
-            <h3 id="pa-ntfy" style={{ margin: "0 0 8px", fontSize: 15 }}>Push notifications to a phone app (ntfy)</h3>
+            <h3 id="pa-ntfy" style={{ margin: "0 0 8px", fontSize: 15 }}>Phone push (ntfy)</h3>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
               <input
                 type="checkbox"
