@@ -209,8 +209,12 @@ test("rows read as device, severity, type and a plain event, with no secret or p
   await expect(syslog.getByText("192.168.222.102")).toBeVisible();
 
   const flow = rows(page).nth(5);
-  await expect(flow.getByText("192.168.222.105 → 192.168.172.1")).toBeVisible();
-  await expect(flow.getByText("UDP 161 → 38204 · 1,003 bytes · 13 packets")).toBeVisible();
+  // Coloured parts (owner 2026-11-11): two endpoint pills, a protocol badge, readable volume.
+  await expect(flow.locator(".fl-ep-src")).toHaveText("192.168.222.105:161");
+  await expect(flow.locator(".fl-ep-dst")).toHaveText("192.168.172.1:38204");
+  await expect(flow.getByTestId("flow-proto")).toHaveText("UDP");
+  await expect(flow.getByTestId("flow-detail")).toContainText("1,003 B");
+  await expect(flow.getByTestId("flow-detail")).toContainText("13 packets");
 
   const text = (await page.locator(".lv").textContent()) ?? "";
   expect(text).not.toContain(SECRET);
@@ -325,7 +329,7 @@ for (const theme of ["light", "dark", "oled", "indigo", "graphite", "white"]) {
     // Reduced motion also proves that path: a colour transition would be measured mid-flight.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await boot(page, theme);
-    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page, .lv .lv-routine label, .lv .lv-routine-note, .lv .lv-routine-hint");
+    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page, .lv .lv-routine label, .lv .lv-routine-note, .lv .fl-ep-src .fl-addr, .lv .fl-ep-dst .fl-addr, .lv .fl-port, .lv .fl-proto, .lv .fl-service, .lv .fl-own, .lv .fl-detail");
     expect(results.length).toBeGreaterThan(20);
     const failing = results.filter((r) => r.ratio < 4.5).map((r) => `${r.what} ${r.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
