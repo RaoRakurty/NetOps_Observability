@@ -638,7 +638,13 @@ RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be56
 #: grammars, no rule row. The vBond `DNS cache expired` and `FQDN ... resolved to` lines
 #: share the lookup's correlation key; the ConfD refusal reads no community.
 RULES_HASH_SDWAN_DNS_SNMP_REFUSAL = "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41"
-RULES_HASH_A3 = RULES_HASH_SDWAN_DNS_SNMP_REFUSAL
+#:
+#: The final syslog wave (2026-11-11, tracker 387): SD-WAN DNS refresh, RESOLVD gateway,
+#: CFGMGR, fp-um and IOS XE banner grammars, neutral syslogd/ntpd/kernel/OSPF grammars and
+#: the ntp_event label table (read by a summary, so in the hash); five rule rows (the
+#: gateway lost at warn from either of its two lines, three known_benign).
+RULES_HASH_SYSLOG_FINAL_WAVE = "63f78614003890a5296798154fe3e6d75a02fe9823af01161cb186b5597bfae4"
+RULES_HASH_A3 = RULES_HASH_SYSLOG_FINAL_WAVE
 
 
 def _guard_patterns(node) -> list[str]:
