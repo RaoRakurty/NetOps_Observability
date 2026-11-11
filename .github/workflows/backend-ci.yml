@@ -6,7 +6,7 @@ name: backend-ci
 # for those packages, and run repo-wide as non-blocking triage until the existing
 # backlog is burned down (then flip `full-lint` to blocking).
 #
-# Go is pinned to a patched toolchain (go1.26.10): govulncheck flagged a batch of
+# Go is pinned to a patched toolchain (go1.26.11): govulncheck flagged a batch of
 # stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
 # bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
 # Raised 1.25.13 -> 1.26.8 on 2026-09-02: x/crypto v0.56.0 (GO-2026-6354 /
@@ -19,6 +19,10 @@ name: backend-ci
 # 2026-10-24: 1.26.9 -> 1.26.10 for GO-2026-6809 (crypto/x509: distrust the
 # compromised emSign intermediate CAs; CALLED via every TLS client handshake,
 # e.g. collectors/redis.go redisDial). Patch release.
+# 2026-11-11: 1.26.10 -> 1.26.11 for GO-2026-6859 (net/http: HTTP/1 server
+# crash due to a MaxBytesReader header race; CALLED from our HTTP handlers and
+# clients, e.g. internal/backendauth Transport.RoundTrip -> maxBytesReader).
+# Patch release; scanner pins unchanged.
 
 on:
   workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)
@@ -52,7 +56,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.10'
+  GO_VERSION: '1.26.11'
   # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
   # unpinned @latest would let a compromised/regressed release run in CI. Bump
   # deliberately (Dependabot watches these too).
