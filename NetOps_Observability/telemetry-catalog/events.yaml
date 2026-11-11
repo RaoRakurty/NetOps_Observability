@@ -35,12 +35,30 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-11-syslog-final-wave-confd — the merge of the two revisions below: the final
+# syslog wave's grammars and rule rows, and the ConfD `via snmp` session grammar that
+# reads no user. Nothing else moved.
+#
 # 2026-11-11-confd-snmp-session — the neutral ConfD `created new session via snmp` grammar
 # reads no user: ConfD names a v1/v2c SNMP session by the community the request carried
 # (found live on the lab, owner D1), so the slot is matched but not captured and no
 # title, summary, typed field or key carries it (audit_user unset; a v3 USM user is not
 # read either, since the line cannot tell v2c from v3). Grammar only: no rule row, so no
 # signal moved.
+#
+# 2026-11-11-syslog-final-wave — tracker 387, the last unparsed lab families (live syslog
+# 99.8% parsed). SD-WAN grammars: VTRACKER `DNS cache entry ... refreshed` (the vBond
+# lookup's key), RESOLVD default-gateway monitor and reachability (one key per device, VPN
+# and gateway), CFGMGR routing-daemon link down, fp-um port status and default MAC, and the
+# IOS XE boot banner (parser cisco_iosxe.v1, one key per boot). Neutral grammars (parser
+# standard_system.v1): sysklogd restart, ntpd events with the clock step as a metric, the
+# kernel conntrack banner and hrtimer overrun, quagga OSPF DD discarded. Rule rows: the
+# gateway lost (`syslog.sdwan.default_gateway.monitor_down` and `.unreachable`, one per line
+# shape, device_alarm warn, doc_claimed: only the recovery words are captured) and three
+# known_benign rows (fp-um default MAC at err, kernel hrtimer at warning, OSPF DD in 2-Way
+# at warning). CFGMGR keeps the generic
+# net (err -> warn). No severity moved. The edge shape `sequence_number_without_time`
+# frames the banner (syslog-ng only; no signal by itself).
 #
 # 2026-11-10-sdwan-dns-snmpauth — tracker 387, the last unparsed vEdge families after the
 # train #180 deploy: two SD-WAN grammars for the vBond lookup's success path (VTRACKER
@@ -158,7 +176,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-11-confd-snmp-session
+parser_rev: 2026-11-11-syslog-final-wave-confd
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #

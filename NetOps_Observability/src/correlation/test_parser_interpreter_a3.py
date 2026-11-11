@@ -148,8 +148,10 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # · 72 with PR 10's known_benign row for the SSH banner probe
     # · 93 with 387 §6a wave 1 (Nokia SR OS 11, Cisco IOS XR / IOS / NX-OS 5, Junos 5)
     # · 94 with the SD-WAN SNMP-agent poll-error known_benign row
-    # · 95 with the SONiC orchagent link row (387 wave 2).
-    assert len(P.RULES) == 95
+    # · 95 with the SONiC orchagent link row (387 wave 2)
+    # · 100 with 387's final syslog wave (the SD-WAN gateway lost, two rows; three
+    #   known_benign: fp-um default MAC, kernel hrtimer, OSPF DD in 2-Way).
+    assert len(P.RULES) == 100
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

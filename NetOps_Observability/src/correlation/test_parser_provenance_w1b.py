@@ -639,11 +639,17 @@ RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be56
 #: share the lookup's correlation key; the ConfD refusal reads no community.
 RULES_HASH_SDWAN_DNS_SNMP_REFUSAL = "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41"
 #:
-#: ConfD SNMP session (2026-11-11): the `created new session via snmp` grammar matches
-#: the user slot without capturing it (ConfD names a v1/v2c session by its community).
-#: One grammar, no rule row.
-RULES_HASH_CONFD_SNMP_SESSION = "9f69300ed9d2cb8f1e26f3245d8491190f8d6bca27105f9e379648a0c3a6acba"
-RULES_HASH_A3 = RULES_HASH_CONFD_SNMP_SESSION
+#: The final syslog wave (2026-11-11, tracker 387): SD-WAN DNS refresh, RESOLVD gateway,
+#: CFGMGR, fp-um and IOS XE banner grammars, neutral syslogd/ntpd/kernel/OSPF grammars and
+#: the ntp_event label table (read by a summary, so in the hash); five rule rows (the
+#: gateway lost at warn from either of its two lines, three known_benign).
+RULES_HASH_SYSLOG_FINAL_WAVE = "63f78614003890a5296798154fe3e6d75a02fe9823af01161cb186b5597bfae4"
+#:
+#: ConfD SNMP session (2026-11-11), merged onto the final wave: the `created new session
+#: via snmp` grammar matches the user slot without capturing it (ConfD names a v1/v2c
+#: session by its community). One grammar, no rule row.
+RULES_HASH_FINAL_WAVE_CONFD_SNMP_SESSION = "55b109a4e67d0843bb3206402d6348513356ee53a0fa958f7c1d57ce8b9dcd5b"
+RULES_HASH_A3 = RULES_HASH_FINAL_WAVE_CONFD_SNMP_SESSION
 
 
 def _guard_patterns(node) -> list[str]:

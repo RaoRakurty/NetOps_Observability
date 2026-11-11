@@ -57,6 +57,26 @@ edge_shapes:
     fidelity: doc_claimed
     source: 'napalm-logs IOS-XR syslog sample (Apache-2.0), research VENDOR_PACK_SOURCES_2026-11-09 §2.1'
 
+  # `<189>65: Cisco IOS Software [Amsterdam], ...`: a sequence number and NO time. IOS XE
+  # prints its boot banner this way, before its clock and `service timestamps` apply (live
+  # on the lab's Catalyst 8000v, IOS XE 17.3.2, 2026-11-11). With no time the legacy parser
+  # reads no hostname either, and takes the first word of the text for the program: the
+  # banner was stored as programs `Cisco`, `Technical`, `Copyright` and `Compiled`, each
+  # with its first word cut off the message. An IOS sender writes no program tag, so a
+  # second colon is put after the sequence number: the parser still reads the number
+  # (`meta sequenceId`), reads an EMPTY program at that colon (app `unknown`, as for every
+  # untagged IOS line) and leaves the text whole. One PRI, the frame's own: it is a valid
+  # frame, so no `frame_problem` (docs/runbooks/syslog-bad-frames.md: a real, valid shape
+  # gets an edge shape). No time, so the record is read at receive time, as FortiGate's is.
+  # Every shape that read correctly before is left alone, whatever order the rewrites run
+  # in: a time after the number (plain IOS, NX-OS year, RFC 3339), a mnemonic (`%SYS-...`,
+  # which r_mnemonic_is_not_a_program already puts back), a `word:` or `word[pid]:` after
+  # the number (IOS `logging origin-id`, a tag), and a host and node stuck to a time (XR).
+  - id: sequence_number_without_time
+    match: '^(<[0-9]{1,3}>[0-9]{1,10}: )(?!%|[*.]?(?:[0-9]{4} )?[A-Z][a-z]{2} +[0-9]{1,2} [0-9]{2}:[0-9]{2}:[0-9]{2}|[0-9]{4}-[0-9]{2}-[0-9]{2}T|[A-Za-z0-9._/#-]+(?:\[[0-9]+\])?: |[A-Za-z0-9._-]+ [A-Za-z0-9/_-]+:[A-Z][a-z]{2} )'
+    replace: '$1: '
+    fidelity: lab_validated
+
   # `<PRI>2026-11-09T09:00:00.123456+00:00 host INFO bgp#bgpd[123]: ...`: the severity
   # word stands where the program belongs. The tag after it must end in a colon, so a
   # real program called INFO (`INFO: text`) is left alone.
@@ -329,6 +349,124 @@ grammars:
       audit_via: 'ssh'
     fidelity: lab_validated
 
+  # Stock Linux daemons a network OS runs (tracker 387, the last unparsed lab families,
+  # 2026-11-11). Seen on the lab's vEdges, but every line below is printed by the upstream
+  # program, not by Cisco code, so the rows are neutral and stamp no vendor. None reads a
+  # severity: PRI is the line's own. `system_lifecycle` is a start or restart of a part of
+  # the OS: a record to keep and group, never an alarm.
+  #
+  # sysklogd's own start line (`syslogd v2.1.1: restart.`; 1.x prints `syslogd 1.5.0:
+  # restart.`). It is logged when the daemon starts and when it re-reads its configuration
+  # (SIGHUP), so it is a boot or a logging change on the box, not a fault.
+  - id: syslogd_restart
+    parser_id: standard_system.v1
+    literal: ': restart'
+    apps: [syslogd]
+    pattern: '^syslogd v?(?P<version>[0-9][0-9A-Za-z.-]{0,31}): restart\.?(?: \((?P<mode>[^)]{1,32})\))?'
+    event_type: syslog_daemon_restart
+    summary: 'Syslog daemon (re)started, syslogd {version}[ ({mode})]'
+    category: system_lifecycle
+    fields:
+      title: 'Syslog daemon on {host} (re)started (syslogd {version})'
+      correlation_key: 'syslogd:{device}'
+    fidelity: lab_validated
+
+  # ntpd's event lines, `<address> <status word> <event code> <event>[ <detail>]`, as
+  # report_event() in ntp_control.c prints them: the address is 0.0.0.0 for a system event
+  # and the peer for a peer event; the status word and the code are hex. The event names
+  # are ntpd's own (NTP 4 documentation, "Event Messages and Status Words", decode.html:
+  # system codes 05 clock_sync, 08 no_sys_peer, 0c clock_step). The pack's `ntp_event`
+  # table puts the common ones in plain words; any other keeps its name.
+  #
+  # A clock STEP first, with the step as a typed metric (`clock_step_s`, seconds, signed):
+  # it moves every timestamp the box writes, so it is what explains a record whose time
+  # jumps. No signal, deliberately. The platform measures a device's clock itself: Vector
+  # stamps `clock_skew_s` past the tolerance and producers.clock_skew_signal reports it as
+  # a management-plane meta-finding that never enters the window, so a wrong clock cannot
+  # lend a corroborating plane to a real fault. A step is the device CORRECTING its clock,
+  # after which its timestamps can be believed; it arrives at info; the record stays.
+  - id: ntpd_clock_step
+    parser_id: standard_system.v1
+    literal: ' clock_step '
+    apps: [ntpd]
+    pattern: '^(?P<addr>[0-9A-Fa-f.:]{2,45}) (?P<status>[0-9a-f]{4}) (?P<code>[0-9a-f]{2}) clock_step (?P<step>[+-]?[0-9]{1,9}\.[0-9]{1,9}) s'
+    event_type: ntp_clock_step
+    summary: 'NTP stepped the clock by {step} s (status {status})'
+    category: time_sync
+    fields:
+      title: 'NTP stepped the clock on {host} by {step} s'
+      correlation_key: 'ntp:{device}'
+    metrics:
+      clock_step_s: step
+    fidelity: lab_validated
+
+  - id: ntpd_event
+    parser_id: standard_system.v1
+    literal: ' '
+    apps: [ntpd]
+    pattern: '^(?P<addr>[0-9A-Fa-f.:]{2,45}) (?P<status>[0-9a-f]{4}) (?P<code>[0-9a-f]{2}) (?P<event>[A-Za-z][A-Za-z_]{1,31})(?: (?P<detail>\S.{0,127}))?'
+    event_type: 'ntp_{event}'
+    summary: 'NTP {event|ntp_event}[: {detail}] (status {status})'
+    category: time_sync
+    fields:
+      title: 'NTP on {host} {event|ntp_event}'
+      correlation_key: 'ntp:{device}'
+    fidelity: lab_validated
+
+  # The kernel's connection-tracking banner at module load (`nf_conntrack version 0.5.0
+  # (7168 buckets, 28672 max)`): boot. The table size is a typed metric, because a full
+  # conntrack table drops new flows and this line is the only place the box states it.
+  - id: kernel_conntrack_init
+    parser_id: standard_system.v1
+    literal: 'nf_conntrack version '
+    apps: [kernel]
+    pattern: '^nf_conntrack version (?P<version>[0-9][0-9.]{0,15}) \((?P<buckets>[0-9]{1,10}) buckets, (?P<max>[0-9]{1,12}) max\)'
+    event_type: kernel_conntrack_init
+    summary: 'Kernel connection tracking started: {buckets} buckets, {max} entries max'
+    category: system_lifecycle
+    fields:
+      title: 'Kernel connection tracking started on {host} ({max} entries max)'
+      correlation_key: 'kernel:{device}:conntrack'
+    metrics:
+      conntrack_buckets: buckets
+      conntrack_max: max
+    fidelity: lab_validated
+
+  # The kernel's high-resolution timer handler ran late (`hrtimer: interrupt took 4421501
+  # ns`). The kernel prints it ONCE per boot (pr_warn_once in kernel/time/hrtimer.c), the
+  # first time one handler overruns, which on a virtual machine is a host scheduling hiccup.
+  # The delay is a typed metric. The row below keeps it off the generic net.
+  - id: kernel_hrtimer_slow
+    parser_id: standard_system.v1
+    literal: 'hrtimer: interrupt took '
+    apps: [kernel]
+    pattern: '^hrtimer: interrupt took (?P<ns>[0-9]{1,15}) ns'
+    event_type: kernel_hrtimer_slow
+    summary: 'Kernel timer interrupt took {ns} ns (first overrun since boot)'
+    fields:
+      title: 'Kernel timer interrupt ran late on {host} ({ns} ns)'
+      correlation_key: 'kernel:{device}:hrtimer'
+    metrics:
+      hrtimer_interrupt_ns: ns
+    fidelity: lab_validated
+
+  # Quagga ospfd discarding a Database Description packet (`Packet[DD]: Neighbor
+  # 192.0.2.7 state is 2-Way, packet discarded.`, ospf_packet.c). The address is the
+  # neighbour's ROUTER ID, not an interface address. Any neighbour state parses; only
+  # 2-Way is kept off the net by the row below, because RFC 2328 §10.6 says a DD packet
+  # received in 2-Way is ignored by design (two DROthers never form an adjacency).
+  - id: ospfd_dd_discarded
+    parser_id: standard_system.v1
+    literal: 'Packet[DD]: Neighbor '
+    apps: [ospf, ospfd]
+    pattern: '^Packet\[DD\]: Neighbor (?P<nbr>[0-9A-Fa-f.:]{2,45}) state is (?P<state>[A-Za-z0-9-]{1,16}), packet discarded'
+    event_type: ospf_dd_discarded
+    summary: 'OSPF ignored a Database Description packet from neighbour {nbr} (state {state})'
+    fields:
+      title: 'OSPF ignored a DD packet from neighbour {nbr} on {host} (state {state})'
+      correlation_key: 'ospf:{device}:{nbr}'
+    fidelity: lab_validated
+
 rules:
   # Real PRI makes this line err (`<35>`, auth.err), and it repeats on every vEdge sampled:
   # 7 lines from 3 devices in 300 s of lab capture (2026-11-09). A TCP peer connected to
@@ -354,6 +492,67 @@ rules:
       modality: control_plane
       entity: {type: device, id: '{host}'}
       native_id: '{host}|sshd_banner_probe|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+  # The kernel arrives at warning with this line, so the generic net made a device alarm of
+  # it: once per boot, from a VM's host scheduling. It says nothing about the network, and
+  # it is not a recurring condition the engine could watch (pr_warn_once). The guard is the
+  # whole text shape and the kernel tag, so any other kernel warning still reaches the net.
+  - rule_id: syslog.standard.kernel_hrtimer_slow
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [any]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: the kernel's once-per-boot note that one timer interrupt ran late; no network or device fault in the text
+    pattern_src: '^hrtimer: interrupt took \d{1,15} ns'
+    guard:
+      all:
+        - {equals_any: [tag, [KERNEL]]}
+        - {re: [msg, '^hrtimer: interrupt took \d{1,15} ns', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
+  # Quagga ospfd logs a DD packet it ignores in 2-Way at warning (the vEdge's `OSPF` app).
+  # RFC 2328 §10.6: "If the neighbor state is 2-Way: The packet should be ignored." Two
+  # DROther routers on one segment stay in 2-Way by design, and the line repeats while a
+  # neighbour still offers a DD during a DR/BDR change. A lost adjacency reaches the engine
+  # through the adjacency rows; this line would only add a below-floor alarm per packet.
+  # A neighbour stuck in 2-Way that SHOULD be adjacent (a priority or network-type
+  # mismatch) makes this line steady: `corr_parser_known_benign_total` shows the rate, and
+  # every record stays stored. Only 2-Way: a DD discarded in Init, Down or Attempt still
+  # reaches the net.
+  - rule_id: syslog.standard.ospf_dd_two_way
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [any]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: an OSPF Database Description packet ignored in 2-Way, as RFC 2328 section 10.6 requires; no adjacency change in the text
+    pattern_src: '^Packet\[DD\]: Neighbor \S{1,45} state is 2-Way, packet discarded'
+    guard:
+      all:
+        - {equals_any: [tag, [OSPF, OSPFD]]}
+        - {re: [msg, '^Packet\[DD\]: Neighbor \S{1,45} state is 2-Way, packet discarded', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
       tokens: [{t: '{host}'}]
       attrs: {}
 
@@ -731,3 +930,240 @@ fixtures:
     message: 'something this platform calls an error'
     expect: {}
     signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  # ── stock Linux daemons (tracker 387, live on the lab's vEdges 2026-11-11) ─────────
+  - name: the syslog daemon starting is a lifecycle record, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: syslogd
+    severity: info
+    message: 'syslogd v2.1.1: restart.'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: syslog_daemon_restart
+      summary: 'Syslog daemon (re)started, syslogd 2.1.1'
+      title: 'Syslog daemon on vEdge-1 (re)started (syslogd 2.1.1)'
+      event_category: system_lifecycle
+      dedup_key: 'vEdge-1|syslogd|syslog_daemon_restart'
+      correlation_key: 'syslogd:vEdge-1'
+      normalized_severity: info
+    signal: null
+
+  - name: the older sysklogd start line with its mode parses the same way
+    fidelity: doc_claimed
+    source: 'sysklogd 1.5 syslogd.c, init(): "syslogd " VERSION "." PATCHLEVEL ": restart (remote reception)." when it accepts network input'
+    hostname: vEdge-1
+    appname: syslogd
+    severity: info
+    message: 'syslogd 1.5.0: restart (remote reception).'
+    expect:
+      parser_status: parsed
+      event_type: syslog_daemon_restart
+      summary: 'Syslog daemon (re)started, syslogd 1.5.0 (remote reception)'
+    signal: null
+
+  - name: an NTP clock step carries the step as a typed metric, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: ntpd
+    severity: info
+    message: '0.0.0.0 c61c 0c clock_step +28.800702 s'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: ntp_clock_step
+      summary: 'NTP stepped the clock by +28.800702 s (status c61c)'
+      title: 'NTP stepped the clock on vEdge-1 by +28.800702 s'
+      event_category: time_sync
+      dedup_key: 'vEdge-1|ntpd|ntp_clock_step'
+      correlation_key: 'ntp:vEdge-1'
+      normalized_severity: info
+      metrics:
+        clock_step_s: {value: 28.800702, basis: observed}
+      enrichment:
+        fields_observed: [event_type, summary, metrics.clock_step_s]
+        fields_derived: [normalized_severity, title, correlation_key, dedup_key]
+        fields_guidance: []
+        unknown: []
+    signal: null
+
+  - name: a backward NTP step is a negative metric
+    fidelity: doc_claimed
+    source: 'the lab clock_step line with a backward step; ntpd prints the offset signed (ntp_loopfilter.c, step_systime)'
+    hostname: vEdge-1
+    appname: ntpd
+    severity: info
+    message: '0.0.0.0 c61c 0c clock_step -0.512345 s'
+    expect:
+      event_type: ntp_clock_step
+      metrics:
+        clock_step_s: {value: -0.512345, basis: observed}
+    signal: null
+
+  - name: NTP losing its system peer is a time-sync record
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: ntpd
+    severity: info
+    message: '0.0.0.0 c618 08 no_sys_peer'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: ntp_no_sys_peer
+      summary: 'NTP has no time source selected (no system peer) (status c618)'
+      title: 'NTP on vEdge-1 has no time source selected (no system peer)'
+      event_category: time_sync
+      correlation_key: 'ntp:vEdge-1'
+    signal: null
+
+  - name: NTP synchronising the clock shares the step's key
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: ntpd
+    severity: info
+    message: '0.0.0.0 c615 05 clock_sync'
+    expect:
+      parser_status: parsed
+      event_type: ntp_clock_sync
+      title: 'NTP on vEdge-1 synchronised the clock'
+      correlation_key: 'ntp:vEdge-1'
+    signal: null
+
+  - name: a peer event names its peer and keeps its detail
+    fidelity: doc_claimed
+    source: 'NTP 4 documentation decode.html, peer event code 01 mobilize; report_event() prints the peer address, the peer status word, the code with 0x80 set, and the detail'
+    hostname: vEdge-1
+    appname: ntpd
+    severity: info
+    message: '192.0.2.123 8011 81 mobilize assoc 1'
+    expect:
+      parser_status: parsed
+      event_type: ntp_mobilize
+      summary: 'NTP set up a peer association: assoc 1 (status 8011)'
+    signal: null
+
+  - name: the NTP words from another app are not classified
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    severity: info
+    message: '0.0.0.0 c61c 0c clock_step +28.800702 s'
+    expect: {}
+    signal: null
+
+  - name: the kernel's conntrack banner is a lifecycle record with the table size
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: kernel
+    severity: info
+    message: 'nf_conntrack version 0.5.0 (7168 buckets, 28672 max)'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: kernel_conntrack_init
+      summary: 'Kernel connection tracking started: 7168 buckets, 28672 entries max'
+      title: 'Kernel connection tracking started on vEdge-1 (28672 entries max)'
+      event_category: system_lifecycle
+      dedup_key: 'vEdge-1|kernel|kernel_conntrack_init'
+      metrics:
+        conntrack_buckets: {value: 7168.0, basis: observed}
+        conntrack_max: {value: 28672.0, basis: observed}
+    signal: null
+
+  - name: a late kernel timer interrupt is filed with its delay, and emits nothing at warning
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: kernel
+    severity: warning
+    message: 'hrtimer: interrupt took 4421501 ns'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: kernel_hrtimer_slow
+      summary: 'Kernel timer interrupt took 4421501 ns (first overrun since boot)'
+      title: 'Kernel timer interrupt ran late on vEdge-1 (4421501 ns)'
+      correlation_key: 'kernel:vEdge-1:hrtimer'
+      normalized_severity: warning
+      metrics:
+        hrtimer_interrupt_ns: {value: 4421501.0, basis: observed}
+    signal: null
+
+  - name: the timer words from another app are not the benign kernel line
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate and the known_benign guard: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    severity: warning
+    message: 'hrtimer: interrupt took 4421501 ns'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: another kernel warning still reaches the net
+    fidelity: doc_claimed
+    source: 'negative case of the known_benign guard: Linux net/ipv4/tcp.c tcp_out_of_memory() warning text'
+    hostname: vEdge-1
+    appname: kernel
+    severity: warning
+    message: 'TCP: out of memory -- consider tuning tcp_mem'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: an OSPF DD packet ignored in 2-Way names the neighbour, and emits nothing at warning
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: OSPF
+    severity: warning
+    message: 'Packet[DD]: Neighbor 192.0.2.7 state is 2-Way, packet discarded.'
+    expect:
+      parser_id: standard_system.v1
+      parser_status: parsed
+      event_type: ospf_dd_discarded
+      summary: 'OSPF ignored a Database Description packet from neighbour 192.0.2.7 (state 2-Way)'
+      title: 'OSPF ignored a DD packet from neighbour 192.0.2.7 on vEdge-1 (state 2-Way)'
+      correlation_key: 'ospf:vEdge-1:192.0.2.7'
+      normalized_severity: warning
+    signal: null
+
+  - name: an OSPF DD packet discarded in Init is not the benign line and still reaches the net
+    fidelity: doc_claimed
+    source: 'quagga ospf_packet.c ospf_db_desc(): the same "Packet[DD]: Neighbor %s state is %s, packet discarded." for a neighbour in Down, Attempt or Init'
+    hostname: vEdge-1
+    appname: OSPF
+    severity: warning
+    message: 'Packet[DD]: Neighbor 192.0.2.7 state is Init, packet discarded.'
+    expect:
+      parser_status: parsed
+      event_type: ospf_dd_discarded
+      title: 'OSPF ignored a DD packet from neighbour 192.0.2.7 on vEdge-1 (state Init)'
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: the OSPF words from another app are not classified
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    severity: info
+    message: 'Packet[DD]: Neighbor 192.0.2.7 state is 2-Way, packet discarded.'
+    expect: {}
+    signal: null
+
+# Plain-language names for ntpd's event names, read by `{event|ntp_event}`. Presentation
+# only: an event this table does not name keeps ntpd's own word. Source: NTP 4
+# documentation, "Event Messages and Status Words" (decode.html), system and peer codes.
+labels:
+  ntp_event:
+    clock_sync: synchronised the clock
+    no_sys_peer: has no time source selected (no system peer)
+    clock_step: stepped the clock
+    freq_set: set the clock frequency from its drift file
+    freq_not_set: started without a drift file (frequency not set)
+    spike_detect: saw a time spike and is holding the clock
+    restart: restarted
+    panic_stop: stopped because the clock is too far off (panic)
+    sys_peer: selected a time source (system peer)
+    mobilize: set up a peer association
+    demobilize: removed a peer association
+    unreachable: lost a peer (unreachable)
+    reachable: reached a peer
