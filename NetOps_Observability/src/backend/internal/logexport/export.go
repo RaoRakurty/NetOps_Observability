@@ -55,6 +55,13 @@ type Spec struct {
 	ExcludeTenants []string `json:"exclude_tenants,omitempty"`
 	DenyAll        bool     `json:"deny_all,omitempty"`
 
+	// RoutineMgmtExclusion is the routine-management-session class
+	// (internal/logroutine.Clause) the export leaves out, built by the api from
+	// server-side addresses at request time and frozen here so a queued export
+	// leaves out exactly what the page did. Nil: nothing is left out. It is
+	// only ever ANDed out (must_not), so it can narrow the export, never widen it.
+	RoutineMgmtExclusion map[string]any `json:"routine_mgmt_exclusion,omitempty"`
+
 	// Who asked and under which execution id, frozen for the audit record the
 	// async worker writes when the file is done (the worker has no request).
 	RequestedBy string `json:"requested_by,omitempty"`
@@ -124,8 +131,17 @@ func BuildSearchBody(spec Spec, start, end time.Time, size int, searchAfter []an
 	}
 	if spec.DenyAll {
 		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
-	} else if len(spec.ExcludeTenants) > 0 {
-		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": spec.ExcludeTenants}}}
+	} else {
+		var mustNot []any
+		if len(spec.ExcludeTenants) > 0 {
+			mustNot = append(mustNot, map[string]any{"terms": map[string]any{"tenant_id": spec.ExcludeTenants}})
+		}
+		if spec.RoutineMgmtExclusion != nil {
+			mustNot = append(mustNot, spec.RoutineMgmtExclusion)
+		}
+		if len(mustNot) > 0 {
+			boolQuery["must_not"] = mustNot
+		}
 	}
 	body := map[string]any{
 		"size": size,

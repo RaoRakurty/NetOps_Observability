@@ -539,6 +539,9 @@ export type OSHit = {
   // Names the API resolved beside a flow document (tracker 387 PR 13b):
   // in_if_name/_basis, out_if_name/_basis, proto_name, service_name. Not stored.
   _resolved?: Record<string, any> | null;
+  // Named query clauses this record matched. The routine-management-session
+  // rules (routine_mgmt.*) say why a shown record is classed routine.
+  matched_queries?: string[];
 };
 // Sampling disclosure the backend injects on sampled stores (today: the flows
 // signal, whose OpenSearch index holds the router's 1:50 sample — ClickHouse
@@ -552,6 +555,9 @@ export type OSResponse = {
     hits: OSHit[];
   };
   sampling?: LogSampling;
+  // Routine management sessions (owner 2026-11-11): whether the answer shows
+  // them and how many match the query. Absent on stores that hold none (flows).
+  routine_mgmt?: { included: boolean; count: number };
 };
 
 export type LogSearchOpts = {
@@ -562,6 +568,9 @@ export type LogSearchOpts = {
   signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
   // Paging offset ("Load more"); server-clamped to the engine's result window.
   offset?: number;
+  // Show routine management sessions (monitoring polls and SD-WAN controller
+  // sessions). The server leaves them out unless this is true.
+  include_routine_mgmt?: boolean;
 };
 
 // Severity counts for a log search (tracker 387): how many records of each STORED
@@ -574,6 +583,7 @@ export type LogSeverityCounts = {
   unrated: number;
   other: number;
   sampling?: LogSampling;
+  routine_mgmt_included?: boolean;
 };
 
 // Retention floor for the caller's visible log store: exact doc count + oldest
@@ -590,6 +600,7 @@ export type LogExportOpts = {
   to?: string;
   signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
   mode?: "sync" | "async" | "auto";
+  include_routine_mgmt?: boolean;
 };
 
 export type ExportStatus = {
@@ -6092,9 +6103,10 @@ export const api = {
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
   // Severity counts for the Logs summary tiles (tenant-scoped server-side, the
   // search's own surface). Same query/signal/window as the search it summarises.
-  logSeverityCounts: (opts: { query: string; signal?: string; from: string; to: string }) => {
+  logSeverityCounts: (opts: { query: string; signal?: string; from: string; to: string; include_routine_mgmt?: boolean }) => {
     const p = new URLSearchParams({ query: opts.query, from: opts.from, to: opts.to });
     if (opts.signal) p.set("signal", opts.signal);
+    if (opts.include_routine_mgmt) p.set("include_routine_mgmt", "true");
     return request<LogSeverityCounts>(`/api/logs/severity-counts?${p.toString()}`);
   },
   // Retention floor: how far back the caller's visible log store goes + exact
@@ -6929,6 +6941,7 @@ export const api = {
     if (opts.to) params.set("to", opts.to);
     if (opts.signal) params.set("signal", opts.signal);
     if (opts.mode) params.set("mode", opts.mode);
+    if (opts.include_routine_mgmt) params.set("include_routine_mgmt", "true");
     const res = await fetch(`/api/logs/export?${params.toString()}`, {
       headers: authHeaders(),
     });

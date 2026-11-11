@@ -20,6 +20,7 @@ import (
 	"netops/backend/internal/oslog"
 
 	"netops/backend/internal/logexport"
+	"netops/backend/internal/logroutine"
 )
 
 // jobTypeExport is the shared report-substrate job type for log exports.
@@ -123,7 +124,7 @@ func (s *server) auditLogSearch(r *http.Request, claims jwtClaims, req logSearch
 		Detail: map[string]any{
 			"action": "logs.search", "signal": strings.ToLower(strings.TrimSpace(req.Signal)),
 			"query": auditQueryText(req.Query), "from": req.From, "to": req.To, "offset": req.Offset,
-			"matched": counts.Matched, "rows": counts.Rows,
+			"matched": counts.Matched, "rows": counts.Rows, "include_routine_mgmt": req.IncludeRoutineMgmt,
 		},
 	})
 }
@@ -144,6 +145,11 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("format must be csv, json, ndjson, or xlsx"))
 		return
 	}
+	includeRoutine, err := logroutine.ParseParam(q.Get(logroutine.Param))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	tenant, cross := principalTenant(claims)
 	if !s.exportLimiter.AllowN(tenant, envInt("EXPORT_RATE_PER_MIN", 10)) {
 		writeError(w, http.StatusTooManyRequests, errors.New("export rate limit exceeded for this tenant — try again shortly"))
@@ -155,6 +161,13 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec := s.exportSpecFor(claims, q.Get("query"), q.Get("from"), q.Get("to"), q.Get("signal"), format)
+	// "Export all" exports what the page lists: routine management sessions
+	// follow the same parameter and default as the search. The class is built
+	// here, from server-side addresses only, and frozen onto the spec so a
+	// queued export leaves out exactly what was left out at request time.
+	if !includeRoutine && routineApplies(spec.Signal) && !spec.DenyAll {
+		spec.RoutineMgmtExclusion = logroutine.Clause(s.routineSources(r, claims))
+	}
 
 	// App logs are platform-owner-only — the SAME boundary as the interactive search
 	// (logs.go). The export path previously relied solely on osTenantFilter excluding
@@ -264,6 +277,7 @@ func (s *server) auditExport(r *http.Request, claims jwtClaims, tenant string, c
 		Detail: map[string]any{
 			"signal": spec.Signal, "format": spec.Format, "query": auditQueryText(spec.Query),
 			"mode": mode, "matched": count, "execution_id": execID,
+			"include_routine_mgmt": spec.RoutineMgmtExclusion == nil,
 		},
 	})
 	if err != nil {

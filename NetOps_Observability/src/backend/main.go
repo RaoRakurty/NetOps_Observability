@@ -50,6 +50,7 @@ import (
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/ifbridge"
 	"netops/backend/internal/invfacts"
+	"netops/backend/internal/logroutine"
 	// BMP-BEGIN
 	"netops/backend/internal/bmp"
 	// BMP-END
@@ -583,6 +584,7 @@ type server struct {
 	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
 	invFacts        *invfacts.Store                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
 	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
+	routineCtl      *logroutine.ControllerAddrs          // Logs: the caller's SD-WAN controller node addresses (nil when NMS is off)
 	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
 	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
 	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
@@ -1691,6 +1693,9 @@ func newServer() *server {
 		// One router = one entity: controller device keys join inventory ids.
 		srv.nmsResolver = &nms.InventoryResolver{}
 		srv.nms.SetDeviceResolver(srv.nmsResolver)
+		// The Logs page folds the controller's own sessions away (owner
+		// 2026-11-11): its node addresses, tenant-scoped, cached briefly.
+		srv.routineCtl = logroutine.NewControllerAddrs(srv.nms.Store(), logroutine.ControllerTTL, nil)
 		// Controller interface lists feed the interface bridge (tracker 387 PR 13a).
 		srv.nms.SetInterfaceSink(srv.ingestNMSInterfaces)
 	}

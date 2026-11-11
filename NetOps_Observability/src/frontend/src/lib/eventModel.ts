@@ -26,6 +26,7 @@ import {
   FlowView, LogClause, LogEvent, LogField, LogHit, LogSignal, clauseText, known, pick, scalar, toLogEvent,
 } from "./logEvent";
 import { SeverityKey, severityKey, severityLabel } from "../theme/severity";
+import { routineReason } from "./routineMgmt";
 
 // ── the model ────────────────────────────────────────────────────────────────
 
@@ -230,6 +231,8 @@ export interface EventView {
   link: EventLink | null;
   /** The record id the search returned, for de-duplication and deep links. */
   id: string;
+  /** Why the server classed this record as a routine management session; null when it is not one. */
+  routineReason: string | null;
   /** The underlying presenter output (owner, flow sampling, chips, …). */
   ev: LogEvent;
 }
@@ -379,8 +382,10 @@ const SEARCH_SIGNAL: Record<Lane, TimelineQuery["signal"]> = {
  * eventModel.test.ts pins every entry here to deployment/docker/opensearch/index-templates.json.
  */
 export const TIMELINE_SEARCHABLE: Partial<Record<Lane, readonly string[]>> = {
-  trap: ["device_id", "event_type", "trap_oid"],
-  syslog: ["device_id", "event_type"],
+  // transition_id and correlation_key are mapped on both lanes since train #180
+  // (tracker 387); the bootstrap adds them to the current index at deploy.
+  trap: ["device_id", "event_type", "trap_oid", "transition_id", "correlation_key"],
+  syslog: ["device_id", "event_type", "transition_id", "correlation_key"],
 };
 
 /** The search text for a set of clauses: each value quoted, so none can break out. */
@@ -935,6 +940,7 @@ export function toEventView(hit: LogHit): EventView {
     incidentDraft,
     link,
     id,
+    routineReason: routineReason(hit.matched_queries),
     ev,
   };
 }

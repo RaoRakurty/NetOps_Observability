@@ -69,7 +69,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
         // rendered as "no events in this window". Settle instead, and report every
         // failed source explicitly.
         const [sysS, trapS, alertS] = await Promise.allSettled([
-          api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE }),
+          api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE, include_routine_mgmt: true }), // no routine toggle on this page
           api.searchLogs({ query: "*", signal: "snmptrap", from, size: PAGE }),
           api.alerts(),
         ]);
@@ -140,7 +140,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
     try {
       const from = new Date(Date.now() - since * 1000).toISOString();
       const [sys, traps] = await Promise.all([
-        moreSys ? api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE, offset: counts.syslog }).catch(() => null) : Promise.resolve(null),
+        moreSys ? api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE, offset: counts.syslog, include_routine_mgmt: true }).catch(() => null) : Promise.resolve(null),
         moreTrap ? api.searchLogs({ query: "*", signal: "snmptrap", from, size: PAGE, offset: counts.trap }).catch(() => null) : Promise.resolve(null),
       ]);
       const add: Ev[] = [];
