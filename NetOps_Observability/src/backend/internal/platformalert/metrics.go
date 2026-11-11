@@ -32,7 +32,10 @@ func WriteMetrics(w io.Writer, s *Store, r *Router) {
 	g("netops_platform_alert_store_readable",
 		"1 when the platform alert settings were read on the last attempt, 0 when the last read failed (the last good settings stay in force).", b2i(ok))
 	g("netops_platform_alert_store_ever_read",
-		"1 once the platform alert settings have been read since start-up; 0 means NOTHING is in force and platform alerts reach nobody.", b2i(everRead))
+		"1 once platform alert settings are in force since start-up (read from the store, or the on-host last-good copy); 0 means NOTHING is in force and platform alerts reach nobody.", b2i(everRead))
+	g("netops_platform_alert_store_from_cache",
+		"1 when the store has not been read since start-up and the on-host last-good copy is in force (pages still reach the configured channels).", b2i(s.FromCache()))
+	ctr("netops_platform_alert_store_cache_write_failures_total", "Failed writes of the on-host last-good copy of the platform alert settings.", s.cacheFailures.Load())
 	ctr("netops_platform_alert_store_read_failures_total", "Failed reads of the platform alert settings.", s.readFailures.Load())
 	ctr("netops_platform_alert_store_save_failures_total", "Failed saves of the platform alert settings (nothing was changed).", s.saveFailures.Load())
 	g("netops_platform_alert_page_routed", "1 when page-tier platform alerts reach at least one channel (Platform → Platform alerts), 0 when they reach nobody.", b2i(c.PageRouted()))

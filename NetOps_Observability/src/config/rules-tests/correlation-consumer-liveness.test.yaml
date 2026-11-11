@@ -325,6 +325,149 @@ tests:
         exp_alerts: []
 
   # ==========================================================================
+  # 6b) PlatformAlertsReachNobody — condition 4 (the alerting path is broken)
+  #     from the far end: the api receiver is fed, but no channel set up on
+  #     Platform → Platform alerts receives pages (review 2026-11-11).
+  # ==========================================================================
+  # branch 1: no channel receives pages.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: platform
+              tier: page
+              instance: "api:8080"
+            exp_annotations:
+              summary: "PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere"
+              description: "The api's alert receiver is configured and fed, but the last hop to a person is missing: netops_platform_alert_page_routed is 0 (no ntfy or SMS channel is set up to receive pages), or netops_platform_alert_store_ever_read is 0 (the saved settings and their on-host copy could not be read since the api started — check Postgres and the vault), or the api does not export the routing gauge at all. Set up a channel on Platform → Platform alerts and press Send test. This alert may only reach the product channels; the external watchdog reports the same condition over its own ntfy topic."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 6c) branch 2: nothing in force since start-up (store + on-host copy unreadable).
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: platform
+              tier: page
+              instance: "api:8080"
+            exp_annotations:
+              summary: "PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere"
+              description: "The api's alert receiver is configured and fed, but the last hop to a person is missing: netops_platform_alert_page_routed is 0 (no ntfy or SMS channel is set up to receive pages), or netops_platform_alert_store_ever_read is 0 (the saved settings and their on-host copy could not be read since the api started — check Postgres and the vault), or the api does not export the routing gauge at all. Set up a channel on Platform → Platform alerts and press Send test. This alert may only reach the product channels; the external watchdog reports the same condition over its own ntfy topic."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 6d) branch 3: the routing gauge is ABSENT while the same api exports the
+  #     receiver gauge — an api that cannot say where pages go is not fine.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: platform
+              tier: page
+              instance: "api:8080"
+            exp_annotations:
+              summary: "PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere"
+              description: "The api's alert receiver is configured and fed, but the last hop to a person is missing: netops_platform_alert_page_routed is 0 (no ntfy or SMS channel is set up to receive pages), or netops_platform_alert_store_ever_read is 0 (the saved settings and their on-host copy could not be read since the api started — check Postgres and the vault), or the api does not export the routing gauge at all. Set up a channel on Platform → Platform alerts and press Send test. This alert may only reach the product channels; the external watchdog reports the same condition over its own ntfy topic."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 6e) a fresh install, or a store blip at boot: 0 for less than the 15m
+  #     `for:` must NOT page (the admin is given time to configure the route).
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts: []
+
+  # 6f) routed and readable: silence.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts: []
+
+  # 6g) delivery deliberately OFF (enabled == 0): AlertDeliveryBroken's silence
+  #     rule applies here too — a switched-off feature is not broken.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts: []
+
+  # 6h) the api is not scraped at all (no receiver gauge): not this rule's fault
+  #     to report — the scrape and service checks own it.
+  - interval: 1m
+    input_series:
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts: []
+
+  # 6i) a channel is configured again after 10m of nothing: the page clears
+  #     without waiting out another `for:`.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_platform_alert_page_routed{instance="api:8080",job="netops-api"}'
+        values: "0x10 1x30"
+      - series: 'netops_platform_alert_store_ever_read{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PlatformAlertsReachNobody
+        exp_alerts: []
+
+  # ==========================================================================
   # 7) CorrConsumerNotRunning — the engine's SELF-report (tracker 224).
   # ==========================================================================
   - interval: 1m

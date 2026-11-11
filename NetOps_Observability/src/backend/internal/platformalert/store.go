@@ -54,6 +54,29 @@ type StoreDeps struct {
 	Open Xform
 	Log  LogFunc
 	Now  func() time.Time
+
+	// CachePath is the ON-HOST last-good copy of the record, exactly as it is
+	// stored: SEALED (the secrets stay ciphertext under the platform DEK), a
+	// 0600 file written atomically under the data volume. It is rewritten on
+	// every successful read or save whose bytes differ, and it is consulted
+	// ONLY when the store cannot be read and nothing has been read since boot
+	// (review 2026-11-11: an api that boots while Postgres flaps or the record
+	// will not open would otherwise count every page as not_configured while
+	// every layer reads green — the 2026-09-02 shape). When the store reads
+	// fine, the cache is never used; it is overwritten.
+	//
+	// THE ONE REMAINING DEPENDENCY is the vault: opening the cached secrets
+	// needs the platform DEK. A vault/swtpm failure at boot therefore still
+	// leaves the route unconfigured — loudly (store_ever_read 0, the
+	// PlatformAlertsReachNobody page rule) — and the external watchdog
+	// (scripts/stack-watchdog.sh, its own ntfy topic) is the layer that covers
+	// it. With a dormant vault the file holds the secrets in clear, exactly
+	// like the file-backend record itself; hence 0600.
+	//
+	// Empty CachePath disables the cache (tests, embedders).
+	CachePath  string
+	ReadCache  func(path string) ([]byte, error)
+	WriteCache func(path string, data []byte) error
 }
 
 // ErrStoreUnreadable refuses a save that would overwrite a record this process
@@ -82,6 +105,16 @@ type Store struct {
 
 	readFailures atomic.Uint64
 	saveFailures atomic.Uint64
+
+	// fromCache is true while the record in force came from the on-host cache
+	// (the store has not been read since boot). cacheMu guards cachedBytes
+	// (what the cache file holds, so an unchanged record is not rewritten every
+	// minute) and cacheErr (the last cache write failure).
+	fromCache     bool
+	cacheMu       sync.Mutex
+	cachedBytes   []byte
+	cacheErr      error
+	cacheFailures atomic.Uint64
 }
 
 // NewStore builds the store and performs the first read. A failed first read
@@ -102,8 +135,106 @@ func NewStore(d StoreDeps) *Store {
 	}
 	s := &Store{d: d, cfg: DefaultConfig()}
 	s.version.Store(1)
-	_ = s.Refresh() // discard: Refresh logs and records its own failure; the boot path has nothing more to do with it
+	if s.cacheOn() {
+		// What the cache file holds now, so an unchanged record is not
+		// rewritten at every boot. An unreadable cache is simply "unknown": the
+		// next good read rewrites it.
+		if b, err := d.ReadCache(d.CachePath); err == nil {
+			s.cachedBytes = b
+		}
+	}
+	if err := s.Refresh(); err != nil {
+		s.loadCache()
+	}
 	return s
+}
+
+func (s *Store) cacheOn() bool {
+	return s.d.CachePath != "" && s.d.ReadCache != nil && s.d.WriteCache != nil
+}
+
+// loadCache installs the on-host last-good copy when NOTHING has been read
+// since boot. The store's own read error stays recorded (the store is still
+// unreadable and every gauge says so); what changes is that pages reach the
+// channels an administrator last configured instead of nobody.
+func (s *Store) loadCache() {
+	if !s.cacheOn() {
+		return
+	}
+	if _, everRead := s.Health(); everRead {
+		return
+	}
+	b, err := s.d.ReadCache(s.d.CachePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		s.log("error", "the on-host copy of the platform alert settings could not be read either; platform alerts reach NOBODY until the store is readable",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	var stored Config
+	if err := json.Unmarshal(b, &stored); err != nil {
+		s.log("error", "the on-host copy of the platform alert settings is corrupt; platform alerts reach NOBODY until the store is readable",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	open, err := s.openSecrets(stored)
+	if err != nil {
+		// The vault is the one dependency the cache cannot remove.
+		s.log("error", "the on-host copy of the platform alert settings could not be unsealed (vault); platform alerts reach NOBODY until the vault and the store are readable — the external watchdog still pages",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	s.mu.Lock()
+	if s.everRead { // a concurrent good read won the race: never overrule it
+		s.mu.Unlock()
+		return
+	}
+	s.cfg = open.normalize()
+	s.everRead = true
+	s.fromCache = true
+	routed := s.cfg.PageRouted()
+	s.mu.Unlock()
+	s.version.Add(1)
+	s.log("error", "platform alert settings could not be read from the store; using the LAST GOOD copy kept on this host until the store is readable",
+		map[string]any{"page_routed": routed, "cache": s.d.CachePath})
+}
+
+// writeCache mirrors a good sealed record to the on-host copy. Failure is loud
+// (logged on the transition, counted) but never fails the read or the save:
+// the store is the authority, the cache only a boot-time fallback.
+func (s *Store) writeCache(sealed []byte) {
+	if !s.cacheOn() || sealed == nil {
+		return
+	}
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if string(s.cachedBytes) == string(sealed) {
+		return
+	}
+	if err := s.d.WriteCache(s.d.CachePath, sealed); err != nil {
+		s.cacheFailures.Add(1)
+		if s.cacheErr == nil {
+			s.log("warn", "could not keep the on-host copy of the platform alert settings; if the store is unreadable at the next start, platform alerts will reach nobody",
+				map[string]any{"error": err.Error(), "cache": s.d.CachePath})
+		}
+		s.cacheErr = err
+		return
+	}
+	s.cacheErr = nil
+	s.cachedBytes = append([]byte(nil), sealed...)
+}
+
+// defaultSealed is what an absent record mirrors to the cache: the shipped
+// default (no secrets, nothing enabled), so a cache can never resurrect a
+// record that has since been removed from the store.
+func defaultSealed() []byte {
+	b, err := json.Marshal(DefaultConfig())
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func passthrough(_, v string) (string, error) { return v, nil }
@@ -124,11 +255,13 @@ func (s *Store) Refresh() error {
 	case errors.Is(err, fs.ErrNotExist):
 		// Absent is a valid state (nothing configured yet), not a failure.
 		s.adopt(DefaultConfig())
+		s.writeCache(defaultSealed())
 		return nil
 	case err != nil:
 		return s.recordReadErr(fmt.Errorf("read: %w", err))
 	case len(b) == 0:
 		s.adopt(DefaultConfig())
+		s.writeCache(defaultSealed())
 		return nil
 	}
 	var stored Config
@@ -140,6 +273,7 @@ func (s *Store) Refresh() error {
 		return s.recordReadErr(fmt.Errorf("unseal: %w", oerr))
 	}
 	s.adopt(open.normalize())
+	s.writeCache(b)
 	return nil
 }
 
@@ -151,6 +285,7 @@ func (s *Store) adopt(c Config) {
 	s.cfg = c
 	s.everRead = true
 	s.readErr = nil
+	s.fromCache = false
 	s.mu.Unlock()
 	if changed {
 		s.version.Add(1)
@@ -173,7 +308,7 @@ func (s *Store) recordReadErr(err error) error {
 	if first {
 		msg := "platform alert settings could NOT be read; the last good settings stay in force until a read succeeds"
 		if !kept {
-			msg = "platform alert settings could NOT be read since start-up; platform alerts reach NOBODY until a read succeeds or an administrator replaces them"
+			msg = "platform alert settings could NOT be read since start-up; falling back to the on-host copy if one is usable — otherwise platform alerts reach NOBODY until a read succeeds or an administrator replaces them"
 		}
 		s.log("error", msg, map[string]any{"error": err.Error()})
 	}
@@ -221,6 +356,13 @@ func (s *Store) Current() Config {
 
 // Version identifies the record in force; it changes whenever the record does.
 func (s *Store) Version() uint64 { return s.version.Load() }
+
+// FromCache reports whether the record in force came from the on-host cache.
+func (s *Store) FromCache() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.fromCache
+}
 
 // Health reports the store's read state: ok, and whether the record in force
 // was ever read (false = nothing was ever read since boot).
@@ -284,6 +426,7 @@ func (s *Store) save(next Config, replaceUnreadable bool) error {
 		return fmt.Errorf("write: %w", err)
 	}
 	s.adopt(next)
+	s.writeCache(b)
 	return nil
 }
 
@@ -301,7 +444,12 @@ func (s *Store) RefreshLoop(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = s.Refresh() // discard: Refresh logs on the transition and counts every failure
+			// Refresh logs on the transition and counts every failure. While
+			// nothing has been read since boot, keep trying the on-host copy
+			// too (a vault that was locked at boot may have recovered).
+			if err := s.Refresh(); err != nil {
+				s.loadCache()
+			}
 		}
 	}
 }

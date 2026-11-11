@@ -26,6 +26,16 @@ type routerRig struct {
 
 func newRouterRig(t *testing.T, c func(*Config)) *routerRig {
 	t.Helper()
+	return newRouterRigBoot(t, c, nil)
+}
+
+// bootHook shapes the world BEFORE the store is built (the boot read): it may
+// replace the stored record, break the kv, or point the store at a cache file.
+// cfg is the live config the fakes would serve.
+type bootHook func(kv *memKV, d *StoreDeps, cfg Config)
+
+func newRouterRigBoot(t *testing.T, c func(*Config), boot bootHook) *routerRig {
+	t.Helper()
 	ntfy, tw := newFakeProvider(t), newFakeProvider(t)
 	kv := newMemKV()
 	cfg := liveConfig(ntfy, tw)
@@ -33,7 +43,11 @@ func newRouterRig(t *testing.T, c func(*Config)) *routerRig {
 		c(&cfg)
 	}
 	kv.put(t, sealedForKV(t, cfg))
-	store := newTestStore(t, kv, &logSpy{})
+	d := StoreDeps{Key: DefaultKey, Load: kv.Load, Save: kv.Save, Seal: fakeSeal, Open: fakeOpen, Log: (&logSpy{}).log}
+	if boot != nil {
+		boot(kv, &d, cfg)
+	}
+	store := NewStore(d)
 	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 	clock := &now
 	router := NewRouter(RouterDeps{
@@ -136,6 +150,16 @@ func TestSMSBudgetCapsAndReservesForPages(t *testing.T) {
 	}
 	if got := r.router.SMSBudgetRemaining(); got != 0 {
 		t.Fatalf("re-saving must not refill the SMS allowance: remaining %d", got)
+	}
+	// Raising the cap 4 → 8 with 4 already spent this hour leaves 4, not 8:
+	// editing max_per_hour must not refill a spent allowance either.
+	cur.SMS.MaxPerHour = 8
+	r.kv.put(t, sealedForKV(t, cur))
+	if err := r.store.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.router.SMSBudgetRemaining(); got != 4 {
+		t.Fatalf("after raising the cap with 4 spent, remaining = %d, want 4", got)
 	}
 }
 

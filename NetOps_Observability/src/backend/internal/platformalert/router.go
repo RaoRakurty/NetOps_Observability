@@ -117,10 +117,7 @@ func (r *Router) rebuildLocked() {
 		}
 	}
 	if cfg.smsLive() {
-		if r.smsBudget == nil || r.smsCap != cfg.SMS.MaxPerHour {
-			r.smsBudget = newSMSBudget(cfg.SMS.MaxPerHour, r.d.Now)
-			r.smsCap = cfg.SMS.MaxPerHour
-		}
+		r.ensureSMSBudgetLocked(cfg.SMS.MaxPerHour)
 		for _, to := range cfg.SMS.To {
 			t := alertwebhook.HostTarget{
 				Channel: alertwebhook.ChannelSMS,
@@ -146,9 +143,25 @@ func (r *Router) twilio(c SMSChannel, to string) *notify.Twilio {
 	return tw
 }
 
-// newSMSBudget: cap messages an hour, half of them reserved for pages.
-func newSMSBudget(perHour int, now func() time.Time) *notify.PushBudget {
-	return notify.NewPushBudget(notify.DefaultTwilioAPIBase, perHour, perHour/2, now)
+// ensureSMSBudgetLocked makes the SMS bucket exist at the configured cap. ONE
+// bucket for the process's life: a change of the cap RESIZES it and carries the
+// hour's usage over (notify.PushBudget.Resize), so editing max_per_hour — or
+// re-saving the page — can never refill a spent allowance.
+//
+// What a token buys: one message to one number. A page that Twilio answers with
+// a 5xx/429 is retried by the receiver (internal/alertwebhook) up to 5 POSTs in
+// total under the SAME token, so the worst case per page token is 5 billable
+// attempts; Twilio does not bill a request it refused with an error, so in
+// practice a retry costs only when an earlier attempt silently succeeded.
+func (r *Router) ensureSMSBudgetLocked(perHour int) *notify.PushBudget {
+	switch {
+	case r.smsBudget == nil:
+		r.smsBudget = notify.NewPushBudget(notify.DefaultTwilioAPIBase, perHour, perHour/2, r.d.Now)
+	case r.smsCap != perHour:
+		r.smsBudget.Resize(perHour, perHour/2)
+	}
+	r.smsCap = perHour
+	return r.smsBudget
 }
 
 // SMSBudgetRemaining is the SMS allowance left this hour (-1 = SMS not live).
@@ -241,14 +254,9 @@ func (r *Router) Test(channel string) TestResult {
 		}
 		r.mu.Lock()
 		r.rebuildLocked()
-		b := r.smsBudget
-		if b == nil || r.smsCap != cfg.SMS.MaxPerHour {
-			// SMS saved but disabled: the router has no bucket yet. Build one
-			// so the cap holds for tests too.
-			r.smsBudget = newSMSBudget(cfg.SMS.MaxPerHour, r.d.Now)
-			r.smsCap = cfg.SMS.MaxPerHour
-			b = r.smsBudget
-		}
+		// SMS saved but disabled has no bucket from the rebuild: make it, so the
+		// cap holds for tests too (and a test's spend counts once it is enabled).
+		b := r.ensureSMSBudgetLocked(cfg.SMS.MaxPerHour)
 		r.mu.Unlock()
 		var firstErr error
 		for _, to := range cfg.SMS.To {

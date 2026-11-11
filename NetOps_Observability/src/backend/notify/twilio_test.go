@@ -81,6 +81,33 @@ func TestTwilioTextTypedErrorWithoutProviderBody(t *testing.T) {
 	}
 }
 
+// Resize carries the hour's usage over: editing the SMS cap must never refill
+// a spent allowance (that is real money), and shrinking it below what was
+// already spent leaves nothing to spend.
+func TestPushBudgetResizeCarriesOverUsage(t *testing.T) {
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	b := NewPushBudget(DefaultTwilioAPIBase, 10, 5, clock)
+	for i := 0; i < 7; i++ {
+		if !b.Take(true) {
+			t.Fatalf("take %d refused", i)
+		}
+	}
+	b.Resize(20, 10)
+	if got := b.Remaining(); got != 13 {
+		t.Fatalf("after raising the cap 10→20 with 7 spent, remaining = %d, want 13", got)
+	}
+	b.Resize(5, 2)
+	if got := b.Remaining(); got != 0 {
+		t.Fatalf("shrinking the cap below what was spent must leave 0, got %d", got)
+	}
+	if b.Take(true) {
+		t.Fatal("a resized-down bucket with nothing left must refuse even a page")
+	}
+	var nilBudget *PushBudget
+	nilBudget.Resize(10, 5) // nil-safe: a disabled guard stays disabled
+}
+
 func TestTwilioTextRefusesIncompleteConfig(t *testing.T) {
 	if err := NewTwilio("", "", "", "").Text("x"); err == nil {
 		t.Fatal("an incomplete sender must refuse")

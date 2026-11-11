@@ -263,6 +263,15 @@ func liveConfig(ntfy, twilio *fakeProvider) Config {
 	return c
 }
 
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // sealedForKV seals a record the way the store writes it.
 func sealedForKV(t *testing.T, c Config) Config {
 	t.Helper()

@@ -169,6 +169,11 @@ export default function PlatformAlerts() {
           The saved settings could not be re-read just now. The last settings Correlix read are still in use; it retries every minute.
         </div>
       )}
+      {data.store_status === "cached" && (
+        <div className="cc-panel" role="alert" data-testid="store-cached" style={{ padding: "10px 12px", marginBottom: 12, borderColor: "var(--warn)" }}>
+          The saved settings could not be read since Correlix started. The last copy kept on this server is in use; Correlix retries every minute.
+        </div>
+      )}
       {data.ignored_env.length > 0 && (
         <div className="cc-panel" data-testid="ignored-env" style={{ padding: "10px 12px", marginBottom: 12, borderColor: "var(--warn)" }}>
           These settings in the installation file do nothing any more: {data.ignored_env.join(", ")}. Platform alerts are set up only on
@@ -195,6 +200,9 @@ export default function PlatformAlerts() {
               Server
               <input style={input} value={d.ntfy.server} onChange={(e) => set((x) => ((x.ntfy.server = e.target.value), x))} />
             </label>
+            <p className="fact-line" style={{ margin: "-4px 0 10px" }}>
+              A server on your own network must first be allowed by the installation (SSRF_ALLOWED_HOSTS).
+            </p>
             <label style={field}>
               Topic (subscribe to this name in the ntfy app; treat it like a password)
               <input
@@ -292,7 +300,8 @@ export default function PlatformAlerts() {
             </label>
             <p className="fact-line" style={{ margin: "0 0 8px" }}>
               Text messages cost money. Each number is one message. Half of this limit is kept for pages; past it, texts stop
-              until the hour is up, and ntfy still carries the alert if it is on.
+              until the hour is up, and ntfy still carries the alert if it is on. If Twilio fails, a page is tried up to 5 times
+              in all, within one message of the limit.
               {data.sms_budget_remaining >= 0 && ` Left this hour: ${data.sms_budget_remaining}.`}
             </p>
             {tiers("sms")}

@@ -45,7 +45,8 @@ and the platform administrator sees a banner.
   `https://ntfy.sh` service the topic name is the only secret: anyone who learns
   or guesses it can read and publish your alerts. Mint a high-entropy name with
   `openssl rand -hex 16`, or run a self-hosted ntfy server with authentication.
-  The server address must start with `https://`.
+  The server address must start with `https://`, and Correlix refuses a server
+  on a private address unless the installation allows it (`SSRF_ALLOWED_HOSTS`).
 - For text messages: a Twilio Account SID, auth token, a Twilio number to send
   from, and up to five numbers to text, all in international format such as
   `+14155550100`. Text messages cost money; see the limit below.
@@ -108,9 +109,20 @@ warning. A typo never silently turns the digest off.
 ### If the saved settings cannot be read
 
 The api keeps the last settings it read and retries every minute;
-`netops_platform_alert_store_readable` reads 0 and the page says so. If nothing
-could be read since start-up, nothing is in force: re-enter the settings and tick
-**Replace the saved settings** to overwrite the unreadable record.
+`netops_platform_alert_store_readable` reads 0 and the page says so. If the
+settings cannot be read when the api starts, it uses the sealed copy it keeps on
+the server (`data/platform_alert_route.lastgood.json`), so pages still reach your
+channels. Opening that copy still needs the vault. If neither can be read,
+nothing is in force: re-enter the settings and tick **Replace the saved
+settings** to overwrite the unreadable record.
+
+### When platform alerts reach nobody
+
+If no channel receives pages, or nothing could be read, for 15 minutes, the
+`PlatformAlertsReachNobody` page rule fires, and the external watchdog pushes a
+`PLATFORM_ALERTS_UNROUTED` alert over its own ntfy topic after 10 minutes. A fresh
+install that never sets up this page therefore pages through the watchdog. That
+is intended: set up a channel.
 
 ## Result
 
@@ -118,7 +130,7 @@ Platform self-health alerts arrive on the channels you chose, classified by tier
 
 | Tier | What it is | Priority | How it is sent |
 |---|---|---|---|
-| `page` | One of the nine `tier: page` rules. | High | Pushed immediately, and retried. |
+| `page` | One of the eleven `tier: page` rules. | High | Pushed immediately, and retried. |
 | `resolved` | The resolution of any alert. | Low | Pushed immediately when it resolves a page. |
 | warning | Every other firing alert. | Default | Folded into the periodic digest. |
 

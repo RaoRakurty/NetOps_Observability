@@ -145,6 +145,7 @@ func TestProductNtfyRefusesThePlatformAlertTopic(t *testing.T) {
 func TestRetiredPlatformAlertEnvIsReportedNotRead(t *testing.T) {
 	t.Setenv("PLATFORM_ALERTS_NTFY_TOPIC", "env-topic")
 	t.Setenv("WATCHDOG_NTFY_TOPIC", "wd-topic")
+	t.Setenv("DATA_DIR", t.TempDir()) // the on-host last-good copy lands here, never in a real /data
 	ts, s := newTestServerState(t)
 	_ = ts
 	s.pushBudgets = notify.NewPushBudgets(30, 10, nil)

@@ -228,9 +228,20 @@ func TestAPIGateAndAPIKeyPrincipal(t *testing.T) {
 		t.Fatal("a refused caller wrote the record")
 	}
 	*a.allow = true
+	if st, b := a.do(t, http.MethodPut, Path, updateJSON(t, fullUpdate())); st != 200 {
+		t.Fatalf("seed PUT = %d %s", st, b)
+	}
+	_, signedIn := a.do(t, http.MethodGet, Path, "")
+	if !strings.Contains(signedIn, `"topic":"corr-platform-x"`) {
+		t.Fatalf("a signed-in platform admin sees the topic (to subscribe a phone): %s", signedIn)
+	}
 	*a.caller = Caller{Subject: "apikey:ci", APIKey: true}
-	if st, _ := a.do(t, http.MethodGet, Path, ""); st != 200 {
+	st, keyView := a.do(t, http.MethodGet, Path, "")
+	if st != 200 {
 		t.Error("an API key may read")
+	}
+	if strings.Contains(keyView, "corr-platform-x") || !strings.Contains(keyView, `"topic_set":true`) {
+		t.Fatalf("an API key must see topic_set, never the topic itself: %s", keyView)
 	}
 	if st, _ := a.do(t, http.MethodPut, Path, updateJSON(t, fullUpdate())); st != 403 {
 		t.Error("an API key must not change platform alert settings")

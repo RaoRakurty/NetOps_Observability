@@ -86,9 +86,14 @@ func NewAPI(store *Store, router *Router, d Deps) *API {
 // NtfyView / SMSView / View are the GET shape. No secret value appears in any
 // of them — only *_set booleans.
 type NtfyView struct {
-	Enabled  bool   `json:"enabled"`
-	Server   string `json:"server"`
+	Enabled bool   `json:"enabled"`
+	Server  string `json:"server"`
+	// Topic is shown to a signed-in platform administrator (who must subscribe
+	// a phone to it) and MASKED for an API-key principal: the topic is a
+	// credential, and a key is a long-lived bearer secret that can leak into
+	// scripts and CI logs. TopicSet always says whether one is configured.
 	Topic    string `json:"topic"`
+	TopicSet bool   `json:"topic_set"`
 	TokenSet bool   `json:"token_set"`
 	Tiers    Tiers  `json:"tiers"`
 }
@@ -110,7 +115,8 @@ type View struct {
 	PageRouted    bool `json:"page_routed"`
 	WarningRouted bool `json:"warning_routed"`
 	// StoreStatus: "ok" | "stale" (re-read failing; last good settings in
-	// force) | "unreadable" (never read since start-up; nothing in force).
+	// force) | "cached" (never read since start-up; the on-host last-good copy
+	// is in force) | "unreadable" (never read since start-up; nothing in force).
 	StoreStatus string    `json:"store_status"`
 	IgnoredEnv  []string  `json:"ignored_env"`
 	UpdatedBy   string    `json:"updated_by,omitempty"`
@@ -149,12 +155,15 @@ type Update struct {
 	ReplaceUnreadable bool `json:"replace_unreadable"`
 }
 
-// view renders the record in force.
-func (a *API) view() View {
+// view renders the record in force. maskTopic hides the topic (API-key
+// principals).
+func (a *API) view(maskTopic bool) View {
 	c := a.store.Current()
 	ok, everRead := a.store.Health()
 	status := "ok"
 	switch {
+	case !ok && a.store.FromCache():
+		status = "cached"
 	case !ok && everRead:
 		status = "stale"
 	case !ok:
@@ -168,8 +177,12 @@ func (a *API) view() View {
 	if to == nil {
 		to = []string{}
 	}
+	topic := c.Ntfy.Topic
+	if maskTopic {
+		topic = ""
+	}
 	return View{
-		Ntfy: NtfyView{Enabled: c.Ntfy.Enabled, Server: c.Ntfy.Server, Topic: c.Ntfy.Topic,
+		Ntfy: NtfyView{Enabled: c.Ntfy.Enabled, Server: c.Ntfy.Server, Topic: topic, TopicSet: c.Ntfy.Topic != "",
 			TokenSet: c.Ntfy.Token != "", Tiers: c.Ntfy.Tiers},
 		SMS: SMSView{Enabled: c.SMS.Enabled, AccountSID: c.SMS.AccountSID, AuthTokenSet: c.SMS.AuthToken != "",
 			From: c.SMS.From, To: to, Tiers: c.SMS.Tiers, MaxPerHour: c.SMS.MaxPerHour},
@@ -243,7 +256,7 @@ func (a *API) HandleRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		a.d.WriteJSON(w, http.StatusOK, a.view())
+		a.d.WriteJSON(w, http.StatusOK, a.view(caller.APIKey))
 	case http.MethodPut:
 		a.put(w, r, caller)
 	default:
@@ -307,12 +320,12 @@ func (a *API) put(w http.ResponseWriter, r *http.Request, caller Caller) {
 		a.log("warn", "platform alert settings saved with NO channel for pages: page-tier platform alerts now reach nobody",
 			map[string]any{"by": caller.Subject, "where": alertwebhook.GUILocation})
 	}
-	a.d.WriteJSON(w, http.StatusOK, a.view())
+	a.d.WriteJSON(w, http.StatusOK, a.view(caller.APIKey))
 }
 
 // isValidationErr reports one of this package's validation sentences.
 func isValidationErr(err error) bool {
-	for _, v := range []error{ErrNtfyServer, ErrNtfyTopic, ErrNtfyToken, ErrNtfyIncomplete, ErrSMSSID,
+	for _, v := range []error{ErrNtfyServer, ErrNtfyServerPrivate, ErrNtfyTopic, ErrNtfyToken, ErrNtfyIncomplete, ErrSMSSID,
 		ErrSMSAuthToken, ErrSMSNumber, ErrSMSRecipients, ErrSMSIncomplete, ErrSMSCap, ErrNoTierSelected, ErrSMSFromIsTarget} {
 		if errors.Is(err, v) {
 			return true

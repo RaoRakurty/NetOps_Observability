@@ -5559,6 +5559,13 @@ func (s *server) buildPlatformAlertRoute() (*platformalert.Store, *platformalert
 		Seal: func(field, v string) (string, error) { return sealFn(s.vault)("", field, v) },
 		Open: func(field, v string) (string, error) { return openFn(s.vault)("", field, v) },
 		Log:  log,
+		// The sealed last-good copy on the data volume, used only when the
+		// store cannot be read at boot (Postgres flapping, an unreadable
+		// record) — so pages keep reaching the configured channels instead of
+		// nobody. Opening it still needs the vault; see StoreDeps.CachePath.
+		CachePath:  filepath.Join(envOr("DATA_DIR", "/data"), "platform_alert_route.lastgood.json"),
+		ReadCache:  os.ReadFile,
+		WriteCache: func(p string, b []byte) error { return platformdb.WriteFileAtomic(p, b, 0o600) },
 	})
 	router := platformalert.NewRouter(platformalert.RouterDeps{Store: store, Budgets: s.pushBudgets})
 	ignored := platformalert.RetiredEnvSet(os.LookupEnv)

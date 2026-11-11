@@ -172,6 +172,37 @@ func (b *PushBudget) Take(privileged bool) bool {
 	return true
 }
 
+// Resize changes the bucket's capacity and reserve IN PLACE, carrying over what
+// was already spent this hour: the tokens used stay used. Building a fresh,
+// FULL bucket instead would let an edit of the cap refill a spent allowance —
+// for the SMS route that is real money. Nil-safe (a disabled guard stays
+// disabled); capacity <= 0 is refused (the caller validates the range).
+func (b *PushBudget) Resize(capacity, reserve int) {
+	if b == nil || capacity <= 0 {
+		return
+	}
+	if reserve < 0 {
+		reserve = 0
+	}
+	if reserve > capacity-1 {
+		reserve = capacity - 1
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refill(b.now())
+	spent := b.capacity - b.tokens
+	b.capacity = float64(capacity)
+	b.reserve = float64(reserve)
+	b.perNano = float64(capacity) / float64(time.Hour)
+	b.tokens = b.capacity - spent
+	if b.tokens < 0 {
+		b.tokens = 0
+	}
+	if b.tokens > b.capacity {
+		b.tokens = b.capacity
+	}
+}
+
 // Remaining is the gauge value: whole tokens available right now. Nil-safe and
 // side-effect-free apart from the refill, which is what makes the gauge honest
 // between pushes instead of frozen at the last take.

@@ -190,11 +190,11 @@ type staticRouter struct{ t HostTarget }
 
 func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 
-// FOUR PAGE CONDITIONS, TEN RULES — and that is not a contradiction.
+// FOUR PAGE CONDITIONS, ELEVEN RULES — and that is not a contradiction.
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
 // conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
-// TEN, because one condition is implemented by several per-engine/per-lane
+// ELEVEN, because one condition is implemented by several per-engine/per-lane
 // rules whose first response differs — the rules are the same condition seen
 // from a different vantage point, not extra conditions:
 //
@@ -212,14 +212,22 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 //	                                   delivered before went silent past
 //	                                   max(3 x interval, 15m)
 //	(3) storage refusing writes                — 1 rule: ClickHouseWritesRejected
-//	(4) the alerting heartbeat missing         — 1 rule: AlertDeliveryBroken
+//	(4) the alerting path broken               — 2 rules
+//	      AlertDeliveryBroken        the front half: no heartbeat reached the
+//	                                   receiver (vmalert -> notifier -> api)
+//	      PlatformAlertsReachNobody  the last hop: the receiver is fed but no
+//	                                   channel set up on Platform -> Platform
+//	                                   alerts receives pages, or the settings
+//	                                   were never readable since start-up
+//	                                   (review 2026-11-11; same condition, not
+//	                                   a fifth)
 //
 // The page tier lives ENTIRELY in rules-scale-slo.yaml (vmalert-only, so it
 // keeps firing when the api is the thing that is down); rules.yaml carries no
 // `tier: page` rule at all. Both claims are pinned mechanically by
 // TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
 // fails the build rather than rotting the next time a rule is added.
-const pageRuleCount = 10
+const pageRuleCount = 11
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.

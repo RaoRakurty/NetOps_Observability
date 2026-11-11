@@ -38,7 +38,12 @@ type e2e struct {
 
 func newE2E(t *testing.T, mut func(*Config)) *e2e {
 	t.Helper()
-	r := newRouterRig(t, mut)
+	return newE2EBoot(t, mut, nil)
+}
+
+func newE2EBoot(t *testing.T, mut func(*Config), boot bootHook) *e2e {
+	t.Helper()
+	r := newRouterRigBoot(t, mut, boot)
 	m := alertwebhook.NewMetrics()
 	logs := &logSpy{}
 	tok := "hook-" + strings.Repeat("z", 24)

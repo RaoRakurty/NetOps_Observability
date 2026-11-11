@@ -5276,7 +5276,8 @@ export interface PlatformAlertTiers {
 
 /** GET /api/platform/alerting/host-route — secrets appear only as *_set. */
 export interface PlatformAlertRoute {
-  ntfy: { enabled: boolean; server: string; topic: string; token_set: boolean; tiers: PlatformAlertTiers };
+  /** topic is empty for an API-key caller (the topic is a credential); topic_set always says whether one exists. */
+  ntfy: { enabled: boolean; server: string; topic: string; topic_set: boolean; token_set: boolean; tiers: PlatformAlertTiers };
   sms: {
     enabled: boolean;
     account_sid: string;
@@ -5288,8 +5289,8 @@ export interface PlatformAlertRoute {
   };
   page_routed: boolean;
   warning_routed: boolean;
-  /** ok | stale (re-read failing, last good in force) | unreadable (nothing read since start-up). */
-  store_status: "ok" | "stale" | "unreadable";
+  /** ok | stale (re-read failing, last good in force) | cached (never read since start-up; the on-host copy is in force) | unreadable (nothing in force). */
+  store_status: "ok" | "stale" | "cached" | "unreadable";
   ignored_env: string[];
   updated_by?: string;
   updated_at?: string;

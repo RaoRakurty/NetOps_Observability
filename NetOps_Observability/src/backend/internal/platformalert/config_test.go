@@ -132,6 +132,32 @@ func TestValidateAcceptsAStagedDisabledChannel(t *testing.T) {
 	}
 }
 
+// A non-public ntfy server is refused with a sentence that says WHY (instead of
+// a later "unreachable"), and the installation's explicit allowlist lets a
+// self-hosted ntfy on the LAN through. IP literals only: no DNS in this test.
+func TestValidateRefusesANonPublicNtfyServerUnlessAllowed(t *testing.T) {
+	t.Setenv("SSRF_ALLOW_PRIVATE", "false")
+	t.Setenv("SSRF_ALLOWED_HOSTS", "")
+	for _, host := range []string{"https://10.1.2.3", "https://127.0.0.1:8443", "https://169.254.169.254", "https://[::1]"} {
+		c := validNtfyOnly()
+		c.Ntfy.Server = host
+		if err := c.Validate(); !errors.Is(err, ErrNtfyServerPrivate) {
+			t.Errorf("%s: Validate = %v, want ErrNtfyServerPrivate", host, err)
+		}
+	}
+	t.Setenv("SSRF_ALLOWED_HOSTS", "10.1.2.0/24")
+	c := validNtfyOnly()
+	c.Ntfy.Server = "https://10.1.2.3"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("an explicitly allowed LAN ntfy must validate: %v", err)
+	}
+	pub := validNtfyOnly()
+	pub.Ntfy.Server = "https://203.0.113.10" // public-range literal (TEST-NET-3 is not in the block list)
+	if err := pub.Validate(); err != nil && errors.Is(err, ErrNtfyServerPrivate) {
+		t.Fatalf("a public literal must not be refused as private: %v", err)
+	}
+}
+
 func TestRetiredEnvIsReportedNeverRead(t *testing.T) {
 	env := map[string]string{
 		"PLATFORM_ALERTS_NTFY_TOPIC":  "old-topic",

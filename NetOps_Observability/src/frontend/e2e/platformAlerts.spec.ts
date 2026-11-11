@@ -13,7 +13,7 @@ type Srv = { route: Record<string, unknown>; reads: number; puts: unknown[]; tes
 function newServer(): Srv {
   return {
     route: {
-      ntfy: { enabled: false, server: "https://ntfy.sh", topic: "", token_set: false, tiers: { page: true, warning: true } },
+      ntfy: { enabled: false, server: "https://ntfy.sh", topic: "", topic_set: false, token_set: false, tiers: { page: true, warning: true } },
       sms: { enabled: false, account_sid: "", auth_token_set: false, from: "", to: [], tiers: { page: true, warning: false }, max_per_hour: 10 },
       page_routed: false,
       warning_routed: false,
@@ -47,7 +47,7 @@ async function boot(page: Page, platform: boolean, srv: Srv) {
         srv.puts.push(b);
         srv.route = {
           ...srv.route,
-          ntfy: { enabled: b.ntfy.enabled, server: b.ntfy.server, topic: b.ntfy.topic, token_set: b.ntfy.token !== "", tiers: b.ntfy.tiers },
+          ntfy: { enabled: b.ntfy.enabled, server: b.ntfy.server, topic: b.ntfy.topic, topic_set: b.ntfy.topic !== "", token_set: b.ntfy.token !== "", tiers: b.ntfy.tiers },
           page_routed: b.ntfy.enabled,
           warning_routed: b.ntfy.enabled,
           updated_by: "root",

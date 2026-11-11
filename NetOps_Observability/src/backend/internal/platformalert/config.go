@@ -37,6 +37,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"netops/backend/safehttp"
 )
 
 // Shipped defaults.
@@ -176,18 +178,19 @@ var (
 // Validation errors are plain sentences: they are shown to the administrator
 // verbatim, so they say what to fix, not what failed.
 var (
-	ErrNtfyServer      = errors.New("The ntfy server must be an https:// address, for example https://ntfy.sh.")
-	ErrNtfyTopic       = errors.New("The ntfy topic may use only letters, digits, - and _ (at most 64).")
-	ErrNtfyToken       = errors.New("The ntfy access token has characters a token cannot have (spaces or control characters).")
-	ErrNtfyIncomplete  = errors.New("To turn on ntfy, enter a topic.")
-	ErrSMSSID          = errors.New("The Twilio Account SID starts with AC followed by 32 letters and digits.")
-	ErrSMSAuthToken    = errors.New("The Twilio auth token does not look right (16 to 128 characters, no spaces).")
-	ErrSMSNumber       = errors.New("Phone numbers must be in international format, for example +14155550100.")
-	ErrSMSRecipients   = fmt.Errorf("Enter between 1 and %d phone numbers to text, without repeats.", MaxSMSRecipients)
-	ErrSMSIncomplete   = errors.New("To turn on text messages, enter the Account SID, auth token, the number to send from and at least one number to text.")
-	ErrSMSCap          = fmt.Errorf("The text-message limit must be between %d and %d an hour.", MinSMSPerHour, MaxSMSPerHour)
-	ErrNoTierSelected  = errors.New("A channel that is turned on must receive pages, the warning summary, or both.")
-	ErrSMSFromIsTarget = errors.New("The number to send from cannot also be a number to text.")
+	ErrNtfyServer        = errors.New("The ntfy server must be an https:// address, for example https://ntfy.sh.")
+	ErrNtfyServerPrivate = errors.New("The ntfy server is not a public internet address, so Correlix will not connect to it. A server on your own network must first be allowed by the installation (SSRF_ALLOWED_HOSTS).")
+	ErrNtfyTopic         = errors.New("The ntfy topic may use only letters, digits, - and _ (at most 64).")
+	ErrNtfyToken         = errors.New("The ntfy access token has characters a token cannot have (spaces or control characters).")
+	ErrNtfyIncomplete    = errors.New("To turn on ntfy, enter a topic.")
+	ErrSMSSID            = errors.New("The Twilio Account SID starts with AC followed by 32 letters and digits.")
+	ErrSMSAuthToken      = errors.New("The Twilio auth token does not look right (16 to 128 characters, no spaces).")
+	ErrSMSNumber         = errors.New("Phone numbers must be in international format, for example +14155550100.")
+	ErrSMSRecipients     = fmt.Errorf("Enter between 1 and %d phone numbers to text, without repeats.", MaxSMSRecipients)
+	ErrSMSIncomplete     = errors.New("To turn on text messages, enter the Account SID, auth token, the number to send from and at least one number to text.")
+	ErrSMSCap            = fmt.Errorf("The text-message limit must be between %d and %d an hour.", MinSMSPerHour, MaxSMSPerHour)
+	ErrNoTierSelected    = errors.New("A channel that is turned on must receive pages, the warning summary, or both.")
+	ErrSMSFromIsTarget   = errors.New("The number to send from cannot also be a number to text.")
 )
 
 // Validate checks a complete, merged record (secrets included) before it is
@@ -266,6 +269,16 @@ func validServer(raw string) error {
 	}
 	if strings.ContainsAny(raw, " \t\r\n") {
 		return ErrNtfyServer
+	}
+	// The SSRF guard's own save-time pre-check: the dialer would refuse a
+	// private/loopback/metadata address at send time anyway, but then the page
+	// could only say "unreachable". Saying WHY here is the honest answer. It
+	// honours the installation's explicit override (SSRF_ALLOW_PRIVATE /
+	// SSRF_ALLOWED_HOSTS) for a self-hosted ntfy on the LAN, and a resolver
+	// outage is not a rejection (the dialer still guards it). Bounded: the
+	// lookup carries its own 5 s timeout.
+	if err := safehttp.ValidateURL(u.Hostname()); err != nil {
+		return ErrNtfyServerPrivate
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import type { PlatformAlertRoute } from "../../services/api";
 import { draftFrom, isDirty, parseNumbers, routeBanner, toUpdate, validateDraft, receivesLine } from "./platformAlertsModel";
 
 const route = (o: Partial<PlatformAlertRoute> = {}): PlatformAlertRoute => ({
-  ntfy: { enabled: false, server: "https://ntfy.sh", topic: "", token_set: false, tiers: { page: true, warning: true } },
+  ntfy: { enabled: false, server: "https://ntfy.sh", topic: "", topic_set: false, token_set: false, tiers: { page: true, warning: true } },
   sms: { enabled: false, account_sid: "", auth_token_set: false, from: "", to: [], tiers: { page: true, warning: false }, max_per_hour: 10 },
   page_routed: false,
   warning_routed: false,
@@ -110,6 +110,15 @@ describe("Platform alerts page", () => {
     expect((await screen.findByTestId("platform-alerts-banner")).textContent).toMatch(/reach nobody/);
     expect(screen.getByTestId("ignored-env").textContent).toMatch(/PLATFORM_ALERTS_NTFY_TOPIC/);
     expect(screen.getByText(/host watchdog keeps its own settings/)).toBeTruthy();
+  });
+
+  it("says plainly when the on-host copy is in force, and that pages still go out", async () => {
+    apiMock.platformAlertRoute.mockResolvedValue(route({ page_routed: true, store_status: "cached", ntfy: { ...route().ntfy, enabled: true, topic: "corr-a", topic_set: true } }));
+    render(<PlatformAlerts />);
+    expect((await screen.findByTestId("store-cached")).textContent).toMatch(/last copy kept on this server is in use/);
+    expect(screen.queryByTestId("platform-alerts-banner")).toBeNull();
+    expect(screen.getByText(/SSRF_ALLOWED_HOSTS/)).toBeTruthy();
+    expect(screen.getByText(/tried up to 5 times/)).toBeTruthy();
   });
 
   it("never shows a saved secret, and saves without sending one back", async () => {
