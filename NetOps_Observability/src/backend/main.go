@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/ifbridge"
 	"netops/backend/internal/invfacts"
@@ -377,9 +378,10 @@ type server struct {
 	apiKeys                    *apikey.Store
 	refresh                    *session.RefreshStore
 	snmpCreds                  *snmpcred.Store
-	credOverrides              *credOverrideStore // learned SNMP credential bindings (credential sentinel)
-	credSentinel               *credSentinel      // self-healing credential resolution loop
-	sshHosts                   *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
+	credScrub                  *credscrub.Scrubber // the configured SNMP communities, masked by value on every log read path
+	credOverrides              *credOverrideStore  // learned SNMP credential bindings (credential sentinel)
+	credSentinel               *credSentinel       // self-healing credential resolution loop
+	sshHosts                   *sshHostStore       // #20/device-ssh: TOFU host-key store for the SSH gateway
 	snmpProfiles               *snmpProfileStore
 	saved                      saved.Repo
 	audit                      auditRepo
@@ -1185,6 +1187,14 @@ func newServer() *server {
 	if err := discoveryCfg.migrateLegacyCommunity(snmpCreds); err != nil {
 		logError("discovery", "discovery community migration failed — subnet discovery has no credential until it succeeds or an SNMP profile is added", errf(err))
 	}
+	// Every configured community, masked by value on every log read path
+	// (internal/credscrub): ConfD names an SNMP session by its community, in a
+	// slot that holds a person on every other session. Refreshed on every
+	// credential write and every minute (the credscrub-refresh worker).
+	credScrub := credscrub.New(snmpCommunityValues(snmpCreds, discoveryCfg))
+	if err := credScrub.Refresh(context.Background()); err != nil {
+		logError("credscrub", "configured SNMP communities could not be read; log reads mask none until the next refresh", errf(err))
+	}
 	credOverrides, err := newCredOverrideStore(envOr("CRED_OVERRIDES_FILE", "/data/credential_overrides.json"))
 	if err != nil {
 		log.Fatalf("credential overrides store: %v", err)
@@ -1296,6 +1306,7 @@ func newServer() *server {
 		apiKeys:          apiKeys,
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,
+		credScrub:        credScrub,
 		credOverrides:    credOverrides,
 		// MONITORING-BEGIN — the credential sentinel probes devices over SNMP to
 		// learn which profile answers, so it must see only MONITORED devices:
@@ -3084,6 +3095,13 @@ func Run() {
 	// filled it permanently and lockout then failed OPEN for every account not
 	// already tracked. The janitor is what keeps the cap reachable.
 	workers.start("login-throttle-janitor", func() { srv.loginThrottle.RunJanitor(ctx) })
+	// The by-value log scrubber follows credential changes made on another
+	// replica, or by a path that does not call credScrubRefresh.
+	workers.start("credscrub-refresh", func() {
+		srv.credScrub.Run(ctx, time.Minute, func(err error) {
+			logError("credscrub", "configured SNMP communities could not be re-read; the previous set stays in force", errf(err))
+		})
+	})
 	// Multi-instance cache coherence for the cached-by-design stores: refresh
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
@@ -3152,6 +3170,12 @@ func Run() {
 	}
 
 	httpSrv := newAPIServer(addr, handler)
+	// LLM06 last line: every request context carries the configured-community
+	// masker, which ai.ProviderDo applies to each provider payload.
+	if srv.credScrub != nil {
+		egress := ai.WithEgressScrub(context.Background(), srv.credScrub.MaskJSON)
+		httpSrv.BaseContext = func(net.Listener) context.Context { return egress }
+	}
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
 		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
@@ -5739,6 +5763,7 @@ func (s *server) parserCovDeps() parsercov.Deps {
 		WriteError:    writeError,
 		LogWarn:       func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
 		MaxLines:      envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
+		Mask:          s.credScrub.Mask, // nil-safe: a nil scrubber masks nothing
 	}
 }
 
@@ -5926,6 +5951,7 @@ func (s *server) debugDeps() pipedebug.Deps {
 		WriteJSON:    writeJSON,
 		WriteError:   writeError,
 		Now:          func() time.Time { return time.Now().UTC() },
+		MaskValue:    s.credScrub.MaskValue, // nil-safe: a nil scrubber masks nothing
 	}
 }
 

@@ -218,6 +218,39 @@ type Deps struct {
 
 	// Now is the clock seam (nil = wall clock).
 	Now func() time.Time
+
+	// MaskValue masks the configured credential values (internal/credscrub) in
+	// every string of a decoded value. It runs after the redaction pass on what
+	// the store, bus and ClickHouse stages hand back, because the platform's
+	// own SNMP communities appear in device text where no pattern can find them
+	// (ConfD names an SNMP session by its community). Optional: nil masks nothing.
+	MaskValue func(v any) (any, bool)
+}
+
+// maskDetail runs MaskValue over a stage's evidence map.
+func (d Deps) maskDetail(m map[string]any) map[string]any {
+	if d.MaskValue == nil || m == nil {
+		return m
+	}
+	if out, changed := d.MaskValue(m); changed {
+		if mm, ok := out.(map[string]any); ok {
+			return mm
+		}
+	}
+	return m
+}
+
+// maskText runs MaskValue over one string.
+func (d Deps) maskText(s string) string {
+	if d.MaskValue == nil {
+		return s
+	}
+	if out, changed := d.MaskValue(s); changed {
+		if str, ok := out.(string); ok {
+			return str
+		}
+	}
+	return s
 }
 
 func (d Deps) now() time.Time {

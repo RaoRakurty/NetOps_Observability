@@ -26,6 +26,14 @@
 // (ai.RedactSecrets). The store keeps the original (owner D5). Identifiers such as
 // usernames are NOT masked: they stay for security attribution, behind the same
 // RBAC, tenant scope and audit as the line itself (owner D7).
+//
+// A CREDENTIAL BY VALUE. ConfD names a v1/v2c SNMP session by its community, in a
+// slot that holds a real account on every other session, so no pattern can find
+// it (found live 2026-11-11, see internal/credscrub). Every function that serves
+// a document therefore also takes a ValueMasker: the configured communities,
+// masked wherever they occur as a whole token in ANY string of the document, not
+// only the text fields (audit_user, title, summary, the keys, nested values).
+// A nil masker masks no value; the field strip and the text dialect still run.
 package logsecrets
 
 import (
@@ -47,6 +55,57 @@ const redactedText = `"` + TrapCommunityField + `":"[REDACTED]"`
 // including a value cut short by an excerpt limit (no closing quote).
 var quotedCommunityValue = regexp.MustCompile(`"` + TrapCommunityField + `"\s*:\s*"(?:[^"\\]|\\.?)*"?`)
 
+// ValueMasker masks known credential values by value (internal/credscrub). It
+// never reveals which values it holds: MayHold only gates the parse, and
+// MaskValue returns the masked copy.
+type ValueMasker interface {
+	// MayHold reports whether serialized JSON could hold a value (fast path).
+	MayHold(raw []byte) bool
+	// MaskValue masks every string inside a decoded JSON value.
+	MaskValue(v any) (any, bool)
+}
+
+// mayHoldValue is the by-value half of the fast path.
+func mayHoldValue(raw []byte, vm ValueMasker) bool {
+	return vm != nil && vm.MayHold(raw)
+}
+
+// maskRaw masks every string inside one serialized JSON value, numbers kept to
+// the digit. It says whether anything changed.
+func maskRaw(raw json.RawMessage, vm ValueMasker) (json.RawMessage, bool, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false, fmt.Errorf("logsecrets: value is not JSON: %w", err)
+	}
+	masked, changed := vm.MaskValue(v)
+	if !changed {
+		return raw, false, nil
+	}
+	out, err := encode(masked)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+// maskValues runs maskRaw over every value of a decoded object.
+func maskValues(doc map[string]json.RawMessage, vm ValueMasker) (bool, error) {
+	changed := false
+	for key, value := range doc {
+		masked, ch, err := maskRaw(value, vm)
+		if err != nil {
+			return false, err
+		}
+		if ch {
+			doc[key] = masked
+			changed = true
+		}
+	}
+	return changed, nil
+}
+
 // textFields are the document keys that hold a line's text.
 var textFields = [...]string{"message", "message_original", "structured_data", "summary"}
 
@@ -54,7 +113,7 @@ var textFields = [...]string{"message", "message_original", "structured_data", "
 // ai.RedactSecrets can match, so an ordinary document is not parsed and goes through
 // byte for byte. A false positive costs one parse; RE2 keeps the scan linear.
 var mayHoldSecretText = regexp.MustCompile(
-	`(?i)passw|pwd|secret|community|token|api[_-]?key|bearer|basic |digest |eyJ|sk-|xox|gh[pousr]_|private key|://`)
+	`(?i)passw|pwd|secret|community|token|api[_-]?key|bearer|basic |digest |eyJ|sk-|xox|gh[pousr]_|private key|://|via snmp`)
 
 // SourceExcludes is the `_source.excludes` list every document search sends, so
 // the value does not reach this process at all when the store honours it. The
@@ -98,12 +157,14 @@ func scrubTextFields(doc map[string]json.RawMessage) (bool, error) {
 	return changed, nil
 }
 
-// StripSource returns one `_source` document without the field. A document that
-// does not hold it comes back unchanged. A document that may hold the field but
-// cannot be parsed as a JSON object is an error: the caller must refuse it
-// rather than serve it.
-func StripSource(raw json.RawMessage) (json.RawMessage, error) {
-	if !mayHoldField(raw) {
+// StripSource returns one `_source` document without the field, its text fields
+// masked and every value vm holds masked in every string. A document that holds
+// none of these comes back unchanged, byte for byte. A document that may hold
+// one but cannot be parsed as a JSON object is an error: the caller must refuse
+// it rather than serve it.
+func StripSource(raw json.RawMessage, vm ValueMasker) (json.RawMessage, error) {
+	byValue := mayHoldValue(raw, vm)
+	if !byValue && !mayHoldField(raw) {
 		return raw, nil
 	}
 	var doc map[string]json.RawMessage
@@ -117,6 +178,13 @@ func StripSource(raw json.RawMessage) (json.RawMessage, error) {
 	if _, present := doc[TrapCommunityField]; present {
 		delete(doc, TrapCommunityField)
 		changed = true
+	}
+	if byValue {
+		masked, err := maskValues(doc, vm)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || masked
 	}
 	if !changed {
 		return raw, nil
@@ -133,24 +201,45 @@ func StripFields(doc map[string]any) {
 	delete(doc, TrapCommunityField)
 }
 
-// StripSearchResponse removes the field from every hit's `_source` in an
-// OpenSearch _search response. All other bytes of each value are preserved, so
-// numbers keep their full precision. A response that may hold the field but
-// cannot be parsed is an error: the caller must refuse it rather than serve it.
+// StripSearchResponse runs StripSource over every hit's `_source` in an
+// OpenSearch _search response, and masks vm's values in `aggregations` too (a
+// terms bucket key is a field value). All other bytes of each value are
+// preserved, so numbers keep their full precision. A response that may hold
+// something to strip but cannot be parsed is an error: the caller must refuse it
+// rather than serve it.
 //
-// Only `_source` is walked because the callers compose the search body
-// themselves and never request `fields`, `docvalue_fields` or `highlight`.
-func StripSearchResponse(raw []byte) ([]byte, error) {
-	if !mayHoldField(raw) {
+// Only `_source` and `aggregations` are walked because the callers compose the
+// search body themselves and never request `fields`, `docvalue_fields` or
+// `highlight`.
+func StripSearchResponse(raw []byte, vm ValueMasker) ([]byte, error) {
+	byValue := mayHoldValue(raw, vm)
+	if !byValue && !mayHoldField(raw) {
 		return raw, nil
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return nil, fmt.Errorf("logsecrets: search response is not a JSON object: %w", err)
 	}
+	aggsChanged := false
+	if aggs, ok := top["aggregations"]; ok && byValue {
+		masked, ch, err := maskRaw(aggs, vm)
+		if err != nil {
+			return nil, fmt.Errorf("logsecrets: aggregations: %w", err)
+		}
+		if ch {
+			top["aggregations"] = masked
+			aggsChanged = true
+		}
+	}
+	unchangedHits := func() ([]byte, error) {
+		if aggsChanged {
+			return encode(top)
+		}
+		return raw, nil
+	}
 	outerRaw, ok := top["hits"]
 	if !ok {
-		return raw, nil
+		return unchangedHits()
 	}
 	var outer map[string]json.RawMessage
 	if err := json.Unmarshal(outerRaw, &outer); err != nil {
@@ -158,7 +247,7 @@ func StripSearchResponse(raw []byte) ([]byte, error) {
 	}
 	listRaw, ok := outer["hits"]
 	if !ok {
-		return raw, nil
+		return unchangedHits()
 	}
 	var hits []map[string]json.RawMessage
 	if err := json.Unmarshal(listRaw, &hits); err != nil {
@@ -169,7 +258,7 @@ func StripSearchResponse(raw []byte) ([]byte, error) {
 		if !ok {
 			continue
 		}
-		clean, err := StripSource(source)
+		clean, err := StripSource(source, vm)
 		if err != nil {
 			return nil, fmt.Errorf("logsecrets: hit %d: %w", i, err)
 		}

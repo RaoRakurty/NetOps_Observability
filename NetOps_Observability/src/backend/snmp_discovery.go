@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/collectors"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/discoveryscope"
 	"netops/backend/internal/owner"
@@ -190,6 +191,36 @@ func (s *discoveryConfigStore) migrateLegacyCommunity(creds *snmpcred.Store) err
 		"profiles": names, "count": len(names),
 	})
 	return nil
+}
+
+// snmpCommunityValues is the internal/credscrub Source: every v1/v2c community
+// the platform was configured with, from every place one can be configured —
+// every tenant's SNMP profiles (the trap receiver and the poller resolve theirs
+// from the same profiles), the SNMP_COMMUNITY fallback when an operator set it,
+// and a discovery community an older build saved that has not migrated into a
+// profile yet. The protocol default "public" the poller falls back to when
+// SNMP_COMMUNITY is unset is NOT configured by anyone and is not included.
+func snmpCommunityValues(creds *snmpcred.Store, disc *discoveryConfigStore) credscrub.Source {
+	return func(context.Context) ([]string, error) {
+		var out []string
+		if creds != nil {
+			out = append(out, creds.Communities()...)
+		}
+		if v := os.Getenv("SNMP_COMMUNITY"); v != "" {
+			out = append(out, v)
+		}
+		if disc != nil {
+			disc.mu.RLock()
+			pending := disc.legacyCommunity
+			disc.mu.RUnlock()
+			for _, comm := range strings.Split(pending, ",") {
+				if comm = strings.TrimSpace(comm); comm != "" {
+					out = append(out, comm)
+				}
+			}
+		}
+		return out, nil
+	}
 }
 
 // migrateOneCommunity finds (or creates) the platform-owned v2c profile holding

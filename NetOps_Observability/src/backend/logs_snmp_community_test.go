@@ -138,7 +138,7 @@ func TestExportFetchStripsBeforeEveryProjection(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(reply))}, nil
 	}
 	start, end := time.Now().Add(-time.Hour), time.Now()
-	data, err := logexport.FetchBounded(context.Background(), search, logexport.Spec{Signal: "snmptrap", Tenant: "acme"}, start, end, 100, 1<<20)
+	data, err := logexport.FetchBounded(context.Background(), search, logexport.Spec{Signal: "snmptrap", Tenant: "acme"}, start, end, 100, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestExportFetchFailsOnADocumentItCannotCheck(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(reply))}, nil
 	}
 	start, end := time.Now().Add(-time.Hour), time.Now()
-	data, err := logexport.FetchBounded(context.Background(), search, logexport.Spec{Signal: "snmptrap", Tenant: "acme"}, start, end, 100, 1<<20)
+	data, err := logexport.FetchBounded(context.Background(), search, logexport.Spec{Signal: "snmptrap", Tenant: "acme"}, start, end, 100, 1<<20, nil)
 	if err == nil {
 		t.Fatalf("an uncheckable document must fail the export, got %+v", data)
 	}

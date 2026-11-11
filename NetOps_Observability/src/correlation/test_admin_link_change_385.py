@@ -473,10 +473,11 @@ def test_the_parser_is_untouched():
     Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
     behind every older one; the trap link rows this file protects did not move.
     Re-pinned for the tracker 387 process snapshot: the SD-WAN `ps` row only.
-    Re-pinned for the tracker 387 SD-WAN DNS / ConfD SNMP auth grammars: no rule row."""
-    assert parser_rules.PARSER_REV == "2026-11-10-sdwan-dns-snmpauth"
+    Re-pinned for the tracker 387 SD-WAN DNS / ConfD SNMP auth grammars: no rule row.
+    Re-pinned for the ConfD SNMP session grammar that reads no user: no rule row."""
+    assert parser_rules.PARSER_REV == "2026-11-11-confd-snmp-session"
     assert parser_rules.BAKED_RULES_HASH == (
-        "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41")
+        "9f69300ed9d2cb8f1e26f3245d8491190f8d6bca27105f9e379648a0c3a6acba")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

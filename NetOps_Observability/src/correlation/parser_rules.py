@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-10-sdwan-dns-snmpauth'
+PARSER_REV = '2026-11-11-confd-snmp-session'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -390,11 +390,11 @@ SYSLOG_GRAMMARS: tuple[dict[str, Any], ...] = ({'pack': 'cisco_ios',
   'parser_id': 'standard_mgmt_audit.v1',
   'literal': 'audit user: ',
   'apps': ['confd'],
-  'pattern': '^audit user: (?P<user>[^/\\s]{1,64})(?:/(?P<usid>\\d{1,12}))? created new session via (?P<via>snmp)(?: from '
+  'pattern': '^audit user: [^/\\s]{1,64}(?:/(?P<usid>\\d{1,12}))? created new session via (?P<via>snmp)(?: from '
              '(?P<src>[^\\s:]{1,64}|\\[[^\\]\\s]{1,64}\\])(?::(?P<port>\\d{1,5}))?)?',
   'facility': '',
   'event_type': 'audit_session_created_{via}',
-  'summary': 'SNMP session[ by {user}][ from {src}] (poll)',
+  'summary': 'SNMP session[ from {src}] (poll)',
   'sev_digit': '',
   'sev_word': '',
   'sev_map': {},
@@ -3656,6 +3656,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41'
+BAKED_RULES_HASH = '9f69300ed9d2cb8f1e26f3245d8491190f8d6bca27105f9e379648a0c3a6acba'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

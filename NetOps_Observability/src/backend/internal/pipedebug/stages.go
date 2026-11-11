@@ -208,7 +208,7 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 	e.Verdict = VerdictSeen
 	e.FirstSeen = timeField(hit.Source, "timestamp")
 	e.EvidenceRef = fmt.Sprintf("%s#%s", hit.Index, hit.ID)
-	e.Detail = RedactFields(hit.Source)
+	e.Detail = a.deps.maskDetail(RedactFields(hit.Source))
 	e.Detail["_index"] = hit.Index
 	e.Detail["_id"] = hit.ID
 	e.Detail["_total"] = parsed.Hits.Total.Value
@@ -265,7 +265,7 @@ func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 	e.Detail = map[string]any{
 		"topic": rec.Topic, "partition": rec.Partition, "offset": rec.Offset,
 		"scanned": res.Scanned, "elapsed_s": res.ElapsedS, "truncated": res.Truncated,
-		"excerpt": RedactString(rec.Excerpt),
+		"excerpt": a.deps.maskText(RedactString(rec.Excerpt)),
 	}
 	if kind == KindFlow {
 		e.Detail["fingerprint"] = NewFlowFingerprint(marker).Fields()
@@ -413,7 +413,7 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 	e.Detail = map[string]any{
 		"rows": len(rows), "table": table,
 		"fingerprint": NewFlowFingerprint(marker).Fields(),
-		"row":         RedactFields(rows[0]),
+		"row":         a.deps.maskDetail(RedactFields(rows[0])),
 	}
 	return e
 }
@@ -481,7 +481,11 @@ func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, mark
 		e.FirstSeen = timeField(rows[0], "created_at")
 	}
 	e.Detail = detail
-	e.Detail["rows"] = RedactSlice(rows)
+	red := RedactSlice(rows)
+	for i, row := range red {
+		red[i] = a.deps.maskDetail(row)
+	}
+	e.Detail["rows"] = red
 	return e
 }
 

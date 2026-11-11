@@ -322,6 +322,17 @@ func (a aiTraceToStream) Trace(e ai.TraceEvent) {
 	a.st.Emit(irisstream.Event{Type: string(e.Type), Tool: e.Tool, Outcome: e.Outcome})
 }
 
+// irisRedactor is the orchestrator's outbound DLP: the package dialect
+// (ai.Redact) and then the configured SNMP communities by value
+// (internal/credscrub), which no pattern can find in a ConfD session line.
+func (s *server) irisRedactor() func(string) string {
+	cs := s.credScrub
+	if cs == nil {
+		return ai.Redact
+	}
+	return func(text string) string { return cs.Mask(ai.Redact(text)) }
+}
+
 // newOrchestrator builds the grounded engine for one request — shared by
 // /api/ai/ask and the copilot provider-down fallback (the engine answers when
 // no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
@@ -345,7 +356,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		LLM:      aiLLM{srv: s, claims: claims},
 		Flags:    envFlagLookup,
 		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		Redactor: ai.Redact,                                            // outbound DLP: secrets + direct identifiers (LLM06)
+		Redactor: s.irisRedactor(),                                     // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
 		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
 		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
 		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering

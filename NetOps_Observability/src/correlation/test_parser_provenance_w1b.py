@@ -638,7 +638,12 @@ RULES_HASH_PROCESS_SNAPSHOT = "d2fedca84b9be1446e959be28105f0830579431c824b2be56
 #: grammars, no rule row. The vBond `DNS cache expired` and `FQDN ... resolved to` lines
 #: share the lookup's correlation key; the ConfD refusal reads no community.
 RULES_HASH_SDWAN_DNS_SNMP_REFUSAL = "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41"
-RULES_HASH_A3 = RULES_HASH_SDWAN_DNS_SNMP_REFUSAL
+#:
+#: ConfD SNMP session (2026-11-11): the `created new session via snmp` grammar matches
+#: the user slot without capturing it (ConfD names a v1/v2c session by its community).
+#: One grammar, no rule row.
+RULES_HASH_CONFD_SNMP_SESSION = "9f69300ed9d2cb8f1e26f3245d8491190f8d6bca27105f9e379648a0c3a6acba"
+RULES_HASH_A3 = RULES_HASH_CONFD_SNMP_SESSION
 
 
 def _guard_patterns(node) -> list[str]:

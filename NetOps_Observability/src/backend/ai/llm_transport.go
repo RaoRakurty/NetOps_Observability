@@ -318,6 +318,30 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// egressScrubKey carries the by-value masker ProviderDo applies last.
+type egressScrubKey struct{}
+
+// WithEgressScrub returns ctx carrying scrub, which ProviderDo applies to every
+// provider payload sent under it, after RedactSecrets. scrub takes and returns
+// the serialized JSON body and must keep it well-formed (credscrub.MaskJSON
+// does). The api attaches it to every request context (http.Server
+// BaseContext), so a value no pattern can find never leaves for a provider even
+// from an assembler that forgot to mask it. A nil scrub returns ctx unchanged.
+func WithEgressScrub(ctx context.Context, scrub func([]byte) []byte) context.Context {
+	if scrub == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, egressScrubKey{}, scrub)
+}
+
+func egressScrubFrom(ctx context.Context) func([]byte) []byte {
+	if ctx == nil {
+		return nil
+	}
+	scrub, _ := ctx.Value(egressScrubKey{}).(func([]byte) []byte)
+	return scrub
+}
+
 // ProviderDo performs one provider HTTP call — retried on a transient failure
 // — and returns the 2xx body. On a non-2xx it logs the provider's error body
 // server-side (SR-022 — never echoed to the client) and returns an error so the
@@ -334,6 +358,12 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 	// Mask contains no quoting/escaping characters and the value patterns
 	// stop at structural characters, so the JSON payload stays well-formed.
 	body = []byte(RedactSecrets(string(body)))
+	// Values no pattern can find (the configured SNMP communities, which ConfD
+	// prints as a session's user): masked by value when the request context
+	// carries the platform's scrubber (WithEgressScrub).
+	if scrub := egressScrubFrom(ctx); scrub != nil {
+		body = scrub(body)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
 		rb, err := providerDoOnce(ctx, urlStr, headers, body, provider)

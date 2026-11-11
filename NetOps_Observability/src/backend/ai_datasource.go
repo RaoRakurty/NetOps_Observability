@@ -13,6 +13,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/irisreplay"
 )
 
@@ -493,7 +494,50 @@ func (d aiDataSource) ListProblemsInWindow(ctx context.Context, _ ai.Principal, 
 // netops.flows / netops.findings tenant_iso row policy via d.scope (a non-cross
 // caller sees only its own + untagged rows). Unknown query → ErrNotImplemented;
 // no data → empty result (honest, not an error).
+//
+// Every result leaves through the configured-community mask (internal/credscrub):
+// a tool result is both what Iris shows and what the agent loop sends to an
+// external provider (§15 LLM06), and search_logs carries device text in which
+// ConfD names an SNMP session by its community.
 func (d aiDataSource) ModuleQuery(ctx context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
+	tr, err := d.moduleQuery(ctx, p, query, args)
+	if err != nil {
+		return tr, err
+	}
+	var cs *credscrub.Scrubber
+	if d.srv != nil {
+		cs = d.srv.credScrub
+	}
+	return maskToolResult(cs, tr), nil
+}
+
+// maskToolResult masks the configured communities in every text a tool result
+// carries (item text, links, notes). A nil scrubber masks nothing.
+func maskToolResult(cs *credscrub.Scrubber, tr ai.ToolResult) ai.ToolResult {
+	if cs == nil {
+		return tr
+	}
+	if len(tr.Items) > 0 {
+		items := make([]ai.EvidenceItem, len(tr.Items))
+		for i, it := range tr.Items {
+			it.Text = cs.Mask(it.Text)
+			it.Href = cs.Mask(it.Href)
+			it.CitationID = cs.Mask(it.CitationID)
+			items[i] = it
+		}
+		tr.Items = items
+	}
+	if len(tr.Notes) > 0 {
+		notes := make([]string, len(tr.Notes))
+		for i, n := range tr.Notes {
+			notes[i] = cs.Mask(n)
+		}
+		tr.Notes = notes
+	}
+	return tr
+}
+
+func (d aiDataSource) moduleQuery(ctx context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
 	d = d.with(ctx)
 	switch query {
 	case "top_talkers":

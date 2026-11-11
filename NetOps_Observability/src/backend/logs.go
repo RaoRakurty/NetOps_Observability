@@ -5,6 +5,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -229,6 +230,29 @@ func logsForbiddenErr(signal string) error {
 	return errors.New("app logs are restricted to the platform owner")
 }
 
+// logValueMasker is the by-value credential mask every log read path hands to
+// internal/logsecrets (the configured SNMP communities, internal/credscrub). A
+// server without one (a test, or a build that never wired the store) masks no
+// value: an untyped nil, never a typed-nil interface.
+func (s *server) logValueMasker() logsecrets.ValueMasker {
+	if s == nil || s.credScrub == nil {
+		return nil
+	}
+	return s.credScrub
+}
+
+// credScrubRefresh re-reads the configured communities after a credential
+// write, so a new community is masked from the next read on rather than after
+// the next periodic refresh. A failure keeps the previous set and is logged.
+func (s *server) credScrubRefresh(ctx context.Context) {
+	if s == nil || s.credScrub == nil {
+		return
+	}
+	if err := s.credScrub.Refresh(ctx); err != nil {
+		logError("credscrub", "configured SNMP communities could not be re-read after a credential change; the previous set stays in force", errf(err))
+	}
+}
+
 // logsSearchResponseCap bounds how much of one search answer is held in memory
 // for the credential strip (§9). A page is at most 5000 documents.
 const logsSearchResponseCap = 256 << 20
@@ -407,7 +431,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, errors.New("log search response is too large: narrow the query, time range or page size"))
 		return
 	}
-	raw, err = logsecrets.StripSearchResponse(raw)
+	raw, err = logsecrets.StripSearchResponse(raw, s.logValueMasker())
 	if err != nil {
 		logError("logs", "search response refused by the credential strip", map[string]any{"err": err.Error()})
 		writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be checked"))

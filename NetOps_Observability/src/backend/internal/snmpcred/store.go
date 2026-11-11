@@ -348,6 +348,25 @@ func (s *Store) ResolveAll() []Credential {
 	return out
 }
 
+// Communities returns every stored community, across ALL tenants (a v3
+// profile keeps one only if it was edited from v2c; it is still a secret, so it
+// is included). It feeds internal/credscrub, which masks these values wherever a
+// log line repeats one: the union is safe there because masking only removes
+// text from a record the caller could already read. It is never for display, an
+// API answer or a log line.
+func (s *Store) Communities() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.creds))
+	for _, c := range s.creds {
+		if c.Community != "" {
+			out = append(out, c.Community)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Upsert creates or replaces a credential. On update, empty secret fields keep
 // the existing stored secret (so the UI need not re-send them).
 func (s *Store) Upsert(c Credential) (Public, error) {

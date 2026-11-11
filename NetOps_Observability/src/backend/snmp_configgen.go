@@ -120,6 +120,7 @@ func (s *server) handleGenerateSNMPConfig(w http.ResponseWriter, r *http.Request
 			return
 		}
 		res.ProfileID = cred.ID
+		s.credScrubRefresh(r.Context())
 	}
 	// Audit WITHOUT the secrets (LLM06/secret discipline).
 	logInfo("onboard", "snmp config generated", map[string]any{

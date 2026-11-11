@@ -113,6 +113,10 @@ type Deps struct {
 	// MaxLines caps one mining run's scan (PARSERCOV_MAX_LINES). <= 0 takes
 	// DefaultMaxLines.
 	MaxLines int
+	// Mask masks the configured credential values in a line's text before it is
+	// mined (internal/credscrub), so no sample, template or template id carries
+	// one. Optional: nil masks nothing.
+	Mask func(string) string
 }
 
 // API is the handler set.
@@ -495,7 +499,13 @@ func (a *API) mine(ctx context.Context, index string, clause map[string]any, day
 					map[string]any{"error": err.Error()})
 				continue
 			}
-			miner.Add(doc.toLine())
+			line := doc.toLine()
+			if a.d.Mask != nil {
+				// Before the miner: the sample, the template AND the template id
+				// (a hash of the template) all derive from the masked text.
+				line.Message = a.d.Mask(line.Message)
+			}
+			miner.Add(line)
 		}
 		after = hits[len(hits)-1].Sort
 		if len(hits) < size || len(after) == 0 {

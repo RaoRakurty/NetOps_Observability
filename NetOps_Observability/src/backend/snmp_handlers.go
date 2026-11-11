@@ -73,6 +73,7 @@ func (s *server) handleSNMPCreds(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.credScrubRefresh(r.Context())
 		writeJSON(w, http.StatusCreated, saved)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -114,6 +115,7 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.credScrubRefresh(r.Context())
 		writeJSON(w, http.StatusOK, saved)
 	case http.MethodDelete:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
@@ -130,6 +132,7 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.credScrubRefresh(r.Context()) // the deleted value stays masked (credscrub: Rotation)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "PUT, DELETE")

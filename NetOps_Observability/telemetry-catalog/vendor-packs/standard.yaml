@@ -74,18 +74,26 @@ grammars:
   # management_audit: the one refusal classified here (an SNMP request with a bad
   # community) has its own category, security_audit, so it never groups with the routine
   # records.
+  # An SNMP session NAMES NO USER (found live 2026-11-11). A v1/v2c request carries no
+  # user, so ConfD names the session by the COMMUNITY it carried: the "user" here is a
+  # credential (owner D1). The slot is matched but not captured, so no title, summary,
+  # typed field, dedup_key or correlation_key can carry it, and audit_user stays unset.
+  # For SNMPv3 the slot is a USM user name, which is not a secret, but the line cannot
+  # tell v2c from v3, so it is never read. The session's group and close lines that
+  # follow look exactly like a person's (the rows below keep their user, D7); there the
+  # read path masks the platform's configured communities by value (internal/credscrub)
+  # and ai.RedactSecrets masks this line's shape.
   - id: confd_session_created
     parser_id: standard_mgmt_audit.v1
     literal: 'audit user: '
     apps: [confd]
-    pattern: '^audit user: (?P<user>[^/\s]{1,64})(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?'
+    pattern: '^audit user: [^/\s]{1,64}(?:/(?P<usid>\d{1,12}))? created new session via (?P<via>snmp)(?: from (?P<src>[^\s:]{1,64}|\[[^\]\s]{1,64}\])(?::(?P<port>\d{1,5}))?)?'
     event_type: 'audit_session_created_{via}'
-    summary: 'SNMP session[ by {user}][ from {src}] (poll)'
+    summary: 'SNMP session[ from {src}] (poll)'
     category: management_audit
     fields:
-      title: 'SNMP session on {host}[ by {user}][ from {src}] (poll)'
+      title: 'SNMP session on {host}[ from {src}] (poll)'
       correlation_key: 'audit:{device}:{via}[:{usid}]'
-      audit_user: '{user}'
       audit_action: 'session_created'
       audit_source: '{src}[:{port}]'
       audit_via: '{via}'
@@ -359,32 +367,33 @@ fixtures:
       message: 'a genuine message that begins this way'
     signal: null
 
-  - name: an SNMP poll session opening, with its key
+  # The user slot of an SNMP session is the community the request carried (fabricated
+  # here), so the parse reads none of it: no title, summary, typed field or key holds it.
+  - name: an SNMP poll session opening, with its key and no user
     fidelity: lab_validated
     hostname: vEdge-1
     appname: confd
-    message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+    message: 'audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp'
     expect:
-      title: 'SNMP session on vEdge-1 by svc-user from 192.0.2.1 (poll)'
+      title: 'SNMP session on vEdge-1 from 192.0.2.1 (poll)'
       correlation_key: 'audit:vEdge-1:snmp:777134'
-      audit_user: svc-user
       audit_action: session_created
       audit_source: '192.0.2.1:59169'
       audit_via: snmp
       session_id: '777134'
       enrichment:
-        fields_observed: [event_type, summary, audit_user, audit_source, audit_via, session_id]
+        fields_observed: [event_type, summary, audit_source, audit_via, session_id]
         fields_derived: [normalized_severity, title, correlation_key, audit_action, dedup_key]
         fields_guidance: []
         unknown: []
-      summary: 'SNMP session by svc-user from 192.0.2.1 (poll)'
+      summary: 'SNMP session from 192.0.2.1 (poll)'
       parser_id: standard_mgmt_audit.v1
       parser_status: parsed
       event_type: audit_session_created_snmp
       event_category: management_audit
       dedup_key: 'vEdge-1|confd|audit_session_created_snmp'
       normalized_severity: notice
-      message: 'audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+      message: 'audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp'
     signal: null
 
   - name: a NETCONF session opening keeps its own key

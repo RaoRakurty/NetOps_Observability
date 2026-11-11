@@ -178,3 +178,33 @@ func TestSNMPCredRejectsUnimplementedPrivProtocols(t *testing.T) {
 		}
 	}
 }
+
+// Communities feeds the by-value log scrubber: every tenant's community, no v3
+// key, nothing else.
+func TestCommunitiesListsEveryTenantsCommunityAndNoUSMKey(t *testing.T) {
+	cs, err := NewStore(filepath.Join(t.TempDir(), "snmp.json"), nil, fileKV{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := "fixture-a-"+"qqqq", "fixture-b-"+"zzzz"
+	for _, c := range []Credential{
+		{Name: "acme", TenantID: "acme", Version: "v2c", Community: a},
+		{Name: "globex", TenantID: "globex", Version: "v1", Community: b},
+		{Name: "usm", TenantID: "acme", Version: "v3", SecurityName: "noc", SecurityLevel: "authNoPriv",
+			AuthProtocol: "SHA", AuthKey: "fixture-auth-" + "kkkk"},
+	} {
+		if _, err := cs.Upsert(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := cs.Communities()
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("Communities = %d values, want the two communities in order", len(got))
+	}
+	if err := cs.Delete("acme"); err != nil {
+		t.Fatal(err)
+	}
+	if got := cs.Communities(); len(got) != 1 || got[0] != b {
+		t.Fatalf("a deleted profile's community is still listed (%d values)", len(got))
+	}
+}

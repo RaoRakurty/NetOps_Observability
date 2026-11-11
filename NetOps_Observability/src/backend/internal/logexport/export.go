@@ -187,7 +187,9 @@ type Data struct {
 // SearchFn is the OpenSearch transport seam (main's env-configured client).
 type SearchFn func(method, path string, body any) (*http.Response, error)
 
-func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end time.Time, maxRows, maxBytes int) (Data, error) {
+// FetchBounded's vm masks the configured credential values (internal/credscrub)
+// in every document before it is projected or kept; nil masks no value.
+func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end time.Time, maxRows, maxBytes int, vm logsecrets.ValueMasker) (Data, error) {
 	const batch = 1000
 	index := oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
 	var data Data
@@ -221,7 +223,7 @@ func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end ti
 			// Before any projection: csv/xlsx fall back to the raw document when
 			// it has no message, and json/ndjson write it verbatim. An export
 			// fails rather than ship a document the strip could not check.
-			source, err := logsecrets.StripSource(h.Source)
+			source, err := logsecrets.StripSource(h.Source, vm)
 			if err != nil {
 				return data, fmt.Errorf("log export: %w", err)
 			}

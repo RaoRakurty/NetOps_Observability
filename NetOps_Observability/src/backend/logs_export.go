@@ -230,7 +230,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync: bounded fetch → encode → stream.
-	data, err := logexport.FetchBounded(r.Context(), openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(r.Context(), openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024), s.logValueMasker())
 	if err != nil {
 		if errors.Is(err, logexport.ErrTooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, err)
@@ -716,7 +716,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	start, end := exportTimeRange(spec.From, spec.To)
 
 	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseExporting, time.Now().UTC(), spec.Signal)
-	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024), p.srv.logValueMasker())
 	if err != nil {
 		// Size-cap breaches are deterministic → dead-letter, don't retry.
 		dead := errors.Is(err, logexport.ErrTooLarge) || p.dead(job)
