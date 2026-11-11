@@ -116,6 +116,7 @@ import (
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/owner"
+	"netops/backend/internal/platformalert"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -688,6 +689,13 @@ type server struct {
 	// receiver was never wired" must be distinguishable.
 	vmalertWebhook        http.HandlerFunc
 	vmalertWebhookMetrics *alertwebhook.Metrics
+	// platformAlerts is the platform self-health route's configuration
+	// (internal/platformalert, owner decision 2026-11-11: GUI, not env) and
+	// platformAlertRouter resolves it per push for the receiver above.
+	// platformAlertIgnoredEnv lists retired env names found set at boot.
+	platformAlerts          *platformalert.Store
+	platformAlertRouter     *platformalert.Router
+	platformAlertIgnoredEnv []string
 	// VMALERT-WEBHOOK-END
 	// igpAPI serves the read-only OSPF/IS-IS monitoring subtree
 	// /api/protocols/{ospf|isis}/{adjacencies,summary,health} (internal/igpmon).
@@ -1838,6 +1846,11 @@ func newServer() *server {
 			alertwebhook.DefaultPageReserve, alertwebhook.EnvPushBudgetPageReserve, alertWebhookLog),
 		nil)
 	srv.notifier.SetPushBudgets(srv.pushBudgets)
+	// The platform self-health route's settings (Platform → Platform alerts).
+	// Built BEFORE the notify config store so the product ntfy channel's
+	// "never the platform route's topic" refusal can consult it, and after
+	// the vault so its secrets open under the platform DEK.
+	srv.platformAlerts, srv.platformAlertRouter, srv.platformAlertIgnoredEnv = srv.buildPlatformAlertRoute()
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
 	// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path. Must come after the
 	// notifier is on srv (it is the fan-out target).
@@ -1853,16 +1866,15 @@ func newServer() *server {
 			"endpoint": alertwebhook.AlertsPath,
 		})
 	} else {
-		hostRoute, hostServer := platformAlertsHostRoute()
 		h, err := alertwebhook.Handler(alertwebhook.Deps{
 			Dispatcher: srv.notifier,
-			HostRoute:  hostRoute,
-			// The SHARED bucket, keyed by the server this route actually talks
-			// to. Without it this route's page reserve could not see the
-			// product channel's traffic against the same ntfy server — the
-			// 2026-09-03 defect.
+			// The destinations an administrator set on Platform → Platform
+			// alerts, resolved per push. Each target carries its own bucket:
+			// the ntfy one is the SHARED per-server bucket (the 2026-09-03
+			// defect: the page reserve must see the product channel's traffic
+			// against the same server), the SMS one is the route's SMS cap.
+			HostRouter: srv.platformAlertRouter,
 			Budgets:    srv.pushBudgets,
-			HostServer: hostServer,
 			Token:      token,
 			Cooldown:   alertwebhook.ParseCooldown(os.Getenv(alertwebhook.EnvCooldown), alertWebhookLog),
 			// Noise + rate-limit control (2026-09-03): the warning tier is
@@ -2750,6 +2762,10 @@ func Run() {
 	// A failed boot load of the customer discovery scans is retried until it
 	// succeeds (the last good set otherwise stays in force).
 	workers.start("discovery-scope-reload", func() { srv.discoveryScopes.RetryLoop(ctx, time.Minute) })
+	// The platform alert route's settings are re-read every minute: a change
+	// saved on another api replica arrives, and a failed read recovers without
+	// a restart (the last good settings stay in force meanwhile).
+	workers.start("platform-alert-route-refresh", func() { srv.platformAlerts.RefreshLoop(ctx, time.Minute) })
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	// Credential sentinel — self-healing SNMP credential resolution. Runs with
@@ -3366,6 +3382,15 @@ func (s *server) routes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("/api/platform/restart", s.elevatedOnly(func(w http.ResponseWriter, r *http.Request) {
 		s.featuresAPI().HandleRestart(w, r)
+	}))
+	// Platform alerts (owner 2026-11-11): where the stack's OWN alerts go —
+	// ntfy and/or Twilio SMS, by tier. Platform-global, requirePlatformAdmin;
+	// changes and test sends step up like the Features page.
+	mux.HandleFunc("/api/platform/alerting/host-route", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.platformAlertAPI().HandleRoute(w, r)
+	}))
+	mux.HandleFunc("/api/platform/alerting/host-route/test", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.platformAlertAPI().HandleTest(w, r)
 	}))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
@@ -4982,6 +5007,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// netops_alert_webhook_enabled distinguishes "nothing fired" from "the
 	// delivery path was never wired".
 	s.vmalertWebhookMetrics.Write(w) // nil-safe
+	// The route CONFIGURATION's health: store readable, pages routed, SMS cap.
+	platformalert.WriteMetrics(w, s.platformAlerts, s.platformAlertRouter) // nil-safe
 	// VMALERT-WEBHOOK-END
 	// DEBUG-ROUTES-BEGIN — ALWAYS written, with zeros when nothing is raised.
 	// scripts/stack-watchdog.sh's DEBUG_LEVEL_STUCK class is the only layer that
@@ -5512,51 +5539,77 @@ func alertWebhookLog(level, msg string, fields map[string]any) {
 	applog.Log(level, "alertwebhook", msg, fields)
 }
 
-// platformAlertsHostRoute builds the HOST-MONITORING push destination for
-// PLATFORM self-health alerts (owner decision, 2026-09-03: "Correlix alerts
-// should be alerted to the host monitoring").
+// buildPlatformAlertRoute wires the PLATFORM self-health route's settings
+// (owner decision 2026-11-11, binding: "configured from the GUI and not via
+// env. Block that option."). The record lives in the platform kv (app_kv on
+// Postgres, a 0600 file otherwise) with its secrets sealed under the platform
+// DEK; the router resolves it per push for the vmalert receiver.
 //
-// Env is read HERE, in the wiring layer, and the built sender is injected — the
-// package stays env-free (the seclane/configstore precedent). The topic
-// defaults to the external watchdog's own topic, which is already passed into
-// this container so notify_config.go can REFUSE it for PRODUCT alerting: the
-// platform's self-health alerts and the watchdog's death notice belong on the
-// same phone channel, while a tenant-facing channel still may not point at it.
-//
-// Returns a nil interface (never a typed nil) when no topic is configured, so
-// the receiver counts the misconfiguration instead of dereferencing it.
-// It returns the sender and the SERVER it is aimed at; the server is the key
-// into the shared per-server push budget (notify/pushbudget.go) and is safe to
-// log — unlike the topic, which is a credential.
-func platformAlertsHostRoute() (alertwebhook.HostPusher, string) {
-	topic := strings.TrimSpace(os.Getenv(alertwebhook.EnvHostTopic))
-	source := alertwebhook.EnvHostTopic
-	if topic == "" {
-		topic = strings.TrimSpace(os.Getenv(alertwebhook.EnvWatchdogTopic))
-		source = alertwebhook.EnvWatchdogTopic
+// THE ENV PATH IS BLOCKED: PLATFORM_ALERTS_NTFY_* is not read at all, and
+// WATCHDOG_NTFY_TOPIC is no longer a fallback destination (it stays in the
+// environment for the product channel's refusal only). A value left set is
+// named in ONE boot WARN and on the admin page, so nobody believes it still
+// does something. There is deliberately no import of it into the store.
+func (s *server) buildPlatformAlertRoute() (*platformalert.Store, *platformalert.Router, []string) {
+	log := func(level, msg string, f map[string]any) { applog.Log(level, "platformalert", msg, f) }
+	store := platformalert.NewStore(platformalert.StoreDeps{
+		Key:  platformalert.DefaultKey,
+		Load: platformdb.Load,
+		Save: platformdb.Save,
+		Seal: func(field, v string) (string, error) { return sealFn(s.vault)("", field, v) },
+		Open: func(field, v string) (string, error) { return openFn(s.vault)("", field, v) },
+		Log:  log,
+		// The sealed last-good copy on the data volume, used only when the
+		// store cannot be read at boot (Postgres flapping, an unreadable
+		// record) — so pages keep reaching the configured channels instead of
+		// nobody. Opening it still needs the vault; see StoreDeps.CachePath.
+		CachePath:  filepath.Join(envOr("DATA_DIR", "/data"), "platform_alert_route.lastgood.json"),
+		ReadCache:  os.ReadFile,
+		WriteCache: func(p string, b []byte) error { return platformdb.WriteFileAtomic(p, b, 0o600) },
+	})
+	router := platformalert.NewRouter(platformalert.RouterDeps{Store: store, Budgets: s.pushBudgets})
+	ignored := platformalert.RetiredEnvSet(os.LookupEnv)
+	if len(ignored) > 0 {
+		logWarn("platformalert", "IGNORED: "+strings.Join(ignored, ", ")+" — platform alert destinations are no longer read from the environment; "+
+			"configure them in "+alertwebhook.GUILocation+" (remove these from .env)", map[string]any{"ignored": ignored, "where": alertwebhook.GUILocation})
 	}
-	if topic == "" {
-		// LOUD, not silent (§10): with no topic the stack keeps every alert to
-		// itself, which is the failure mode the whole delivery path exists to
-		// end. Name both variables so the fix is one line away.
-		logWarn("alertwebhook", "platform self-health alerts will NOT reach the host-monitoring phone channel: neither "+
-			alertwebhook.EnvHostTopic+" nor "+alertwebhook.EnvWatchdogTopic+" is set", map[string]any{
-			"route": alertwebhook.RouteHostMonitoring,
-			"env":   alertwebhook.EnvHostTopic,
-		})
-		return nil, ""
+	cur := store.Current()
+	if platformalert.WatchdogFallbackIgnored(os.LookupEnv, cur) {
+		ignored = append(ignored, platformalert.WatchdogTopicEnv+" (as the platform alert destination)")
+		logWarn("platformalert", platformalert.WatchdogTopicEnv+" is set but is no longer where platform alerts go: it only stops product channels from reusing the watchdog's topic. "+
+			"Set the platform alert destination in "+alertwebhook.GUILocation, map[string]any{"where": alertwebhook.GUILocation})
 	}
-	server := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostServer), os.Getenv(alertwebhook.EnvProductNtfyServer)))
-	token := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostToken), os.Getenv(alertwebhook.EnvProductNtfyToken)))
-	// The TOPIC is never logged — knowing it is enough to read every alert
-	// published to it and to publish forgeries (§8).
-	logInfo("alertwebhook", "platform self-health alerts route to the host-monitoring push channel",
-		alertwebhook.HostRouteLogFields(server, token != "", source))
-	// NO budget is attached to this sender on purpose: the receiver takes the
-	// token at ENQUEUE (internal/alertwebhook/hostroute.go), so attaching one
-	// here would spend two tokens per push. Both draw from the SAME shared
-	// bucket for this server.
-	return notify.NewNtfy(server, topic, token), server
+	if !cur.PageRouted() {
+		// LOUD at boot too (§10); the receiver adds its own once-only line at
+		// the first undelivered alert, and the gauge stays at 0 until fixed.
+		logWarn("platformalert", "platform self-health alerts reach NOBODY: no channel is configured for pages — set one up in "+alertwebhook.GUILocation,
+			map[string]any{"where": alertwebhook.GUILocation})
+	}
+	return store, router, ignored
+}
+
+// platformAlertAPI binds the Platform alerts page (internal/platformalert):
+// requirePlatformAdmin for every route (platform-GLOBAL config, CLAUDE.md
+// §3a rule 3 — never requireAdmin, which a tenant admin passes), the strict
+// audit trail, and the structured log.
+func (s *server) platformAlertAPI() *platformalert.API {
+	return platformalert.NewAPI(s.platformAlerts, s.platformAlertRouter, platformalert.Deps{
+		Authz: func(w http.ResponseWriter, r *http.Request) (platformalert.Caller, bool) {
+			claims, ok := s.requirePlatformAdmin(w, r)
+			return platformalert.Caller{Subject: claims.Sub, APIKey: strings.HasPrefix(claims.Sub, "apikey:")}, ok
+		},
+		AuditStrict: func(e platformalert.AuditEntry) error { return s.audit.RecordStrict(platformAlertAudit(e)) },
+		Audit:       func(e platformalert.AuditEntry) { s.audit.Record(platformAlertAudit(e)) },
+		WriteJSON:   writeJSON,
+		WriteErr:    writeError,
+		Log:         func(level, msg string, f map[string]any) { applog.Log(level, "platformalert", msg, f) },
+		IgnoredEnv:  s.platformAlertIgnoredEnv,
+		Now:         time.Now,
+	})
+}
+
+func platformAlertAudit(e platformalert.AuditEntry) AuditEvent {
+	return AuditEvent{Actor: e.Subject, Cross: true, Method: e.Method, Path: e.Path, Status: e.Status, Decision: e.Outcome, Detail: e.Detail}
 }
 
 // handleVMAlertWebhook serves the Alertmanager-v2 receiver vmalert POSTs to.

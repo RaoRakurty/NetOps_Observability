@@ -694,6 +694,65 @@ groups:
             own independent ntfy path.
           runbook: "docs/runbooks/engine-not-consuming.md"
 
+      - alert: PlatformAlertsReachNobody
+        # THE SAME PAGE CONDITION AS AlertDeliveryBroken (condition 4: the
+        # alerting path is broken), seen from the other end. That rule proves
+        # vmalert -> notifier -> api receiver; this one proves the LAST hop,
+        # api receiver -> a human. Since 2026-11-11 the destinations are set on
+        # Platform -> Platform alerts (internal/platformalert), and with none
+        # set — or with the saved settings unreadable since the api started —
+        # every page is counted not_configured while the heartbeat still lands,
+        # so AlertDeliveryBroken stays quiet and every container reads healthy:
+        # the 2026-09-02 shape. Review decision 2026-11-11: page on it, inside
+        # the existing delivery class — NOT a fifth condition.
+        #
+        # Three branches, all gated on the receiver being CONFIGURED (enabled ==
+        # 1; delivery switched off on purpose is AlertDeliveryBroken's silence
+        # rule, not a fault):
+        #   * page_routed == 0     no channel receives pages;
+        #   * store_ever_read == 0 nothing in force since start-up (store and
+        #                          the on-host last-good copy both unreadable);
+        #   * page_routed ABSENT while the same api's enabled gauge is present —
+        #     both come from one /metrics scrape, so an absent routing gauge is
+        #     an api that cannot say where pages go, which must not read as fine.
+        # A wholly unscraped api is not this rule's fault to report (the scrape
+        # and service checks own it), so a missing enabled gauge is silent here.
+        #
+        # for: 15m — a fresh install needs time to reach the page after first
+        # sign-in, and a store blip at boot must clear before anyone is woken.
+        # Fifteen minutes is the same budget AlertDeliveryBroken's 900 s
+        # heartbeat limit gives the chain's front half. This alert travels the
+        # very route it reports on, so it reaches the configured PRODUCT
+        # channels and ALERTS only; scripts/stack-watchdog.sh checks the same
+        # gauges over its own ntfy topic (problem class PLATFORM_ALERTS_UNROUTED).
+        expr: |
+          (max by (instance) (netops_alert_webhook_enabled) == 1)
+          and on(instance)
+          (
+              (max by (instance) (netops_platform_alert_page_routed) == 0)
+            or
+              (max by (instance) (netops_platform_alert_store_ever_read) == 0)
+            or
+              (max by (instance) (netops_alert_webhook_enabled)
+                unless on(instance) max by (instance) (netops_platform_alert_page_routed))
+          )
+        for: 15m
+        labels: { severity: critical, layer: platform, tier: page }
+        annotations:
+          summary: "PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere"
+          description: >-
+            The api's alert receiver is configured and fed, but the last hop to
+            a person is missing: netops_platform_alert_page_routed is 0 (no
+            ntfy or SMS channel is set up to receive pages), or
+            netops_platform_alert_store_ever_read is 0 (the saved settings and
+            their on-host copy could not be read since the api started — check
+            Postgres and the vault), or the api does not export the routing
+            gauge at all. Set up a channel on Platform → Platform alerts and
+            press Send test. This alert may only reach the product channels;
+            the external watchdog reports the same condition over its own ntfy
+            topic.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
       # ==================================================================
       # THE ENGINE'S OWN LIVENESS GAUGES  (tracker 224)
       #
