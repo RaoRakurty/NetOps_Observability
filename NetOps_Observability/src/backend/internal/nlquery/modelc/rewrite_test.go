@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/lex"
@@ -48,25 +49,42 @@ func rewriteFor(t *testing.T, question, line string) (RewriteOutcome, *stubModel
 func TestRewriteGuards(t *testing.T) {
 	// "sluggish" is the one word the grammar does not understand here.
 	const q = "is cpu sluggish on edge-1 in the last 2 hours"
+	// qToday is the review's probe question (2026-11-11).
+	const qToday = "is cpu sluggish on edge-1 today"
 	for _, c := range []struct {
 		name, line, want string
+		q                string // "" ⇒ q
 	}{
-		{"accepted", "average cpu on edge-1 in the last 2 hours", ""},
-		{"none", "NONE", RefuseRewriteNone},
-		{"two lines", "cpu on edge-1\nlast 2 hours", RefuseRewriteShape},
-		{"too long", "cpu on edge-1 " + strings.Repeat("in the last 2 hours ", 12), RefuseRewriteShape},
-		{"unchanged", q, RefuseRewriteShape},
-		{"foreign name", "average cpu on edge-b in the last 2 hours", RefuseRewriteVocabulary},
-		{"added number", "average cpu on edge-1 in the last 24 hours", RefuseRewriteVocabulary},
-		{"tenant word", "average cpu on edge-1 in the last 2 hours for tenant globex", RefuseRewriteVocabulary},
-		{"inflected decline word", "restarted cpu on edge-1 in the last 2 hours", RefuseRewriteVocabulary},
-		{"dropped name", "average cpu in the last 2 hours", RefuseRewriteDropped},
-		{"dropped number", "average cpu on edge-1 recently", RefuseRewriteDropped},
-		{"name respelled is kept", "average cpu on EDGE_1 in the last 2 hours", ""},
-		{"reference", "average cpu on edge-1 and it in the last 2 hours", RefuseRewriteReference},
-		{"second device", "average cpu on edge-1 and edge-2 in the last 2 hours", RefuseRewriteVocabulary},
+		{"accepted", "average cpu on edge-1 in the last 2 hours", "", ""},
+		{"none", "NONE", RefuseRewriteNone, ""},
+		{"two lines", "cpu on edge-1\nlast 2 hours", RefuseRewriteShape, ""},
+		{"too long", "cpu on edge-1 " + strings.Repeat("in the last 2 hours ", 12), RefuseRewriteShape, ""},
+		{"unchanged", q, RefuseRewriteShape, ""},
+		{"foreign name", "average cpu on edge-b in the last 2 hours", RefuseRewriteVocabulary, ""},
+		{"added number", "average cpu on edge-1 in the last 24 hours", RefuseRewriteVocabulary, ""},
+		{"tenant word", "average cpu on edge-1 in the last 2 hours for tenant globex", RefuseRewriteVocabulary, ""},
+		{"inflected decline word", "restarted cpu on edge-1 in the last 2 hours", RefuseRewriteVocabulary, ""},
+		{"dropped name", "average cpu in the last 2 hours", RefuseRewriteDropped, ""},
+		{"dropped number", "average cpu on edge-1 recently", RefuseRewriteDropped, ""},
+		{"name respelled is kept", "average cpu on EDGE_1 in the last 2 hours", "", ""},
+		{"reference", "average cpu on edge-1 and it in the last 2 hours", RefuseRewriteReference, ""},
+		{"second device", "average cpu on edge-1 and edge-2 in the last 2 hours", RefuseRewriteVocabulary, ""},
+		// Meaning drift (review 2026-11-11): every grammar word is vocabulary,
+		// so these passed the closed-vocabulary rule and compiled.
+		{"window swapped", "worst cpu on edge-1 last week", RefuseRewriteMeaning, qToday},
+		{"unit swapped", "average cpu on edge-1 in the last 2 days", RefuseRewriteMeaning, ""},
+		{"number reused as a threshold", "cpu above 2 percent on edge-1 in the last 2 hours", RefuseRewriteMeaning, ""},
+		{"metric question turned into a list", "open incidents at edge-1 today", RefuseRewriteMeaning, qToday},
+		{"number moved out of the window", "average cpu on edge-1 2 in the last hours", RefuseRewriteMeaning, ""},
+		{"scope widened", "average cpu on every edge-1 in the last 2 hours", RefuseRewriteMeaning, ""},
+		{"rank added", "top average cpu on edge-1 in the last 2 hours", RefuseRewriteMeaning, ""},
+		{"replacement with the window kept", "average cpu on edge-1 today", "", qToday},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			q := q
+			if c.q != "" {
+				q = c.q
+			}
 			out, m := rewriteFor(t, q, c.line)
 			if c.want == "" {
 				if !out.Accepted() {
@@ -264,7 +282,7 @@ func TestRewriteNeverNamesAnEntityTheQuestionDidNot(t *testing.T) {
 	if err != nil || !det.Unparsed {
 		t.Fatalf("fixture: %+v %v", det, err)
 	}
-	line := "average cpu on edge-1 and backbone in the last 2 hours"
+	line := "cpu on edge-1 and backbone in the last 2 hours"
 	rw := Rewriter{Cat: cat, L: l, R: res, Model: &stubModel{replies: []string{line}}}
 	out, err := rw.Compile(context.Background(), q, cx, scopeA{}, det)
 	if err != nil {
@@ -282,4 +300,110 @@ type modelFunc func(ctx context.Context) (string, error)
 
 func (f modelFunc) Complete(ctx context.Context, _ string, _ []Message) (string, error) {
 	return f(ctx)
+}
+
+// A deadline that cannot hold the rephrase AND the strong fallback skips the
+// rephrase (no call); a roomy one runs it.
+func TestRewriteYieldsToTheFallbackOnAShortDeadline(t *testing.T) {
+	det := compile.Result{Unparsed: true, NotUnderstood: []string{"sluggish"}}
+	q := "is cpu sluggish on edge-1 in the last 2 hours"
+	for _, c := range []struct {
+		budget time.Duration
+		call   bool
+	}{{DefaultRewriteLimit + DefaultTimeout - time.Second, false}, {DefaultRewriteLimit + DefaultTimeout + 5*time.Second, true}} {
+		m := &stubModel{replies: []string{"NONE"}}
+		ctx, cancel := context.WithTimeout(context.Background(), c.budget)
+		out, err := rwA(m).Compile(ctx, q, compile.Context{Now: testNow}, scopeA{}, det)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (len(m.calls) == 1) != c.call {
+			t.Fatalf("budget %s: calls %d, want call=%v (refusal %q)", c.budget, len(m.calls), c.call, out.Refusal)
+		}
+		if !c.call && out.Refusal != RefuseRewriteNoTime {
+			t.Fatalf("budget %s: refusal %q, want %q", c.budget, out.Refusal, RefuseRewriteNoTime)
+		}
+	}
+}
+
+// TestConsistentKind (review fix b): the compiled query is the kind of
+// question asked — a metric question compiles to a query of THAT metric,
+// never a list or another metric; an incident (change) question to an
+// incident (change) query; a question naming neither is free.
+func TestConsistentKind(t *testing.T) {
+	cat := catalog.MustLoad()
+	cpu := &ast.AST{Type: ast.MetricSeries, Metric: "cpu_util_pct"}
+	mem := &ast.AST{Type: ast.MetricSeries, Metric: "mem_util_pct"}
+	incidents := &ast.AST{Type: ast.IncidentList}
+	changes := &ast.AST{Type: ast.ChangeList}
+	for _, c := range []struct {
+		text string
+		q    *ast.AST
+		want bool
+	}{
+		{"is cpu sluggish on edge-1 today", cpu, true},
+		{"is cpu sluggish on edge-1 today", incidents, false},
+		{"is cpu sluggish on edge-1 today", mem, false},
+		{"anything odd with incidents at dallas", incidents, true},
+		{"anything odd with incidents at dallas", changes, false},
+		{"anything odd with incidents at dallas", cpu, false},
+		{"what got pushed through changes on edge-1", changes, true},
+		{"what got pushed through changes on edge-1", incidents, false},
+		{"is edge-1 sluggish", cpu, true},
+	} {
+		if got := consistentKind(questionKinds(cat, normalizeQuestion(c.text)), c.q); got != c.want {
+			t.Errorf("%q → %s/%s: consistent=%v, want %v", c.text, c.q.Type, c.q.Metric, got, c.want)
+		}
+	}
+}
+
+// The review's fourth row at the compiled-query stage: even if a rephrase got
+// past the word rules, a metric question read back as an incident list (or as
+// another metric) is refused as the wrong kind.
+func TestRewriteKindIsCheckedOnTheCompiledQuery(t *testing.T) {
+	cat := catalog.MustLoad()
+	ments := []mention{{input: "edge-1", typ: "device", id: "device:edge-1"}}
+	text := normalizeQuestion("is cpu sluggish on edge-1 today")
+	edge := []ast.EntityRef{{Type: "device", ID: "device:edge-1"}}
+	for _, c := range []struct {
+		q    *ast.AST
+		want string
+	}{
+		{&ast.AST{Type: ast.IncidentList, Target: "incident", Refs: edge}, RefuseRewriteKind},
+		{&ast.AST{Type: ast.MetricSeries, Metric: "mem_util_pct", Refs: edge}, RefuseRewriteKind},
+		{&ast.AST{Type: ast.MetricSeries, Metric: "cpu_util_pct", Refs: edge}, ""},
+		{&ast.AST{Type: ast.MetricSeries, Metric: "cpu_util_pct", Refs: []ast.EntityRef{{Type: "device", ID: "device:edge-2"}}}, RefuseRewriteEntity},
+	} {
+		if got := checkCompiled(cat, compile.Result{AST: c.q}, ments, "", text); got != c.want {
+			t.Errorf("%s/%s: %q, want %q", c.q.Type, c.q.Metric, got, c.want)
+		}
+	}
+}
+
+// The meaning rules' building blocks: a number keeps its role, and the
+// comparison symbols the normaliser strips still count.
+func TestNumberRolesAndSymbols(t *testing.T) {
+	for _, c := range []struct {
+		q, r string
+		same bool
+	}{
+		{"cpu last 2 hours", "average cpu in the last 2 hours", true},
+		{"cpu last 2 hours", "cpu above 2 percent last 2 hours", false},
+		{"top 5 interfaces", "5 interfaces", false},
+		{"loss above 5", "loss over 5", true},
+		{"cpu last 24h", "cpu last 24 hours", true},
+	} {
+		if got := sameNumberRoles(lex.Normalize(c.q).Tokens, lex.Normalize(c.r).Tokens); got != c.same {
+			t.Errorf("%q vs %q: same roles %v, want %v", c.q, c.r, got, c.same)
+		}
+	}
+	mw := newMeaningWords(catalog.MustLoad())
+	q := withSymbols("loss > 1%", lex.Normalize("loss > 1%").Tokens)
+	if r := mw.checkMeaning(q, lex.Normalize("loss more than 1%").Tokens, 0, false); r != "" {
+		t.Errorf("'>' and 'more than' are the same condition: %s", r)
+	}
+	if r := mw.checkMeaning(q, lex.Normalize("loss less than 1%").Tokens, 0, false); r != RefuseRewriteMeaning {
+		t.Errorf("'>' turned into 'less than' must be refused, got %q", r)
+	}
 }

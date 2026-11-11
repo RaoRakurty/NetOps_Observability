@@ -171,9 +171,16 @@ func geminiThinkingFor(ctx context.Context, model string) map[string]any {
 	return geminiFastThinking(model)
 }
 
-// refusedArgument reports Gemini's 400 INVALID_ARGUMENT — the answer to a
-// request field the model does not accept.
+// refusedArgument reports a Gemini 400 that a thinking setting could have
+// caused. ANY 400 qualifies (review fix 2026-11-11): providerErrorReason
+// prefers the specific google.rpc.ErrorInfo reason over the generic
+// INVALID_ARGUMENT status, so a refused field may surface under a reason we
+// do not know. The one exception is a key problem — no request field can
+// cause or cure it, and retrying would only send a bad key twice.
 func refusedArgument(err error) bool {
 	var se *ProviderStatusError
-	return errors.As(err, &se) && se.Status == http.StatusBadRequest && se.Reason == "INVALID_ARGUMENT"
+	if !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		return false
+	}
+	return !strings.Contains(se.Reason, "API_KEY") && se.Reason != "PERMISSION_DENIED" && se.Reason != "UNAUTHENTICATED"
 }

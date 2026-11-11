@@ -47,11 +47,16 @@ const (
 	minRewriteAnsweredPrec = 0.99
 	// minRewriteAcceptance: canonical rephrases accepted / answerable
 	// phrasings that reached the stage.
-	minRewriteAcceptance = 0.21 // measured 58/272 = 0.213 on 2026-11-11
+	// Measured 33/272 = 0.121 on 2026-11-11 after the meaning rules
+	// (meaning.go); 58/272 before them, when 25 of the accepted canonical
+	// rephrases differed from the question in window wording ("since monday"
+	// vs "this week"), scope ("all") or rank word — refused on purpose.
+	minRewriteAcceptance = 0.12
 	// minKeyPathReachWithRewrite: grammar + rephrase + strong fallback, of
-	// every answerable phrasing (measured 0.836 on 2026-11-11, against 0.830
-	// without the stage). Never below the key path without the stage.
-	minKeyPathReachWithRewrite = 0.835
+	// every answerable phrasing (measured 569/683 = 0.833 on 2026-11-11 with
+	// the meaning rules, against 0.830 without the stage). Never below the key
+	// path without the stage.
+	minKeyPathReachWithRewrite = 0.833
 )
 
 // lineModel replies with one fixed line.
@@ -97,6 +102,9 @@ func runRewritePathWith(t *testing.T, cat *catalog.Catalog, w *world, ps []phras
 		}
 		if !out.Accepted() {
 			tally.refusals[out.Refusal]++
+			if testing.Verbose() && os.Getenv("NLQ_MODEL_TRACE") != "" && answerable {
+				t.Logf("REFUSED %s %s %q as %q", out.Refusal, p.c.ID, p.question, out.Text)
+			}
 			continue
 		}
 		if !answerable {
@@ -161,11 +169,36 @@ func TestRewriteStageAgainstTheGoldenCorpus(t *testing.T) {
 			return digitRun.ReplaceAllStringFunc(p.question, func(d string) string { return d + "7" })
 		},
 	}
+	// drift (review 2026-11-11): the canonical line — the rephrase most likely
+	// to be accepted — with its MEANING changed in one place, using only
+	// grammar words and the question's own numbers.
+	for kind, mutate := range driftMutations(cat) {
+		adversaries["drift-"+kind] = func(p phrasing) string {
+			// A mutation that adds what the operator already said (a threshold,
+			// a quantifier) does not change the question: skip it there.
+			if already, ok := driftAlready[kind]; ok {
+				if hasAnyWord(strings.ToLower(p.question), already) || (kind == "threshold" && strings.ContainsAny(p.question, "<>")) {
+					return "NONE"
+				}
+			}
+			if l, ok := mutate(strings.ToLower(strings.TrimRight(p.c.Question, "?.!"))); ok {
+				return l
+			}
+			return "NONE"
+		}
+	}
 	for name, line := range adversaries {
 		adv := runRewritePath(t, cat, w, ps, line)
-		t.Logf("%-9s: %s", name, adv)
+		t.Logf("%-14s: %s", name, adv)
 		for _, s := range adv.safety {
 			t.Errorf("SAFETY %s: %s", name, s)
+		}
+		switch {
+		case strings.HasPrefix(name, "drift-"):
+			if adv.accepted > 0 {
+				t.Errorf("SAFETY %s: %d rephrases that changed the question's meaning were accepted", name, adv.accepted)
+			}
+			continue
 		}
 		switch name {
 		case "foreign", "instruct", "tenant":
@@ -207,6 +240,101 @@ func TestRewriteStageAgainstTheGoldenCorpus(t *testing.T) {
 	}
 }
 
+// driftAlready: the words that mean a phrasing already carries what a drift
+// kind would add.
+var driftAlready = map[string][]string{
+	"threshold": {"above", "over", "more", "greater", "higher", "below", "under", "less", "fewer", "lower", "exceeds", "exceeding"},
+	"scope":     {"all", "every", "each", "any", "anything", "everything"},
+}
+
+func hasAnyWord(text string, words []string) bool {
+	for _, t := range strings.FieldsFunc(text, func(r rune) bool { return r == ' ' || r == ',' || r == '?' || r == '.' }) {
+		for _, w := range words {
+			if t == w {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// driftMutations change ONE meaning of a line: its window, a unit, a typed
+// number's role, the kind of question, its scope, its rank direction. Each
+// returns false when the line has nothing to change.
+func driftMutations(cat *catalog.Catalog) map[string]func(string) (string, bool) {
+	swapFirst := func(line string, pairs [][2]string) (string, bool) {
+		toks := strings.Fields(line)
+		for i, t := range toks {
+			for _, p := range pairs {
+				if t == p[0] {
+					toks[i] = p[1]
+					return strings.Join(toks, " "), true
+				}
+			}
+		}
+		return line, false
+	}
+	metricWords := map[string]bool{}
+	for _, m := range cat.Metrics {
+		for _, a := range m.Aliases {
+			for _, w := range strings.Fields(catalog.NormalizeAlias(a)) {
+				metricWords[w] = true
+			}
+		}
+	}
+	return map[string]func(string) (string, bool){
+		"window": func(l string) (string, bool) {
+			if out, ok := swapFirst(l, [][2]string{{"today", "yesterday"}, {"yesterday", "today"}, {"week", "month"},
+				{"month", "week"}, {"monday", "friday"}, {"hour", "day"}, {"day", "week"}, {"midnight", "noon"}}); ok {
+				return out, true
+			}
+			return l + " yesterday", true
+		},
+		"unit": func(l string) (string, bool) {
+			return swapFirst(l, [][2]string{{"hours", "days"}, {"days", "hours"}, {"minutes", "hours"}, {"min", "hours"}, {"weeks", "days"}})
+		},
+		"threshold": func(l string) (string, bool) {
+			n := digitRun.FindString(l)
+			if n == "" {
+				return l, false
+			}
+			return l + " above " + n + " percent", true
+		},
+		"list": func(l string) (string, bool) {
+			var keep []string
+			named := false
+			for _, t := range strings.Fields(l) {
+				if metricWords[t] {
+					named = true
+					continue
+				}
+				keep = append(keep, t)
+			}
+			if !named {
+				return l, false
+			}
+			return "open incidents " + strings.Join(keep, " "), true
+		},
+		"scope": func(l string) (string, bool) {
+			for _, t := range strings.Fields(l) {
+				if t == "all" || t == "every" || t == "each" || t == "any" || t == "everything" {
+					return l, false // already scoped: adding another quantifier changes nothing
+				}
+			}
+			return swapFirst(l, [][2]string{{"devices", "all devices"}, {"interfaces", "all interfaces"}, {"sites", "all sites"},
+				{"circuits", "all circuits"}, {"incidents", "all incidents"}, {"changes", "all changes"}, {"peers", "every peer"},
+				{"routers", "every router"}, {"cpu", "every cpu"}, {"latency", "all latency"}})
+		},
+		"rank": func(l string) (string, bool) {
+			if out, ok := swapFirst(l, [][2]string{{"worst", "best"}, {"best", "worst"}, {"highest", "lowest"}, {"lowest", "highest"},
+				{"top", "bottom"}, {"most", "least"}, {"least", "most"}, {"busiest", "lowest"}}); ok {
+				return out, true
+			}
+			return "top " + l, true
+		},
+	}
+}
+
 // TestRewriteNeverAddsAnEntity is the §3a property of the stage: whatever line
 // the model returns, an accepted rephrase names only entities the CALLER's
 // resolver found in the ORIGINAL question — never another tenant's, never
@@ -245,7 +373,7 @@ func TestRewriteNeverAddsAnEntity(t *testing.T) {
 		}
 	}
 	// The honest rephrase is accepted and names exactly the question's device.
-	rw := modelc.Rewriter{Cat: cat, L: fixtureLookups{w: w}, R: res, Model: lineModel{line: "average cpu utilization on DFW-EDGE-1"}}
+	rw := modelc.Rewriter{Cat: cat, L: fixtureLookups{w: w}, R: res, Model: lineModel{line: "average cpu utilization on DFW-EDGE-1 lately"}}
 	out, err := rw.Compile(context.Background(), question, cx, sc, det)
 	if err != nil {
 		t.Fatal(err)

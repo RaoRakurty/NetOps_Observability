@@ -80,6 +80,9 @@ const (
 	RefuseRewriteReference  = "rewrite_reference"  // it points at an earlier turn the question did not
 	RefuseRewriteNoQuery    = "rewrite_no_query"   // the grammar did not compile it to one valid query
 	RefuseRewriteEntity     = "rewrite_entity"     // the query names an entity the question did not
+	RefuseRewriteMeaning    = "rewrite_meaning"    // a time, rank, comparison, scope, metric or value word changed, or a number changed role
+	RefuseRewriteKind       = "rewrite_kind"       // the query is not the kind of question asked (a metric question turned into a list)
+	RefuseRewriteNoTime     = "rewrite_no_time"    // the caller's deadline cannot hold the rephrase and the fallback
 )
 
 // Rewriter is the B1 stage.
@@ -192,6 +195,15 @@ func (rw Rewriter) Compile(ctx context.Context, question string, cx compile.Cont
 	if limit <= 0 {
 		limit = DefaultRewriteLimit
 	}
+	// The rephrase must not eat the strong fallback's time: when the caller's
+	// deadline cannot hold both (rephrase + fallback, 28 s by default), it is
+	// skipped and the fallback keeps its whole budget. Today's Iris routes
+	// leave ≥ 120 s (nginx /api read timeout; the stream's 170 s budget), so
+	// this guards a future caller with a short deadline.
+	if d, ok := ctx.Deadline(); ok && time.Until(d) < limit+DefaultTimeout {
+		out.Refusal = RefuseRewriteNoTime
+		return out, nil
+	}
 	cctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	reply, err := rw.Model.Complete(cctx, RewriteSystemPrompt(), []Message{{Role: "user", Content: buildRewritePrompt(question, keep, vocab)}})
@@ -206,7 +218,7 @@ func (rw Rewriter) Compile(ctx context.Context, question string, cx compile.Cont
 		out.Refusal = refusal
 		return out, nil
 	}
-	if refusal := checkRewrite(line, question, text, keep, vocab); refusal != "" {
+	if refusal := checkRewrite(line, question, text, keep, vocab, newMeaningWords(rw.Cat)); refusal != "" {
 		out.Refusal = refusal
 		return out, nil
 	}
@@ -218,12 +230,8 @@ func (rw Rewriter) Compile(ctx context.Context, question string, cx compile.Cont
 	if err != nil {
 		return out, err
 	}
-	if res.Unparsed || res.AST == nil || res.Decline != "" || len(res.Clarify) > 0 || res.NotFound != nil {
-		out.Refusal = RefuseRewriteNoQuery
-		return out, nil
-	}
-	if !refsWithin(res.AST, ments, cx.IncidentID) {
-		out.Refusal = RefuseRewriteEntity
+	if refusal := checkCompiled(rw.Cat, res, ments, cx.IncidentID, text); refusal != "" {
+		out.Refusal = refusal
 		return out, nil
 	}
 	checked, vr := validate.Validate(ctx, rw.Cat, sc, res.AST)
@@ -234,6 +242,22 @@ func (rw Rewriter) Compile(ctx context.Context, question string, cx compile.Cont
 	res.Readings = append([]lex.Reading{{From: question, To: line, Kind: lex.KindRephrase}}, res.Readings...)
 	out.Result, out.Checked, out.Validation, out.Source, out.Refusal = res, checked, vr, SourceRewrite, ""
 	return out, nil
+}
+
+// checkCompiled judges the grammar's reading of the rephrase: one query (no
+// clarification, decline or not-found), naming only entities the ORIGINAL
+// question resolved, of the kind of question the operator asked (text is the
+// original, normalised).
+func checkCompiled(cat *catalog.Catalog, res compile.Result, ments []mention, incident, text string) string {
+	switch {
+	case res.Unparsed || res.AST == nil || res.Decline != "" || len(res.Clarify) > 0 || res.NotFound != nil:
+		return RefuseRewriteNoQuery
+	case !refsWithin(res.AST, ments, incident):
+		return RefuseRewriteEntity
+	case !consistentKind(questionKinds(cat, text), res.AST):
+		return RefuseRewriteKind
+	}
+	return ""
 }
 
 // keeps are what the question names and the rewrite must carry over.
@@ -358,9 +382,9 @@ func rewriteLine(reply, text string) (string, string) {
 	return line, ""
 }
 
-// checkRewrite applies the closed-vocabulary, nothing-dropped and
-// no-reference rules.
-func checkRewrite(line, question, text string, k keeps, vocab *lex.Vocab) string {
+// checkRewrite applies the closed-vocabulary, nothing-dropped, meaning
+// (meaning.go) and no-reference rules.
+func checkRewrite(line, question, text string, k keeps, vocab *lex.Vocab, mw meaningWords) string {
 	toks := lex.Tokens(line)
 	norm := lex.Normalize(line).Tokens
 	for _, reading := range [][]string{toks, norm} {
@@ -417,6 +441,15 @@ func checkRewrite(line, question, text string, k keeps, vocab *lex.Vocab) string
 	}
 	if dropped > len(added) {
 		return RefuseRewriteDropped
+	}
+	unknownSuperlative := false
+	for w := range k.unknown {
+		if !have[w] && strings.HasSuffix(w, "est") && !rankDown[w] {
+			unknownSuperlative = true
+		}
+	}
+	if refusal := mw.checkMeaning(withSymbols(question, lex.Normalize(question).Tokens), withSymbols(line, norm), dropped, unknownSuperlative); refusal != "" {
+		return refusal
 	}
 	if precheckReferences(normalizeQuestion(line), nil) != "" {
 		return RefuseRewriteReference // the question had none (checked before the call)

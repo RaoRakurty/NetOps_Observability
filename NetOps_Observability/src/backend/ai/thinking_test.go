@@ -160,6 +160,29 @@ func TestGeminiThinkingRetryIsNotRememberedWhenItAlsoFails(t *testing.T) {
 	}
 }
 
+// Any 400 on a call that carried the setting is retried once without it —
+// also when Google names a specific ErrorInfo reason instead of the generic
+// INVALID_ARGUMENT status (review fix 2026-11-11).
+func TestGeminiAnyFieldRefusalIsRetriedWithoutThinking(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"code":400,"message":"Unknown name \"thinkingLevel\"","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"FIELD_INVALID"}]}}`,
+		`{"error":{"code":400,"message":"bad request"}}`, // no reason at all
+	} {
+		model := "gemini-9-flash-test-any400-" + string(rune('a'+len(body)%26))
+		g := &seqGemini{answers: [][2]any{{400, body}, {200, geminiOK}}}
+		g.start(t)
+		if c, err := callGeminiAt(t, TierFast, model); err != nil || c.Text != "OK" {
+			t.Fatalf("%s: completion %+v err %v", body, c, err)
+		}
+		if len(g.bodies) != 2 {
+			t.Fatalf("%s: requests = %d, want the refused one and one retry", body, len(g.bodies))
+		}
+		if tc, ok := g.thinkingConfig(1); ok {
+			t.Fatalf("%s: the retry still carried %v", body, tc)
+		}
+	}
+}
+
 func TestGeminiOtherRefusalsAreNotRetried(t *testing.T) {
 	g := &seqGemini{answers: [][2]any{{400, `{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`}}}
 	g.start(t)

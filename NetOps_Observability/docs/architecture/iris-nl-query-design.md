@@ -250,7 +250,12 @@ place, number, tenant or instruction; **nothing dropped** — every resolved men
 capitalised word, number, negation and name-shaped leftover (a did-you-mean name, a word after
 at/in/for/by/…, a word qualifying a list noun) survives verbatim (a respelled name, `EDGE_1` for `edge-1`,
 is the same name key), and every other not-understood word left out is replaced by a new vocabulary word;
-**no reference** the question did not make; the grammar compiles it to one query (no clarify, decline or
+**same meaning** (`modelc/meaning.go`, review fix 2026-11-11) — time words compared word for word (synonyms
+folded: past = last, hrs = hour), rank and comparison words by direction group, quantifiers by presence: nothing
+typed dropped or changed, nothing new; aggregation words, metrics (by catalog identity: rtt = latency) and enum
+values typed are kept, and new ones count only as replacements for dropped not-understood words; every number
+keeps its role (window, rank size, threshold); and the compiled query is the kind of question asked (a question
+naming a metric compiles to a query of that metric, never a list); **no reference** the question did not make; the grammar compiles it to one query (no clarify, decline or
 not-found), the validator accepts it, and every entity the query names was resolved from the ORIGINAL
 question. The fallback's no-call pre-checks (unbound reference, unresolved name) run first. Accepted
 results carry `source: "model_rewrite"`, a `rephrase` reading ("I read your question as … (rephrased by

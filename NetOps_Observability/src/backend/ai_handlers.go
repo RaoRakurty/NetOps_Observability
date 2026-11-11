@@ -1160,15 +1160,8 @@ func (s *server) aiSuggestAudit(r *http.Request, claims jwtClaims, res resolve.R
 	})
 }
 
-// nlqResolver builds the resolution ladder over the caller's own aliases,
-// visible inventory and adjacency. The model-suggestion rung is NOT wired:
-// this is the ladder the query compiler uses, and nothing a model suggests is
-// ever applied to a query without the operator confirming it first.
-func (s *server) nlqResolver(r *http.Request, claims jwtClaims) resolve.Resolver {
-	return s.nlqResolverWith(r, claims, false)
-}
-
-// nlqResolverWith is nlqResolver, plus — when suggest is set, Iris is on and
+// nlqResolverWith builds the resolution ladder over the caller's own aliases,
+// visible inventory and adjacency, plus — when suggest is set, Iris is on and
 // the caller may use a model — the model-suggestion rung, on the caller's own
 // provider chain and daily budget (nlqModel: credential-shaped text redacted
 // before it leaves, LLM06; budget refused before any call, LLM04).
@@ -1411,7 +1404,13 @@ const nlqModelFallbackTier = ai.TierStrong
 // (repeated failures, cooling down), Model stays nil and the fallback is
 // skipped without a call — the grammar's answer stands at once, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
-	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims), Examples: s.nlqExamples}
+	return s.nlqModelFallbackWith(claims, newNLQLookups(s, r, claims))
+}
+
+// nlqModelFallbackWith is nlqModelFallback over lookups the caller already
+// holds (one per request: aliases and inventory are read once).
+func (s *server) nlqModelFallbackWith(claims jwtClaims, l nlqLookups) modelc.Fallback {
+	f := modelc.Fallback{Cat: s.nlqCatalog, L: l, Examples: s.nlqExamples}
 	if s.nlqModelUsable(claims, nlqModelFallbackTier) {
 		f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}, tier: nlqModelFallbackTier, stage: ai.StageCompile}
 	}
@@ -1435,9 +1434,11 @@ const nlqRewriteTier = ai.TierFast
 // off alone) to the caller: their own aliases, inventory and resolver, and
 // their own provider chain and daily budget. Model stays nil — no call — on
 // the same conditions as the fallback.
-func (s *server) nlqRewriter(r *http.Request, claims jwtClaims) modelc.Rewriter {
-	l := newNLQLookups(s, r, claims)
-	rw := modelc.Rewriter{Cat: s.nlqCatalog, L: l, R: s.nlqResolver(r, claims)}
+//
+// l and res are the request's own lookups and resolver (shared with the
+// grammar compile and the fallback, so aliases and inventory are read once).
+func (s *server) nlqRewriter(claims jwtClaims, l nlqLookups, res resolve.Resolver) modelc.Rewriter {
+	rw := modelc.Rewriter{Cat: s.nlqCatalog, L: l, R: res}
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_REWRITE")), "false") && s.nlqModelUsable(claims, nlqRewriteTier) {
 		rw.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}, tier: nlqRewriteTier, stage: ai.StageRewrite}
 	}
@@ -1620,13 +1621,20 @@ func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question 
 // (allowModel=false: grammar only — the /ask data arm on product-help
 // questions).
 func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool, beforeModel func(context.Context) bool) (nlqCompiled, error) {
-	res, err := compile.Compiler{Cat: s.nlqCatalog, R: s.nlqResolver(r, claims)}.Compile(r.Context(), question, cx)
+	// One set of lookups per question: the grammar, the rephrase stage and
+	// the fallback read the caller's aliases and inventory through the same
+	// cache. The model-suggestion rung is NOT wired into this ladder: nothing
+	// a model suggests is ever applied to a query without the operator
+	// confirming it first.
+	l := newNLQLookups(s, r, claims)
+	resolver := resolve.Resolver{Cat: s.nlqCatalog, L: l, Topo: l}
+	res, err := compile.Compiler{Cat: s.nlqCatalog, R: resolver}.Compile(r.Context(), question, cx)
 	if err != nil {
 		return nlqCompiled{}, err
 	}
 	if res.Unparsed && allowModel {
-		fb := s.nlqModelFallback(r, claims)
-		rw := s.nlqRewriter(r, claims)
+		fb := s.nlqModelFallbackWith(claims, l)
+		rw := s.nlqRewriter(claims, l, resolver)
 		if (fb.Model != nil || rw.Model != nil) && beforeModel != nil && !beforeModel(r.Context()) {
 			// N-G4 tie-break: a troubleshooting method also claims this
 			// question and the model said "investigate" (or could not say):
