@@ -32,6 +32,31 @@ is recorded in the audit line. Per-tier providers (a fast model vs. a strong one
 plug into the single `LLMClient` seam without touching the orchestrator; today
 they resolve through one provider chain + the evidence-only fallback.
 
+### Thinking and per-call measurement (2026-11-11)
+
+The recommended Gemini models think (hidden reasoning) by default; that
+reasoning is billed as output, counts against `maxOutputTokens` and adds
+latency. A **fast-tier** call therefore asks for the least thinking the model
+offers (`ai/thinking.go`): `thinkingConfig.thinkingBudget = 0` for
+`gemini-2.5-flash*`, `thinkingLevel = "low"` for later models and the
+`-latest` aliases, nothing for `-lite` models (already off/minimal), 1.x/2.0,
+`gemini-2.5-pro` (cannot turn off) or non-Gemini models. If Gemini refuses the
+setting with 400 `INVALID_ARGUMENT`, the call is repeated once without it and,
+when that succeeds, the model is remembered. Strong and untiered calls keep
+the provider default. Claude calls never think (extended thinking is opt-in and
+never requested); OpenAI's recommended models are not reasoning models.
+
+Every **answered** call (`callProviderGuarded`) logs `ai.provider` / "model
+provider call answered" with provider, model, tier, Iris stage (`answer`,
+`nlq_rewrite`, `nlq_compile`), key source, `latency_ms` and the provider's
+`input_tokens` / `output_tokens` / `thinking_tokens` (failures were already
+logged), and feeds `netops_ai_provider_tokens_total{provider,tier,stage,kind}`.
+`TokenUsage.OutputTokens` is every billed output token — Gemini's
+`thoughtsTokenCount` is added in (it is reported beside
+`candidatesTokenCount`), so the tenant budget is charged for thinking too.
+To answer "why is Iris slow": `netops_ai_provider_call_seconds` by tier, then
+the answered-call lines for `model`, `latency_ms` and `thinking_tokens`.
+
 ## Verifier / unsupported-claim detector (§11, §16)
 
 `VerifyGrounding` (`ai/verify.go`) is a **deterministic** post-check on every

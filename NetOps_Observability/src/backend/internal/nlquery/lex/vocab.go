@@ -23,6 +23,10 @@ const (
 	KindSynonym   = "synonym"    // another word for a catalog term
 	KindSeverity  = "severity"   // a severity word mapped onto a catalog filter
 	KindImplicitN = "implicit_n" // a superlative with no number ("busiest" → top 5)
+	// KindRephrase: the fast AI model rephrased the whole question and the
+	// grammar read the rephrase (hybrid NLU plan B1). From is the question,
+	// To the rephrase.
+	KindRephrase = "rephrase"
 )
 
 // Note is the sentence a Reading is disclosed with.
@@ -32,6 +36,8 @@ func (r Reading) Note() string {
 		return "I read \"" + r.From + "\" as " + r.To + "."
 	case KindImplicitN:
 		return "I read \"" + r.From + "\" as the " + r.To + "."
+	case KindRephrase:
+		return "I read your question as \"" + r.To + "\" (rephrased by the AI model — check the query shown with this answer)."
 	}
 	return "I read \"" + r.From + "\" as \"" + r.To + "\"."
 }
