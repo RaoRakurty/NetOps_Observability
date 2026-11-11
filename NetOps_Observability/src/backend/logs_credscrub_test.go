@@ -506,3 +506,64 @@ func TestProviderPayloadFromABackgroundContextIsScrubbed(t *testing.T) {
 		t.Fatalf("a background provider call was not scrubbed:\n%s", p)
 	}
 }
+
+// The residual egress oracle: a provider call made for a request masks with the
+// CALLER's set, not the union, because the model's answer comes back to the
+// caller and an echoed "***" over another tenant's community would reveal it.
+// Asserted on the bytes sent to the provider, on the grounded engine's adapter
+// (aiLLM) and on the copilot's plain chat, with the union default installed as
+// in production.
+func TestRequestProviderCallsMaskWithTheCallersSet(t *testing.T) {
+	t.Setenv("FEATURE_COPILOT", "true")
+	t.Setenv("FEATURE_AI_TOOLS", "")
+	s := groundingTestServer(t)
+	if _, err := s.aiTenantCfg.SetTenantSettings("t-a", ai.TenantSettings{Provider: "openai", Model: "gpt-4o-mini", Key: "sk-test"}); err != nil {
+		t.Fatal(err)
+	}
+	own := "fixture-ta-" + strings.Repeat("a", 5)
+	other := "fixture-tb-" + strings.Repeat("b", 5)
+	platform := "fixture-platform-" + strings.Repeat("c", 5)
+	withTenantCommunities(t, s,
+		credscrub.Value{Tenant: "t-a", Text: own},
+		credscrub.Value{Tenant: "t-b", Text: other},
+		credscrub.Value{Tenant: "", Text: platform})
+	ai.SetDefaultEgressScrub(func(b []byte) []byte { return s.credScrub.Union().MaskJSON(b) })
+	t.Cleanup(func() { ai.SetDefaultEgressScrub(nil) })
+	cap := &capturingTransport{}
+	restore := ai.SwapProviderHTTPForTest(&http.Client{Transport: cap})
+	defer restore()
+	claims := jwtClaims{Tenant: "t-a", Sub: "u", Role: "viewer"}
+	question := "poller " + own + " and " + other + " and " + platform
+
+	check := func(path string) {
+		t.Helper()
+		sent := string(cap.body)
+		if sent == "" {
+			t.Fatalf("%s: no provider payload captured", path)
+		}
+		if strings.Contains(sent, own) || strings.Contains(sent, platform) {
+			t.Errorf("%s: the caller's own or the platform's community left for the provider:\n%s", path, sent)
+		}
+		if !strings.Contains(sent, other) {
+			t.Errorf("%s: another tenant's value was masked in t-a's payload (the union, an oracle on the answer):\n%s", path, sent)
+		}
+	}
+
+	l := aiLLM{srv: s, claims: claims}
+	if _, _, _, err := l.CompleteTierWithUsage(context.Background(), ai.TierFast, "sys", []ai.LLMMessage{{Role: "user", Content: question}}); err != nil {
+		t.Fatalf("aiLLM: %v", err)
+	}
+	check("aiLLM")
+
+	cap.body = nil
+	chatOnce(t, s, claims, question)
+	check("copilot plain chat")
+
+	// The agent loop's call wraps the same helper.
+	cap.body = nil
+	if _, err := ai.ProviderDo(s.egressCtx(context.Background(), claims), "https://api.openai.com/v1/chat/completions", nil,
+		[]byte(`{"m":"`+question+`"}`), "openai"); err != nil {
+		t.Fatal(err)
+	}
+	check("egressCtx")
+}
