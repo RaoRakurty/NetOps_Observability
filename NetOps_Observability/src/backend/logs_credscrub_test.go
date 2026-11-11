@@ -567,3 +567,120 @@ func TestRequestProviderCallsMaskWithTheCallersSet(t *testing.T) {
 	}
 	check("egressCtx")
 }
+
+// ---- signal attrs: the generic device_alarm keeps the line's text ----------
+
+// signalFakeCH answers the correlation-slice and event-feed reads with one
+// generic device_alarm signal whose attrs.text holds line.
+func signalFakeCH(t *testing.T, line string) {
+	t.Helper()
+	attrs, err := json.Marshal(map[string]any{"facility": "confd", "severity": 4, "text": line})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := json.Marshal(map[string]any{
+		"signal_id": "5b2f6c1e-1111-4222-8333-944455556666", "ts_iso": "2026-11-11T09:01:00Z", "ts_ms": 1762851660000,
+		"source": "syslog", "kind": "device_alarm", "severity": "warn", "entity_type": "device", "entity_id": "acme-core",
+		"attrs": string(attrs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		q := string(b)
+		data := "[]"
+		switch {
+		case strings.Contains(q, "FROM netops.corr_objects"):
+			data = `[{"version":1,"tenant_id":"acme","state":"open","merged_into":"","window_start":"2026-11-11T09:00:00Z",` +
+				`"window_end":"2026-11-11T09:10:00Z","trigger_signal":"5b2f6c1e-1111-4222-8333-944455556666","verdict_tier":"suspected",` +
+				`"top_hypothesis":"x","top_confidence":0.5,"evidence_missing":[]}]`
+		case strings.Contains(q, "max(archived_version)"):
+			data = `[{"av":1}]`
+		case strings.Contains(q, "FROM netops.corr_signals_archive AS a"), strings.Contains(q, "FROM netops.corr_signals AS s"):
+			data = "[" + string(sig) + "]"
+		case strings.Contains(q, "count() AS c"):
+			data = `[{"c":1}]`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"meta":[],"data":` + data + `,"rows":1}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+	t.Setenv("CLICKHOUSE_PASSWORD", "")
+}
+
+// attrs is a JSON string: a value with a character JSON escapes is spelled
+// differently inside it, so a text-only pass would miss it.
+func TestMaskSignalRowsReadsAttrsAsJSON(t *testing.T) {
+	s := &server{}
+	quoted := `fixture"comm-` + strings.Repeat("q", 4)
+	withCommunities(t, s, quoted)
+	attrs, err := json.Marshal(map[string]any{"text": "audit user: " + quoted + "/1 terminated session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []map[string]any{{"kind": "device_alarm", "attrs": string(attrs)}}
+	maskSignalRows(s.credScrub.For("acme", false), rows)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(rows[0]["attrs"].(string)), &got); err != nil {
+		t.Fatalf("masked attrs are not JSON: %v", err)
+	}
+	if got["text"] != "audit user: ***/1 terminated session" {
+		t.Errorf("attrs.text = %q", got["text"])
+	}
+}
+
+// A ConfD session line sent at warning or worse reaches the generic
+// device_alarm net, which keeps its text in attrs. Every reader of a signal's
+// attrs masks the caller's own set (and serves another tenant's as text).
+func TestSignalAttrsTextIsMaskedForTheCallersTenant(t *testing.T) {
+	s := corrTestServer(t)
+	acmeV, globexV, globalV := tenantMaskFixture(t, s)
+	line := "audit user: " + acmeV + "/49119 assigned to groups: basic " + globexV + " " + globalV
+	signalFakeCH(t, line)
+	const id = "0f8d5d6e-aaaa-4bbb-8ccc-ddddeeeeffff"
+
+	check := func(where, body string) {
+		t.Helper()
+		if strings.Contains(body, acmeV) || strings.Contains(body, globalV) {
+			t.Errorf("%s served acme's own or the platform's community in signal attrs:\n%s", where, body)
+		}
+		if !strings.Contains(body, globexV) {
+			t.Errorf("%s masked another tenant's value for acme (cross-tenant oracle):\n%s", where, body)
+		}
+		if !strings.Contains(body, "assigned to groups") {
+			t.Errorf("%s lost the signal text entirely:\n%s", where, body)
+		}
+	}
+
+	// The slice every principal reader shares (detail timeline, RCA report,
+	// similar incidents, Iris case timeline).
+	_, sigRows, _, _, _, err := s.loadCorrSlice(context.Background(), acme(), id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(sigRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("loadCorrSlice", string(b))
+	var attrs map[string]any
+	if err := json.Unmarshal([]byte(sigRows[0]["attrs"].(string)), &attrs); err != nil {
+		t.Fatalf("masked attrs are not JSON: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	s.handleCorrelationByID(w, req(http.MethodGet, "/api/correlations/"+id+"/timeline", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("timeline: %d %s", w.Code, w.Body.String())
+	}
+	check("the correlation timeline", w.Body.String())
+
+	w = httptest.NewRecorder()
+	s.handleEventsFeed(w, req(http.MethodGet, "/api/events/feed?from=24h&limit=50", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("events feed: %d %s", w.Code, w.Body.String())
+	}
+	check("the events feed", w.Body.String())
+}
