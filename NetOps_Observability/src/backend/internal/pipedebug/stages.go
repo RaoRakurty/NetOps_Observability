@@ -208,7 +208,7 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 	e.Verdict = VerdictSeen
 	e.FirstSeen = timeField(hit.Source, "timestamp")
 	e.EvidenceRef = fmt.Sprintf("%s#%s", hit.Index, hit.ID)
-	e.Detail = RedactFields(hit.Source)
+	e.Detail = a.deps.maskDetail(p, RedactFields(hit.Source))
 	e.Detail["_index"] = hit.Index
 	e.Detail["_id"] = hit.ID
 	e.Detail["_total"] = parsed.Hits.Total.Value
@@ -217,7 +217,7 @@ func (a *API) OpenSearchStage(ctx context.Context, p Principal, kind Kind, marke
 
 // KafkaStage peeks the kind's topic for the marker through the correlation
 // container's debug sidecar (Go has no Kafka client by design, §6).
-func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
+func (a *API) KafkaStage(ctx context.Context, p Principal, kind Kind, marker string) Entry {
 	e := Entry{Stage: StageKafka, Module: string(StageKafka)}
 	topic := TopicFor(kind)
 	if topic == "" {
@@ -265,7 +265,7 @@ func (a *API) KafkaStage(ctx context.Context, kind Kind, marker string) Entry {
 	e.Detail = map[string]any{
 		"topic": rec.Topic, "partition": rec.Partition, "offset": rec.Offset,
 		"scanned": res.Scanned, "elapsed_s": res.ElapsedS, "truncated": res.Truncated,
-		"excerpt": RedactString(rec.Excerpt),
+		"excerpt": a.deps.maskText(p, RedactString(rec.Excerpt)),
 	}
 	if kind == KindFlow {
 		e.Detail["fingerprint"] = NewFlowFingerprint(marker).Fields()
@@ -413,7 +413,7 @@ func (a *API) ClickHouseStage(ctx context.Context, p Principal, kind Kind, marke
 	e.Detail = map[string]any{
 		"rows": len(rows), "table": table,
 		"fingerprint": NewFlowFingerprint(marker).Fields(),
-		"row":         RedactFields(rows[0]),
+		"row":         a.deps.maskDetail(p, RedactFields(rows[0])),
 	}
 	return e
 }
@@ -481,7 +481,11 @@ func (a *API) CorrelationStage(ctx context.Context, p Principal, kind Kind, mark
 		e.FirstSeen = timeField(rows[0], "created_at")
 	}
 	e.Detail = detail
-	e.Detail["rows"] = RedactSlice(rows)
+	red := RedactSlice(rows)
+	for i, row := range red {
+		red[i] = a.deps.maskDetail(p, row)
+	}
+	e.Detail["rows"] = red
 	return e
 }
 

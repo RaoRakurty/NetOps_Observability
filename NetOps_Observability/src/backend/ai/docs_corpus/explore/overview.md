@@ -1,6 +1,6 @@
 ---
 title: Explore your data
-description: The four raw telemetry planes - metrics, logs, flows and events - how to choose between them, and the global search box and time range that tie them together.
+description: The three raw telemetry planes - metrics, logs and flows - how to choose between them, and the global search box and time range that tie them together.
 page_type: index
 sidebar_position: 1
 ---
@@ -12,20 +12,19 @@ sidebar_position: 1
 | Page | Console path | Ask it |
 |---|---|---|
 | [Query metrics](/explore/metrics) | **Explore → Metrics** | How is this measured value trending? Pick a metric from the catalog or write a query, and get a chart. |
-| [Search logs](/explore/logs) | **Explore → Logs** | What exactly happened, in the device's own words? Full-text search over syslog, traps, firewall logs and sampled flow records. |
+| [Search logs](/explore/logs) | **Explore → Logs** | What exactly happened, in the device's own words, and in what order? Full-text search over syslog, traps, firewall logs and sampled flow records. Its **Events** tab, the default, puts them all on one timeline. |
 | [Analyse flows](/explore/flows) | **Explore → Flows** | Who is talking to whom, and how much? Top talkers, conversations, ports, protocols and TCP flags. |
-| [Review the event feed](/explore/events) | **Explore → Events** | What happened, and what changed? Syslog, SNMP traps and active alerts on one timeline. |
 
-**Explore → Saved Searches** holds the searches you named and kept.
+**Explore → Saved Searches** holds the searches you named and kept. The alerts that are firing now are on **Operations → Active Alerts**. See [Manage alerts](/monitoring/manage-alerts).
 
 ## Choosing a plane
 
 - A number in mind, such as utilization, an error rate or a threshold: use **Metrics**. It charts time series and compares devices side by side.
 - A bandwidth or who-and-what question, such as a saturated link or an unexpected top talker: use **Flows**. It aggregates flow records into Top-N views you can filter by address, exporter and interface.
 - The exact event text, such as a BGP neighbor message or a firewall deny: use **Logs**. It is the only plane that returns the raw records themselves, one per row, with the whole document behind each.
-- A timeline to correlate against: use **Events**. It merges device log events, SNMP traps and active alerts in time order.
+- A timeline to correlate against: use the **Events** tab on **Logs**. It puts syslog, SNMP traps, flow records and firewall logs in time order.
 
-A typical investigation walks all four: a spike on a metric chart, then flows to see which traffic caused it, then logs for what the device said, then events for what else fired at the same moment.
+A typical investigation walks all three: a spike on a metric chart, then flows to see which traffic caused it, then logs for what the device said and what else happened at the same moment. Check **Operations → Active Alerts** for what fired.
 
 ## The global time range
 

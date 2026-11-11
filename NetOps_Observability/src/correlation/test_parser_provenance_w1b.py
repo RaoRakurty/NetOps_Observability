@@ -649,7 +649,16 @@ RULES_HASH_SYSLOG_FINAL_WAVE = "63f78614003890a5296798154fe3e6d75a02fe9823af0116
 #: also emit the lost controller (`peer-system-ip`) as a grounding token, as the trap
 #: rows do, so several edges' losses of one controller meet on it. No grammar moved.
 RULES_HASH_SDWAN_CONTROLLER_PEER = "eb753644980b5c19d411211381c9c8f2c6273e83f9de30d1ff4688fea52dd2a3"
-RULES_HASH_A3 = RULES_HASH_SDWAN_CONTROLLER_PEER
+#:
+#: ConfD SNMP session (2026-11-11), merged onto the final wave: the `created new session
+#: via snmp` grammar matches the user slot without capturing it (ConfD names a v1/v2c
+#: session by its community). One grammar, no rule row.
+RULES_HASH_FINAL_WAVE_CONFD_SNMP_SESSION = "55b109a4e67d0843bb3206402d6348513356ee53a0fa958f7c1d57ce8b9dcd5b"
+#:
+#: Merged (2026-11-11): the SD-WAN controller peer token and the ConfD SNMP session
+#: grammar, both on the final wave. Nothing else moved.
+RULES_HASH_CONTROLLER_PEER_CONFD_MERGE = "ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941df8206e71018d92b347ace9bb0"
+RULES_HASH_A3 = RULES_HASH_CONTROLLER_PEER_CONFD_MERGE
 
 
 def _guard_patterns(node) -> list[str]:

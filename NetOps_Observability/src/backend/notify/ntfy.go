@@ -210,6 +210,17 @@ type NtfyStatusError struct {
 
 func (e *NtfyStatusError) Error() string { return fmt.Sprintf("ntfy: status %d", e.Status) }
 
+// RetryDelay is the server's own Retry-After, already clamped. A method (and
+// not only the field) so a caller can read it through an interface shared with
+// TwilioStatusError.
+func (e *NtfyStatusError) RetryDelay() time.Duration { return e.RetryAfter }
+
+// AuthRejected reports that the server refused the bearer token (or that the
+// topic needs one).
+func (e *NtfyStatusError) AuthRejected() bool {
+	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
 // RateLimited reports a refusal for BUDGET reasons rather than a fault. It is
 // the one failure a caller must not answer by pushing harder.
 func (e *NtfyStatusError) RateLimited() bool { return e.Status == http.StatusTooManyRequests }

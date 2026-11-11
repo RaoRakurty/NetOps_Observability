@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/internal/applog"
@@ -318,6 +319,54 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// egressScrubKey carries the by-value masker ProviderDo applies last.
+type egressScrubKey struct{}
+
+// WithEgressScrub returns ctx carrying scrub, which ProviderDo applies to every
+// provider payload sent under it, after RedactSecrets, IN PLACE OF the
+// process default (SetDefaultEgressScrub). scrub takes and returns the
+// serialized JSON body and must keep it well-formed (credscrub.MaskJSON does).
+// A nil scrub returns ctx unchanged.
+func WithEgressScrub(ctx context.Context, scrub func([]byte) []byte) context.Context {
+	if scrub == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, egressScrubKey{}, scrub)
+}
+
+// defaultEgressScrub is the process-wide fallback ProviderDo applies when the
+// context carries no scrub: the api sets it once at boot to the configured SNMP
+// communities of EVERY tenant (credscrub's Union). It is package state, a
+// deliberate exception to "no global variables" (CLAUDE.md §5): ProviderDo is a
+// free function called from many places, including background jobs that have
+// no request context, and the point of a last line is that a caller cannot
+// forget it. The union is safe here because the pass runs on a payload on its
+// way OUT to an external provider: it only removes information and returns
+// nothing to any caller.
+var defaultEgressScrub atomic.Pointer[func([]byte) []byte]
+
+// SetDefaultEgressScrub installs the fallback ProviderDo applies when the
+// context carries no scrub. nil removes it.
+func SetDefaultEgressScrub(scrub func([]byte) []byte) {
+	if scrub == nil {
+		defaultEgressScrub.Store(nil)
+		return
+	}
+	defaultEgressScrub.Store(&scrub)
+}
+
+func egressScrubFrom(ctx context.Context) func([]byte) []byte {
+	if ctx != nil {
+		if scrub, _ := ctx.Value(egressScrubKey{}).(func([]byte) []byte); scrub != nil {
+			return scrub
+		}
+	}
+	if p := defaultEgressScrub.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // ProviderDo performs one provider HTTP call — retried on a transient failure
 // — and returns the 2xx body. On a non-2xx it logs the provider's error body
 // server-side (SR-022 — never echoed to the client) and returns an error so the
@@ -334,6 +383,13 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 	// Mask contains no quoting/escaping characters and the value patterns
 	// stop at structural characters, so the JSON payload stays well-formed.
 	body = []byte(RedactSecrets(string(body)))
+	// Values no pattern can find (the configured SNMP communities, which ConfD
+	// prints as a session's user): masked by value with the context's scrub
+	// (WithEgressScrub) or, without one, the process default set at boot
+	// (SetDefaultEgressScrub), so a background job cannot bypass it.
+	if scrub := egressScrubFrom(ctx); scrub != nil {
+		body = scrub(body)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
 		rb, err := providerDoOnce(ctx, urlStr, headers, body, provider)

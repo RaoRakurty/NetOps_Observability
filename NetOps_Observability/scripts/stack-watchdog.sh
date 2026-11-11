@@ -1440,7 +1440,8 @@ drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/n
 eng_cid=""
 eng_err=""
 if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ] || [ "${SNAPSHOT_RESTORABLE_CHECK:-1}" = "1" ] ||
-   [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ] || [ "${CLIENT_CERT_CHECK:-1}" = "1" ]; then
+   [ "${DEBUG_LEVEL_CHECK:-1}" = "1" ] || [ "${CLIENT_CERT_CHECK:-1}" = "1" ] ||
+   [ "${PLATFORM_ALERT_ROUTE_CHECK:-1}" = "1" ]; then
   eng_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
                       --filter "label=com.docker.compose.service=victoria" 2>/dev/null | head -1)
 fi
@@ -1577,6 +1578,71 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
           problems+=("alert-delivery probe SKIPPED: heartbeat age is not a number (got '${eng_hb_age}') — treating as UNKNOWN, not as healthy")
         elif [ "$eng_hb_age_i" -gt "$eng_hb_max" ]; then
           problems+=("ALERT_DELIVERY_BROKEN: no alert has reached the platform for $(( eng_hb_age_i / 60 ))m (limit $(( eng_hb_max / 60 ))m) — vmalert is evaluating into a void and every 'quiet' alert is unproven. Runbook: docs/runbooks/engine-not-consuming.md")
+        fi
+      fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# PLATFORM ALERTS REACH NOBODY (review 2026-11-11).
+#
+# The alert-delivery heartbeat above proves vmalert -> notifier -> api. It
+# cannot see the LAST hop: since 2026-11-11 the destinations of the stack's own
+# alerts are set in the web console (Platform -> Platform alerts), and with none
+# set — or with the saved settings unreadable since the api started — every
+# page is counted not_configured while the heartbeat keeps landing. Every layer
+# then reads green while pages reach nobody: the 2026-09-02 shape. The api
+# exports netops_platform_alert_page_routed (0/1) and
+# netops_platform_alert_store_ever_read (0/1) on every scrape; this block reads
+# them over the watchdog's own VictoriaMetrics seam and pages over its OWN ntfy
+# topic, because the platform route is exactly what is missing.
+#
+# Same condition as the in-stack PlatformAlertsReachNobody page rule
+# (rules-scale-slo.yaml, condition 4 — not a fifth page condition).
+#
+# WHEN IT FIRES: page_routed has been 0 for the whole last 10 minutes AND the
+# series already existed 10 minutes ago — so a fresh install (or a restarted
+# api) gets ten minutes to be configured before the phone buzzes. It is a
+# CRITICAL class: a fresh install with no route WILL page through this
+# watchdog's ntfy, on purpose — the operator must configure the route.
+# Gated on the receiver being enabled: with delivery switched off the
+# heartbeat block above already reports "alert delivery is DISABLED".
+# Absent routing gauge (an api that predates the setting, or is not scraped)
+# is a quiet named gap in the log — never a pass, never a page; the in-stack
+# rule treats that case for a scraped api.
+#
+# PLATFORM_ALERT_ROUTE_CHECK=0 disables the block.
+if [ "${PLATFORM_ALERT_ROUTE_CHECK:-1}" = "1" ] && [ -n "${eng_cid:-}" ]; then
+  # max(netops_alert_webhook_enabled)
+  if ! eng_query 'max%28netops_alert_webhook_enabled%29'; then
+    problems+=("platform-alert route probe SKIPPED: $eng_err")
+  elif [ "${eng_val%%.*}" = "1" ]; then
+    # max(netops_platform_alert_page_routed)
+    if ! eng_query 'max%28netops_platform_alert_page_routed%29'; then
+      problems+=("platform-alert route probe SKIPPED: $eng_err")
+    elif [ -z "$eng_val" ]; then
+      logerr "watchdog: platform-alert route not checked — netops_platform_alert_page_routed is absent (api predates Platform alerts, or is not scraped). Whether pages reach anyone is UNPROVEN on this deployment."
+    elif ! grep -qE '^-?[0-9]+$' <<<"${eng_val%%.*}"; then
+      problems+=("platform-alert route probe SKIPPED: page_routed is not a number (got '${eng_val}') — treating as UNKNOWN, not as healthy")
+    elif [ "${eng_val%%.*}" -le 0 ]; then
+      # Routed nowhere NOW; has it been so for the whole window, and is the
+      # series older than the window? An empty answer means "too young to
+      # judge" — quiet until the grace has passed.
+      # max(max_over_time(page_routed[10m])) unless on() absent(page_routed offset 10m)
+      if ! eng_query 'max%28max_over_time%28netops_platform_alert_page_routed%5B10m%5D%29%29%20unless%20on%28%29%20absent%28netops_platform_alert_page_routed%20offset%2010m%29'; then
+        problems+=("platform-alert route probe SKIPPED: $eng_err")
+      elif [ -z "$eng_val" ]; then
+        logerr "watchdog: platform alerts reach nobody, but the api's routing gauge is younger than the 10-minute grace — not paging yet"
+      elif ! grep -qE '^-?[0-9]+$' <<<"${eng_val%%.*}"; then
+        problems+=("platform-alert route probe SKIPPED: windowed page_routed is not a number (got '${eng_val}') — treating as UNKNOWN, not as healthy")
+      elif [ "${eng_val%%.*}" -le 0 ]; then
+        # Name the cause: nothing configured, or nothing readable.
+        # max(netops_platform_alert_store_ever_read)
+        if eng_query 'max%28netops_platform_alert_store_ever_read%29' && [ "${eng_val%%.*}" = "0" ]; then
+          problems+=("PLATFORM_ALERTS_UNROUTED: page-tier platform alerts reach NOBODY — the saved Platform alerts settings could not be read since the api started (check Postgres and the vault). Runbook: docs/runbooks/engine-not-consuming.md")
+        else
+          problems+=("PLATFORM_ALERTS_UNROUTED: page-tier platform alerts reach NOBODY — no channel receives pages; set one up in the web console under Platform, Platform alerts, and press Send test. Runbook: docs/runbooks/engine-not-consuming.md")
         fi
       fi
     fi
@@ -1938,7 +2004,7 @@ problem_is_critical() {
     *PID_LIMIT_REACHED*|*CONTAINER_RUNTIME_EXEC_FAILURE*|\
     *CLICKHOUSE_UNREACHABLE*|*CLICKHOUSE_TLS_FAILURE*|*"CANNOT PROBE"*|\
     *API_UNRESPONSIVE*|\
-    *ENGINE_NOT_CONSUMING*|*ALERT_DELIVERY_BROKEN*|\
+    *ENGINE_NOT_CONSUMING*|*ALERT_DELIVERY_BROKEN*|*PLATFORM_ALERTS_UNROUTED*|\
     *"log ingest stalled"*)
       return 0 ;;
   esac

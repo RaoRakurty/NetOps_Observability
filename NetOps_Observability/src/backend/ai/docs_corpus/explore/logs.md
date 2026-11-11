@@ -7,7 +7,9 @@ sidebar_position: 3
 
 # Search logs
 
-**Explore → Logs** is full-text search over the records devices actually sent. It is the only explore plane that returns raw documents, one per row, with the whole document behind each. A **Cloud Logs** sub-tab covers the cloud plane; its nav entry sits under **Operations → Cloud** and opens the same view.
+**Explore → Logs** is full-text search over the records devices actually sent. It is the only explore plane that returns raw documents, one per row, with the whole document behind each. The page opens on its **Events** tab: syslog, SNMP traps, flow records and firewall logs on one timeline, newest first. A **Cloud Logs** sub-tab covers the cloud plane; its nav entry sits under **Operations → Cloud** and opens the same view.
+
+Firing alerts are not on this page. They have their own page, **Operations → Active Alerts**. See [Manage alerts](/monitoring/manage-alerts).
 
 ## Before you begin
 
@@ -18,13 +20,13 @@ sidebar_position: 3
 
 ## Steps
 
-### Step 1 - Choose a log source and a window
+### Step 1 - Choose a log type and a window
 
-1. Choose a source from the first dropdown: **All**, **App logs**, **Syslog (devices)**, **Firewall logs**, **SNMP traps** or **Flows**. It sets the `signal` parameter on the search.
-2. Choose a range: **Last 15m**, **Last 1h**, **Last 6h** or **Last 24h**, or let the top-bar range picker drive it.
+1. Choose a tab in the **Log type** row: **Events**, **Logs**, **Traps**, **Flows**, **Firewall** or **App logs**. **Events** is the default and searches every type at once. The other tabs narrow the search to one type. The tab you are on shows its match count.
+2. The top-bar range picker sets the window. See [The global time range](/explore/overview#the-global-time-range).
 3. Choose a page size.
 
-**Firewall logs** is a convenience filter over the syslog index. It narrows to records a firewall vendor parser produced, or that carry the vendor-neutral application contract, so it works across vendors rather than matching a vendor name.
+**Firewall** is a convenience filter over the syslog store. It narrows to records a firewall vendor parser produced, or that carry the vendor-neutral application contract, so it works across vendors rather than matching a vendor name.
 
 ### Step 2 - Read the retention floor before you read the results
 
@@ -39,7 +41,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 {"days":13,"oldest":"2026-08-21T00:00:00Z","signal":"syslog","total":2172327}
 ```
 
-The line reads `This store holds N logs — going back to <timestamp> (N days of history).` The total is an exact count over the same tenant-scoped surface the search reads, not a capped estimate. Each source is its own store with its own retention, so the line is re-read when you change the dropdown. Where a source has nothing stored, it reads `No logs stored yet for this signal.`
+The line reads `This store holds N logs — going back to <timestamp> (N days of history).` The total is an exact count over the same tenant-scoped surface the search reads, not a capped estimate. Each source is its own store with its own retention, so the line is re-read when you change the tab. Where a source has nothing stored, it reads `No logs stored yet for this signal.`
 
 ### Step 3 - Run the search and read the count
 
@@ -106,6 +108,7 @@ The raw search console at `/search` is for the platform owner only. Entry is rec
 
 ## Related
 
-- [Review the event feed](/explore/events) for syslog and traps merged with active alerts on one timeline.
+- [Manage alerts](/monitoring/manage-alerts) for the alerts that are firing now, on **Operations → Active Alerts**.
+- [Event feed API](/explore/event-feed-api) for the unified feed behind **What changed**, including configuration changes and audit actions.
 - [Analyse flows](/explore/flows) for the unsampled flow store.
 - [Reading logs](/noc-guide/reading-logs) for what the fields mean during an incident.

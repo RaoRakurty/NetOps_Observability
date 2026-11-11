@@ -212,11 +212,17 @@ type Deps struct {
 	// as the Budgets key (notify.PushServerKey normalizes it to a host). Empty
 	// means the default public server. It is never logged with the topic.
 	HostServer string
-	// HostRoute is the HOST-MONITORING push destination (hostroute.go): the
-	// phone channel the external watchdog already uses. nil = not configured,
+	// HostRouter resolves the HOST-MONITORING destinations per push
+	// (hostroute.go) — the platform-global route an administrator configures on
+	// Platform → Platform alerts (internal/platformalert). It wins over
+	// HostRoute. A router with no destination for any tier = not configured,
 	// which is COUNTED and warned about once, never an error per alert. This
 	// route is deliberately independent of the product notification channels —
 	// it is how the stack reports on ITSELF.
+	HostRouter HostRouter
+	// HostRoute is the legacy fixed destination: one pusher for every tier,
+	// spending this receiver's own budget (Budgets/HostServer or PushBudget).
+	// Used only when HostRouter is nil. nil = not configured.
 	HostRoute HostPusher
 	// Metrics is the counter set surfaced on /metrics. nil is safe (every
 	// method is nil-safe) but loses the observability §10 asks for.
@@ -283,8 +289,13 @@ type receiver struct {
 	budgetLoggedAt time.Time
 
 	// budget is the SHARED per-push-server outbound token bucket
-	// (notify/pushbudget.go). nil when the operator disabled it.
+	// (notify/pushbudget.go) of the legacy fixed route. nil when the operator
+	// disabled it, and nil under a HostRouter (each target carries its own).
 	budget *notify.PushBudget
+
+	// router resolves the host route's destinations per push: Deps.HostRouter,
+	// or a staticRouter over Deps.HostRoute, or nil (no route wired at all).
+	router HostRouter
 }
 
 // Handler builds the Alertmanager-v2 receiver. It returns an error rather than
@@ -318,7 +329,12 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 	// dumps every standing alert on its first post, and a window anchored there
 	// summarizes that dump instead of letting the first of it through alone.
 	r.digestLast = r.now()
-	if d.HostRoute != nil {
+	if d.HostRouter != nil {
+		// The configurable route: every target carries its own budget, so the
+		// receiver holds none of its own.
+		r.router = d.HostRouter
+		r.hostQ = make(chan hostJob, hostQueueSize)
+	} else if d.HostRoute != nil {
 		r.hostQ = make(chan hostJob, hostQueueSize)
 		// DEFAULT-ON. An unset (zero) budget takes the package default rather
 		// than "unlimited": the guard exists because the free ntfy server
@@ -342,11 +358,34 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 		} else {
 			r.budget = notify.NewPushBudget(d.HostServer, budget, reserve, r.now)
 		}
+		r.router = staticRouter{t: HostTarget{Channel: ChannelNtfy, Pusher: d.HostRoute, Budget: r.budget}}
 	}
 	d.Metrics.setEnabled(true)
-	d.Metrics.setHostRouteEnabled(d.HostRoute != nil)
-	d.Metrics.attachBudget(r.budget)
+	r.refreshRouteGauges()
 	return r.serve, nil
+}
+
+// refreshRouteGauges re-reads the router into the two route gauges. Called at
+// build and on every request: the destinations are configurable at runtime,
+// and the always-firing heartbeat guarantees a request per vmalert evaluation,
+// so the gauge follows a configuration change within one evaluation without a
+// timer of its own.
+func (r *receiver) refreshRouteGauges() {
+	r.deps.Metrics.setHostRouteEnabled(len(r.hostTargets(tierPage)) > 0)
+	if r.budget != nil {
+		r.deps.Metrics.attachBudget(r.budget)
+		return
+	}
+	// Under a router, the gauge follows the ntfy page target's bucket — the
+	// one shared with the product channel, which is what the operator tunes.
+	var b *notify.PushBudget
+	for _, t := range r.hostTargets(tierPage) {
+		if t.Channel == ChannelNtfy {
+			b = t.Budget
+			break
+		}
+	}
+	r.deps.Metrics.attachBudget(b)
 }
 
 // ── wire format ─────────────────────────────────────────────────────────────
@@ -456,6 +495,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	// one evaluation of its deadline, with no background timer to leak and no
 	// wall-clock the tests must sleep through (digest.go).
 	r.maybeFlushDigest(r.now())
+	r.refreshRouteGauges()
 
 	// ALWAYS 200 once authenticated and parsed. vmalert retries a 5xx forever
 	// and would turn a receiver-side bug into a self-inflicted request storm;

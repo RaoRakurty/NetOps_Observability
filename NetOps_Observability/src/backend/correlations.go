@@ -29,6 +29,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/httppage"
 	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/metricval"
@@ -619,8 +620,36 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 // the Global-view exclusion. A restricted tenant's object answers the SAME 404
 // a missing one does, and the four sub-reads below never run, because they key
 // off the meta row this query refused to return.
+//
+// The signal rows leave through the CALLER's community mask (internal/credscrub):
+// the generic device_alarm net keeps the first 256 characters of a syslog line
+// in attrs.text, and a ConfD session line sent at warning or worse would put
+// the SNMP community it names as its user there. Every principal reader of a
+// slice goes through here: the correlation detail and timeline, the RCA report,
+// the similar-incidents recall and Iris's case timeline.
 func (s *server) loadCorrSlice(ctx context.Context, claims jwtClaims, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
-	return s.loadCorrSliceAtScope(ctx, s.chTenantScopeFor(claims), s.tenantIDExcludeCondFor(claims, "tenant_id"), id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSliceAtScope(ctx, s.chTenantScopeFor(claims), s.tenantIDExcludeCondFor(claims, "tenant_id"), id, version)
+	if err == nil && s.credScrub != nil {
+		tenant, cross := principalTenant(claims)
+		maskSignalRows(s.credScrub.For(tenant, cross), sigRows)
+	}
+	return meta, sigRows, evRows, edgeRows, status, err
+}
+
+// maskSignalRows masks a View's values in every string of each signal row, in
+// place. attrs is a JSON string: it is masked as JSON first (a value spelled
+// with an escape inside it is still found), then as text with the rest.
+func maskSignalRows(v credscrub.View, rows []map[string]any) {
+	for i, row := range rows {
+		if raw, ok := row["attrs"].(string); ok && raw != "" {
+			row["attrs"] = string(v.MaskJSON([]byte(raw)))
+		}
+		if masked, changed := v.MaskValue(row); changed {
+			if m, ok := masked.(map[string]any); ok {
+				rows[i] = m
+			}
+		}
+	}
 }
 
 // loadCorrSliceAtScope is the same read at an EXPLICIT scope, for the two

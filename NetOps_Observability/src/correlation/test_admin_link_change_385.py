@@ -479,10 +479,12 @@ def test_the_parser_is_untouched():
     Re-pinned for the tracker 387 final syslog wave: five pack rows (the SD-WAN gateway
     lost at warn, two rows, and three known_benign) behind every older one; no link row moved.
     Re-pinned for the SD-WAN controller token: the two control-connection syslog rows emit
-    the lost controller as a token; no link row moved."""
-    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token"
+    the lost controller as a token; no link row moved.
+    Re-pinned for the ConfD SNMP session grammar that reads no user: no rule row.
+    Re-pinned for the merge of those two; no link row moved."""
+    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token-confd"
     assert parser_rules.BAKED_RULES_HASH == (
-        "eb753644980b5c19d411211381c9c8f2c6273e83f9de30d1ff4688fea52dd2a3")
+        "ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941df8206e71018d92b347ace9bb0")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

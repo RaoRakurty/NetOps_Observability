@@ -200,7 +200,7 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		name := cand.name
 		attempted = true
 		// The shared guard: breaker, one structured failure log, call metrics.
-		c, err := s.callProviderGuarded(r.Context(), tenant, "", cand, system, msgs)
+		c, err := s.callProviderGuarded(s.egressCtx(r.Context(), claims), tenant, "", cand, system, msgs)
 		text := c.Text
 		if err == nil && strings.TrimSpace(text) != "" {
 			// Strip any doc citation the model INVENTED (an id not among the
@@ -281,7 +281,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 	// resolve "last night" without knowing now).
 	system += "\n\n" + ai.AgentDoctrine(time.Now().UTC())
 	call := func(ctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
-		return ai.CallTools(ctx, ai.ProviderDo, name, key, model, sys, turns, sp)
+		return ai.CallTools(s.egressCtx(ctx, claims), ai.ProviderDo, name, key, model, sys, turns, sp)
 	}
 	preIDs := make([]string, 0, len(docRefs))
 	for _, dr := range docRefs {

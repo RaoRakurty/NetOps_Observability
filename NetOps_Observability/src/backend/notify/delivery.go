@@ -436,7 +436,7 @@ func (d *Dispatcher) WriteMetrics(w io.Writer) {
 	// A push server that could not be resolved to a host is a CONFIGURATION
 	// FAULT, and every push to it is already failing. Emitted for every known
 	// server (0 or 1) so "configured correctly" is a value and not a gap.
-	fmt.Fprintf(w, "# HELP netops_notify_push_server_misconfigured 1 when a configured push server could not be resolved to a host (NTFY_ALERT_SERVER / PLATFORM_ALERTS_NTFY_SERVER); the label is then the raw value, not a hostname.\n")
+	fmt.Fprintf(w, "# HELP netops_notify_push_server_misconfigured 1 when a configured push server could not be resolved to a host (the product ntfy channel's server, or the server set on Platform → Platform alerts); the label is then the raw value, not a hostname.\n")
 	fmt.Fprintf(w, "# TYPE netops_notify_push_server_misconfigured gauge\n")
 	for _, st := range states {
 		fmt.Fprintf(w, "netops_notify_push_budget_remaining{server=%q} %d\n", st.Server, st.Remaining)

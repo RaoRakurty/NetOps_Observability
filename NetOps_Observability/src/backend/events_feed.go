@@ -284,6 +284,12 @@ SELECT toString(s.signal_id) AS signal_id,
 	}
 	order, _ := s.governance.AttributionPrecedence(tenant)
 
+	// Every signal row leaves through the caller's community mask
+	// (internal/credscrub, maskSignalRows): a generic device_alarm keeps the
+	// first 256 characters of its syslog line in attrs.text.
+	if s.credScrub != nil {
+		maskSignalRows(s.credScrub.For(tenant, cross), rows)
+	}
 	items := make([]map[string]any, 0, len(rows))
 	var nextCursor string
 	for _, row := range rows {

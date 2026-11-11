@@ -223,7 +223,8 @@ test("BGP, syslog fault, audit, unparsed and flow records use the same panel", a
   await expect(detail(page).getByTestId("event-syslog")).toContainText("could not reach 8.8.8.8");
   await expect(detail(page).getByTestId("event-syslog")).toContainText("Original frame");
   await openRow(page, "audit user");
-  await expect(detail(page).getByTestId("event-audit")).toContainText("ciscosdwan");
+  await expect(detail(page).getByTestId("event-audit")).toContainText("127.0.0.1:54511");
+  await expect(detail(page).getByTestId("event-audit")).toContainText("snmp (udp)");
   await openRow(page, "FP_QFULL");
   await expect(detail(page).getByTestId("event-syslog")).toContainText("Not parsed yet");
   await openRow(page, "192.168.222.105");

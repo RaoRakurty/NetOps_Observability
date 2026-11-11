@@ -155,8 +155,8 @@ const sidebars = {
             'explore/logs',
             'explore/flows',
             'explore/application-attribution',
-            'explore/events',
             'explore/saved-searches',
+            'explore/event-feed-api',
           ],
         },
         {

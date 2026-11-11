@@ -73,6 +73,7 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	}
 	var lastErr error
 	skipped := 0
+	ctx = l.srv.egressCtx(ctx, l.claims)
 	for _, cand := range cands {
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
@@ -96,6 +97,24 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	// Wrapped, not replaced: the caller's honest footer ("timed out", "paused")
 	// is decided from the class of the last failure.
 	return "", "", ai.TokenUsage{}, fmt.Errorf("no AI provider answered: %w", lastErr)
+}
+
+// egressCtx attaches the CALLER's community mask to a provider call's context
+// (ai.WithEgressScrub): its own tenant's values plus the platform's, every
+// tenant's only for a cross-tenant caller (internal/credscrub). It replaces the
+// process default (the union, kept for callers with no request) because the
+// model's answer comes back to this caller: an answer that echoed "***" where
+// the caller's own log held another tenant's community would tell the caller
+// the string is one. Every request path that reaches ai.ProviderDo goes through
+// here: aiLLM (the grounded engine, Iris NL), the copilot's plain chat and its
+// agent loop.
+func (s *server) egressCtx(ctx context.Context, claims jwtClaims) context.Context {
+	if s == nil || s.credScrub == nil {
+		return ctx
+	}
+	cs := s.credScrub
+	tenant, cross := principalTenant(claims)
+	return ai.WithEgressScrub(ctx, func(body []byte) []byte { return cs.For(tenant, cross).MaskJSON(body) })
 }
 
 // errAIBudgetExhausted is the refusal once a tenant's daily token budget is spent.

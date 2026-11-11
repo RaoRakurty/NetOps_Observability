@@ -113,6 +113,12 @@ type Deps struct {
 	// MaxLines caps one mining run's scan (PARSERCOV_MAX_LINES). <= 0 takes
 	// DefaultMaxLines.
 	MaxLines int
+	// Mask masks the configured credential values in a line's text before it is
+	// mined (internal/credscrub), so no sample, template or template id carries
+	// one. It masks with the CALLER's set (tenant/cross of the Principal: its
+	// own tenant's values plus the platform's), never another tenant's.
+	// Optional: nil masks nothing.
+	Mask func(tenant string, cross bool, text string) string
 }
 
 // API is the handler set.
@@ -406,11 +412,15 @@ func (a *API) runOrCached(ctx context.Context, p Principal, days int, lane Lane)
 		// rather than ignored (§5: no ignored errors).
 		return runResult{}, false, fmt.Errorf("scope clause not serialisable: %w", err)
 	}
-	key := cacheKey(index, clauseJSON, days, lane)
+	// The mined samples are masked with the caller's credential set (Deps.Mask),
+	// so the set's scope is part of the key: a run masked for one principal is
+	// never served to a principal with a different set.
+	maskScope := []byte(fmt.Sprintf("\x00mask:%s:%t", p.Tenant, p.Cross))
+	key := cacheKey(index, append(clauseJSON, maskScope...), days, lane)
 	if e := a.cache.get(key); e != nil {
 		return e.run, true, nil
 	}
-	run, err := a.mine(ctx, index, clause, days, lane)
+	run, err := a.mine(ctx, p, index, clause, days, lane)
 	if err != nil {
 		return runResult{}, false, err
 	}
@@ -436,7 +446,7 @@ func laneVerdict(lane Lane) error {
 }
 
 // mine runs the whole scan for one scope and window.
-func (a *API) mine(ctx context.Context, index string, clause map[string]any, days int, lane Lane) (runResult, error) {
+func (a *API) mine(ctx context.Context, p Principal, index string, clause map[string]any, days int, lane Lane) (runResult, error) {
 	if err := laneVerdict(lane); err != nil {
 		return runResult{}, err
 	}
@@ -495,7 +505,14 @@ func (a *API) mine(ctx context.Context, index string, clause map[string]any, day
 					map[string]any{"error": err.Error()})
 				continue
 			}
-			miner.Add(doc.toLine())
+			line := doc.toLine()
+			if a.d.Mask != nil {
+				// Before the miner: the sample, the template AND the template id
+				// (a hash of the template) all derive from the masked text. The
+				// caller's own set, never another tenant's (§3a).
+				line.Message = a.d.Mask(p.Tenant, p.Cross, line.Message)
+			}
+			miner.Add(line)
 		}
 		after = hits[len(hits)-1].Sort
 		if len(hits) < size || len(after) == 0 {

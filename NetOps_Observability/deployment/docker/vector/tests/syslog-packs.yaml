@@ -2169,7 +2169,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.message, "a genuine message that begins this way", "wrong message")
-  - name: "standard: an SNMP poll session opening, with its key"
+  - name: "standard: an SNMP poll session opening, with its key and no user"
     inputs:
       - insert_at: syslog_normalized
         type: log
@@ -2177,7 +2177,7 @@ tests:
           hostname: "vEdge-1"
           appname: "confd"
           severity: "notice"
-          message: "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+          message: "audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp"
           timestamp: "2026-01-01T00:00:00Z"
     outputs:
       - extract_from: syslog_normalized
@@ -2187,19 +2187,18 @@ tests:
               assert_eq!(.parser_id, "standard_mgmt_audit.v1", "wrong parser_id")
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.event_type, "audit_session_created_snmp", "wrong event_type")
-              assert_eq!(.summary, "SNMP session by svc-user from 192.0.2.1 (poll)", "wrong summary")
+              assert_eq!(.summary, "SNMP session from 192.0.2.1 (poll)", "wrong summary")
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
-              assert_eq!(.message, "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
-              assert_eq!(.title, "SNMP session on vEdge-1 by svc-user from 192.0.2.1 (poll)", "wrong title")
+              assert_eq!(.message, "audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
+              assert_eq!(.title, "SNMP session on vEdge-1 from 192.0.2.1 (poll)", "wrong title")
               assert_eq!(.correlation_key, "audit:vEdge-1:snmp:777134", "wrong correlation_key")
-              assert_eq!(.audit_user, "svc-user", "wrong audit_user")
               assert_eq!(.audit_action, "session_created", "wrong audit_action")
               assert_eq!(.audit_source, "192.0.2.1:59169", "wrong audit_source")
               assert_eq!(.audit_via, "snmp", "wrong audit_via")
               assert_eq!(.session_id, "777134", "wrong session_id")
-              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "audit_action", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "audit_user", "audit_source", "audit_via", "session_id"], "unknown": []}, "wrong enrichment")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "audit_action", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "audit_source", "audit_via", "session_id"], "unknown": []}, "wrong enrichment")
   - name: "standard: a NETCONF session opening keeps its own key"
     inputs:
       - insert_at: syslog_normalized

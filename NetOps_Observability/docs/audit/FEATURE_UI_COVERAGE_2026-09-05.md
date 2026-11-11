@@ -85,7 +85,7 @@ under `docs-portal/docs/`.
 | gNMI streaming | `ENABLE_GNMI_COLLECTION` | Sensors; Data Sources | `onboard-devices/streaming-gnmi.md` | partial | status only, no subscription editor |
 | NETCONF | `ENABLE_NETCONF_COLLECTION` | Sensors | — | partial | status only |
 | Syslog ingest | `syslog-ng` → `vector`, `/api/logs/*` | Explore → Logs | `send-data/syslog.md` | exposed | — |
-| SNMP traps | `FEATURE_SNMP_TRAPS`, `/api/events` | Explore → Events | `send-data/traps.md` | exposed | — |
+| SNMP traps | `FEATURE_SNMP_TRAPS`, `/api/events` | Explore → Logs (Traps and Events tabs; the separate Explore → Events page was removed 2026-11-11) | `send-data/traps.md` | exposed | — |
 | Flow ingest (NetFlow/sFlow/IPFIX) | `goflow2`, `/api/flows/*` | Explore → Flows | `send-data/flows.md` | partial | **`/api/flows/apps` and `/api/flows/services` MISSING** — no app view, no per-service view of the flow plane |
 | Telemetry coverage / unrecognized shapes | `/api/telemetry/unrecognized`, `/api/admin/parser/stats` | Administration → Telemetry Coverage | `administration/telemetry-coverage.md` | exposed | — |
 | Pipeline processors | `FEATURE_PROCESSORS`, `/api/pipeline/processors` | Administration → Processors | `administration/processors.md` | exposed | — |
