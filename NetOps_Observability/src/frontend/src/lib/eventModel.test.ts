@@ -135,8 +135,10 @@ describe("the golden CPU trap (vedge-51, 2026-11-10)", () => {
   });
 
   it("links related records by fields the index can answer, quoted", () => {
-    expect(v.timelineQuery?.basis).toMatch(/Same device and event type/);
-    expect(clauseQuery(v.timelineQuery!.clauses)).toBe('device_id:"vedge-51-0a0b4db5" AND event_type:"viptela_system_cpu_usage"');
+    // The correlation key is searchable since train #180, so it is preferred over
+    // the device + event type fallback.
+    expect(v.timelineQuery?.basis).toBe("Same correlation key");
+    expect(clauseQuery(v.timelineQuery!.clauses)).toBe('correlation_key:"cpu:vedge-51-0a0b4db5:device"');
     expect(v.timelineQuery?.signal).toBe("snmptrap");
   });
 
@@ -427,11 +429,29 @@ describe("the timeline only filters on fields the index can answer", () => {
     expect(fields.length).toBeGreaterThan(5);
     for (const f of TIMELINE_SEARCHABLE[lane] ?? []) expect(fields, f).toContain(f);
   });
-  it("adopts the correlation key the moment it is mapped (today it is not)", () => {
-    const trapFields = mapped("netops-snmptrap-*");
-    for (const k of TIMELINE_KEYS) {
-      expect(trapFields.includes(k), `${k} is now mapped: add it to TIMELINE_SEARCHABLE.trap`).toBe((TIMELINE_SEARCHABLE.trap ?? []).includes(k));
-    }
+  it.each([["trap", "netops-snmptrap-*"], ["syslog", "netops-syslog-*"]] as const)(
+    "the %s timeline uses a correlation key exactly when the index maps it",
+    (lane, pattern) => {
+      const fields = mapped(pattern);
+      for (const k of TIMELINE_KEYS) {
+        expect(fields.includes(k), `${k} mapped on ${pattern}: keep TIMELINE_SEARCHABLE.${lane} in step`).toBe(
+          (TIMELINE_SEARCHABLE[lane] ?? []).includes(k),
+        );
+      }
+    },
+  );
+});
+
+describe("the timeline prefers the narrowest searchable key", () => {
+  it("a BGP transition links by its transition id, before the correlation key", () => {
+    const v = toEventView(BGP_TRANSITION);
+    expect(v.timelineQuery?.basis).toBe("Same transition");
+    expect(clauseQuery(v.timelineQuery!.clauses)).toBe('transition_id:"bgp:cedge-11-0a0b4da1:10.10.20.2:ipv4"');
+  });
+  it("a record with neither key falls back to device and event type", () => {
+    const src = { ...CPU_GOLDEN._source!, correlation_key: undefined, transition_id: undefined };
+    const v = toEventView({ ...CPU_GOLDEN, _source: src });
+    expect(v.timelineQuery?.basis).toMatch(/Same device and event type/);
   });
 });
 

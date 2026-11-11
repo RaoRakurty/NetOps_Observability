@@ -379,8 +379,10 @@ const SEARCH_SIGNAL: Record<Lane, TimelineQuery["signal"]> = {
  * eventModel.test.ts pins every entry here to deployment/docker/opensearch/index-templates.json.
  */
 export const TIMELINE_SEARCHABLE: Partial<Record<Lane, readonly string[]>> = {
-  trap: ["device_id", "event_type", "trap_oid"],
-  syslog: ["device_id", "event_type"],
+  // transition_id and correlation_key are mapped on both lanes since train #180
+  // (tracker 387); the bootstrap adds them to the current index at deploy.
+  trap: ["device_id", "event_type", "trap_oid", "transition_id", "correlation_key"],
+  syslog: ["device_id", "event_type", "transition_id", "correlation_key"],
 };
 
 /** The search text for a set of clauses: each value quoted, so none can break out. */

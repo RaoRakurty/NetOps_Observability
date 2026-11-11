@@ -155,6 +155,7 @@ ALL = set(tp.CI_GROUPS)
     ([P + "deployment/docker/Dockerfile.correlation"], {"correlation", "install-boot"}),
     ([P + "deployment/docker/Dockerfile.frontend"], {"frontend", "install-boot"}),
     ([P + "deployment/docker/docker-compose.yml"], {"install-boot"}),
+    ([P + "deployment/docker/opensearch/index-templates.json"], {"backend", "frontend", "install-boot"}),
     # install / startup scripts
     ([P + "scripts/install.py"], {"install-boot"}),
     ([P + "scripts/install-correlix.sh"], {"install-boot"}),
