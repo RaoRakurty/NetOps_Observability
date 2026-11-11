@@ -14,7 +14,9 @@
 # GO-2026-6607..6617, reached from our HTTP handlers and clients).
 # 2026-10-24: 1.26.9 -> 1.26.10 (crypto/x509 GO-2026-6809: distrust the
 # compromised emSign intermediates; reached from every TLS client handshake).
-FROM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS build
+# 2026-11-11: 1.26.10 -> 1.26.11 (net/http GO-2026-6859: HTTP/1 server crash
+# due to a MaxBytesReader header race; reached from our HTTP handlers/clients).
+FROM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 WORKDIR /src
 COPY src/backend/ ./
 
