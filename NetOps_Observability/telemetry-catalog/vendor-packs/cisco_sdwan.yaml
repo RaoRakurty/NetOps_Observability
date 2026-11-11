@@ -1367,6 +1367,7 @@ fixtures:
     message: 'Copyright (c) 1986-2020 by Cisco Systems, Inc.'
     expect:
       parser_id: cisco_iosxe.v1
+      parser_status: parsed
       event_type: ios_boot_banner
       summary: 'Cisco IOS boot banner: copyright 1986-2020'
       title: 'Cisco IOS boot banner on cEdge-1: copyright notice'
@@ -1381,6 +1382,7 @@ fixtures:
     message: 'Compiled Sat 31-Oct-20 13:16 by mcpre'
     expect:
       parser_id: cisco_iosxe.v1
+      parser_status: parsed
       event_type: ios_boot_banner
       summary: 'Cisco IOS boot banner: image built Sat 31-Oct-20 13:16 by mcpre'
       title: 'Cisco IOS boot banner on cEdge-1: build stamp Sat 31-Oct-20 13:16'

@@ -35,7 +35,7 @@
   "cisco/snmptrap/rules_total": 21,
   "cisco/snmptrap/rules_validated": 1,
   "cisco/snmptrap/trap_definitions": 16,
-  "cisco/syslog/fixtures": 54,
+  "cisco/syslog/fixtures": 56,
   "cisco/syslog/grammars": 25,
   "cisco/syslog/rules_total": 35,
   "cisco/syslog/rules_validated": 9,
