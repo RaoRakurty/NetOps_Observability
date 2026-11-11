@@ -36,6 +36,7 @@ Run:  python3 -m pytest tests/test_pipeline_debug_ship.py -v
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import string
@@ -268,53 +269,59 @@ def test_existing_env_is_seeded_once_and_never_overwritten(tmp_path, capsys):
 # update.sh — the key is reconciled on an upgrade (executed, not grepped)
 # ---------------------------------------------------------------------------
 
-def test_update_reconciliation_enumerates_the_debug_token():
+def test_update_reconciles_the_debug_token_through_the_installer_migration():
+    """Since 2026-11-11 update.sh adds new keys by running the installer's own
+    migration (`install.py --migrate-env`), which mints this token; its knob
+    table must not carry a second, empty-defaulted copy of it."""
     src = UPDATE_SH.read_text()
-    assert f'"{TOKEN_VAR}":' in src, (
-        f"{TOKEN_VAR} is missing from update.sh's EXPECTED list — an upgraded "
-        f"install would never learn the knob exists.")
-    m = re.search(rf'"{TOKEN_VAR}":\s*"([^"]*)"', src)
-    assert m and m.group(1) == "__URLSAFE__", (
-        f"{TOKEN_VAR} must be reconciled as a GENERATED url-safe secret, not "
-        f"as the empty compose default: empty is fail-closed, so an upgraded "
-        f"install would keep answering 503 at the bus stage. Got {m and m.group(1)!r}.")
-
-
-def _reconcile_block() -> str:
-    """The .env reconciliation program update.sh actually runs."""
-    blocks = re.findall(r"python3 - <<'PY'\n(.*?)\nPY\n", UPDATE_SH.read_text(), re.S)
-    for b in blocks:
-        if "EXPECTED = {" in b:
-            return b
-    raise AssertionError("update.sh's .env reconcile block not found")
+    assert "python3 scripts/install.py --migrate-env" in src, (
+        "update.sh no longer runs the installer's .env migration — an upgraded "
+        f"install would never get {TOKEN_VAR}.")
+    assert f'"{TOKEN_VAR}":' not in src, (
+        f"{TOKEN_VAR} must be minted by install.py's migration, not appended "
+        "from update.sh's knob table: empty is fail-closed, so an upgraded "
+        "install would keep answering 503 at the bus stage.")
+    assert TOKEN_VAR in install.migrated_env_keys()
 
 
 def test_update_actually_adds_the_token_and_never_touches_it_again(tmp_path):
-    """Run update.sh's own reconcile program against a temp .env. Twice."""
-    block = _reconcile_block()
-    env_path = tmp_path / "deployment" / "docker" / ".env"
-    env_path.parent.mkdir(parents=True)
-    env_path.write_text("BASE_PORT=8000\nADMIN_USERNAME=admin\n")
+    """Run the upgrade's migration entry point (a copy of install.py in a temp
+    install tree, exactly as update.sh invokes it) against an older .env. Twice."""
+    (tmp_path / "scripts").mkdir()
+    for name in ("install.py", "secret_rotation.py"):
+        shutil.copy2(SCRIPTS / name, tmp_path / "scripts" / name)
+    cd = tmp_path / "deployment" / "docker"
+    cd.mkdir(parents=True)
+    for name in ("docker-compose.yml", "compose.tls.yml"):
+        shutil.copy2(COMPOSE.parent / name, cd / name)
+    env_path = cd / ".env"
+    install.write_env(env_path, 8000, force=True)
+    env_path.write_text("".join(line for line in env_path.read_text().splitlines(keepends=True)
+                                if not line.startswith(f"{TOKEN_VAR}=")))
+    run_env = {k: v for k, v in os.environ.items()
+               if k != "CORRELIX_INSTALL_LOCK_FD"}
+    run_env["CX_PLATFORM_ADDRESSES"] = "192.0.2.10"   # host-independent
 
-    first = subprocess.run([sys.executable, "-c", block], cwd=tmp_path,
-                           capture_output=True, text=True, timeout=60)
-    assert first.returncode == 0, f"reconcile failed:\n{first.stdout}{first.stderr}"
+    def migrate() -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "scripts/install.py", "--migrate-env"],
+                              cwd=tmp_path, env=run_env, capture_output=True, text=True,
+                              timeout=120, check=False)
+
+    first = migrate()
+    assert first.returncode == 0, f"migration failed:\n{first.stdout}{first.stderr}"
     env = _parse_env_file(env_path)
-    assert TOKEN_VAR in env, (
-        f"update.sh did not add {TOKEN_VAR} to an existing .env")
+    assert TOKEN_VAR in env, f"the upgrade did not add {TOKEN_VAR} to an existing .env"
     token = env[TOKEN_VAR]
-    assert len(token) == 43 and set(token) <= URLSAFE, (
-        f"{TOKEN_VAR} must be a 43-char url-safe token (randtoken), got {len(token)} chars")
+    assert len(token) >= 32 and set(token) <= URLSAFE, (
+        f"{TOKEN_VAR} must be a url-safe token, got {len(token)} chars")
     # §8/§16.5: a minted secret must never be echoed to the terminal or a log.
     assert token not in first.stdout and token not in first.stderr, (
-        f"update.sh printed the {TOKEN_VAR} value — secrets stay out of output")
-    assert f"{TOKEN_VAR}=<43 chars>" in first.stdout, (
-        f"update.sh should report {TOKEN_VAR} as redacted so the operator can "
-        f"see it was added")
+        f"the upgrade printed the {TOKEN_VAR} value — secrets stay out of output")
+    assert TOKEN_VAR in first.stdout, (
+        f"the upgrade should name {TOKEN_VAR} so the operator can see it was added")
 
-    second = subprocess.run([sys.executable, "-c", block], cwd=tmp_path,
-                            capture_output=True, text=True, timeout=60)
-    assert second.returncode == 0, f"second reconcile failed:\n{second.stderr}"
+    second = migrate()
+    assert second.returncode == 0, f"second migration failed:\n{second.stderr}"
     assert _parse_env_file(env_path)[TOKEN_VAR] == token, (
         "reconciliation must never overwrite an existing value (§16.3 "
         "idempotence) — a rewritten token desynchronises api and correlation.")
