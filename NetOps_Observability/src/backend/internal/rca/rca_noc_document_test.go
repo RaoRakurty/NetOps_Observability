@@ -75,7 +75,7 @@ func p424934(t *testing.T, withCausal bool) Report {
 	ctl := map[string]any{"source": "controller", "collection_path": "via_controller", "observer_type": "controller"}
 	sigs := []map[string]any{
 		testSig("bgp_adjacency_change", "control_plane", p424934Vmanage, "device", "cEDGE-81", "high", "2026-11-11 00:00:30", true,
-			merge(ctl, map[string]any{"attrs": `{"peer":"192.168.200.34","state":"idle","peer_router_id":"0.0.0.0"}`})),
+			merge(ctl, map[string]any{"attrs": `{"peer":"192.168.200.34","state":"idle","correlation_hints":{"bgp_transition_class":"never_established","bgp_transition_basis":"never seen established","bgp_peer_routerid":"unset"}}`})),
 		testSig("bgp_adjacency_change", "control_plane", p424934Vmanage, "device", "cEDGE-81", "high", "2026-11-11 00:02:30", true,
 			merge(ctl, map[string]any{"attrs": `{"peer":"192.168.200.34"}`})),
 		testSig("security_exposure", "security", "security:netrule", "device", "cEDGE-81", "high", "2026-11-11 00:03:30", true,
@@ -155,7 +155,7 @@ func TestNocDocumentP424934BackgroundStoryNeverConfirms(t *testing.T) {
 		t.Fatalf("P-424934 must never become an RCA document: %+v", rep.Promotion)
 	}
 	if !rep.Eligibility.NeverEstablished {
-		t.Error("the vManage BGP reports describe a peer that never came up (router-id 0.0.0.0)")
+		t.Error("the vManage BGP reports classify the peer as never established")
 	}
 }
 
@@ -474,9 +474,67 @@ func TestControllerHubAndNeverEstablishedDetection(t *testing.T) {
 	if rcaNeverEstablishedOnly(mixed) {
 		t.Error("a real fault beside the dead peer is not never-established-only")
 	}
-	up := []map[string]any{{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"state":"established","peer_router_id":"0.0.0.0"}`}}
+	up := []map[string]any{
+		{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"bgp":{"transition_class":"never_established"}}`},
+		{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"bgp":{"transition_class":"session_up"}}`},
+	}
 	if rcaNeverEstablishedOnly(up) {
-		t.Error("an established session is never never-established")
+		t.Error("a peer seen established is never never-established")
+	}
+}
+
+// Coordinator fix (2026-11-11): IOS/IOS-XE clears the remote router-id on
+// teardown, so 0.0.0.0 never decides. Only the transition class (trap
+// bgp.transition_class, or the controller's correlation_hints.bgp_transition_class)
+// or an explicit never_established flag marks a dead peer; "unknown" or an
+// absent class is a possible real failure and must not block promotion.
+func TestNeverEstablishedOnlyFromTransitionClass(t *testing.T) {
+	ctl := func(attrs string) []map[string]any {
+		return []map[string]any{{"kind": "bgp_adjacency_change", "modality_class": "control_plane",
+			"collection_path": "via_controller", "source": "controller", "attrs": attrs}}
+	}
+	for name, attrs := range map[string]string{
+		"router-id 0.0.0.0, no class":      `{"peer":"10.0.0.2","state":"idle","peer_router_id":"0.0.0.0"}`,
+		"router-id unset hint, no class":   `{"peer":"10.0.0.2","state":"idle","correlation_hints":{"bgp_peer_routerid":"unset"}}`,
+		"class unknown, router-id 0.0.0.0": `{"peer":"10.0.0.2","state":"idle","peer_router_id":"0.0.0.0","correlation_hints":{"bgp_transition_class":"unknown","bgp_peer_routerid":"unset"}}`,
+		"class session_lost":               `{"peer":"10.0.0.2","correlation_hints":{"bgp_transition_class":"session_lost"}}`,
+	} {
+		if rcaNeverEstablishedOnly(ctl(attrs)) {
+			t.Errorf("%s: must be treated as a possible real failure, not never-established", name)
+		}
+	}
+	for name, attrs := range map[string]string{
+		"controller class":  `{"peer":"10.0.0.2","correlation_hints":{"bgp_transition_class":"never_established","bgp_transition_basis":"x"}}`,
+		"trap nested class": `{"peer":"10.0.0.2","bgp":{"transition_class":"never_established"}}`,
+		"trap flat class":   `{"peer":"10.0.0.2","bgp.transition_class":"never_established"}`,
+		"explicit flag":     `{"peer":"10.0.0.2","never_established":true}`,
+	} {
+		if !rcaNeverEstablishedOnly(ctl(attrs)) {
+			t.Errorf("%s: must read as never-established", name)
+		}
+	}
+
+	// end to end: a recurring BGP session-loss on one device (repeat-offender
+	// trigger) whose controller reports carry a 0.0.0.0 router id and class
+	// unknown still promotes; class never_established never does.
+	build := func(attrs string) PromotionStatus {
+		h := testHyp("sig.ent.wan-edge.bgp-peer-down", 0.9, "suspected", []string{"bgp_adjacency_change"}, nil, nil, "netops", false)
+		meta := testMeta("open", "suspected", "sig.ent.wan-edge.bgp-peer-down", h)
+		meta["affected"] = `{"devices":["edge-1"]}`
+		rep := buildTestReport(t, meta, []map[string]any{
+			testSig("bgp_adjacency_change", "control_plane", "vmanage-1", "device", "edge-1", "crit", "2026-07-12 18:12:00", true,
+				map[string]any{"collection_path": "via_controller", "source": "controller", "attrs": attrs}),
+			testSig("bgp_adjacency_change", "control_plane", "vmanage-1", "device", "edge-1", "crit", "2026-07-12 18:20:00", true,
+				map[string]any{"collection_path": "via_controller", "source": "controller", "attrs": attrs}),
+		})
+		rep.SetRecurrence(5)
+		return EvaluatePromotion(&rep, nil)
+	}
+	if st := build(`{"peer":"10.0.0.2","state":"idle","peer_router_id":"0.0.0.0","correlation_hints":{"bgp_transition_class":"unknown","bgp_peer_routerid":"unset"}}`); !st.Promoted {
+		t.Fatalf("a recurring session loss with router-id 0.0.0.0 and class unknown must still promote: %+v", st)
+	}
+	if st := build(`{"peer":"10.0.0.2","state":"idle","correlation_hints":{"bgp_transition_class":"never_established"}}`); st.Promoted {
+		t.Fatalf("a never-established peer must not promote: %+v", st)
 	}
 }
 

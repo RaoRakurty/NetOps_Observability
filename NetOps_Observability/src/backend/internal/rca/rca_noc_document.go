@@ -224,11 +224,43 @@ type rcaRecurrence struct {
 	Count7d int `json:"count_7d"`
 }
 
+// rcaBGPTransitionClass reads the BGP transition class an observation carries
+// (session_lost | session_up | never_established | progressing | unknown).
+// Contract (engine branch fix/rca-false-confirm-exposure-bgp):
+//   - trap lane: bgp.transition_class (nested, or flattened as
+//     "bgp.transition_class"), and the legacy top-level transition_class;
+//   - controller lane (vManage): correlation_hints.bgp_transition_class (with
+//     bgp_transition_basis beside it).
+//
+// correlation_hints.bgp_peer_routerid=unset is only an annotation and is never
+// read: IOS/IOS-XE clears the remote router-id on teardown, so a session that
+// WAS established and then dropped also reports 0.0.0.0.
+func rcaBGPTransitionClass(at map[string]any) string {
+	str := func(v any) string { return strings.ToLower(strings.TrimSpace(asString(v))) }
+	if c := str(at["transition_class"]); c != "" {
+		return c
+	}
+	if c := str(at["bgp.transition_class"]); c != "" {
+		return c
+	}
+	if bgp, ok := at["bgp"].(map[string]any); ok {
+		if c := str(bgp["transition_class"]); c != "" {
+			return c
+		}
+	}
+	if hints, ok := at["correlation_hints"].(map[string]any); ok {
+		if c := str(hints["bgp_transition_class"]); c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
 // rcaNeverEstablishedMark reports a BGP observation of a peer that never came
-// up. Contract (multi-vendor, read from attrs): the trap lane's
-// transition_class=never_established, an explicit never_established=true, or a
-// controller's peer record with an all-zero peer router id while not
-// established (vManage reports a dead peer as state idle, router-id 0.0.0.0).
+// up: the transition class (either lane) is never_established, or the
+// observation carries never_established=true. Nothing else decides — "unknown"
+// or an absent class is a possible real failure, and a 0.0.0.0 peer router id
+// proves nothing (it is cleared on teardown of an established session too).
 func rcaNeverEstablishedMark(sig map[string]any) bool {
 	a := asString(sig["attrs"])
 	if a == "" {
@@ -238,22 +270,10 @@ func rcaNeverEstablishedMark(sig map[string]any) bool {
 	if json.Unmarshal([]byte(a), &at) != nil {
 		return false
 	}
-	if strings.EqualFold(asString(at["transition_class"]), "never_established") {
-		return true
-	}
 	if b, ok := at["never_established"].(bool); ok && b {
 		return true
 	}
-	state := strings.ToLower(asString(at["state"]))
-	if state == "established" || state == "up" {
-		return false
-	}
-	for _, k := range []string{"peer_router_id", "remote_router_id", "peer_rid", "router_id"} {
-		if asString(at[k]) == "0.0.0.0" {
-			return true
-		}
-	}
-	return false
+	return rcaBGPTransitionClass(at) == "never_established"
 }
 
 // rcaBGPPeerKey — the peer a BGP observation is about (attrs peer/neighbor,
@@ -280,7 +300,7 @@ func rcaBGPEstablished(sig map[string]any) bool {
 		return false
 	}
 	st := strings.ToLower(asString(at["state"]))
-	return st == "established" || st == "up"
+	return st == "established" || st == "up" || rcaBGPTransitionClass(at) == "session_up"
 }
 
 // rcaNeverEstablishedOnly: every anomalous non-security observation is a BGP
