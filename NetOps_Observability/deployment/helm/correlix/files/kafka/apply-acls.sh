@@ -37,9 +37,10 @@
 #                      the kafka_bus sink multiplexes every HTTP-ingested
 #                      lane by __topic, so enumerating lanes here would just
 #                      go stale; the HTTP side authenticates producers.
-#   vector-router      consume  its 9 lanes (incl. netops.flows.raw — the
-#                      scale-P0 re-key hop, and netops.security — the P3-L1
-#                      findings lane); produce netops.deadletter AND
+#   vector-router      consume  its lanes (incl. netops.flows.raw — the
+#                      scale-P0 re-key hop, and netops.security +
+#                      netops.security.audit — the P3-L1 findings lane, split
+#                      by owner D2); produce netops.deadletter AND
 #                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
 #   correlation        consume  its 15 topics (incl. netops.security — the
@@ -105,8 +106,15 @@ echo "acls: router — consume its lanes, produce deadletter+flows, own its grou
 # correlation is deliberately NOT granted Read on it: nothing in the engine
 # subscribes to experience events, and granting a topic nothing consumes would
 # imply a consumer that does not exist.
+#
+# Owner D2 (2026-11-11): netops.security.audit joins the router's consume set.
+# The security lane sends the engine only finding TRANSITIONS on
+# netops.security and puts the verdicts a scan merely re-confirmed on
+# netops.security.audit, so the findings store still receives every scan.
+# Only the router reads it; correlation is deliberately NOT granted it (the
+# engine must not hear unchanged findings again — that is the point).
 for t in netops.applogs netops.syslog netops.flows netops.flows.raw \
-         netops.snmptrap netops.security netops.experience \
+         netops.snmptrap netops.security netops.security.audit netops.experience \
          netops.cloudlogs netops.cloudcosts netops.deadletter; do
     $ACLS --add --allow-principal "$ROUTER" \
         --operation Read --operation Describe --topic "$t" >/dev/null
