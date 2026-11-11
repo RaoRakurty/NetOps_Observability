@@ -1231,9 +1231,12 @@ func (l *Lane) emitOnChange(ctx context.Context, tenant, scanID string, now time
 	if err != nil {
 		// State unknown: a transition cannot be told from a re-confirmation.
 		// Every verdict still reaches the findings store (audit topic) and the
-		// engine is told NOTHING this pass; the next pass retries the load, and
-		// whatever changed meanwhile is detected then — delayed, never lost and
-		// never a burst.
+		// engine is told NOTHING this pass; the next pass retries the load. A
+		// finding still open when state is readable again is announced then
+		// (delayed); one that opened AND closed inside the unreadable window is
+		// never announced at all — lost to the engine, though every scan of it
+		// is in the store (stamped "unclassified"). Never a burst. Alerted by
+		// SecurityEpisodeStateErrors / SecurityLaneTransitionsStalled.
 		l.metrics.AddStateError("load")
 		addErr("episode-state", err)
 		stamped := make([]secbus.EvidenceEvent, 0, len(items))
@@ -1267,7 +1270,10 @@ func (l *Lane) emitOnChange(ctx context.Context, tenant, scanID string, now time
 	lost := map[string]string{}
 	for i, it := range plan.transitions {
 		l.metrics.RecordTransitions(it.transition, outcomes[i].String(), 1)
-		if outcomes[i] == sentLost {
+		if outcomes[i] != sentPublished {
+			// Dead-lettered or lost: the engine did not get it either way
+			// (nothing replays netops.deadletter into netops.security), so
+			// the transition is retried next scan.
 			lost[it.nativeID] = it.transition
 		}
 		if outcomes[i] == sentPublished && it.transition != secbus.TransitionClear {

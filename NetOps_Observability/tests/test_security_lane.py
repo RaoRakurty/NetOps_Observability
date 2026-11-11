@@ -94,6 +94,10 @@ def test_security_source_consumes_the_topic_like_every_other_lane():
     # Owner D2: transitions on TOPIC, re-confirmed verdicts on AUDIT_TOPIC —
     # the store needs both to hold every scan.
     assert src["topics"] == [TOPIC, AUDIT_TOPIC]
+    # The audit topic is new to an existing group: without `earliest`, audit
+    # records produced before the router restarts would be skipped. Safe for
+    # TOPIC, whose committed offsets win (docs/runbooks/upgrade-bootstraps.md).
+    assert src.get("auto_offset_reset") == "earliest"
     assert src["group_id"] == "netops-router-security", \
         "the consumer group must sit under the netops-router- prefix the ACL grants"
     assert src["decoding"] == {"codec": "json"}

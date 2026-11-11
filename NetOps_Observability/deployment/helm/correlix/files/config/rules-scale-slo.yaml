@@ -1077,6 +1077,52 @@ groups:
             than good — that distinction is the whole lesson of 2026-08-26.
           runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
 
+      # SECURITY LANE — findings-on-change (owner D2, 2026-11-11). The lane
+      # tells the correlation engine only what APPEARED, CHANGED or CLEARED,
+      # which needs per-tenant episode state (internal/seclane/episodes.go).
+      # When that state cannot be read, every verdict is still stored but the
+      # engine is told NOTHING, and a finding that opens and closes inside the
+      # outage is never announced at all. Nothing else would show it: the lane
+      # keeps scanning, findings_emitted keeps climbing, every container reads
+      # healthy. Both rules are `tier: warning` — security evidence going
+      # quiet is a degraded RCA input, not a platform outage, and it is not one
+      # of the four page conditions. Both read the api's own counters, which
+      # exist only while FEATURE_SECURITY_LANE is on; with the lane off every
+      # series is absent and both rules are silent.
+      #
+      # (a) any episode-state failure (load | seed | commit) in 30 minutes.
+      - alert: SecurityEpisodeStateErrors
+        expr: sum(increase(netops_security_episode_state_errors_total[30m])) > 0
+        labels: { severity: warning, layer: security, tier: warning }
+        annotations:
+          summary: "The security lane could not read or save its finding-episode state — correlation is not being told about new or changed security findings"
+          description: "netops_security_episode_state_errors_total moved (op=load|seed|commit). Verdicts are still stored for audit, but while state is unreadable the engine hears nothing from the security lane. Check the episode store (Postgres security_finding_episodes, or SECURITY_EPISODE_DIR on the file backend) and the api log for security.lane episode-state errors."
+          runbook: "docs/runbooks/engine-liveness-matrix.md"
+      # (b) the lane PUBLISHED verdicts for an hour, but neither D2 path moved:
+      # no transition reached netops.security and nothing was counted as
+      # unchanged. That combination happens only when every verdict was routed
+      # around classification (episode state unreadable), so it catches a state
+      # outage even if (a)'s counter were never scraped. An idle lane (no
+      # verdicts published) is silent: the left side is then not > 0. An ABSENT
+      # transitions/unchanged series with verdicts flowing fires on purpose —
+      # an api that publishes but does not export the D2 counters is the same
+      # blind spot.
+      - alert: SecurityLaneTransitionsStalled
+        expr: |
+          (sum(increase(netops_security_findings_emitted_total[1h])) > 0)
+          unless on()
+          (
+            (sum(increase(netops_security_transitions_total{outcome="emitted"}[1h])) > 0)
+            or on()
+            (sum(increase(netops_security_unchanged_suppressed_total[1h])) > 0)
+          )
+        for: 15m
+        labels: { severity: warning, layer: security, tier: warning }
+        annotations:
+          summary: "The security lane is publishing verdicts but neither telling correlation about changes nor recognising unchanged findings — change tracking has stopped"
+          description: "For an hour netops_security_findings_emitted_total climbed while netops_security_transitions_total and netops_security_unchanged_suppressed_total stayed flat. The verdicts reach the findings store (stamped unclassified) but the engine hears nothing from the security lane. See SecurityEpisodeStateErrors and the api log for security.lane episode-state errors."
+          runbook: "docs/runbooks/engine-liveness-matrix.md"
+
   # ---------------------------------------------------------------------------
   # iris-ai-quality — is Iris answering from evidence, and can we see its cost?
   # (tracker 337 N-A3; metrics: internal/aiscore/metrics.go, docs/runbooks/iris-ai-quality.md)

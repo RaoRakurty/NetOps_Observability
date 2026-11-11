@@ -46,12 +46,29 @@ package seclane
 // for EpisodePruneAfter is dropped silently (counted), which bounds the state of
 // a device that left the inventory.
 //
+// ── SIGNALS ARE NOT STANDING FINDINGS ───────────────────────────────────────
+// evidence_class `signal` (threat detections, and the detection-window gap
+// verdict) is EXEMPT from episode suppression. A signal is a dated detection
+// over telemetry read exactly once (the detection high-water mark), and its
+// identity is rule + device + mnemonic / conversation / source — NOT the
+// occurrence. A second "new local user created" on the same device in a later
+// window is a second event the engine must hear about (D1 lets a dated
+// detection anchor a verdict), yet its native_id and fingerprint would match
+// the first. So every signal verdict goes onto netops.security as an appear
+// with first_seen = its own detection time, no episode is kept for it, and it
+// never clears. An undelivered signal is preserved by the dead-letter ladder
+// but not retried — the next window does not re-read that telemetry — which is
+// the contract signals always had. Only posture and exposure (standing state)
+// are suppressed when unchanged.
+//
 // ── DELIVERY ────────────────────────────────────────────────────────────────
-// A transition is committed to state once it has a durable copy: on the bus, or
-// in the dead-letter ladder (the existing "preserved, not lost" contract). One
-// that is LOST (bus, dead-letter topic and spool all refused it) is NOT
-// committed, so the next scan detects and re-emits it. The ts of the retry is
-// that scan's verdict instant; a lost appear's first_seen is therefore the retry
+// A transition is committed to state only once it is ON netops.security. One
+// that was dead-lettered is preserved for the operator, but nothing replays
+// netops.deadletter into netops.security, so the engine would never hear of it;
+// one that was lost has no copy at all. Neither is committed, so the next scan
+// detects and re-emits it (a re-sent verdict lands on its own scan's _id in the
+// store, so the index cannot duplicate). The ts of the retry is that scan's
+// verdict instant; an undelivered appear's first_seen is therefore the retry
 // scan's, the one place first_seen can be later than the truth.
 
 import (
@@ -85,6 +102,15 @@ const DefaultEpisodeDir = "/data/security_episodes"
 
 // EpisodePruneAfter is how long an open episode may go UNASSESSED (its source
 // never ran for it) before it is dropped from state without a clear.
+//
+// The clock is IN-PROCESS: "last reported" is not persisted (writing every open
+// row every scan to keep it would cost far more than what it bounds), so a
+// restart restarts it, and an api restarted more often than every 30 days never
+// prunes. That is accepted: what lingers is only an episode whose source stopped
+// running for it — in practice a device that left the inventory — so state is
+// bounded by (devices ever removed × rules per device), a few hundred rows per
+// removed device at most, and each lingering row is inert (it can only clear if
+// that device is assessed again, which is then correct).
 const EpisodePruneAfter = 30 * 24 * time.Hour
 
 // Seed sources — the closed `source` label of the seeded counter.
@@ -387,6 +413,12 @@ func planScan(tr *tenantTrack, tenant, scanID string, now time.Time, items []sec
 		}
 		prev, open := tr.open[nid]
 		switch {
+		case cur.EvidenceClass == secfindings.EvidenceSignal:
+			// A dated detection, not a standing finding (see SIGNALS above):
+			// every occurrence is its own appear, and no episode is kept.
+			secbus.StampEpisode(&ev, secbus.TransitionAppear, ts.UTC(), secbus.BasisObserved)
+			p.transitions = append(p.transitions, emitItem{nid, secbus.TransitionAppear, ev})
+			p.counts[secbus.TransitionAppear]++
 		case !open:
 			ep := Episode{FirstSeen: ts.UTC(), Basis: secbus.BasisObserved, Subject: cur}
 			secbus.StampEpisode(&ev, secbus.TransitionAppear, ep.FirstSeen, ep.Basis)
@@ -405,6 +437,12 @@ func planScan(tr *tenantTrack, tenant, scanID string, now time.Time, items []sec
 		}
 	}
 	for nid, ep := range tr.open {
+		if ep.Subject.EvidenceClass == secfindings.EvidenceSignal {
+			// Never tracked (a state written before signals were exempted):
+			// dropped silently, never "cleared".
+			p.deletes[nid] = true
+			continue
+		}
 		if present[nid] {
 			continue
 		}
@@ -429,8 +467,9 @@ func planScan(tr *tenantTrack, tenant, scanID string, now time.Time, items []sec
 	return p
 }
 
-// revertLost undoes the state effect of transitions that have no durable copy
-// anywhere, so the next scan detects and re-emits them.
+// revertLost undoes the state effect of transitions that did not reach
+// netops.security (dead-lettered or lost), so the next scan detects and
+// re-emits them.
 func (p *scanPlan) revertLost(lost map[string]string) {
 	for nid, transition := range lost {
 		switch transition {
@@ -508,6 +547,9 @@ func (l *Lane) seed(ctx context.Context, tenant string, tr *tenantTrack, items [
 		src = SeedSourceScan
 		open = make(map[string]Episode, len(items))
 		for _, ev := range items {
+			if attrStr(ev.Attrs, "evidence_class") == secfindings.EvidenceSignal {
+				continue // signals are never tracked as episodes (SIGNALS)
+			}
 			ts, perr := time.Parse(time.RFC3339Nano, ev.TS)
 			if perr != nil {
 				ts = l.deps.Now()

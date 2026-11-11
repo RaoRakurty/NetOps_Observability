@@ -134,8 +134,8 @@ func (l *Lane) seedFromIndex(ctx context.Context, tenant string) (map[string]Epi
 	for _, src := range hits {
 		nid, _ := src["native_id"].(string)
 		kind, _ := src["kind"].(string)
-		if nid == "" || kind == "" || secbus.IsClearKind(kind) {
-			continue
+		if nid == "" || kind == "" || secbus.IsClearKind(kind) || kind == secbus.KindSignal {
+			continue // signals are never tracked as episodes (episodes.go, SIGNALS)
 		}
 		attrs, _ := src["attrs"].(map[string]any)
 		subj := EpisodeSubject{

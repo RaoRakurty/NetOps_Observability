@@ -500,6 +500,63 @@ func TestPlanScanSeverityIsMaterialAndDetailIsNot(t *testing.T) {
 	}
 }
 
+// ── signals: every occurrence is an appear ──────────────────────────────────
+
+// Two distinct "new local user" detections on the same device in two windows
+// share one native_id (rule:device:mnemonic) and one fingerprint. They are two
+// events, and the engine must hear both.
+func TestTwoDetectionsInTwoWindowsAreTwoAppears(t *testing.T) {
+	ef := newEpisodeFixture(t, nil, func(d *Deps) { d.EmitClears = true })
+	ef.devices["acme"] = []Device{dev("acme-core", "acme")}
+	doc := func(at, user string) string {
+		return `{"hostname":"acme-core","timestamp":"` + at + `","facility":"SEC","severity":"notice",` +
+			`"message":"%SEC-5-CONFIG: username ` + user + ` privilege 15 secret 5 $1$redacted"}`
+	}
+	newUser := func(recs []sentRecord) []secbus.EvidenceEvent {
+		var out []secbus.EvidenceEvent
+		for _, ev := range onTopic(recs, secbus.TopicSecurityEvidence) {
+			if ev.Attrs["raw_rule_id"] == "log-new-local-user" {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+
+	ef.logs["acme"] = []string{doc("2026-09-02T02:55:00Z", "first")}
+	w1 := newUser(ef.scan(t, "acme", fixedNow))
+	ef.logs["acme"] = []string{doc("2026-09-02T03:10:00Z", "second")}
+	w2 := newUser(ef.scan(t, "acme", fixedNow.Add(15*time.Minute)))
+	ef.logs["acme"] = nil
+	w3 := ef.scan(t, "acme", fixedNow.Add(30*time.Minute))
+
+	if len(w1) != 1 || len(w2) != 1 {
+		t.Fatalf("window 1 sent %d, window 2 sent %d new-local-user detections; want one each", len(w1), len(w2))
+	}
+	if w1[0].NativeID != w2[0].NativeID {
+		t.Fatal("precondition: the two detections should share one identity — that is what made them collapse")
+	}
+	for i, ev := range []secbus.EvidenceEvent{w1[0], w2[0]} {
+		tr, fs, basis := stamp(ev)
+		if tr != secbus.TransitionAppear || fs != ev.TS || basis != secbus.BasisObserved {
+			t.Fatalf("detection %d: %q first_seen=%s basis=%s ts=%s — each occurrence is its own appear", i+1, tr, fs, basis, ev.TS)
+		}
+	}
+	if w1[0].TS == w2[0].TS {
+		t.Fatal("the two detections carry one ts — the engine would dedupe them as a redelivery")
+	}
+	for _, ev := range onTopic(w3, secbus.TopicSecurityEvidence) {
+		if secbus.IsClearKind(ev.Kind) && ev.Kind == secbus.ClearKind(secbus.KindSignal) {
+			t.Fatal("a detection is an event, not a state — it never clears")
+		}
+	}
+	st, _ := ef.store.Load(context.Background(), "acme")
+	for nid, ep := range st.Open {
+		if ep.Subject.EvidenceClass == "signal" {
+			t.Fatalf("a signal was tracked as an episode: %s", nid)
+		}
+	}
+}
+
 // ── clear, and the next episode ─────────────────────────────────────────────
 
 func TestFindingGoneForOneScanClearsAndReturnsAsANewEpisode(t *testing.T) {
@@ -640,7 +697,7 @@ func TestTruncatedFindingsAreNotCleared(t *testing.T) {
 
 // ── delivery ────────────────────────────────────────────────────────────────
 
-func TestLostTransitionIsRetriedNextScanAndDeadLetteredIsNot(t *testing.T) {
+func TestUndeliveredTransitionsAreRetriedNextScan(t *testing.T) {
 	ef := newEpisodeFixture(t, nil, nil)
 	ef.cfg["acme-core"] = cfgTelnet
 	ef.devices["acme"] = []Device{dev("acme-core", "acme")}
@@ -669,13 +726,24 @@ func TestLostTransitionIsRetriedNextScanAndDeadLetteredIsNot(t *testing.T) {
 		}
 	}
 
-	// Scan 3 with a DEAD-LETTERED change: preserved, so it is not re-sent.
+	// Scan 3 with a DEAD-LETTERED change: preserved for the operator, but
+	// nothing replays netops.deadletter into netops.security — so the engine
+	// never got it, and the next scan must send it again.
 	ef.cfg["acme-core"] = cfgSSH
 	ef.pub.failTopics[secbus.TopicSecurityEvidence] = errors.New("bus bridge 503")
 	ef.scan(t, "acme", t1.Add(15*time.Minute))
+	if got := ef.lane.Metrics().Snapshot()["transition_change_dead_lettered"]; got == 0 {
+		t.Fatal("the dead-lettered change was not counted")
+	}
 	delete(ef.pub.failTopics, secbus.TopicSecurityEvidence)
-	if n := len(onTopic(ef.scan(t, "acme", t1.Add(30*time.Minute)), secbus.TopicSecurityEvidence)); n != 0 {
-		t.Fatalf("a change preserved in the dead-letter topic was re-sent (%d records) — the ladder is the durable copy", n)
+	retry := onTopic(ef.scan(t, "acme", t1.Add(30*time.Minute)), secbus.TopicSecurityEvidence)
+	ev := ruleEvent(t, retry, telnetRule)
+	if tr, fs, _ := stamp(ev); tr != secbus.TransitionChange || fs != rfc(t1) {
+		t.Fatalf("a DEAD-LETTERED change must be re-sent next scan as a change with its first_seen %s: got %q %s", rfc(t1), tr, fs)
+	}
+	// And once delivered, it is not sent a third time.
+	if n := len(onTopic(ef.scan(t, "acme", t1.Add(45*time.Minute)), secbus.TopicSecurityEvidence)); n != 0 {
+		t.Fatalf("a delivered change was re-sent (%d records)", n)
 	}
 }
 

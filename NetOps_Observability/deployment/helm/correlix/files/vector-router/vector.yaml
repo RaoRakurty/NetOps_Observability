@@ -371,6 +371,18 @@ sources:
     # exactly as before the split; the two never carry the same verdict.
     topics: ["netops.security", "netops.security.audit"]
     group_id: "netops-router-security"
+    # Upgrade gap (owner D2): the api starts producing netops.security.audit as
+    # soon as it runs the new build, and this group has NO committed offset on
+    # that new topic. With Vector's default (`largest`) every audit record
+    # produced before the router restarts onto the new subscription would be
+    # skipped — a hole in the findings history. `earliest` reads the new topic
+    # from the start of its retention instead. It is safe for the EXISTING
+    # topic: a group with committed offsets resumes from them and never consults
+    # this setting; and if those offsets ever expired, re-reading netops.security
+    # is an UPSERT, not a duplicate — the store's _id is the deterministic
+    # sha2(native_id|scan_id) (security_identity below) and clear records are
+    # filtered. Set on this source only.
+    auto_offset_reset: "earliest"
     decoding: { codec: json }
     key_field: ""                         # keep the payload message_key
 
