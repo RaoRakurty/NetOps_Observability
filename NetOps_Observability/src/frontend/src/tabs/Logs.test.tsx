@@ -177,8 +177,14 @@ describe("event stream", () => {
     respond([flowHit]);
     render(<Logs />);
     const table = within(await grid());
-    expect(table.getByText("10.0.0.5 → 10.0.0.9")).toBeTruthy();
-    expect(table.getByText("UDP 161 → 38204 · 1,003 bytes · 13 packets")).toBeTruthy();
+    // Owner 2026-11-11: coloured parts, not a bare tuple.
+    const title = table.getByTestId("flow-title");
+    expect(title.querySelector(".fl-ep-src")?.textContent).toBe("10.0.0.5:161");
+    expect(title.querySelector(".fl-ep-dst")?.textContent).toBe("10.0.0.9:38204");
+    expect(within(title).getByTestId("flow-proto").textContent).toBe("UDP");
+    const detail = table.getByTestId("flow-detail").textContent ?? "";
+    expect(detail).toContain("1,003 B");
+    expect(detail).toContain("13 packets");
     expect((await grid()).textContent).not.toContain("{");
   });
 

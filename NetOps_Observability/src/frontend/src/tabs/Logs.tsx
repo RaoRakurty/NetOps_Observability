@@ -3,6 +3,7 @@
 
 import { parseTs } from "../lib/time";
 import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { FlowDetail, FlowTitle } from "../components/logs/FlowRowParts";
 import { api, OSHit, ExportFmt, LogSampling, LogSearchOpts } from "../services/api";
 import { severityLabel, severityRank, severityVar } from "../theme/severity";
 import { LogTime, LogLevel, LogMessage } from "../lib/logfmt";
@@ -94,8 +95,8 @@ function RowTitle({ ev, group }: { ev: LogEvent; group?: TransitionGroup }) {
   const isTuple = flow && (flow.source.address || flow.destination.address) && ev.title.includes("→");
   return (
     <div className="lv-line lv-title-line">
-      {isTuple
-        ? <span className="lv-trunc lv-mono" title={ev.title}>{ev.title}</span>
+      {isTuple && flow
+        ? <FlowTitle flow={flow} />
         : <LogMessage text={ev.title} highlight="stream" />}
       {ev.lifecycle && <span className="lv-quiet-chip">{ev.lifecycle}</span>}
       {ev.chips.filter((c) => c.stream).map((c) => <span key={c.label} className="lv-quiet-chip">{c.label}</span>)}
@@ -113,7 +114,7 @@ function RowDetail({ ev }: { ev: LogEvent }) {
   return (
     <div className="lv-line lv-detail-line">
       {ev.flow
-        ? <span className="lv-trunc lv-mono" title={ev.detailLine}>{ev.detailLine}</span>
+        ? <FlowDetail flow={ev.flow} />
         : <LogMessage text={ev.detailLine} highlight="stream" />}
     </div>
   );
