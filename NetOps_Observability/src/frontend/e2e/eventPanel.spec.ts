@@ -68,8 +68,9 @@ async function boot(page: Page, opts: { theme?: string; hash?: string } = {}): P
       const q = body.query ?? "";
       const id = /^_id:"(.+)"$/.exec(q)?.[1];
       if (id) return json({ hits: { total: { value: 1 }, hits: HITS.filter((h) => h._id === id) } });
-      // The related-records search: the golden trap has no other record yet.
-      if (q.startsWith("device_id:")) return json({ hits: { total: { value: 0 }, hits: [] } });
+      // The related-records search (by transition id, correlation key, or device +
+      // event type): the golden trap has no other record yet.
+      if (/^(transition_id|correlation_key|device_id):/.test(q)) return json({ hits: { total: { value: 0 }, hits: [] } });
       return json({ hits: { total: { value: 7547 }, hits: HITS } });
     }
     return json({});
