@@ -5311,20 +5311,13 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .report-wiz-grid { max-width: 980px; }
 .report-wiz-goal-ic { font-size: 22px; line-height: 1; margin-bottom: 6px; }
 
-/* Event detail inspector (Events tab — rows now clickable, #25) */
+/* Right-side drawer shell (first built for the removed Events page; the
+   appobs evidence drawer and the connector wizard ride it). */
 .ev-detail-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.42); display: flex; justify-content: flex-end; }
 .ev-detail { width: min(520px, 92vw); height: 100%; overflow-y: auto; background: var(--glass-bg-strong, var(--surface)); border-left: 1px solid var(--border);
   backdrop-filter: blur(18px) saturate(120%); -webkit-backdrop-filter: blur(18px) saturate(120%); box-shadow: -12px 0 40px rgba(0,0,0,.45); padding: 16px 18px; }
 .ev-detail-h { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-.ev-detail-x { margin-left: auto; border: 0; background: transparent; color: var(--fg-muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
-.ev-detail-x:hover { color: var(--fg); }
-.ev-detail-grid { display: grid; grid-template-columns: 96px 1fr; gap: 7px 12px; margin: 0 0 16px; font-size: 12.5px; }
-.ev-detail-grid dt { color: var(--fg-subtle); text-transform: uppercase; letter-spacing: .05em; font-size: 12.5px; font-weight: 600; align-self: center; }
-.ev-detail-grid dd { margin: 0; color: var(--fg); }
 .ev-mono { font-family: var(--font-mono); font-size: 12.5px; }
-.ev-detail-msg-l { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle); margin-bottom: 6px; }
-.ev-detail-msg { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; color: var(--fg-muted); white-space: pre-wrap; word-break: break-word;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 12px; margin: 0; }
 
 /* ----- Operational Recovery Scorecard (RCA Time Intelligence #84) ----- */
 .rsc { padding: 4px 2px; }

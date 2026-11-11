@@ -115,7 +115,6 @@ var navPageDocs = map[string]navPage{
 	"explore/metrics": {Label: "Explore → Metrics", Docs: []pageDoc{wholePage("explore/metrics")}},
 	"explore/logs":    {Label: "Explore → Logs", Docs: []pageDoc{wholePage("explore/logs"), wholePage("noc-guide/reading-logs")}},
 	"explore/flows":   {Label: "Explore → Flows", Docs: []pageDoc{wholePage("explore/flows")}},
-	"explore/events":  {Label: "Explore → Events", Docs: []pageDoc{wholePage("explore/events")}},
 	"explore/saved":   {Label: "Explore → Saved Searches", Docs: []pageDoc{wholePage("explore/saved-searches")}},
 
 	// Security
