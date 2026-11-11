@@ -19,19 +19,27 @@ package alertwebhook
 //      refusal to reuse the watchdog topic (notify_config.go). Untouched.
 //
 // WHY A SEPARATE ROUTE AND NOT JUST A CHANNEL. The product channel set is
-// operator-CONFIGURED state: it can be empty, disabled, or misconfigured, and
-// it lives behind the same api this route reports on. A stack that can only
-// tell you it is broken through a channel someone had to configure first is not
-// self-reporting. This route depends on nothing but an env-provided topic, so
-// it works on a fresh install with zero notification config — which is exactly
-// the install where "the correlation engine has consumed nothing for 3 hours"
-// most needs to reach a human.
+// tenant-facing alert routing (severity gates, contact points, PlatformScope
+// filtering). The platform route is the stack reporting on ITSELF, to the
+// operator, by tier — a different audience with a different policy.
 //
-// WHY IT REUSES THE WATCHDOG'S TOPIC BY DEFAULT. The watchdog's independence
-// requirement (#101) is about the SENDER, not the topic: the watchdog must be
-// able to report the stack's death from OUTSIDE the stack, which it still does.
-// The product channel refusal stays in force so a TENANT-facing channel can
-// never be pointed at the operator's host-monitoring topic.
+// WHERE ITS DESTINATIONS COME FROM (owner decision 2026-11-11, binding):
+// "Platform self-health alerts should be configured from the GUI and not via
+// env." Until then this route was configured ONLY from PLATFORM_ALERTS_NTFY_*
+// env (falling back to WATCHDOG_NTFY_TOPIC), so a fresh install self-reported
+// with zero config. That env contract is RETIRED: the destinations (ntfy and
+// Twilio SMS, with per-tier routing) are a platform-global setting edited on
+// Platform → Platform alerts and resolved per push through the HostRouter
+// seam below (internal/platformalert implements it, with an in-memory
+// last-good copy so a store outage never silences the route). What survives of
+// the old property is that this package depends on no configured state to
+// RUN — and that an unconfigured route is LOUD (gauge, log, admin banner),
+// never quiet. The external watchdog (scripts/stack-watchdog.sh) stays
+// env/file-based on the host: it is the layer that must outlive the stack.
+//
+// The product ntfy channel still refuses the watchdog topic and the platform
+// route's topic (notify_config.go), so a tenant-facing channel can never be
+// pointed at the operator's host-monitoring topic.
 //
 // Delivery is ASYNC and BOUNDED (§9). vmalert's POST must not wait on an
 // external push — a single batch can carry hundreds of alerts and vmalert
@@ -49,28 +57,12 @@ import (
 	"netops/backend/notify"
 )
 
-// Environment contract for this route. Declared here for the same reason as
-// EnvToken: one spelling of each name, greppable against the compose plumbing.
+// Environment contract for this route: install-default POLICY knobs only (the
+// owner's rule — env = install defaults). The DESTINATIONS are no longer env:
+// see "WHERE ITS DESTINATIONS COME FROM" above. Declared here for the same
+// reason as EnvToken: one spelling of each name, greppable against the compose
+// plumbing.
 const (
-	// EnvHostTopic is the host-monitoring ntfy topic. EMPTY falls back to
-	// EnvWatchdogTopic — the phone channel the operator already carries.
-	EnvHostTopic = "PLATFORM_ALERTS_NTFY_TOPIC"
-	// EnvHostServer / EnvHostToken override the ntfy server and bearer token
-	// for this route only. Empty falls back to the product ntfy wiring below,
-	// then to https://ntfy.sh.
-	EnvHostServer = "PLATFORM_ALERTS_NTFY_SERVER"
-	// #nosec G101 -- the NAME of an environment variable, not a credential.
-	EnvHostToken = "PLATFORM_ALERTS_NTFY_TOKEN"
-	// EnvWatchdogTopic is the external watchdog's topic (scripts/stack-watchdog.env,
-	// already passed into the api container so notify_config.go can REFUSE it
-	// for product alerting). It is this route's default destination.
-	EnvWatchdogTopic = "WATCHDOG_NTFY_TOPIC"
-	// The product ntfy wiring, used only as the server/token fallback — never
-	// as the topic fallback: a platform alert must not land on a product topic.
-	EnvProductNtfyServer = "NTFY_ALERT_SERVER"
-	// #nosec G101 -- the NAME of an environment variable, not a credential.
-	EnvProductNtfyToken = "NTFY_ALERT_TOKEN"
-
 	// ── noise + rate-limit control (2026-09-03) ─────────────────────────────
 	//
 	// EnvWarningDigestInterval is how often the accumulated WARNING tier may be
@@ -138,6 +130,66 @@ const (
 	tierResolved = "resolved"
 )
 
+// The tier names a HostRouter is asked about. Exported so the router (in its
+// own package) routes on the SAME closed set this receiver classifies into,
+// rather than on a copy of the strings.
+//
+//	TierPage     a page-worthy condition, pushed immediately
+//	TierResolved the resolution of a page, pushed immediately — it goes where
+//	             pages go: an operator who was woken must be told it is over
+//	TierWarning  an individual warning (only reached when the warning tier is
+//	             routed nowhere; a routed warning is folded into the digest)
+//	TierDigest   the periodic warning summary — it goes where warnings go
+const (
+	TierPage     = tierPage
+	TierResolved = tierResolved
+	TierWarning  = tierWarning
+	TierDigest   = tierDigest
+)
+
+// Host channel names: the CLOSED set a HostTarget may carry (it is a log field
+// and a test-verdict key — never an open label).
+const (
+	ChannelNtfy = "ntfy"
+	ChannelSMS  = "sms"
+)
+
+// HostTarget is ONE destination of the host route for one push: a sender, the
+// outbound budget it spends, and the channel name it is reported under.
+//
+// One target per RECIPIENT, not per channel: an SMS channel with two numbers is
+// two targets, so a retry after one number failed re-sends to that number only
+// (never a second, billable SMS to the number that already got it), and each
+// message spends one token of the SMS budget.
+type HostTarget struct {
+	Channel string
+	Pusher  HostPusher
+	// Budget is taken at ENQUEUE (see pushHost). nil = no guard.
+	Budget *notify.PushBudget
+}
+
+// HostRouter resolves the host route's destinations for a tier AT PUSH TIME.
+// It is how the destinations became configurable without a restart: the
+// receiver is built once at boot, and asks the router on every push.
+//
+// An empty answer for every tier means the route is NOT CONFIGURED, which is
+// counted (not_configured), logged once, and reported on
+// netops_alert_webhook_host_route_enabled. An empty answer for one tier while
+// another tier has destinations is a deliberate choice by the administrator
+// ("warnings go nowhere") and is counted separately (unrouted), never as a
+// failure.
+type HostRouter interface {
+	Targets(tier string) []HostTarget
+}
+
+// staticRouter adapts the legacy single-pusher wiring (Deps.HostRoute) onto
+// the router seam: every tier goes to the one pusher, under the receiver's own
+// budget. Kept so an embedder (and the receiver's own tests) can wire a fixed
+// destination without a store.
+type staticRouter struct{ t HostTarget }
+
+func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
+
 // FOUR PAGE CONDITIONS, TEN RULES — and that is not a contradiction.
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
@@ -183,10 +235,10 @@ const maxHostTitle = 180
 var bodyLabels = [...]string{"severity", "layer", "rule_layer", "tier", "service", "instance", "job", "consumergroup", "container"}
 
 // HostPusher is the push seam (§5: interfaces for external dependencies). It is
-// satisfied by *notify.Ntfy — the SAME sender the product channel uses, so
-// there is exactly one ntfy HTTP client in the process. A nil HostPusher means
-// the route is not configured: pushes are counted as not_configured and warned
-// about ONCE, never per alert.
+// satisfied by *notify.Ntfy — the SAME sender the product channel uses — and by
+// the SMS adapter in internal/platformalert. A typed failure that implements
+// Retryable()/RateLimited() (notify.NtfyStatusError, notify.TwilioStatusError)
+// drives the page-tier retry policy below.
 type HostPusher interface {
 	Push(p notify.NtfyPush) error
 }
@@ -196,6 +248,12 @@ type hostJob struct {
 	push notify.NtfyPush
 	tier string
 	name string
+	// target is the destination this job is bound to (one per recipient).
+	target HostTarget
+	// onOK runs once after a successful delivery. Paired with onFail so a
+	// digest fanned out to several targets is restored only when it reached
+	// NONE of them (see fanout).
+	onOK func()
 	// onFail runs on EVERY path that ends without delivery: after the last
 	// attempt has failed (deliverHost), and when the job was never attempted at
 	// all because the queue was full or no topic is configured (enqueueHost). It
@@ -225,11 +283,11 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 	tier := hostTier(status, labels["tier"])
 
 	// THE WARNING TIER IS NEVER PUSHED ON ITS OWN (digest.go). Folding happens
-	// only when there is a route to fold FOR: with no topic configured the
-	// alert still goes to enqueueHost, which is what counts the
-	// not_configured failure per alert instead of accumulating a digest nobody
-	// can ever send.
-	if r.deps.HostRoute != nil && hostDigested(labels["tier"]) {
+	// only when there is a destination to fold FOR: with no warning-tier
+	// destination the alert falls through, and is counted as not_configured
+	// (no route at all) or unrouted (the administrator sent warnings nowhere)
+	// instead of accumulating a digest nobody can ever send.
+	if hostDigested(labels["tier"]) && len(r.hostTargets(tierDigest)) > 0 {
 		r.foldDigest(a.Rule, a.Summary, labels["severity"], tier, r.now())
 		return
 	}
@@ -244,29 +302,70 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 			Tags:     hostTags(tier),
 		},
 	}
-	// The budget is taken at ENQUEUE, synchronously with the request, so a
-	// refusal is decided (and counted) at a point the operator can correlate
-	// with the alert that caused it rather than inside a drain goroutine.
-	if r.deps.HostRoute != nil && !r.budget.Take(j.privileged()) {
-		r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
-		// A PAGE that the budget refuses is an ERROR, never a warning: the
-		// operator is not being told about a page-worthy condition and must
-		// learn that from the log if nowhere else (§10 — no silent failures).
-		level := "warn"
-		if j.tier == tierPage {
-			level = "error"
-		}
-		r.log(level, "platform alert push SKIPPED: the outbound push budget for this topic is spent", map[string]any{
-			"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier,
-			"env": EnvPushBudget, "reserve_env": EnvPushBudgetPageReserve,
-			// The budget is per SERVER and shared with the product channel, so
-			// name the server: "the topic is quiet" is not the same fact as
-			// "this host's whole ntfy allowance is spent" (§10).
-			"server": r.budget.Server(),
-		})
+	targets := r.hostTargets(tier)
+	if len(targets) == 0 {
+		r.noHostTarget(j)
 		return
 	}
-	r.enqueueHost(j)
+	for _, t := range targets {
+		jt := j
+		jt.target = t
+		// The budget is taken at ENQUEUE, synchronously with the request, so a
+		// refusal is decided (and counted) at a point the operator can
+		// correlate with the alert that caused it rather than inside a drain
+		// goroutine. Per TARGET: an SMS budget that is spent must not stop the
+		// ntfy push of the same page, and vice versa.
+		if !t.Budget.Take(jt.privileged()) {
+			r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
+			// A PAGE that the budget refuses is an ERROR, never a warning: the
+			// operator is not being told about a page-worthy condition on this
+			// channel and must learn that from the log if nowhere else (§10).
+			level := "warn"
+			if jt.tier == tierPage {
+				level = "error"
+			}
+			r.log(level, "platform alert push SKIPPED: the outbound push budget for this channel is spent", map[string]any{
+				"route": RouteHostMonitoring, "alertname": jt.name, "tier": jt.tier, "channel": t.Channel,
+				"env": EnvPushBudget, "reserve_env": EnvPushBudgetPageReserve,
+				// The ntfy budget is per SERVER and shared with the product
+				// channel, so name the server: "the topic is quiet" is not the
+				// same fact as "this host's whole ntfy allowance is spent" (§10).
+				"server": t.Budget.Server(),
+			})
+			continue
+		}
+		r.enqueueHost(jt)
+	}
+}
+
+// hostTargets asks the router for a tier's destinations. Nil router (no route
+// wired at all) answers none.
+func (r *receiver) hostTargets(tier string) []HostTarget {
+	if r.router == nil {
+		return nil
+	}
+	return r.router.Targets(tier)
+}
+
+// hostConfigured reports whether the route has ANY destination for any tier.
+// It is what separates "not configured" (nobody will ever hear from this
+// stack) from "unrouted" (the administrator chose to send this tier nowhere).
+func (r *receiver) hostConfigured() bool {
+	return len(r.hostTargets(tierPage)) > 0 || len(r.hostTargets(tierDigest)) > 0
+}
+
+// noHostTarget accounts for a job with no destination for its tier.
+func (r *receiver) noHostTarget(j hostJob) {
+	if r.hostConfigured() {
+		// A deliberate routing choice, not a failure: counted, never logged per
+		// alert (it would repeat on every cool-down, forever).
+		r.deps.Metrics.inc(&r.deps.Metrics.hostUnrouted)
+		if j.onFail != nil {
+			j.onFail()
+		}
+		return
+	}
+	r.enqueueHost(j) // the not_configured accounting lives there
 }
 
 // hostDigested reports whether an alert belongs in the warning digest rather
@@ -364,15 +463,17 @@ func hostBody(tier string, a models.Alert, labels map[string]string) string {
 // enqueueHost hands the job to the drain worker. It never blocks: a full queue
 // is counted and logged, and a missing route is counted and logged ONCE.
 func (r *receiver) enqueueHost(j hostJob) {
-	if r.deps.HostRoute == nil {
+	if j.target.Pusher == nil {
 		r.deps.Metrics.inc(&r.deps.Metrics.hostNotConfigured)
-		// ONCE, not per alert: a stack with no host topic configured would
+		// ONCE, not per alert: a stack with no destination configured would
 		// otherwise write one warning per alert per cool-down forever, which is
-		// its own outage (the log volume, and the signal buried in it).
+		// its own outage (the log volume, and the signal buried in it). The
+		// gauge (netops_alert_webhook_host_route_enabled 0) and the banner on
+		// the admin page stay loud for as long as the condition lasts.
 		r.hostOnce.Do(func() {
-			r.log("warn", "platform alerts are NOT pushed to host monitoring: no topic configured — set "+
-				EnvHostTopic+" (or "+EnvWatchdogTopic+") or the stack cannot report its own failures to a phone",
-				map[string]any{"route": RouteHostMonitoring, "env": EnvHostTopic})
+			r.log("warn", "platform alerts are NOT pushed to host monitoring: no channel is configured — "+
+				"set one up in "+GUILocation+" or the stack cannot report its own failures to a phone",
+				map[string]any{"route": RouteHostMonitoring, "where": GUILocation})
 		})
 		// Never delivered, so content that lives only inside this job comes back
 		// (review 3.9-09). Unreachable for the digest today — maybeFlushDigest
@@ -451,12 +552,15 @@ func (r *receiver) deliverHost(j hostJob) {
 	deadline := r.now().Add(hostRetryDeadline)
 	var err error
 	for attempt := 1; ; attempt++ {
-		if err = r.deps.HostRoute.Push(j.push); err == nil {
+		if err = j.target.Pusher.Push(j.push); err == nil {
 			r.deps.Metrics.incHostPushed(j.tier)
 			r.log("info", "platform alert pushed to host monitoring", map[string]any{
 				"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier,
-				"priority": j.push.Priority, "attempts": attempt,
+				"channel": j.target.Channel, "priority": j.push.Priority, "attempts": attempt,
 			})
+			if j.onOK != nil {
+				j.onOK()
+			}
 			return
 		}
 		if !j.retryable() || attempt >= hostMaxAttempts || !retryableErr(err) {
@@ -470,11 +574,17 @@ func (r *receiver) deliverHost(j hostJob) {
 		r.sleep(wait)
 	}
 
-	reason, rateLimited := "send_error", isRateLimited(err)
-	if rateLimited {
+	reason := "send_error"
+	switch {
+	case errors.Is(err, notify.ErrPushBudgetExhausted):
+		// A sender that carries its own bucket refused locally: the request
+		// was never made. Same account as a refusal at enqueue.
+		reason = "budget_exhausted"
+		r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
+	case isRateLimited(err):
 		reason = "rate_limited"
 		r.deps.Metrics.inc(&r.deps.Metrics.hostRateLimited)
-	} else {
+	default:
 		r.deps.Metrics.inc(&r.deps.Metrics.hostFailed)
 	}
 	// A page that never landed is an ERROR: nobody was told about a
@@ -486,7 +596,7 @@ func (r *receiver) deliverHost(j hostJob) {
 	// The error is already topic-free (notify.Ntfy scrubs the URL) — the
 	// topic is a credential and never appears in a log line.
 	r.log(level, "platform alert push to host monitoring FAILED", map[string]any{
-		"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier,
+		"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier, "channel": j.target.Channel,
 		"error": err.Error(), "reason": reason, "retried": j.retryable(),
 		"content_kept": j.onFail != nil,
 	})
@@ -532,23 +642,45 @@ func hostBackoff(attempt int, retryAfter time.Duration) time.Duration {
 // answers for itself (429/5xx yes, other 4xx no — a bad token will not fix
 // itself and retrying it only burns budget). An UNTYPED error is a transport
 // failure (connect/timeout) and is retried: that is the classic transient.
+//
+// A LOCAL budget refusal (notify.ErrPushBudgetExhausted) is never retried: the
+// request was not made, and hammering a spent bucket only defers the refusal.
 func retryableErr(err error) bool {
-	var se *notify.NtfyStatusError
+	if errors.Is(err, notify.ErrPushBudgetExhausted) {
+		return false
+	}
+	var se pushStatus
 	if errors.As(err, &se) {
 		return se.Retryable()
 	}
 	return err != nil
 }
 
+// pushStatus is the typed-failure shape every host sender shares
+// (notify.NtfyStatusError, notify.TwilioStatusError), so the retry policy is
+// written once rather than per provider.
+type pushStatus interface {
+	error
+	Retryable() bool
+	RateLimited() bool
+}
+
+// retryDelayer is the optional server-supplied Retry-After, already clamped by
+// the sender.
+type retryDelayer interface {
+	error
+	RetryDelay() time.Duration
+}
+
 func isRateLimited(err error) bool {
-	var se *notify.NtfyStatusError
+	var se pushStatus
 	return errors.As(err, &se) && se.RateLimited()
 }
 
 func retryAfterOf(err error) time.Duration {
-	var se *notify.NtfyStatusError
+	var se retryDelayer
 	if errors.As(err, &se) {
-		return se.RetryAfter
+		return se.RetryDelay()
 	}
 	return 0
 }
@@ -594,11 +726,8 @@ func ParseCount(raw string, def int, env string, log LogFunc) int {
 	return n
 }
 
-// HostRouteLogFields renders the route's configuration for the wiring layer's
-// boot log line. The TOPIC IS NEVER A FIELD: knowing an ntfy topic is enough to
-// read every alert published to it and to publish forgeries (§8).
-func HostRouteLogFields(server string, tokenSet bool, source string) map[string]any {
-	return map[string]any{
-		"route": RouteHostMonitoring, "server": server, "token_set": tokenSet, "topic_from": source,
-	}
-}
+// GUILocation is where an administrator configures this route. One spelling,
+// shared by the not-configured log line, the boot warning about retired env,
+// and the admin page's own heading (src/frontend nav: Platform → Platform
+// alerts).
+const GUILocation = "Platform → Platform alerts"

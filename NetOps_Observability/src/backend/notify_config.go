@@ -625,6 +625,15 @@ func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
 			if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && in.Topic == wd {
 				return errors.New("this topic is reserved for the stack watchdog — use a dedicated topic for platform alerts (watchdog independence)")
 			}
+			// The same separation for the platform self-health route, whose
+			// topic is now set in the GUI (Platform → Platform alerts) rather
+			// than env: a product channel must never publish onto the
+			// operator's host-monitoring topic.
+			if s.platformAlerts != nil {
+				if pt := s.platformAlerts.Current().Ntfy.Topic; pt != "" && strings.TrimSpace(in.Topic) == pt {
+					return errors.New("this topic is the platform alert topic (Platform → Platform alerts) — use a dedicated topic for product notifications")
+				}
+			}
 			return nil
 		},
 		func(in notify.NtfyConfig, cur notify.ChannelConfig) notify.NtfyConfig {

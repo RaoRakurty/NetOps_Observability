@@ -1690,18 +1690,12 @@ WATCHDOG_NTFY_TOPIC=
 # ---- Platform self-health alerts -> HOST MONITORING ---------------------
 # The stack's OWN alerts (vmalert: engines not consuming, storage refusing
 # writes, ingest silent, the alerting heartbeat) are pushed to the
-# host-monitoring phone channel, NOT to the product notification channels:
-# that route has to work on an install where nobody configured a channel
-# yet, because it is how the stack reports on itself.
-# Leave EMPTY to use WATCHDOG_NTFY_TOPIC above (the recommended setup — the
-# same phone channel that already carries the watchdog's dead-man's-switch).
-# Server/token fall back to NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN, then to
-# https://ntfy.sh. Set these only to split the platform alerts onto their own
-# topic. NOTE: the product ntfy channel still REFUSES the watchdog topic —
-# that refusal is about tenant-facing alerting and is unchanged.
-#PLATFORM_ALERTS_NTFY_TOPIC=
-#PLATFORM_ALERTS_NTFY_SERVER=
-#PLATFORM_ALERTS_NTFY_TOKEN=
+# destinations you set in the web console: Platform -> Platform alerts
+# (ntfy and/or Twilio text messages, chosen per kind of alert). They are NOT
+# set here: there is no environment variable for them. Until a destination is
+# set, the console shows a banner and the stack reports that its own alerts
+# reach nobody. The external watchdog (scripts/stack-watchdog.sh, its own
+# scripts/stack-watchdog.env) stays separate on purpose.
 # Alert NOISE + RATE-LIMIT control. ntfy.sh's free public server rate-limits
 # per topic/IP; on 2026-09-03 it answered 429 to this route because chronic
 # WARNINGS (vector component errors, dead letters, disk headroom) were each

@@ -5268,6 +5268,58 @@ export interface PlatformFeatures {
   store_load_error: string;
 }
 
+/** Which kinds of platform alert a channel receives (internal/platformalert). */
+export interface PlatformAlertTiers {
+  page: boolean;
+  warning: boolean;
+}
+
+/** GET /api/platform/alerting/host-route — secrets appear only as *_set. */
+export interface PlatformAlertRoute {
+  ntfy: { enabled: boolean; server: string; topic: string; token_set: boolean; tiers: PlatformAlertTiers };
+  sms: {
+    enabled: boolean;
+    account_sid: string;
+    auth_token_set: boolean;
+    from: string;
+    to: string[];
+    tiers: PlatformAlertTiers;
+    max_per_hour: number;
+  };
+  page_routed: boolean;
+  warning_routed: boolean;
+  /** ok | stale (re-read failing, last good in force) | unreadable (nothing read since start-up). */
+  store_status: "ok" | "stale" | "unreadable";
+  ignored_env: string[];
+  updated_by?: string;
+  updated_at?: string;
+  sms_budget_remaining: number;
+}
+
+/** PUT body. An empty secret keeps the saved one; clear_* removes it. */
+export interface PlatformAlertRouteUpdate {
+  ntfy: { enabled: boolean; server: string; topic: string; token: string; clear_token: boolean; tiers: PlatformAlertTiers };
+  sms: {
+    enabled: boolean;
+    account_sid: string;
+    auth_token: string;
+    clear_auth_token: boolean;
+    from: string;
+    to: string[];
+    tiers: PlatformAlertTiers;
+    max_per_hour: number;
+  };
+  replace_unreadable: boolean;
+}
+
+export type PlatformAlertVerdict = "ok" | "auth_rejected" | "rate_limited" | "unreachable" | "refused" | "not_configured";
+
+export interface PlatformAlertTestResult {
+  channel: "ntfy" | "sms";
+  verdict: PlatformAlertVerdict;
+  message: string;
+}
+
 export interface VrfRoutingInstance {
   name: string;
   /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
@@ -5879,6 +5931,17 @@ export const api = {
       body: JSON.stringify(acknowledge ? { env, value, acknowledge } : { env, value }),
     }),
   restartPlatform: () => request<{ status: string }>("/api/platform/restart", { method: "POST" }),
+
+  // Platform alerts (owner 2026-11-11) — where the stack's OWN alerts go.
+  // Platform-owner only (requirePlatformAdmin); a tenant admin gets 403.
+  platformAlertRoute: () => request<PlatformAlertRoute>("/api/platform/alerting/host-route"),
+  savePlatformAlertRoute: (u: PlatformAlertRouteUpdate) =>
+    request<PlatformAlertRoute>("/api/platform/alerting/host-route", { method: "PUT", body: JSON.stringify(u) }),
+  testPlatformAlertRoute: (channel: "ntfy" | "sms") =>
+    request<PlatformAlertTestResult>("/api/platform/alerting/host-route/test", {
+      method: "POST",
+      body: JSON.stringify({ channel }),
+    }),
 
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),

@@ -260,14 +260,10 @@ EXPECTED = {
     # __URLSAFE__, not __RANDOM__: it travels as an Authorization: Bearer
     # credential, so randpw's @ # % ^ & + = have no business in it.
     "CORR_DEBUG_TOKEN":              "__URLSAFE__",
-    # Platform self-health alerts -> the HOST-MONITORING ntfy topic
-    # (internal/alertwebhook hostroute.go). EMPTY is the intended default and is
-    # byte-identical to compose: empty topic means "use WATCHDOG_NTFY_TOPIC",
-    # which an existing install already has. Materializing the keys only makes
-    # the split-topic knob discoverable after an upgrade.
-    "PLATFORM_ALERTS_NTFY_TOPIC":    "",
-    "PLATFORM_ALERTS_NTFY_SERVER":   "",
-    "PLATFORM_ALERTS_NTFY_TOKEN":    "",
+    # Platform self-health alert DESTINATIONS are no longer env (owner decision
+    # 2026-11-11): they are set in the web console, Platform -> Platform alerts.
+    # PLATFORM_ALERTS_NTFY_TOPIC/_SERVER/_TOKEN are therefore NOT materialized;
+    # RETIRED below reports a leftover value instead of silently keeping it.
     # Alert-noise + rate-limit control (2026-09-03). Byte-identical to the
     # docker-compose defaults and to alertwebhook's DefaultWarningDigestInterval
     # / DefaultPushBudget / DefaultPageReserve. Materialized so an UPGRADED
@@ -309,6 +305,20 @@ for k, default in EXPECTED.items():
     else:
         v = default
     missing.append((k, v))
+
+# Retired keys: still in an upgraded .env, read by nothing. Named (values are
+# never printed — a topic or token is a credential) so the operator knows the
+# setting moved, instead of believing it still routes platform alerts. Not
+# fatal and not edited away: removing lines from an operator's .env is theirs
+# to do.
+RETIRED = {
+    "PLATFORM_ALERTS_NTFY_TOPIC":  "Platform -> Platform alerts in the web console",
+    "PLATFORM_ALERTS_NTFY_SERVER": "Platform -> Platform alerts in the web console",
+    "PLATFORM_ALERTS_NTFY_TOKEN":  "Platform -> Platform alerts in the web console",
+}
+for k, where in RETIRED.items():
+    if existing.get(k, "").strip():
+        print(f"  NOTICE: {k} is set in .env but is no longer read — configure it in {where}, then remove the line.")
 
 if not missing:
     print("  no new variables to add — .env is already current.")

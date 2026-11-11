@@ -113,15 +113,11 @@ API_ENV_DEFAULTS = {
     # deliberately NOT in this table — it is a secret with no code default (see
     # test_vmalert_webhook_token_is_passed_through_and_fail_closed).
     "VMALERT_WEBHOOK_COOLDOWN": "${VMALERT_WEBHOOK_COOLDOWN:-30m}",
-    # Platform self-health alerts → the host-monitoring push topic
-    # (alertwebhook hostroute.go). EMPTY is a real setting, not a placeholder:
-    # the code then falls back to WATCHDOG_NTFY_TOPIC for the topic and to
-    # NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN for the transport.
-    "PLATFORM_ALERTS_NTFY_TOPIC": "${PLATFORM_ALERTS_NTFY_TOPIC:-}",
-    "PLATFORM_ALERTS_NTFY_SERVER": "${PLATFORM_ALERTS_NTFY_SERVER:-}",
-    "PLATFORM_ALERTS_NTFY_TOKEN": "${PLATFORM_ALERTS_NTFY_TOKEN:-}",
+    # Platform self-health alert DESTINATIONS are GUI-only since 2026-11-11
+    # (Platform → Platform alerts); their retired env knobs must NOT be passed
+    # through — see test_platform_alert_destinations_are_not_env.
     # Alert-noise + rate-limit control (alertwebhook digest.go / pushbudget.go).
-    # These DO carry a value, unlike the topic knobs above: they are policy with
+    # These DO carry a value, unlike a destination: they are policy with
     # a code default, not a destination. The defaults must stay byte-identical
     # to the Go constants — see
     # test_platform_alert_noise_defaults_match_the_go_constants.
@@ -413,8 +409,6 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "PARSERCOV_MAX_LINES", "CORRELATION_REPLICA_URLS",
                 "CORR_SYSLOG_TOPIC", "CORR_FIDELITY_WEIGHTING",
                 "VMALERT_WEBHOOK_TOKEN", "VMALERT_WEBHOOK_COOLDOWN",
-                "PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
-                "PLATFORM_ALERTS_NTFY_TOKEN",
                 "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL",
                 "PLATFORM_ALERTS_PUSH_BUDGET",
                 "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE", "FEATURE_BGP_LIVE_FEED",
@@ -522,12 +516,31 @@ def test_alert_webhook_env_contract_is_fully_plumbed_to_the_api():
         f"internal/alertwebhook reads {missing} but docker-compose.yml never "
         f"passes them to the api — the route cannot be configured through the "
         f"supported install path.")
-    # The host route's topic defaults to the watchdog's own topic IN CODE, so
-    # compose must not invent a different default for either key.
-    for var in ("PLATFORM_ALERTS_NTFY_TOPIC", "WATCHDOG_NTFY_TOPIC"):
-        assert str(env[var]) == "${%s:-}" % var, (
-            f"{var}: compose must pass the value through empty-by-default; the "
-            f"topic fallback chain lives in the code, not in the YAML.")
+    # WATCHDOG_NTFY_TOPIC stays (the PRODUCT ntfy channel refuses it), empty
+    # by default.
+    assert str(env["WATCHDOG_NTFY_TOPIC"]) == "${WATCHDOG_NTFY_TOPIC:-}"
+
+
+def test_platform_alert_destinations_are_not_env():
+    """Owner decision 2026-11-11: platform self-health alert destinations are
+    configured in the GUI (Platform → Platform alerts), "not via env. Block that
+    option." So the retired knobs must not be plumbed, templated or reconciled
+    anywhere on the supported install path, and the Go package must not declare
+    them as part of its env contract."""
+    retired = ("PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
+               "PLATFORM_ALERTS_NTFY_TOKEN")
+    env = service_env("api")
+    consts = _go_env_consts(ALERTWEBHOOK_PKG)
+    install = INSTALL_PY.read_text()
+    update = UPDATE_SH.read_text()
+    for var in retired:
+        assert var not in env, f"{var} must not be passed to the api any more"
+        assert var not in consts.values(), f"internal/alertwebhook must not declare {var}"
+        assert var not in install, f"{var} must not be in the .env template"
+        assert f'"{var}":    ""' not in update and f'"{var}": ""' not in update, (
+            f"{var} must not be materialized into an upgraded .env")
+    # update.sh names a leftover value so the operator knows the setting moved.
+    assert "RETIRED = {" in update and "PLATFORM_ALERTS_NTFY_TOPIC" in update
 
 
 def test_platform_alert_noise_defaults_match_the_go_constants():
@@ -576,14 +589,12 @@ def test_env_template_ships_the_alert_noise_knobs_commented_with_the_code_defaul
         assert f"\n{var}=" not in src, f"{var} must not ship with an active value"
 
 
-def test_env_template_ships_the_platform_alert_topic_commented_out():
-    """Empty/absent = 'use the watchdog topic'. Shipping it SET would silently
-    split platform alerts onto a topic nobody is subscribed to."""
+def test_env_template_points_platform_alerts_at_the_console():
+    """The destinations moved to the GUI; the template must say where, so an
+    operator reading .env is not left looking for a knob that no longer
+    exists."""
     src = INSTALL_PY.read_text()
-    for var in ("PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
-                "PLATFORM_ALERTS_NTFY_TOKEN"):
-        assert f"#{var}=" in src, f"{var} must be discoverable (commented) in the .env template"
-        assert f"\n{var}=" not in src, f"{var} must not ship with a value"
+    assert "Platform -> Platform alerts" in src
 
 
 def test_bgp_feature_flags_are_fully_plumbed_to_the_api():

@@ -50,12 +50,15 @@ rather than minting duplicates.
 
 | Alert class | Route | Destination |
 |---|---|---|
-| **Platform self-health** (everything in this matrix: layers stack/host/clickhouse/platform, the four page conditions, the watch tier) | `internal/alertwebhook` host route → the existing ntfy sender | the **host-monitoring topic** — the same phone channel as the watchdog. `PLATFORM_ALERTS_NTFY_TOPIC`, defaulting to `WATCHDOG_NTFY_TOPIC`; server/token from `PLATFORM_ALERTS_NTFY_SERVER`/`_TOKEN`, else `NTFY_ALERT_SERVER`/`_TOKEN` |
+| **Platform self-health** (everything in this matrix: layers stack/host/clickhouse/platform, the four page conditions, the watch tier) | `internal/alertwebhook` host route → ntfy and/or Twilio SMS | the channels set on **Platform → Platform alerts** (GUI only since 2026-11-11; `PLATFORM_ALERTS_NTFY_*` retired, `WATCHDOG_NTFY_TOPIC` no longer a fallback). Default: pages to every enabled channel, the warning digest to ntfy only |
 | **Product / tenant** (monitor rules, BGP watch, per-tenant security findings) | `notify.Dispatcher` | the channels an operator configured, which still **refuse** the watchdog topic (#101) |
 
 The platform route is deliberately independent of the product channel config —
-it must work on an install where nobody has configured a channel, because it is
-how the stack reports on **itself**. Tier → priority: `page` → high, `watch` →
+it is how the stack reports on **itself**. It needs one channel set on the
+Platform alerts page; until then it is LOUD, not quiet
+(`netops_alert_webhook_host_route_enabled 0`, a boot WARN, a banner for the
+platform admin), and the external watchdog (layer B below) still covers the
+stack's death from outside. Tier → priority: `page` → high, `watch` →
 default, a resolution → low; the **heartbeat is never pushed** (it exists for
 the watchdog's freshness probe). Counted in
 `netops_alert_webhook_pushed_total{route="host_monitoring",tier}` /
