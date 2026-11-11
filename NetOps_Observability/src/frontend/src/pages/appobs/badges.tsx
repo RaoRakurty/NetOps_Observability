@@ -280,7 +280,7 @@ export function FilterBar({ filters, value, onChange, children }: {
   );
 }
 
-// EvidenceDrawer — right-side panel (the ev-detail-scrim pattern Events uses), so an
+// EvidenceDrawer — right-side panel (the shared ev-detail-scrim drawer), so an
 // RCA/identity claim always shows its evidence + confidence + reason.
 export function EvidenceDrawer({ title, subtitle, onClose, children }: { title: string; subtitle?: ReactNode; onClose: () => void; children: ReactNode }) {
   useEffect(() => {

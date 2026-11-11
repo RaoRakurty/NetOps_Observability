@@ -145,6 +145,10 @@ topic. A `PUT` that sets it to the value of `WATCHDOG_NTFY_TOPIC` is refused wit
 At boot, an `NTFY_ALERT_TOPIC` equal to the watchdog topic refuses to enable ntfy
 and logs an error every boot until the deployment gives product alerting its own
 topic. The watchdog must stay able to report the stack's own death.
+
+The same applies to the platform alert topic set on **Platform → Platform alerts**:
+a `PUT` that sets the product ntfy topic to it is refused with `400` and
+`this topic is the platform alert topic (Platform → Platform alerts) — use a dedicated topic for product notifications`.
 :::
 
 ## Contact points

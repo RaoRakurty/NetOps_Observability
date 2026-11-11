@@ -27,7 +27,6 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   BgpOspf: () => import("./pages/BgpOspf"),
   BgpOps: () => import("./pages/BgpOps"),
   Troubleshooting: () => import("./pages/Troubleshooting"),
-  Events: () => import("./pages/Events"),
   Correlations: () => import("./tabs/Correlations"),
   RcaReports: () => import("./pages/RcaReports"),
   // Owner IA (2026-09-07): the old "Services" leaf split by what feeds it —
@@ -99,6 +98,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
   Features: () => import("./pages/platform/Features"),
+  PlatformAlerts: () => import("./pages/platform/PlatformAlerts"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -112,7 +112,6 @@ const Wireless = lazy(ROUTE_CHUNKS["Wireless"] as () => Promise<{ default: React
 const BgpOspf = lazy(ROUTE_CHUNKS["BgpOspf"] as () => Promise<{ default: React.ComponentType<any> }>);
 const BgpOps = lazy(ROUTE_CHUNKS["BgpOps"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ default: React.ComponentType<any> }>);
-const Events = lazy(ROUTE_CHUNKS["Events"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Correlations = lazy(ROUTE_CHUNKS["Correlations"] as () => Promise<{ default: React.ComponentType<any> }>);
 const RcaReports = lazy(ROUTE_CHUNKS["RcaReports"] as () => Promise<{ default: React.ComponentType<any> }>);
 const CloudObservability = lazy(ROUTE_CHUNKS["CloudObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -186,6 +185,7 @@ const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ de
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
+const PlatformAlerts = lazy(ROUTE_CHUNKS["PlatformAlerts"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -359,7 +359,9 @@ export const NAV: NavSection[] = [
       // to Operations → Cloud (owner IA, 2026-09-07) and routes back here.
       { id: "logs", label: "Logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "events", label: "Events", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
+      // The separate Events leaf was removed (owner 2026-11-11): the Logs page's
+      // Events tab (the default) shows every store, and active alerts have their
+      // own page, Operations → Active Alerts. Old links alias to Logs below.
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },
@@ -583,6 +585,11 @@ export const NAV: NavSection[] = [
       // features → feature_flags.go handlePlatformFeatures / handlePlatformRestart,
       //            requirePlatformAdmin (the switches are platform-global)
       { id: "features", label: "Features", group: "Configuration", render: () => <Features /> },
+      // platform-alerts → internal/platformalert via platformAlertAPI,
+      //                   requirePlatformAdmin on GET/PUT and the test send
+      //                   (where Correlix's OWN alerts go; owner 2026-11-11:
+      //                   GUI, not env)
+      { id: "platform-alerts", label: "Platform alerts", group: "Configuration", render: () => <PlatformAlerts /> },
       // Tools — the provider's operational instruments and the raw-backend
       // escape hatches.
       // health     → stack_health.go, requireCrossTenant
@@ -694,7 +701,7 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "monitoring/triggered": "operations/alerts",
   "monitoring/maintenance": "operations/maintenance",
   "monitoring/quality": "operations/network-health",
-  "monitoring/events": "explore/events",
+  "monitoring/events": "explore/logs",
   "monitoring/incidents": "operations/incidents",
   "monitoring/anomalies": "investigate/findings",
   "monitoring/correlations": "investigate/rca",
@@ -762,6 +769,10 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "logs/logs": "explore/logs",
   "logs/cloud": "explore/logs/cloud",
   "logs/saved": "explore/saved",
+  // Explore → Events was removed (owner 2026-11-11). Its content is the Logs
+  // page's Events tab, which Logs opens on by default, so old bookmarks and
+  // drills land there. Active alerts live on Operations → Active Alerts.
+  "explore/events": "explore/logs",
   // Admin renames (collectors → sensors → Discovery's Sensors section).
   // Aliases resolve ONCE, so each old leaf points straight at its section.
   "admin/collectors": "admin/discovery/sensors",
