@@ -81,6 +81,16 @@ function secs(n: number): string {
   return `${n} s`;
 }
 
+/** What a run told correlation (owner D2): only new or changed findings go to
+ *  it; unchanged ones are stored but not re-sent. A lane older than D2 sends
+ *  neither field, and that is shown as not stated — never as zero. */
+function sentToCorrelation(row: SecLaneScanStatus): string {
+  if (row.transitions_emitted === undefined) return "not stated";
+  const sent = row.transitions_emitted.toLocaleString();
+  if (row.unchanged_suppressed === undefined) return sent;
+  return `${sent} · ${row.unchanged_suppressed.toLocaleString()} unchanged`;
+}
+
 function TenantRow({ row }: { row: SecLaneScanStatus }) {
   const skipped = row.outcome === "skipped";
   return (
@@ -98,6 +108,7 @@ function TenantRow({ row }: { row: SecLaneScanStatus }) {
         {row.findings_emitted.toLocaleString()}
         {row.findings_truncated > 0 && <span className="sec-line"> · {row.findings_truncated.toLocaleString()} over the cap</span>}
       </td>
+      <td>{sentToCorrelation(row)}</td>
     </tr>
   );
 }
@@ -243,6 +254,10 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
           Scan finished {scan.row.outcome === "ok" ? "cleanly" : `with outcome ${scan.row.outcome}`} —{" "}
           {scan.row.findings_emitted.toLocaleString()} finding{scan.row.findings_emitted === 1 ? "" : "s"} published
           from {scan.row.devices_assessed.toLocaleString()} device{scan.row.devices_assessed === 1 ? "" : "s"} assessed.
+          {scan.row.transitions_emitted !== undefined && (
+            <> {scan.row.transitions_emitted.toLocaleString()} new or changed sent to correlation
+              {scan.row.unchanged_suppressed !== undefined && <>; {scan.row.unchanged_suppressed.toLocaleString()} unchanged, stored only</>}.</>
+          )}
           {scan.row.devices_assessed === 0 && <AskIris topic="lane.assessed-nothing" label="a scan that assessed nothing" />}
         </p>
       )}
@@ -263,6 +278,7 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
               <th scope="col">Duration</th>
               <th scope="col">Devices assessed</th>
               <th scope="col">Findings published</th>
+              <th scope="col">New or changed, sent to correlation</th>
             </tr>
           </thead>
           <tbody>
