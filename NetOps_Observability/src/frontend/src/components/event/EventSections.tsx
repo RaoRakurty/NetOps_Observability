@@ -162,7 +162,8 @@ export function EventHeader({ view, actions, close, titleId }: { view: EventView
           )}
           <h2 className="evd-title" id={titleId} data-testid="event-title">{view.title}</h2>
         </div>
-        {view.subtitle && <p className="evd-subtitle">{view.subtitle}</p>}
+        {/* The device's raw line is shown once, in the Original Frame tab, not
+            under the headline (owner 2026-11-11). */}
         {view.routineReason && (
           <p className="evd-routine" data-testid="event-routine-reason">
             <EvIcon name="info" size={16} className="evd-routine-ico" />

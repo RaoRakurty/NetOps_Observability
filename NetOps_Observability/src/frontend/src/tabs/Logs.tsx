@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { fmtDateTime, parseTs } from "../lib/time";
+import { parseTs } from "../lib/time";
 import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { api, OSHit, ExportFmt, LogRetention, LogSampling, LogSearchOpts } from "../services/api";
+import { api, OSHit, ExportFmt, LogSampling, LogSearchOpts } from "../services/api";
 import { severityLabel, severityRank, severityVar } from "../theme/severity";
 import { LogTime, LogLevel, LogMessage } from "../lib/logfmt";
 import {
@@ -20,7 +20,7 @@ import { humanize } from "../lib/eventModel";
 import { SEVERITY_TONES } from "../theme/severity";
 import { useAuth } from "../hooks/useAuth";
 import {
-  ROUTINE_TOGGLE_HINT, ROUTINE_TOGGLE_LABEL, RoutineSummary, loadShowRoutine, routineNote, saveShowRoutine,
+  ROUTINE_TOGGLE_LABEL, RoutineSummary, loadShowRoutine, routineNote, saveShowRoutine,
 } from "../lib/routineMgmt";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
@@ -172,8 +172,6 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const [tiles, setTiles] = useState<SeverityTiles | null>(null);
   const filtersRef = useRef({ sevGroup, typePick, familyPick });
   filtersRef.current = { sevGroup, typePick, familyPick };
-  // Retention floor: how far back the visible store goes + exact total stored.
-  const [retention, setRetention] = useState<LogRetention | null>(null);
   // Sampling disclosure from the last search response (flows: 1:50 sample).
   const [sampling, setSampling] = useState<LogSampling | null>(null);
   // Routine management sessions (owner 2026-11-11): hidden unless the viewer
@@ -301,17 +299,6 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   useEffect(() => {
     setTypePick("");
     setFamilyPick("");
-  }, [signal]);
-
-  // Retention floor (owner directive: "how long back can I go?"). Re-read when
-  // the signal changes — each signal is its own store with its own retention.
-  useEffect(() => {
-    let alive = true;
-    const backendSignal = signal === "firewall" ? "syslog" : signal;
-    api.logsRetention(backendSignal)
-      .then((r) => { if (alive) setRetention(r ?? null); })
-      .catch(() => { if (alive) setRetention(null); });
-    return () => { alive = false; };
   }, [signal]);
 
   // Numbered pages through hits.total: each page re-issues the SAME request (query,
@@ -686,24 +673,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
               {ROUTINE_TOGGLE_LABEL}
             </label>
             {routine && <span className="lv-routine-note" data-testid="logs-routine-note">{routineNote(routine)}</span>}
-            <span className="lv-routine-hint">{ROUTINE_TOGGLE_HINT}</span>
           </div>
-        )}
-        {/* Retention floor (owner directive: DON'T HIDE how far back logs go). */}
-        {retention && (
-          <p className="lv-meta">
-            {retention.total > 0 && retention.oldest ? (
-              <>
-                This store holds <strong>{retention.total.toLocaleString()}</strong> logs —
-                going back to <strong>{fmtDateTime(retention.oldest)}</strong>
-                {" "}({retention.days < 1 ? "less than a day" : `${retention.days} day${retention.days === 1 ? "" : "s"}`} of history).
-                {(flowsSampled || retention.sampling) &&
-                  ` A 1:${retention.sampling?.rate ?? sampleRate} sample — the stream holds ~${retention.sampling?.rate ?? sampleRate}× more.`}
-              </>
-            ) : (
-              "No logs stored yet for this signal."
-            )}
-          </p>
         )}
         {error && (
           <p className="lv-error">

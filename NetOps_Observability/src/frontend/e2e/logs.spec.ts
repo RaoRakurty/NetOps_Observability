@@ -325,7 +325,7 @@ for (const theme of ["light", "dark", "oled", "indigo", "graphite", "white"]) {
     // Reduced motion also proves that path: a colour transition would be measured mid-flight.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await boot(page, theme);
-    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page, .lv .lv-routine label, .lv .lv-routine-note, .lv .lv-routine-hint");
+    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page, .lv .lv-routine label, .lv .lv-routine-note");
     expect(results.length).toBeGreaterThan(20);
     const failing = results.filter((r) => r.ratio < 4.5).map((r) => `${r.what} ${r.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
