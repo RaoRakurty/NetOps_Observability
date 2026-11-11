@@ -6,10 +6,13 @@
 // internal/secbus (T2), internal/advisory (T3), internal/hardening (T5) and
 // internal/threatlane (T6), all built, gate-clean and until now emitting
 // nothing — into a live, per-tenant, bounded background lane that publishes
-// secfindings.Finding objects onto the netops.security topic. From there the
-// router already persists them into netops-secfindings-<seg>-*
-// (SECURITY_FINDINGS_STORE_DECISION 2026-08-28) and, later, T2b grounds them in
-// the correlation engine with ZERO security-specific code.
+// secfindings.Finding objects onto the security topics — since owner decision
+// D2 (2026-11-11) only finding TRANSITIONS (appear / change / clear) on
+// netops.security, the engine's lane, and the verdicts a scan merely
+// re-confirmed on netops.security.audit, which only the router reads (see
+// episodes.go). The router persists both into netops-secfindings-<seg>-*
+// (SECURITY_FINDINGS_STORE_DECISION 2026-08-28), and T2b grounds the
+// transitions in the correlation engine with ZERO security-specific code.
 //
 // ── REMOVAL RULE (the removable-module constraint) ──────────────────────────
 // The security PRODUCER stays REMOVABLE. Exactly four units in the compiled
@@ -310,6 +313,16 @@ type Deps struct {
 	// an UNASSESSED detection verdict instead of quietly starting at
 	// now-interval as if nothing had been missed.
 	Watermarks Watermarks
+	// Episodes persists per-tenant finding-episode state (findings-on-change,
+	// episodes.go) across restarts. Optional: nil uses an in-process store and
+	// the lane SAYS SO at construction — a restart then re-seeds every tenant
+	// from the findings store (silently, no burst), which is correct but loses
+	// observed first-seen times and any change that landed during the restart.
+	Episodes EpisodeStore
+	// EmitClears publishes `<kind>_clear` recovery events when an episode
+	// closes. Default false until the engine registers the security clear
+	// kinds (see EnvEmitClears); a closed episode is withheld, not forgotten.
+	EmitClears bool
 	// Scrub sanitizes an untrusted string before it reaches a log or a status
 	// row (§8 log hygiene). Required.
 	Scrub func(string) string
@@ -375,8 +388,16 @@ var (
 // Lane is the per-tenant security evidence producer.
 type Lane struct {
 	deps     Deps
-	producer *secbus.Producer
+	producer *secbus.Producer // netops.security — transitions, the engine's lane
+	audit    *secbus.Producer // netops.security.audit — re-confirmed verdicts, router only
 	metrics  *Metrics
+
+	// episodes is the per-tenant finding-episode store; tracks is its loaded,
+	// in-memory view (episodes.go). Scans are serialized by passMu, so a track
+	// is only ever touched by one pass; episodesMu guards the map itself.
+	episodes   EpisodeStore
+	episodesMu sync.Mutex
+	tracks     map[string]*tenantTrack
 
 	// passMu is the TryLock non-overlap guard: at most one pass at a time,
 	// ticker or manual. A loser YIELDS (the running pass is doing the same work)
@@ -422,6 +443,17 @@ func New(d Deps) (*Lane, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seclane: %w", err)
 	}
+	audit, err := secbus.NewProducer(pub, secbus.WithRetry(4, 500*time.Millisecond, 10*time.Second),
+		secbus.WithTopic(secbus.TopicSecurityAudit))
+	if err != nil {
+		return nil, fmt.Errorf("seclane: %w", err)
+	}
+	episodes := d.Episodes
+	if episodes == nil {
+		episodes = NewMemEpisodes()
+		d.LogWarn("security finding-episode state is NOT persisted — a restart re-seeds every tenant from the findings store, losing observed first-seen times",
+			map[string]any{"store": "memory"})
+	}
 	if d.Advisory == nil && d.AdvisoryFeed != nil {
 		d.Advisory = advisory.NewOfflineProvider(d.AdvisoryFeed)
 	}
@@ -443,6 +475,9 @@ func New(d Deps) (*Lane, error) {
 	return &Lane{
 		deps:        d,
 		producer:    prod,
+		audit:       audit,
+		episodes:    episodes,
+		tracks:      map[string]*tenantTrack{},
 		metrics:     NewMetrics(),
 		inflight:    map[string]bool{},
 		queue:       make(chan string, scanQueueDepth),
@@ -569,10 +604,18 @@ type ScanStatus struct {
 	Outcome    string    `json:"outcome"`
 	Trigger    string    `json:"trigger"` // ticker | manual
 	DurationMS int64     `json:"duration_ms"`
-	Emitted    int       `json:"findings_emitted"`
-	Truncated  int       `json:"findings_truncated"`
-	Devices    int       `json:"devices_assessed"`
-	Errors     []string  `json:"errors,omitempty"`
+	// Emitted counts the verdicts published to the findings store this run —
+	// every scan's verdicts, on either security topic.
+	Emitted int `json:"findings_emitted"`
+	// Transitions counts what the correlation engine was told this run:
+	// appear / change (and clear, when clears are on) records on netops.security.
+	Transitions int `json:"transitions_emitted"`
+	// Unchanged counts verdicts the run re-confirmed without change: stored for
+	// audit, never re-sent to the engine.
+	Unchanged int      `json:"unchanged_suppressed"`
+	Truncated int      `json:"findings_truncated"`
+	Devices   int      `json:"devices_assessed"`
+	Errors    []string `json:"errors,omitempty"`
 }
 
 func (l *Lane) record(st ScanStatus) {
@@ -663,29 +706,46 @@ func (l *Lane) runScan(ctx context.Context, tenant, trigger string) {
 	devices := l.deps.Devices(tenant)
 	st.Devices = len(devices)
 
+	// assessed records every source that ACTUALLY RAN this scan ("lane|entity",
+	// or "lane|*" for a tenant-wide read). Only an episode whose source ran can
+	// clear; anything else was not looked at (episodes.go, CLEAR).
+	assessed := map[string]bool{}
+	mark := func(lane string, entities ...string) {
+		for _, e := range entities {
+			if e = strings.TrimSpace(e); e != "" {
+				assessed[lane+"|"+e] = true
+			}
+		}
+	}
+
 	findings := make([]secfindings.Finding, 0, 128)
-	findings = append(findings, l.hardeningFindings(ctx, tenant, scanID, devices, enabled, addErr)...)
-	findings = append(findings, l.advisoryFindings(ctx, scanID, devices, enabled)...)
-	findings = append(findings, l.threatFindings(ctx, tenant, scanID, devices, enabled, addErr)...)
+	findings = append(findings, l.hardeningFindings(ctx, tenant, scanID, devices, enabled, addErr, mark)...)
+	findings = append(findings, l.advisoryFindings(ctx, scanID, devices, enabled, mark)...)
+	findings = append(findings, l.threatFindings(ctx, tenant, scanID, devices, enabled, addErr, mark)...)
+
+	// Every finding's event is built — the truncated tail included — so the
+	// present set is complete and a capped finding never reads as cleared.
+	sortFindings(findings)
+	events, present := l.buildEvents(findings, seg, scanID)
 
 	// Bound the run (§9). The cap is applied AFTER a deterministic sort, so a
 	// truncated run keeps the same prefix from one scan to the next instead of
 	// oscillating between arbitrary subsets.
-	sortFindings(findings)
-	if len(findings) > l.maxFindings {
-		st.Truncated = len(findings) - l.maxFindings
-		findings = findings[:l.maxFindings]
+	if len(events) > l.maxFindings {
+		st.Truncated = len(events) - l.maxFindings
+		events = events[:l.maxFindings]
 		l.metrics.AddTruncated(int64(st.Truncated))
 		l.deps.LogWarn("security scan truncated at the per-tenant cap — some findings were NOT emitted this run",
 			map[string]any{"tenant_seg": seg, "scan_id": scanID, "cap": l.maxFindings, "dropped": st.Truncated})
 	}
 
-	emitted, emitErr := l.emit(ctx, tenant, findings)
-	st.Emitted = emitted
+	res := l.emitOnChange(ctx, tenant, scanID, start, events, present, assessed, addErr)
+	st.Emitted, st.Transitions, st.Unchanged = res.verdicts, res.transitions, res.unchanged
+	emitErr := res.err
 	addErr("emit", emitErr)
 
 	switch {
-	case emitErr != nil && emitted == 0 && len(findings) > 0:
+	case emitErr != nil && res.verdicts == 0 && len(events) > 0:
 		st.Outcome = OutcomeError
 	case len(st.Errors) > 0 || st.Truncated > 0:
 		st.Outcome = OutcomePartial
@@ -742,7 +802,8 @@ func ruleOn(enabled map[string]bool, id string) bool {
 // ── lane 1: hardening (posture + seam-aware exposure) ───────────────────────
 
 func (l *Lane) hardeningFindings(ctx context.Context, tenant, scanID string,
-	devices []Device, enabled map[string]bool, addErr func(string, error)) []secfindings.Finding {
+	devices []Device, enabled map[string]bool, addErr func(string, error),
+	mark func(lane string, entities ...string)) []secfindings.Finding {
 
 	cfgSrc := l.deps.ConfigSource
 	if cfgSrc == nil {
@@ -775,6 +836,9 @@ func (l *Lane) hardeningFindings(ctx context.Context, tenant, scanID string,
 			addErr("hardening", fmt.Errorf("device %s: %w", d.ID, err))
 			continue
 		}
+		// Evaluated: an episode of this device's that is not reported now has
+		// genuinely stopped (a rule the tenant disabled included).
+		mark(laneHardening, d.ID, d.Name, d.Address)
 		for _, f := range fs {
 			if !ruleOn(enabled, f.RawRuleID) {
 				continue
@@ -793,9 +857,17 @@ func (l *Lane) hardeningFindings(ctx context.Context, tenant, scanID string,
 // feed) yields an explicit UNASSESSED finding — never silence, which a UI would
 // render as "clear" (§5g).
 func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
-	devices []Device, enabled map[string]bool) []secfindings.Finding {
+	devices []Device, enabled map[string]bool, mark func(lane string, entities ...string)) []secfindings.Finding {
 
-	if l.deps.Advisory == nil || !ruleOn(enabled, l.deps.Advisory.Name()) {
+	if l.deps.Advisory == nil {
+		return nil // not configured: nothing was assessed, so nothing clears
+	}
+	if !ruleOn(enabled, l.deps.Advisory.Name()) {
+		// The tenant switched the advisory lane off: its open episodes are no
+		// longer reported, and that is a decision, not an outage.
+		for _, d := range devices {
+			mark(laneAdvisory, d.ID, d.Name, d.Address)
+		}
 		return nil
 	}
 	parse := l.deps.ParseSoftware
@@ -807,6 +879,9 @@ func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
 		if ctx.Err() != nil {
 			return out
 		}
+		// Every branch below reports this device (a verdict or an honest
+		// UNASSESSED), so the device was assessed.
+		mark(laneAdvisory, d.ID, d.Name, d.Address)
 		res := secfindings.Resource{
 			DeviceID: d.ID, DeviceName: d.Name, Hostname: d.Name, Address: d.Address,
 			Kind: secfindings.KindNetworkDevice, Platform: d.Platform(),
@@ -886,7 +961,18 @@ func unassessedAdvisory(tenant, scanID string, res secfindings.Resource, now tim
 // either source, so a ClickHouse outage must not take the syslog detections down
 // with it.
 func (l *Lane) threatFindings(ctx context.Context, tenant, scanID string,
-	devices []Device, enabled map[string]bool, addErr func(string, error)) []secfindings.Finding {
+	devices []Device, enabled map[string]bool, addErr func(string, error),
+	mark func(lane string, entities ...string)) []secfindings.Finding {
+
+	// A detection read over an EMPTY inventory is not evidence that an open
+	// detection stopped (an inventory that has not loaded yet looks exactly
+	// like this), so the threat and gap lanes only count as assessed when
+	// there were devices to assess.
+	markTenant := func(lane string) {
+		if len(devices) > 0 {
+			mark(lane, laneAll)
+		}
+	}
 
 	cat := threatlane.DefaultCatalog()
 	until := l.deps.Now()
@@ -907,6 +993,7 @@ func (l *Lane) threatFindings(ctx context.Context, tenant, scanID string,
 		read = false
 	} else {
 		out = append(out, fs...)
+		markTenant(laneThreatLog)
 	}
 
 	// The flow reader measures its window backwards from the DATABASE clock, so
@@ -925,7 +1012,11 @@ func (l *Lane) threatFindings(ctx context.Context, tenant, scanID string,
 		read = false
 	} else {
 		out = append(out, fs...)
+		markTenant(laneThreatFlow)
 	}
+	// The gap verdict is decided afresh every pass: a gap verdict from an
+	// earlier pass that is not repeated now has closed.
+	markTenant(laneGap)
 
 	kept := out[:0]
 	for _, f := range out {
@@ -1093,66 +1184,222 @@ func unassessedDetection(tenant, scanID string, now time.Time, d Device, w detec
 
 // ── emit ────────────────────────────────────────────────────────────────────
 
-// emit publishes the findings in bounded batches, keyed by tenant. It returns
-// the number published; a batch that exhausts the producer's bounded retry is
-// DEAD-LETTERED and is never counted as lost while a durable copy exists.
-func (l *Lane) emit(ctx context.Context, tenant string, findings []secfindings.Finding) (int, error) {
-	if len(findings) == 0 {
-		return 0, nil
+// buildEvents converts every finding into its bus event, in order, and returns
+// the set of native ids the scan reported. A finding that cannot ground (no
+// evidence class, no subject, no verdict time, no owning tenant) is refused and
+// counted, never guessed — exactly the refusal the producer used to make.
+func (l *Lane) buildEvents(findings []secfindings.Finding, seg, scanID string) ([]secbus.EvidenceEvent, map[string]bool) {
+	events := make([]secbus.EvidenceEvent, 0, len(findings))
+	present := make(map[string]bool, len(findings))
+	refused := 0
+	for _, f := range findings {
+		ev, err := secbus.FromFinding(f)
+		if err == nil && strings.TrimSpace(ev.TenantID) == "" {
+			err = errors.New("secbus: finding carries no owning tenant")
+		}
+		if err != nil {
+			refused++
+			continue
+		}
+		events = append(events, ev)
+		present[ev.NativeID] = true
+	}
+	if refused > 0 {
+		l.metrics.AddUngroundable(int64(refused))
+		l.deps.LogWarn("security findings refused at the bus seam — they could not be grounded and were NOT emitted",
+			map[string]any{"tenant_seg": seg, "scan_id": scanID, "refused": refused})
+	}
+	return events, present
+}
+
+// emitResult is what one scan put on the bus.
+type emitResult struct {
+	verdicts    int // verdict records published (both topics; clears are not verdicts)
+	transitions int // records published onto netops.security
+	unchanged   int // verdicts routed to the audit topic only
+	err         error
+}
+
+// emitOnChange is the D2 emission (episodes.go): transitions onto
+// netops.security, re-confirmed verdicts onto netops.security.audit, then the
+// tenant's episode state committed.
+func (l *Lane) emitOnChange(ctx context.Context, tenant, scanID string, now time.Time,
+	items []secbus.EvidenceEvent, present, assessed map[string]bool, addErr func(string, error)) emitResult {
+
+	var res emitResult
+	tr, err := l.track(ctx, tenant)
+	if err != nil {
+		// State unknown: a transition cannot be told from a re-confirmation.
+		// Every verdict still reaches the findings store (audit topic) and the
+		// engine is told NOTHING this pass; the next pass retries the load, and
+		// whatever changed meanwhile is detected then — delayed, never lost and
+		// never a burst.
+		l.metrics.AddStateError("load")
+		addErr("episode-state", err)
+		stamped := make([]secbus.EvidenceEvent, 0, len(items))
+		for _, ev := range items {
+			attrs := make(map[string]any, len(ev.Attrs)+1)
+			for k, v := range ev.Attrs {
+				attrs[k] = v
+			}
+			ev.Attrs = attrs
+			secbus.StampEpisode(&ev, secbus.TransitionUnclassified, time.Time{}, "")
+			stamped = append(stamped, ev)
+		}
+		n, _, perr := l.publishEvents(ctx, tenant, l.audit, stamped)
+		res.verdicts, res.err = n, perr
+		return res
+	}
+
+	if !tr.seeded {
+		open, src := l.seed(ctx, tenant, tr, items)
+		tr.pending = mergeCommit(tr.pending, EpisodeCommit{Upserts: open, SeedSource: src})
+	}
+	plan := planScan(tr, tenant, scanID, now, items, present, assessed, l.deps.EmitClears)
+
+	// 1. Transitions → the engine's lane.
+	trEvents := make([]secbus.EvidenceEvent, 0, len(plan.transitions))
+	for _, it := range plan.transitions {
+		trEvents = append(trEvents, it.ev)
+	}
+	n, outcomes, perr := l.publishEvents(ctx, tenant, l.producer, trEvents)
+	res.transitions, res.err = n, perr
+	lost := map[string]string{}
+	for i, it := range plan.transitions {
+		l.metrics.RecordTransitions(it.transition, outcomes[i].String(), 1)
+		if outcomes[i] == sentLost {
+			lost[it.nativeID] = it.transition
+		}
+		if outcomes[i] == sentPublished && it.transition != secbus.TransitionClear {
+			res.verdicts++
+		}
+	}
+	if plan.withheld > 0 {
+		l.metrics.RecordTransitions(secbus.TransitionClear, outcomeWithheld, int64(plan.withheld))
+	}
+	plan.revertLost(lost)
+
+	// 2. Re-confirmed verdicts → the findings store only.
+	n, _, perr = l.publishEvents(ctx, tenant, l.audit, plan.unchanged)
+	res.verdicts += n
+	res.unchanged = len(plan.unchanged)
+	l.metrics.AddUnchanged(int64(len(plan.unchanged)))
+	if res.err == nil {
+		res.err = perr
+	}
+	l.metrics.AddPruned(int64(plan.pruned))
+
+	// 3. Commit. A refused commit is carried forward and retried with the next
+	// scan's delta: the in-memory view stands (this process knows what it sent),
+	// and dropping the delta would make a restart re-announce it.
+	tr.apply(plan, present, now)
+	commit := mergeCommit(tr.pending, plan.commit())
+	if cerr := l.episodes.Commit(ctx, tenant, commit); cerr != nil {
+		tr.pending = commit
+		l.metrics.AddStateError("commit")
+		addErr("episode-state", fmt.Errorf("finding episode state could not be persisted (kept in memory, retried next scan): %w", cerr))
+	} else {
+		tr.pending = EpisodeCommit{}
+	}
+	return res
+}
+
+// sendOutcome is what became of one record.
+type sendOutcome uint8
+
+const (
+	sentPublished sendOutcome = iota
+	sentDeadLettered
+	sentLost
+)
+
+// outcomeWithheld labels a clear closed in state but not emitted.
+const outcomeWithheld = "withheld"
+
+func (o sendOutcome) String() string {
+	switch o {
+	case sentDeadLettered:
+		return "dead_lettered"
+	case sentLost:
+		return "lost"
+	default:
+		return "emitted"
+	}
+}
+
+// publishEvents publishes events through one producer in bounded batches,
+// keyed by tenant. A batch that exhausts the producer's bounded retry is
+// DEAD-LETTERED and is never counted as lost while a durable copy exists. It
+// returns the number published, every record's outcome, and the first error.
+func (l *Lane) publishEvents(ctx context.Context, tenant string, prod *secbus.Producer,
+	evs []secbus.EvidenceEvent) (int, []sendOutcome, error) {
+
+	outcomes := make([]sendOutcome, len(evs))
+	if len(evs) == 0 {
+		return 0, outcomes, nil
 	}
 	published := 0
 	var firstErr error
-	before := l.producer.Metrics().Snapshot()
-	for start := 0; start < len(findings); start += emitBatch {
+	before := prod.Metrics().Snapshot()
+	for start := 0; start < len(evs); start += emitBatch {
 		end := start + emitBatch
-		if end > len(findings) {
-			end = len(findings)
+		if end > len(evs) {
+			end = len(evs)
 		}
-		batch := findings[start:end]
-		n, err := l.producer.Publish(ctx, batch)
+		batch := evs[start:end]
+		n, err := prod.PublishEvents(ctx, batch)
 		if err != nil {
 			l.metrics.AddEmitFailure(1)
 			if firstErr == nil {
 				firstErr = err
 			}
-			l.deadLetter(ctx, tenant, batch, err)
+			o := sentDeadLettered
+			if !l.deadLetter(ctx, tenant, batch, err) {
+				o = sentLost
+			}
+			for i := start; i < end; i++ {
+				outcomes[i] = o
+			}
 			continue
 		}
 		published += n
 		for _, class := range evidenceClasses {
-			l.metrics.RecordEmitted(class, countClass(batch, class))
+			l.metrics.RecordEmitted(class, countVerdicts(batch, class))
 		}
 	}
-	after := l.producer.Metrics().Snapshot()
+	after := prod.Metrics().Snapshot()
 	l.metrics.AddUngroundable(after.Skipped - before.Skipped)
-	return published, firstErr
+	return published, outcomes, firstErr
 }
 
-func countClass(fs []secfindings.Finding, class string) int {
+// countVerdicts counts the verdict records (clears are not verdicts) of one
+// evidence class in a batch.
+func countVerdicts(evs []secbus.EvidenceEvent, class string) int {
 	n := 0
-	for _, f := range fs {
-		if f.EvidenceClass == class {
+	for _, ev := range evs {
+		if secbus.IsClearKind(ev.Kind) {
+			continue
+		}
+		if c, _ := ev.Attrs["evidence_class"].(string); c == class {
 			n++
 		}
 	}
 	return n
 }
 
-// deadLetter preserves a batch the bus refused. The LADDER (the 189 persist
-// contract): the dead-letter TOPIC first, then the local SPOOL, and only when
-// both fail does `lost_total` move — `lost` is reserved for evidence with no
-// durable copy anywhere, never for evidence sitting in a dead-letter sink.
-func (l *Lane) deadLetter(ctx context.Context, tenant string, findings []secfindings.Finding, cause error) {
-	recs := make([]Record, 0, len(findings))
-	for _, f := range findings {
-		ev, err := secbus.FromFinding(f)
-		if err != nil {
-			continue // already counted as ungroundable by the producer
-		}
+// deadLetter preserves a batch the bus refused and reports whether a durable
+// copy now exists. The LADDER (the 189 persist contract): the dead-letter TOPIC
+// first, then the local SPOOL, and only when both fail does `lost_total` move —
+// `lost` is reserved for evidence with no durable copy anywhere, never for
+// evidence sitting in a dead-letter sink. The record keeps attrs.transition, so
+// a replay knows which topic it belongs on (unchanged → the audit topic).
+func (l *Lane) deadLetter(ctx context.Context, tenant string, evs []secbus.EvidenceEvent, cause error) bool {
+	recs := make([]Record, 0, len(evs))
+	for _, ev := range evs {
 		recs = append(recs, Record{Key: ev.TenantID, Value: ev})
 	}
 	if len(recs) == 0 {
-		return
+		return true
 	}
 	seg := l.deps.TenantSeg(tenant)
 	busErr := l.deadLetterToBus(ctx, recs, cause)
@@ -1160,27 +1407,28 @@ func (l *Lane) deadLetter(ctx context.Context, tenant string, findings []secfind
 		l.metrics.AddDeadLettered(int64(len(recs)))
 		l.deps.LogError("security evidence DEAD-LETTERED onto "+DeadLetterTopic+" after the bounded retry — it is preserved, not lost",
 			map[string]any{"tenant_seg": seg, "records": len(recs), "cause": cause.Error()})
-		return
+		return true
 	}
 	if l.deps.Spool != nil {
-		if serr := l.deps.Spool(tenant, recs, cause); serr == nil {
+		serr := l.deps.Spool(tenant, recs, cause)
+		if serr == nil {
 			l.metrics.AddDeadLettered(int64(len(recs)))
 			l.deps.LogError("security evidence dead-lettered to the LOCAL SPOOL — the dead-letter topic is unreachable",
 				map[string]any{"tenant_seg": seg, "records": len(recs),
 					"bus_err": busErr.Error(), "cause": cause.Error()})
-			return
-		} else {
-			l.metrics.AddLost(int64(len(recs)))
-			l.deps.LogError("security evidence LOST — neither the bus, the dead-letter topic nor the local spool accepted it",
-				map[string]any{"tenant_seg": seg, "records": len(recs),
-					"bus_err": busErr.Error(), "spool_err": serr.Error(), "cause": cause.Error()})
-			return
+			return true
 		}
+		l.metrics.AddLost(int64(len(recs)))
+		l.deps.LogError("security evidence LOST — neither the bus, the dead-letter topic nor the local spool accepted it",
+			map[string]any{"tenant_seg": seg, "records": len(recs),
+				"bus_err": busErr.Error(), "spool_err": serr.Error(), "cause": cause.Error()})
+		return false
 	}
 	l.metrics.AddLost(int64(len(recs)))
 	l.deps.LogError("security evidence LOST — the dead-letter topic is unreachable and no local spool is configured",
 		map[string]any{"tenant_seg": seg, "records": len(recs),
 			"bus_err": busErr.Error(), "cause": cause.Error()})
+	return false
 }
 
 // deadLetterToBus produces the batch onto netops.deadletter in the SAME shape

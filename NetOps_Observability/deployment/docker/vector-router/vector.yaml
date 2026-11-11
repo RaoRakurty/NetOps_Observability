@@ -364,7 +364,12 @@ sources:
     librdkafka_options:
       queued.max.messages.kbytes: "4096"
       queued.min.messages: "5000"
-    topics: ["netops.security"]
+    # Owner D2 (2026-11-11): the security lane sends the engine only finding
+    # TRANSITIONS on netops.security and puts the verdicts a scan merely
+    # re-confirmed on netops.security.audit (router-only — the engine never
+    # subscribes). Indexing BOTH keeps every scan's verdicts in the store,
+    # exactly as before the split; the two never carry the same verdict.
+    topics: ["netops.security", "netops.security.audit"]
     group_id: "netops-router-security"
     decoding: { codec: json }
     key_field: ""                         # keep the payload message_key
@@ -799,9 +804,19 @@ transforms:
   # QUARANTINED (operator-only index) rather than written with an invented id.
   # That is the F-11 posture applied to this lane: an unattributable record is
   # kept and made visible, never guessed at and never silently dropped.
+  # A `security_*_clear` record (owner D2) tells the ENGINE that a finding
+  # stopped being reported. It is not a verdict — it carries no status — and
+  # indexed it would become the `current=true` row for its native_id, so the
+  # findings store skips it here; the store's history already shows the
+  # finding's absence from that scan. Every other record passes unchanged.
+  security_verdicts_only:
+    type: filter
+    inputs: [security_tagged]
+    condition: '!ends_with(to_string(.kind) ?? "", "_clear")'
+
   security_identity:
     type: remap
-    inputs: [security_tagged]
+    inputs: [security_verdicts_only]
     source: |
       # The CLAUDE.md dotted-key gotcha: a `.label` map (Docker's
       # com.docker.compose.* keys) is read by OpenSearch as an object PATH and

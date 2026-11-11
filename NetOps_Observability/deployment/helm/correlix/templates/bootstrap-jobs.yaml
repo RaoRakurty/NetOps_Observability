@@ -87,7 +87,7 @@ spec:
                        netops.controller_events netops.app.edge netops.verification \
                        netops.cloudlogs netops.cloudcosts netops.deadletter \
                        netops.wireless_sessions netops.wireless_events \
-                       netops.security netops.bgp netops.experience; do
+                       netops.security netops.security.audit netops.bgp netops.experience; do
                 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
                   --create --if-not-exists --topic "$t" \
                   --partitions "$p" --replication-factor 1 || exit 1

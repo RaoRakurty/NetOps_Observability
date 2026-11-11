@@ -117,7 +117,12 @@ func newWindowFixture(t *testing.T, store Watermarks) *windowFixture {
 		d.Now = func() time.Time { return wf.now }
 		d.Interval = time.Hour
 		d.Watermarks = store
-		d.Search = func(_, _ string, body any) (*http.Response, error) {
+		d.Search = func(_, path string, body any) (*http.Response, error) {
+			if strings.Contains(path, "netops-secfindings-") {
+				// The finding-episode seed reads the findings store, not a
+				// detection window.
+				return wf.index.search(path, body)
+			}
 			wf.windows = append(wf.windows, windowOf(t, body))
 			return osResponse(), nil
 		}

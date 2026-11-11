@@ -6350,7 +6350,23 @@ func (s *server) securityLaneDeps() seclane.Deps {
 		// assessed by anything.
 		Watermarks: seclane.NewFileWatermarks(
 			envOr(seclane.EnvWatermarkFile, seclane.DefaultWatermarkFile)),
+		// Findings-on-change (owner D2): the per-tenant episode state that lets
+		// the lane send the engine only appear/change/clear, durable across a
+		// restart. Clears stay withheld until the engine registers the
+		// security_*_clear kinds (seclane.EnvEmitClears).
+		Episodes:   securityLaneEpisodeStore(),
+		EmitClears: envBool(seclane.EnvEmitClears),
 	}
+}
+
+// securityLaneEpisodeStore selects the Postgres episode register under the
+// Postgres backend (migration 0069, tenant_iso FORCE-RLS), else the per-tenant
+// file store so the default build works unchanged (the secStore precedent).
+func securityLaneEpisodeStore() seclane.EpisodeStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return seclane.NewPGEpisodes(ps.DB())
+	}
+	return seclane.NewFileEpisodes(envOr(seclane.EnvEpisodeDir, seclane.DefaultEpisodeDir), seclane.TenantSeg)
 }
 
 // securityLaneTenants lists the tenant ids the producer scans. Untagged/global
