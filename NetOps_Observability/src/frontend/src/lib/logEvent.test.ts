@@ -81,7 +81,7 @@ const CONFD_SYSLOG = {
     severity: "notice",
     vendor: "unknown",
     parser_status: "unparsed",
-    message: "4220 - - audit user: svc-poller/980840 created new session via snmp from 127.0.0.1:54511 with udp",
+    message: "4220 - - audit user: svc-nms/980840 created new session via snmp from 127.0.0.1:54511 with udp",
     tenant_attribution: "unmatched",
     topic: "netops.syslog",
   },

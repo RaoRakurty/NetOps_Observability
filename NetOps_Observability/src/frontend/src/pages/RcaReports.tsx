@@ -113,10 +113,10 @@ export default function RcaReports() {
             Open workspace
           </a>
           <button className="rw-btn" style={{ fontSize: 12.5, padding: "1px 8px" }}
-            title="Download the promoted RCA document (PDF; falls back to the print view when the PDF renderer is off)"
+            title="Download the promoted RCA document as a PDF (opens Save as PDF when the PDF renderer is off)"
             onClick={() => {
               api.downloadRcaReport(r.correlation_id, r.display_id)
-                .catch(() => alert("Could not render the document — try again or check the PDF sidecar."));
+                .catch(() => alert("Could not produce the document — try again in a minute."));
             }}>
             ⤓ PDF
           </button>
