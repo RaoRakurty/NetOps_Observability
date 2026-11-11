@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -133,6 +134,18 @@ SROS = (b"<188>Jan  2 18:43:23 10.221.38.108 TMNX: 17 Base "
         b"SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed")
 SONIC = (b"<30>2026-11-09T09:00:00.123456+00:00 sonic-1 INFO bgp#bgpd[123]: neighbor 10.0.0.1 Down")
 SONIC_ERR = (b"<27>2026-11-09T09:00:00.123456+00:00 sonic-1 ERR syncd#syncd: SAI_API_PORT failed")
+# The IOS XE boot banner (tracker 387, live on the lab's Catalyst 8000v 17.3.2, 2026-11-11):
+# a sequence number and no time, so the legacy parser took the first word for the program
+# (`Cisco`, `Technical`, `Copyright`, `Compiled`) and cut it off the message. Edge shape
+# `sequence_number_without_time` frames them as the untagged IOS lines they are.
+IOSXE_BANNER = [
+    ((b"<189>65: Cisco IOS Software [Amsterdam], Virtual XE Software "
+      b"(X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.3.2, RELEASE SOFTWARE (fc3)"),
+     "ios_boot_version"),
+    (b"<189>66: Technical Support: http://www.cisco.com/techsupport", "ios_boot_banner"),
+    (b"<189>67: Copyright (c) 1986-2020 by Cisco Systems, Inc.", "ios_boot_banner"),
+    (b"<189>68: Compiled Sat 31-Oct-20 13:16 by mcpre", "ios_boot_banner"),
+]
 FORTI = (b"<189>date=2026-11-09 time=09:00:00 devname=fw01 devid=FGT60E logid=0000000013 "
          b"type=traffic subtype=forward level=notice srcip=10.0.0.1 dstip=10.0.0.2 action=accept")
 
@@ -245,6 +258,15 @@ FRAMES = [
         "message": "date=2026-11-09 time=09:00:00 devname=fw01 devid=FGT60E logid=0000000013 "
                    "type=traffic subtype=forward level=notice srcip=10.0.0.1 dstip=10.0.0.2 "
                    "action=accept"}),
+] + [
+    (f"IOS XE boot banner line {seq}", frame, {
+        "frame_format": "rfc3164", "hostname": SENDER, "appname": "unknown",
+        "severity": "notice", "syslog_facility": "local7",
+        "message": frame.decode().split(": ", 1)[1],
+        "structured_data": f'[meta sequenceId="{seq}"]',
+        "vendor": "cisco", "parser_id": "cisco_iosxe.v1", "parser_status": "parsed",
+        "event_type": event_type, "event_category": "system_lifecycle"})
+    for seq, (frame, event_type) in enumerate(IOSXE_BANNER, start=65)
 ]
 
 
@@ -279,6 +301,7 @@ ENGINE_CASES = [
     ("SR OS warning is kept below the floor", SROS, "device_alarm", "warn"),
     ("ASA info is a log", ASA, None, None),
     ("FortiGate notice is a log", FORTI, None, None),
+    ("the IOS XE boot banner is a log", IOSXE_BANNER[0][0], None, None),
 ]
 
 
@@ -484,6 +507,88 @@ def test_a_zoneless_device_ahead_is_read_at_receive_time_too(edge: H.Edge) -> No
     doc = edge.send(_frame(ZONELESS[2][1], claimed))
     assert doc["ts_source"] == "edge_receive", doc
     assert abs((_ts(doc["timestamp"]) - datetime.now(timezone.utc)).total_seconds()) < RECORD_TOLERANCE_S, doc
+
+
+def test_a_banner_line_has_no_time_and_is_read_at_receive_time_unflagged(edge: H.Edge) -> None:
+    """No time in the frame: nothing to believe or distrust, so no skew stamp, and the
+    record's minute is the one key every line of that boot carries."""
+    doc = edge.send(IOSXE_BANNER[0][0])
+    assert "ts_source" not in doc and "clock_skew_s" not in doc, doc
+    assert abs((_ts(doc["timestamp"]) - datetime.now(timezone.utc)).total_seconds()) < RECORD_TOLERANCE_S, doc
+    assert re.fullmatch(rf"boot:{re.escape(edge.sender_ip)}:\d{{4}}-\d\d-\d\dT\d\d:\d\d",
+                        doc["correlation_key"]), doc
+    assert doc["title"] == f"{edge.sender_ip} booted Cisco IOS XE 17.3.2", doc
+
+
+#: A sequence number with no time that already read correctly: the banner's shape must
+#: leave each as it was. name, frame, the fields it must keep.
+SEQUENCE_NO_TIME_UNCHANGED = [
+    ("a mnemonic, which r_mnemonic_is_not_a_program puts back",
+     b"<189>69: %SYS-5-RESTART: System restarted --",
+     {"appname": "unknown", "message": "%SYS-5-RESTART: System restarted --",
+      "structured_data": '[meta sequenceId="69"]', "parser_id": "ios_style.v1",
+      "event_type": "restart"}),
+    ("IOS logging origin-id, a host before the text",
+     b"<189>70: r1: %SYS-5-CONFIG_I: Configured from console",
+     {"message": "%SYS-5-CONFIG_I: Configured from console", "parser_id": "ios_style.v1",
+      "event_type": "config_i", "structured_data": '[meta sequenceId="70"]'}),
+    ("a process tag with a pid",
+     b"<13>71: myprog[45]: a tagged line",
+     {"appname": "myprog", "procid": 45, "message": "a tagged line"}),
+]
+
+
+@pytest.mark.parametrize("name,frame,want", SEQUENCE_NO_TIME_UNCHANGED,
+                         ids=[c[0] for c in SEQUENCE_NO_TIME_UNCHANGED])
+def test_a_sequence_number_frame_that_read_before_still_reads_the_same(
+        edge: H.Edge, name: str, frame: bytes, want: dict) -> None:
+    doc = edge.send(frame)
+    for key, value in want.items():
+        assert doc.get(key) == value, f"{name}: {key}={doc.get(key)!r}, wanted {value!r}\n{doc}"
+    assert doc["frame_format"] == "rfc3164" and "frame_problem" not in doc, doc
+
+
+# ── syslog-ng's own `-- MARK --` (tracker 387, 2026-11-11) ───────────────────────
+
+def _conf_with_mark_freq(tmp: Path, where: str) -> Path:
+    """The shipped conf.d with `mark-freq(1)` set BEFORE or AFTER the shipped options."""
+    conf = tmp / "conf.d"
+    shutil.copytree(SYSLOG_NG, conf)
+    core = conf / "core.conf"
+    text = core.read_text(encoding="utf-8")
+    if where == "before":
+        text = text.replace("options {\n", "options {\n    mark-freq(1);\n", 1)
+    else:
+        text = text.replace("    log-msg-size(32768);\n", "    log-msg-size(32768);\n    mark-freq(1);\n", 1)
+    assert "mark-freq(1);" in text
+    core.write_text(text, encoding="utf-8")
+    for path in (tmp, conf):
+        path.chmod(0o755)
+    for f in conf.iterdir():
+        f.chmod(0o644)
+    return conf
+
+
+@pytest.mark.parametrize("where,marks", [("before", False), ("after", True)],
+                         ids=["the shipped mark-freq(0) wins", "control: a later mark-freq(1) marks"])
+def test_the_edge_writes_no_mark_of_its_own(tmp_path: Path, where: str, marks: bool) -> None:
+    """At syslog-ng's default the edge wrote `-- MARK --` into the relay every 20 idle
+    minutes, under its container id: a record from a device that does not exist. The
+    shipped options turn it off. The control proves the probe can see a mark at all."""
+    if not _docker_available():
+        pytest.skip(_SKIP)
+    with H.running_edge(_conf_with_mark_freq(tmp_path, where), VECTOR_YAML,
+                        registry=[("vEdge-1", "lab")]) as running:
+        first = running.send(VEDGE_ERR)
+        assert first["hostname"] == "vEdge-1"
+        # Six idle seconds, then one snapshot: not `settle`, which waits for a quiet the
+        # control (a mark every second) never gives.
+        time.sleep(6)
+        seen = [d for d in running._stdout_docs() if d.get("message") == "-- MARK --"]
+    assert bool(seen) is marks, seen
+    if marks:
+        # What the edge used to store: its own container id as the host, no program.
+        assert seen[0]["hostname"] != "vEdge-1" and seen[0]["appname"] == "unknown", seen[0]
 
 
 def test_a_frame_with_no_time_is_not_flagged(edge: H.Edge) -> None:

@@ -463,6 +463,106 @@
                       "type": "keyword"
                     }
                   }
+                },
+                "clock_step_s": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "conntrack_buckets": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "conntrack_max": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "hrtimer_interrupt_ns": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "admin_status": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "port_status": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "link_status": {
+                  "properties": {
+                    "value": {
+                      "type": "double"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "software_version": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "software_image": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "release_train": {
+                  "properties": {
+                    "value": {
+                      "type": "keyword"
+                    },
+                    "basis": {
+                      "type": "keyword"
+                    }
+                  }
                 }
               }
             },

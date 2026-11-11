@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-10-sdwan-dns-snmpauth`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-11-11-syslog-final-wave`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -39,7 +39,7 @@ engine treats them as such. Fidelity is the catalog's ladder
 | **`controller_bfd_down_clear`** | `syslog.sdwan.bfd.up` | `trap.sdwan.bfd.clear` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
 | **`controller_control_connection_loss`** | `syslog.sdwan.control_connection.down` | `trap.sdwan.control_connection`, `trap.sdwan.omp` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
 | **`controller_control_connection_loss_clear`** | `syslog.sdwan.control_connection.up` | `trap.sdwan.control_connection.clear`, `trap.sdwan.omp.clear` | — | `cisco` | syslog: doc_claimed · trap: doc_claimed |
-| **`device_alarm`** | `syslog.sdwan.ftmd.interface_dump`, `syslog.sdwan.snmp_agent.poll_error`, `syslog.sros.clear`, `syslog.sros.config.saved`, `syslog.sros.equipment.failure`, `syslog.sros.port.alarm`, `syslog.standard.sshd_banner_probe` | `trap.sdwan.omp_tloc_change` | — | `any`, `cisco`, `nokia` | syslog: doc_claimed/lab_validated · trap: doc_claimed |
+| **`device_alarm`** | `syslog.sdwan.fp.default_mac`, `syslog.sdwan.ftmd.interface_dump`, `syslog.sdwan.snmp_agent.poll_error`, `syslog.sros.clear`, `syslog.sros.config.saved`, `syslog.sros.equipment.failure`, `syslog.sros.port.alarm`, `syslog.standard.kernel_hrtimer_slow`, `syslog.standard.ospf_dd_two_way`, `syslog.standard.sshd_banner_probe` | `trap.sdwan.omp_tloc_change` | — | `any`, `cisco`, `nokia` | syslog: doc_claimed/lab_validated · trap: doc_claimed |
 | **`device_config_change`** | `syslog.junos.config.commit_completed`, `syslog.sros.config.change` | `trap.config.change` | — | `cisco`, `juniper`, `nokia` | syslog: doc_claimed · trap: doc_claimed |
 | **`device_resource_anomaly`** | `syslog.sdwan.cpu_high.critical`, `syslog.sdwan.cpu_high.warning` | `trap.resource.cpu_threshold`, `trap.sdwan.cpu_threshold`, `trap.sdwan.memory_threshold` | — | `cisco` | syslog: lab_validated · trap: doc_claimed |
 | **`device_resource_anomaly_clear`** | `syslog.sdwan.cpu_high.clear`, `syslog.sdwan.cpu_normal.clear` | `trap.resource.cpu_threshold.clear`, `trap.sdwan.cpu_threshold.clear`, `trap.sdwan.memory_threshold.clear` | — | `cisco` | syslog: lab_validated · trap: doc_claimed/lab_validated |
@@ -117,6 +117,8 @@ waiting for a recovery line.
 |---|---|---|
 | `syslog.iosxr.below_floor` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sdwan.dns.failed` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
+| `syslog.sdwan.default_gateway.monitor_down` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
+| `syslog.sdwan.default_gateway.unreachable` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sdwan.below_floor` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sdwan.below_floor.iosxe` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `syslog.sros.below_floor` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
