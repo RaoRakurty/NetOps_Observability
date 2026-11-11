@@ -122,7 +122,9 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 		return ai.Completion{}, ai.ErrProviderBreakerOpen
 	}
 	start := time.Now()
-	c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, msgs)
+	// A fast-tier call asks for the least hidden reasoning the model offers
+	// (ai/thinking.go); other tiers keep the provider default.
+	c, err := ai.CallProviderUsage(ai.WithTierThinking(ctx, tier), cand.name, cand.key, cand.model, system, msgs)
 	took := time.Since(start)
 	outcome := ai.ClassifyProviderError(err)
 	// A deadline that expired because the CALLER'S context ended (client gone)
@@ -134,6 +136,11 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 	switch {
 	case err == nil:
 		s.aiBreaker.Record(tenant, cand.name, false)
+		// Every answered call is measured too: model, stage, latency and the
+		// provider's own tokens, hidden reasoning included (aiprovider/usage.go).
+		s.aiProvCalls.RecordSuccess(aiprovider.Call{Tenant: tenant, Provider: cand.name, Model: cand.model, Tier: tierLabel,
+			Stage: ai.StageOf(ctx), KeySource: cand.source, Latency: took, InputTokens: c.Usage.InputTokens,
+			OutputTokens: c.Usage.OutputTokens, ThinkingTokens: c.Usage.ThinkingTokens, UsageReported: c.Usage.Reported})
 	case ai.CountsAgainstProvider(outcome):
 		s.aiBreaker.Record(tenant, cand.name, true)
 	default:

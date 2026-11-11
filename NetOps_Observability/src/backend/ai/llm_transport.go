@@ -430,8 +430,11 @@ func parseOpenAI(rb []byte) (Completion, error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
+			PromptTokens            int64 `json:"prompt_tokens"`
+			CompletionTokens        int64 `json:"completion_tokens"`
+			CompletionTokensDetails *struct {
+				ReasoningTokens int64 `json:"reasoning_tokens"` // a reasoning model's hidden reasoning, inside completion_tokens
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
@@ -446,6 +449,9 @@ func parseOpenAI(rb []byte) (Completion, error) {
 	c := Completion{Text: out.Choices[0].Message.Content}
 	if out.Usage != nil {
 		c.Usage = TokenUsage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens, Reported: true}
+		if d := out.Usage.CompletionTokensDetails; d != nil {
+			c.Usage.ThinkingTokens = d.ReasoningTokens
+		}
 	}
 	return c, nil
 }
@@ -468,16 +474,32 @@ func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessa
 		}
 		contents = append(contents, gcontent{Role: role, Parts: []gpart{{Text: m.Content}}})
 	}
-	body, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
-		"system_instruction": map[string]any{"parts": []gpart{{Text: system}}},
-		"contents":           contents,
-		"generationConfig":   map[string]any{"maxOutputTokens": MaxOutputTokens},
-	})
+	build := func(thinking map[string]any) []byte {
+		gen := map[string]any{"maxOutputTokens": MaxOutputTokens}
+		if thinking != nil {
+			gen["thinkingConfig"] = thinking // fast tier only (thinking.go)
+		}
+		body, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
+			"system_instruction": map[string]any{"parts": []gpart{{Text: system}}},
+			"contents":           contents,
+			"generationConfig":   gen,
+		})
+		return body
+	}
+	thinking := geminiThinkingFor(ctx, model)
 	// Gemini authenticates with the x-goog-api-key HEADER, never the query
 	// string: a transport error (*url.Error) embeds the full request URL in its
 	// message, and a key in the URL was written to the logs on every failed call
 	// (found live 2026-11-10). The header never appears in an error.
-	rb, err := ProviderDo(ctx, GeminiEndpoint(model), GeminiAuthHeader(key), body, "gemini")
+	rb, err := ProviderDo(ctx, GeminiEndpoint(model), GeminiAuthHeader(key), build(thinking), "gemini")
+	if err != nil && thinking != nil && refusedArgument(err) {
+		// The model (an alias Google re-pointed, or one we do not know) refused
+		// the thinking setting: ask once without it, and remember only when that
+		// proves the setting was the cause.
+		if rb, err = ProviderDo(ctx, GeminiEndpoint(model), GeminiAuthHeader(key), build(nil), "gemini"); err == nil {
+			geminiThinkingRejected.add(model)
+		}
+	}
 	if err != nil {
 		return Completion{}, err
 	}
@@ -561,8 +583,12 @@ func parseGemini(rb []byte) (Completion, error) {
 		return Completion{}, empty
 	}
 	c := Completion{Text: sb.String()}
-	if out.UsageMetadata != nil {
-		c.Usage = TokenUsage{InputTokens: out.UsageMetadata.PromptTokenCount, OutputTokens: out.UsageMetadata.CandidatesTokenCount, Reported: true}
+	if u := out.UsageMetadata; u != nil {
+		// thoughtsTokenCount is reported BESIDE candidatesTokenCount and billed
+		// as output, so it is added in (TokenUsage.OutputTokens is every billed
+		// output token).
+		c.Usage = TokenUsage{InputTokens: u.PromptTokenCount, OutputTokens: u.CandidatesTokenCount + u.ThoughtsTokenCount,
+			ThinkingTokens: u.ThoughtsTokenCount, Reported: true}
 	}
 	return c, nil
 }
@@ -591,8 +617,11 @@ func parseAnthropic(rb []byte) (Completion, error) {
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      *struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
+			InputTokens         int64 `json:"input_tokens"`
+			OutputTokens        int64 `json:"output_tokens"`
+			OutputTokensDetails *struct {
+				ThinkingTokens int64 `json:"thinking_tokens"` // the reasoning share of output_tokens
+			} `json:"output_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
@@ -610,6 +639,9 @@ func parseAnthropic(rb []byte) (Completion, error) {
 	c := Completion{Text: sb.String()}
 	if out.Usage != nil {
 		c.Usage = TokenUsage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens, Reported: true}
+		if d := out.Usage.OutputTokensDetails; d != nil {
+			c.Usage.ThinkingTokens = d.ThinkingTokens
+		}
 	}
 	return c, nil
 }
