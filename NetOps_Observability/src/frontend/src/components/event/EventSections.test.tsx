@@ -3,7 +3,9 @@
 
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { Breakable, KvRow } from "./EventSections";
+import { Breakable, EventHeader, KvRow } from "./EventSections";
+import { toEventView } from "../../lib/eventModel";
+import { CPU_GOLDEN } from "../../lib/eventFixtures";
 
 describe("Breakable identifiers", () => {
   it("wraps only after its separators and keeps the text whole", () => {
@@ -33,5 +35,15 @@ describe("KvRow", () => {
   it("sets a number in Inter, not mono", () => {
     const { container } = render(<dl><KvRow row={{ key: "uptime", label: "Device Uptime", value: "16d 13h 59m" }} /></dl>);
     expect(container.querySelector(".evd-mono")).toBeNull();
+  });
+});
+
+describe("EventHeader", () => {
+  it("shows the headline only: the raw device line lives in the Original Frame tab", () => {
+    const v = toEventView(CPU_GOLDEN);
+    expect(v.subtitle).not.toBe(""); // the model still knows the vendor's words
+    const { container } = render(<EventHeader view={v} titleId="t" />);
+    expect(container.querySelector(".evd-title")?.textContent).toBe(v.title);
+    expect(container.textContent).not.toContain(v.subtitle);
   });
 });
