@@ -384,6 +384,13 @@ def audit_template(t: Template) -> dict:
         "max_possible_verdict": max_verdict,
         "status": status,
         "demo_ready": status == "confirmable_now",
+        # The template's OWN cap (allow_root_cause_confirmed=False), reported
+        # beside the status and never folded into it. `status` and the ratchet
+        # answer "can the producers that exist reach the gate?"; a deliberate cap
+        # answers "should this family ever claim a cause?" (admin link change,
+        # tracker 385; exposure / hardening-drift stories, P-424934). Folding it in
+        # would make every deliberate cap read as a producer regression.
+        "confirm_capped": not t.allow_root_cause_confirmed,
     }
 
 
@@ -444,7 +451,7 @@ def write_reports(out_dir: str = "build/reports") -> list[str]:
         f"Status counts: `{json.dumps(by_status, sort_keys=True)}`\n\n"
         "## Signatures\n\n"
         + _md_table(rows, ["signature_id", "priority", "status", "max_possible_verdict",
-                           "producer_classes_available", "pending_collection_kinds",
+                           "confirm_capped", "producer_classes_available", "pending_collection_kinds",
                            "pending_normalization_kinds"])
         + "\n## Producer ↔ signature reconciliation\n\n"
         + _md_table(recon, ["kind", "emitted", "modality", "app_groundable",

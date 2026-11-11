@@ -96,7 +96,14 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # leaves are `catalog_version` and `engine`. The durable form of that proof is
 # test_admin_link_change_385.py::
 # test_no_link_cause_evidence_is_byte_identical_with_and_without_385.
-FIXTURE_GOLDEN = "c83fd3b4ede97dbe"
+#
+# RE-FROZEN, 2026-11-11, P-424934 (was "c83fd3b4ede97dbe"). ENGINE_SEMVER went
+# 3.3.0 -> 3.3.1 and the catalog moved (allow_root_cause_confirmed=False and a cap
+# reason on the exposure / hardening-drift stories). This object carries no
+# security evidence, so its DECISION cannot move, and that was CHECKED by a JSON
+# diff of the persisted row against origin/main's: the only differing leaves are
+# `catalog_version` (row and blob) and `engine_version`.
+FIXTURE_GOLDEN = "150e3d24314fdcd0"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

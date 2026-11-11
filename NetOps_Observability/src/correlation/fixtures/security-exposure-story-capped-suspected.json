@@ -1,0 +1,15 @@
+{
+  "name": "Exposure verdict (security lane) + BGP adjacency change (syslog) on ONE device: exposure story capped at SUSPECTED",
+  "comment": "T2b, capped 2026-11-11 (P-424934). Two INDEPENDENT planes: a rule/advisory verdict (security modality, platform witness) and a control-plane transition measured on the wire (device witness). The gate passes, but an exposure is a standing property with no onset, so the fault beside it is co-occurrence: allow_root_cause_confirmed=false holds it at suspected with the cap reason on record. Without the BGP transition see security-verdicts-only-suspected.json.",
+  "signals": [
+    {"kind": "security_exposure", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "security:vuln", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator",
+     "attrs": {"evidence_class": "security", "control_id": "CVE-2026-1234",
+               "seam_id": "seam-7", "internet_facing": true}},
+    {"kind": "bgp_adjacency_change", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "syslog-edge-r1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "ts_offset_s": 30}
+  ],
+  "expect": {"top": "sig.ent.security.exposure-story", "tier": "suspected", "owner": "netops"}
+}

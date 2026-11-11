@@ -197,7 +197,9 @@ def test_the_counter_reaches_the_exposition():
 
 
 def test_engine_semver_moved():
-    assert engine_version(EngineConfig()).startswith("3.3.0+")
+    # 3.3.0 introduced tracker 385; later releases only move it forward.
+    semver = engine_version(EngineConfig()).split("+", 1)[0]
+    assert tuple(int(p) for p in semver.split(".")) >= (3, 3, 0)
 
 
 # ══ stage [6]: the clause DSL ═══════════════════════════════════════════════

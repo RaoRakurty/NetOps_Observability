@@ -59,7 +59,11 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.3.0"  # 3.3.0: tracker 385 — a no-edge link_state_change node whose
+ENGINE_SEMVER = "3.3.1"  # 3.3.1: P-424934 — the exposure and hardening-drift stories
+# carry allow_root_cause_confirmed=False (stage [7]): a standing property with no onset
+# never confirms one cause, however many planes agree. Evidence that ranks neither story
+# top is byte-identical bar this version and catalog_version.
+# 3.3.0: tracker 385 — a no-edge link_state_change node whose
 # every opening-severity signal is link_cause=admin opens no object (stage [5]), and
 # stage [6] scores an admin link change as a change, not a link fault. Byte-identical
 # (bar this version and catalog_version) for evidence with no link_cause=admin.

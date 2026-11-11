@@ -3754,6 +3754,12 @@ BUILTIN_TEMPLATES.extend(WIRELESS_TEMPLATES)
 # suspected — the honest "possibly because of X" reading, never a confirmed
 # cause built out of a scanner's opinion. Corroboration is what promotes it, and
 # corroboration can only come from a plane the verdict lane does not own.
+# EXCEPT for a standing property (P-424934, 2026-11-11): an exposure or a failed
+# hardening control has no onset, so a fault measured beside it on an independent
+# plane proves both are true, never that one caused the other. Those two stories
+# carry allow_root_cause_confirmed=False and stop at suspected however many planes
+# agree. A detection (threat-signal-story) is an EVENT with an onset, so time
+# can relate it to the fault and the gate still decides it.
 #
 # GROUNDING. Both clauses are matched on the SAME object, i.e. on evidence the
 # engine already co-located by entity/token — the producer's entity_tokens
@@ -3793,13 +3799,22 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
                 "If the device sits on an internet-facing seam, isolate or ACL it before upgrading",
             ],
         },
+        # Capped at suspected (P-424934, 2026-11-11): an exposure is a standing
+        # property with no onset, so a network fault on the same node is
+        # co-occurrence, never proof of one cause. Two planes agreeing proves
+        # both facts are true, not that one caused the other.
+        "allow_root_cause_confirmed": False,
+        "confirm_cap_reason": (
+            "confirmed capped to suspected: an exposure is a standing property with no "
+            "onset, so a network fault on the same device is co-occurrence, not proof of "
+            "one cause (allow_root_cause_confirmed=false)"),
         "operator_phrase": "This device carries a known exposure and is showing a network fault at the same time — the two are on one node, not yet proven to be one cause",
         "manager_phrase": "A device with a known security weakness is also misbehaving on the network",
         "blast_radius": "the exposed device and everything transiting it",
         "false_positives": (
             ("an exposure is a standing property, not an event — co-occurrence "
              "with an unrelated network fault is common, and is why this family "
-             "cannot confirm on the verdict alone"),
+             "never confirms: a person decides whether the two are one cause"),
         ),
     },
     {
@@ -3811,8 +3826,8 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
             {"kind": "security_posture"},
             {"kind": _CORROBORATING_NETWORK_EVIDENCE, "optional": True},
             # WHEN the baseline broke. A failed hardening control is a STANDING
-            # property with no onset — that is why this family cannot confirm on
-            # the verdict alone. A config change on the same device inside the
+            # property with no onset — that is why this family never confirms
+            # (allow_root_cause_confirmed=False below). A config change on the same device inside the
             # window is the first piece of evidence that dates the drift, and it
             # is the operator's next click ("what changed?"). Optional, and
             # control-plane like the fault clause above it, so it can never be
@@ -3828,6 +3843,14 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
                 "Check the change/maintenance window: a hardening regression outside one is itself a signal",
             ],
         },
+        # Capped at suspected (P-424934, 2026-11-11), for the reason the clause
+        # comment above gives: a failed control has no onset, so the fault beside
+        # it is co-occurrence until a person dates the drift.
+        "allow_root_cause_confirmed": False,
+        "confirm_cap_reason": (
+            "confirmed capped to suspected: a failed hardening control is a standing "
+            "property with no onset, so a network fault on the same device is "
+            "co-occurrence, not proof of one cause (allow_root_cause_confirmed=false)"),
         "operator_phrase": "A hardening control failed on this device and the device is also showing a network fault — check whether the same config change caused both",
         "manager_phrase": "A device is out of its hardening baseline and is also having problems",
         "blast_radius": "the audited device; wider if the same baseline drift is fleet-wide",
