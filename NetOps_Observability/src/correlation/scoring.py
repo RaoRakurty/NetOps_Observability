@@ -25,6 +25,9 @@ group declares it (``Template.requires_structure``) and is admitted to ranking
 only if the evidence ATTESTS that structure. A gate, not a weight — a discount
 is out-scored by a strong symptom match, which is precisely how a leaf/spine
 signature came to rank top in a topology with no spine.
+A discriminator may name a structure too (``Discriminator.attested``): its
+contradiction then fires only when the evidence attests it — the SD-WAN
+controller fan-in uses this to rule out the edge-local reading.
 
 Object outcome: rank-1 below the confidence floor ⇒ ``undetermined`` with
 ``evidence_missing`` derived mechanically from the nearest template's
@@ -39,12 +42,14 @@ from functools import lru_cache
 from catalog import Catalog, Clause, Template
 from signals import (
     CONFIG_CHANGE_KIND_SET,
+    CONTROL_LOSS_KINDS,
     EntityType,
     ModalityClass,
     ProbeAuthority,
     Signal,
     clause_attr,
     config_change_family_enabled,
+    controller_peer,
     fidelity_weighting_enabled,
     probe_authority_of,
     unvalidated_rule_ids,
@@ -335,10 +340,27 @@ def score_template(
 
     contradictions: list[str] = []
     forced: list[str] = []
+    attested: frozenset[str] | None = None   # computed only if a discriminator asks
     for disc in template.discriminators:
-        if _satisfying(disc.absent, evidence):
+        if not _satisfying(disc.absent, evidence):
+            continue
+        if disc.attested is not None:
+            # A structure-conditioned look-alike killer: the `absent` evidence
+            # contradicts this reading only when it forms the named structure
+            # (e.g. control losses that fan in on one controller). Tagged with
+            # the structure so the "ruled out because…" row says why.
+            if attested is None:
+                attested = evidence_structure(evidence, evidence_kinds(evidence))
+            if disc.attested not in attested:
+                continue
+            contradictions.append(f"{_clause_tag(disc.absent)}@{disc.attested}")
+        else:
             contradictions.append(_clause_tag(disc.absent))
-            forced.append(disc.else_prefer)
+        forced.append(disc.else_prefer)
+    if "controller_fan_in" in template.requires_structure:
+        fan_in = controller_fan_in(evidence)
+        if fan_in:
+            notes.append(controller_fan_in_note(fan_in))
 
     # Active-verification refutation (spec item 8): a HEALTHY read-only check
     # battery on an implicated entity is REFUTING evidence. The producer stamps
@@ -847,13 +869,101 @@ def _attests_transit_leg(evidence: tuple[Signal, ...]) -> bool:
     return False
 
 
+# ── SD-WAN controller fan-in (structure class `controller_fan_in`) ──────────
+#
+# THE OUTAGE (lab, 2026-11-10). The vSmart was shut down. Every edge lost its
+# control connection to it, so OMP, centralized policy (and with it the cflowd
+# flow-export config) and BFD all went away at once — and the engine saw N
+# unrelated symptoms, because no signature could tell "every edge lost the SAME
+# controller" from "one edge lost its controllers". The edge-local reading
+# (sig.ent.wan-edge.sdwan-control-connection-loss) was the only one on offer.
+#
+# THE TEMPLATE IT ADMITS caps itself at suspected (allow_root_cause_confirmed=
+# false): the fan-in says the sessions died, not that the controller rather than
+# a shared path to it failed.
+#
+# THE FACT ATTESTED. Two or more DISTINCT edges, as one lane spells them, each
+# report losing their control connection to the SAME controller. Structural
+# fan-in: independent devices converging on one shared element (owner D1,
+# docs/design/NMS_FIRST_PLAN_2026-10-24.md) — the common element is the
+# candidate cause. It is an observation, not inventory: each edge names the far
+# end of the session it lost (`signals.controller_peer`).
+#
+# WHY PER LANE. A device's syslog hostname, its SNMP/trap id and the controller's
+# system-ip are three spellings of ONE box until stage-[1] canonicalisation is on
+# (CORR_IDENTITY_CANON, default off). Counting across lanes would let one edge
+# reporting through three lanes attest a fan-in by itself. Within one lane a
+# device is spelled one way, so two distinct ids there are two edges. The cost is
+# a missed fan-in when each edge is seen through a different lane only — fail
+# closed: the edge-local reading stays.
+#
+# WHAT IT DOES NOT ATTEST. Contrast. Edges that lose EVERY controller at once (a
+# shared transport outage at their sites) fan in on each controller too; the
+# template discloses that look-alike under `false_positives`. Positive "the
+# other sessions stayed up" evidence is not on the bus today.
+#
+# MEMO SOUNDNESS. Reads kind, entity_type, entity_id (already keyed) plus
+# `source` and the (peer, peer_type) pair, which rank_memo.signal_projection
+# carries for CONTROL_LOSS_KINDS signals only.
+CONTROLLER_FAN_IN_MIN_EDGES = 2
+#: The class attested by a fan-in COUNT rather than by a kind or an entity shape.
+STRUCTURE_FAN_IN_ATTESTED: frozenset[str] = frozenset({"controller_fan_in"})
+
+
+def controller_fan_in(evidence: tuple[Signal, ...]) -> tuple[tuple[str, str, int], ...]:
+    """Every controller ≥ CONTROLLER_FAN_IN_MIN_EDGES distinct edges lost, as
+    ``(peer, peer_type, edges)`` sorted by (-edges, peer).
+
+    ``edges`` is the largest per-lane count of distinct reporting devices;
+    ``peer_type`` joins the distinct types the reports gave ("" when none did).
+    DEBUG_ONLY evidence is excluded, as everywhere in the scorer. Pure and total:
+    malformed attrs name no controller (`signals.controller_peer`)."""
+    lanes: dict[tuple[str, str], set[str]] = {}
+    types: dict[str, set[str]] = {}
+    for s in evidence:
+        if s.kind not in CONTROL_LOSS_KINDS or s.entity_type is not EntityType.DEVICE:
+            continue
+        if probe_authority_of(s) is ProbeAuthority.DEBUG_ONLY:
+            continue
+        peer, ptype = controller_peer(s)
+        if not peer:
+            continue
+        lanes.setdefault((s.source.value, peer), set()).add(s.entity_id)
+        if ptype:
+            types.setdefault(peer, set()).add(ptype)
+    best: dict[str, int] = {}
+    for (_lane, peer), edges in lanes.items():
+        best[peer] = max(best.get(peer, 0), len(edges))
+    return tuple(sorted(
+        ((peer, "|".join(sorted(types.get(peer, ()))), n)
+         for peer, n in best.items() if n >= CONTROLLER_FAN_IN_MIN_EDGES),
+        key=lambda r: (-r[2], r[0])))
+
+
+_PEER_TYPE_DISPLAY = {"vsmart": "vSmart", "vbond": "vBond", "vmanage": "vManage"}
+
+
+def controller_fan_in_note(fan_in: tuple[tuple[str, str, int], ...]) -> str:
+    """The hypothesis note naming the controller(s) the edges converged on — the
+    X of "possibly because of X". Deterministic: `controller_fan_in` order, at
+    most four controllers named."""
+    parts = []
+    for peer, ptype, n in fan_in[:4]:
+        label = "/".join(_PEER_TYPE_DISPLAY.get(t, t) for t in ptype.split("|") if t)
+        parts.append(f"{n} edges lost their control connection to controller {peer}"
+                     + (f" ({label})" if label else ""))
+    more = len(fan_in) - 4
+    return ("controller fan-in: " + "; ".join(parts)
+            + (f"; and {more} more controller(s)" if more > 0 else ""))
+
+
 def evidence_structure(evidence: tuple[Signal, ...],
                        present: frozenset[str]) -> frozenset[str]:
     """The structural classes THIS evidence attests.
 
-    Two mechanisms, both reading fields the rank memo's key already carries
-    (`sig.kind`, `sig.entity_type`, `sig.entity_id`), so the gate needs no
-    change to that key:
+    Three mechanisms. The first two read fields the rank memo's key already
+    carries (`sig.kind`, `sig.entity_type`, `sig.entity_id`); the third adds the
+    (lane, controller) pair the projection carries for control-loss kinds:
 
       * KIND-attested (`STRUCTURE_ATTESTING_KINDS`) — takes the already-computed
         `evidence_kinds(ev)`, so the DEBUG_ONLY exclusion and the
@@ -862,12 +972,16 @@ def evidence_structure(evidence: tuple[Signal, ...],
         group the same as the device's own report, and a lab probe attests
         nothing.
       * ENTITY-attested (`STRUCTURE_ENTITY_ATTESTED`) — a measured leg.
+      * FAN-IN-attested (`controller_fan_in`) — ≥2 edges lost the same
+        controller. Scanned only when a control-loss kind is present.
 
     Pure, total, and monotone: adding evidence can only add classes."""
     attested = {cls for cls, ks in STRUCTURE_ATTESTING_KINDS.items()
                 if ks & present}
     if _attests_transit_leg(evidence):
         attested.add("transit_path")
+    if CONTROL_LOSS_KINDS & present and controller_fan_in(evidence):
+        attested |= STRUCTURE_FAN_IN_ATTESTED
     return frozenset(attested)
 
 

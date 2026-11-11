@@ -644,7 +644,12 @@ RULES_HASH_SDWAN_DNS_SNMP_REFUSAL = "6c6ab197a2a5a8b386be041720b6f3128f843aafec0
 #: the ntp_event label table (read by a summary, so in the hash); five rule rows (the
 #: gateway lost at warn from either of its two lines, three known_benign).
 RULES_HASH_SYSLOG_FINAL_WAVE = "63f78614003890a5296798154fe3e6d75a02fe9823af01161cb186b5597bfae4"
-RULES_HASH_A3 = RULES_HASH_SYSLOG_FINAL_WAVE
+#:
+#: SD-WAN controller token (2026-11-11): the two `syslog.sdwan.control_connection` rows
+#: also emit the lost controller (`peer-system-ip`) as a grounding token, as the trap
+#: rows do, so several edges' losses of one controller meet on it. No grammar moved.
+RULES_HASH_SDWAN_CONTROLLER_PEER = "eb753644980b5c19d411211381c9c8f2c6273e83f9de30d1ff4688fea52dd2a3"
+RULES_HASH_A3 = RULES_HASH_SDWAN_CONTROLLER_PEER
 
 
 def _guard_patterns(node) -> list[str]:

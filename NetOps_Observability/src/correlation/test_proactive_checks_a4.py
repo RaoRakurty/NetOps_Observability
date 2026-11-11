@@ -514,7 +514,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # row; the V1 pool has neither line.
     # 2026-11-11-syslog-final-wave: vEdge daemon, IOS XE banner and stock Linux daemon
     # grammars plus five pack rows; the V1 pool (Cisco IOS three-part lines) has none.
-    assert parser_rules.PARSER_REV == "2026-11-11-syslog-final-wave", (
+    # 2026-11-11-sdwan-controller-token: the SD-WAN control-connection rows emit the lost
+    # controller as a token; the V1 pool has no VDAEMON line.
+    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

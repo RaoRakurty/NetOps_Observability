@@ -197,7 +197,9 @@ def test_the_counter_reaches_the_exposition():
 
 
 def test_engine_semver_moved():
-    assert engine_version(EngineConfig()).startswith("3.3.0+")
+    # 3.3.0 was this change; later minors (3.4.0: SD-WAN controller fan-in) keep it.
+    semver = engine_version(EngineConfig()).split("+", 1)[0]
+    assert tuple(int(x) for x in semver.split(".")) >= (3, 3, 0)
 
 
 # ══ stage [6]: the clause DSL ═══════════════════════════════════════════════
@@ -475,10 +477,12 @@ def test_the_parser_is_untouched():
     Re-pinned for the tracker 387 process snapshot: the SD-WAN `ps` row only.
     Re-pinned for the tracker 387 SD-WAN DNS / ConfD SNMP auth grammars: no rule row.
     Re-pinned for the tracker 387 final syslog wave: five pack rows (the SD-WAN gateway
-    lost at warn, two rows, and three known_benign) behind every older one; no link row moved."""
-    assert parser_rules.PARSER_REV == "2026-11-11-syslog-final-wave"
+    lost at warn, two rows, and three known_benign) behind every older one; no link row moved.
+    Re-pinned for the SD-WAN controller token: the two control-connection syslog rows emit
+    the lost controller as a token; no link row moved."""
+    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token"
     assert parser_rules.BAKED_RULES_HASH == (
-        "63f78614003890a5296798154fe3e6d75a02fe9823af01161cb186b5597bfae4")
+        "eb753644980b5c19d411211381c9c8f2c6273e83f9de30d1ff4688fea52dd2a3")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

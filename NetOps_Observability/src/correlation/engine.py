@@ -59,7 +59,14 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.3.0"  # 3.3.0: tracker 385 — a no-edge link_state_change node whose
+ENGINE_SEMVER = "3.4.0"  # 3.4.0: SD-WAN controller fan-in (2026-11-11) — stage [6]
+# structure class `controller_fan_in` (>=2 distinct edges, per lane, lost their
+# control connection to the SAME controller: scoring.controller_fan_in), the
+# sig.ent.wan-edge.sdwan-controller-unreachable template it gates, and a
+# structure-conditioned discriminator (Discriminator.attested) that rules out the
+# edge-local reading when the losses fan in. Byte-identical (bar this version and
+# catalog_version) for evidence with no control-connection loss.
+# 3.3.0: tracker 385 — a no-edge link_state_change node whose
 # every opening-severity signal is link_cause=admin opens no object (stage [5]), and
 # stage [6] scores an admin link change as a change, not a link fault. Byte-identical
 # (bar this version and catalog_version) for evidence with no link_cause=admin.
