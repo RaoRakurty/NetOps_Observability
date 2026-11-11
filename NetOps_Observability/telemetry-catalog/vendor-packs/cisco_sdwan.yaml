@@ -174,6 +174,173 @@ grammars:
       correlation_key: 'dns:{device}:{target}'
     fidelity: lab_validated
 
+  # The resolver refreshing the vBond entry it already holds (live 2026-11-11, VTRACKER
+  # notice): routine, the same lookup's key as the lines above, no rule row.
+  - id: vedge_dns_cache_refreshed
+    parser_id: cisco_sdwan.v1
+    literal: ']: DNS cache entry for '
+    apps: [vtracker]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: DNS cache entry for (?P<target>[^\s,/()]{1,253})(?: \(via (?P<via>[^\s,()]{0,64})\))? refreshed'
+    event_type: dns_cache_refreshed
+    summary: 'DNS cache entry for {target}[ via {via}] refreshed'
+    fields:
+      title: 'DNS cache entry for {target} refreshed on {host}'
+      correlation_key: 'dns:{device}:{target}'
+    fidelity: lab_validated
+
+  # The vEdge resolver daemon watching its default gateway (RESOLVD notice, live
+  # 2026-11-11 at boot): the tracker on the transport interface (`Monitor attached to
+  # <vpn>/<gateway>/<n> via <if> is UP`) and the resolver's own verdict (`Default gateway
+  # <gateway> in VPN <vpn> is now reachable`). Both lines of one gateway carry one key,
+  # `gateway:<device>:<vpn>:<gateway>`, so its up and down pair on one timeline. The lab
+  # shows only UP and `reachable`; the DOWN and `unreachable` words are inferred from them
+  # (fixtures doc_claimed, the rule row below says so), and a real capture is what
+  # promotes them. `<n>` after the address is not documented and is not read.
+  - id: vedge_gateway_monitor
+    parser_id: cisco_sdwan.v1
+    literal: ']: Monitor attached to '
+    apps: [resolvd]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: Monitor attached to (?P<vpn>\d{1,5})/(?P<gw>[0-9A-Fa-f.:]{2,45})/\d{1,5} via (?P<ifname>[A-Za-z][\w/.-]{0,31}) is (?P<state>UP|DOWN)'
+    event_type: 'gateway_monitor_{state}'
+    summary: 'Gateway monitor for {gw} in VPN {vpn} via {ifname} is {state}'
+    fields:
+      title: 'Gateway {gw} in VPN {vpn} via {ifname} is {state} on {host}'
+      correlation_key: 'gateway:{device}:{vpn}:{gw}'
+    fidelity: lab_validated
+
+  - id: vedge_default_gateway
+    parser_id: cisco_sdwan.v1
+    literal: ']: Default gateway '
+    apps: [resolvd]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: Default gateway (?P<gw>[0-9A-Fa-f.:]{2,45}) in VPN (?P<vpn>\d{1,5}) is now (?P<reach>reachable|unreachable)'
+    event_type: 'default_gateway_{reach}'
+    summary: 'Default gateway {gw} in VPN {vpn} is now {reach}'
+    fields:
+      title: 'Default gateway {gw} in VPN {vpn} is now {reach} on {host}'
+      correlation_key: 'gateway:{device}:{vpn}:{gw}'
+    fidelity: lab_validated
+
+  # The vEdge configuration manager skipping a push to a routing daemon it cannot reach
+  # (CFGMGR err, live 2026-11-11 at boot: `Quagga daemon - ospfd link is down (vpn:512),
+  # skipping`). At boot the routing daemons start after cfgmgr, so the line is transient;
+  # later it would mean configuration is NOT reaching that daemon. No row: it keeps its
+  # err and the generic net sends it at warn, below the open floor, so it joins a component
+  # that grounds to the device and cannot start one (rule 1, owner D3).
+  - id: vedge_cfgmgr_daemon_link_down
+    parser_id: cisco_sdwan.v1
+    literal: ']: Quagga daemon - '
+    apps: [cfgmgr]
+    pattern: '^(?P<func>[a-z][a-z0-9_]{0,63})\[(?P<lno>\d{1,6})\]: Quagga daemon - (?P<daemon>[a-z][a-z0-9_]{0,31}) link is down \(vpn:(?P<vpn>\d{1,5})\)(?:, (?P<action>[a-z ]{1,32}))?'
+    event_type: cfgmgr_routing_daemon_unreachable
+    summary: 'Configuration manager cannot reach {daemon} in VPN {vpn}[, {action}]'
+    fields:
+      title: 'Configuration manager on {host} cannot reach {daemon} in VPN {vpn}, change skipped'
+      correlation_key: 'cfgmgr:{device}:{daemon}:{vpn}'
+    fidelity: lab_validated
+
+  # The vEdge forwarding plane's user-mode process (`fp-um`, live 2026-11-11 at boot).
+  # Port status as the forwarding plane programs it: the kernel interface name, the port
+  # id and three status numbers, kept as typed metrics. Their encoding is not documented
+  # (the lab shows only 1, at boot), so no title says up or down and no row reads them.
+  - id: vedge_fp_port_status
+    parser_id: cisco_sdwan.v1
+    literal: ': Updating port status for portid '
+    apps: [fp-um]
+    pattern: '^(?P<ctx>[A-Z][A-Z0-9_]{0,15}): (?P<ifname>[A-Za-z][\w/.-]{0,31}): Updating port status for portid (?P<portid>\d{1,5}) admin_status (?P<admin>\d{1,3}), port_status (?P<port>\d{1,3}), link_status (?P<link>\d{1,3})(?:, fast (?P<fast>\d{1,3}))?'
+    event_type: fp_port_status
+    summary: 'Forwarding plane updated port {portid} ({ifname}): admin_status {admin}, port_status {port}, link_status {link}'
+    fields:
+      title: 'Forwarding plane updated {ifname} (port {portid}) on {host}'
+      correlation_key: 'fp_port:{device}:{portid}'
+    metrics:
+      admin_status: admin
+      port_status: port
+      link_status: link
+    fidelity: lab_validated
+
+  # `Port 3: Cannot remove default MAC address` (fp-um err, live 2026-11-11, at boot for
+  # each port as the forwarding plane takes it over). The port's key matches the status
+  # line above. Native err kept; the row `syslog.sdwan.fp.default_mac` keeps it off the
+  # generic net.
+  - id: vedge_fp_default_mac
+    parser_id: cisco_sdwan.v1
+    literal: ': Cannot remove default MAC address'
+    apps: [fp-um]
+    pattern: '^Port (?P<portid>\d{1,5}): Cannot remove default MAC address'
+    event_type: fp_default_mac_not_removed
+    summary: 'Forwarding plane could not remove the default MAC address of port {portid}'
+    fields:
+      title: 'Forwarding plane could not remove the default MAC address of port {portid} on {host}'
+      correlation_key: 'fp_port:{device}:{portid}'
+    fidelity: lab_validated
+
+  # The IOS XE boot banner (live 2026-11-11 on the lab's cEdge, a Catalyst 8000v on 17.3.2;
+  # edge shape `sequence_number_without_time` frames it). IOSd prints four lines when it
+  # starts, before its clock is set, so they carry no time and no tag (app `unknown`). Any
+  # IOS XE box prints the same lines; they sit in this pack because the lab's cEdge is
+  # where they were captured, as `iosxe_dmi_auth` does. The bracketed release train
+  # (`[Amsterdam]`) is printed by IOS XE 16 and later only, so the version row names IOS XE
+  # on it alone. All four lines carry one key per boot, the device and the minute, the
+  # dump_id rule's tradeoff (a boot that straddles a minute splits in two). No signal: a
+  # reboot reaches the engine as `device_restart` from the coldStart/warmStart trap row
+  # (trap.device.restart.*) and from the controller (nms/vmanage_kinds.go), and a banner
+  # line is the same event seen a third time with less in it.
+  - id: iosxe_boot_version
+    parser_id: cisco_iosxe.v1
+    literal: 'Cisco IOS Software ['
+    apps: [unknown]
+    pattern: '^Cisco IOS Software \[(?P<train>[A-Za-z][A-Za-z0-9 ]{0,31})\], (?P<platform>[A-Za-z0-9 ._-]{1,64}) Software \((?P<image>[A-Za-z0-9_.-]{1,64})\), Version (?P<version>[0-9][0-9A-Za-z.()]{0,31}), (?P<release>[A-Z][A-Z ]{0,31}SOFTWARE)(?: \((?P<fc>[a-z0-9]{1,16})\))?'
+    event_type: ios_boot_version
+    summary: 'Booted Cisco IOS XE {version} ({train}), image {image}'
+    category: system_lifecycle
+    fields:
+      title: '{host} booted Cisco IOS XE {version}'
+      correlation_key: 'boot:{device}[:{minute}]'
+    metrics:
+      software_version: {text: version}
+      software_image: {text: image}
+      release_train: {text: train}
+    fidelity: lab_validated
+
+  - id: iosxe_banner_support
+    parser_id: cisco_iosxe.v1
+    literal: 'Technical Support: '
+    apps: [unknown]
+    pattern: '^Technical Support: (?P<url>https?://[A-Za-z0-9./_-]{1,128})'
+    event_type: ios_boot_banner
+    summary: 'Cisco IOS boot banner: support link {url}'
+    category: system_lifecycle
+    fields:
+      title: 'Cisco IOS boot banner on {host}: support link'
+      correlation_key: 'boot:{device}[:{minute}]'
+    fidelity: lab_validated
+
+  - id: iosxe_banner_copyright
+    parser_id: cisco_iosxe.v1
+    literal: ' by Cisco Systems, Inc.'
+    apps: [unknown]
+    pattern: '^Copyright \(c\) (?P<years>[0-9]{4}-[0-9]{4}) by Cisco Systems, Inc\.'
+    event_type: ios_boot_banner
+    summary: 'Cisco IOS boot banner: copyright {years}'
+    category: system_lifecycle
+    fields:
+      title: 'Cisco IOS boot banner on {host}: copyright notice'
+      correlation_key: 'boot:{device}[:{minute}]'
+    fidelity: lab_validated
+
+  - id: iosxe_banner_compiled
+    parser_id: cisco_iosxe.v1
+    literal: 'Compiled '
+    apps: [unknown]
+    pattern: '^Compiled (?P<built>[A-Z][a-z]{2} [0-9]{1,2}-[A-Z][a-z]{2}-[0-9]{2} [0-9]{1,2}:[0-9]{2}) by (?P<builder>[A-Za-z0-9_.-]{1,32})'
+    event_type: ios_boot_banner
+    summary: 'Cisco IOS boot banner: image built {built} by {builder}'
+    category: system_lifecycle
+    fields:
+      title: 'Cisco IOS boot banner on {host}: build stamp {built}'
+      correlation_key: 'boot:{device}[:{minute}]'
+    fidelity: lab_validated
+
   # Poll-induced management-plane records (PR 11 shape, owner D2). The vEdge confd SNMP
   # agent logs these while answering OUR poller's interfaceTable walk: about 45 an hour
   # across the lab's vEdges (measured live 2026-11-10). Non-alarm: no severity, a stable
@@ -525,6 +692,101 @@ rules:
       tokens: [{t: '{host}'}]
       attrs: {}
 
+  # The default gateway of a transport VPN lost (grammars `vedge_gateway_monitor` and
+  # `vedge_default_gateway`). A real transport fault: while it lasts the edge has no next
+  # hop on that WAN, so its tunnels over that transport fail. `device_alarm` at `warn`, as
+  # the vBond DNS failure: below the open floor, it joins a component that grounds to the
+  # device (the BFD and control-connection losses that follow it) and names the failure
+  # for an operator, and no template can take it as an ISP or circuit verdict on its own
+  # (a vEdge losing ARP or ping to its gateway does not say whose fault that is). One
+  # transition logs both lines, so both emit, as the DNS lookup and resolution lines do;
+  # one entity and kind, one node. DOC_CLAIMED: the lab shows only the recovery words (UP,
+  # `reachable`); DOWN and `unreachable` are inferred from them, never captured.
+  #
+  # The recovery has no row, as `DNS lookup succeeded` has none: `device_alarm_clear` would
+  # read as the end of every alarm on the device. Its record carries the same correlation
+  # key, so the timeline shows when the gateway came back. Two rows, one per line shape,
+  # sharing their reading: each guard's literal text is what the ingest screen admits on,
+  # and one alternation would have screened on two bare words.
+  - rule_id: syslog.sdwan.default_gateway.monitor_down
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    generic: true
+    fidelity_status: doc_claimed
+    pattern_src: 'Monitor attached to \d{1,5}/\S{1,45}/\d{1,5} via \S{1,32} is DOWN'
+    guard:
+      all:
+        - {equals_any: [tag, [RESOLVD]]}
+        - {re: [msg, 'Monitor attached to \d{1,5}/\S{1,45}/\d{1,5} via \S{1,32} is DOWN', '']}
+    severity: warn
+    extract: &gateway_extract
+      gateway: {re: [[msg, 'Monitor attached to \d{1,5}/([^/\s]{1,45})/', 1, ''], [msg, 'Default gateway (\S{1,45}) in VPN', 1, '']]}
+      vpn: {re: [[msg, 'Monitor attached to (\d{1,5})/', 1, ''], [msg, ' in VPN (\d{1,5}) is now', 1, '']]}
+      ifname: {re: [[msg, ' via (\S{1,32}) is DOWN', 1, '']]}
+    emit: &gateway_emit
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|alarm|default_gateway_unreachable|{vpn|?}|{gateway|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        failure: {const: default_gateway_unreachable}
+        gateway: {var: gateway}
+        vpn: {var: vpn}
+        interface: {var: ifname}
+
+  - rule_id: syslog.sdwan.default_gateway.unreachable
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    generic: true
+    fidelity_status: doc_claimed
+    pattern_src: 'Default gateway \S{1,45} in VPN \d{1,5} is now unreachable'
+    guard:
+      all:
+        - {equals_any: [tag, [RESOLVD]]}
+        - {re: [msg, 'Default gateway \S{1,45} in VPN \d{1,5} is now unreachable', '']}
+    severity: warn
+    extract: *gateway_extract
+    emit: *gateway_emit
+
+  # `Port <n>: Cannot remove default MAC address` (grammar `vedge_fp_default_mac`). fp-um
+  # logs it at err for each port while the forwarding plane takes the ports over at boot,
+  # and the generic net made a device alarm of every one. The text names no fault the
+  # engine could use: the port goes on to be programmed (the status line that follows
+  # it). The guard is the whole text shape and the fp-um tag, so any other fp-um error
+  # still reaches the net, and `corr_parser_known_benign_total` shows if the rate moves.
+  - rule_id: syslog.sdwan.fp.default_mac
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    fidelity_status: lab_validated
+    known_benign: true
+    benign_reason: the vEdge forwarding plane noting at boot that a port kept its default MAC address; no fault in the text
+    pattern_src: '^Port \d{1,5}: Cannot remove default MAC address'
+    guard:
+      all:
+        - {equals_any: [tag, [FP-UM]]}
+        - {re: [msg, '^Port \d{1,5}: Cannot remove default MAC address', '']}
+    severity: warn
+    emit:
+      metric: device_alarm
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|benign|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs: {}
+
   # Rule 1, "ingestion is not incident creation": any other error or warning of this
   # grammar still reaches the engine, at `warn`, so it can join a component and enrich an
   # undetermined outcome. It matches no signature.
@@ -858,6 +1120,279 @@ fixtures:
     hostname: vEdge-1
     appname: otherd
     message: 'dnsclient_cache_update[134]: FQDN vbond.example.net (via none) resolved to 192.0.2.3'
+    expect: {}
+    signal: null
+
+  - name: the resolver refreshing the vBond entry is the lookup's routine path, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: VTRACKER
+    message: 'dnsclient_cache_update[144]: DNS cache entry for vbond.example.net (via none) refreshed'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      vendor: cisco
+      event_type: dns_cache_refreshed
+      summary: 'DNS cache entry for vbond.example.net via none refreshed'
+      title: 'DNS cache entry for vbond.example.net refreshed on vEdge-1'
+      correlation_key: 'dns:vEdge-1:vbond.example.net'
+      normalized_severity: notice
+    signal: null
+
+  # ── the default gateway of a transport VPN (RESOLVD) ─────────────────────────────
+  - name: the gateway monitor coming up names the gateway, VPN and interface, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: RESOLVD
+    message: 'monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is UP'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      vendor: cisco
+      event_type: gateway_monitor_up
+      summary: 'Gateway monitor for 192.0.2.1 in VPN 0 via ge0_0 is UP'
+      title: 'Gateway 192.0.2.1 in VPN 0 via ge0_0 is UP on vEdge-1'
+      correlation_key: 'gateway:vEdge-1:0:192.0.2.1'
+      normalized_severity: notice
+    signal: null
+
+  - name: the default gateway reachable again shares the monitor's key, and emits nothing
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: RESOLVD
+    message: 'resolv_monitor_state_callback[260]: Default gateway 192.0.2.1 in VPN 0 is now reachable'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: default_gateway_reachable
+      summary: 'Default gateway 192.0.2.1 in VPN 0 is now reachable'
+      title: 'Default gateway 192.0.2.1 in VPN 0 is now reachable on vEdge-1'
+      correlation_key: 'gateway:vEdge-1:0:192.0.2.1'
+    signal: null
+
+  - name: the gateway monitor going down is a below-floor alarm naming the gateway
+    fidelity: doc_claimed
+    source: 'inferred: the DOWN counterpart of the lab UP line (2026-11-11); no capture or Cisco document shows it'
+    hostname: vEdge-1
+    appname: RESOLVD
+    message: 'monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is DOWN'
+    expect:
+      parser_status: parsed
+      event_type: gateway_monitor_down
+      title: 'Gateway 192.0.2.1 in VPN 0 via ge0_0 is DOWN on vEdge-1'
+      correlation_key: 'gateway:vEdge-1:0:192.0.2.1'
+      guidance:
+        impact:
+          - The edge lost its default gateway in this VPN, so it has no next hop on that transport; tunnels and control connections over it fail until the gateway answers again.
+        next_checks:
+          - Run show interface for the transport interface named in the line and check that it is up.
+          - Ping the gateway from the edge in that VPN and check ARP for its address.
+          - Run show bfd sessions and show control connections to see which tunnels and controllers went with it.
+        basis: pack_guidance
+    signal: {rule_id: syslog.sdwan.default_gateway.monitor_down, kind: device_alarm, severity: warn, opens_alone: false, failure: default_gateway_unreachable, entity: vEdge-1}
+
+  - name: the default gateway unreachable is the same below-floor alarm
+    fidelity: doc_claimed
+    source: 'inferred: the unreachable counterpart of the lab reachable line (2026-11-11); no capture or Cisco document shows it'
+    hostname: vEdge-1
+    appname: RESOLVD
+    message: 'resolv_monitor_state_callback[260]: Default gateway 192.0.2.1 in VPN 0 is now unreachable'
+    expect:
+      parser_status: parsed
+      event_type: default_gateway_unreachable
+      correlation_key: 'gateway:vEdge-1:0:192.0.2.1'
+    signal: {rule_id: syslog.sdwan.default_gateway.unreachable, kind: device_alarm, severity: warn, opens_alone: false, failure: default_gateway_unreachable, entity: vEdge-1}
+
+  - name: the gateway words from a daemon outside the resolver are not classified
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate and the row guard: the inferred down line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    message: 'monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is DOWN'
+    expect: {}
+    signal: null
+
+  - name: the configuration manager unable to reach a routing daemon keeps its err, below the floor
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: CFGMGR
+    severity: err
+    message: 'cfgmgr_quagga_pb_send_message[831]: Quagga daemon - ospfd link is down (vpn:512), skipping'
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: cfgmgr_routing_daemon_unreachable
+      summary: 'Configuration manager cannot reach ospfd in VPN 512, skipping'
+      title: 'Configuration manager on vEdge-1 cannot reach ospfd in VPN 512, change skipped'
+      correlation_key: 'cfgmgr:vEdge-1:ospfd:512'
+      normalized_severity: error
+    signal: {kind: device_alarm, severity: warn, opens_alone: false, entity: vEdge-1}
+
+  # ── the forwarding plane (fp-um) ─────────────────────────────────────────────────
+  - name: the forwarding plane keeping a port's default MAC is filed, and emits nothing at err
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: fp-um
+    severity: err
+    message: 'Port 3: Cannot remove default MAC address '
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      vendor: cisco
+      event_type: fp_default_mac_not_removed
+      summary: 'Forwarding plane could not remove the default MAC address of port 3'
+      title: 'Forwarding plane could not remove the default MAC address of port 3 on vEdge-1'
+      correlation_key: 'fp_port:vEdge-1:3'
+      normalized_severity: error
+    signal: null
+
+  - name: the forwarding plane updating a port names the interface and keeps the status numbers
+    fidelity: lab_validated
+    hostname: vEdge-1
+    appname: fp-um
+    severity: info
+    message: 'USER1: ge0_3: Updating port status for portid 3 admin_status 1, port_status 1, link_status 1, fast 0 '
+    expect:
+      parser_id: cisco_sdwan.v1
+      parser_status: parsed
+      event_type: fp_port_status
+      summary: 'Forwarding plane updated port 3 (ge0_3): admin_status 1, port_status 1, link_status 1'
+      title: 'Forwarding plane updated ge0_3 (port 3) on vEdge-1'
+      correlation_key: 'fp_port:vEdge-1:3'
+      normalized_severity: info
+      metrics:
+        admin_status: {value: 1.0, basis: observed}
+        port_status: {value: 1.0, basis: observed}
+        link_status: {value: 1.0, basis: observed}
+    signal: null
+
+  # The two lines below differ from the lab line only in the numbers, so a metric read from
+  # the wrong group is caught (the lab shows only 1). They say nothing about what 0 means.
+  - name: each status number reaches its own metric (link differs)
+    fidelity: doc_claimed
+    source: 'the lab fp-um port status line with link_status 0; illustrative numbers, the encoding is not documented'
+    hostname: vEdge-1
+    appname: fp-um
+    severity: info
+    message: 'USER1: ge0_3: Updating port status for portid 3 admin_status 1, port_status 1, link_status 0, fast 0 '
+    expect:
+      event_type: fp_port_status
+      metrics:
+        admin_status: {value: 1.0, basis: observed}
+        port_status: {value: 1.0, basis: observed}
+        link_status: {value: 0.0, basis: observed}
+    signal: null
+
+  - name: each status number reaches its own metric (admin differs)
+    fidelity: doc_claimed
+    source: 'the lab fp-um port status line with admin_status 0; illustrative numbers, the encoding is not documented'
+    hostname: vEdge-1
+    appname: fp-um
+    severity: info
+    message: 'USER1: ge0_3: Updating port status for portid 3 admin_status 0, port_status 1, link_status 1, fast 0 '
+    expect:
+      event_type: fp_port_status
+      metrics:
+        admin_status: {value: 0.0, basis: observed}
+        port_status: {value: 1.0, basis: observed}
+        link_status: {value: 1.0, basis: observed}
+    signal: null
+
+  - name: the default-MAC words from another app are not the benign forwarding-plane line
+    fidelity: doc_claimed
+    source: 'negative case of the apps gate and the known_benign guard: the lab line from another app'
+    hostname: vEdge-1
+    appname: otherd
+    severity: err
+    message: 'Port 3: Cannot remove default MAC address '
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  - name: another forwarding-plane error still reaches the net
+    fidelity: doc_claimed
+    source: 'negative case of the known_benign guard: the lab line with a different port complaint'
+    hostname: vEdge-1
+    appname: fp-um
+    severity: err
+    message: 'Port 3: Cannot set MTU 1500'
+    expect: {}
+    signal: {kind: device_alarm, severity: warn, opens_alone: false}
+
+  # ── the IOS XE boot banner (cEdge; framed by edge shape sequence_number_without_time) ─
+  - name: the IOS XE banner version line names the release, and emits nothing
+    fidelity: lab_validated
+    hostname: cEdge-1
+    appname: unknown
+    timestamp: '2026-11-11T09:00:01Z'
+    message: 'Cisco IOS Software [Amsterdam], Virtual XE Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.3.2, RELEASE SOFTWARE (fc3)'
+    expect:
+      vendor: cisco
+      parser_id: cisco_iosxe.v1
+      parser_status: parsed
+      event_type: ios_boot_version
+      summary: 'Booted Cisco IOS XE 17.3.2 (Amsterdam), image X86_64_LINUX_IOSD-UNIVERSALK9-M'
+      title: 'cEdge-1 booted Cisco IOS XE 17.3.2'
+      event_category: system_lifecycle
+      dedup_key: 'cEdge-1|unknown|ios_boot_version'
+      correlation_key: 'boot:cEdge-1:2026-11-11T09:00'
+      normalized_severity: notice
+      metrics:
+        software_version: {value: 17.3.2, basis: observed}
+        software_image: {value: X86_64_LINUX_IOSD-UNIVERSALK9-M, basis: observed}
+        release_train: {value: Amsterdam, basis: observed}
+    signal: null
+
+  - name: the banner support line is the same boot
+    fidelity: lab_validated
+    hostname: cEdge-1
+    appname: unknown
+    timestamp: '2026-11-11T09:00:01Z'
+    message: 'Technical Support: http://www.cisco.com/techsupport'
+    expect:
+      parser_id: cisco_iosxe.v1
+      parser_status: parsed
+      event_type: ios_boot_banner
+      summary: 'Cisco IOS boot banner: support link http://www.cisco.com/techsupport'
+      title: 'Cisco IOS boot banner on cEdge-1: support link'
+      event_category: system_lifecycle
+      dedup_key: 'cEdge-1|unknown|ios_boot_banner'
+      correlation_key: 'boot:cEdge-1:2026-11-11T09:00'
+    signal: null
+
+  - name: the banner copyright line is the same boot
+    fidelity: lab_validated
+    hostname: cEdge-1
+    appname: unknown
+    timestamp: '2026-11-11T09:00:01Z'
+    message: 'Copyright (c) 1986-2020 by Cisco Systems, Inc.'
+    expect:
+      parser_id: cisco_iosxe.v1
+      event_type: ios_boot_banner
+      summary: 'Cisco IOS boot banner: copyright 1986-2020'
+      title: 'Cisco IOS boot banner on cEdge-1: copyright notice'
+      correlation_key: 'boot:cEdge-1:2026-11-11T09:00'
+    signal: null
+
+  - name: the banner build line is the same boot
+    fidelity: lab_validated
+    hostname: cEdge-1
+    appname: unknown
+    timestamp: '2026-11-11T09:00:02Z'
+    message: 'Compiled Sat 31-Oct-20 13:16 by mcpre'
+    expect:
+      parser_id: cisco_iosxe.v1
+      event_type: ios_boot_banner
+      summary: 'Cisco IOS boot banner: image built Sat 31-Oct-20 13:16 by mcpre'
+      title: 'Cisco IOS boot banner on cEdge-1: build stamp Sat 31-Oct-20 13:16'
+      correlation_key: 'boot:cEdge-1:2026-11-11T09:00'
+    signal: null
+
+  - name: a classic IOS banner with no release train is not called IOS XE
+    fidelity: doc_claimed
+    source: 'negative case: the classic IOS 15 `show version` first line (Cisco Catalyst 2960 configuration guide), which has no bracketed train'
+    hostname: cEdge-1
+    appname: unknown
+    message: 'Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.0(2)SE, RELEASE SOFTWARE (fc1)'
     expect: {}
     signal: null
 
@@ -1358,6 +1893,13 @@ guidance:
       - Check the DNS servers configured in VPN 0 and that the transport interface can reach them.
       - Resolve the vBond name from VPN 0 by hand (ping or nslookup from the edge).
       - Run show control connections and show control local-properties to see whether the edge is still attached.
+  - event_types: [gateway_monitor_down, default_gateway_unreachable]
+    impact:
+      - The edge lost its default gateway in this VPN, so it has no next hop on that transport; tunnels and control connections over it fail until the gateway answers again.
+    next_checks:
+      - Run show interface for the transport interface named in the line and check that it is up.
+      - Ping the gateway from the edge in that VPN and check ARP for its address.
+      - Run show bfd sessions and show control connections to see which tunnels and controllers went with it.
   - event_types: [control-connection-state-change]
     impact:
       - A control connection to a vSmart, vBond or vManage changed state; while it is down the edge gets no new policy or routes from that controller.

@@ -381,6 +381,107 @@ def test_the_vbond_success_path_groups_with_its_lookup():
         "dns_lookup_failed", "dns_lookup_succeeded", "dns_cache_expired", "dns_resolved"]
     assert parsed[3]["title"] == ("DNS lookup succeeded for vbond.example.net on vEdge-1: "
                                   "resolved to 192.0.2.3")
+    refreshed = _audit("dnsclient_cache_update[144]: DNS cache entry for vbond.example.net "
+                       "(via none) refreshed", host="vEdge-1", app="VTRACKER")
+    assert refreshed["correlation_key"] == "dns:vEdge-1:vbond.example.net"
+    assert refreshed["event_type"] == "dns_cache_refreshed"
+
+
+# ── tracker 387, the final syslog wave (2026-11-11) ─────────────────────────────
+
+def _signal(raw: dict):
+    ev = {"timestamp": "2026-11-11T10:00:00Z", **_stage_b(raw)}
+    return ev, P.syslog_control_signal(dict(ev), "t1", datetime.now(timezone.utc))
+
+
+def test_a_default_gateway_pairs_up_and_down_on_one_key_and_only_down_alarms():
+    """The tracker's monitor line and the resolver's verdict name one gateway, so its
+    loss and its recovery are one timeline per device, VPN and gateway. Only the loss is a
+    signal (below the floor, naming the gateway); a recovery has no honest clear."""
+    def line(n: int, gw: str, vpn: str, word: str) -> str:
+        if n == 0:
+            return f"monitor_peer_change_state[291]: Monitor attached to {vpn}/{gw}/0 via ge0_0 is {word}"
+        return f"resolv_monitor_state_callback[260]: Default gateway {gw} in VPN {vpn} is now {word}"
+    words = [(0, "DOWN"), (1, "unreachable"), (0, "UP"), (1, "reachable")]
+    out = [_signal({"hostname": "vEdge-1", "appname": "RESOLVD", "severity": "notice",
+                    "message": line(n, "192.0.2.1", "0", w)}) for n, w in words]
+    assert {ev["correlation_key"] for ev, _ in out} == {"gateway:vEdge-1:0:192.0.2.1"}
+    sigs = [s for _, s in out]
+    assert [s is not None for s in sigs] == [True, True, False, False]
+    assert [s.attrs["rule_id"] for s in sigs[:2]] == [
+        "syslog.sdwan.default_gateway.monitor_down", "syslog.sdwan.default_gateway.unreachable"]
+    for s in sigs[:2]:
+        assert (s.kind, s.severity.value, s.entity_id) == ("device_alarm", "warn", "vEdge-1")
+        assert (s.attrs["failure"], s.attrs["gateway"], s.attrs["vpn"]) == (
+            "default_gateway_unreachable", "192.0.2.1", "0")
+    assert sigs[0].attrs["interface"] == "ge0_0"
+    assert sigs[1].attrs["interface"] == "", "the resolver line names no interface"
+    # Another gateway, or the same address in another VPN, is another timeline.
+    other_gw = _signal({"hostname": "vEdge-1", "appname": "RESOLVD", "severity": "notice",
+                        "message": line(1, "198.51.100.1", "0", "unreachable")})[0]
+    other_vpn = _signal({"hostname": "vEdge-1", "appname": "RESOLVD", "severity": "notice",
+                         "message": line(1, "192.0.2.1", "10", "unreachable")})[0]
+    assert other_gw["correlation_key"] == "gateway:vEdge-1:0:198.51.100.1"
+    assert other_vpn["correlation_key"] == "gateway:vEdge-1:10:192.0.2.1"
+
+
+@pytest.mark.parametrize(("app", "sev", "message", "rule_id"), [
+    ("fp-um", "err", "Port 3: Cannot remove default MAC address ", "syslog.sdwan.fp.default_mac"),
+    ("kernel", "warning", "hrtimer: interrupt took 4421501 ns", "syslog.standard.kernel_hrtimer_slow"),
+    ("OSPF", "warning", "Packet[DD]: Neighbor 192.0.2.7 state is 2-Way, packet discarded.",
+     "syslog.standard.ospf_dd_two_way"),
+])
+def test_each_new_benign_row_counts_its_line_and_stops_the_net(app, sev, message, rule_id):
+    """Without its row the line reaches the generic net (err/warning -> warn). With it the
+    line is counted, admitted (so the count is real) and emits nothing."""
+    P.reset_parser_counters()
+    raw = {"hostname": "vEdge-1", "appname": app, "severity": sev, "message": message,
+           "timestamp": "2026-11-11T10:00:00Z"}
+    ev, sig = _signal(raw)
+    assert P.syslog_promotable(ev)
+    assert sig is None
+    assert P.parser_stats()["known_benign_hits"][rule_id] == 1
+
+
+def test_the_ios_xe_banner_groups_one_boot_and_a_later_boot_apart():
+    """All four banner lines of one boot carry one key: the device and the minute."""
+    lines = [
+        ("Cisco IOS Software [Amsterdam], Virtual XE Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), "
+         "Version 17.3.2, RELEASE SOFTWARE (fc3)"),
+        "Technical Support: http://www.cisco.com/techsupport",
+        "Copyright (c) 1986-2020 by Cisco Systems, Inc.",
+        "Compiled Sat 31-Oct-20 13:16 by mcpre",
+    ]
+
+    def parse(line: str, ts: str) -> dict:
+        return _FULL.parse({"hostname": "cEdge-1", "appname": "unknown", "severity": "notice",
+                            "message": line, "timestamp": ts})
+    boot = [parse(line, "2026-11-11T09:00:01Z") for line in lines]
+    assert {p["correlation_key"] for p in boot} == {"boot:cEdge-1:2026-11-11T09:00"}
+    assert {p["parser_id"] for p in boot} == {"cisco_iosxe.v1"}
+    assert {p["event_category"] for p in boot} == {"system_lifecycle"}
+    assert boot[0]["title"] == "cEdge-1 booted Cisco IOS XE 17.3.2"
+    assert boot[0]["metrics"]["software_version"]["value"] == "17.3.2"
+    later = parse(lines[0], "2026-11-11T11:42:07Z")
+    assert later["correlation_key"] == "boot:cEdge-1:2026-11-11T11:42"
+    # A banner line no IOS sender writes under a process tag is not read from one.
+    assert "parser_id" not in _FULL.parse({"hostname": "h", "appname": "otherd",
+                                           "severity": "notice", "message": lines[2]})
+
+
+def test_an_ntp_clock_step_is_a_metric_and_never_a_signal():
+    """The step moves every timestamp the box writes, so it is kept as a typed number. It
+    is not evidence: the platform measures clock skew itself (clock_skew_signal), and a
+    step is the device correcting its clock."""
+    ev, sig = _signal({"hostname": "vEdge-1", "appname": "ntpd", "severity": "info",
+                       "message": "0.0.0.0 c61c 0c clock_step +28.800702 s"})
+    assert ev["metrics"]["clock_step_s"] == {"value": 28.800702, "basis": "observed"}
+    assert ev["event_category"] == "time_sync"
+    assert sig is None
+    # The same line at a worse PRI is still not typed: only the generic net could answer.
+    _, sig_warn = _signal({"hostname": "vEdge-1", "appname": "ntpd", "severity": "warning",
+                           "message": "0.0.0.0 c61c 0c clock_step +28.800702 s"})
+    assert sig_warn is not None and sig_warn.attrs["rule_id"] == "syslog.generic.device_alarm"
 
 
 def test_every_typed_grammar_renders_a_human_summary():
@@ -487,7 +588,7 @@ FAULT_EVENT_TYPES = {
     "cisco_sdwan": {"dns_lookup_failed", "dns_resolution_failed", "control-connection-state-change",
                     "bfd-state-change", "omp-peer-state-change", "omp-state-change",
                     "interface-state-change", "bgp-peer-state-change", "cpu-usage",
-                    "sysmgr_200069"},
+                    "sysmgr_200069", "gateway_monitor_down", "default_gateway_unreachable"},
     "nokia_sros": {"bgp_2020", "bgp_2039", "ospf_2042", "snmp_2004", "chassis_2144",
                    "chassis_2148", "system_2010"},
     "juniper_junos": {"rpd_bgp_neighbor_state_changed", "rpd_ospf_nbrdown",
