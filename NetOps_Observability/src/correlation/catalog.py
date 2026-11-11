@@ -340,6 +340,12 @@ class Template(BaseModel):
     allow_root_cause_confirmed: bool = True
     # Why the cap applies, shown to the operator. Empty keeps the physical-family wording.
     confirm_cap_reason: str = ""
+    # Owner D2 (2026-11-11): a CONTEXT story — co-occurrence on one node (a
+    # standing security property beside a fault), not a cause. `rank` puts it
+    # below every viable causal template, the gate caps it at suspected, and the
+    # hypotheses blob carries "context_story": true for the "Background on this
+    # device (not a cause)" band. Part of the catalog version (replay).
+    context_story: bool = False
     # Propagation ladder (root→impact), owner directive 2026-07-13: templates
     # whose fault family cascades across layers declare the ladder so the RCA
     # can show HOW one failure causes the next. Optional — most templates omit.
@@ -3758,8 +3764,11 @@ BUILTIN_TEMPLATES.extend(WIRELESS_TEMPLATES)
 # hardening control has no onset, so a fault measured beside it on an independent
 # plane proves both are true, never that one caused the other. Those two stories
 # carry allow_root_cause_confirmed=False and stop at suspected however many planes
-# agree. A detection (threat-signal-story) is an EVENT with an onset, so time
-# can relate it to the fault and the gate still decides it.
+# agree, and are CONTEXT stories (owner D2, `context_story`): they rank below any
+# viable causal template and render as background, not a cause. A detection
+# (threat-signal-story) is an EVENT with an onset and its REQUIRED clause is that
+# dated detection, so time can relate it to the fault: it stays causal and the
+# gate decides it (owner D1 lets a dated detection anchor).
 #
 # GROUNDING. Both clauses are matched on the SAME object, i.e. on evidence the
 # engine already co-located by entity/token — the producer's entity_tokens
@@ -3804,6 +3813,7 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
         # co-occurrence, never proof of one cause. Two planes agreeing proves
         # both facts are true, not that one caused the other.
         "allow_root_cause_confirmed": False,
+        "context_story": True,  # owner D2: background on this device, not a cause
         "confirm_cap_reason": (
             "confirmed capped to suspected: an exposure is a standing property with no "
             "onset, so a network fault on the same device is co-occurrence, not proof of "
@@ -3847,6 +3857,7 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
         # comment above gives: a failed control has no onset, so the fault beside
         # it is co-occurrence until a person dates the drift.
         "allow_root_cause_confirmed": False,
+        "context_story": True,  # owner D2: background on this device, not a cause
         "confirm_cap_reason": (
             "confirmed capped to suspected: a failed hardening control is a standing "
             "property with no onset, so a network fault on the same device is "

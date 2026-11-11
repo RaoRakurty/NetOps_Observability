@@ -129,36 +129,66 @@ def test_the_standing_property_stories_are_capped_in_the_catalog(tid):
     assert "allow_root_cause_confirmed=false" in t.confirm_cap_reason
 
 
-def test_the_incident_is_suspected_at_most_with_the_cap_on_record():
+def _measured(kind: str, modality: ModalityClass, observer: str, secs: int,
+              etype: EntityType = EntityType.DEVICE, entity: str = DEVICE) -> Signal:
+    """A signal the device measured itself (direct path): a measurement plane."""
+    return Signal(
+        tenant_id=TENANT, ts=T0 + timedelta(seconds=secs), source=Source.SYSLOG,
+        kind=kind, observer=Observer(observer_id=observer, observer_type=ObserverType.DEVICE),
+        modality_class=modality, entity_type=etype, entity_id=entity,
+        severity=Severity.HIGH, native_id=f"{observer}|{kind}|{entity}|{secs}",
+        entity_tokens=(DEVICE, entity), deviation=6.0)
+
+
+def two_measurement_planes(story_kind: str, control: str) -> list[Signal]:
+    """The story's finding beside a fault measured on TWO independent
+    measurement planes, so the gate alone confirms and only the cap holds it."""
+    return [_security(story_kind, control, 0),
+            _measured("bgp_adjacency_change", ModalityClass.CONTROL_PLANE, "syslog-cedge81", 20),
+            _measured("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, "snmp-cedge81", 40,
+                      EntityType.INTERFACE, f"{DEVICE}:GigabitEthernet2")]
+
+
+def test_the_incident_is_never_confirmed_and_the_exposure_is_background():
+    """The incident as it reached 3.3.0. Under owner D1 the security finding
+    and the controller relay support but never anchor, so nothing confirms; under
+    D2 the exposure story is background (visible, flagged) and a causal template
+    leads."""
     snap = _object_with(run_window(incident(), builtin_catalog(), (), EngineConfig()),
                         "security_exposure")
     ranking = snap.ranking
-    assert ranking.top_hypothesis == EXPOSURE
     assert ranking.verdict_tier is not VerdictTier.CONFIRMED
-    assert ranking.verdict_tier is VerdictTier.SUSPECTED
-    top = next(h for h in ranking.hypotheses if h.template_id == EXPOSURE)
-    reason = _cap_reason(top)
-    assert "standing property" in reason, top.verdict_gate.reasons
+    assert all(h.verdict_gate.tier is not VerdictTier.CONFIRMED for h in ranking.hypotheses)
+    assert ranking.top_hypothesis not in CAPPED
+    story = next(h for h in ranking.hypotheses if h.template_id == EXPOSURE)
+    assert story.context_story and story.to_dict()["context_story"] is True
+    assert any("supports but never anchors" in r for r in story.verdict_gate.reasons), \
+        story.verdict_gate.reasons
 
 
-def test_the_gate_alone_would_have_confirmed_it():
-    """The cap is what holds it: the gate still sees an independent pair across
-    planes. If this stops holding, the regression above proves nothing."""
-    res = rank(builtin_catalog(), incident())
-    top = next(h for h in res.hypotheses if h.template_id == EXPOSURE)
-    assert _cap_reason(top), "the cap must be the reason, not a missing witness"
-    assert any("independent confirming pair" in r for r in top.verdict_gate.reasons), \
-        top.verdict_gate.reasons
+@pytest.mark.parametrize("tid,kind,control,words", [
+    (EXPOSURE, "security_exposure", "telnet-untrusted-seam", "standing property"),
+    (HARDENING, "security_posture", "AC-17", "hardening control"),
+])
+def test_the_cap_holds_where_the_gate_alone_would_confirm(tid, kind, control, words):
+    """Stage [7] on its own: two independent measurement planes beside the
+    finding pass the gate, and the cap — not a missing witness — holds the story
+    at suspected with its reason on record."""
+    res = rank(builtin_catalog(), two_measurement_planes(kind, control))
+    story = next(h for h in res.hypotheses if h.template_id == tid)
+    assert story.verdict_gate.tier is VerdictTier.SUSPECTED
+    assert any("independent confirming pair" in r for r in story.verdict_gate.reasons), \
+        story.verdict_gate.reasons
+    assert words in _cap_reason(story), story.verdict_gate.reasons
 
 
-def test_the_hardening_drift_sibling_is_capped_on_the_same_evidence():
-    """Without the exposure verdict the posture story leads, and stops at suspected."""
-    sigs = [s for s in incident() if s.kind != "security_exposure"]
+def test_the_hardening_drift_sibling_leads_only_when_nothing_causal_does():
+    """Owner D2: the posture story with only the controller relay and the
+    finding beside it (no causal template viable) may lead, at suspected."""
+    sigs = [s for s in incident() if s.kind == "security_posture"]
     res = rank(builtin_catalog(), sigs)
     assert res.top_hypothesis == HARDENING
     assert res.verdict_tier is VerdictTier.SUSPECTED
-    top = next(h for h in res.hypotheses if h.template_id == HARDENING)
-    assert "hardening control" in _cap_reason(top), top.verdict_gate.reasons
 
 
 def test_the_threat_signal_story_still_confirms_with_an_independent_plane():
@@ -172,4 +202,4 @@ def test_the_threat_signal_story_still_confirms_with_an_independent_plane():
 def test_engine_semver_moved():
     from engine import engine_version
     semver = engine_version(EngineConfig()).split("+", 1)[0]
-    assert tuple(int(p) for p in semver.split(".")) >= (3, 3, 1)
+    assert tuple(int(p) for p in semver.split(".")) >= (3, 4, 0)

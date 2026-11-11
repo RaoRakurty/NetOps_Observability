@@ -69,3 +69,25 @@ def test_no_lane_produces_tenant_wide_grounding():
         for tok in sig.entity_tokens:
             assert not tok.lower().startswith(("tenant:", "org:", "global:")), (
                 f"{sig.kind} emitted forbidden grounding token {tok!r}")
+
+
+def test_a_security_exposure_is_background_in_the_persisted_blob():
+    """Owner D1/D2 (2026-11-11), from raw wire events: the secbus envelope and a
+    device syslog BGP drop on one device. The persisted hypotheses blob carries
+    "context_story": true on the exposure story (the UI / PDF / Iris contract for
+    the "Background on this device (not a cause)" band), a causal template leads,
+    and the security finding anchors nothing."""
+    import json
+    signals, snaps, _ = replay_fixture_through_engine("security_exposure_beside_bgp_fault.json")
+    assert {s.kind for s in signals} == {"security_exposure", "bgp_adjacency_change"}
+    snap = next(s for s in snaps
+                if any(x.kind == "security_exposure" for n in s.nodes for x in n.signals))
+    blob = json.loads(snap.to_object_row(1)["hypotheses"])
+    hyps = {h["id"]: h for h in blob["ranking"]["hypotheses"]}
+    story = hyps["sig.ent.security.exposure-story"]
+    assert story["context_story"] is True
+    top = blob["ranking"]["top_hypothesis"]
+    assert top != "sig.ent.security.exposure-story"
+    assert "context_story" not in hyps[top]
+    assert blob["ranking"]["verdict_tier"] != "confirmed"
+    assert story["verdict"]["verdict_tier"] != "confirmed"

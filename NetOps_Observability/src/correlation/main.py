@@ -146,6 +146,7 @@ from engine import (
     prepare_run_window,
     required_retention_s,
     run_window,
+    standing_finding_metric_lines,
 )
 from entity_resolver import EntityResolver, identity_resolver_for
 from episodes import EpisodeDetector
@@ -15378,6 +15379,7 @@ def _metrics_text(health: dict | None = None) -> str:
         *template_scoring_metric_lines(),
         # tracker 385: admin link changes exempted from the singleton rule.
         *admin_link_change_metric_lines(),
+        *standing_finding_metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until

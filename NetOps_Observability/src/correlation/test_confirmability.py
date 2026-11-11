@@ -53,7 +53,7 @@ def test_audit_covers_every_enabled_signature():
     valid_status = {
         "confirmable_now", "suspected_only", "not_matchable",
         "collection_pending", "normalization_pending",
-        "entity_mismatch", "modality_mismatch",
+        "entity_mismatch", "modality_mismatch", "support_plane_only",
     }
     for r in ROWS.values():
         assert r["status"] in valid_status, r

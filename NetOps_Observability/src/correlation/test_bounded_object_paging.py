@@ -103,7 +103,14 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # security evidence, so its DECISION cannot move, and that was CHECKED by a JSON
 # diff of the persisted row against origin/main's: the only differing leaves are
 # `catalog_version` (row and blob) and `engine_version`.
-FIXTURE_GOLDEN = "150e3d24314fdcd0"
+#
+# RE-FROZEN, 2026-11-11, owner D1–D3 (was "150e3d24314fdcd0"). ENGINE_SEMVER went
+# 3.3.1 -> 3.4.0 and the catalog moved (the `context_story` field on every
+# template). This object has one device-telemetry observer, no security evidence
+# and no context story, so its DECISION cannot move: CHECKED by diffing the
+# persisted row against the 3.3.1 one — identical blob modulo catalog_version;
+# only `catalog_version` and `engine_version` differ.
+FIXTURE_GOLDEN = "4c1a60751e3a0bd3"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

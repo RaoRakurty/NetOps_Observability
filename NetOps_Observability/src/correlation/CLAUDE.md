@@ -289,6 +289,13 @@ count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
   the parser (storm eviction is severity-ordered). The evidence stays in the window and
   `corr_signals`, so a grounded fault later folds it in. Counted:
   `corr_admin_link_change_singletons_total`.
+- **Standing security findings (owner D3, 2026-11-11, ENGINE_SEMVER 3.4.0).** A
+  component whose EVERY node is `security_posture` or `security_exposure`
+  (`engine.STANDING_SECURITY_KINDS`) opens NO object, whatever its severity or edges:
+  a failed control or a known exposure is a property of a device, not an event. The
+  evidence stays in the window and `corr_signals`, so a grounded network fault later
+  folds it in as context. A dated detection (`security_signal`) is not in the set and
+  opens as before. Counted (cohort touch): `corr_security_standing_finding_singletons_total`.
 
 **Identity** `cid = uuid5(corrobj|tenant|earliest node key|onset_ms)` (E:3752).
 - A cid that overlaps an open object adopts that object's id: entity Jaccard ≥0.4 +
@@ -365,6 +372,9 @@ M:1420). 150 templates, 104 enabled. The version hash changes on any edit (C:382
 - `required_modalities`.
 - `requires_structure` (device_tier / redundancy_group / overlay_encap / transit_path).
 - `allow_root_cause_confirmed`.
+- `context_story` (owner D2, 2026-11-11): co-occurrence on one node, not a cause.
+  Today: `exposure-story`, `hardening-drift-story`. `threat-signal-story` stays causal:
+  its required clause is a dated detection.
 - `verdict{owner, layer, first_steps}`.
 - Narration: `seams`, `operator_phrase`, `manager_phrase`, `blast_radius`,
   `false_positives`, `causal_chain`.
@@ -380,8 +390,14 @@ M:1420). 150 templates, 104 enabled. The version hash changes on any edit (C:382
 4. A discriminator `absent` hit (or a healthy active-verification refute) multiplies by
    **×0.2** and force-lists the `else_prefer` competitor (SC:300-351).
 5. **confidence_rank = coverage × penalty**: a heuristic rank, not a probability.
-6. Sort by (−confidence, −#satisfied, id). Show **TOP_K=4** plus forced and
-   contradicted competitors.
+6. Sort by (context-behind-causal, −confidence, −#satisfied, id). Show **TOP_K=4**
+   plus forced and contradicted competitors, plus every MATCHED context story.
+   Owner D2: while any causal template is viable (≥ CONFIDENCE_FLOOR), a
+   `context_story` sorts after all of them whatever its own confidence, so it never
+   takes the headline; with nothing causal viable it sorts as before and may lead,
+   capped at suspected (`score_template` applies the same cap as
+   `allow_root_cause_confirmed=false`). Confidence numbers are never touched. The
+   seam-affinity tie-break re-orders only the leading run of the leader's own class.
 7. **Top < CONFIDENCE_FLOOR 0.3 → `undetermined`**, with `evidence_missing` from the 2
    nearest templates. No forced root cause, ever (SC:1050-1086).
 
@@ -448,12 +464,32 @@ host / egress / seam+target+schedule) (V:105-115).
 - active_verification: only when the method is ssh or snmp;
 - DEBUG_ONLY: excluded.
 
-**CONFIRMED** ⇔ ≥2 modalities AND ≥2 observers AND a trusted, cross-modality,
-independent pair AND every required modality met by a trusted witness (V:367-387).
+**Support planes (owner D1, 2026-11-11, ENGINE_SEMVER 3.4.0).** SECURITY and
+MANAGEMENT_PLANE witnesses report ABOUT the network: they count toward modality and
+observer coverage and satisfy `required_modalities`, but never anchor the confirming
+pair (`Witness.support_plane`; `may_anchor` = trusted AND not support_plane). The pair
+must be two measurement-plane witnesses: device_telemetry, control_plane,
+passive_flow, active_probe at trusted authority, active_verification via ssh/snmp.
+Exception: a DATED security detection, keyed fail-closed on BOTH the kind and the
+subclass (`verdicts.ANCHORING_SECURITY_EVIDENCE` = `(security_signal, signal)`; the
+subclass is `attrs.evidence_subclass`, the wire's evidence_class). Posture, exposure,
+a missing or unknown subclass, or any future security kind never anchors. A policy
+push reaches the engine as `device_config_change` (control_plane, anchors as before)
+or `controller_policy_change` (management_plane, support-only); no security-lane
+firewall-drop or ACL-push kind exists yet. Management plane stays support-only until
+NMS-first T2. When the cross-plane agreement rests on a support plane the reason says
+so ("support plane (…) supports but never anchors"). `support_plane` is in the
+rank_memo witness projection (it reads attrs no other projected field carries).
+Lab fact behind it: all 193 confirmed objects in a week were
+`security:correlix-netrule ⟂ <device/controller>` pairs.
+
+**CONFIRMED** ⇔ ≥2 modalities AND ≥2 observers AND a cross-modality, independent
+pair of witnesses that may anchor AND every required modality met by a trusted
+witness (V:367-387).
 - Otherwise SUSPECTED, with reasons.
 - UNDETERMINED only when there is no admissible evidence, or the rank is below the floor.
 - management_plane and security are each their own plane: either alone caps at
-  suspected.
+  suspected, and (D1) neither can be half of the confirming pair.
 
 **Downgrade-only caps** (`_cap_verdict` never upgrades, E:3188-3204):
 - `allow_root_cause_confirmed=false` (SC:395), reason from the template's
@@ -463,7 +499,8 @@ independent pair AND every required modality met by a trusted witness (V:367-387
   `sig.ent.security.hardening-drift-story` — an exposure or a failed hardening control is
   a standing property with no onset, so a fault measured beside it on an independent
   plane proves both facts, never one cause. (P-424934 was persisted CONFIRMED on
-  "independent confirming pair across 3 modality classes".) `threat-signal-story` is NOT
+  "independent confirming pair across 3 modality classes".) Since D2 both are also
+  `context_story`, and the cap applies to any context story. `threat-signal-story` is NOT
   capped: a detection is an event with an onset, so the gate decides it;
 - A7 fidelity — a doc_claimed signal can't be in the confirming pair; flag
   `CORR_FIDELITY_WEIGHTING`, default OFF (S:441, SC:385);
@@ -481,6 +518,11 @@ measures producers only and ignores `allow_root_cause_confirmed`: a capped templ
 producers reach two planes still counts as `confirmable_now` (admin-link-change-induced,
 exposure-story, hardening-drift-story). The row reports the cap beside the status
 (`confirm_capped`, P-424934), so a deliberate cap neither moves the ratchet nor hides.
+D1 IS in the audit's math (`_kind_may_anchor` mirrors `plane_may_anchor` per kind):
+confirmable needs two anchor-eligible modality classes, else status
+`support_plane_only`. The baseline went 32 → 29 by owner decision D1 (recorded in the
+baseline file): `wan-edge.sdwan-tunnel-controller-corroborated`, `wireless.ap-down-power`,
+`wireless.capwap-instability`, each with a `DEMO_CONFIRMABILITY_EXCEPTIONS` entry.
 
 ## 6. Outputs — [8] persist (M:5792)
 
@@ -495,6 +537,11 @@ priority queue (evidence_plane.py).
 - Row: `to_object_row` (E:2859); `top_confidence` = top hypothesis rank.
 - Hypotheses blob = {ranking, grounding_context, seams, gap hints, degradation,
   orientations, adjacency, path_graph, provenance} (E:2653-2762).
+- Per hypothesis (`HypothesisScore.to_dict`): `"context_story": true` is present ONLY on
+  a context story (owner D2) — the contract the UI / PDF / Iris read to render a
+  "Background on this device (not a cause)" band; absent means causal. Pinned from raw
+  wire events by test_golden_wire_all_lanes.py (fixture
+  golden_wire/security_exposure_beside_bgp_fault.json).
 - Persisted copies are capped at 1 MiB; content_hash is unaffected (E:1771).
 - Outside every hash: `layer_coverage`, `app_impact`, `attribution`. Path attribution
   never touches the verdict (E:2894, E:3539).
@@ -604,7 +651,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
-  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934); byte-identical when no tunnel rows exist. The verdict tier still
+  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since owner
+  D1–D3); byte-identical when no tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.

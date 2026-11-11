@@ -742,7 +742,7 @@ class _CatalogView:
         self.const: tuple[tuple, ...] = tuple(
             ((t.title, t.verdict.owner, t.verdict.first_steps, tuple(t.seams),
               t.deployment_scope, t.operator_phrase, t.manager_phrase,
-              t.blast_radius, tuple(t.false_positives)),
+              t.blast_radius, tuple(t.false_positives), t.context_story),
              tuple((st.stage, st.root, st.unobserved_note)
                    for st in t.causal_chain))
             for t in self.templates)
@@ -790,7 +790,7 @@ def encode_result(result: RankingResult) -> bytes | None:
         fixed, stages = const[i]
         if (h.title, h.owner, h.first_steps, h.seams, h.deployment_scope,
                 h.operator_phrase, h.manager_phrase, h.blast_radius,
-                h.false_positives) != fixed:
+                h.false_positives, h.context_story) != fixed:
             return None                    # a "constant" field is not constant
         chain = h.causal_chain
         if len(chain) != len(stages):
@@ -880,6 +880,7 @@ def decode_result(blob: bytes) -> RankingResult | None:
             manager_phrase=fixed[6],
             blast_radius=fixed[7],
             false_positives=fixed[8],
+            context_story=fixed[9],
             causal_chain=tuple(
                 {"stage": stage[0], "root": stage[1], "witnessed": witnessed,
                  "kinds": list(kinds),
@@ -927,6 +928,9 @@ def _witness_projection(w: Witness) -> tuple:
         w.probe_authority.value if w.probe_authority is not None else "",
         w.probe_scope.value if w.probe_scope is not None else "",
         bool(w.support_only),
+        # Owner D1: it reads attrs.evidence_subclass, which no other projected
+        # field carries, and it decides whether the witness may anchor.
+        bool(w.support_plane),
         # A TUPLE, not a joined string: a delimiter could be forged inside an
         # attrs value, and two different fates must never canonicalize alike.
         (() if fate is None else

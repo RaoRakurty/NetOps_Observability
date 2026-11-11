@@ -241,6 +241,10 @@ class HypothesisScore:
     # which is what makes the OFF path byte-identical (INVARIANTS §10/§10a).
     fidelity_gap: tuple[str, ...] = ()   # rule ids that held CONFIRMATION back
     fidelity_min: str = ""               # weakest fidelity claimed in the evidence
+    # Owner D2: the template is a CONTEXT story (co-occurrence, not a cause).
+    # A function of the template alone; `to_dict` emits it only when true, so a
+    # causal hypothesis's dict is the one it always was.
+    context_story: bool = False
 
     def confidence_label(self) -> str:
         """The lexical confidence label of the owner's taxonomy (voice contract):
@@ -287,6 +291,10 @@ class HypothesisScore:
             # one it always was — key for key, byte for byte.
             out["verdict"]["fidelity_min"] = self.fidelity_min
             out["verdict"]["fidelity_gap"] = list(self.fidelity_gap)
+        if self.context_story:
+            # Owner D2 contract (UI / PDF / Iris): render this hypothesis as
+            # "Background on this device (not a cause)". Present-only.
+            out["context_story"] = True
         return out
 
 
@@ -391,13 +399,19 @@ def score_template(
     # Port-Intelligence cap (#94): physical-layer families with
     # allow_root_cause_confirmed=False never emit CONFIRMED from telemetry
     # alone — the tier is capped at SUSPECTED with the reason on the record
-    # (fiber-path validation / human corroboration lifts it later).
-    if gate.tier is VerdictTier.CONFIRMED and not template.allow_root_cause_confirmed:
+    # (fiber-path validation / human corroboration lifts it later). A context
+    # story (owner D2) is capped the same way: co-occurrence is not a cause.
+    if gate.tier is VerdictTier.CONFIRMED and (
+            not template.allow_root_cause_confirmed or template.context_story):
+        default_reason = (
+            "confirmed capped to suspected: a context story (co-occurrence on one "
+            "node) is background, never a confirmed cause (context_story)"
+            if template.allow_root_cause_confirmed else
+            "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)")
         gate = GateVerdict(
             tier=VerdictTier.SUSPECTED,
             coverage=gate.coverage,
-            reasons=gate.reasons + (
-                template.confirm_cap_reason or "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)",),
+            reasons=gate.reasons + (template.confirm_cap_reason or default_reason,),
         )
     # A7 fidelity cap (flag CORR_FIDELITY_WEIGHTING, default OFF) — the same
     # shape as the #94 cap above, one rung further down the evidence chain: the
@@ -459,6 +473,7 @@ def score_template(
         causal_chain=causal_chain,
         fidelity_gap=fidelity_gap,
         fidelity_min=fidelity_low,
+        context_story=template.context_story,
     )
 
 
@@ -613,6 +628,7 @@ def _build_inapplicable_score(template: Template) -> HypothesisScore:
             {"stage": st.stage, "root": st.root, "witnessed": False,
              "kinds": [], "note": st.unobserved_note}
             for st in template.causal_chain),
+        context_story=template.context_story,
     )
 
 
@@ -1090,7 +1106,16 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     # clauses = more of the evidence explained); template id only as the final
     # deterministic tie-break. Keeps a broad single-clause look-alike from
     # shadowing a multi-witness signature it ties with.
-    scores.sort(key=lambda s: (-s.confidence_rank, -len(s.satisfied), s.template_id))
+    #
+    # Owner D2: a CONTEXT story (co-occurrence on one node, not a cause) never
+    # takes the headline while any causal template is viable (at or above the
+    # floor): it sorts after every one of them, whatever its own confidence.
+    # Where nothing causal is viable it sorts as before, and may lead — capped at
+    # suspected by score_template. Confidence numbers are never touched.
+    causal_viable = any(not s.context_story and s.confidence_rank >= CONFIDENCE_FLOOR
+                        for s in scores)
+    scores.sort(key=lambda s: (bool(causal_viable and s.context_story),
+                               -s.confidence_rank, -len(s.satisfied), s.template_id))
 
     # Forced competitors must appear in the visible set even if low-ranked
     # (competing hypotheses by construction — §4.5).
@@ -1109,6 +1134,14 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
         if s.contradicted and s.template_id not in visible_ids and visible_ids & set(s.forced_competitors):
             visible.append(s)
             visible_ids.add(s.template_id)
+            visible_ids.add(s.template_id)
+    # Owner D2: a MATCHED context story stays visible even when the causal
+    # templates sorted ahead of it fill TOP_K — it is the "Background on this
+    # device (not a cause)" band, and dropping it would hide evidence the object
+    # holds. Only at or above the floor: an unmatched one is not background.
+    for s in scores[TOP_K:]:
+        if s.context_story and s.confidence_rank >= CONFIDENCE_FLOOR and s.template_id not in visible_ids:
+            visible.append(s)
             visible_ids.add(s.template_id)
 
     if not scores or scores[0].confidence_rank < CONFIDENCE_FLOOR:

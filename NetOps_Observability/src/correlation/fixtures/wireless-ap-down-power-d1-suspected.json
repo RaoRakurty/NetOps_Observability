@@ -25,7 +25,8 @@
   ],
   "expect": {
     "top": "sig.ent.wireless.ap-down-power",
-    "tier": "confirmed",
+    "tier": "suspected",
     "owner": "netops"
-  }
+  },
+  "comment": "Owner D1 (2026-11-11): the controller's report is management_plane, which supports but never anchors the confirming pair; with ONE measurement-plane witness the verdict is suspected, the honest 'possibly because of X'. It was 'confirmed' before D1."
 }

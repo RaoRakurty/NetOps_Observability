@@ -344,7 +344,8 @@ def test_T1d_the_witness_projection_is_exactly_Witness_equality():
     # `series_authorities` (P6 PR-C2) follows the same rule under
     # CORR_SERIES_ADMISSION.
     covered = {"observer_id", "modality", "authority", "probe_authority",
-               "probe_scope", "support_only", "fate", "origin", "series_authorities"}
+               "probe_scope", "support_only", "fate", "origin", "series_authorities",
+               "support_plane"}  # owner D1, projected unconditionally
     assert {f.name for f in dc_fields(Witness)} == covered, \
         "Witness gained a field — extend _witness_projection"
     assert {f.name for f in dc_fields(ProbeFate)} == {

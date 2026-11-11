@@ -342,8 +342,11 @@ def test_edge_evidence_joins_back_to_the_security_signals():
     This pins the engine half: an all-security object's edge evidence carries a
     real signal id that belongs to one of the edge's endpoint nodes AND resolves
     to a signal of a security kind — i.e. the backend predicate is productive."""
+    # Owner D3 (2026-11-11): a component of standing findings alone (posture +
+    # exposure) opens no object, so the all-security object here carries a
+    # dated detection beside the exposure.
     window = [security_signal(kind="security_exposure", secs=0),
-              security_signal(kind="security_posture", secs=10)]
+              security_signal(kind="security_signal", secs=10)]
     snaps = run_window(window, CAT, (), EngineConfig())
     assert len(snaps) == 1
     snap = snaps[0]
