@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 120
+# cases: 153
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -91,7 +91,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS administrative down carries the admin cause"
     inputs:
       - insert_at: syslog_normalized
@@ -108,7 +108,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS link failure carries the fault cause"
     inputs:
       - insert_at: syslog_normalized
@@ -125,7 +125,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS port-channel with no members is down with an unknown cause"
     inputs:
       - insert_at: syslog_normalized
@@ -142,7 +142,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS interface up"
     inputs:
       - insert_at: syslog_normalized
@@ -159,7 +159,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS speed change stays a log"
     inputs:
       - insert_at: syslog_normalized
@@ -176,7 +176,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: an NX-OS BFD session down is a below-floor BFD flap"
     inputs:
       - insert_at: syslog_normalized
@@ -193,7 +193,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_ios: the three-part IOS form is not the XR grammar"
     inputs:
       - insert_at: syslog_normalized
@@ -210,7 +210,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: an error line parses and lifts severity"
     inputs:
       - insert_at: syslog_normalized
@@ -592,7 +592,373 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_sdwan: the resolver refreshing the vBond entry is the lookup's routine path, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "VTRACKER"
+          severity: "notice"
+          message: "dnsclient_cache_update[144]: DNS cache entry for vbond.example.net (via none) refreshed"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "dns_cache_refreshed", "wrong event_type")
+              assert_eq!(.summary, "DNS cache entry for vbond.example.net via none refreshed", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.title, "DNS cache entry for vbond.example.net refreshed on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "dns:vEdge-1:vbond.example.net", "wrong correlation_key")
+  - name: "cisco_sdwan: the gateway monitor coming up names the gateway, VPN and interface, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "RESOLVD"
+          severity: "notice"
+          message: "monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is UP"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "gateway_monitor_up", "wrong event_type")
+              assert_eq!(.summary, "Gateway monitor for 192.0.2.1 in VPN 0 via ge0_0 is UP", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.title, "Gateway 192.0.2.1 in VPN 0 via ge0_0 is UP on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "gateway:vEdge-1:0:192.0.2.1", "wrong correlation_key")
+  - name: "cisco_sdwan: the default gateway reachable again shares the monitor's key, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "RESOLVD"
+          severity: "notice"
+          message: "resolv_monitor_state_callback[260]: Default gateway 192.0.2.1 in VPN 0 is now reachable"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "default_gateway_reachable", "wrong event_type")
+              assert_eq!(.summary, "Default gateway 192.0.2.1 in VPN 0 is now reachable", "wrong summary")
+              assert_eq!(.title, "Default gateway 192.0.2.1 in VPN 0 is now reachable on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "gateway:vEdge-1:0:192.0.2.1", "wrong correlation_key")
+  - name: "cisco_sdwan: the gateway monitor going down is a below-floor alarm naming the gateway"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "RESOLVD"
+          severity: "notice"
+          message: "monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is DOWN"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "gateway_monitor_down", "wrong event_type")
+              assert_eq!(.title, "Gateway 192.0.2.1 in VPN 0 via ge0_0 is DOWN on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "gateway:vEdge-1:0:192.0.2.1", "wrong correlation_key")
+              assert_eq!(.guidance, {"basis": "pack_guidance", "impact": ["The edge lost its default gateway in this VPN, so it has no next hop on that transport; tunnels and control connections over it fail until the gateway answers again."], "next_checks": ["Run show interface for the transport interface named in the line and check that it is up.", "Ping the gateway from the edge in that VPN and check ARP for its address.", "Run show bfd sessions and show control connections to see which tunnels and controllers went with it."]}, "wrong guidance")
+  - name: "cisco_sdwan: the default gateway unreachable is the same below-floor alarm"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "RESOLVD"
+          severity: "notice"
+          message: "resolv_monitor_state_callback[260]: Default gateway 192.0.2.1 in VPN 0 is now unreachable"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "default_gateway_unreachable", "wrong event_type")
+              assert_eq!(.correlation_key, "gateway:vEdge-1:0:192.0.2.1", "wrong correlation_key")
+  - name: "cisco_sdwan: the gateway words from a daemon outside the resolver are not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "notice"
+          message: "monitor_peer_change_state[291]: Monitor attached to 0/192.0.2.1/0 via ge0_0 is DOWN"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_sdwan: the configuration manager unable to reach a routing daemon keeps its err, below the floor"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "CFGMGR"
+          severity: "err"
+          message: "cfgmgr_quagga_pb_send_message[831]: Quagga daemon - ospfd link is down (vpn:512), skipping"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "cfgmgr_routing_daemon_unreachable", "wrong event_type")
+              assert_eq!(.summary, "Configuration manager cannot reach ospfd in VPN 512, skipping", "wrong summary")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+              assert_eq!(.title, "Configuration manager on vEdge-1 cannot reach ospfd in VPN 512, change skipped", "wrong title")
+              assert_eq!(.correlation_key, "cfgmgr:vEdge-1:ospfd:512", "wrong correlation_key")
+  - name: "cisco_sdwan: the forwarding plane keeping a port's default MAC is filed, and emits nothing at err"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "fp-um"
+          severity: "err"
+          message: "Port 3: Cannot remove default MAC address "
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "fp_default_mac_not_removed", "wrong event_type")
+              assert_eq!(.summary, "Forwarding plane could not remove the default MAC address of port 3", "wrong summary")
+              assert_eq!(.normalized_severity, "error", "wrong normalized_severity")
+              assert_eq!(.title, "Forwarding plane could not remove the default MAC address of port 3 on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "fp_port:vEdge-1:3", "wrong correlation_key")
+  - name: "cisco_sdwan: the forwarding plane updating a port names the interface and keeps the status numbers"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "fp-um"
+          severity: "info"
+          message: "USER1: ge0_3: Updating port status for portid 3 admin_status 1, port_status 1, link_status 1, fast 0 "
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_sdwan.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "fp_port_status", "wrong event_type")
+              assert_eq!(.summary, "Forwarding plane updated port 3 (ge0_3): admin_status 1, port_status 1, link_status 1", "wrong summary")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+              assert_eq!(.title, "Forwarding plane updated ge0_3 (port 3) on vEdge-1", "wrong title")
+              assert_eq!(.correlation_key, "fp_port:vEdge-1:3", "wrong correlation_key")
+              assert_eq!(.metrics, {"admin_status": {"basis": "observed", "value": 1.0}, "link_status": {"basis": "observed", "value": 1.0}, "port_status": {"basis": "observed", "value": 1.0}}, "wrong metrics")
+  - name: "cisco_sdwan: each status number reaches its own metric (link differs)"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "fp-um"
+          severity: "info"
+          message: "USER1: ge0_3: Updating port status for portid 3 admin_status 1, port_status 1, link_status 0, fast 0 "
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "fp_port_status", "wrong event_type")
+              assert_eq!(.metrics, {"admin_status": {"basis": "observed", "value": 1.0}, "link_status": {"basis": "observed", "value": 0.0}, "port_status": {"basis": "observed", "value": 1.0}}, "wrong metrics")
+  - name: "cisco_sdwan: each status number reaches its own metric (admin differs)"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "fp-um"
+          severity: "info"
+          message: "USER1: ge0_3: Updating port status for portid 3 admin_status 0, port_status 1, link_status 1, fast 0 "
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "fp_port_status", "wrong event_type")
+              assert_eq!(.metrics, {"admin_status": {"basis": "observed", "value": 0.0}, "link_status": {"basis": "observed", "value": 1.0}, "port_status": {"basis": "observed", "value": 1.0}}, "wrong metrics")
+  - name: "cisco_sdwan: the default-MAC words from another app are not the benign forwarding-plane line"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "err"
+          message: "Port 3: Cannot remove default MAC address "
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_sdwan: another forwarding-plane error still reaches the net"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "fp-um"
+          severity: "err"
+          message: "Port 3: Cannot set MTU 1500"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "cisco_sdwan: the IOS XE banner version line names the release, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cEdge-1"
+          appname: "unknown"
+          severity: "notice"
+          message: "Cisco IOS Software [Amsterdam], Virtual XE Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.3.2, RELEASE SOFTWARE (fc3)"
+          timestamp: "2026-11-11T09:00:01Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.vendor, "cisco", "wrong vendor")
+              assert_eq!(.parser_id, "cisco_iosxe.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ios_boot_version", "wrong event_type")
+              assert_eq!(.summary, "Booted Cisco IOS XE 17.3.2 (Amsterdam), image X86_64_LINUX_IOSD-UNIVERSALK9-M", "wrong summary")
+              assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
+              assert_eq!(.event_category, "system_lifecycle", "wrong event_category")
+              assert_eq!(.dedup_key, "cEdge-1|unknown|ios_boot_version", "wrong dedup_key")
+              assert_eq!(.title, "cEdge-1 booted Cisco IOS XE 17.3.2", "wrong title")
+              assert_eq!(.correlation_key, "boot:cEdge-1:2026-11-11T09:00", "wrong correlation_key")
+              assert_eq!(.metrics, {"release_train": {"basis": "observed", "value": "Amsterdam"}, "software_image": {"basis": "observed", "value": "X86_64_LINUX_IOSD-UNIVERSALK9-M"}, "software_version": {"basis": "observed", "value": "17.3.2"}}, "wrong metrics")
+  - name: "cisco_sdwan: the banner support line is the same boot"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cEdge-1"
+          appname: "unknown"
+          severity: "notice"
+          message: "Technical Support: http://www.cisco.com/techsupport"
+          timestamp: "2026-11-11T09:00:01Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_iosxe.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ios_boot_banner", "wrong event_type")
+              assert_eq!(.summary, "Cisco IOS boot banner: support link http://www.cisco.com/techsupport", "wrong summary")
+              assert_eq!(.event_category, "system_lifecycle", "wrong event_category")
+              assert_eq!(.dedup_key, "cEdge-1|unknown|ios_boot_banner", "wrong dedup_key")
+              assert_eq!(.title, "Cisco IOS boot banner on cEdge-1: support link", "wrong title")
+              assert_eq!(.correlation_key, "boot:cEdge-1:2026-11-11T09:00", "wrong correlation_key")
+  - name: "cisco_sdwan: the banner copyright line is the same boot"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cEdge-1"
+          appname: "unknown"
+          severity: "notice"
+          message: "Copyright (c) 1986-2020 by Cisco Systems, Inc."
+          timestamp: "2026-11-11T09:00:01Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_iosxe.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ios_boot_banner", "wrong event_type")
+              assert_eq!(.summary, "Cisco IOS boot banner: copyright 1986-2020", "wrong summary")
+              assert_eq!(.title, "Cisco IOS boot banner on cEdge-1: copyright notice", "wrong title")
+              assert_eq!(.correlation_key, "boot:cEdge-1:2026-11-11T09:00", "wrong correlation_key")
+  - name: "cisco_sdwan: the banner build line is the same boot"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cEdge-1"
+          appname: "unknown"
+          severity: "notice"
+          message: "Compiled Sat 31-Oct-20 13:16 by mcpre"
+          timestamp: "2026-11-11T09:00:02Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "cisco_iosxe.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ios_boot_banner", "wrong event_type")
+              assert_eq!(.summary, "Cisco IOS boot banner: image built Sat 31-Oct-20 13:16 by mcpre", "wrong summary")
+              assert_eq!(.title, "Cisco IOS boot banner on cEdge-1: build stamp Sat 31-Oct-20 13:16", "wrong title")
+              assert_eq!(.correlation_key, "boot:cEdge-1:2026-11-11T09:00", "wrong correlation_key")
+  - name: "cisco_sdwan: a classic IOS banner with no release train is not called IOS XE"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cEdge-1"
+          appname: "unknown"
+          severity: "notice"
+          message: "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.0(2)SE, RELEASE SOFTWARE (fc1)"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: the same DNS words from a daemon outside this pack mean nothing"
     inputs:
       - insert_at: syslog_normalized
@@ -609,7 +975,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_normalized
@@ -1327,7 +1693,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "nokia_sros: the documented SYSTEM line parses and reads its severity word"
     inputs:
       - insert_at: syslog_normalized
@@ -1728,7 +2094,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "sonic: an orchagent port down is a below-floor link change with no cause"
     inputs:
       - insert_at: syslog_normalized
@@ -1786,7 +2152,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_normalized
@@ -2014,7 +2380,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: a NETCONF request"
     inputs:
       - insert_at: syslog_normalized
@@ -2209,7 +2575,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: the same words from another app are not classified"
     inputs:
       - insert_at: syslog_normalized
@@ -2226,7 +2592,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: Juniper sshd is classified by the neutral row and keeps its vendor guess"
     inputs:
       - insert_at: syslog_normalized
@@ -2283,7 +2649,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: a tagged line whose mnemonic is the only severity it states"
     inputs:
       - insert_at: syslog_normalized
@@ -2300,7 +2666,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: a mnemonic later in the line sets no severity"
     inputs:
       - insert_at: syslog_normalized
@@ -2317,7 +2683,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: a critical line with no pack still opens alone"
     inputs:
       - insert_at: syslog_normalized
@@ -2334,7 +2700,7 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
   - name: "standard: an error line with no pack stays below the open floor"
     inputs:
       - insert_at: syslog_normalized
@@ -2351,4 +2717,302 @@ tests:
           - type: vrl
             source: |
               assert!(!exists(.event_category), "no pack row applies")
-              assert!(!includes(["cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1"], .parser_id), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "standard: the syslog daemon starting is a lifecycle record, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "syslogd"
+          severity: "info"
+          message: "syslogd v2.1.1: restart."
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "syslog_daemon_restart", "wrong event_type")
+              assert_eq!(.summary, "Syslog daemon (re)started, syslogd 2.1.1", "wrong summary")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+              assert_eq!(.event_category, "system_lifecycle", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|syslogd|syslog_daemon_restart", "wrong dedup_key")
+              assert_eq!(.title, "Syslog daemon on vEdge-1 (re)started (syslogd 2.1.1)", "wrong title")
+              assert_eq!(.correlation_key, "syslogd:vEdge-1", "wrong correlation_key")
+  - name: "standard: the older sysklogd start line with its mode parses the same way"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "syslogd"
+          severity: "info"
+          message: "syslogd 1.5.0: restart (remote reception)."
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "syslog_daemon_restart", "wrong event_type")
+              assert_eq!(.summary, "Syslog daemon (re)started, syslogd 1.5.0 (remote reception)", "wrong summary")
+  - name: "standard: an NTP clock step carries the step as a typed metric, and emits nothing"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "ntpd"
+          severity: "info"
+          message: "0.0.0.0 c61c 0c clock_step +28.800702 s"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ntp_clock_step", "wrong event_type")
+              assert_eq!(.summary, "NTP stepped the clock by +28.800702 s (status c61c)", "wrong summary")
+              assert_eq!(.normalized_severity, "info", "wrong normalized_severity")
+              assert_eq!(.event_category, "time_sync", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|ntpd|ntp_clock_step", "wrong dedup_key")
+              assert_eq!(.title, "NTP stepped the clock on vEdge-1 by +28.800702 s", "wrong title")
+              assert_eq!(.correlation_key, "ntp:vEdge-1", "wrong correlation_key")
+              assert_eq!(.metrics, {"clock_step_s": {"basis": "observed", "value": 28.800702}}, "wrong metrics")
+              assert_eq!(.enrichment, {"fields_derived": ["normalized_severity", "title", "correlation_key", "dedup_key"], "fields_guidance": [], "fields_observed": ["event_type", "summary", "metrics.clock_step_s"], "unknown": []}, "wrong enrichment")
+  - name: "standard: a backward NTP step is a negative metric"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "ntpd"
+          severity: "info"
+          message: "0.0.0.0 c61c 0c clock_step -0.512345 s"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "ntp_clock_step", "wrong event_type")
+              assert_eq!(.metrics, {"clock_step_s": {"basis": "observed", "value": -0.512345}}, "wrong metrics")
+  - name: "standard: NTP losing its system peer is a time-sync record"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "ntpd"
+          severity: "info"
+          message: "0.0.0.0 c618 08 no_sys_peer"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ntp_no_sys_peer", "wrong event_type")
+              assert_eq!(.summary, "NTP has no time source selected (no system peer) (status c618)", "wrong summary")
+              assert_eq!(.event_category, "time_sync", "wrong event_category")
+              assert_eq!(.title, "NTP on vEdge-1 has no time source selected (no system peer)", "wrong title")
+              assert_eq!(.correlation_key, "ntp:vEdge-1", "wrong correlation_key")
+  - name: "standard: NTP synchronising the clock shares the step's key"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "ntpd"
+          severity: "info"
+          message: "0.0.0.0 c615 05 clock_sync"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ntp_clock_sync", "wrong event_type")
+              assert_eq!(.title, "NTP on vEdge-1 synchronised the clock", "wrong title")
+              assert_eq!(.correlation_key, "ntp:vEdge-1", "wrong correlation_key")
+  - name: "standard: a peer event names its peer and keeps its detail"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "ntpd"
+          severity: "info"
+          message: "192.0.2.123 8011 81 mobilize assoc 1"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ntp_mobilize", "wrong event_type")
+              assert_eq!(.summary, "NTP set up a peer association: assoc 1 (status 8011)", "wrong summary")
+  - name: "standard: the NTP words from another app are not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "info"
+          message: "0.0.0.0 c61c 0c clock_step +28.800702 s"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "standard: the kernel's conntrack banner is a lifecycle record with the table size"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "kernel"
+          severity: "info"
+          message: "nf_conntrack version 0.5.0 (7168 buckets, 28672 max)"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "kernel_conntrack_init", "wrong event_type")
+              assert_eq!(.summary, "Kernel connection tracking started: 7168 buckets, 28672 entries max", "wrong summary")
+              assert_eq!(.event_category, "system_lifecycle", "wrong event_category")
+              assert_eq!(.dedup_key, "vEdge-1|kernel|kernel_conntrack_init", "wrong dedup_key")
+              assert_eq!(.title, "Kernel connection tracking started on vEdge-1 (28672 entries max)", "wrong title")
+              assert_eq!(.metrics, {"conntrack_buckets": {"basis": "observed", "value": 7168.0}, "conntrack_max": {"basis": "observed", "value": 28672.0}}, "wrong metrics")
+  - name: "standard: a late kernel timer interrupt is filed with its delay, and emits nothing at warning"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "kernel"
+          severity: "warning"
+          message: "hrtimer: interrupt took 4421501 ns"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "kernel_hrtimer_slow", "wrong event_type")
+              assert_eq!(.summary, "Kernel timer interrupt took 4421501 ns (first overrun since boot)", "wrong summary")
+              assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+              assert_eq!(.title, "Kernel timer interrupt ran late on vEdge-1 (4421501 ns)", "wrong title")
+              assert_eq!(.correlation_key, "kernel:vEdge-1:hrtimer", "wrong correlation_key")
+              assert_eq!(.metrics, {"hrtimer_interrupt_ns": {"basis": "observed", "value": 4421501.0}}, "wrong metrics")
+  - name: "standard: the timer words from another app are not the benign kernel line"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "warning"
+          message: "hrtimer: interrupt took 4421501 ns"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "standard: another kernel warning still reaches the net"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "kernel"
+          severity: "warning"
+          message: "TCP: out of memory -- consider tuning tcp_mem"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")
+  - name: "standard: an OSPF DD packet ignored in 2-Way names the neighbour, and emits nothing at warning"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "OSPF"
+          severity: "warning"
+          message: "Packet[DD]: Neighbor 192.0.2.7 state is 2-Way, packet discarded."
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_id, "standard_system.v1", "wrong parser_id")
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ospf_dd_discarded", "wrong event_type")
+              assert_eq!(.summary, "OSPF ignored a Database Description packet from neighbour 192.0.2.7 (state 2-Way)", "wrong summary")
+              assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+              assert_eq!(.title, "OSPF ignored a DD packet from neighbour 192.0.2.7 on vEdge-1 (state 2-Way)", "wrong title")
+              assert_eq!(.correlation_key, "ospf:vEdge-1:192.0.2.7", "wrong correlation_key")
+  - name: "standard: an OSPF DD packet discarded in Init is not the benign line and still reaches the net"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "OSPF"
+          severity: "warning"
+          message: "Packet[DD]: Neighbor 192.0.2.7 state is Init, packet discarded."
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.event_type, "ospf_dd_discarded", "wrong event_type")
+              assert_eq!(.title, "OSPF ignored a DD packet from neighbour 192.0.2.7 on vEdge-1 (state Init)", "wrong title")
+  - name: "standard: the OSPF words from another app are not classified"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "vEdge-1"
+          appname: "otherd"
+          severity: "info"
+          message: "Packet[DD]: Neighbor 192.0.2.7 state is 2-Way, packet discarded."
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.event_category), "no pack row applies")
+              assert!(!includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "junos.v1", "nokia_sros.v1", "sonic.v1", "standard_mgmt_audit.v1", "standard_system.v1"], .parser_id), "no pack row applies")

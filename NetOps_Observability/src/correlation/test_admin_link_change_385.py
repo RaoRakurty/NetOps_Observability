@@ -436,7 +436,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 95  # parser_rules.RULES since tracker 387 wave 2 (SONiC link row)
+PINNED_RULE_COUNT = 100  # parser_rules.RULES since tracker 387 final syslog wave (5 pack rows)
 
 
 def test_control_digest_frozen_before_the_change():
@@ -473,10 +473,12 @@ def test_the_parser_is_untouched():
     Re-pinned for tracker 387 wave 1 (vendor packs, 388 syslog link cause): new rows
     behind every older one; the trap link rows this file protects did not move.
     Re-pinned for the tracker 387 process snapshot: the SD-WAN `ps` row only.
-    Re-pinned for the tracker 387 SD-WAN DNS / ConfD SNMP auth grammars: no rule row."""
-    assert parser_rules.PARSER_REV == "2026-11-10-sdwan-dns-snmpauth"
+    Re-pinned for the tracker 387 SD-WAN DNS / ConfD SNMP auth grammars: no rule row.
+    Re-pinned for the tracker 387 final syslog wave: five pack rows (the SD-WAN gateway
+    lost at warn, two rows, and three known_benign) behind every older one; no link row moved."""
+    assert parser_rules.PARSER_REV == "2026-11-11-syslog-final-wave"
     assert parser_rules.BAKED_RULES_HASH == (
-        "6c6ab197a2a5a8b386be041720b6f3128f843aafec01e6033a314f028f33ff41")
+        "63f78614003890a5296798154fe3e6d75a02fe9823af01161cb186b5597bfae4")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]
