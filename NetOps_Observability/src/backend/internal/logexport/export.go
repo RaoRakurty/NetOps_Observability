@@ -62,6 +62,15 @@ type Spec struct {
 	// only ever ANDed out (must_not), so it can narrow the export, never widen it.
 	RoutineMgmtExclusion map[string]any `json:"routine_mgmt_exclusion,omitempty"`
 
+	// MaskTenant / MaskCross are the requester's principal (principalTenant),
+	// frozen so the async worker masks the configured SNMP communities with
+	// the REQUESTER's set (internal/credscrub: its own tenant's plus the
+	// platform's, every tenant's only for a cross-tenant requester). A spec
+	// frozen without them masks the platform's values only: never another
+	// tenant's.
+	MaskTenant string `json:"mask_tenant,omitempty"`
+	MaskCross  bool   `json:"mask_cross,omitempty"`
+
 	// Who asked and under which execution id, frozen for the audit record the
 	// async worker writes when the file is done (the worker has no request).
 	RequestedBy string `json:"requested_by,omitempty"`
@@ -187,7 +196,9 @@ type Data struct {
 // SearchFn is the OpenSearch transport seam (main's env-configured client).
 type SearchFn func(method, path string, body any) (*http.Response, error)
 
-func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end time.Time, maxRows, maxBytes int) (Data, error) {
+// FetchBounded's vm masks the configured credential values (internal/credscrub)
+// in every document before it is projected or kept; nil masks no value.
+func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end time.Time, maxRows, maxBytes int, vm logsecrets.ValueMasker) (Data, error) {
 	const batch = 1000
 	index := oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
 	var data Data
@@ -221,7 +232,7 @@ func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end ti
 			// Before any projection: csv/xlsx fall back to the raw document when
 			// it has no message, and json/ndjson write it verbatim. An export
 			// fails rather than ship a document the strip could not check.
-			source, err := logsecrets.StripSource(h.Source)
+			source, err := logsecrets.StripSource(h.Source, vm)
 			if err != nil {
 				return data, fmt.Errorf("log export: %w", err)
 			}

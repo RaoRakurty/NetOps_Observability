@@ -198,7 +198,7 @@ func (a *API) passiveFollow(ctx context.Context, p Principal, spec PassiveSpec, 
 	// leave those rows ABSENT from the timeline, and an absent row reads as a
 	// hop that was fine — the same defect as an empty module file.
 	return []Entry{
-		a.KafkaStage(ctx, spec.Kind, marker),
+		a.KafkaStage(ctx, p, spec.Kind, marker),
 		a.OpenSearchStage(ctx, p, spec.Kind, marker, ""),
 		a.PassiveVictoriaStage(ctx, p, spec),
 		a.ClickHouseStage(ctx, p, spec.Kind, marker),

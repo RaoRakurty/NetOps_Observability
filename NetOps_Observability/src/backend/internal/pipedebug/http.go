@@ -477,7 +477,7 @@ func (a *API) stage(r *http.Request, p Principal, stage Stage, kind Kind, marker
 	case StageUI:
 		return a.UIStage(r, kind, marker, spec, tenant)
 	case StageKafka:
-		return a.KafkaStage(ctx, kind, marker)
+		return a.KafkaStage(ctx, p, kind, marker)
 	case StageOpenSearch:
 		return a.OpenSearchStage(ctx, p, kind, marker, tenant)
 	case StageVictoria:

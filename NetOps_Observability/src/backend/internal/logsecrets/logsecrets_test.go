@@ -13,7 +13,7 @@ const fabricatedValue = "fabricated-community-7f3a"
 
 func TestStripSourceRemovesTheFieldAndKeepsTheRest(t *testing.T) {
 	in := json.RawMessage(`{"message":"a<b","snmp_community":"` + fabricatedValue + `","snmp_community_present":true,"n":12345678901234567890}`)
-	out, err := StripSource(in)
+	out, err := StripSource(in, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestStripSourceRemovesTheFieldAndKeepsTheRest(t *testing.T) {
 
 func TestStripSourceTreatsEveryValueTheSame(t *testing.T) {
 	for _, value := range []string{"public", "private", "", fabricatedValue} {
-		out, err := StripSource(json.RawMessage(`{"snmp_community":"` + value + `","a":1}`))
+		out, err := StripSource(json.RawMessage(`{"snmp_community":"`+value+`","a":1}`), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +41,7 @@ func TestStripSourceTreatsEveryValueTheSame(t *testing.T) {
 }
 
 func TestStripSourceCatchesAKeySpelledWithAnEscape(t *testing.T) {
-	out, err := StripSource(json.RawMessage(`{"snmp_community":"` + fabricatedValue + `","a":1}`))
+	out, err := StripSource(json.RawMessage(`{"snmp_community":"`+fabricatedValue+`","a":1}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestStripSourceLeavesOtherDocumentsByteIdentical(t *testing.T) {
 		`{"note":"café"}`, // escape takes the slow path, no field, still unchanged
 		`null`,
 	} {
-		out, err := StripSource(json.RawMessage(doc))
+		out, err := StripSource(json.RawMessage(doc), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,10 +69,10 @@ func TestStripSourceLeavesOtherDocumentsByteIdentical(t *testing.T) {
 // Default-closed: a body that may hold the field but cannot be checked is an
 // error the caller must refuse, never something passed along.
 func TestStripRefusesWhatItCannotCheck(t *testing.T) {
-	if _, err := StripSource(json.RawMessage(`{"snmp_community":"` + fabricatedValue)); err == nil {
+	if _, err := StripSource(json.RawMessage(`{"snmp_community":"`+fabricatedValue), nil); err == nil {
 		t.Error("truncated _source must be refused")
 	}
-	if _, err := StripSource(json.RawMessage(`["snmp_community"]`)); err == nil {
+	if _, err := StripSource(json.RawMessage(`["snmp_community"]`), nil); err == nil {
 		t.Error("non-object _source must be refused")
 	}
 	for name, body := range map[string]string{
@@ -81,7 +81,7 @@ func TestStripRefusesWhatItCannotCheck(t *testing.T) {
 		"list scalar":   `{"hits":{"hits":"snmp_community"}}`,
 		"source scalar": `{"hits":{"hits":[{"_source":"snmp_community"}]}}`,
 	} {
-		if _, err := StripSearchResponse([]byte(body)); err == nil {
+		if _, err := StripSearchResponse([]byte(body), nil); err == nil {
 			t.Errorf("%s: must be refused", name)
 		}
 	}
@@ -91,7 +91,7 @@ func TestStripSearchResponseCleansEveryHit(t *testing.T) {
 	body := `{"took":3,"hits":{"total":{"value":2},"hits":[` +
 		`{"_index":"netops-snmptrap-acme-2026.11.09","_id":"1","_source":{"message":"m1","snmp_community":"` + fabricatedValue + `"}},` +
 		`{"_index":"netops-syslog-acme-2026.11.09","_id":"2","_source":{"message":"m2","time_received_ns":1762657500123456789}}]}}`
-	out, err := StripSearchResponse([]byte(body))
+	out, err := StripSearchResponse([]byte(body), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestStripSearchResponseCleansEveryHit(t *testing.T) {
 
 func TestStripSearchResponseWithoutTheFieldIsByteIdentical(t *testing.T) {
 	body := `{"took":3,  "hits":{"hits":[{"_source":{"message":"x"}}]}}`
-	out, err := StripSearchResponse([]byte(body))
+	out, err := StripSearchResponse([]byte(body), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestStripSearchResponseWithoutTheFieldIsByteIdentical(t *testing.T) {
 
 func TestStripSearchResponseAMessageNamingTheFieldIsKept(t *testing.T) {
 	body := `{"hits":{"hits":[{"_source":{"message":"operator asked about snmp_community"}}]}}`
-	out, err := StripSearchResponse([]byte(body))
+	out, err := StripSearchResponse([]byte(body), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestStripSourceMasksCredentialsInTextFields(t *testing.T) {
 		`"message":"snmp-server community hunter2 RO",` +
 		`"message_original":"<189>Nov  9 09:00:01 r1 app: snmp-server community hunter2 RO",` +
 		`"structured_data":"[a@1 password=\"hunter2\"]","summary":"password=hunter2"}`)
-	out, err := StripSource(raw)
+	out, err := StripSource(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestStripSourceMasksCredentialsInTextFields(t *testing.T) {
 // A username is not a credential here: it stays for security attribution (owner D7).
 func TestStripSourceKeepsUsernames(t *testing.T) {
 	raw := json.RawMessage(`{"message_original":"<189>r1 app: User 'svc-user' authenticated with token auth"}`)
-	out, err := StripSource(raw)
+	out, err := StripSource(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestStripSourceKeepsUsernames(t *testing.T) {
 // order or number form a re-encode would change.
 func TestStripSourcePassesAnOrdinaryDocumentByteForByte(t *testing.T) {
 	raw := json.RawMessage(`{"z":1.0,"a":2,"message":"Interface Gi1, changed state to down","message_original":"<187>x"}`)
-	out, err := StripSource(raw)
+	out, err := StripSource(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestStripSourcePassesAnOrdinaryDocumentByteForByte(t *testing.T) {
 // A search answer goes through the same masking, hit by hit.
 func TestStripSearchResponseMasksTextFields(t *testing.T) {
 	raw := []byte(`{"took":1,"hits":{"total":{"value":1},"hits":[{"_id":"a","_source":{"message_original":"password=hunter2"}}]}}`)
-	out, err := StripSearchResponse(raw)
+	out, err := StripSearchResponse(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

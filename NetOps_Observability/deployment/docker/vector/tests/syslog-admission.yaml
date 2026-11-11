@@ -2277,12 +2277,12 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission, null, "expected NO admission stamp")
-  - name: "pack standard: an SNMP poll session opening, with its key"
+  - name: "pack standard: an SNMP poll session opening, with its key and no user"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log
         log_fields:
-          message: "audit user: svc-user/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+          message: "audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp"
           appname: "confd"
           severity: "notice"
           hostname: "vEdge-1"

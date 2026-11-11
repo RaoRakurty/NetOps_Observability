@@ -307,11 +307,13 @@ def test_audit_rows_cannot_alarm():
 def test_usernames_stay_in_the_message():
     """D7: usernames are retained, never redacted here. The human summary and title (owner,
     live review 2026-11-10) and the typed `audit_user` name the user as the message does,
-    on the same record under the same access; the message itself is untouched."""
-    line = "audit user: svc-user/1 created new session via snmp from 192.0.2.1:1 with udp"
+    on the same record under the same access; the message itself is untouched. A NETCONF
+    session is a person's (or a controller account's); an SNMP session names no user
+    (next test)."""
+    line = "audit user: svc-user/1 created new session via netconf from 192.0.2.1:1 with ssh"
     parsed = _audit(line)
     assert "message" not in parsed
-    assert parsed["summary"] == "SNMP session by svc-user from 192.0.2.1 (poll)"
+    assert parsed["summary"] == "NETCONF session opened by svc-user from 192.0.2.1"
     # The audit card's typed fields (event model, 2026-11-10) name the user too; the Logs
     # read path enforces RBAC and audit on the whole record. No other field copies it.
     allowed = {"summary", "title", "audit_user", "correlation_key"}
@@ -321,6 +323,57 @@ def test_usernames_stay_in_the_message():
 
 #: A fabricated community: the value must reach no field the parse adds.
 _COMMUNITY = "fabricated-community-7f3a"
+
+
+@pytest.mark.parametrize(("user", "tail", "src", "port"), [
+    (_COMMUNITY, " from 127.0.0.1:54873 with udp", "127.0.0.1", "54873"),
+    (_COMMUNITY, " from 192.0.2.1:59169 with udp", "192.0.2.1", "59169"),
+    (_COMMUNITY, "", None, None),
+    ("public", " from 127.0.0.1:1 with udp", "127.0.0.1", "1"),
+    ("snmpv3-usm-user", " from 127.0.0.1:2 with udp", "127.0.0.1", "2"),
+    ("1234", " from 127.0.0.1:3 with udp", "127.0.0.1", "3"),
+], ids=["lab-shape", "other-source", "no-source", "public", "v3-user", "numeric"])
+def test_an_snmp_session_names_no_user(user, tail, src, port):
+    """Found live 2026-11-11: ConfD names a v1/v2c SNMP session by the community the
+    request carried, so the user slot of a `via snmp` session is a credential (owner D1).
+    The parse reads none of it: not audit_user, title, summary, dedup_key or
+    correlation_key. A v3 USM user is not a secret, but the line cannot tell v2c from v3,
+    so it is never read either."""
+    line = f"audit user: {user}/49119 created new session via snmp{tail}"
+    parsed = _audit(line, host="vEdge-20")
+    assert parsed["event_type"] == "audit_session_created_snmp"
+    assert parsed["event_category"] == "management_audit"
+    assert parsed["audit_via"] == "snmp"
+    assert parsed["audit_action"] == "session_created"
+    assert parsed["session_id"] == "49119"
+    assert parsed.get("audit_source") == (f"{src}:{port}" if src else None)
+    assert parsed["correlation_key"] == "audit:vEdge-20:snmp:49119"
+    assert parsed["dedup_key"] == "vEdge-20|confd|audit_session_created_snmp"
+    assert parsed["title"] == ("SNMP session on vEdge-20" + (f" from {src}" if src else "")
+                               + " (poll)")
+    assert "audit_user" not in parsed and "message" not in parsed
+    assert "audit_user" not in parsed["enrichment"]["fields_observed"]
+    leaked = {k: v for k, v in parsed.items() if user in repr(v)}
+    assert not leaked, f"the session's user slot reached {sorted(leaked)}"
+
+
+@pytest.mark.parametrize(("line", "event_type", "summary"), [
+    ("audit user: fixture-person/49119 assigned to groups: basic",
+     "audit_session_groups", "Session of fixture-person given groups basic"),
+    ("audit user: fixture-person/49119 terminated session (reason: normal)",
+     "audit_session_terminated", "Session of fixture-person closed (normal)"),
+    ("audit user: fixture-person/7 created new session via cli from 192.0.2.7:51234 with ssh",
+     "audit_session_created_cli", "Session opened via cli by fixture-person from 192.0.2.7"),
+])
+def test_a_persons_session_lines_keep_the_user(line, event_type, summary):
+    """The group and close lines of an SNMP session look exactly like a person's, and no
+    stateless parse can tell them apart, so they keep capturing the user (D7). The read
+    path masks the platform's configured communities by value (internal/credscrub)."""
+    parsed = _audit(line, host="vEdge-20")
+    assert parsed["event_type"] == event_type
+    assert parsed["audit_user"] == "fixture-person"
+    assert parsed["summary"] == summary
+    assert "fixture-person" in parsed["title"]
 
 
 @pytest.mark.parametrize(("community", "tail", "src"), [
@@ -649,7 +702,7 @@ def test_a_missing_optional_group_is_unknown_never_invented():
     table = P.PackTable(*B.pack_tables(B.load_packs()))
     got = table.parse({"hostname": "vEdge-1", "appname": "confd", "severity": "notice",
                        "message": "audit user: svc-user created new session via snmp"})
-    assert got["title"] == "SNMP session on vEdge-1 by svc-user (poll)"
+    assert got["title"] == "SNMP session on vEdge-1 (poll)"
     assert "audit_source" not in got and "session_id" not in got
     assert got["enrichment"]["unknown"] == ["audit_source", "session_id"]
 

@@ -218,6 +218,41 @@ type Deps struct {
 
 	// Now is the clock seam (nil = wall clock).
 	Now func() time.Time
+
+	// MaskValue masks the configured credential values (internal/credscrub) in
+	// every string of a decoded value. It runs after the redaction pass on what
+	// the store, bus and ClickHouse stages hand back, because the platform's
+	// own SNMP communities appear in device text where no pattern can find them
+	// (ConfD names an SNMP session by its community). It masks with the CALLER's
+	// set (tenant/cross of the Principal: its own tenant's values plus the
+	// platform's), never another tenant's. Optional: nil masks nothing.
+	MaskValue func(tenant string, cross bool, v any) (any, bool)
+}
+
+// maskDetail runs MaskValue over a stage's evidence map with p's set.
+func (d Deps) maskDetail(p Principal, m map[string]any) map[string]any {
+	if d.MaskValue == nil || m == nil {
+		return m
+	}
+	if out, changed := d.MaskValue(p.Tenant, p.Cross, m); changed {
+		if mm, ok := out.(map[string]any); ok {
+			return mm
+		}
+	}
+	return m
+}
+
+// maskText runs MaskValue over one string with p's set.
+func (d Deps) maskText(p Principal, s string) string {
+	if d.MaskValue == nil {
+		return s
+	}
+	if out, changed := d.MaskValue(p.Tenant, p.Cross, s); changed {
+		if str, ok := out.(string); ok {
+			return str
+		}
+	}
+	return s
 }
 
 func (d Deps) now() time.Time {
