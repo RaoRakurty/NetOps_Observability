@@ -61,7 +61,7 @@ export default function DataSources() {
           Promise.allSettled([
             api.metricsQueryRange("device_sysuptime", end - 900, end, 300),
             api.flowsTopN("device", 900, 500),
-            api.searchLogs({ query: "*", signal: "syslog", from: fromIso, size: 500 }),
+            api.searchLogs({ query: "*", signal: "syslog", from: fromIso, size: 500, include_routine_mgmt: true }), // presence: every record counts
             api.searchLogs({ query: "*", signal: "snmptrap", from: fromIso, size: 500 }),
           ]),
         ]);

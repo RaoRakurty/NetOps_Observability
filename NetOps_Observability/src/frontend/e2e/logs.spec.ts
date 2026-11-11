@@ -86,7 +86,11 @@ const APP = {
 };
 const HITS = [TRAP, SYSLOG, SYSLOG_ERR, CRIT, WARN, FLOW, APP];
 
-type SearchBody = { query?: string; signal?: string };
+type SearchBody = { query?: string; signal?: string; include_routine_mgmt?: boolean };
+
+// The routine management sessions the server left out of (or kept in) a search:
+// the lab's 12-minute share (owner decision 2026-11-11).
+const ROUTINE_COUNT = 10203;
 
 async function boot(page: Page, theme?: string): Promise<SearchBody[]> {
   const searches: SearchBody[] = [];
@@ -109,7 +113,8 @@ async function boot(page: Page, theme?: string): Promise<SearchBody[]> {
       const body = route.request().postDataJSON() as SearchBody;
       searches.push(body);
       const hits = body.signal === "flows" ? [FLOW] : body.signal === "snmptrap" ? [TRAP] : HITS;
-      return json({ hits: { total: { value: hits.length * 700 }, hits } });
+      const routine = body.signal === "flows" ? {} : { routine_mgmt: { included: !!body.include_routine_mgmt, count: ROUTINE_COUNT } };
+      return json({ hits: { total: { value: hits.length * 700 }, hits }, ...routine });
     }
     return json({});
   });
@@ -246,6 +251,29 @@ test("a quick filter adds a real clause and runs it", async ({ page }) => {
   await expect(page.getByTestId("flows-sampling-note")).toContainText("totals are estimates");
 });
 
+test("routine management sessions: hidden by default, one visible toggle, remembered across a reload", async ({ page }) => {
+  const searches = await boot(page);
+  const toggle = page.getByRole("checkbox", { name: "Show routine management sessions" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  expect(searches[searches.length - 1].include_routine_mgmt).toBe(false);
+  await expect(page.getByTestId("logs-routine-note")).toHaveText("10,203 routine management sessions hidden.");
+
+  await toggle.check();
+  await expect.poll(() => searches[searches.length - 1].include_routine_mgmt).toBe(true);
+  await expect(page.getByTestId("logs-routine-note")).toHaveText("Includes 10,203 routine management sessions.");
+
+  // The choice survives a reload (this browser only).
+  await page.reload();
+  await expect(page.getByRole("grid", { name: "Log results" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("checkbox", { name: "Show routine management sessions" })).toBeChecked();
+  await expect.poll(() => searches[searches.length - 1].include_routine_mgmt).toBe(true);
+
+  // Flows have their own toggle: this one is not offered there.
+  await page.getByRole("group", { name: "Log type" }).getByRole("button", { name: "Flows" }).click();
+  await expect(page.getByTestId("logs-routine")).toHaveCount(0);
+});
+
 test("the page works from the keyboard", async ({ page }) => {
   await boot(page);
   const help = page.getByRole("button", { name: "Search examples" });
@@ -297,7 +325,7 @@ for (const theme of ["light", "dark", "oled", "indigo", "graphite", "white"]) {
     // Reduced motion also proves that path: a colour transition would be measured mid-flight.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await boot(page, theme);
-    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page");
+    const results = await contrasts(page, ".lv .lf-level, .lv .lv-device, .lv .lv-signal, .lv .lv-detail-line .lf-msg, .lv .lv-title-line .lf-msg, .lv .lv-addr, .lv .lf-time-clock, .lv .lf-time-date, .lv .lf-state, .lv .lf-ip, .lv .lv-quiet-chip, .lv .lv-facet, .lv .ds-seg button.active, .lv .btn-primary, .lv .lv-tile-n, .lv .lv-tile-k, .lv .lv-subtab, .lv .lv-pager-txt, .lv .lv-page, .lv .lv-routine label, .lv .lv-routine-note, .lv .lv-routine-hint");
     expect(results.length).toBeGreaterThan(20);
     const failing = results.filter((r) => r.ratio < 4.5).map((r) => `${r.what} ${r.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);

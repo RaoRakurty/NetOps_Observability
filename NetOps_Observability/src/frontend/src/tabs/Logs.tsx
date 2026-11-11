@@ -19,6 +19,9 @@ import {
 import { humanize } from "../lib/eventModel";
 import { SEVERITY_TONES } from "../theme/severity";
 import { useAuth } from "../hooks/useAuth";
+import {
+  ROUTINE_TOGGLE_HINT, ROUTINE_TOGGLE_LABEL, RoutineSummary, loadShowRoutine, routineNote, saveShowRoutine,
+} from "../lib/routineMgmt";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "csv", label: "CSV" },
@@ -173,6 +176,17 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const [retention, setRetention] = useState<LogRetention | null>(null);
   // Sampling disclosure from the last search response (flows: 1:50 sample).
   const [sampling, setSampling] = useState<LogSampling | null>(null);
+  // Routine management sessions (owner 2026-11-11): hidden unless the viewer
+  // turns them on; the choice is remembered in this browser. The server decides
+  // what is routine and says how many it left out.
+  const [showRoutine, setShowRoutine] = useState<boolean>(() => loadShowRoutine());
+  const showRoutineRef = useRef(showRoutine);
+  showRoutineRef.current = showRoutine;
+  const [routine, setRoutine] = useState<RoutineSummary | null>(null);
+  const toggleRoutine = (show: boolean) => {
+    saveShowRoutine(show);
+    setShowRoutine(show);
+  };
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -207,12 +221,13 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         to: end.toISOString(),
         size: sz,
         signal: backendSignal,
+        include_routine_mgmt: showRoutineRef.current,
         ...(pg > 1 ? { offset: (pg - 1) * sz } : {}),
       };
       // The tiles count every match for the query without the severity pick, so a
       // tile still shows its siblings while one is selected. A count that fails
       // hides the tiles rather than guessing them from the loaded rows.
-      api.logSeverityCounts({ query: withoutSeverity, signal: backendSignal, from: opts.from!, to: opts.to! })
+      api.logSeverityCounts({ query: withoutSeverity, signal: backendSignal, from: opts.from!, to: opts.to!, include_routine_mgmt: opts.include_routine_mgmt })
         .then((c) => { if (seq === runSeq.current) setTiles(tilesFrom(c)); })
         .catch(() => { if (seq === runSeq.current) setTiles(null); });
       const r = await api.searchLogs(opts);
@@ -229,6 +244,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       // Sample honesty: trust the response's metadata; fall back to the known
       // rate so a flows result is NEVER presented as exact.
       setSampling(r?.sampling ?? (sig === "flows" ? { rate: FLOWS_OS_SAMPLE_RATE } : null));
+      setRoutine(r?.routine_mgmt ?? null);
       setSelected(new Set()); // a new result set invalidates row indices
     } catch (e) {
       if (seq !== runSeq.current) return;
@@ -236,6 +252,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       setHits([]);
       setTotal(null);
       setSampling(null);
+      setRoutine(null);
     } finally {
       if (seq === runSeq.current) setBusy(false);
     }
@@ -278,7 +295,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
     run(query, minutes, signal, size);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signal, size, sevGroup, typePick, familyPick]);
+  }, [signal, size, sevGroup, typePick, familyPick, showRoutine]);
 
   // A store that has no such field cannot keep a pick made on another store.
   useEffect(() => {
@@ -313,6 +330,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       lastRun.current = opts;
       startTransition(() => setHits(r?.hits?.hits ?? []));
       setTotal(r?.hits?.total?.value ?? total);
+      if (r?.routine_mgmt) setRoutine(r.routine_mgmt);
       setPage(pg);
       setSelected(new Set());
     } catch (e) {
@@ -354,7 +372,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const app = String(src.app_id || src.app || (fgt.app ?? "") || "");
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, resolved: h._resolved ?? null, ev };
+      return { id, ts: ev.time, message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src, resolved: h._resolved ?? null, matched: h.matched_queries, ev };
     });
   }, [hits]);
   // One BGP transition's reports fold into one row on the stream (tracker 387); the
@@ -419,6 +437,8 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         signal: backendSignal,
         from: start.toISOString(),
         to: end.toISOString(),
+        // "Export all" holds what the page lists: the same routine choice.
+        include_routine_mgmt: showRoutine,
       });
       if (!executionId) {
         setExportMsg(`Export downloaded.${flowsExportNote}`);
@@ -657,6 +677,18 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             ))}
           </select>
         </div>
+        {/* Routine management sessions (owner 2026-11-11). Flows have their own
+            toggle on the Flows tab, so the control is not offered there. */}
+        {signal !== "flows" && (
+          <div className="lv-routine" data-testid="logs-routine">
+            <label>
+              <input type="checkbox" checked={showRoutine} onChange={(e) => toggleRoutine(e.target.checked)} />
+              {ROUTINE_TOGGLE_LABEL}
+            </label>
+            {routine && <span className="lv-routine-note" data-testid="logs-routine-note">{routineNote(routine)}</span>}
+            <span className="lv-routine-hint">{ROUTINE_TOGGLE_HINT}</span>
+          </div>
+        )}
         {/* Retention floor (owner directive: DON'T HIDE how far back logs go). */}
         {retention && (
           <p className="lv-meta">
@@ -831,7 +863,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         {detailLine && (
           <EventDetailPanel
             key={detailLine.id}
-            hit={{ _index: detailLine.index, _id: detailLine.id, _source: detailLine.raw, _resolved: detailLine.resolved }}
+            hit={{ _index: detailLine.index, _id: detailLine.id, _source: detailLine.raw, _resolved: detailLine.resolved, matched_queries: detailLine.matched }}
             onClose={() => setDetailId(null)}
           />
         )}

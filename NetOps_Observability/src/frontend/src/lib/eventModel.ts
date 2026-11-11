@@ -26,6 +26,7 @@ import {
   FlowView, LogClause, LogEvent, LogField, LogHit, LogSignal, clauseText, known, pick, scalar, toLogEvent,
 } from "./logEvent";
 import { SeverityKey, severityKey, severityLabel } from "../theme/severity";
+import { routineReason } from "./routineMgmt";
 
 // ── the model ────────────────────────────────────────────────────────────────
 
@@ -230,6 +231,8 @@ export interface EventView {
   link: EventLink | null;
   /** The record id the search returned, for de-duplication and deep links. */
   id: string;
+  /** Why the server classed this record as a routine management session; null when it is not one. */
+  routineReason: string | null;
   /** The underlying presenter output (owner, flow sampling, chips, …). */
   ev: LogEvent;
 }
@@ -937,6 +940,7 @@ export function toEventView(hit: LogHit): EventView {
     incidentDraft,
     link,
     id,
+    routineReason: routineReason(hit.matched_queries),
     ev,
   };
 }

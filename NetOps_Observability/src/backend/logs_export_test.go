@@ -107,6 +107,48 @@ func TestBuildExportSearchBody_TenantScoping(t *testing.T) {
 	}
 }
 
+// The routine-session class frozen onto a spec is ANDed out beside the
+// operator restriction, survives the queued job's JSON round trip, and is moot
+// when the export reads nothing at all.
+func TestBuildExportSearchBody_RoutineMgmtExclusion(t *testing.T) {
+	t0, t1 := exportTimeRange("", "")
+	class := map[string]any{"bool": map[string]any{"_name": "routine_mgmt.poll", "filter": []any{map[string]any{"term": map[string]any{"event_category": "management_audit"}}}}}
+	spec := logexport.Spec{Tenant: "acme", DeviceKeys: []string{"r1"}, ExcludeTenants: []string{"restricted"}, RoutineMgmtExclusion: class}
+
+	// The async worker reads the spec back from the job payload.
+	payload, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued logexport.Spec
+	if err := json.Unmarshal(payload, &queued); err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]logexport.Spec{"request": spec, "queued": queued} {
+		body := logexport.BuildSearchBody(s, t0, t1, 100, nil)
+		b := body["query"].(map[string]any)["bool"].(map[string]any)
+		mustNot := mustJSON(t, b["must_not"])
+		if !strings.Contains(mustNot, "routine_mgmt.poll") || !strings.Contains(mustNot, `"restricted"`) {
+			t.Errorf("%s: must_not lost a member: %s", name, mustNot)
+		}
+		if strings.Contains(mustJSON(t, b["filter"]), "routine_mgmt") || !strings.Contains(mustJSON(t, b["filter"]), `"tenant_id":"acme"`) {
+			t.Errorf("%s: the class reached the scope filter, or the scope changed: %s", name, mustJSON(t, b["filter"]))
+		}
+	}
+
+	// Nil: nothing is left out (and no empty must_not is sent at the top level;
+	// the tenant filter's own untagged clause carries one of its own).
+	plain := logexport.BuildSearchBody(logexport.Spec{Tenant: "acme"}, t0, t1, 100, nil)
+	if mn, has := plain["query"].(map[string]any)["bool"].(map[string]any)["must_not"]; has {
+		t.Errorf("no exclusion, yet a must_not: %s", mustJSON(t, mn))
+	}
+	// DenyAll reads nothing; the class does not matter.
+	js := mustJSON(t, logexport.BuildSearchBody(logexport.Spec{Tenant: "acme", DenyAll: true, RoutineMgmtExclusion: class}, t0, t1, 100, nil))
+	if !strings.Contains(js, "match_none") {
+		t.Errorf("deny-all export must read nothing: %s", js)
+	}
+}
+
 func TestEncodeExport(t *testing.T) {
 	ctx := context.Background()
 	cols := logexport.Columns

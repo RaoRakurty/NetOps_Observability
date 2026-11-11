@@ -163,6 +163,12 @@ export function EventHeader({ view, actions, close, titleId }: { view: EventView
           <h2 className="evd-title" id={titleId} data-testid="event-title">{view.title}</h2>
         </div>
         {view.subtitle && <p className="evd-subtitle">{view.subtitle}</p>}
+        {view.routineReason && (
+          <p className="evd-routine" data-testid="event-routine-reason">
+            <EvIcon name="info" size={16} className="evd-routine-ico" />
+            {view.routineReason}
+          </p>
+        )}
         <div className="evd-head-row">
           <ul className="evd-chips" aria-label="Event classification">
             {view.chips.map((c) => (
