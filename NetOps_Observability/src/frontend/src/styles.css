@@ -1004,6 +1004,12 @@ code, kbd, pre, .mono, td.mono {
 }
 .lv-meta { color: var(--fg-muted); font-size: var(--fs-meta); margin: var(--sp-2) 0 0; }
 .lv-meta strong { color: var(--fg); font-weight: 600; }
+/* Routine management sessions toggle (routineMgmt.ts): one row, wraps on a phone. */
+.lv-routine { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--sp-3); margin: var(--sp-2) 0 0; font-size: var(--fs-sm); }
+.lv-routine label { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); cursor: pointer; }
+.lv-routine input { width: 16px; height: 16px; margin: 0; }
+.lv-routine-note { color: var(--fg); font-weight: 600; }
+.lv-routine-hint { flex-basis: 100%; color: var(--fg-muted); }
 .lv-error { color: var(--bad); font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
 .lv-flow-sample { color: color-mix(in srgb, var(--sev-warning) 58%, var(--fg)); font-size: var(--fs-meta); margin: 6px 0 0; }
 .lv-more { display: flex; justify-content: center; margin-top: var(--sp-2); }

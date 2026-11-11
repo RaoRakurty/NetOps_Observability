@@ -507,6 +507,8 @@ export interface LogHit {
   _source?: Record<string, any> | null;
   /** Names the API resolved beside the stored document (tracker 387 PR 13b). Never stored. */
   _resolved?: Record<string, any> | null;
+  /** Named clauses the record matched; routine_mgmt.* say why it is routine (routineMgmt.ts). */
+  matched_queries?: string[];
 }
 
 export function toLogEvent(hit: LogHit): LogEvent {

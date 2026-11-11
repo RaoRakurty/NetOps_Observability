@@ -47,6 +47,10 @@ type SeverityCountsResp struct {
 	Unrated  int64           `json:"unrated"`
 	Other    int64           `json:"other"`
 	Sampling map[string]any  `json:"sampling,omitempty"`
+	// RoutineMgmtIncluded says whether routine management sessions are in the
+	// counts (the api's internal/logroutine class); nil for a store that holds
+	// none (flows).
+	RoutineMgmtIncluded *bool `json:"routine_mgmt_included,omitempty"`
 }
 
 type termsAgg struct {

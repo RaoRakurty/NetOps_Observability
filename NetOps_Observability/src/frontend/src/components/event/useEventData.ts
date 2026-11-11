@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../services/api";
+import { loadShowRoutine } from "../../lib/routineMgmt";
 import { EventView, TimelineEntry, clauseQuery, parseIso, toEventView } from "../../lib/eventModel";
 
 const WINDOW_MS = 24 * 3600_000;
@@ -48,6 +49,9 @@ export function useRelatedRecords(view: EventView): RelatedState {
       from: new Date(t - WINDOW_MS).toISOString(),
       to: new Date(Math.min(t + WINDOW_MS, Math.max(now, t))).toISOString(),
       size: RELATED_LIMIT,
+      // Related records follow the viewer's Logs choice for routine management
+      // sessions, so the same records are shown or folded away in both places.
+      include_routine_mgmt: loadShowRoutine(),
     })
       .then((r) => {
         if (!alive) return;

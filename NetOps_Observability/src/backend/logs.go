@@ -20,6 +20,7 @@ import (
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/iana"
 
+	"netops/backend/internal/logroutine"
 	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
 	// DEBUG-ROUTES-BEGIN
@@ -70,6 +71,31 @@ type logSearchReq struct {
 	// Offset pages through the result set ("Load more"): OpenSearch `from`.
 	// Bounded server-side to the engine's result window (see logsMaxWindow).
 	Offset int `json:"offset,omitempty"`
+	// IncludeRoutineMgmt shows routine management sessions (monitoring polls
+	// and SD-WAN controller sessions, internal/logroutine). Absent or false:
+	// they are left out and the answer says how many (owner 2026-11-11).
+	IncludeRoutineMgmt bool `json:"include_routine_mgmt,omitempty"`
+}
+
+// routineSources are the addresses whose sessions are routine for this
+// principal: Correlix's own (configuration) and the principal's own SD-WAN
+// controller nodes (its integrations' inventory, tenant-scoped). A controller
+// read that fails is logged and leaves those sessions visible: the page then
+// hides fewer records, never more.
+func (s *server) routineSources(r *http.Request, claims jwtClaims) logroutine.Sources {
+	tenant, cross := principalTenant(claims)
+	ctl, err := s.routineCtl.Addrs(r.Context(), tenant, cross)
+	if err != nil {
+		logWarn("logs", "controller addresses could not be read; the controller's own sessions stay visible on the Logs page", map[string]any{"err": err.Error()})
+	}
+	return logroutine.Sources{Platform: platformAddrsFromEnv().IPs(), Controllers: ctl}
+}
+
+// routineApplies reports whether a store can hold routine management records.
+// The flows store cannot (it has its own toggle for Correlix's polling
+// traffic, flownames/platform.go), so no clause or count is sent to it.
+func routineApplies(signal string) bool {
+	return !isFlowsSignal(signal)
 }
 
 // logsMaxWindow is OpenSearch's default max_result_window: from+size may not
@@ -240,6 +266,12 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(q.Get("offset")); err == nil {
 			req.Offset = n
 		}
+		inc, err := logroutine.ParseParam(q.Get(logroutine.Param))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		req.IncludeRoutineMgmt = inc
 	}
 	if req.Size <= 0 || req.Size > 5000 {
 		req.Size = 200
@@ -324,6 +356,24 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if req.Offset > 0 {
 		body["from"] = req.Offset
 	}
+	// Routine management sessions (owner 2026-11-11, internal/logroutine). The
+	// class is counted by an aggregation, which runs over the whole query, and
+	// left out of the rows by a post_filter, which hits.total honours: the
+	// answer says how many matched and how many of those were left out, in one
+	// round trip. The tenant scope above is untouched: the post_filter can only
+	// remove documents the scoped query already matched. Shown, the class is an
+	// optional named clause, so each routine row names its rule in
+	// matched_queries and the event panel can say why.
+	routine := routineApplies(req.Signal) && !denyAll
+	if routine {
+		src := s.routineSources(r, claims)
+		body["aggs"] = map[string]any{logroutine.AggName: logroutine.Agg(src)}
+		if req.IncludeRoutineMgmt {
+			boolQuery["should"] = []any{logroutine.Clause(src)}
+		} else {
+			body["post_filter"] = logroutine.Exclusion(src)
+		}
+	}
 
 	resp, err := openSearch("POST", "/"+index+"/_search", body)
 	if err != nil {
@@ -363,6 +413,13 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be checked"))
 		return
 	}
+	if routine {
+		if raw, err = logroutine.Inject(raw, req.IncludeRoutineMgmt); err != nil {
+			logError("logs", "search response could not carry the routine-session count", map[string]any{"err": err.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be read"))
+			return
+		}
+	}
 	// Recorded here, once, because this is the point the delivered rows are known.
 	s.auditLogSearch(r, claims, req, resp.StatusCode, countLogHits(raw))
 	// Sample honesty: signal=flows serves the router's 1:50 OpenSearch sample
@@ -383,7 +440,9 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := w.Write(raw); err != nil {
+	// The only request-derived bytes are the routine summary's boolean, which
+	// logroutine.Inject marshals itself; the rest is the store's JSON answer.
+	if _, err := w.Write(raw); err != nil { // #nosec G705 -- a JSON document with a JSON content type, not HTML
 		log.Printf("logs: write response: %v", err)
 	}
 }
@@ -619,6 +678,11 @@ func (s *server) handleLogsSeverityCounts(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, errors.New("to is before from"))
 		return
 	}
+	includeRoutine, err := logroutine.ParseParam(q.Get(logroutine.Param))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	index, scopeFilters, mustNot, denyAll, forbidden := s.logsScope(r, signal)
 	if forbidden {
@@ -628,6 +692,14 @@ func (s *server) handleLogsSeverityCounts(w http.ResponseWriter, r *http.Request
 	out := oslog.SeverityCountsResp{Signal: signal, Counts: []oslog.SeverityCount{}}
 	if isFlowsSignal(signal) {
 		out.Sampling = flowsSamplingMeta()
+	}
+	// The tiles count what the rows show: routine management sessions are left
+	// out unless the search shows them (the same default and the same class).
+	if routineApplies(signal) {
+		out.RoutineMgmtIncluded = &includeRoutine
+		if !includeRoutine && !denyAll {
+			mustNot = append(append([]any(nil), mustNot...), logroutine.Clause(s.routineSources(r, claims)))
+		}
 	}
 	if denyAll {
 		s.auditSeverityCounts(r, claims, signal, query, start, end, http.StatusOK, 0)

@@ -31,6 +31,9 @@ export default function EventDetailPage({ route }: { route: EventRoute }) {
       query: `_id:${luceneQuote(route.id)}`,
       signal: EVENT_SIGNALS[route.signal],
       size: 1,
+      // A link names one record: find it even when it is a routine management
+      // session the Logs page hides by default (the answer also says why).
+      include_routine_mgmt: true,
       ...(at !== undefined
         ? { from: new Date(at - WINDOW_MS).toISOString(), to: new Date(at + WINDOW_MS).toISOString() }
         : { from: new Date(Date.now() - 24 * WINDOW_MS).toISOString(), to: new Date().toISOString() }),

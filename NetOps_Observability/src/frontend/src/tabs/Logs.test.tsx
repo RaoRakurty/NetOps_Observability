@@ -572,3 +572,114 @@ describe("severity tiles, filters and pages (tracker 387)", () => {
     expect(exportLogQuery.mock.calls[0][0].query).toBe(lastQuery().query);
   });
 });
+
+// Routine management sessions (owner decision 2026-11-11): hidden by default, a
+// visible toggle with the server's hidden count, the choice remembered per viewer,
+// and the same choice on the tiles and "Export all".
+describe("routine management sessions", () => {
+  const routineHit = {
+    _index: "netops-syslog-acme-2026.11.11",
+    _id: "r1",
+    matched_queries: ["routine_mgmt.poll"],
+    _source: {
+      timestamp: "2026-11-11T09:00:00Z", hostname: "vEdge-51", appname: "confd", severity: "info",
+      event_category: "management_audit", event_type: "audit_session_created_snmp",
+      title: "SNMP session on vEdge-51 by svc from 127.0.0.1 (poll)",
+      message: "audit user: svc/1 created new session via snmp from 127.0.0.1:54511 with udp",
+    },
+  };
+  const toggle = () => screen.getByRole("checkbox", { name: "Show routine management sessions" }) as HTMLInputElement;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it("are hidden by default, and the page says how many", async () => {
+    searchLogs.mockResolvedValue({ hits: { total: { value: 1 }, hits: [syslogHit] }, routine_mgmt: { included: false, count: 10203 } });
+    logsRetention.mockResolvedValue({ signal: "", total: 1, oldest: null, days: 0 });
+    render(<Logs />);
+    await grid();
+    expect(toggle().checked).toBe(false);
+    expect(lastQuery().include_routine_mgmt).toBe(false);
+    expect(logSeverityCounts.mock.calls[0][0].include_routine_mgmt).toBe(false);
+    expect((await screen.findByTestId("logs-routine-note")).textContent).toBe("10,203 routine management sessions hidden.");
+    expect(screen.getByTestId("logs-routine").textContent).toContain("Security records, failed logins and people's logins are always shown.");
+  });
+
+  it("the toggle re-runs the search, the tiles and the export with them, and is remembered", async () => {
+    exportLogQuery.mockResolvedValue({ executionId: "", matched: 2 });
+    searchLogs.mockResolvedValue({ hits: { total: { value: 1 }, hits: [syslogHit] }, routine_mgmt: { included: false, count: 5 } });
+    logsRetention.mockResolvedValue({ signal: "", total: 1, oldest: null, days: 0 });
+    render(<Logs />);
+    await grid();
+    searchLogs.mockResolvedValue({ hits: { total: { value: 2 }, hits: [syslogHit, routineHit] }, routine_mgmt: { included: true, count: 5 } });
+    fireEvent.click(toggle());
+    await waitFor(() => expect(lastQuery().include_routine_mgmt).toBe(true));
+    const counts = logSeverityCounts.mock.calls[logSeverityCounts.mock.calls.length - 1][0];
+    expect(counts.include_routine_mgmt).toBe(true);
+    expect(window.localStorage.getItem("correlix.logs.showRoutineMgmt")).toBe("1");
+    await waitFor(() => expect(screen.getByTestId("logs-routine-note").textContent).toBe("Includes 5 routine management sessions."));
+    fireEvent.click(screen.getByTitle("Export the entire result set as CSV"));
+    await waitFor(() => expect(exportLogQuery).toHaveBeenCalled());
+    expect(exportLogQuery.mock.calls[0][0].include_routine_mgmt).toBe(true);
+
+    // A later visit starts from the remembered choice.
+    cleanup();
+    searchLogs.mockClear();
+    render(<Logs />);
+    await grid();
+    expect(toggle().checked).toBe(true);
+    expect(searchLogs.mock.calls[0][0].include_routine_mgmt).toBe(true);
+  });
+
+  it("turning it off forgets the choice and hides them again", async () => {
+    window.localStorage.setItem("correlix.logs.showRoutineMgmt", "1");
+    respond([syslogHit]);
+    render(<Logs />);
+    await grid();
+    expect(toggle().checked).toBe(true);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(lastQuery().include_routine_mgmt).toBe(false));
+    expect(window.localStorage.getItem("correlix.logs.showRoutineMgmt")).toBeNull();
+  });
+
+  it("works when the browser refuses storage", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("SecurityError"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("SecurityError"); });
+    respond([syslogHit]);
+    render(<Logs />);
+    await grid();
+    expect(toggle().checked).toBe(false);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(lastQuery().include_routine_mgmt).toBe(true));
+    expect(toggle().checked).toBe(true);
+  });
+
+  it("a shown routine record says why in its event panel; others say nothing", async () => {
+    window.localStorage.setItem("correlix.logs.showRoutineMgmt", "1");
+    searchLogs.mockResolvedValue({ hits: { total: { value: 2 }, hits: [routineHit, syslogHit] }, routine_mgmt: { included: true, count: 1 } });
+    logsRetention.mockResolvedValue({ signal: "", total: 2, oldest: null, days: 0 });
+    render(<Logs />);
+    const g = within(await grid());
+    fireEvent.click(g.getAllByTitle("vEdge-51")[0]);
+    expect((await screen.findByTestId("event-routine-reason")).textContent).toBe(
+      "Routine: an SNMP monitoring poll. SNMP never carries a person's login.",
+    );
+    fireEvent.click(screen.getByTestId("event-close"));
+    fireEvent.click(g.getAllByTitle("router-01")[0]);
+    await screen.findByTestId("event-detail");
+    expect(screen.queryByTestId("event-routine-reason")).toBeNull();
+  });
+
+  it("is not offered on flows, which have their own toggle", async () => {
+    searchLogs.mockResolvedValue({ hits: { total: { value: 1 }, hits: [flowHit] }, sampling: { rate: 50 } });
+    logsRetention.mockResolvedValue({ signal: "flows", total: 1, oldest: null, days: 0 });
+    render(<Logs initialSignal="flows" />);
+    await grid();
+    expect(screen.queryByTestId("logs-routine")).toBeNull();
+  });
+});
