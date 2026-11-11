@@ -6,8 +6,11 @@ package nms
 import (
 	"encoding/json"
 	"net"
+	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/internal/bgpfsm"
 )
 
 // vmanage_events.go — the /dataservice/event and /dataservice/device streams.
@@ -90,6 +93,66 @@ func vmBGPState(s string) string {
 	return "down"
 }
 
+// vManage's bgp-peer-state-change bases for the `bgp_transition_basis` hint: where
+// the transition's prior state, or the fact that it had none, came from.
+const (
+	vmBGPBasisPeerHistory  = "peer_history"        // the same peer's previous report in this poll
+	vmBGPBasisRouterIDZero = "peer_routerid_unset" // no OPEN ever received from the peer
+	vmBGPBasisNewState     = "new_state"           // the new state alone
+)
+
+// vmBGPReport is one bgp-peer-state-change of one device|peer in a poll batch.
+type vmBGPReport struct {
+	at    int64 // entry_time, ms
+	state string
+}
+
+// vmBGPPrevState is the state the peer's latest report STRICTLY before `at` moved
+// to, or "" when there is none, or when two reports at that same instant disagree
+// (the order is not evidenced). reports is sorted by at.
+func vmBGPPrevState(reports []vmBGPReport, at int64) string {
+	i := sort.Search(len(reports), func(i int) bool { return reports[i].at >= at })
+	if i == 0 {
+		return ""
+	}
+	prev := reports[i-1]
+	for j := i - 2; j >= 0 && reports[j].at == prev.at; j-- {
+		if reports[j].state != prev.state {
+			return ""
+		}
+	}
+	return prev.state
+}
+
+// vmBGPTransition names one vManage bgp-peer-state-change with the classifier the
+// trap receiver uses (internal/bgpfsm; tracker 387). Owner rule: only an
+// ESTABLISHED session going down is a session failure. vManage reports only the
+// NEW state, so the prior one comes from, in order:
+//  1. the same peer's previous report in this poll (peer_history), which is
+//     direct evidence and wins even over the router id below;
+//  2. a new state below established with peer-routerid 0.0.0.0 (peer_routerid_unset):
+//     no OPEN has been received from the peer in this session, so the session
+//     was not established when the report was made — never_established;
+//  3. the new state alone (new_state): session_up, or unknown, which leaves the
+//     reading as it was (a down).
+//
+// class "" when the new state is not an FSM state.
+func vmBGPTransition(prev, newState, peerRouterID string) (class, basis string) {
+	if prev != "" {
+		if c := bgpfsm.Classify(prev, newState); c != "" {
+			return c, vmBGPBasisPeerHistory
+		}
+	}
+	rank, ok := bgpfsm.Rank(newState)
+	if !ok {
+		return "", ""
+	}
+	if rank < 6 && strings.TrimSpace(peerRouterID) == "0.0.0.0" {
+		return bgpfsm.NeverEstablished, vmBGPBasisRouterIDZero
+	}
+	return bgpfsm.Classify("", newState), vmBGPBasisNewState
+}
+
 func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, error) {
 	var resp struct {
 		Data []struct {
@@ -105,6 +168,22 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return Batch{}, err
+	}
+	// Each BGP peer's reports in this poll, oldest first, so a report's prior
+	// state can be read from the one before it (vmBGPTransition).
+	bgpHistory := map[string][]vmBGPReport{}
+	for _, r := range resp.Data {
+		if r.ID == "" || net.ParseIP(r.SystemIP) == nil {
+			continue
+		}
+		det := vmDetails(r.Details)
+		if k, _, ok := vmanageEventKind(r.EventName, det); ok && k.StateKind == "bgp" && det["peer"] != "" && det[k.StateKey] != "" {
+			key := r.SystemIP + "|" + det["peer"]
+			bgpHistory[key] = append(bgpHistory[key], vmBGPReport{at: int64(r.EntryTime), state: strings.ToLower(strings.TrimSpace(det[k.StateKey]))})
+		}
+	}
+	for _, reports := range bgpHistory {
+		sort.SliceStable(reports, func(i, j int) bool { return reports[i].at < reports[j].at })
 	}
 	var b Batch
 	for _, r := range resp.Data {
@@ -134,6 +213,18 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte) (Batch, er
 			PeerID:        firstNonEmpty(det["peer"], det["neighbor"]),
 			Message:       r.EventName + " " + strings.TrimSpace(r.Details), EvidenceRole: roleForEventType(normType),
 			CorrelationHints: map[string]string{"component": r.Component, "system_ip": r.SystemIP},
+		}
+		// Tracker 387 on the controller lane: what the BGP transition MEANS. The
+		// engine builds no session failure from never_established / progressing
+		// (controller_events.bgp_not_a_session_failure) and counts it; the event
+		// itself is kept, as it is.
+		if stateKind == "bgp" && det["peer"] != "" && det["bgp-new-state"] != "" {
+			newState := strings.ToLower(strings.TrimSpace(det["bgp-new-state"]))
+			prev := vmBGPPrevState(bgpHistory[r.SystemIP+"|"+det["peer"]], int64(r.EntryTime))
+			if class, basis := vmBGPTransition(prev, newState, det["peer-routerid"]); class != "" {
+				e.CorrelationHints["bgp_transition_class"] = class
+				e.CorrelationHints["bgp_transition_basis"] = basis
+			}
 		}
 		if recovery {
 			e.NormalizedEventType += "_clear"

@@ -148,6 +148,24 @@ reading as it was. The lab's idle <-> active neighbour used to open a `high` sin
 transition. Dedup of the six reports stays `trap_collapse.TransitionCollapser` (main.py).
 Both sides pin the classifier to `collectors/testdata/bgp_transition_classes.json`. No
 template, gate or constant moved: ENGINE_SEMVER does not move.
+**The controller lane obeys the same rule (P-424934, 2026-11-11).** The classifier is
+one Go package, `internal/bgpfsm` (the trap receiver's `classifyBGPTransition` delegates to
+it; its own test reads the same pinned fixture). vManage's `bgp-peer-state-change` carries
+only the new state, so `nms/vmanage_events.go` takes the prior state from the same
+device|peer's previous report in that poll (basis `peer_history`, direct evidence, wins);
+failing that, a new state below established with `peer-routerid=0.0.0.0` (no OPEN ever
+received) is `never_established` (basis `peer_routerid_unset`); otherwise the new state
+alone (`new_state`: session_up or unknown). It stamps `correlation_hints.
+bgp_transition_class` / `bgp_transition_basis`; the event, its kind and severity are
+unchanged. Stage [1] (`main.handle_controller_event`): the corr_signals row is written as
+before, then a `bgp_adjacency_change` whose class is never_established or progressing
+(`controller_events.bgp_not_a_session_failure`) is NOT buffered and is counted
+(`corr_controller_bgp_not_session_failure_total{class}`, /healthz
+`ingest.controller_bgp_not_session_failure`). No class, "unknown", session_lost or an
+out-of-vocabulary value reads as before. Before this, the lab neighbour's idle <-> active
+reports reached the window as seven `high` session downs on cEDGE-81 and served as the
+exposure story's "network fault". Other connectors (and vManage's `BGP_Router_Down`
+alarm) stamp no class yet, so they read as before.
 
 **A device's interface rows outlive its polls.** `interface_ips` and `ifindex` in
 `entity_resolver.json` are each device's LAST-KNOWN rows, so `device_for_ip` still
@@ -438,7 +456,15 @@ independent pair AND every required modality met by a trusted witness (V:367-387
   suspected.
 
 **Downgrade-only caps** (`_cap_verdict` never upgrades, E:3188-3204):
-- physical `allow_root_cause_confirmed=false` (SC:359);
+- `allow_root_cause_confirmed=false` (SC:395), reason from the template's
+  `confirm_cap_reason`. Carried by: the 23 physical-layer `sig.ent.spdc.*` families;
+  `sig.ent.access.admin-link-change-induced` (tracker 385); and, since P-424934
+  (2026-11-11, ENGINE_SEMVER 3.3.1), `sig.ent.security.exposure-story` and
+  `sig.ent.security.hardening-drift-story` — an exposure or a failed hardening control is
+  a standing property with no onset, so a fault measured beside it on an independent
+  plane proves both facts, never one cause. (P-424934 was persisted CONFIRMED on
+  "independent confirming pair across 3 modality classes".) `threat-signal-story` is NOT
+  capped: a detection is an event with an onset, so the gate decides it;
 - A7 fidelity — a doc_claimed signal can't be in the confirming pair; flag
   `CORR_FIDELITY_WEIGHTING`, default OFF (S:441, SC:385);
 - non-live `data_class` (E:3722);
@@ -450,7 +476,11 @@ outcomes, never from the number (SC:215-226).
 
 **confirmability.py is a static CI audit, not a runtime check.** It computes the best
 verdict each template can reach with today's producers (CF:314-375). The ratchet
-`confirmability_baseline.json` never drops (test_confirmability.py:120).
+`confirmability_baseline.json` never drops (test_confirmability.py:120). Its `status`
+measures producers only and ignores `allow_root_cause_confirmed`: a capped template whose
+producers reach two planes still counts as `confirmable_now` (admin-link-change-induced,
+exposure-story, hardening-drift-story). The row reports the cap beside the status
+(`confirm_capped`, P-424934), so a deliberate cap neither moves the ratchet nor hides.
 
 ## 6. Outputs — [8] persist (M:5792)
 
@@ -574,7 +604,7 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
-  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385); byte-identical when no tunnel rows exist. The verdict tier still
+  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934); byte-identical when no tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.
