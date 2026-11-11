@@ -68,3 +68,41 @@ func TestModelPathLiveProvider(t *testing.T) {
 	}
 	t.Logf("live %s/%s over %d of %d golden phrasings the grammar left Unparsed (%s)", m.provider, m.model, len(ps), total, time.Since(start).Round(time.Second))
 }
+
+// TestRewriteLiveProvider is the rephrase stage (hybrid NLU plan B1) against a
+// real FAST model — same variables, NLQ_EVAL_MODEL being the fast model. It
+// reports, per split, how many Unparsed phrasings the rephrase rescues and how
+// many of those are right, plus the wall time per call (the latency the
+// operator waits for on an Unparsed question).
+func TestRewriteLiveProvider(t *testing.T) {
+	m := liveModel{provider: ai.NormalizeProvider(os.Getenv("NLQ_EVAL_PROVIDER")), key: os.Getenv("NLQ_EVAL_API_KEY"), model: os.Getenv("NLQ_EVAL_MODEL")}
+	if m.provider == "" || m.key == "" || m.model == "" {
+		t.Skip("set NLQ_EVAL_PROVIDER, NLQ_EVAL_API_KEY and NLQ_EVAL_MODEL to run the live rephrase evaluation")
+	}
+	limit := 60
+	if v, err := strconv.Atoi(os.Getenv("NLQ_EVAL_MAX")); err == nil && v > 0 {
+		limit = v
+	}
+	cat := catalog.MustLoad()
+	w := loadWorld(t)
+	ps, _, _, _ := phrasingsByGrammar(t, cat, w)
+	ps = capPerSplit(ps, limit)
+	fast := liveFastModel{m}
+	for _, sp := range []evalsplit.Split{evalsplit.Dev, evalsplit.HeldOut} {
+		sub := phrasingsOfSplit(ps, sp)
+		start := time.Now()
+		tally := runRewritePathWith(t, cat, w, sub, func(phrasing) modelc.Model { return fast })
+		t.Logf("%s rephrase: %s (%s for %d phrasings)", sp, tally, time.Since(start).Round(time.Millisecond), len(sub))
+		for _, s := range tally.safety {
+			t.Errorf("SAFETY: %s", s)
+		}
+	}
+}
+
+// liveFastModel calls the provider the way the product's fast tier does: with
+// the least thinking the model offers.
+type liveFastModel struct{ liveModel }
+
+func (m liveFastModel) Complete(ctx context.Context, system string, msgs []modelc.Message) (string, error) {
+	return m.liveModel.Complete(ai.WithTierThinking(ctx, ai.TierFast), system, msgs)
+}

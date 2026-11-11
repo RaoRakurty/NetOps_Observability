@@ -33,6 +33,7 @@ import (
 	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
 	"netops/backend/internal/nlquery/explain"
+	"netops/backend/internal/nlquery/lex"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/present"
@@ -1394,6 +1395,11 @@ func (s *server) aiCompileQuery(r *http.Request, claims jwtClaims) func(context.
 // nlqModelDisclosure is the note every model-compiled answer carries.
 const nlqModelDisclosure = "Interpreted by the AI model, not the built-in question grammar — check the query shown with this answer before relying on it."
 
+// nlqRewriteDisclosure is the record disclosure when the AI model rephrased
+// the question and the built-in grammar read the rephrase (plan B1). The
+// answer itself carries the rephrase as a reading note.
+const nlqRewriteDisclosure = "Rephrased by the AI model, then read by the built-in question grammar — check the query shown with this answer before relying on it."
+
 // nlqModelFallbackTier is the model tier the fallback asks for: turning a
 // question into a checked query is structured reasoning, not a headline.
 const nlqModelFallbackTier = ai.TierStrong
@@ -1406,27 +1412,59 @@ const nlqModelFallbackTier = ai.TierStrong
 // skipped without a call — the grammar's answer stands at once, key-free.
 func (s *server) nlqModelFallback(r *http.Request, claims jwtClaims) modelc.Fallback {
 	f := modelc.Fallback{Cat: s.nlqCatalog, L: newNLQLookups(s, r, claims), Examples: s.nlqExamples}
-	if !aiEnabled() || strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") ||
-		s.aiTenantCfg == nil || s.copilotCfg == nil || len(s.usableProviderCandidates(claims, nlqModelFallbackTier)) == 0 {
-		return f
+	if s.nlqModelUsable(claims, nlqModelFallbackTier) {
+		f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}, tier: nlqModelFallbackTier, stage: ai.StageCompile}
 	}
-	f.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}}
 	return f
+}
+
+// nlqModelUsable: Iris on, the NL model path not switched off
+// (IRIS_NLQ_MODEL_FALLBACK=false), and a provider this caller may use at tier
+// whose circuit breaker would let a call through.
+func (s *server) nlqModelUsable(claims jwtClaims, tier ai.ModelTier) bool {
+	return aiEnabled() && !strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_MODEL_FALLBACK")), "false") &&
+		s.aiTenantCfg != nil && s.copilotCfg != nil && len(s.usableProviderCandidates(claims, tier)) > 0
+}
+
+// nlqRewriteTier is the tier of the rephrase stage (hybrid NLU plan B1): one
+// short line, so the fast model, with its least thinking (ai/thinking.go).
+const nlqRewriteTier = ai.TierFast
+
+// nlqRewriter binds the rephrase stage (plan B1, owner decision D3: on by
+// default whenever a model is connected; IRIS_NLQ_REWRITE=false switches it
+// off alone) to the caller: their own aliases, inventory and resolver, and
+// their own provider chain and daily budget. Model stays nil — no call — on
+// the same conditions as the fallback.
+func (s *server) nlqRewriter(r *http.Request, claims jwtClaims) modelc.Rewriter {
+	l := newNLQLookups(s, r, claims)
+	rw := modelc.Rewriter{Cat: s.nlqCatalog, L: l, R: s.nlqResolver(r, claims)}
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("IRIS_NLQ_REWRITE")), "false") && s.nlqModelUsable(claims, nlqRewriteTier) {
+		rw.Model = nlqModel{llm: aiLLM{srv: s, claims: claims}, tier: nlqRewriteTier, stage: ai.StageRewrite}
+	}
+	return rw
 }
 
 // nlqModel adapts aiLLM to modelc.Model: the server-owned system prompt goes
 // in its own channel, every turn is stripped of credential-shaped text before
 // it crosses the provider boundary (LLM06), and the call is charged to the
 // caller's tenant budget — an exhausted budget refuses before any provider is
-// called (LLM04).
-type nlqModel struct{ llm aiLLM }
+// called (LLM04). tier picks the model; stage labels the call's measurement.
+type nlqModel struct {
+	llm   aiLLM
+	tier  ai.ModelTier
+	stage string
+}
 
 func (m nlqModel) Complete(ctx context.Context, system string, msgs []modelc.Message) (string, error) {
 	lm := make([]ai.LLMMessage, 0, len(msgs))
 	for _, x := range msgs {
 		lm = append(lm, ai.LLMMessage{Role: x.Role, Content: ai.RedactSecrets(x.Content)})
 	}
-	text, _, _, err := m.llm.CompleteTierWithUsage(ctx, nlqModelFallbackTier, system, lm)
+	tier := m.tier
+	if tier == "" {
+		tier = nlqModelFallbackTier
+	}
+	text, _, _, err := m.llm.CompleteTierWithUsage(ai.WithStage(ctx, m.stage), tier, system, lm)
 	return text, err
 }
 
@@ -1588,18 +1626,37 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 	}
 	if res.Unparsed && allowModel {
 		fb := s.nlqModelFallback(r, claims)
-		if fb.Model != nil && beforeModel != nil && !beforeModel(r.Context()) {
+		rw := s.nlqRewriter(r, claims)
+		if (fb.Model != nil || rw.Model != nil) && beforeModel != nil && !beforeModel(r.Context()) {
 			// N-G4 tie-break: a troubleshooting method also claims this
 			// question and the model said "investigate" (or could not say):
 			// no model compile — the question goes to the method.
 			return nlqCompiled{res: res}, nil
 		}
 		scope := s.nlqScopeFor(r, claims)
+		tenant, _ := principalTenant(claims)
+		// Plan B1 first: the fast model rephrases, the grammar reads the
+		// rephrase in the caller's scope. Only when that yields nothing does
+		// the strong structured-output fallback (B3) run.
+		if rw.Model != nil {
+			ro, err := rw.Compile(r.Context(), question, cx, scope, res)
+			if err != nil {
+				return nlqCompiled{}, err
+			}
+			if ro.Calls > 0 {
+				// Counts and closed reasons only — never the question or the line.
+				logInfo("iris.nlquery", "model rewrite", map[string]any{"tenant": tenant, "sub": claims.Sub,
+					"accepted": ro.Accepted(), "refusal": ro.Refusal, "calls": ro.Calls})
+			}
+			if ro.Accepted() {
+				vr := ro.Validation
+				return nlqCompiled{res: ro.Result, checked: ro.Checked, vr: &vr, source: ro.Source}, nil
+			}
+		}
 		o, err := fb.Compile(r.Context(), question, cx, scope, res)
 		if err != nil {
 			return nlqCompiled{}, err
 		}
-		tenant, _ := principalTenant(claims)
 		if o.Calls > 0 {
 			// Counts and closed reasons only — never the question or the reply.
 			logInfo("iris.nlquery", "model fallback", map[string]any{"tenant": tenant, "sub": claims.Sub,
@@ -1629,8 +1686,8 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 // (so the disclosure outlives the answer — GET /api/ai/query/{id}/explain).
 func (c nlqCompiled) record(source, question string) irisquerylog.Record {
 	rec := irisquerylog.FromCompile(source, question, c.res, c.checked, c.vr)
-	if c.source == modelc.SourceModel {
-		rec.ByModel()
+	if modelc.IsModelSource(c.source) {
+		rec.ByModel() // the strong fallback's query, or the grammar's reading of the model's rephrase
 	}
 	return rec
 }
@@ -2448,6 +2505,15 @@ func withholdColleagueText(rec *irisquerylog.Record) {
 	for j := range rec.Corrections {
 		rec.Corrections[j].Note = ""
 	}
+	// A rephrase reading carries the whole question and the model's rewording
+	// of it (hybrid NLU plan B1): the colleague's words twice over.
+	kept := []irisquerylog.Reading{} // a new slice: the store's own copy is never touched
+	for _, rd := range rec.Readings {
+		if rd.Kind != lex.KindRephrase {
+			kept = append(kept, rd)
+		}
+	}
+	rec.Readings = kept
 }
 
 // ---- Iris NL: one query, and what it does (tracker 337 N-C5) ----------------
@@ -2524,10 +2590,15 @@ type nlqRecordView struct {
 
 // nlqDisclosureFor is the model disclosure for a model-written record, else "".
 func nlqDisclosureFor(rec irisquerylog.Record) string {
-	if rec.CompiledBy == irisquerylog.CompiledByModel {
-		return nlqModelDisclosure
+	if rec.CompiledBy != irisquerylog.CompiledByModel {
+		return ""
 	}
-	return ""
+	for _, rd := range rec.Readings {
+		if rd.Kind == lex.KindRephrase {
+			return nlqRewriteDisclosure
+		}
+	}
+	return nlqModelDisclosure
 }
 
 // nlqReadRecord reads one record for the caller, writing the error response
@@ -2567,7 +2638,7 @@ func (s *server) nlqExplainRecord(r *http.Request, claims jwtClaims, rec irisque
 		"catalog_current": rec.CatalogVersion == "" || rec.CatalogVersion == s.nlqCatalog.Version()}
 	if rec.CompiledBy == irisquerylog.CompiledByModel {
 		out["source"] = modelc.SourceModel // interpreted by the model, not the grammar
-		out["disclosure"] = nlqModelDisclosure
+		out["disclosure"] = nlqDisclosureFor(rec)
 	}
 	tenant, _ := principalTenant(claims)
 	logInfo("iris.nlquery", "explain", map[string]any{"tenant": tenant, "sub": claims.Sub, "id": rec.ID,
@@ -2754,7 +2825,7 @@ func nlqPlanEntry(ledger *aidecision.Recorder, question string, c nlqCompiled, r
 	if rec.CatalogVersion != "" {
 		e.ToolVersion = "catalog:" + rec.CatalogVersion
 	}
-	if c.source == modelc.SourceModel {
+	if modelc.IsModelSource(c.source) {
 		m, _ := ledger.Model()
 		e.ModelProvider, e.ModelName, e.ModelTier = m.Provider, m.Name, m.Tier
 	}
