@@ -150,6 +150,10 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("install.py", "chown_tree", "a3b625dd"): "chown_tree child walk; failures collected in `failed`, caller escalates",
     ("install.py", "chown_tree", "e11fa36c"): "chown_tree direct attempt; err captured, docker fallback runs, both-fail => fail()",
     ("vrl-harness.py", "available", "ef7cf66a"): "vector-binary availability probe; returns False => harness skips loudly",
+    # Reviewed 2026-11-11 (upgrade .env migration + multi-homed platform addresses).
+    ("install.py", "_ip_addr_json", "9986043d"): "`ip -j addr` probe; warns naming the error and returns None, and platform_addresses_default then WARNS that only the default route's source is written and how to set the full list — a degraded value said out loud, never a silent one",
+    ("install.py", "_prune_env_migrate_backups", "91f3511b"): "retention of old .env migration backups AFTER a successful migration; a backup that cannot be removed is named in a warning and kept — failing the upgrade over housekeeping would be worse than one extra 0600 file",
+    ("install.py", "migrate_env_for_upgrade", "fbb08047"): "removing this run's backup when the migration changed NOTHING; on failure the unneeded (but correct, 0600) copy is named in a warning and kept — .env itself is untouched either way",
     # -- optional-input reads with a sane, visible default --
     ("install.py", "_git_sha", "b26fa56b"): "git rev-parse for build provenance; falls back to 'unknown', which drift check FAILS on",
     # Reviewed 2026-09-02 (Project 2 G6, deployment-friction instrument). The
