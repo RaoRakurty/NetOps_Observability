@@ -18,7 +18,7 @@ That's it for 95% of upgrades. Read on for the rest.
 
 1. **Snapshots `data/` + `.env`** into `/var/backups/netops/pre-upgrade-<timestamp>.tar.zst`. This is your rollback point.
 2. **Validates the new scaffold** — fails fast if required files are missing.
-3. **Reconciles your `.env`** with the latest installer template. Existing values are never touched; only missing variables are appended (with random passwords generated for any new secret).
+3. **Reconciles your `.env`** with the latest installer template. Existing values are never touched; only missing variables are appended (with random passwords generated for any new secret). This is the installer's own migration, `python3 scripts/install.py --migrate-env` (since 2026-11-11; `scripts/deploy.sh` runs it too): it backs `.env` up to `deployment/docker/.env.pre-migrate-<UTC stamp>` (mode 0600, newest 10 kept) before writing, prints the names of the keys it added and never a value, refuses a truncated `.env` instead of minting new store credentials into it, and stops the upgrade with the containers untouched on any error. Running it again changes nothing.
 4. **Pulls pinned images** (`postgres:16-alpine`, `opensearch:2.16.0`, etc.) in case any were repinned.
 5. **Rebuilds the local images** — the `api`, `frontend`, and `correlation` services are built from your source tree.
 6. **Recreates containers** — `docker compose up -d --remove-orphans`. Services whose image or env didn't change keep running. Services that *did* change get rolled.

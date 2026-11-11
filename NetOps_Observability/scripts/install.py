@@ -260,16 +260,124 @@ def _route_source_address() -> str | None:
     return addr if addr and not addr.startswith("127.") else None
 
 
+# Interfaces Docker creates for the stack itself: the default bridge, every
+# user-defined compose network (br-<12 hex>), the swarm gateway bridge and the
+# per-container veth ends. Their addresses are never what a device sees.
+# Deliberately NOT a generic "bridge" rule: a libvirt/KVM bridge (virbr0, a lab
+# bridge) is often exactly the interface Correlix polls a network through.
+_DOCKER_IFACE = re.compile(r"(?:docker[0-9]*|docker_gwbridge|br-[0-9a-f]{12}|veth[0-9A-Za-z]+)")
+# operstate values that mean "carrying traffic": UP, and UNKNOWN, which is what
+# tun/wireguard/loopback-style drivers report while they are perfectly usable.
+_IFACE_USABLE_STATES = frozenset({"UP", "UNKNOWN"})
+# Address flags of an address the kernel will not pick as a source, or that is
+# not stable enough to write into .env (RFC 4941 privacy addresses rotate daily).
+_ADDR_UNUSABLE_FLAGS = ("tentative", "dadfailed", "deprecated", "temporary")
+# The api parses at most this many entries (flownames.MaxPlatformAddrs).
+PLATFORM_ADDRS_MAX = 64
+# Where iproute2 lives when PATH is cron's /usr/bin:/bin (RHEL keeps it in sbin).
+_IP_FALLBACK_PATHS = ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip")
+
+
+def _ip_addr_json(timeout: float = 5.0) -> list | None:
+    """`ip -j addr show`, parsed, or None (with a warning naming why) when it
+    cannot be read. Bounded by `timeout`; never raises."""
+    ip_bin = shutil.which("ip") or next((p for p in _IP_FALLBACK_PATHS if os.access(p, os.X_OK)), None)
+    if ip_bin is None:
+        warn("cannot list the host's interface addresses: `ip` (iproute2) is not installed")
+        return None
+    try:
+        res = subprocess.run([ip_bin, "-j", "addr", "show"], capture_output=True, text=True,
+                             timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        warn(f"cannot list the host's interface addresses: `ip -j addr show` failed: {e}")
+        return None
+    if res.returncode != 0:
+        tail = " ".join((res.stderr or "").strip().splitlines()[-2:])[:300]
+        warn(f"cannot list the host's interface addresses: `ip -j addr show` exited "
+             f"{res.returncode}: {tail}")
+        return None
+    try:
+        data = json.loads(res.stdout or "")
+    except ValueError as e:
+        warn(f"cannot list the host's interface addresses: `ip -j addr show` printed "
+             f"something that is not JSON ({e})")
+        return None
+    if not isinstance(data, list):
+        warn("cannot list the host's interface addresses: `ip -j addr show` did not "
+             "print a list")
+        return None
+    return data
+
+
+def host_interface_addresses(ifaces: list) -> list[str]:
+    """The host's own addresses a device can see, from `ip -j addr` output.
+
+    Kept: every global-scope IPv4/IPv6 address on an interface that is UP
+    (flag UP, operstate UP or UNKNOWN). Left out: loopback, link-local,
+    Docker's own bridges and veths, an interface that is down, and an address
+    the kernel will not source from or that rotates (tentative, dadfailed,
+    deprecated, temporary). Canonical text (as the api's net.IP.String() prints
+    it), de-duplicated, sorted IPv4 first then numerically: deterministic, so
+    re-running the installer on the same host writes the same value. Pure:
+    the input is untrusted data, a malformed entry is skipped, never raised on."""
+    found: dict[str, ipaddress.IPv4Address | ipaddress.IPv6Address] = {}
+    for iface in ifaces:
+        if not isinstance(iface, dict):
+            continue
+        name = str(iface.get("ifname") or "")
+        flags = iface.get("flags") if isinstance(iface.get("flags"), list) else []
+        if (not name or _DOCKER_IFACE.fullmatch(name) or "LOOPBACK" in flags
+                or "UP" not in flags
+                or str(iface.get("operstate") or "UNKNOWN") not in _IFACE_USABLE_STATES):
+            continue
+        infos = iface.get("addr_info") if isinstance(iface.get("addr_info"), list) else []
+        for info_ in infos:
+            if not isinstance(info_, dict) or info_.get("family") not in ("inet", "inet6"):
+                continue
+            if str(info_.get("scope") or "global") != "global":
+                continue
+            if any(info_.get(f) is True for f in _ADDR_UNUSABLE_FLAGS):
+                continue
+            try:
+                addr = ipaddress.ip_address(str(info_.get("local") or ""))
+            except ValueError:
+                continue
+            if (addr.is_loopback or addr.is_link_local or addr.is_multicast
+                    or addr.is_unspecified):
+                continue
+            found[str(addr)] = addr
+    return _sorted_addrs(found.values())
+
+
+def _sorted_addrs(addrs: Iterable[ipaddress.IPv4Address | ipaddress.IPv6Address]) -> list[str]:
+    """Canonical text, de-duplicated, IPv4 first, then numeric order."""
+    return [str(a) for a in sorted(set(addrs), key=lambda a: (a.version, int(a)))]
+
+
 def platform_addresses_default() -> str:
     """CX_PLATFORM_ADDRESSES for a .env that does not set it (tracker 387 PR 13).
 
-    The address this appliance's pollers and collectors send from, as devices
-    see it: the default route's source. Flows to or from it are Correlix's own
-    monitoring and the flows views leave them out by default. An operator's
-    explicit value always wins (from the environment on a fresh install, or the
-    value already in .env, which nothing here rewrites). No default route ->
-    empty, and the api then falls back to its own outbound address at run time.
-    The environment value is validated: it is written into .env verbatim."""
+    The addresses this appliance's pollers and collectors send from and receive
+    on, as devices see them. Flows to or from any of them are Correlix's own
+    monitoring and the flows views leave them out by default.
+
+    Rule (2026-11-11): every address host_interface_addresses() keeps — all UP,
+    non-loopback, non-link-local, non-Docker interface addresses — plus the
+    default route's source. A multi-homed appliance polls one network through
+    its default route and another through a second interface (the lab:
+    10.70.245.122 and 192.168.172.1), and the default-route address alone left
+    the second network's polling counted as customer traffic. Chosen over "the
+    source the kernel picks toward each discovery range" because that set is
+    only as complete as the ranges: devices also arrive from NMS integrations
+    (the primary source, NMS-first) and manual adds, and devices SEND to the
+    appliance (syslog, traps, flows) on whichever address they were given. A
+    dedicated appliance's own addresses are its traffic by definition.
+
+    An operator's explicit value always wins (from the environment on a fresh
+    install, or the value already in .env, which nothing here rewrites). No
+    readable interface list and no default route -> empty, and the api then
+    falls back to its own outbound address at run time. The environment value
+    is validated: it is written into .env verbatim."""
     explicit = (os.environ.get("CX_PLATFORM_ADDRESSES") or "").strip()
     if explicit:
         for part in explicit.split(","):
@@ -277,7 +385,27 @@ def platform_addresses_default() -> str:
             if part and not re.fullmatch(r"[0-9A-Fa-f.:/]{2,49}", part):
                 fail(f"CX_PLATFORM_ADDRESSES has an entry that is not an IP or CIDR: {part!r}")
         return explicit
-    return _route_source_address() or ""
+    ifaces = _ip_addr_json()
+    addrs = host_interface_addresses(ifaces) if ifaces is not None else []
+    route = _route_source_address()
+    if ifaces is None:
+        warn("CX_PLATFORM_ADDRESSES: using the default route's source address only"
+             + ("" if route else " (there is none, so it stays empty)")
+             + "; a second interface's polling would count as customer traffic. "
+             "Set CX_PLATFORM_ADDRESSES in deployment/docker/.env to list them all.")
+    if route and route not in addrs:
+        # The kernel's own answer, so it is a valid address; parsed anyway.
+        try:
+            addrs = _sorted_addrs([*map(ipaddress.ip_address, addrs),
+                                   ipaddress.ip_address(route)])
+        except ValueError:
+            warn(f"CX_PLATFORM_ADDRESSES: ignoring the default route's source {route!r}: "
+                 "not an IP address")
+    if len(addrs) > PLATFORM_ADDRS_MAX:
+        warn(f"CX_PLATFORM_ADDRESSES: the host has {len(addrs)} addresses; the api reads "
+             f"the first {PLATFORM_ADDRS_MAX}, so only those are written")
+        addrs = addrs[:PLATFORM_ADDRS_MAX]
+    return ",".join(addrs)
 
 
 def _first_host_address() -> str | None:
@@ -1281,6 +1409,94 @@ def _env_migration_lines(env: dict, profiles: str = DEFAULT_PROFILES,
     if "APP_DB_PASSWORD" not in env:
         additions.append(f"APP_DB_PASSWORD={generate_urlsafe_password(28)}")
     return additions
+
+
+# --migrate-env backups: .env.pre-migrate-<UTC stamp>, owner-only, next to .env
+# (gitignored by deployment/docker/.env*). Written only by a run that changes
+# .env, and bounded: the newest ENV_MIGRATE_BACKUP_KEEP are kept.
+ENV_MIGRATE_BACKUP_PREFIX = ".pre-migrate-"
+ENV_MIGRATE_BACKUP_KEEP = 10
+
+
+def _prune_env_migrate_backups(env_path: Path, keep: int = ENV_MIGRATE_BACKUP_KEEP) -> None:
+    """Keep the newest `keep` migration backups; name every one removed."""
+    prefix = env_path.name + ENV_MIGRATE_BACKUP_PREFIX
+    backups = sorted(p for p in env_path.parent.glob(prefix + "*")
+                     if p.is_file() and re.fullmatch(r"\d{8}T\d{6}Z(?:-\d+)?", p.name[len(prefix):]))
+    for old in backups[:-keep] if keep > 0 else backups:
+        try:
+            old.unlink()
+        except OSError as e:
+            warn(f"could not remove the old .env migration backup {old.name}: {e.strerror or e}")
+            continue
+        info(f"removed the old .env migration backup {old.name} (keeping the newest {keep})")
+
+
+def migrate_env_for_upgrade(env_path: Path) -> list[str]:
+    """`install.py --migrate-env`: bring an existing .env up to this release.
+
+    The upgrade paths (scripts/update.sh, scripts/deploy.sh) call this so an
+    upgraded install gains the keys a newer release introduced, exactly as a
+    re-run of the installer would — it IS that code: write_env's existing-.env
+    branch (migrate_env_credentials, then _env_migration_lines, then the
+    OS_DASHBOARDS_PASSWORD heal), between the same completeness gates
+    main() runs. There is no second key list.
+
+    Guarantees: a key already in .env keeps its value byte for byte (only
+    missing keys are appended; the credential move rewrites DATABASE_URL to its
+    file-backed form, as every install/update/deploy already does). Idempotent:
+    a second run changes nothing. The previous .env is copied, owner-only, to
+    .env.pre-migrate-<UTC stamp> BEFORE anything is written; the copy is removed
+    again when nothing changed. Prints key NAMES only, never a value. Any error
+    is fatal (fail(), exit 1) and the atomic writer leaves .env as it was.
+    Returns the names of the keys added, sorted."""
+    if not env_path.is_file():
+        fail(f"{env_path} not found — there is no installation to migrate; for a "
+             "first-time install run scripts/install.py")
+    try:
+        before = env_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        fail(f"cannot read {env_path}: {getattr(e, 'strerror', None) or e}. Nothing was changed.")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = env_path.with_name(f"{env_path.name}{ENV_MIGRATE_BACKUP_PREFIX}{stamp}")
+    n = 1
+    while backup.exists():
+        backup = env_path.with_name(f"{env_path.name}{ENV_MIGRATE_BACKUP_PREFIX}{stamp}-{n}")
+        n += 1
+    try:
+        _write_private(backup, before)
+    except OSError as e:
+        fail(f"cannot back up {env_path} to {backup.name} before migrating it: "
+             f"{e.strerror or e}. Nothing was changed — fix the permission or free "
+             "disk space, then re-run.")
+    # A truncated .env is healed from its snapshot or refused, never filled in
+    # with freshly minted store credentials (row 13 / E1) — the same gate a
+    # re-run of the installer applies before its migration.
+    validate_env_complete(env_path, before_migration=True)
+    write_env(env_path, 0, force=False)
+    validate_env_complete(env_path)
+    try:
+        after = env_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        fail(f"cannot read back {env_path} after migrating it: "
+             f"{getattr(e, 'strerror', None) or e}. The previous copy is {backup.name}.")
+    if after == before:
+        try:
+            backup.unlink()
+        except OSError as e:
+            warn(f"could not remove the unneeded backup {backup.name}: {e.strerror or e}")
+        ok(".env is current: no new keys for this release")
+        return []
+    old_env, new_env = _parse_env_text(before), _parse_env_text(after)
+    added = sorted(set(new_env) - set(old_env))
+    changed = sorted(k for k in old_env if k in new_env and old_env[k] != new_env[k])
+    ok(f"migrated .env (previous copy: {backup.name}, mode 0600)")
+    if added:
+        ok(f"added {len(added)} key(s): {', '.join(added)}")
+    if changed:
+        ok(f"rewrote {len(changed)} key(s) to their current form: {', '.join(changed)}")
+    _prune_env_migrate_backups(env_path)
+    return added
 
 
 def write_env(env_path: Path, port: int, *, force: bool,
@@ -5968,6 +6184,13 @@ def main() -> None:
                          "credential file under data/secrets with the reader table "
                          "(deployment/docker/tls-key-readers.json). Exit 1 on any "
                          "violation. Prints modes and names only.")
+    ap.add_argument("--migrate-env", action="store_true",
+                    help="Upgrade step: add the .env keys this release introduced "
+                         "to an existing deployment/docker/.env (the installer's own "
+                         "migration), then exit. Never changes a value already set; "
+                         "idempotent; backs .env up first (.env.pre-migrate-<stamp>, "
+                         "0600); prints key names only. scripts/update.sh and "
+                         "scripts/deploy.sh run it.")
     ap.add_argument("--custody-rollback", nargs="?", const="", default=None, metavar="DATA_DIR",
                     help="Before going back to a release from before 2026-11-09: widen "
                          "data/tls to what that release's containers expect (keys 0644, "
@@ -5982,6 +6205,11 @@ def main() -> None:
                                               else default_data))
     if args.dry_run and args.rotate_secret is None:
         ap.error("--dry-run is only meaningful with --rotate-secret")
+    if args.migrate_env and (args.reset_env or args.rotate_app_secrets
+                             or args.rotate_secret is not None or args.replan
+                             or args.rollback_plan or args.bootstrap_sso):
+        ap.error("--migrate-env runs on its own; it cannot be combined with --reset-env, "
+                 "--rotate-*, --replan, --rollback-plan or --bootstrap-sso")
     if args.rotate_secret is not None and (args.reset_env or args.rotate_app_secrets):
         ap.error("--rotate-secret cannot be combined with --reset-env or --rotate-app-secrets")
     if args.progress_json:
@@ -6067,6 +6295,13 @@ def main() -> None:
                                   os.environ, _parse_env(env_path))
         bootstrap_keycloak_db(compose_dir, _parse_env(env_path),
                               pg_budget_s=budgets.pg_ready_s)
+        return
+
+    # The upgrade paths' .env migration (update.sh, deploy.sh) — under the lock
+    # taken above, so it never interleaves with an install's .env surgery.
+    if args.migrate_env:
+        step("adding the .env keys this release introduced")
+        migrate_env_for_upgrade(env_path)
         return
 
     if args.replan:
