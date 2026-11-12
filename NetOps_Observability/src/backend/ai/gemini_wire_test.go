@@ -185,3 +185,76 @@ func TestOpenAIAndAnthropicEmptyRepliesAreErrors(t *testing.T) {
 		t.Fatal("enumOnly keeps identifiers only")
 	}
 }
+
+// Lab, 2026-11-12: Google answered 503 "high demand" for gemini-flash-latest,
+// the client retried, and the 10 s test budget ran out on the retry. That read
+// as "timeout" and the settings page told the operator to check the server's
+// internet access while another model answered the same key in 0.8 s. When
+// time runs out AFTER the provider's own retryable answer, the class is the
+// provider's (server_error, http 503); the deadline stays visible in the chain.
+func TestDeadlineAfterAnOverloadedAnswerReadsAsTheProvidersAnswer(t *testing.T) {
+	var calls int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}`)
+			return
+		}
+		_, _ = io.ReadAll(r.Body) // the server notices the client leaving only once the body is read
+		<-r.Context().Done()      // the retry hangs until the caller's deadline
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(SwapGeminiBaseForTest(srv.URL + "/v1beta/models/"))
+	prevSleep := providerSleep
+	providerSleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { providerSleep = prevSleep })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := CallProviderUsage(ctx, "gemini", geminiTestKey, "gemini-flash-latest", "s", []ChatMessage{{Role: "user", Content: "q"}})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	srv.CloseClientConnections()
+	if got := ClassifyProviderError(err); got != ProvServer {
+		t.Fatalf("class = %q, want server_error: %v", got, err)
+	}
+	if ProviderStatusOf(err) != http.StatusServiceUnavailable {
+		t.Fatalf("http status = %d, want 503", ProviderStatusOf(err))
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the deadline must stay in the chain: %v", err)
+	}
+	if strings.Contains(err.Error(), geminiTestKey) {
+		t.Fatalf("KEY LEAK: %v", err)
+	}
+}
+
+// A provider that never answered at all is still a timeout, and a caller that
+// left after a 503 is still a cancellation (nobody's failure).
+func TestPlainHangStaysTimeoutAndCancelStaysCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(SwapGeminiBaseForTest(srv.URL + "/v1beta/models/"))
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := CallProviderUsage(ctx, "gemini", geminiTestKey, "m", "s", []ChatMessage{{Role: "user", Content: "q"}})
+	if got := ClassifyProviderError(err); got != ProvTimeout {
+		t.Fatalf("a provider that never answered: class %q, want timeout (%v)", got, err)
+	}
+	if e := withPriorStatus(context.Canceled, &ProviderStatusError{Status: 503}); !errors.Is(e, context.Canceled) || ProviderStatusOf(e) != 0 {
+		t.Fatal("a cancellation after a 503 must stay a cancellation")
+	}
+	if e := withPriorStatus(errors.New("decode"), &ProviderStatusError{Status: 503}); ClassifyProviderError(e) != ProvError {
+		t.Fatal("only a deadline borrows the prior status")
+	}
+}

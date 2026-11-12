@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 // Package aiprovider guards model-provider calls: a circuit breaker per
-// (tenant, provider) and the call metrics (Iris latency batch, 2026-11-10).
+// (tenant, target) and the call metrics (Iris latency batch, 2026-11-10).
 //
 // Why a breaker: on 2026-11-10 the lab's provider failed every call, and every
 // question still paid the full wait for it (20 s on the model-compile path, 60 s
@@ -11,7 +11,14 @@
 // one probe call is let through (half-open); success closes it, failure
 // re-opens it.
 //
-// Keys are (tenant, provider) so one tenant's bad BYO key never pauses another
+// A target is one model of one provider (Target): since 2026-11-12 a model the
+// provider reports overloaded no longer pauses that provider's other models —
+// that day Google answered 503 "high demand" for gemini-flash-latest while
+// gemini-2.5-flash answered the same key in 0.5 s. A bare provider name is
+// still a valid target. The metrics stay labelled by provider (ProviderOf),
+// never by model name, which is operator free text.
+//
+// Keys are (tenant, target) so one tenant's bad BYO key never pauses another
 // tenant's AI (CLAUDE.md §3a: tenant isolation holds for availability state
 // too). The key set is BOUNDED (MaxKeys): past it, the least recently used
 // closed breaker is evicted — an open one is kept, since forgetting it would
@@ -22,6 +29,7 @@ package aiprovider
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -73,7 +81,24 @@ type entry struct {
 	lastTouch time.Time
 }
 
-type key struct{ tenant, provider string }
+type key struct{ tenant, target string }
+
+// Target names one model of one provider as a breaker target. The separator
+// is a byte no provider or model name contains.
+func Target(provider, model string) string {
+	if model == "" {
+		return provider
+	}
+	return provider + "\x00" + model
+}
+
+// ProviderOf is the provider part of a target (the metrics label).
+func ProviderOf(target string) string {
+	if i := strings.IndexByte(target, 0); i >= 0 {
+		return target[:i]
+	}
+	return target
+}
 
 // Breaker is the per-(tenant, provider) circuit breaker. Safe for concurrent
 // use; a nil *Breaker admits every call and records nothing.
@@ -101,16 +126,16 @@ func NewBreaker(cfg Config) *Breaker {
 	return &Breaker{cfg: cfg, m: map[key]*entry{}, transitions: map[string]map[State]int64{}}
 }
 
-// Allow reports whether a call to provider for tenant may proceed. An open
+// Allow reports whether a call to target for tenant may proceed. An open
 // breaker past its cool-down becomes half-open and admits exactly ONE probe;
 // concurrent callers are refused until the probe reports.
-func (b *Breaker) Allow(tenant, provider string) bool {
+func (b *Breaker) Allow(tenant, target string) bool {
 	if b == nil {
 		return true
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	e := b.m[key{tenant, provider}]
+	e := b.m[key{tenant, target}]
 	if e == nil {
 		return true
 	}
@@ -123,7 +148,7 @@ func (b *Breaker) Allow(tenant, provider string) bool {
 		if now.Sub(e.openedAt) < b.cfg.Cooldown {
 			return false
 		}
-		b.setState(provider, e, HalfOpen)
+		b.setState(target, e, HalfOpen)
 		e.probing = true
 		return true
 	default: // HalfOpen
@@ -138,13 +163,13 @@ func (b *Breaker) Allow(tenant, provider string) bool {
 // Peek reports whether Allow WOULD admit a call, without claiming the probe.
 // It is for "is there any usable provider" checks that decide whether to try
 // at all (the model-compile path skips itself entirely when nothing is usable).
-func (b *Breaker) Peek(tenant, provider string) bool {
+func (b *Breaker) Peek(tenant, target string) bool {
 	if b == nil {
 		return true
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	e := b.m[key{tenant, provider}]
+	e := b.m[key{tenant, target}]
 	if e == nil {
 		return true
 	}
@@ -161,13 +186,13 @@ func (b *Breaker) Peek(tenant, provider string) bool {
 // Record reports a call's result. failure=false is a success (closes the
 // breaker, clears the count). A call that should not count either way (the
 // caller left, budget spent) must simply not be recorded — use Release.
-func (b *Breaker) Record(tenant, provider string, failure bool) {
+func (b *Breaker) Record(tenant, target string, failure bool) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	k := key{tenant, provider}
+	k := key{tenant, target}
 	e := b.m[k]
 	now := b.cfg.Now()
 	if e == nil {
@@ -183,19 +208,19 @@ func (b *Breaker) Record(tenant, provider string, failure bool) {
 	if !failure {
 		e.failures = 0
 		if e.state != Closed {
-			b.setState(provider, e, Closed)
+			b.setState(target, e, Closed)
 		}
 		return
 	}
 	switch e.state {
 	case HalfOpen:
 		e.openedAt = now
-		b.setState(provider, e, Open)
+		b.setState(target, e, Open)
 	case Closed:
 		e.failures++
 		if e.failures >= b.cfg.Threshold {
 			e.openedAt = now
-			b.setState(provider, e, Open)
+			b.setState(target, e, Open)
 		}
 	case Open:
 		e.openedAt = now
@@ -204,25 +229,25 @@ func (b *Breaker) Record(tenant, provider string, failure bool) {
 
 // Release gives back a half-open probe slot claimed by Allow whose call ended
 // without a verdict (the caller left). The breaker stays half-open.
-func (b *Breaker) Release(tenant, provider string) {
+func (b *Breaker) Release(tenant, target string) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if e := b.m[key{tenant, provider}]; e != nil {
+	if e := b.m[key{tenant, target}]; e != nil {
 		e.probing = false
 	}
 }
 
 // State returns the current state of a pair (Closed when unknown).
-func (b *Breaker) State(tenant, provider string) State {
+func (b *Breaker) State(tenant, target string) State {
 	if b == nil {
 		return Closed
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if e := b.m[key{tenant, provider}]; e != nil {
+	if e := b.m[key{tenant, target}]; e != nil {
 		return e.state
 	}
 	return Closed
@@ -238,8 +263,9 @@ func (b *Breaker) Len() int {
 	return len(b.m)
 }
 
-func (b *Breaker) setState(provider string, e *entry, to State) {
+func (b *Breaker) setState(target string, e *entry, to State) {
 	e.state = to
+	provider := ProviderOf(target)
 	t := b.transitions[provider]
 	if t == nil {
 		t = map[State]int64{}
@@ -299,11 +325,12 @@ func (b *Breaker) Snapshot() Snapshot {
 	defer b.mu.Unlock()
 	seen := map[string]bool{}
 	for k, e := range b.m {
-		if out.States[k.provider] == nil {
-			out.States[k.provider] = map[State]int{}
+		provider := ProviderOf(k.target)
+		if out.States[provider] == nil {
+			out.States[provider] = map[State]int{}
 		}
-		out.States[k.provider][e.state]++
-		seen[k.provider] = true
+		out.States[provider][e.state]++
+		seen[provider] = true
 	}
 	for p, t := range b.transitions {
 		c := make(map[State]int64, len(t))

@@ -216,3 +216,29 @@ func TestMetricsLabelSpaceIsBounded(t *testing.T) {
 		t.Fatalf("series=%d dropped=%d", len(m.calls), m.dropped.Load())
 	}
 }
+
+// One overloaded model does not pause its provider's other models (lab
+// 2026-11-12: gemini-flash-latest 503 while gemini-2.5-flash answered), and
+// the metrics stay labelled by provider, never by model name.
+func TestBreakerTargetIsPerModel(t *testing.T) {
+	b, _ := newTestBreaker(2, time.Minute, 0)
+	bad, good := Target("gemini", "gemini-flash-latest"), Target("gemini", "gemini-2.5-flash")
+	b.Record("t", bad, true)
+	b.Record("t", bad, true)
+	if b.Allow("t", bad) {
+		t.Fatal("the failing model's breaker must be open")
+	}
+	if !b.Allow("t", good) || !b.Peek("t", good) || b.State("t", good) != Closed {
+		t.Fatal("another model of the same provider must still be called")
+	}
+	if !b.Allow("t", "gemini") {
+		t.Fatal("the bare provider target is a different key")
+	}
+	snap := b.Snapshot()
+	if len(snap.Providers) != 1 || snap.Providers[0] != "gemini" || snap.States["gemini"][Open] != 1 || snap.Transitions["gemini"][Open] != 1 {
+		t.Fatalf("metrics must be per provider: %+v", snap)
+	}
+	if ProviderOf(bad) != "gemini" || ProviderOf("openai") != "openai" || Target("openai", "") != "openai" {
+		t.Fatal("Target / ProviderOf round trip")
+	}
+}

@@ -152,3 +152,40 @@ func TestLabQuestionsRoute(t *testing.T) {
 		}
 	}
 }
+
+// Lab, 2026-11-12: "explain the network topology" matched the product-help
+// wording "explain the …", was answered from the product docs as "covered" and
+// never reached the model. A question whose subject is the operator's OWN
+// network is about their data: it is not a product question (with no other
+// deterministic intent it is a miss, which the routing policy sends to the
+// model and its tools). Questions about the product's screens and concepts
+// stay product questions.
+func TestOwnNetworkIsNotAProductQuestion(t *testing.T) {
+	for _, q := range []string{
+		"explain the network topology",
+		"Explain the network topology",
+		"tell me about my network",
+		"explain our WAN topology",
+		"tell me about the devices in this network",
+		"what is the overall network architecture",
+		"explain the current SD-WAN overlay",
+		"tell me about our sites",
+	} {
+		if got := Classify(q, nil).Intent; got == "product_question" {
+			t.Errorf("Classify(%q) = product_question; the subject is the operator's own network", q)
+		}
+	}
+	for _, q := range []string{
+		"what is a seam",
+		"explain how correlation works",
+		"explain the topology page",
+		"what does the topology view show",
+		"tell me about the devices page",
+		"what is correlix",
+		"how does the engine rank hypotheses",
+	} {
+		if got := Classify(q, nil).Intent; got != "product_question" {
+			t.Errorf("Classify(%q) = %q, want product_question", q, got)
+		}
+	}
+}

@@ -391,12 +391,13 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 		body = scrub(body)
 	}
 	var lastErr error
+	var prior *ProviderStatusError // the last retryable status the provider answered
 	for attempt := 1; attempt <= providerMaxAttempts; attempt++ {
 		rb, err := providerDoOnce(ctx, urlStr, headers, body, provider)
 		if err == nil {
 			return rb, nil
 		}
-		lastErr = err
+		lastErr = withPriorStatus(err, prior)
 		if attempt == providerMaxAttempts || ctx.Err() != nil {
 			break
 		}
@@ -408,15 +409,16 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 				return nil, err
 			}
 			hint = se.RetryAfter
+			prior = se
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return nil, err
+			return nil, lastErr
 		default:
 			// A provider that hung until the client timeout is not retried: a
 			// second 60 s wait is worse than the chain falling through to the
 			// next provider now. Connection-level failures (refused, reset) are.
 			var te interface{ Timeout() bool }
 			if errors.As(err, &te) && te.Timeout() {
-				return nil, err
+				return nil, lastErr
 			}
 		}
 		wait := providerBackoff(attempt, hint)
@@ -427,6 +429,25 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 		}
 	}
 	return nil, lastErr
+}
+
+// withPriorStatus keeps the provider's own answer when time ran out AFTER it:
+// a call that got 503 "high demand", retried, and then hit the deadline is an
+// overloaded model, not a slow network. Classified as a plain timeout it told
+// the operator to "check this server's internet access" (lab, 2026-11-12,
+// while another model answered the same key in 0.8 s). The deadline stays in
+// the chain (errors.Is still finds it); the status is found first, so the
+// class is the provider's. A cancellation (the caller left) is left alone:
+// that is nobody's failure.
+func withPriorStatus(err error, prior *ProviderStatusError) error {
+	if prior == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var te interface{ Timeout() bool }
+	if !errors.Is(err, context.DeadlineExceeded) && (!errors.As(err, &te) || !te.Timeout()) {
+		return err
+	}
+	return fmt.Errorf("%w; then ran out of time: %w", prior, err)
 }
 
 // providerDoOnce is exactly one HTTP exchange.

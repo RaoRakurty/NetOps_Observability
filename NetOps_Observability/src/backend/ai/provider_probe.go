@@ -94,6 +94,35 @@ func RecommendedModels() map[string]RecommendedSet {
 	}
 }
 
+// FallbackModel is the ONE other model of the same provider a call falls back
+// to when model fails: the provider's recommended default model, or — when
+// model already is that — its recommended fast model; "" when there is none
+// (unknown provider, or model is both). Same provider, same key: a fallback
+// never changes whose account pays or where the prompt goes, only which of
+// that provider's models answers, and it is never dearer than the
+// recommended default (owner rule: the recommended picks are the cheap,
+// short-answer models; the fallback must not escalate cost).
+//
+// Why (2026-11-12, lab): Google answered 503 "high demand" for the alias
+// gemini-flash-latest, and gemini-flash-lite-latest stopped answering inside
+// 10 s, while the dated gemini-2.5-flash answered the same key in 0.5–0.9 s.
+// With only a Gemini key there was no other provider to fall through to, so
+// Iris lost the model although a working one was one name away.
+func FallbackModel(provider, model string) string {
+	rec, ok := RecommendedModels()[NormalizeProvider(provider)]
+	if !ok {
+		return ""
+	}
+	model = strings.TrimSpace(model)
+	if rec.Default != "" && rec.Default != model {
+		return rec.Default
+	}
+	if rec.Fast != "" && rec.Fast != model {
+		return rec.Fast
+	}
+	return ""
+}
+
 // ModelSuggestions is the per-provider dropdown list (free text stays allowed):
 // the recommended models first, then other common choices.
 func ModelSuggestions() map[string][]string {

@@ -82,3 +82,38 @@ func TestProbeTiersTestsEachModelOnce(t *testing.T) {
 		t.Fatalf("one model, one call: %v", calls)
 	}
 }
+
+// The model fallback (2026-11-12): one other model of the SAME provider, never
+// dearer than the recommended default — the default, or the fast pick when the
+// failed model already is the default; nothing for an unknown provider.
+func TestFallbackModel(t *testing.T) {
+	rec := RecommendedModels()
+	for _, p := range []string{"gemini", "openai", "anthropic"} {
+		r := rec[p]
+		if got := FallbackModel(p, "some-alias-latest"); got != r.Default {
+			t.Errorf("%s: a non-default model falls back to the default %q, got %q", p, r.Default, got)
+		}
+		if got := FallbackModel(p, " "+r.Default+" "); r.Fast != r.Default && got != r.Fast {
+			t.Errorf("%s: the default falls back to the fast pick %q, got %q", p, r.Fast, got)
+		}
+		if FallbackModel(p, r.Default) == r.Default {
+			t.Errorf("%s: a model never falls back to itself", p)
+		}
+		if got := FallbackModel(p, r.Strong); r.Strong != r.Default && got != r.Default {
+			t.Errorf("%s: the strong pick falls back to the default (never dearer), got %q", p, got)
+		}
+	}
+	if got := FallbackModel("gemini", "gemini-flash-latest"); got != "gemini-2.5-flash" {
+		t.Fatalf("the lab case: gemini-flash-latest → %q, want gemini-2.5-flash", got)
+	}
+	if FallbackModel("google", "x") != rec["gemini"].Default {
+		t.Fatal("provider aliases normalise")
+	}
+	if FallbackModel("mistral", "x") != "" {
+		t.Fatal("an unknown provider has no fallback")
+	}
+	// openai's default and fast are the same model: the default has no fallback.
+	if r := rec["openai"]; r.Default == r.Fast && FallbackModel("openai", r.Default) != "" {
+		t.Fatal("no fallback when the default is also the fast pick")
+	}
+}

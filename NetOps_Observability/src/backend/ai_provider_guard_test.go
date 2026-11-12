@@ -51,6 +51,9 @@ type fakeGemini struct {
 	status int
 	body   string
 	hang   bool
+	// statusFor answers a model (named in the URL path) with its own status
+	// and an overloaded body instead of status/body.
+	statusFor map[string]int
 }
 
 func (g *fakeGemini) set(status int, body string) {
@@ -70,6 +73,11 @@ func startFakeGemini(t *testing.T, status int, body string) *fakeGemini {
 		g.keys = append(g.keys, r.Header.Get("x-goog-api-key"))
 		g.urls = append(g.urls, r.URL.String())
 		st, b, hang := g.status, g.body, g.hang
+		for m, code := range g.statusFor {
+			if strings.Contains(r.URL.Path, "/"+m+":") {
+				st, b = code, `{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}`
+			}
+		}
 		g.mu.Unlock()
 		if hang {
 			<-r.Context().Done()
@@ -159,20 +167,29 @@ func TestProviderFailureIsLoggedWithClassAndNoSecret(t *testing.T) {
 	if ai.ClassifyProviderError(err) != ai.ProvModelNotFound {
 		t.Fatalf("the wrapped error must keep its class: %v", err)
 	}
-	if g.hits() != 1 || g.keys[0] != platformKey || strings.Contains(g.urls[0], platformKey) {
+	// A model the key cannot use is followed by the provider's fallback model,
+	// same key (2026-11-12) — both are refused here, so two calls, two lines.
+	rec := ai.RecommendedModels()["gemini"]
+	if g.hits() != 2 || g.keys[0] != platformKey || g.keys[1] != platformKey || strings.Contains(g.urls[0], platformKey) ||
+		!strings.Contains(g.urls[0], rec.Fast+":") || !strings.Contains(g.urls[1], rec.Default+":") {
 		t.Fatalf("request: hits=%d keys=%v urls=%v", g.hits(), g.keys, g.urls)
 	}
 	got := logs.find("model provider call failed")
-	if len(got) != 1 {
-		t.Fatalf("want exactly one failure line, got %d: %v", len(got), logs.lines)
+	if len(got) != 2 {
+		t.Fatalf("want one failure line per model asked, got %d: %v", len(got), logs.lines)
 	}
-	f := got[0]
-	if f["provider"] != "gemini" || f["model"] != ai.RecommendedModels()["gemini"].Fast || f["tier"] != "fast" ||
-		f["error_class"] != ai.ProvModelNotFound || f["http_status"] != 404 || f["provider_reason"] != "NOT_FOUND" {
-		t.Fatalf("failure line fields: %v", f)
-	}
-	if _, ok := f["latency_ms"]; !ok {
-		t.Fatalf("latency missing: %v", f)
+	for i, want := range []struct {
+		model    string
+		fallback bool
+	}{{rec.Fast, false}, {rec.Default, true}} {
+		f := got[i]
+		if f["provider"] != "gemini" || f["model"] != want.model || f["fallback"] != want.fallback || f["tier"] != "fast" ||
+			f["error_class"] != ai.ProvModelNotFound || f["http_status"] != 404 || f["provider_reason"] != "NOT_FOUND" {
+			t.Fatalf("failure line %d fields: %v", i, f)
+		}
+		if _, ok := f["latency_ms"]; !ok {
+			t.Fatalf("latency missing: %v", f)
+		}
 	}
 	logs.mustNotContain(t, platformKey)
 }
@@ -216,12 +233,17 @@ func TestProviderBreakerOpensSkipsProbesAndCloses(t *testing.T) {
 	if err := call(); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
-	if s.aiBreaker.State(TenantGlobal, "gemini") != aiprovider.Closed || len(s.usableProviderCandidates(aiPlatformOwn, ai.TierStrong)) != 1 {
-		t.Fatal("a successful probe must close the breaker")
+	// A refused key is about the whole provider: the PROVIDER breaker opened
+	// (and the fallback model was never sent the bad key — 3 calls, not 6), and
+	// the probe closes it; every model of it is usable again.
+	if s.aiBreaker.State(TenantGlobal, "gemini") != aiprovider.Closed || len(s.usableProviderCandidates(aiPlatformOwn, ai.TierStrong)) != 2 {
+		t.Fatalf("a successful probe must close the breaker: state=%v usable=%+v", s.aiBreaker.State(TenantGlobal, "gemini"), s.usableProviderCandidates(aiPlatformOwn, ai.TierStrong))
 	}
 	var sb strings.Builder
 	_ = s.aiProvCalls.Write(&sb)
-	for _, want := range []string{`outcome="auth"} 3`, `outcome="breaker_open"} 1`, `netops_ai_provider_breaker_transitions_total{provider="gemini",to="open"} 1`} {
+	// breaker_open 2: the configured model and its fallback were both refused by
+	// the open provider breaker on the fourth call.
+	for _, want := range []string{`outcome="auth"} 3`, `outcome="breaker_open"} 2`, `netops_ai_provider_breaker_transitions_total{provider="gemini",to="open"} 1`} {
 		if !strings.Contains(sb.String(), want) {
 			t.Errorf("metrics missing %q:\n%s", want, sb.String())
 		}
@@ -276,8 +298,19 @@ func TestProviderTimeoutCountsButCallerCancelDoesNot(t *testing.T) {
 	if ai.ClassifyProviderError(err) != ai.ProvTimeout || time.Since(start) > 2*time.Second {
 		t.Fatalf("hanging provider: %v after %v", err, time.Since(start))
 	}
-	if s.aiBreaker.State(TenantGlobal, "gemini") != aiprovider.Open {
-		t.Fatal("a provider timeout counts against the provider")
+	// A timeout is about the model asked (2026-11-12: one alias hung while a
+	// dated model answered): that model's breaker opens, the provider's does
+	// not, and the fallback was not blamed for the budget the first one spent.
+	fast := aiprovider.Target("gemini", ai.RecommendedModels()["gemini"].Fast)
+	fallback := aiprovider.Target("gemini", ai.RecommendedModels()["gemini"].Default)
+	if s.aiBreaker.State(TenantGlobal, fast) != aiprovider.Open {
+		t.Fatal("a model timeout counts against that model")
+	}
+	if s.aiBreaker.State(TenantGlobal, "gemini") != aiprovider.Closed || s.aiBreaker.State(TenantGlobal, fallback) != aiprovider.Closed {
+		t.Fatal("the provider and the fallback model must not pay for one model's timeout")
+	}
+	if g.hits() != 2 {
+		t.Fatalf("once the budget is spent no fallback is called: hits=%d", g.hits())
 	}
 }
 
@@ -294,17 +327,17 @@ func TestProviderDefaultModelFollowsProvider(t *testing.T) {
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey})
 	rec := ai.RecommendedModels()["gemini"]
 	for tier, want := range map[ai.ModelTier]string{"": rec.Default, ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong} {
-		c := s.providerCandidatesForTier(aiPlatformOwn, tier)
+		c := primaries(t, s.providerCandidatesForTier(aiPlatformOwn, tier))
 		if len(c) != 1 || c[0].name != "gemini" || c[0].model != want {
 			t.Fatalf("tier %q candidates = %+v, want %s", tier, c, want)
 		}
 	}
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Model: "gemini-2.5-pro"})
-	if c := s.providerCandidatesForTier(aiPlatformOwn, ""); c[0].model != "gemini-2.5-pro" {
+	if c := primaries(t, s.providerCandidatesForTier(aiPlatformOwn, "")); c[0].model != "gemini-2.5-pro" {
 		t.Fatalf("an explicit operator model must win on the default path: %+v", c)
 	}
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Model: "gemini-2.5-pro", ModelFast: "gemini-2.5-pro"})
-	if c := s.providerCandidatesForTier(aiPlatformOwn, ai.TierFast); c[0].model != "gemini-2.5-pro" {
+	if c := primaries(t, s.providerCandidatesForTier(aiPlatformOwn, ai.TierFast)); c[0].model != "gemini-2.5-pro" {
 		t.Fatalf("an explicit tier model must win: %+v", c)
 	}
 	// An env model configured for ANOTHER provider never reaches gemini.
@@ -315,7 +348,7 @@ func TestProviderDefaultModelFollowsProvider(t *testing.T) {
 	if got := s2.copilotCfg.Get(); got.Model != "" {
 		t.Fatalf("COPILOT_MODEL for anthropic leaked into the gemini config: %q", got.Model)
 	}
-	if c := s2.providerCandidatesForTier(aiPlatformOwn, ai.TierFast); len(c) != 1 || c[0].model != ai.RecommendedModels()["gemini"].Fast {
+	if c := primaries(t, s2.providerCandidatesForTier(aiPlatformOwn, ai.TierFast)); len(c) != 1 || c[0].model != ai.RecommendedModels()["gemini"].Fast {
 		t.Fatalf("candidates = %+v", c)
 	}
 }

@@ -51,7 +51,7 @@ func TestProviderTierSingleModelUsesRecommendedTiers(t *testing.T) {
 	for tier, want := range map[ai.ModelTier]string{
 		"": "claude-sonnet-4-6", ai.TierDeterministic: "claude-sonnet-4-6", ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong,
 	} {
-		cands := s.providerCandidatesForTier(claims, tier)
+		cands := primaries(t, s.providerCandidatesForTier(claims, tier))
 		if len(cands) != 1 {
 			t.Fatalf("tier %q: want one candidate, got %+v", tier, cands)
 		}
@@ -61,7 +61,7 @@ func TestProviderTierSingleModelUsesRecommendedTiers(t *testing.T) {
 		}
 	}
 	// The tier-less helper the copilot proxy uses must agree with tier "".
-	if a, b := s.providerCandidates(claims), s.providerCandidatesForTier(claims, ""); len(a) != len(b) || a[0] != b[0] {
+	if a, b := primaries(t, s.providerCandidates(claims)), primaries(t, s.providerCandidatesForTier(claims, "")); len(a) != len(b) || a[0] != b[0] {
 		t.Errorf("providerCandidates must equal the untiered chain: %+v vs %+v", a, b)
 	}
 }
@@ -84,7 +84,7 @@ func TestProviderTierPlatformSplit(t *testing.T) {
 		"":                   "claude-sonnet-4-6",
 	}
 	for tier, model := range want {
-		cands := s.providerCandidatesForTier(claims, tier)
+		cands := primaries(t, s.providerCandidatesForTier(claims, tier))
 		if len(cands) != 1 {
 			t.Fatalf("tier %q: want one candidate, got %+v", tier, cands)
 		}
@@ -97,7 +97,7 @@ func TestProviderTierPlatformSplit(t *testing.T) {
 	}
 	// A half-configured split resolves the unset tier to its recommended model.
 	s.copilotCfg.Set(ai.CopilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6", ModelFast: "claude-haiku-4-5-20251001"})
-	if c := s.providerCandidatesForTier(claims, ai.TierStrong); len(c) != 1 || c[0].model != ai.RecommendedModels()["anthropic"].Strong {
+	if c := primaries(t, s.providerCandidatesForTier(claims, ai.TierStrong)); len(c) != 1 || c[0].model != ai.RecommendedModels()["anthropic"].Strong {
 		t.Errorf("an unset strong tier must use the recommended strong model, got %+v", c)
 	}
 }
@@ -127,7 +127,7 @@ func TestProviderTierTenantOverridesWin(t *testing.T) {
 		"":                   "gpt-4o",
 	}
 	for tier, model := range want {
-		cands := s.providerCandidatesForTier(a, tier)
+		cands := primaries(t, s.providerCandidatesForTier(a, tier))
 		if len(cands) != 1 || cands[0].source != "tenant" {
 			t.Fatalf("tier %q: a BYO tenant must resolve to exactly its own candidate, got %+v", tier, cands)
 		}
@@ -149,7 +149,7 @@ func TestProviderTierTenantOverridesWin(t *testing.T) {
 	}
 	rec := ai.RecommendedModels()["anthropic"]
 	for tier, want := range map[ai.ModelTier]string{"": "tenant-c-only", ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong} {
-		c := s.providerCandidatesForTier(jwtClaims{Role: "viewer", Tenant: "t-c"}, tier)
+		c := primaries(t, s.providerCandidatesForTier(jwtClaims{Role: "viewer", Tenant: "t-c"}, tier))
 		if len(c) != 1 || c[0].model != want || c[0].model == "platform-fast" || c[0].model == "platform-strong" {
 			t.Errorf("tier %q: a single-model tenant gets %s (never the platform's tier models), got %+v", tier, want, c)
 		}
@@ -158,7 +158,7 @@ func TestProviderTierTenantOverridesWin(t *testing.T) {
 	// No leak in either direction: another tenant and the platform owner keep the
 	// PLATFORM's tier models and never see tenant A's key.
 	for _, c := range []jwtClaims{{Role: "viewer", Tenant: "t-b"}, aiPlatformOwn} {
-		got := s.providerCandidatesForTier(c, ai.TierStrong)
+		got := primaries(t, s.providerCandidatesForTier(c, ai.TierStrong))
 		if len(got) != 1 || got[0].source != "platform" || got[0].model != "platform-strong" {
 			t.Errorf("%s must keep the platform strong model, got %+v", c.Tenant, got)
 		}
@@ -191,7 +191,7 @@ func TestProviderTierStrictTenantStillGetsNothing(t *testing.T) {
 	}
 	for _, tenant := range []string{"t-strict", "t-strict2"} {
 		for _, tier := range []ai.ModelTier{"", ai.TierDeterministic, ai.TierFast, ai.TierStrong} {
-			if c := s.providerCandidatesForTier(jwtClaims{Role: "viewer", Tenant: tenant}, tier); c != nil {
+			if c := primaries(t, s.providerCandidatesForTier(jwtClaims{Role: "viewer", Tenant: tenant}, tier)); c != nil {
 				t.Errorf("%s tier %q: a strict tenant must get no provider, got %+v", tenant, tier, c)
 			}
 		}
@@ -206,4 +206,30 @@ func TestAILLMImplementsTieredClient(t *testing.T) {
 	if _, ok := c.(ai.TieredLLMClient); !ok {
 		t.Fatal("aiLLM must implement ai.TieredLLMClient — otherwise the router's tiers never reach a provider")
 	}
+}
+
+// primaries checks the model-fallback invariant of a candidate chain and
+// returns the configured candidates without their fallbacks: every fallback
+// (withModelFallback) follows a configured candidate and has the SAME
+// provider, key and source — a fallback changes the model, never the account.
+func primaries(t *testing.T, cands []providerCandidate) []providerCandidate {
+	t.Helper()
+	if cands == nil {
+		return nil
+	}
+	var out []providerCandidate
+	for i, c := range cands {
+		if !c.fallback {
+			out = append(out, c)
+			continue
+		}
+		if i == 0 {
+			t.Fatalf("a fallback cannot lead the chain: %+v", cands)
+		}
+		p := cands[i-1]
+		if p.fallback || p.name != c.name || p.key != c.key || p.source != c.source || p.model == c.model {
+			t.Fatalf("a fallback must follow its configured model on the same provider, key and source: %+v after %+v", c, p)
+		}
+	}
+	return out
 }

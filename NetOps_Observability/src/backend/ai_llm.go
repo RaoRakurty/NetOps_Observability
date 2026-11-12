@@ -72,18 +72,36 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 		return "", "", ai.TokenUsage{}, errNoAIProvider
 	}
 	var lastErr error
-	skipped := 0
+	skipped, tried := 0, 0 // tried: candidates that reached the breaker
 	ctx = l.srv.egressCtx(ctx, l.claims)
-	for _, cand := range cands {
-		// One strike per request (ai.ModelStruck): a provider that already
-		// timed out or failed in THIS request is not waited on again.
-		if serr := ai.ModelStruck(ctx, cand.name); serr != nil {
+	// down: providers this call already knows are out as a whole (key refused,
+	// unreachable, struck) — their fallback models are skipped silently, so a
+	// bad key is not sent twice and a skip is logged once per provider.
+	down := map[string]bool{}
+	for i, cand := range cands {
+		if down[cand.name] {
+			continue
+		}
+		// The stage's budget is spent: no later candidate can answer in it,
+		// and calling one would only record a failure that is not its own.
+		if i > 0 && ctx.Err() != nil {
+			break
+		}
+		// One strike per request (ai.ModelStruck): a model — or a whole
+		// provider — that already timed out or failed in THIS request is not
+		// waited on again.
+		if serr := ai.ModelStruck(ctx, cand.name, cand.model); serr != nil {
 			lastErr = serr
+			var skip *ai.ModelSkippedError
+			if errors.As(serr, &skip) && skip.Model == "" {
+				down[cand.name] = true
+			}
 			logInfo("ai.provider", "model call skipped: the provider already failed in this request",
-				map[string]any{"tenant": tenant, "provider": cand.name, "tier": string(tier), "stage": ai.StageOf(ctx),
+				map[string]any{"tenant": tenant, "provider": cand.name, "model": cand.model, "tier": string(tier), "stage": ai.StageOf(ctx),
 					"error_class": ai.ClassifyProviderError(serr)})
 			continue
 		}
+		tried++
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
 			l.charge(c, chars)
@@ -92,16 +110,23 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 			// the per-answer footnote (C6).
 			aidecision.FromContext(ctx).NoteModel(aidecision.ModelUse{Provider: cand.name, Name: cand.model, Tier: string(tier)})
 			ai.NoteModelUsed(ctx, cand.name, cand.model)
+			if cand.fallback {
+				logInfo("ai.provider", "fallback model answered", map[string]any{
+					"tenant": tenant, "provider": cand.name, "model": cand.model, "tier": string(tier), "stage": ai.StageOf(ctx)})
+			}
 			return c.Text, cand.name, c.Usage, nil
 		}
 		if errors.Is(err, ai.ErrProviderBreakerOpen) {
 			skipped++
 		}
-		ai.NoteModelFailed(ctx, cand.name, err)
+		ai.NoteModelFailed(ctx, cand.name, cand.model, err)
+		if ai.ProviderWide(ai.ClassifyProviderError(err)) {
+			down[cand.name] = true
+		}
 		lastErr = err
 		// Raw provider error stays server-side (SR-022); fall through to the next.
 	}
-	if skipped == len(cands) {
+	if tried > 0 && skipped == tried {
 		return "", "", ai.TokenUsage{}, ai.ErrProviderBreakerOpen
 	}
 	// Wrapped, not replaced: the caller's honest footer ("timed out", "paused")
@@ -133,9 +158,21 @@ var errAIBudgetExhausted = ai.ErrBudgetExhausted
 // errNoAIProvider: no provider this caller may use is configured.
 var errNoAIProvider = fmt.Errorf("no AI provider configured: %w", ai.ErrNoProvider)
 
+// breakerWouldAdmit PEEKS both breakers a call to c passes (the provider's
+// and the model's) without claiming a half-open probe.
+func (s *server) breakerWouldAdmit(tenant string, c providerCandidate) bool {
+	if s.aiBreaker == nil {
+		return true
+	}
+	if s.aiBreaker.State(tenant, c.name) != aiprovider.Closed {
+		return s.aiBreaker.Peek(tenant, c.name)
+	}
+	return s.aiBreaker.Peek(tenant, aiprovider.Target(c.name, c.model))
+}
+
 // callProviderGuarded is ONE provider attempt behind the guards every model
 // call shares (Iris latency batch 2026-11-10, CLAUDE.md §9/§10):
-//   - the (tenant, provider) circuit breaker — an open breaker skips the call
+//   - the (tenant, provider) and (tenant, model) circuit breakers — an open one skips the call
 //     (ErrProviderBreakerOpen) instead of paying another full timeout;
 //   - one structured log line for EVERY failure (provider, model, tier, http
 //     status, provider reason, error class, latency — never the key, the
@@ -146,7 +183,17 @@ var errNoAIProvider = fmt.Errorf("no AI provider configured: %w", ai.ErrNoProvid
 // is not the provider's failure and does not move the breaker.
 func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai.ModelTier, cand providerCandidate, system string, msgs []copilotMessage) (ai.Completion, error) {
 	tierLabel := string(tier)
-	if !s.aiBreaker.Allow(tenant, cand.name) {
+	// Two breakers per (tenant, provider): the provider's own, moved only by
+	// failures that are about the whole provider (key refused, unreachable),
+	// and one per model, moved by everything else that counts (overloaded,
+	// retired, out of quota, slow). An open provider breaker gates every model
+	// of it, and its half-open probe is claimed on the provider.
+	target := aiprovider.Target(cand.name, cand.model)
+	gate := target
+	if s.aiBreaker.State(tenant, cand.name) != aiprovider.Closed {
+		gate = cand.name
+	}
+	if !s.aiBreaker.Allow(tenant, gate) {
 		s.aiProvCalls.ObserveCall(cand.name, tierLabel, ai.ProvBreakerOpen, 0)
 		return ai.Completion{}, ai.ErrProviderBreakerOpen
 	}
@@ -164,22 +211,32 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 	s.aiProvCalls.ObserveCall(cand.name, tierLabel, outcome, took.Seconds())
 	switch {
 	case err == nil:
+		s.aiBreaker.Record(tenant, target, false)
 		s.aiBreaker.Record(tenant, cand.name, false)
 		// Every answered call is measured too: model, stage, latency and the
 		// provider's own tokens, hidden reasoning included (aiprovider/usage.go).
 		s.aiProvCalls.RecordSuccess(aiprovider.Call{Tenant: tenant, Provider: cand.name, Model: cand.model, Tier: tierLabel,
 			Stage: ai.StageOf(ctx), KeySource: cand.source, Latency: took, InputTokens: c.Usage.InputTokens,
 			OutputTokens: c.Usage.OutputTokens, ThinkingTokens: c.Usage.ThinkingTokens, UsageReported: c.Usage.Reported})
-	case ai.CountsAgainstProvider(outcome):
+	case ai.CountsAgainstProvider(outcome) && ai.ProviderWide(outcome):
 		s.aiBreaker.Record(tenant, cand.name, true)
+		if gate == target {
+			s.aiBreaker.Release(tenant, target)
+		}
+	case ai.CountsAgainstProvider(outcome):
+		// The provider answered (or was reached) and refused only this model:
+		// the key and the path work, so the provider breaker is healthy.
+		s.aiBreaker.Record(tenant, target, true)
+		s.aiBreaker.Record(tenant, cand.name, false)
 	default:
-		s.aiBreaker.Release(tenant, cand.name)
+		s.aiBreaker.Release(tenant, gate)
 	}
 	if err != nil {
 		fields := map[string]any{
 			"tenant": tenant, "provider": cand.name, "model": cand.model, "tier": tierLabel,
 			"key_source": cand.source, "error_class": outcome, "latency_ms": took.Milliseconds(),
-			"breaker": s.aiBreaker.State(tenant, cand.name).String(),
+			"breaker": s.aiBreaker.State(tenant, target).String(), "provider_breaker": s.aiBreaker.State(tenant, cand.name).String(),
+			"fallback": cand.fallback,
 		}
 		if st := ai.ProviderStatusOf(err); st != 0 {
 			fields["http_status"] = st
@@ -238,7 +295,7 @@ func (s *server) usableProviderCandidates(claims jwtClaims, tier ai.ModelTier) [
 	tenant, _ := principalTenant(claims)
 	var out []providerCandidate
 	for _, c := range s.providerCandidatesForTier(claims, tier) {
-		if s.aiBreaker.Peek(tenant, c.name) {
+		if s.breakerWouldAdmit(tenant, c) {
 			out = append(out, c)
 		}
 	}

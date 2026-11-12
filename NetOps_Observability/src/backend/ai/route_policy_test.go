@@ -155,3 +155,23 @@ func (c *captureLLM) Complete(_ context.Context, system string, msgs []LLMMessag
 	}
 	return c.reply, "mock", nil
 }
+
+// Lab 2026-11-12, end to end: "explain the network topology" with a model
+// connected reaches the model (agent path, tools included) instead of being
+// answered from the product docs as covered.
+func TestOwnNetworkQuestionReachesTheModel(t *testing.T) {
+	asked := ""
+	o := &Orchestrator{DS: newMockDS(), LLM: &captureLLM{reply: "x [scope:caller]"}, Flags: func(string) bool { return true },
+		Scope: &ScopeFacts{TenantID: "t-a"}}
+	o.AgentAnswer = func(_ context.Context, _ Principal, q string, _ []string) (Answer, error) {
+		asked = q
+		return Answer{Mode: ModeModelAnswer, Text: "your topology, from the tools"}, nil
+	}
+	ans, err := o.Ask(context.Background(), tenantA(), "explain the network topology", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode == ModeProductAnswer || ans.Routing == nil || ans.Routing.Path != RoutePathModel || asked == "" {
+		t.Fatalf("the question must reach the model: mode=%s routing=%+v asked=%q", ans.Mode, ans.Routing, asked)
+	}
+}
