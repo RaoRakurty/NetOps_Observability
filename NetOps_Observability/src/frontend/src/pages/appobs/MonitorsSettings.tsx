@@ -70,7 +70,9 @@ export default function MonitorsSettings() {
       </div>
       <p className="ao-set-d">
         A monitor watches one cloud metric across your inventory (or one resource)
-        and raises an alert when it fires.
+        and raises an alert when it fires. You get one message when it fires and one
+        when it clears: in your own Slack channel (on by default), and as a page on
+        your own PagerDuty key if you turned that on. Both are set in Integrations.
         {/* role=alert announces the failure; the wording (not only the color)
             identifies it as an error (3.3.1/1.4.1). */}
         {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}

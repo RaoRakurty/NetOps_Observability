@@ -115,6 +115,29 @@ cause, updated in place, auto-resolved on recovery.
   (List Incidents by `incident_key` = our dedup key, read-only API key),
   mirroring the ServiceNow inbound poller.
 
+### Own-watch alerts (tracker 359 — opt-in)
+
+The one exception to "raw alerts never page": alerts from watches the tenant
+set up ITSELF — its BGP-watch prefix classes (origin change, RPKI invalid,
+bogon, route leak, visibility loss) and its cloud monitors. BGP peer-down is
+NOT included (correlation folds a session loss into its root cause).
+
+- **Opt-in, default OFF** for PagerDuty: tick **Also page for my own watches**
+  on the paging connection card (API: `"watch_alerts": true` on
+  `PUT /api/itsm/pagerduty-rca`; omitting the field keeps the stored choice).
+- **One page per alert episode**: `trigger` when it starts, `resolve` (same
+  dedup key, same routing key that opened it) when it clears. The BGP
+  evaluator's cool-down re-notifies and repeated monitor fires are deduped.
+- **Routing authority** is the tenant the evaluator stamped (its own pass),
+  never a label or request value. Empty/platform (`global`, the Provider)
+  tenants reach no tenant key.
+- **Delivery** is the notify dispatcher's bounded pool (retry with backoff +
+  jitter). Observable as `netops_notify_{sent,failures,retries,dropped}_total
+  {channel="tenant-pagerduty"}` and `netops_notify_tenant_watch_total{outcome}`
+  (`queued`, `duplicate`, `no_lane`, `refused_tenant`, …). In-process state:
+  after an api restart an open episode's clear still closes PagerDuty.
+- The platform channels keep receiving these alerts exactly as before.
+
 ## 6. Platform self-health lane (the global key's ONLY job)
 
 The **platform-global** routing key (§1–2 above) now pages exclusively for
