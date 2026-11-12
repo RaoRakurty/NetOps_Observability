@@ -626,11 +626,10 @@ func topoDeviceSVG(b *strings.Builder, tc TopologyContext, n TopoCtxNode) {
 	fmt.Fprintf(b, `<svg viewBox="0 0 %.0f %.0f" width="100%%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Affected device, its evidence interfaces and the causal marks between them">`, w, h)
 	// device ↔ port marks, collapsed per port to the strongest relation.
 	type pm struct {
-		rel        string
-		directed   bool
-		devToPort  bool
-		hasMark    bool
-		portToPort []CausalMark
+		rel       string
+		directed  bool
+		devToPort bool
+		hasMark   bool
 	}
 	per := map[int]*pm{}
 	undirectedPP := 0
