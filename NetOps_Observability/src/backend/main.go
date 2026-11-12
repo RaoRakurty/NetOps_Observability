@@ -215,7 +215,7 @@ type server struct {
 	// tenantWatch delivers a tenant's OWN watch alerts (BGP-watch prefix
 	// classes, cloud monitors) to that tenant's own RCA lanes, once per
 	// episode, through notifier's delivery pool (tracker 359,
-	// tenant_watch_delivery.go). nil-safe.
+	// cloud_notify.go). nil-safe.
 	tenantWatch *notify.TenantWatchRouter
 	// pushBudgets is the process-wide, per-PUSH-SERVER outbound token-bucket
 	// registry (notify/pushbudget.go). Both ntfy senders — the product
