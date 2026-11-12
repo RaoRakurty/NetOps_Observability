@@ -63,9 +63,20 @@ func (s *server) buildBGPWatch(policies bgpwatch.PolicyStore, baselines bgpwatch
 		Peers:     s.bgpWatchPeers,
 		Sightings: s.bgpWatchSightings,
 
-		// Notifications ride the SAME dispatcher every other evaluator uses, so
-		// a BGP alert reaches whatever channels the tenant already configured
-		// (the cloud-monitor evaluator's exact shape).
+		// Notifications ride the SAME dispatcher every other evaluator uses (the
+		// cloud-monitor evaluator's exact shape). That dispatcher holds the
+		// PLATFORM-GLOBAL channel list only — configured by the platform admin,
+		// a cross-tenant audience — so a BGP alert reaches the platform
+		// operator, NOT the tenant (tracker 359). There is no per-tenant alert
+		// channel to route it to: a tenant's own destinations are its RCA
+		// incident-policy lanes (itsm_config.go), which by contract only page
+		// once per root cause and never receive raw alerts, and its contact
+		// points, which only reports use. The global PagerDuty key never pages
+		// for it either: the alert carries no platform `layer` label, so
+		// notify.PlatformScopeFilter drops it (pinned by
+		// TestBGPWatchAlertsNeverPageThePlatformKey). The tenant's route today
+		// is the evidence half below: bgp-watch evidence → correlation → the
+		// tenant's RCA incident policy.
 		Notify:  func(a bgpwatch.Alert) { s.notifier.Dispatch(bgpWatchAlertToModel(a)) },
 		Resolve: func(a bgpwatch.Alert) { s.notifier.DispatchResolve(bgpWatchAlertToModel(a)) },
 

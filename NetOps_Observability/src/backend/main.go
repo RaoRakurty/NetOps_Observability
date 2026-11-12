@@ -5780,12 +5780,11 @@ func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate par
 		return parsercov.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	keys, _ := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
+	claim, _ := s.untaggedClaimFor(claims) // unambiguous identities only (tracker 370)
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return parsercov.Principal{
 		Tenant: tenant, Cross: cross, Subject: claims.Sub,
-		DeviceKeys: keys, DeviceAddrs: addrs,
+		DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		Deny: deny, ExcludeTenants: exclude,
 	}, true
 }
@@ -6144,8 +6143,7 @@ func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate seca
 		return secapi.Principal{}, false
 	}
 	tenant, cross := principalTenant(claims)
-	keys, _ := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
+	claim, _ := s.untaggedClaimFor(claims) // unambiguous identities only (tracker 370)
 	// The OPERATOR-VISIBILITY restriction (Tenant.OperatorRestricted), resolved
 	// with the SAME primitive the logs path uses rather than a second copy of the
 	// rule. The composition root resolves it because it owns the tenant store;
@@ -6158,7 +6156,7 @@ func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate seca
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return secapi.Principal{
 		Tenant: tenant, Cross: cross, Subject: claims.Sub,
-		DeviceKeys: keys, DeviceAddrs: addrs,
+		DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		Deny: deny, ExcludeTenants: exclude,
 	}, true
 }
@@ -6358,6 +6356,11 @@ func (s *server) securityLaneDeps() seclane.Deps {
 
 		Tenants: s.securityLaneTenants,
 		Devices: s.securityLaneDevices,
+		// The untagged-syslog claim: identities no other owner holds (tracker 370).
+		UntaggedClaims: func(tenant string) ([]string, []string) {
+			c := s.untaggedClaimForTenant(tenant)
+			return c.Keys, c.Addrs
+		},
 		// LICENCE-BEGIN — the hardening dialect gate (§4 "dialect registry").
 		// The lane forwards it to the engine and knows nothing about licensing.
 		DialectAllowed: s.licenceDialectAllowed,
@@ -6429,7 +6432,23 @@ func (s *server) securityLaneDeps() seclane.Deps {
 		// assessed by anything.
 		Watermarks: seclane.NewFileWatermarks(
 			envOr(seclane.EnvWatermarkFile, seclane.DefaultWatermarkFile)),
+		// Findings-on-change (owner D2): the per-tenant episode state that lets
+		// the lane send the engine only appear/change/clear, durable across a
+		// restart. Clears stay withheld until the engine registers the
+		// security_*_clear kinds (seclane.EnvEmitClears).
+		Episodes:   securityLaneEpisodeStore(),
+		EmitClears: envBool(seclane.EnvEmitClears),
 	}
+}
+
+// securityLaneEpisodeStore selects the Postgres episode register under the
+// Postgres backend (migration 0069, tenant_iso FORCE-RLS), else the per-tenant
+// file store so the default build works unchanged (the secStore precedent).
+func securityLaneEpisodeStore() seclane.EpisodeStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return seclane.NewPGEpisodes(ps.DB())
+	}
+	return seclane.NewFileEpisodes(envOr(seclane.EnvEpisodeDir, seclane.DefaultEpisodeDir), seclane.TenantSeg)
 }
 
 // securityLaneTenants lists the tenant ids the producer scans. Untagged/global

@@ -600,13 +600,14 @@ func exportMaxTimeRange() time.Duration {
 // including the operator-visibility compliance restriction (so an export can never
 // exfiltrate a restricted tenant's telemetry, even via the async worker later).
 func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logexport.Spec {
-	keys, cross := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
+	// Unambiguous identities only (tracker 370): an export frozen with a name
+	// another owner also holds would carry that owner's untagged lines out.
+	claim, cross := s.untaggedClaimFor(claims)
 	tenant, principalCross := principalTenant(claims)
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return logexport.Spec{
 		Query: query, From: from, To: to, Signal: signal, Format: format,
-		Tenant: tenant, Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
+		Tenant: tenant, Cross: cross, DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		ExcludeTenants: exclude, DenyAll: deny, RequestedBy: claims.Sub,
 		MaskTenant: tenant, MaskCross: principalCross,
 	}

@@ -264,6 +264,36 @@ func TestHeldOutCasesNeverReachTheWordTable(t *testing.T) {
 	}
 }
 
+// TestHeldOutCasesNeverReachTheRewritePrompt (hybrid NLU plan B1, N-H3): the
+// rephrase stage's prompt shows the model a few placeholder shapes; none may
+// be a held-out case, and the guard's negative control proves the check.
+func TestHeldOutCasesNeverReachTheRewritePrompt(t *testing.T) {
+	held := heldOutCases(loadCases(t))
+	shapes := modelc.RewriteShapes()
+	if len(shapes) == 0 {
+		t.Fatal("no rewrite shapes — the guard is checking nothing")
+	}
+	for _, s := range shapes {
+		if !strings.Contains(modelc.RewriteSystemPrompt(), s) {
+			t.Errorf("shape %q is not the one the prompt shows — the guard checks the wrong text", s)
+		}
+	}
+	for _, l := range rewriteShapeLeaks(held, shapes) {
+		t.Error(l)
+	}
+	if len(rewriteShapeLeaks(held, append(append([]string{}, shapes...), held[0].Texts[0]))) == 0 {
+		t.Error("a held-out question planted among the rewrite shapes was not reported")
+	}
+}
+
+func rewriteShapeLeaks(held []evalsplit.Case, shapes []string) []evalsplit.Leak {
+	tuning := make([]evalsplit.Tuning, 0, len(shapes))
+	for _, s := range shapes {
+		tuning = append(tuning, evalsplit.Tuning{Where: "modelc/rewrite.go", Text: s})
+	}
+	return evalsplit.FindLeaks(held, tuning)
+}
+
 func wordTableLeaks(held []evalsplit.Case, table []catalog.SynonymEntry) []evalsplit.Leak {
 	tuning := make([]evalsplit.Tuning, 0, 2*len(table))
 	for _, e := range table {

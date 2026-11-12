@@ -83,6 +83,29 @@ Five files, and a lane is dead if any one is missed:
 Plus `deployment/docker/opensearch/apply-ism.sh` if the lane needs retention
 (it always does — a lane matching no `ism_template` grows forever, F-53).
 
+### Worked example: `netops.security.audit` (owner D2, 2026-11-11)
+
+The security lane now sends the correlation engine only finding TRANSITIONS
+on `netops.security`, and puts the verdicts a scan merely re-confirmed on
+`netops.security.audit`, which only the router reads. It writes into the
+existing `netops-secfindings-*` indices, so steps 4–5 and ISM need nothing
+new; steps 1–3 are in the tree. **Deploy order, in ONE deploy:**
+
+1. `kafka-init` creates `netops.security.audit` (auto-create is off — until it
+   exists the api's audit batches are refused by the broker and fall to the
+   dead-letter ladder);
+2. `apply-acls.sh` grants the router Read on it;
+3. the api and the router restart on the new build.
+
+The router's `kafka_security` source sets `auto_offset_reset: earliest`, so
+audit records the api produced before the router came back on the new
+subscription are read from the start of the topic's retention instead of
+being skipped. The existing `netops-router-security` group keeps its committed
+offsets on `netops.security`, so nothing there is re-read. If the router is
+restarted more than the topic's retention (72 h) after the api, the oldest
+audit records are gone — an audit-history gap only; the engine is unaffected.
+`scripts/deploy-qualify.sh` checks the topic exists.
+
 ---
 
 ## 4. Verifying, without changing anything

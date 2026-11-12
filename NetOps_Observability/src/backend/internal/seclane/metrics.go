@@ -46,7 +46,22 @@ type Metrics struct {
 	deadLettered int64 // records preserved in a dead-letter sink
 	lost         int64 // records with NO durable copy anywhere (the 189 contract)
 	ungroundable int64 // findings the bus seam refused to ground (never guessed)
+
+	// findings-on-change (episodes.go) — closed label sets, written in full.
+	transitions map[string]int64 // "transition\x00outcome" → records
+	unchanged   int64            // re-confirmed verdicts kept off the engine's lane
+	seeded      map[string]int64 // seed source → episodes seeded silently
+	pruned      int64            // episodes dropped after EpisodePruneAfter unassessed
+	stateErrors map[string]int64 // op (load|seed|commit) → failures
 }
+
+// The closed label vocabularies of the findings-on-change series.
+var (
+	transitionLabels = []string{"appear", "change", "clear"}
+	outcomeLabels    = []string{"emitted", "dead_lettered", "lost", outcomeWithheld}
+	seedLabels       = []string{SeedSourceIndex, SeedSourceScan}
+	stateOpLabels    = []string{"load", "seed", "commit"}
+)
 
 // NewMetrics builds the counter set.
 func NewMetrics() *Metrics {
@@ -56,7 +71,59 @@ func NewMetrics() *Metrics {
 		lastScan:  map[string]int64{},
 		lastDur:   map[string]float64{},
 		durBucket: make([]int64, len(durBuckets)),
+
+		transitions: map[string]int64{},
+		seeded:      map[string]int64{},
+		stateErrors: map[string]int64{},
 	}
+}
+
+func inLabels(v string, set []string) bool {
+	for _, s := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordTransitions counts n transition records by (transition, outcome).
+// Values outside the closed vocabularies are dropped, so a label can never be
+// widened by a caller.
+func (m *Metrics) RecordTransitions(transition, outcome string, n int64) {
+	if m == nil || n <= 0 || !inLabels(transition, transitionLabels) || !inLabels(outcome, outcomeLabels) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transitions[transition+"\x00"+outcome] += n
+}
+
+// AddUnchanged counts verdicts re-confirmed without change (audit topic only).
+func (m *Metrics) AddUnchanged(n int64) { m.bump(func(x *Metrics) { x.unchanged += n }, n) }
+
+// AddPruned counts episodes dropped after going unassessed too long.
+func (m *Metrics) AddPruned(n int64) { m.bump(func(x *Metrics) { x.pruned += n }, n) }
+
+// AddSeeded counts episodes seeded silently, by seed source. A seed of zero
+// episodes still counts nothing; the seed itself is visible in the log.
+func (m *Metrics) AddSeeded(source string, n int64) {
+	if m == nil || n <= 0 || !inLabels(source, seedLabels) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seeded[source] += n
+}
+
+// AddStateError counts one episode-state failure by operation.
+func (m *Metrics) AddStateError(op string) {
+	if m == nil || !inLabels(op, stateOpLabels) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stateErrors[op]++
 }
 
 // RecordRun records one completed (or skipped) run.
@@ -136,6 +203,19 @@ func (m *Metrics) Snapshot() map[string]int64 {
 	out["ungroundable_total"] = m.ungroundable
 	for _, c := range evidenceClasses {
 		out["emitted_"+c] = m.emitted[c]
+	}
+	for _, tr := range transitionLabels {
+		for _, o := range outcomeLabels {
+			out["transition_"+tr+"_"+o] = m.transitions[tr+"\x00"+o]
+		}
+	}
+	out["unchanged_suppressed_total"] = m.unchanged
+	out["episodes_pruned_total"] = m.pruned
+	for _, s := range seedLabels {
+		out["episodes_seeded_"+s] = m.seeded[s]
+	}
+	for _, op := range stateOpLabels {
+		out["episode_state_errors_"+op] = m.stateErrors[op]
 	}
 	return out
 }
@@ -217,6 +297,28 @@ func (m *Metrics) Write(w io.Writer) {
 		"Security evidence records with NO durable copy anywhere.", m.lost)
 	writeCounter(w, "netops_security_ungroundable_total",
 		"Findings the bus seam refused to ground (never guessed).", m.ungroundable)
+
+	fmt.Fprint(w, "# HELP netops_security_transitions_total Finding-episode transitions sent to the correlation engine (netops.security), by transition and outcome.\n")
+	fmt.Fprint(w, "# TYPE netops_security_transitions_total counter\n")
+	for _, tr := range transitionLabels {
+		for _, o := range outcomeLabels {
+			fmt.Fprintf(w, "netops_security_transitions_total{transition=%q,outcome=%q} %d\n", tr, o, m.transitions[tr+"\x00"+o])
+		}
+	}
+	writeCounter(w, "netops_security_unchanged_suppressed_total",
+		"Verdicts re-confirmed without change: stored for audit, not re-sent to the correlation engine.", m.unchanged)
+	fmt.Fprint(w, "# HELP netops_security_episodes_seeded_total Finding episodes seeded silently when change tracking started, by seed source.\n")
+	fmt.Fprint(w, "# TYPE netops_security_episodes_seeded_total counter\n")
+	for _, s := range seedLabels {
+		fmt.Fprintf(w, "netops_security_episodes_seeded_total{source=%q} %d\n", s, m.seeded[s])
+	}
+	writeCounter(w, "netops_security_episodes_pruned_total",
+		"Open finding episodes dropped without a clear after their source went unassessed too long.", m.pruned)
+	fmt.Fprint(w, "# HELP netops_security_episode_state_errors_total Finding-episode state failures, by operation.\n")
+	fmt.Fprint(w, "# TYPE netops_security_episode_state_errors_total counter\n")
+	for _, op := range stateOpLabels {
+		fmt.Fprintf(w, "netops_security_episode_state_errors_total{op=%q} %d\n", op, m.stateErrors[op])
+	}
 }
 
 func writeCounter(w io.Writer, name, help string, v int64) {

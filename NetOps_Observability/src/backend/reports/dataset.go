@@ -54,7 +54,19 @@ type DeviceScope struct {
 	// the devices it may reference. Default-closed: a tenant with no visible
 	// device gets an empty set and its renderers must emit the "no data" note
 	// without querying, never fall back to the platform-wide view.
+	//
+	// Keys narrows the VictoriaMetrics device maps. It does NOT narrow the
+	// ClickHouse reads: those run under the report worker's all-tenants scope, so
+	// a device NAME there would match another tenant's stamped rows and any owner's
+	// untagged rows naming the same device. ClickHouse reads use Tenant + Claim.
 	Keys []string
+	// Tenant is the report owner's tenant id (tenant-owned reports only): the
+	// ClickHouse reads take every row STAMPED with it.
+	Tenant string
+	// Claim is the subset of Keys that may claim an UNTAGGED ClickHouse row: the
+	// identities no other owner also holds (tracker 370). A key two owners share
+	// is ambiguous and claims nothing.
+	Claim []string
 	// Exclude is the deny-list a PLATFORM-owned run carries: the ids and names
 	// of restricted tenants' devices. Never set for a tenant-owned run — the
 	// rule hides a tenant from the PLATFORM, never from itself.
@@ -86,9 +98,28 @@ func (sc DeviceScope) tunnelCond() string {
 		return ` WHERE (local_device NOT IN (` + in + `) AND remote_device NOT IN (` + in + `))
 `
 	}
-	in := sqlInList(sc.Keys)
-	return ` WHERE (local_device IN (` + in + `) OR remote_device IN (` + in + `))
+	return ` WHERE ` + sc.tenantClaim(func(in string) string {
+		return `local_device IN (` + in + `) OR remote_device IN (` + in + `)`
+	}) + `
 `
+}
+
+// tenantClaim is the tenant-owned scope's ClickHouse predicate: rows stamped
+// with the report's tenant, OR untagged rows whose device column(s) name an
+// unambiguous Claim key (match renders that column test for an IN list). The
+// tenant_id test is load-bearing, not defence in depth: reports read under the
+// all-tenants scope, so without it a key would match ANOTHER tenant's stamped
+// rows too. An unresolved tenant matches nothing (default-closed).
+func (sc DeviceScope) tenantClaim(match func(in string) string) string {
+	t := strings.ToLower(strings.TrimSpace(sc.Tenant))
+	if t == "" {
+		return "(1 = 0)"
+	}
+	own := "tenant_id = " + sqlInList([]string{t})
+	if len(sc.Claim) == 0 {
+		return "(" + own + ")"
+	}
+	return "(" + own + " OR (tenant_id = '' AND (" + match(sqlInList(sc.Claim)) + ")))"
 }
 
 // findingsCond is the netops.findings sibling, keyed on the single `device`
@@ -102,7 +133,7 @@ func (sc DeviceScope) findingsCond() string {
 		}
 		return " AND device NOT IN (" + sqlInList(sc.Exclude) + ")"
 	}
-	return " AND device IN (" + sqlInList(sc.Keys) + ")"
+	return " AND " + sc.tenantClaim(func(in string) string { return "device IN (" + in + ")" })
 }
 
 // filterMap narrows a VictoriaMetrics device→value map to this scope: the

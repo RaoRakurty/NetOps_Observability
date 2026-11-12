@@ -575,12 +575,16 @@ rules:
     extract: &ctrl_extract
       peer_type: {re: [[msg, '\bpeer-type:([A-Za-z]{1,32})', 1, '']]}
       peer: {re: [[msg, '\bpeer-system-ip:(\S{1,64})', 1, '']]}
+    # The controller the edge lost (`peer-system-ip`) is a grounding token, as on the
+    # trap rows (trap.sdwan.control_connection): when several edges lose the same
+    # controller their losses meet on it, and the engine's controller fan-in
+    # (scoring.controller_fan_in) can name it as the common cause. Empty is dropped.
     emit: &ctrl_emit
       metric: control_connection
       modality: control_plane
       entity: {type: device, id: '{host}'}
       native_id: '{host}|control_connection|{peer_type|?}|{peer|?}|{ts_ms}'
-      tokens: [{t: '{host}'}]
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
       attrs:
         peer_type: {var: peer_type}
         peer: {var: peer}

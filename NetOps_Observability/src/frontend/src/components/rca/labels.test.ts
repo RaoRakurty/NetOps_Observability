@@ -72,6 +72,16 @@ describe("signatureNocTitle — scenario library", () => {
   });
 });
 
+// SD-WAN controller fan-in: the structure-conditioned contradiction tag (the "ruled
+// out because…" row on the edge-local reading) renders in plain words, never raw.
+describe("controller fan-in contradiction label", () => {
+  it("names the structure-conditioned tag in plain language", () => {
+    const tag = "sdwan_control_down|controller_control_connection_loss@controller_fan_in";
+    expect(kindLabel(tag)).toBe("Several edges lost the same SD-WAN controller");
+    expect(kindLabel(tag)).not.toMatch(/[|@_]/);
+  });
+});
+
 // tracker 385: the engine's attrs-bearing contradiction tag and the sibling get NOC words.
 describe("admin link change labels", () => {
   it("names the discriminator tag in plain language", () => {

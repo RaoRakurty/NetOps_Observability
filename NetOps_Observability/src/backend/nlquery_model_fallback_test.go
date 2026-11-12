@@ -78,6 +78,10 @@ func modelFallbackFixture(t *testing.T, reply string, keyed ...string) (*server,
 	for _, k := range []string{"OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "COPILOT_API_KEY", "IRIS_NLQ_MODEL_FALLBACK"} {
 		t.Setenv(k, "")
 	}
+	// These tests are about the strong structured-output fallback (B3); the
+	// fast rephrase stage that runs before it (B1) has its own fixture and
+	// tests (nlquery_model_rewrite_test.go).
+	t.Setenv("IRIS_NLQ_REWRITE", "false")
 	p := &recordingProvider{reply: reply}
 	t.Cleanup(ai.SwapProviderHTTPForTest(&http.Client{Transport: p}))
 	s, a, b := nlqAPIFixture(t)

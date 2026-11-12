@@ -4,6 +4,7 @@
 package reports
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,28 @@ func TestTopDeviceLines(t *testing.T) {
 	}
 	if lines := topDeviceLines(nil, 5, "%"); len(lines) != 0 {
 		t.Errorf("empty map should yield no lines, got %v", lines)
+	}
+}
+
+// Tracker 370: a tenant-owned report reads ClickHouse under the all-tenants
+// scope, so its predicate is the tenant's stamped rows OR untagged rows claimed
+// by an UNAMBIGUOUS key — never a bare device-name match, which would take
+// another tenant's stamped rows and other owners' untagged rows naming the same
+// device.
+func TestDeviceScopeClickHousePredicates(t *testing.T) {
+	sc := DeviceScope{Keys: []string{"core-rtr-1", "acme-edge"}, Tenant: "Acme", Claim: []string{"acme-edge"}}
+	if got, want := sc.findingsCond(), " AND (tenant_id = 'acme' OR (tenant_id = '' AND (device IN ('acme-edge'))))"; got != want {
+		t.Errorf("findingsCond = %q, want %q", got, want)
+	}
+	if got := sc.tunnelCond(); !strings.Contains(got, "(tenant_id = 'acme' OR (tenant_id = '' AND (local_device IN ('acme-edge') OR remote_device IN ('acme-edge'))))") || strings.Contains(got, "core-rtr-1") {
+		t.Errorf("tunnelCond = %q", got)
+	}
+	// Every key ambiguous → own stamped rows only.
+	if got := (DeviceScope{Keys: []string{"x"}, Tenant: "acme"}).findingsCond(); got != " AND (tenant_id = 'acme')" {
+		t.Errorf("no claim: findingsCond = %q", got)
+	}
+	// Unresolved tenant → nothing (default-closed), never an unscoped read.
+	if got := (DeviceScope{Keys: []string{"x"}, Claim: []string{"x"}}).findingsCond(); got != " AND (1 = 0)" {
+		t.Errorf("no tenant: findingsCond = %q", got)
 	}
 }

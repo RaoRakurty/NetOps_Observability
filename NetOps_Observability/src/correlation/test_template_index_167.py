@@ -476,8 +476,10 @@ def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
     # the tracker-157 structural gate, which is not the fast path and does not
     # go away when the fast path does — that is exactly the point of counting
     # it separately. The tracker-385 anchor gate is not the fast path either: this
-    # evidence has no link_cause=admin, so its one anchored template sits out.
-    anchored_out = 1
+    # evidence has no link_cause=admin and no control-connection loss, so both
+    # anchored templates (admin-link-change-induced, sdwan-controller-unreachable)
+    # sit out.
+    anchored_out = 2
     assert st_mutant["candidates"] == len(ALL_TEMPLATES)
     assert st_mutant["scored"] + st_mutant["ungrounded"] == len(ALL_TEMPLATES) - anchored_out
     assert st_mutant["scored"] > st_indexed["scored"], (

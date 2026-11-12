@@ -252,6 +252,12 @@ func IsProviderScope(tenant string) bool {
 // emitting device — named by one of the device-identity fields — is one of the
 // tenant's devices. That branch covers a tenant device whose documents were
 // written before ingest learned its owner.
+//
+// deviceKeys/deviceAddrs must be the caller's UNAMBIGUOUS identities — held by
+// its devices and by no other owner's (the api root's untaggedClaimFor, tracker
+// 370). A device name or address is not unique across owners, so passing the
+// caller's whole device set would hand it every untagged document that names a
+// device another owner also has.
 func TenantFilter(tenant string, cross bool, deviceKeys, deviceAddrs []string) map[string]any {
 	if cross {
 		return nil

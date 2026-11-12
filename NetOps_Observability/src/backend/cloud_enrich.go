@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"netops/backend/internal/rca"
@@ -103,6 +104,69 @@ func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
 	return res
 }
 
+// The four provider series the live view reads, in readCloudLiveMetrics' order.
+const (
+	cloudLiveStatus = iota
+	cloudLiveNetIn
+	cloudLiveNetOut
+	cloudLiveCPU
+)
+
+var cloudLiveMetricNames = [...]string{
+	cloudLiveStatus: "cloud_status_check_failed",
+	cloudLiveNetIn:  "cloud_net_in_bytes",
+	cloudLiveNetOut: "cloud_net_out_bytes",
+	cloudLiveCPU:    "cloud_cpu_util",
+}
+
+// cloudLiveQuery is one live read: the newest point of metric over the window,
+// for the resource ids in idAlternation only. The metric lane's 5-min provider
+// resolution means an instant query can miss the latest point; last_over_time
+// over a window is the honest read. idAlternation is never empty here — an
+// empty alternation would match every series with no resource_id.
+func cloudLiveQuery(metric, idAlternation string) string {
+	return `last_over_time(` + metric + `{resource_id=~"` + idAlternation + `"}[30m])`
+}
+
+// readCloudLiveMetrics reads the live provider metrics for the CALLER's
+// resources only — res is already the caller's view of the inventory — and
+// returns one resource_id → value map per cloudLive* index.
+//
+// It used to read each metric fleet-wide and join afterwards (tracker 392).
+// The join kept other tenants' values out of the answer, but the read was every
+// tenant's cloud fleet under one 1 MiB body cap: past the cap the body was cut,
+// the JSON failed to parse, and every tenant's Service View read "unknown"
+// because one tenant had grown. Now the selector names only the caller's ids,
+// in batches within the selector budget, so the body is bounded by the caller's
+// own inventory. A batch that does not answer leaves its resources unmeasured
+// ("unknown", never "healthy"); a view larger than the batch cap reads its
+// first batches and says so in the log rather than going dark entirely.
+func readCloudLiveMetrics(ctx context.Context, res []cloud.CloudResource) [len(cloudLiveMetricNames)]map[string]float64 {
+	var out [len(cloudLiveMetricNames)]map[string]float64
+	for i := range out {
+		out[i] = map[string]float64{}
+	}
+	batches, fits := cloudResourceIDBatches(res)
+	if len(batches) == 0 {
+		return out // no resource of the caller's: nothing to ask the store
+	}
+	if !fits {
+		slog.Warn("cloud live state: view exceeds the metric read budget, later resources read unknown",
+			"batches", len(batches), "max_batches", cloudMetricProofMaxBatches)
+		batches = batches[:cloudMetricProofMaxBatches]
+	}
+	ctx, cancel := context.WithTimeout(ctx, cloudMetricProofTimeout)
+	defer cancel()
+	for _, ids := range batches {
+		for i, metric := range cloudLiveMetricNames {
+			for id, v := range vmQuery(ctx, cloudLiveQuery(metric, ids)) {
+				out[i][id] = v
+			}
+		}
+	}
+	return out
+}
+
 // cloudLiveStates builds the live view for every resource: provider verdict
 // first (the cloud itself saying the instance is impaired outranks our guesses),
 // then our active checks, then the workload's own health lane.
@@ -112,12 +176,8 @@ func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
 func (s *server) cloudLiveStates(ctx context.Context, scope, pred string, res []cloud.CloudResource) map[string]cloudLiveState {
 	out := make(map[string]cloudLiveState, len(res))
 
-	// The metric lane's 5-min provider resolution means an instant query can miss
-	// the latest point; last_over_time over a window is the honest read.
-	statusCheck := vmQuery(ctx, `last_over_time(cloud_status_check_failed[30m])`)
-	netIn := vmQuery(ctx, `last_over_time(cloud_net_in_bytes[30m])`)
-	netOut := vmQuery(ctx, `last_over_time(cloud_net_out_bytes[30m])`)
-	cpu := vmQuery(ctx, `last_over_time(cloud_cpu_util[30m])`)
+	live := readCloudLiveMetrics(ctx, res)
+	statusCheck, netIn, netOut, cpu := live[cloudLiveStatus], live[cloudLiveNetIn], live[cloudLiveNetOut], live[cloudLiveCPU]
 
 	// Active-check failures per target address in the recent window.
 	// entity_id comes in TWO shapes for the same executions: per-vantage rows

@@ -663,8 +663,9 @@ func (rs *reportScheduler) restrictedTenantIDs() []string {
 // the same decision tenantDevices makes for the registry.
 //
 // A TENANT-owned report carries an ALLOW-list: the ids and names of its own
-// devices (the visibleDeviceKeys key set, derived from the report's owner
-// instead of request claims). Default-closed — a tenant with no visible device
+// devices, derived from the report's owner instead of request claims — plus
+// the owner's tenant id and the UNAMBIGUOUS subset of those keys that may claim
+// an untagged ClickHouse row (untaggedClaimForTenant, tracker 370). Default-closed — a tenant with no visible device
 // gets an empty set and the renderers emit their "no data" note without
 // querying, rather than falling back to unscoped telemetry.
 //
@@ -689,7 +690,14 @@ func (rs *reportScheduler) reportDeviceKeys(tenant string) reports.DeviceScope {
 			}
 		}
 	}
-	return reports.DeviceScope{Keys: keys}
+	// ClickHouse reads run under the all-tenants scope, so they are narrowed by
+	// the owner's tenant_id plus the untagged-row claim: identities no other owner
+	// holds (tracker 370). Default-closed with no server wired.
+	var claim []string
+	if rs.srv != nil {
+		claim = rs.srv.untaggedClaimForTenant(t).Keys
+	}
+	return reports.DeviceScope{Keys: keys, Tenant: t, Claim: claim}
 }
 
 // restrictedDeviceKeys is the device-keyed form of the hidden set a PLATFORM-

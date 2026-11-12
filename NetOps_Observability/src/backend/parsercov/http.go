@@ -55,9 +55,12 @@ const (
 // from the request's claims; nothing in this package derives a tenant from a
 // query string, a path or a body (§3a rule 2).
 type Principal struct {
-	Tenant      string
-	Cross       bool
-	Subject     string
+	Tenant  string
+	Cross   bool
+	Subject string
+	// DeviceKeys/DeviceAddrs claim UNTAGGED documents for a scoped caller:
+	// only identities no other owner also holds (tracker 370), resolved by the
+	// composition root and passed verbatim to oslog.TenantFilter.
 	DeviceKeys  []string
 	DeviceAddrs []string
 

@@ -128,6 +128,24 @@ describe("LaneHealth — reading the lane", () => {
     expect(screen.getByText("advisory-feed: feed unavailable")).toBeTruthy();
   });
 
+  it("shows what each run sent to correlation and what it kept back as unchanged (owner D2)", async () => {
+    securityLaneStatus.mockResolvedValue({
+      ...STATUS,
+      tenants: [{ ...ROW, transitions_emitted: 3, unchanged_suppressed: 63 }],
+    });
+    render(<LaneHealth />);
+    const table = await screen.findByRole("table", { name: /last run per tenant/i });
+    expect(within(table).getByRole("columnheader", { name: /sent to correlation/i })).toBeTruthy();
+    expect(within(table).getByText("3 · 63 unchanged")).toBeTruthy();
+  });
+
+  it("a lane that does not send the D2 counts reads 'not stated', never zero", async () => {
+    render(<LaneHealth />);
+    const table = await screen.findByRole("table", { name: /last run per tenant/i });
+    expect(within(table).getByText("not stated")).toBeTruthy();
+    expect(within(table).queryByText(/unchanged/)).toBeNull();
+  });
+
   it("a skipped run says the row still carries the last real result", async () => {
     securityLaneStatus.mockResolvedValue({ ...STATUS, tenants: [{ ...ROW, outcome: "skipped" }] });
     render(<LaneHealth />);
@@ -150,6 +168,20 @@ describe("LaneHealth — Scan now", () => {
 
     await waitFor(() => expect(securityScan).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/12 findings published from 5 devices assessed/i)).toBeTruthy();
+  });
+
+  it("a finished scan says how many findings went to correlation and how many were unchanged", async () => {
+    const done = {
+      ...STATUS,
+      tenants: [{ ...ROW, trigger: "manual", findings_emitted: 12, devices_assessed: 5,
+        transitions_emitted: 2, unchanged_suppressed: 10, last_scan_at: new Date().toISOString() }],
+    };
+    securityLaneStatus.mockResolvedValueOnce(STATUS).mockResolvedValue(done);
+    securityScan.mockResolvedValue({ queued: true, tenant_seg: "t_acme" });
+
+    render(<LaneHealth />);
+    fireEvent.click(await screen.findByRole("button", { name: /scan now/i }));
+    expect(await screen.findByText(/2 new or changed sent to correlation; 10 unchanged, stored only/i)).toBeTruthy();
   });
 
   it("a run that assessed no device is NOT reported as a clear estate", async () => {
