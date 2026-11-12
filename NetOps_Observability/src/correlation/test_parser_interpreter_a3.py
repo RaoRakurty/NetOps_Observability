@@ -151,7 +151,9 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     # · 95 with the SONiC orchagent link row (387 wave 2)
     # · 100 with 387's final syslog wave (the SD-WAN gateway lost, two rows; three
     #   known_benign: fp-um default MAC, kernel hrtimer, OSPF DD in 2-Way).
-    assert len(P.RULES) == 100
+    # · 102 with tracker 388's syslog link cause (SR Linux port/subinterface state, the
+    #   SONiC portmgrd shutdown).
+    assert len(P.RULES) == 102
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════

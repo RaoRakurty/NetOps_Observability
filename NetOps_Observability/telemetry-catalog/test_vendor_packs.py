@@ -601,7 +601,7 @@ def test_every_grammar_is_load_bearing(gid):
         gen.decide_fixtures(packs, P.PackTable(broken, envelopes))
 
 
-WAVE1_PACKS = ("nokia_sros", "cisco_ios", "juniper_junos", "sonic")
+WAVE1_PACKS = ("nokia_sros", "nokia_srlinux", "cisco_ios", "juniper_junos", "sonic")
 
 
 def test_every_wave1_fixture_cites_where_its_line_comes_from():
@@ -647,7 +647,8 @@ FAULT_EVENT_TYPES = {
     "juniper_junos": {"rpd_bgp_neighbor_state_changed", "rpd_ospf_nbrdown",
                       "rpd_isis_adjdown", "snmp_trap_link_down"},
     "cisco_ios": {"updown", "adjchange"},
-    "sonic": {"host_intf_oper_status_down"},
+    "nokia_srlinux": {"port_down", "subinterface_down"},
+    "sonic": {"host_intf_oper_status_down", "port_admin_status_down"},
 }
 
 

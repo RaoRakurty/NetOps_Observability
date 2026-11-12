@@ -51,10 +51,18 @@ rules:
   # so only the second reached the engine, with no cause. This row emits the change half:
   # `link_cause=admin`, which stage [5] (`_admin_change_only`) and the template
   # `sig.ent.access.admin-link-change-induced` act on. `warn`: a shutdown never opens.
-  # IOS XR is matched by the optional `PKT_INFRA-` and the same words; no XR document was
-  # found for this line (tracker 388 names it), so no fixture claims the XR shape.
+  # IOS XR is matched by the optional `PKT_INFRA-` and the same words: XR writes
+  # `%PKT_INFRA-LINK-5-CHANGED : Interface <if>, changed state to Administratively Down`
+  # (the guard is case-blind), and the same mnemonic with `changed state to Down` for a
+  # port that is not shut (an Optics controller), which this row leaves alone: no cause.
+  # Arista EOS is NOT covered here and nothing else gives it a syslog cause: EOS logs only
+  # `%LINEPROTO-5-UPDOWN` for a shutdown and a fault alike (no EOS document shows an
+  # administratively-down line), so an EOS shutdown is told apart by its link trap's
+  # ifAdminStatus (events.yaml `trap_link_cause` arm 1) or not at all.
   # Sources: Cisco Community, "interface administratively down" (a shutdown logs
-  # %LINK-5-CHANGED), https://community.cisco.com/t5/other-network-architecture-subjects/interface-administratively-down/td-p/340382
+  # %LINK-5-CHANGED), https://community.cisco.com/t5/other-network-architecture-subjects/interface-administratively-down/td-p/340382;
+  # IOS XR lines: cisco-ie/telemetry `4/logs/spine2.portflap.log` (Administratively Down)
+  # and xrdocs/ncs5500 `ncs5500-hw-module-profiles.md` (Optics, Down).
   - rule_id: syslog.cisco.link.admin_down
     lane: syslog
     source: syslog
@@ -312,6 +320,34 @@ fixtures:
     message: '%LINK-5-CHANGED: Interface FastEthernet0/0, changed state to administratively down'
     expect: {}
     signal: {rule_id: syslog.cisco.link.admin_down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'r1:FastEthernet0/0'}
+
+  - name: an IOS XR shutdown line carries the admin cause and cannot open
+    fidelity: doc_claimed
+    source: 'cisco-ie/telemetry 4/logs/spine2.portflap.log, ifmgr "%PKT_INFRA-LINK-5-CHANGED : Interface HundredGigE0/0/0/8, changed state to Administratively Down", https://github.com/cisco-ie/telemetry'
+    hostname: spine2
+    appname: ifmgr
+    severity: notice
+    message: '%PKT_INFRA-LINK-5-CHANGED : Interface HundredGigE0/0/0/8, changed state to Administratively Down'
+    expect:
+      parser_id: cisco_iosxr.v1
+      parser_status: parsed
+      facility: PKT_INFRA-LINK
+      event_type: changed
+    signal: {rule_id: syslog.cisco.link.admin_down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'spine2:HundredGigE0/0/0/8'}
+
+  - name: an IOS XR CHANGED line that is not a shutdown gets no cause
+    fidelity: doc_claimed
+    source: 'xrdocs/ncs5500 _tutorials/ncs5500-hw-module-profiles.md, ifmgr "%PKT_INFRA-LINK-5-CHANGED : Interface Optics0/3/0/28, changed state to Down", https://github.com/xrdocs/ncs5500 (MIT)'
+    hostname: ncs1
+    appname: ifmgr
+    severity: notice
+    message: '%PKT_INFRA-LINK-5-CHANGED : Interface Optics0/3/0/28, changed state to Down'
+    expect:
+      parser_id: cisco_iosxr.v1
+      parser_status: parsed
+      facility: PKT_INFRA-LINK
+      event_type: changed
+    signal: null
 
   - name: an NX-OS administrative down carries the admin cause
     fidelity: doc_claimed

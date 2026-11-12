@@ -412,7 +412,9 @@ def test_no_other_rule_drops_an_attr():
                          "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface",
                          "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear",
                          # tracker 388: a Junos link UP names no cause.
-                         "syslog.junos.link.state_change"}
+                         "syslog.junos.link.state_change",
+                         # tracker 388: an SR Linux up line names neither cause nor reason.
+                         "syslog.srlinux.link.state_change"}
 
 
 def test_omit_empty_cannot_name_a_key_the_rule_does_not_emit():
