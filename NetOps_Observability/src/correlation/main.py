@@ -146,6 +146,7 @@ from engine import (
     prepare_run_window,
     required_retention_s,
     run_window,
+    standing_finding_metric_lines,
 )
 from entity_resolver import EntityResolver, identity_resolver_for
 from episodes import EpisodeDetector
@@ -13156,6 +13157,13 @@ async def handle_controller_event(ev: dict) -> None:
         return
     await batch_signal(sig.to_ch_row())  # batched: lane=controller_events
     CONTROLLER_EVENTS_SIGNALS += 1
+    # Stage [1], tracker 387 on this lane: a relayed BGP "down" of a session that was
+    # never established is evidence (kept above, in corr_signals) but not a session
+    # failure, so it never enters the window. Counted like the trap lane's.
+    not_failure = controller_events_mod.bgp_not_a_session_failure(sig)
+    if not_failure:
+        controller_events_mod.count_bgp_not_a_session_failure(not_failure)
+        return
     buffer_signal(sig)
     log.info("controller signal %s: %s", sig.kind, sig.entity_id)
 
@@ -14763,6 +14771,13 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_trap_bgp_not_session_failure_total counter",]
     for _cls, _hits in sorted(_parser["trap_bgp_not_session_failure"].items()):
         lines.append(f'corr_trap_bgp_not_session_failure_total{{class="{_cls}"}} {_hits}')
+    # The same rule on the controller lane (P-424934): relayed transitions kept in
+    # corr_signals but never windowed. Bounded: the same two classes.
+    lines += [
+        "# HELP corr_controller_bgp_not_session_failure_total Controller-relayed BGP transitions of a session that was never established, kept as evidence but never windowed, by class.",
+        "# TYPE corr_controller_bgp_not_session_failure_total counter",]
+    for _cls, _hits in sorted(controller_events_mod.BGP_NOT_A_SESSION_FAILURE.items()):
+        lines.append(f'corr_controller_bgp_not_session_failure_total{{class="{_cls}"}} {_hits}')
     _proactive = proactive_stats()
     lines += [
         # A4 proactive checks. The SAME split as the parser's shadow series and
@@ -15364,6 +15379,7 @@ def _metrics_text(health: dict | None = None) -> str:
         *template_scoring_metric_lines(),
         # tracker 385: admin link changes exempted from the singleton rule.
         *admin_link_change_metric_lines(),
+        *standing_finding_metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until
@@ -16050,6 +16066,9 @@ def _health_payload() -> dict:
             **{f"identity_canon_{outcome}": n for outcome, n in identity_canon_totals().items()},
             # P6-A: controller event_time present but unparseable → ingest time used.
             "controller_events_ts_fallback": controller_events_mod.TS_FALLBACKS,
+            # P-424934: relayed BGP transitions of a never-established session,
+            # kept in corr_signals, never windowed (by class).
+            "controller_bgp_not_session_failure": dict(controller_events_mod.BGP_NOT_A_SESSION_FAILURE),
             # tracker 376: duplicate family reports of one BGP transition.
             "traps_collapsed": TRAP_TRANSITIONS.collapsed,
             "flows_received": FLOWS_RECEIVED,

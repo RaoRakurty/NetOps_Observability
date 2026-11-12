@@ -6,6 +6,8 @@ package collectors
 import (
 	"strconv"
 	"strings"
+
+	"netops/backend/internal/bgpfsm"
 )
 
 // trap_bgp.go — what a BGP session transition MEANS (tracker 387, trap semantics).
@@ -37,15 +39,16 @@ var bgpStateTitle = map[string]string{
 	"opensent": "OpenSent", "openconfirm": "OpenConfirm", "established": "Established",
 }
 
-// Transition classes, the closed set of TrapEvent.BGPTransition. The engine reads
-// the same vocabulary (producers.BGP_TRANSITION_CLASSES), and both sides pin it to
-// testdata/bgp_transition_classes.json.
+// Transition classes, the closed set of TrapEvent.BGPTransition. They are
+// internal/bgpfsm's, which the controller connectors share (nms/vmanage_events.go);
+// the engine reads the same vocabulary (producers.BGP_TRANSITION_CLASSES), and all
+// sides pin it to testdata/bgp_transition_classes.json.
 const (
-	bgpSessionLost       = "session_lost"      // established → anything lower: a fault
-	bgpSessionUp         = "session_up"        // anything → established
-	bgpNeverEstablished  = "never_established" // moves below established that never reached it
-	bgpProgressing       = "progressing"       // a forward move into opensent/openconfirm
-	bgpTransitionUnknown = "unknown"           // the prior state is not evidenced
+	bgpSessionLost       = bgpfsm.SessionLost      // established → anything lower: a fault
+	bgpSessionUp         = bgpfsm.SessionUp        // anything → established
+	bgpNeverEstablished  = bgpfsm.NeverEstablished // moves below established that never reached it
+	bgpProgressing       = bgpfsm.Progressing      // a forward move into opensent/openconfirm
+	bgpTransitionUnknown = bgpfsm.Unknown          // the prior state is not evidenced
 )
 
 // Bases for TrapEvent.BGPPrevStateBasis: where the prior state came from.
@@ -81,27 +84,10 @@ func normalizeBGPState(label, raw string) string {
 }
 
 // classifyBGPTransition names a move between two states. prev "" means the prior
-// state is not evidenced: only a move INTO established can be named then.
+// state is not evidenced: only a move INTO established can be named then. The
+// table is internal/bgpfsm's, shared with the controller lane.
 func classifyBGPTransition(prev, state string) string {
-	to, okTo := bgpStateRank[state]
-	if !okTo {
-		return ""
-	}
-	from, okFrom := bgpStateRank[prev]
-	switch {
-	case to == 6 && from == 6:
-		return bgpTransitionUnknown // not a transition; nothing to name
-	case to == 6:
-		return bgpSessionUp
-	case !okFrom:
-		return bgpTransitionUnknown
-	case from == 6:
-		return bgpSessionLost // to < 6 here
-	case to > from && to >= 4:
-		return bgpProgressing
-	default:
-		return bgpNeverEstablished
-	}
+	return bgpfsm.Classify(prev, state)
 }
 
 // bgpTransitionMeaning is the separate event severity, operational state and

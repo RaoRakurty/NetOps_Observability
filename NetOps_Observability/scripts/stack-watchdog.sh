@@ -1419,9 +1419,11 @@ drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/n
 # channel exists at all. The vmalert rules (CorrelationConsumerDead,
 # RouterConsumerDead, ...) are the in-stack layer; this is the independent one.
 #
-# THREE checks, all read-only, all bounded:
+# FOUR checks, all read-only, all bounded:
 #   1. correlation consumer group has members;
 #   2. every netops-router-* lane has members;
+#   2b. no router partition is joined-but-not-consuming (records arriving,
+#       committed offset frozen 15m — tracker 353);
 #   3. the alert-delivery heartbeat is arriving (see below).
 # Set ENGINE_CONSUMER_CHECK=0 to disable the lot.
 #
@@ -1485,6 +1487,20 @@ eng_query() {  # $1 = url-encoded promql -> eng_val + status
   return 0
 }
 
+# Names the wedged router partitions in a VictoriaMetrics instant-query body
+# (stdin) as "group/topic[partition] ...". Label ORDER in the body is not
+# relied on: each series object is cut out and each label read by name.
+eng_wedged_lanes() {
+  awk 'BEGIN { RS = "\\{\"metric\":" }
+    NR > 1 {
+      g = t = p = ""
+      if (match($0, /"consumergroup":"[^"]*"/)) { g = substr($0, RSTART + 17, RLENGTH - 18) }
+      if (match($0, /"topic":"[^"]*"/))         { t = substr($0, RSTART + 9,  RLENGTH - 10) }
+      if (match($0, /"partition":"[^"]*"/))     { p = substr($0, RSTART + 13, RLENGTH - 14) }
+      if (g != "") printf "%s/%s[%s] ", g, t, p
+    }'
+}
+
 if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
   if [ -z "$eng_cid" ]; then
     # Advisory, not critical: a missing victoria container is ALREADY reported
@@ -1536,6 +1552,36 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
           ;;
         *)
           problems+=("engine-consuming probe SKIPPED: router consumer-group query returned no usable body: $(printf '%s' "$eng_dead_raw" | tr '\n' ' ' | cut -c1-140)")
+          ;;
+      esac
+
+      # Router lanes JOINED but NOT CONSUMING (tracker 353). Membership above
+      # cannot see it: on 2026-10-17 and 2026-10-30 a router member stayed
+      # joined and heartbeating while it read nothing (Vector 0.40's kafka
+      # source loses its per-partition consumer task across a rebalance,
+      # upstream vectordotdev/vector#22006). Per PARTITION, from the broker's
+      # offsets: records are unread, the committed offset has not moved in 15m,
+      # the partition's end offset DID move in those 15m (records arrived), and
+      # the group still has a member. A quiet lane (end offset flat) and a slow
+      # lane (committed offset moving) cannot match. The in-router self-heal
+      # (cx-lane-watch.sh) restarts a wedged lane within ~5 minutes, so a
+      # 15-minute match means it did not — or storage is blocking writes, which
+      # freezes commits too and is named in the text. Same query as the
+      # vmalert rule RouterConsumerWedged, minus its one-page-per-fault
+      # exclusion: this layer reports every wedge, independently.
+      # max by (consumergroup, topic, partition) (kafka_consumergroup_lag{consumergroup=~"netops-router-.*"}) > 0 and on (consumergroup, topic, partition) max by (consumergroup, topic, partition) (delta(kafka_consumergroup_current_offset{consumergroup=~"netops-router-.*"}[15m])) == 0 and on (topic, partition) max by (topic, partition) (delta(kafka_topic_partition_current_offset[15m])) > 0 and on (consumergroup) max by (consumergroup) (kafka_consumergroup_members{consumergroup=~"netops-router-.*"}) >= 1
+      eng_wedged_q='max%20by%20%28consumergroup%2C%20topic%2C%20partition%29%20%28kafka_consumergroup_lag%7Bconsumergroup%3D~%22netops-router-.%2A%22%7D%29%20%3E%200%20and%20on%20%28consumergroup%2C%20topic%2C%20partition%29%20max%20by%20%28consumergroup%2C%20topic%2C%20partition%29%20%28delta%28kafka_consumergroup_current_offset%7Bconsumergroup%3D~%22netops-router-.%2A%22%7D%5B15m%5D%29%29%20%3D%3D%200%20and%20on%20%28topic%2C%20partition%29%20max%20by%20%28topic%2C%20partition%29%20%28delta%28kafka_topic_partition_current_offset%5B15m%5D%29%29%20%3E%200%20and%20on%20%28consumergroup%29%20max%20by%20%28consumergroup%29%20%28kafka_consumergroup_members%7Bconsumergroup%3D~%22netops-router-.%2A%22%7D%29%20%3E%3D%201'
+      eng_wedged_raw=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
+        "http://127.0.0.1:8428/api/v1/query?query=$eng_wedged_q" 2>&1) ||
+        eng_wedged_raw="victoria query failed: ${eng_wedged_raw}"   # kept, and reported as SKIPPED below
+      case "$eng_wedged_raw" in
+        *'"status":"success"'*)
+          eng_wedged=$(printf '%s' "$eng_wedged_raw" | eng_wedged_lanes)
+          [ -n "${eng_wedged// /}" ] &&
+            problems+=("ENGINE_NOT_CONSUMING: router lane(s) JOINED but NOT CONSUMING — records arriving, committed offset frozen 15m: ${eng_wedged}— nothing on them reaches OpenSearch/ClickHouse. Rule out a storage block first (it freezes commits on purpose); otherwise this is the Vector kafka-source rebalance wedge and the router's cx-lane-watch self-heal did not clear it: restart vector-router. Runbook: docs/runbooks/engine-not-consuming.md")
+          ;;
+        *)
+          problems+=("engine-consuming probe SKIPPED: router consumption query returned no usable body: $(printf '%s' "$eng_wedged_raw" | tr '\n' ' ' | cut -c1-140)")
           ;;
       esac
     fi

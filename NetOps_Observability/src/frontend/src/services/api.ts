@@ -7236,9 +7236,9 @@ export const api = {
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
   itsmJira: () => request<JiraStatus>("/api/itsm/jira"),
   itsmConfig: () => request<ItsmConfig>("/api/notify/itsm"),
-  saveItsmPagerDutyRCA: (c: { enabled: boolean; routing_key?: string }) =>
+  saveItsmPagerDutyRCA: (c: { enabled: boolean; routing_key?: string; watch_alerts?: boolean }) =>
     request<ItsmConfig>("/api/itsm/pagerduty-rca", { method: "PUT", body: JSON.stringify(c) }),
-  saveItsmSlackRCA: (c: { enabled: boolean; webhook_url?: string }) =>
+  saveItsmSlackRCA: (c: { enabled: boolean; webhook_url?: string; watch_alerts?: boolean }) =>
     request<ItsmConfig>("/api/itsm/slack-rca", { method: "PUT", body: JSON.stringify(c) }),
   saveItsmConfig: (c: ItsmConfigInput) =>
     request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
@@ -9913,8 +9913,11 @@ export type NmsStateRow = {
   siteId: string;
 };
 
-export type ItsmPagerDutyRCA = { enabled: boolean; has_routing_key?: boolean; configured?: boolean };
-export type ItsmSlackRCA = { enabled: boolean; has_webhook?: boolean; configured?: boolean };
+// watch_alerts: whether this lane also receives the tenant's OWN watch alerts
+// (BGP-watch prefix classes, cloud monitors) — the effective value, default
+// applied server-side (Slack on, PagerDuty off). Tracker 359.
+export type ItsmPagerDutyRCA = { enabled: boolean; has_routing_key?: boolean; configured?: boolean; watch_alerts?: boolean };
+export type ItsmSlackRCA = { enabled: boolean; has_webhook?: boolean; configured?: boolean; watch_alerts?: boolean };
 export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA; slack?: ItsmSlackRCA };
 export type ItsmConfigInput = {
   servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;

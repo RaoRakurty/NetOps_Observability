@@ -35,6 +35,20 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-12-link-cause-srlinux-sonic — tracker 388 (a), the syslog link cause for the
+# vendors still without one, on top of 2026-11-11-sdwan-controller-token-confd. New pack
+# nokia_srlinux (grammar nokia_srlinux.v1 for the
+# chassis portDown/portUp/subinterfaceDown/subinterfaceUp events only; row
+# syslog.srlinux.link.state_change, cause from the device's oper-down-reason: admin for
+# the *-admin-disabled reasons, fault for a named failure, unknown otherwise). SONiC: the
+# portmgrd `Configure <port> admin status to <state>` grammar and the row
+# syslog.sonic.link.admin_down (link_cause=admin, down only); the orchagent grammar also
+# takes the `swss#orchagent` program spelling. IOS XR gains cited fixtures on the existing
+# syslog.cisco.link.admin_down row (no row moved). Every new row is warn and sits behind
+# every older rule. One line family moves: an SR Linux chassis port line used to reach the
+# generic net as device_alarm warn and is now link_state_change warn. No earlier corpus
+# line carries any of these shapes.
+#
 # 2026-11-11-sdwan-controller-token-confd — the merge of the two revisions below: the SD-WAN control-connection
 # rows emit the lost controller as a grounding token, and the ConfD `via snmp`
 # session grammar reads no user. Nothing else moved.
@@ -186,7 +200,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-11-sdwan-controller-token-confd
+parser_rev: 2026-11-12-link-cause-srlinux-sonic
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -2241,6 +2255,18 @@ rules:
 
   # Interface and BGP: exactly the entity shape and the state word of the standard
   # link and BGP rules, `device:ifname` and `device:peer`.
+  #
+  # NO link_cause, on purpose (tracker 388, checked 2026-11-12). The notification cannot
+  # tell an operator's shutdown from a fault: VIPTELA-TRAPS `viptelaVpnInterfaceStateChange`
+  # is `OBJECTS { eventTime, netconfNotificationSeverity, viptelaVpnVpnId,
+  # viptelaVpnIfName, viptelaVpnNewState }`, and viptelaVpnNewState is `OperState`
+  # (up | down). No admin status, no reason (`viptelaVpnFailureReason` exists in the
+  # module but this notification does not carry it). Same OBJECTS in the pinned 20.12
+  # module (sha256 63c82876…, collectors/mibs/vendored/SOURCES.md) and in 26.1. So on this
+  # trap a shut vEdge interface reads as not-admin (fail-closed, tracker 385) and opens
+  # wherever its severity does. What can name the shutdown is another record of it: an
+  # RFC 2863 linkDown with ifAdminStatus, or the `interface-admin-state-change` event the
+  # edge also reports (tracker 388 residue).
   - rule_id: trap.sdwan.interface
     lane: trap
     source: trap

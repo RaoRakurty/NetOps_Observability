@@ -103,6 +103,18 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
         "owner": "correlix", "date_added": "2026-11-09",
     },
+    "security_posture_clear": {
+        "reason": "owner D2 (security lane findings-on-change) — a cleared hardening finding. Same recovery convention: binds to the finding's entity, build_nodes skips every *_clear kind, so it never becomes evidence, a template input or an object (D3)",
+        "owner": "correlix", "date_added": "2026-11-11",
+    },
+    "security_exposure_clear": {
+        "reason": "owner D2 (security lane findings-on-change) — a cleared exposure. Same recovery convention: binds to the finding's entity, build_nodes skips every *_clear kind, so it never becomes evidence, a template input or an object (D3)",
+        "owner": "correlix", "date_added": "2026-11-11",
+    },
+    "security_signal_clear": {
+        "reason": "owner D2 (security lane findings-on-change) — a cleared detection. Same recovery convention: binds to the finding's entity, build_nodes skips every *_clear kind, so it never becomes evidence, a template input or an object",
+        "owner": "correlix", "date_added": "2026-11-11",
+    },
     "bfd_session_flap": {
         "reason": "tracker 387 — RFC 7331 session transitions, every vendor. Its one template, "
                   "sig.ent.wan-edge.bfd-false-failover, ships disabled; turning it on is a stage [6] "

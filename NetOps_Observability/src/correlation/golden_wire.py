@@ -240,6 +240,11 @@ def replay_fixture_through_engine(name: str, monkeypatch=None):
         elif lane == "metric":
             signals.extend(normalize_metric_event(item["event"], tenant, T0,
                                                   item.get("detected")))
+        elif lane == "evidence":
+            # The evidence bus (netops.security / netops.bgp): the exact
+            # secbus/bgpwatch envelope through the production adapter.
+            from signals import evidence_signal_from_event
+            signals.append(evidence_signal_from_event(item["event"], tenant))
         else:
             raise ValueError(f"unknown golden-wire lane {lane!r} in {name}")
     cat = builtin_catalog()

@@ -190,19 +190,23 @@ type staticRouter struct{ t HostTarget }
 
 func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 
-// FOUR PAGE CONDITIONS, ELEVEN RULES — and that is not a contradiction.
+// FOUR PAGE CONDITIONS, TWELVE RULES — and that is not a contradiction.
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
 // conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
-// ELEVEN, because one condition is implemented by several per-engine/per-lane
+// TWELVE, because one condition is implemented by several per-engine/per-lane
 // rules whose first response differs — the rules are the same condition seen
 // from a different vantage point, not extra conditions:
 //
-//	(1) an engine consumer is not consuming   — 6 rules
+//	(1) an engine consumer is not consuming   — 7 rules
 //	      CorrelationConsumerDead    broker view: the correlation group has zero members
 //	      CorrelationLagGrowing      joined but draining nothing (the stuck shape)
 //	      RouterConsumerDead         the same pair `by (consumergroup)` over the
 //	      RouterConsumerLagGrowing     netops-router-* lanes, so a new lane is covered
+//	      RouterConsumerWedged       per PARTITION: joined, records arriving, the
+//	                                   committed offset frozen 15m — the low-volume
+//	                                   lane LagGrowing cannot see (tracker 353,
+//	                                   upstream vectordotdev/vector#22006)
 //	      CorrConsumerNotRunning     the engine's OWN corr_consumer_running gauge
 //	      CorrConsumerRestartLoop    a supervision loop that never stays up
 //	(2) ingest silent when it should not be    — 2 rules
@@ -227,7 +231,7 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 // `tier: page` rule at all. Both claims are pinned mechanically by
 // TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
 // fails the build rather than rotting the next time a rule is added.
-const pageRuleCount = 11
+const pageRuleCount = 12
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.

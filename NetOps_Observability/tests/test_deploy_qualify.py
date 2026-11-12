@@ -542,3 +542,284 @@ def test_marker_round_trip_and_malformed_markers_read_as_unknown(tmp_path) -> No
         "ACL_MARKER_FILE": str(marker), "LOG_WINDOW": "20m"})
     assert re.search(r"roundtrip=\[\d{10}\]", out), out
     assert "malformed=[]" in out and "nonnumeric=[]" in out and "absent=[]" in out
+
+
+# ---------------------------------------------------------------------------
+# Tracker 353 — Q2c: prove CONSUMPTION, not membership.
+#
+# 2026-10-17: netops-router-applogs read nothing for over an hour (lag 22,643,
+# KafkaConsumerStalled) while its group member stayed joined, so "Q2 router
+# consumers joined" PASSED during the stall. Vector 0.40's kafka source loses
+# its per-partition consumer task across a rebalance (upstream
+# vectordotdev/vector#22006, open; reported still present on 0.54/0.55) and the
+# member keeps heartbeating. Q2c judges every (group, topic, partition) from
+# the broker's committed and end offsets instead. These tests run the SHIPPED
+# functions and the SHIPPED block, extracted from the script, not a restatement.
+# ---------------------------------------------------------------------------
+
+def _q2c_block() -> str:
+    src = _script()
+    start = src.index("# --- Q2c: every consumer group is CONSUMING")
+    end = src.index("# --- Q3:", start)
+    return src[start:end]
+
+
+def _q2c_judge(rows: list[tuple], final: int = 0, minobs: int = 120,
+               grace: int = 60, tol: int = 100) -> dict[tuple, tuple[str, str]]:
+    """Run the real q2c_judge over (epoch, group, topic, partition, C, E) rows."""
+    import subprocess
+    block = _q2c_block()
+    fn = block[block.index("q2c_judge() {"):block.index("q2c_numeric_ok=1")]
+    data = "\n".join("\t".join(str(x) for x in r) for r in rows) + "\n"
+    res = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + fn +
+         f"\nq2c_judge {minobs} {grace} {tol} {final}"],
+        input=data, capture_output=True, text=True, timeout=30, check=False)
+    assert res.returncode == 0, res.stderr
+    out = {}
+    for ln in res.stdout.splitlines():
+        g, t, p, verdict, detail = ln.split("\t", 4)
+        out[(g, t, p)] = (verdict, detail)
+    return out
+
+
+def _series(group: str, topic: str, part: str, t0: int, step: int,
+            committed: list[int], end: list[int]) -> list[tuple]:
+    return [(t0 + i * step, group, topic, part, c, e)
+            for i, (c, e) in enumerate(zip(committed, end))]
+
+
+APP = ("netops-router-applogs", "netops.applogs", "0")
+
+
+def test_q2c_the_2026_10_17_wedge_is_a_failure() -> None:
+    """Records keep arriving, the committed offset never moves, the member is
+    joined: the exact shape Q2 passed. It must be STALLED."""
+    rows = _series(*APP, 1000, 10, [5000] * 19, [5000 + 40 * i for i in range(19)])
+    verdict, detail = _q2c_judge(rows)[APP]
+    assert verdict == "STALLED", detail
+    assert "committed offset stayed at 5000" in detail and "lag now 720" in detail
+
+
+def test_q2c_a_moving_consumer_passes() -> None:
+    rows = _series(*APP, 1000, 10, [5000 + 30 * i for i in range(4)],
+                   [5040 + 30 * i for i in range(4)])
+    assert _q2c_judge(rows)[APP][0] == "CONSUMING"
+
+
+def test_q2c_one_wedged_partition_cannot_hide_behind_a_moving_sibling() -> None:
+    """Nothing is summed: Vector's bug is per PARTITION task."""
+    p1 = ("netops-router-applogs", "netops.applogs", "1")
+    rows = (_series(*APP, 1000, 10, [100 + 9 * i for i in range(19)],
+                    [110 + 9 * i for i in range(19)])
+            + _series(*p1, 1000, 10, [700] * 19, [700 + 5 * i for i in range(19)]))
+    out = _q2c_judge(rows)
+    assert out[APP][0] == "CONSUMING"
+    assert out[p1][0] == "STALLED", out[p1]
+
+
+def test_q2c_an_idle_lane_is_not_a_failure() -> None:
+    """No input + no backlog is a quiet lane — but only after MIN_OBSERVE."""
+    rows = _series(*APP, 1000, 10, [800] * 13, [800] * 13)
+    assert _q2c_judge(rows)[APP][0] == "IDLE"
+    assert _q2c_judge(rows[:6])[APP][0] == "PENDING", (
+        "60 s of quiet is not yet proof of an idle lane")
+
+
+def test_q2c_idle_tolerates_a_small_uncommitted_tail() -> None:
+    """correlation commits every 100 records or 5 s, on the NEXT record, so a
+    quiet lane can rest with a few uncommitted offsets."""
+    rows = _series(*APP, 1000, 10, [800] * 13, [899] * 13)
+    assert _q2c_judge(rows, tol=100)[APP][0] == "IDLE"
+
+
+def test_q2c_a_consumer_sitting_on_a_backlog_is_frozen() -> None:
+    """Input stopped, but 22k records are unread and nothing commits: the
+    wedge after its producer went quiet. Not idle."""
+    rows = _series(*APP, 1000, 10, [1000] * 13, [23643] * 13)
+    verdict, detail = _q2c_judge(rows)[APP]
+    assert verdict == "FROZEN", detail
+    assert "22643 records still unread" in detail
+
+
+def test_q2c_records_inside_the_grace_period_are_not_a_stall() -> None:
+    """A record that lands in the last seconds has not had time to be
+    committed (5 s cadence + a 30 s scrape). Before the end it keeps the poll
+    open; at the end it is judged on the quiet part of the window."""
+    end = [800] * 16 + [805, 805, 805]       # arrives 30 s before the last sample
+    rows = _series(*APP, 1000, 10, [800] * 19, end)
+    assert _q2c_judge(rows, final=0)[APP][0] == "PENDING"
+    verdict, detail = _q2c_judge(rows, final=1)[APP]
+    assert verdict == "IDLE", detail
+    assert "too recent" in detail
+
+
+def test_q2c_a_rewound_group_is_rebaselined_not_read_as_progress() -> None:
+    """A committed offset moving BACKWARDS (group reset) must neither count as
+    consumption nor carry the old baseline."""
+    rows = _series(*APP, 1000, 10, [900] * 5 + [100] * 14, [900] * 19)
+    verdict, detail = _q2c_judge(rows)[APP]
+    assert verdict == "FROZEN", detail       # 800 unread after the reset
+    rows_ok = _series(*APP, 1000, 10, [900] * 5 + [100] * 14, [100] * 19)
+    assert _q2c_judge(rows_ok)[APP][0] == "IDLE"
+
+
+def test_q2c_a_partition_that_never_committed_while_data_arrives_is_stalled() -> None:
+    rows = _series(*APP, 1000, 10, [-1] * 19, [10 * i for i in range(19)])
+    verdict, detail = _q2c_judge(rows)[APP]
+    assert verdict == "STALLED" and "never committed" in detail, detail
+
+
+def _vm_rows_fn() -> str:
+    block = _q2c_block()
+    return block[block.index("vm_rows() {"):block.index("# One observation:")]
+
+
+def test_q2c_vm_rows_parses_a_real_victoriametrics_body() -> None:
+    body = ('{"status":"success","data":{"resultType":"vector","result":['
+            '{"metric":{"__name__":"kafka_consumergroup_current_offset",'
+            '"consumergroup":"netops-router-applogs","instance":"kafka-exporter:9308",'
+            '"job":"kafka","partition":"0","topic":"netops.applogs"},'
+            '"value":[1731400000,"5000"]},'
+            '{"metric":{"consumergroup":"netops-correlation","partition":"11",'
+            '"topic":"netops.syslog"},"value":[1731400000,"1.2e+06"]},'
+            '{"metric":{"consumergroup":"no-partition-label","topic":"x"},'
+            '"value":[1731400000,"7"]}]},"stats":{"seriesFetched":"3"}}')
+    out = _run_bash(
+        "set -euo pipefail\n"
+        'oneline() { printf "%s" "$1"; }\n'
+        'vm_body() { printf "%s" "$BODY"; }\n' + _vm_rows_fn() +
+        "\nvm_rows q consumergroup topic partition\n", env={"BODY": body})
+    assert out.splitlines() == [
+        "netops-router-applogs\tnetops.applogs\t0\t5000",
+        "netops-correlation\tnetops.syslog\t11\t1.2e+06",
+    ], out
+
+
+def test_q2c_vm_rows_refuses_a_non_success_body() -> None:
+    import subprocess
+    res = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n"
+         'oneline() { printf "%s" "$1"; }\n'
+         "vm_body() { printf '{\"status\":\"error\",\"error\":\"bad\"}'; }\n"
+         + _vm_rows_fn() + "\nvm_rows q topic partition\n"],
+        capture_output=True, text=True, timeout=30, check=False)
+    assert res.returncode != 0 and "non-success" in res.stderr, res
+
+
+# --- the whole Q2c block, end to end, on a fake clock -----------------------
+
+_Q2C_HARNESS = r'''
+set -euo pipefail
+METRICS_OK=1; EXPORTER_CID=exp; C_SKIP=''; C_OFF=''
+POLL_INTERVAL=10
+T0=1000000
+echo "$T0" > "$CLK"
+date() { if [ "${1:-}" = "+%s" ]; then cat "$CLK"; else command date "$@"; fi; }
+sleep() { echo $(( $(cat "$CLK") + $1 )) > "$CLK"; }
+DEADLINE=$(( T0 + 300 )); GLOBAL_DEADLINE=$(( T0 + 900 ))
+have_time() { return 0; }
+deadline_skip() { printf 'SKIP\tREQUIRED\t%s\tdeadline\n' "$1"; }
+record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; }
+warn() { printf 'WARN %s\n' "$*" >&2; }
+oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-"${2:-220}"; }
+is_num() { grep -qE '^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$' <<<"$1"; }
+num_gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
+vm_scalar() { printf '%s' "${FRESH_AGE:-5}"; }
+# Offsets are a function of elapsed fake time t, per SCENARIO.
+vm_body() {
+  local t c1 e1 c2 e2
+  t=$(( $(cat "$CLK") - T0 ))
+  case "$SCENARIO" in
+    wedge)   c1=5000;                e1=$(( 5000 + 4 * t )); c2=$(( 900 + t )); e2=$(( 903 + t )) ;;
+    healthy) c1=$(( 5000 + 4 * t )); e1=$(( 5010 + 4 * t )); c2=$(( 900 + t )); e2=$(( 903 + t )) ;;
+    idle)    c1=5000;                e1=5000;                c2=900;            e2=900 ;;
+  esac
+  case "$1" in
+    *consumergroup_current_offset*)
+      printf '{"status":"success","data":{"result":[{"metric":{"consumergroup":"netops-router-applogs","partition":"0","topic":"netops.applogs"},"value":[1,"%s"]},{"metric":{"consumergroup":"netops-correlation","partition":"0","topic":"netops.syslog"},"value":[1,"%s"]}]}}' "$c1" "$c2" ;;
+    *topic_partition_current_offset*)
+      printf '{"status":"success","data":{"result":[{"metric":{"partition":"0","topic":"netops.applogs"},"value":[1,"%s"]},{"metric":{"partition":"0","topic":"netops.syslog"},"value":[1,"%s"]}]}}' "$e1" "$e2" ;;
+  esac
+}
+'''
+
+
+def _run_q2c(scenario: str, tmp_path, extra: str = "", **env) -> list[list[str]]:
+    import subprocess
+    res = subprocess.run(
+        ["bash", "-c", _Q2C_HARNESS + extra + _q2c_block()],
+        capture_output=True, text=True, timeout=60, check=False,
+        env={"PATH": "/usr/bin:/bin", "SCENARIO": scenario,
+             "CLK": str(tmp_path / "clock"), **env})
+    assert res.returncode == 0, f"Q2c block aborted: {res.stderr}"
+    rows = [ln.split("\t") for ln in res.stdout.splitlines()
+            if ln.startswith(("PASS\t", "FAIL\t", "SKIP\t"))]
+    assert len(rows) == 1, f"Q2c must record exactly one verdict: {res.stdout}"
+    return rows
+
+
+def _elapsed(tmp_path) -> int:
+    return int((tmp_path / "clock").read_text()) - 1000000
+
+
+def test_q2c_block_fails_the_wedge_and_names_the_lane(tmp_path) -> None:
+    (verdict, cls, label, detail), = _run_q2c("wedge", tmp_path)
+    assert (verdict, cls) == ("FAIL", "REQUIRED"), detail
+    assert label.startswith("Q2c")
+    assert "STALLED netops-router-applogs[0] netops.applogs" in detail, detail
+    assert "STALLED netops-correlation" not in detail, (
+        "the moving correlation group must not be blamed")
+    assert "vectordotdev/vector#22006" in detail
+
+
+def test_q2c_block_passes_moving_consumers_early(tmp_path) -> None:
+    (verdict, _cls, _label, detail), = _run_q2c("healthy", tmp_path)
+    assert verdict == "PASS", detail
+    assert "2 partition(s) consuming" in detail, detail
+    assert _elapsed(tmp_path) < 60, "two moving groups must not wait out the window"
+
+
+def test_q2c_block_passes_a_quiet_stack_only_after_watching_it(tmp_path) -> None:
+    (verdict, _cls, _label, detail), = _run_q2c("idle", tmp_path)
+    assert verdict == "PASS" and "2 idle" in detail, detail
+    assert _elapsed(tmp_path) >= 120, "idle is only proven after DQ_Q2_MIN_OBSERVE"
+
+
+def test_q2c_block_stale_exporter_is_a_skip_not_a_pass(tmp_path) -> None:
+    """Frozen numbers from a dead exporter would read as idle lanes."""
+    (verdict, cls, _label, detail), = _run_q2c("idle", tmp_path, FRESH_AGE="900")
+    assert (verdict, cls) == ("SKIP", "REQUIRED"), detail
+    assert "not current" in detail
+
+
+def test_q2c_block_extends_a_spent_window_to_min_observe(tmp_path) -> None:
+    """Earlier checks may have used up the shared window; Q2c still watches
+    for MIN_OBSERVE (inside the global deadline) instead of judging nothing."""
+    (verdict, cls, _label, detail), = _run_q2c("wedge", tmp_path, extra="DEADLINE=$T0\n")
+    assert (verdict, cls) == ("FAIL", "REQUIRED"), detail
+    assert _elapsed(tmp_path) >= 120
+
+
+def test_q2c_block_never_overruns_the_global_deadline(tmp_path) -> None:
+    """…but the extension is bounded: with no global budget left the partitions
+    stay unjudged and that is a required SKIP, never a PASS."""
+    (verdict, cls, _label, detail), = _run_q2c(
+        "idle", tmp_path, extra="DEADLINE=$T0; GLOBAL_DEADLINE=$(( T0 + 40 ))\n")
+    assert (verdict, cls) == ("SKIP", "REQUIRED"), detail
+    assert "Not evaluated is not passed" in detail
+    assert _elapsed(tmp_path) <= 40
+
+
+def test_q2c_is_documented_and_reads_the_broker_not_vector() -> None:
+    usage = _script()[:_script().index("EOF\n}")]
+    assert "Q2c" in usage
+    for knob in ("DQ_Q2_MIN_OBSERVE", "DQ_Q2_COMMIT_GRACE",
+                 "DQ_Q2_IDLE_LAG_MAX", "DQ_Q2_MAX_STALENESS"):
+        assert knob in usage, f"{knob} is not documented in --help"
+    block = _q2c_block()
+    # Vector's own lag gauge is wrong after the very glitch we are detecting
+    # (upstream vectordotdev/vector#21134); the broker's offsets are the truth.
+    assert "vector_kafka_consumer_lag" not in block
+    assert "kafka_consumergroup_current_offset" in block
+    assert "kafka_topic_partition_current_offset" in block

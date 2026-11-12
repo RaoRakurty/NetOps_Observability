@@ -87,9 +87,13 @@ def snmp_episode_by_id(origin: str | None = None):
 
 # ── the over-counts, before and after ─────────────────────────────────────────
 
-def test_trap_plus_controller_relay_of_one_device_confirms_today() -> None:
-    """The defect, pinned: with the rule off this pair CONFIRMS on one box's word."""
-    assert assess([trap_from_device(DEVICE_ID), controller_relay_of_device(DEVICE_ID)]).tier is VerdictTier.CONFIRMED
+def test_trap_plus_controller_relay_of_one_device_no_longer_confirms_even_with_the_rule_off() -> None:
+    """The defect E1 was built for: with the rule off this pair CONFIRMED on one
+    box's word. Owner D1 (2026-11-11) closes it for every device, flag or not:
+    the controller relay is management_plane, which supports but never anchors."""
+    v = assess([trap_from_device(DEVICE_ID), controller_relay_of_device(DEVICE_ID)])
+    assert v.tier is not VerdictTier.CONFIRMED
+    assert any("supports but never anchors" in r for r in v.reasons), v.reasons
 
 
 def test_trap_plus_controller_relay_of_one_device_never_confirms(origin_on) -> None:
@@ -106,14 +110,15 @@ def test_syslog_hostname_plus_snmp_id_never_confirms(origin_on) -> None:
 
 
 def test_two_different_devices_still_confirm(origin_on) -> None:
-    """The rule removes only same-device pairs: two boxes are still two witnesses."""
-    assert assess([trap_from_device(DEVICE_ID), controller_relay_of_device("cedge-40-b99e47eb")]).tier \
+    """The rule removes only same-device pairs: two boxes are still two witnesses
+    (two measurement planes since owner D1; a controller relay never anchors)."""
+    assert assess([syslog_by_hostname(DEVICE_ID), snmp_episode_by_id("cedge-40-b99e47eb")]).tier \
         is VerdictTier.CONFIRMED
 
 
 def test_unstamped_signals_are_unaffected(origin_on) -> None:
     """No origin means no claim either way — the old rule applies."""
-    assert assess([trap_from_device(), controller_relay_of_device()]).tier is VerdictTier.CONFIRMED
+    assert assess([syslog_by_hostname(), snmp_episode_by_id()]).tier is VerdictTier.CONFIRMED
 
 
 # ── downgrade-only ─────────────────────────────────────────────────────────────

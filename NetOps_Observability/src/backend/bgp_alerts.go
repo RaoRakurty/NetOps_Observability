@@ -63,22 +63,23 @@ func (s *server) buildBGPWatch(policies bgpwatch.PolicyStore, baselines bgpwatch
 		Peers:     s.bgpWatchPeers,
 		Sightings: s.bgpWatchSightings,
 
-		// Notifications ride the SAME dispatcher every other evaluator uses (the
-		// cloud-monitor evaluator's exact shape). That dispatcher holds the
-		// PLATFORM-GLOBAL channel list only — configured by the platform admin,
-		// a cross-tenant audience — so a BGP alert reaches the platform
-		// operator, NOT the tenant (tracker 359). There is no per-tenant alert
-		// channel to route it to: a tenant's own destinations are its RCA
-		// incident-policy lanes (itsm_config.go), which by contract only page
-		// once per root cause and never receive raw alerts, and its contact
-		// points, which only reports use. The global PagerDuty key never pages
-		// for it either: the alert carries no platform `layer` label, so
-		// notify.PlatformScopeFilter drops it (pinned by
-		// TestBGPWatchAlertsNeverPageThePlatformKey). The tenant's route today
-		// is the evidence half below: bgp-watch evidence → correlation → the
-		// tenant's RCA incident policy.
-		Notify:  func(a bgpwatch.Alert) { s.notifier.Dispatch(bgpWatchAlertToModel(a)) },
-		Resolve: func(a bgpwatch.Alert) { s.notifier.DispatchResolve(bgpWatchAlertToModel(a)) },
+		// Notifications go two ways (tracker 359, owner decision 2026-11-12):
+		//
+		//  1. The SAME dispatcher every other evaluator uses — the
+		//     PLATFORM-GLOBAL channel list (platform-admin configured, a
+		//     cross-tenant audience). Unchanged: the platform operator keeps
+		//     receiving every BGP-watch alert. The global PagerDuty key never
+		//     pages for it: no platform `layer` label, so
+		//     notify.PlatformScopeFilter drops it (pinned by
+		//     TestBGPWatchAlertsNeverPageThePlatformKey).
+		//  2. The owning tenant's OWN RCA lanes, for the prefix classes the
+		//     tenant's watchlist raises — never peer-down, which correlation
+		//     folds (bgpWatchTenantOwned). Routed to a.Tenant, the tenant the
+		//     evaluator stamped from its own pass; one message per episode.
+		//
+		// The evidence half below still feeds correlation as before.
+		Notify:  s.bgpWatchNotify,
+		Resolve: s.bgpWatchResolve,
 
 		// Transport: the same Vector bus-bridge produce path every other Go
 		// producer uses (no Kafka client in the backend, §6 allowlist).
@@ -188,6 +189,39 @@ func (s *server) bgpWatchAuthz(w http.ResponseWriter, r *http.Request, gate bgpw
 		tenant = ""
 	}
 	return bgpwatch.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// bgpWatchNotify / bgpWatchResolve are the evaluator's notifier seams: the
+// platform dispatcher always, the owning tenant's own lanes for tenant-owned
+// classes only.
+func (s *server) bgpWatchNotify(a bgpwatch.Alert) {
+	s.notifier.Dispatch(bgpWatchAlertToModel(a))
+	if bgpWatchTenantOwned(a) {
+		s.tenantWatchFire(a.Tenant, bgpWatchAlertToModel(a))
+	}
+}
+
+func (s *server) bgpWatchResolve(a bgpwatch.Alert) {
+	s.notifier.DispatchResolve(bgpWatchAlertToModel(a))
+	if bgpWatchTenantOwned(a) {
+		s.tenantWatchResolve(a.Tenant, bgpWatchAlertToModel(a))
+	}
+}
+
+// bgpWatchTenantOwned reports whether a BGP-watch alert is a tenant-owned
+// prefix-class episode — one of the incident classes a tenant's own watchlist
+// raises, AND the rule the evaluator pairs with that class (so a peer-down
+// alert can never pass by carrying a class). Deliberately excluded: peer-down
+// (class none — correlation folds a session loss into the root cause it
+// belongs to) and the "no longer measured" notices (class unknown — an
+// operator signal, not a new episode).
+func bgpWatchTenantOwned(a bgpwatch.Alert) bool {
+	switch a.Class {
+	case bgpwatch.ClassOriginChange, bgpwatch.ClassRPKIInvalid, bgpwatch.ClassBogon,
+		bgpwatch.ClassRouteLeak, bgpwatch.ClassVisibilityLoss:
+		return a.Rule == "bgp_"+string(a.Class)
+	}
+	return false
 }
 
 // bgpWatchAlertToModel is the one-line adapter from the module's Alert to the

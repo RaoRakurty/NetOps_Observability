@@ -658,7 +658,12 @@ RULES_HASH_FINAL_WAVE_CONFD_SNMP_SESSION = "55b109a4e67d0843bb3206402d6348513356
 #: Merged (2026-11-11): the SD-WAN controller peer token and the ConfD SNMP session
 #: grammar, both on the final wave. Nothing else moved.
 RULES_HASH_CONTROLLER_PEER_CONFD_MERGE = "ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941df8206e71018d92b347ace9bb0"
-RULES_HASH_A3 = RULES_HASH_CONTROLLER_PEER_CONFD_MERGE
+#:
+#: Tracker 388 syslog link cause (2026-11-12): the nokia_srlinux pack (chassis port and
+#: subinterface events, cause from oper-down-reason) and the SONiC portmgrd admin-status
+#: grammar and row; orchagent also reads `swss#orchagent`. Two rule rows, both warn.
+RULES_HASH_LINK_CAUSE_SRLINUX_SONIC = "246b7761c983b90677e247d8d5d83177a582708929f75e4e1dbdd277e26702af"
+RULES_HASH_A3 = RULES_HASH_LINK_CAUSE_SRLINUX_SONIC
 
 
 def _guard_patterns(node) -> list[str]:

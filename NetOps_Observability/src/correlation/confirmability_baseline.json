@@ -1,4 +1,5 @@
 {
-  "_comment": "#99 R4 confirmability ratchet \u2014 the floor for audit()'s confirmable_now count. CI fails if a change makes FEWER signatures confirmable than this baseline (a catalog/producer regression can never silently darken a signature). When your change legitimately RAISES the count, bump the baseline in the same commit; lowering it requires an explicit owner decision in the PR.",
-  "confirmable_now": 32
+  "_comment": "#99 R4 confirmability ratchet — the floor for audit()'s confirmable_now count. CI fails if a change makes FEWER signatures confirmable than this baseline (a catalog/producer regression can never silently darken a signature). When your change legitimately RAISES the count, bump the baseline in the same commit; lowering it requires an explicit owner decision in the PR.",
+  "_lowered": "32 -> 29 on 2026-11-11 by owner decision D1 (Fable RCA-engine review): security and management_plane witnesses support but never anchor the confirming pair. Darkened: sig.ent.wan-edge.sdwan-tunnel-controller-corroborated, sig.ent.wireless.ap-down-power, sig.ent.wireless.capwap-instability (each carries a DEMO_CONFIRMABILITY_EXCEPTIONS entry with its target resolution).",
+  "confirmable_now": 29
 }
