@@ -78,17 +78,27 @@ type RecommendedSet struct {
 // so "recommended" and "what runs when nothing is set" are the same model. A
 // blank tier field resolves to its recommended model (TierModels.ForProvider).
 //
-// Gemini (2026-11-12): the default and strong pick moved from the moving alias
-// gemini-flash-latest — which timed out on a 10 s probe in the lab that day
-// while the dated gemini-2.5-flash answered in 0.59 s and the fast pick
-// gemini-flash-lite-latest in 0.67 s — to gemini-2.5-flash. A dated id can be
-// retired (gemini-1.5-flash now 404s), and that is the trade: an alias can
-// change under a deployment without notice, a dated id fails loudly as "model
-// not found" in the settings Test (which now probes every tier model) and is
-// replaced deliberately. Review this pick when Google announces 2.5 retirement.
+// Gemini (2026-11-12, second revision the same day). The first revision moved
+// off the moving alias gemini-flash-latest (503 "high demand" and 10 s
+// timeouts in the lab) to gemini-2.5-flash — but Google deprecated 2.5 Flash
+// on 2026-11-02: API access is limited to projects that already used it (a
+// new customer key cannot call it) and from 2026-12-01 its requests are
+// auto-routed to gemini-3.5-flash-lite (aistudio.google.com/docs/deprecations,
+// verified 2026-11-12). The picks are now GA model ids with no shutdown date:
+// three DISTINCT models, so the same-provider fallback (FallbackModel) always
+// has somewhere to go — strong → default → fast:
+//   - default gemini-3.6-flash      (GA 2026-07-21)
+//   - fast    gemini-3.5-flash-lite (GA 2026-07-21; thinking-free family)
+//   - strong  gemini-3.8-flash      (GA 2026-09-02; Google's newest Flash, the
+//     pool its forum reports peak-hour 503s on, so it is the tier that can
+//     fall back, never the default)
+//
+// Aliases (…-latest) are never recommended: Google hot-swaps them with two
+// weeks' email notice and they have no stable capacity. Review these picks
+// when the deprecations page lists any of them.
 func RecommendedModels() map[string]RecommendedSet {
 	return map[string]RecommendedSet{
-		"gemini":    {Default: "gemini-2.5-flash", Fast: "gemini-flash-lite-latest", Strong: "gemini-2.5-flash"},
+		"gemini":    {Default: "gemini-3.6-flash", Fast: "gemini-3.5-flash-lite", Strong: "gemini-3.8-flash"},
 		"openai":    {Default: "gpt-4o-mini", Fast: "gpt-4o-mini", Strong: "gpt-4.1"},
 		"anthropic": {Default: "claude-sonnet-4-6", Fast: "claude-haiku-4-5", Strong: "claude-opus-4-8"},
 	}
@@ -129,7 +139,7 @@ func ModelSuggestions() map[string][]string {
 	return map[string][]string{
 		"anthropic": {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"},
 		"openai":    {"gpt-4o-mini", "gpt-4.1", "gpt-4o"},
-		"gemini":    {"gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-pro"},
+		"gemini":    {"gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-4-hydrogen"},
 	}
 }
 

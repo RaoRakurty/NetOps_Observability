@@ -280,7 +280,21 @@ var (
 	providerBackoffCap    = 3 * time.Second
 	providerRetryAfterCap = 5 * time.Second
 	providerSleep         = sleepCtx
+	// providerOverloadAttempts caps the attempts on a model that answered
+	// "overloaded" (503, Anthropic 529): ONE retry, then the caller moves on
+	// to the same provider's fallback model. Google's 503 "high demand" runs
+	// for hours on one model pool while another answers at once (lab and
+	// Google forum, 2026-11), and each 503 took ~5 s to arrive, so three
+	// attempts spent most of a stage budget on a model that was not coming
+	// back.
+	providerOverloadAttempts = 2
 )
+
+// overloadedStatus reports a provider status that means "this model is over
+// capacity right now" rather than a transient blip.
+func overloadedStatus(code int) bool {
+	return code == http.StatusServiceUnavailable || code == 529
+}
 
 // retryableProviderStatus is the closed set of statuses worth asking again.
 // 529 is Anthropic's "overloaded".
@@ -407,6 +421,9 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 		case errors.As(err, &se):
 			if !retryableProviderStatus(se.Status) {
 				return nil, err
+			}
+			if overloadedStatus(se.Status) && attempt >= providerOverloadAttempts {
+				return nil, lastErr
 			}
 			hint = se.RetryAfter
 			prior = se

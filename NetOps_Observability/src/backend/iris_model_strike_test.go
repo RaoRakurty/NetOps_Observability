@@ -16,6 +16,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,7 +116,7 @@ func TestAnOverloadedModelFallsBackToTheProvidersRecommendedModel(t *testing.T) 
 	if err != nil || text == "" || provider != "gemini" {
 		t.Fatalf("the fallback model must answer: text=%q provider=%q err=%v", text, provider, err)
 	}
-	if got := note.Model("gemini"); got != "gemini-2.5-flash" {
+	if got := note.Model("gemini"); got != ai.RecommendedModels()["gemini"].Default {
 		t.Fatalf("the answer must name the model that answered, got %q", got)
 	}
 	if len(logs.find("fallback model answered")) != 1 {
@@ -153,5 +154,42 @@ func TestAskCallsAFailingProviderOnce(t *testing.T) {
 	}
 	if out["mode"] == nil || time.Since(start) > 10*time.Second {
 		t.Fatalf("the deterministic answer must still ship, promptly: %v after %v", out, time.Since(start))
+	}
+}
+
+// The agent loop (AI investigations) runs on one model; when the configured
+// model is overloaded it runs once more on the provider's fallback model,
+// same key, inside the same budget — never "model unavailable" while another
+// model of the provider answers (lab 2026-11-12: gemini-flash-latest 503).
+func TestAgentLoopMovesToTheFallbackModelWhenTheConfiguredOneIsOverloaded(t *testing.T) {
+	s := oneRegistryServer(t)
+	clearAIEnv(t)
+	t.Setenv("FEATURE_AI_TOOLS", "true")
+	s.aiBreaker = aiprovider.NewBreaker(aiprovider.Config{Threshold: 1000, Cooldown: time.Hour})
+	s.aiProvCalls = aiprovider.NewMetrics(s.aiBreaker)
+	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey, Model: "gemini-flash-latest"})
+	g := startFakeGemini(t, 200, geminiOK)
+	g.mu.Lock()
+	g.statusFor = map[string]int{"gemini-flash-latest": 503}
+	g.mu.Unlock()
+
+	claims := superA()
+	orch := s.newOrchestrator(aiTSRequest(claims), claims)
+	if orch.AgentAnswer == nil {
+		t.Fatal("fixture: the agent path must be wired, or this test proves nothing")
+	}
+	ctx, _ := ai.WithModelNote(context.Background())
+	ans, err := orch.AgentAnswer(ctx, s.aiPrincipal(claims), "explain the network topology", nil)
+	if err != nil {
+		t.Fatalf("the fallback model must answer: %v (calls %v)", err, g.urls)
+	}
+	if ans.Provider != "gemini" || ans.Model != ai.RecommendedModels()["gemini"].Default {
+		t.Fatalf("the answer must name the model that answered: %s/%s", ans.Provider, ans.Model)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	last := g.urls[len(g.urls)-1]
+	if !strings.Contains(g.urls[0], "gemini-flash-latest:") || !strings.Contains(last, ai.RecommendedModels()["gemini"].Default+":") || g.keys[len(g.keys)-1] != platformKey {
+		t.Fatalf("configured model first, then the fallback on the same key: %v", g.urls)
 	}
 }

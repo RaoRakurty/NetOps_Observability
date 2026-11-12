@@ -118,7 +118,7 @@ func TestProviderDoRetriesTransientFailures(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -130,6 +130,26 @@ func TestProviderDoRetriesTransientFailures(t *testing.T) {
 	}
 	if calls.Load() != 3 || len(*waits) != 2 {
 		t.Fatalf("calls=%d waits=%d — want 3 attempts and 2 backoffs", calls.Load(), len(*waits))
+	}
+}
+
+// A model that answers "overloaded" (503, Anthropic 529) gets ONE retry, then
+// the caller moves to the provider's fallback model (lab and Google forum,
+// 2026-11: a 503 "high demand" pool stays busy for hours while another model
+// answers at once).
+func TestProviderDoRetriesAnOverloadedModelOnlyOnce(t *testing.T) {
+	for _, code := range []int{http.StatusServiceUnavailable, 529} {
+		waits := withFastRetries(t)
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(code)
+		}))
+		_, err := ProviderDo(context.Background(), srv.URL, nil, []byte(`{}`), "test")
+		srv.Close()
+		if ProviderStatusOf(err) != code || calls.Load() != 2 || len(*waits) != 1 {
+			t.Fatalf("status %d: calls=%d waits=%d err=%v — want 2 attempts, 1 backoff", code, calls.Load(), len(*waits), err)
+		}
 	}
 }
 

@@ -462,12 +462,10 @@ func providerModel(name string) string {
 	case "openai":
 		return "gpt-4o-mini"
 	case "gemini":
-		// The recommended default (ai.RecommendedModels), probe-verified on the
-		// lab 2026-11-12: gemini-2.5-flash answered a probe in 0.59 s while
-		// the moving alias gemini-flash-latest timed out at 10 s. A dated id
-		// can be retired (gemini-1.5-flash now 404s); that fails loudly as
-		// "model not found" in the settings Test and is replaced on purpose,
-		// where an alias changes under a deployment silently.
+		// The recommended default (ai.RecommendedModels): a GA model id, never a
+		// moving alias (see the Gemini note there, 2026-11-12). A GA id can be
+		// retired; that fails loudly as "model not found" in the settings Test
+		// and is replaced on purpose, where an alias changes silently.
 		return ai.RecommendedModels()["gemini"].Default
 	case "anthropic":
 		return "claude-sonnet-4-6"

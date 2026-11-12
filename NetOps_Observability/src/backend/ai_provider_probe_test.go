@@ -44,7 +44,7 @@ func TestCopilotConfigTestIsPlatformAdminOnlyAndNeverKeepsTheKey(t *testing.T) {
 		t.Fatal("a refused caller must not reach the provider")
 	}
 	code, m, raw := doJSON(t, s.handleCopilotConfigTest, http.MethodPost, "/api/copilot/config/test", body, aiPlatformOwn)
-	if code != http.StatusOK || m["ok"] != true || m["provider"] != "gemini" || m["model"] != "gemini-flash-lite-latest" {
+	if code != http.StatusOK || m["ok"] != true || m["provider"] != "gemini" || m["model"] != ai.RecommendedModels()["gemini"].Fast {
 		t.Fatalf("test: %d %s", code, raw)
 	}
 	if _, ok := m["latency_ms"]; !ok {
@@ -159,7 +159,8 @@ func TestConfigViewIsAdminOnlyAndCarriesBudget(t *testing.T) {
 	}
 	rec, _ := m["recommended"].(map[string]any)
 	gm, _ := rec["gemini"].(map[string]any)
-	if gm["default"] != "gemini-2.5-flash" || gm["fast"] != "gemini-flash-lite-latest" || gm["strong"] != "gemini-2.5-flash" {
+	want := ai.RecommendedModels()["gemini"]
+	if gm["default"] != want.Default || gm["fast"] != want.Fast || gm["strong"] != want.Strong {
 		t.Fatalf("recommended = %v", m["recommended"])
 	}
 	bud, _ := m["budget"].(map[string]any)

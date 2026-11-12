@@ -4,6 +4,7 @@
 package ai
 
 import (
+	"strings"
 	"sync"
 	"testing"
 )
@@ -34,12 +35,26 @@ func TestForProviderUsesTheRecommendedTierModel(t *testing.T) {
 	}
 }
 
-// The Gemini recommendation is the probe-verified set of 2026-11-12, not the
-// moving alias that timed out.
+// The Gemini recommendation (2026-11-12): GA model ids with no announced
+// shutdown, three distinct models so the fallback chain strong → default →
+// fast always has somewhere to go, never a moving "-latest" alias and never a
+// deprecated 2.5 model (access limited to existing users, auto-routed away
+// from 2026-12-01).
 func TestGeminiRecommendationIsTheVerifiedSet(t *testing.T) {
 	rec := RecommendedModels()["gemini"]
-	if rec.Default != "gemini-2.5-flash" || rec.Strong != "gemini-2.5-flash" || rec.Fast != "gemini-flash-lite-latest" {
+	if rec.Default != "gemini-3.6-flash" || rec.Fast != "gemini-3.5-flash-lite" || rec.Strong != "gemini-3.8-flash" {
 		t.Fatalf("gemini recommendation = %+v", rec)
+	}
+	for _, m := range []string{rec.Default, rec.Fast, rec.Strong} {
+		if strings.Contains(m, "latest") || strings.HasPrefix(m, "gemini-2.") || strings.HasPrefix(m, "gemini-1.") {
+			t.Errorf("%q: never an alias or a deprecated generation", m)
+		}
+	}
+	if rec.Default == rec.Fast || rec.Default == rec.Strong || rec.Fast == rec.Strong {
+		t.Fatal("three distinct models, so every tier has a fallback")
+	}
+	if FallbackModel("gemini", rec.Strong) != rec.Default || FallbackModel("gemini", rec.Default) != rec.Fast || FallbackModel("gemini", rec.Fast) != rec.Default {
+		t.Fatal("fallback chain: strong → default → fast, fast → default")
 	}
 	if ModelSuggestions()["gemini"][0] != rec.Default {
 		t.Fatal("the recommended default leads the suggestions")
@@ -67,7 +82,7 @@ func TestProbeTiersTestsEachModelOnce(t *testing.T) {
 	if got[0].OK || got[0].ErrorClass != ProvTimeout || got[0].LatencyMS != 10000 {
 		t.Errorf("the default tier's own verdict: %+v", got[0])
 	}
-	if !got[1].OK || got[1].Model != "gemini-flash-lite-latest" || !got[2].OK || got[2].Model != "gemini-2.5-flash" {
+	if !got[1].OK || got[1].Model != RecommendedModels()["gemini"].Fast || !got[2].OK || got[2].Model != RecommendedModels()["gemini"].Strong {
 		t.Errorf("the recommended tier models answer: %+v", got[1:])
 	}
 	for m, n := range calls {
@@ -103,8 +118,8 @@ func TestFallbackModel(t *testing.T) {
 			t.Errorf("%s: the strong pick falls back to the default (never dearer), got %q", p, got)
 		}
 	}
-	if got := FallbackModel("gemini", "gemini-flash-latest"); got != "gemini-2.5-flash" {
-		t.Fatalf("the lab case: gemini-flash-latest → %q, want gemini-2.5-flash", got)
+	if got := FallbackModel("gemini", "gemini-flash-latest"); got != rec["gemini"].Default {
+		t.Fatalf("the lab case: gemini-flash-latest → %q, want the recommended default", got)
 	}
 	if FallbackModel("google", "x") != rec["gemini"].Default {
 		t.Fatal("provider aliases normalise")
