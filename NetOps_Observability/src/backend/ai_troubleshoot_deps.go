@@ -2905,6 +2905,10 @@ func deviceSourceLabel(src string) string {
 	return src
 }
 
+// aiAgentModelAttempts bounds how many models one agent answer may run on:
+// the first usable model, then the next one once if the first failed.
+const aiAgentModelAttempts = 2
+
 // aiAgentAnswerBudget bounds a whole model-with-tools answer on /api/ai/ask
 // (several model rounds and tool reads), well inside the stream's budget.
 const aiAgentAnswerBudget = 45 * time.Second
@@ -2923,8 +2927,7 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 	return func(ctx context.Context, p ai.Principal, question string, prior []string) (ai.Answer, error) {
 		// One strike per request, and the breaker's verdict across requests,
 		// per model: the first candidate model still usable runs the loop.
-		name, key, model, skipped := s.firstUsableProvider(ctx, claims)
-		if key == "" {
+		if _, key, _, skipped := s.firstUsableProvider(ctx, claims); key == "" {
 			if skipped != nil {
 				return ai.Answer{}, skipped
 			}
@@ -2952,12 +2955,42 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 		msgs = append(msgs, copilotMessage{Role: "user", Content: ai.RedactSecrets(question)})
 		ctx, cancel := context.WithTimeout(ctx, aiAgentAnswerBudget)
 		defer cancel()
-		call := func(cctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
-			return ai.CallTools(s.egressCtx(cctx, claims), ai.ProviderDo, name, key, model, sys, turns, sp)
-		}
-		res, err := s.runAgentLoop(ctx, claims, p, reg, pol, specs, system, msgs, nil, call)
-		if err != nil {
+		// The loop runs on one model; when that model fails in a way that
+		// strikes it (overloaded, retired, out of quota, slow), it runs ONCE
+		// more on the next usable model — the provider's fallback model,
+		// same key — inside the same budget. Lab 2026-11-12: the configured
+		// gemini-flash-latest answered 503 "high demand" and the whole answer
+		// read "model unavailable" while gemini-2.5-flash was answering.
+		var (
+			res              agentResult
+			err              error
+			name, key, model string
+		)
+		for attempt := 0; attempt < aiAgentModelAttempts; attempt++ {
+			name, key, model, _ = s.firstUsableProvider(ctx, claims)
+			if key == "" || ctx.Err() != nil {
+				break // nothing left to try: err is the last model's failure
+			}
+			n, k, m := name, key, model
+			call := func(cctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+				return ai.CallTools(s.egressCtx(cctx, claims), ai.ProviderDo, n, k, m, sys, turns, sp)
+			}
+			res, err = s.runAgentLoop(ctx, claims, p, reg, pol, specs, system, msgs, nil, call)
+			if err == nil {
+				break
+			}
 			ai.NoteModelFailed(ctx, name, model, err)
+			logWarn("ai.provider", "agent loop failed on a model", map[string]any{
+				"tenant": tenant, "provider": name, "model": model, "attempt": attempt + 1,
+				"error_class": ai.ClassifyProviderError(err)})
+			// A failure that is about this call (a refused request shape, an
+			// empty answer) does not strike the model, so the same model would
+			// be picked again: another run cannot help.
+			if ai.ModelStruck(ctx, name, model) == nil {
+				break
+			}
+		}
+		if err != nil {
 			return ai.Answer{}, err
 		}
 		ai.NoteModelUsed(ctx, name, model)
