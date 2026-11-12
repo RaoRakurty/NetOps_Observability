@@ -111,7 +111,27 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # "4d155b6650f11505"): the controller template's operator phrase / blast radius
 # became conditional, so catalog_version moved. JSON diff of the blob against
 # 68abe8a6: the only differing leaf is `ranking/catalog_version`.
-FIXTURE_GOLDEN = "0c87be7cb31b263f"
+# RE-FROZEN, 2026-11-11, P-424934 (was "c83fd3b4ede97dbe"). ENGINE_SEMVER went
+# 3.3.0 -> 3.3.1 and the catalog moved (allow_root_cause_confirmed=False and a cap
+# reason on the exposure / hardening-drift stories). This object carries no
+# security evidence, so its DECISION cannot move, and that was CHECKED by a JSON
+# diff of the persisted row against origin/main's: the only differing leaves are
+# `catalog_version` (row and blob) and `engine_version`.
+#
+# RE-FROZEN, 2026-11-11, owner D1–D3 (was "150e3d24314fdcd0"). ENGINE_SEMVER went
+# 3.3.1 -> 3.4.0 and the catalog moved (the `context_story` field on every
+# template). This object has one device-telemetry observer, no security evidence
+# and no context story, so its DECISION cannot move: CHECKED by diffing the
+# persisted row against the 3.3.1 one — identical blob modulo catalog_version;
+# only `catalog_version` and `engine_version` differ.
+# RE-FROZEN, 2026-11-12, merge of owner D1-D3 with the SD-WAN controller fan-in
+# (was "0c87be7cb31b263f" on main 3.4.0). ENGINE_SEMVER 3.4.0 -> 3.5.0 and the catalog
+# moved (both changes' templates in one catalog). CHECKED by diffing every hashed
+# input (nodes, signals, edges, hypotheses blob, engine) against origin/main 170112c6:
+# exactly two leaves differ — `engine` and `hypotheses/ranking/catalog_version`.
+# This object carries no security evidence and no control-connection loss, so its
+# DECISION cannot move, and it did not.
+FIXTURE_GOLDEN = "1189fe8c3ee56756"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

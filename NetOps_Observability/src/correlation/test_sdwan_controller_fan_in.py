@@ -366,13 +366,17 @@ def test_the_outage_with_the_trap_and_controller_lanes():
     ctl = _controller_objects(snaps)
     assert len(ctl) == 1
     assert len({n.entity_id for n in ctl[0].nodes}) == 5
-    # Two planes (the edges' traps, the manager's relay) agree the sessions died;
-    # the gate would confirm that, and the template caps it: that the controller
-    # itself failed is still "possibly".
+    # Two planes (the edges' traps, the manager's relay) agree the sessions died.
+    # Since 3.5.0 (owner D1) the manager's relay is a SUPPORT plane: it supports
+    # but never anchors, so the gate stops at "one measurement-plane witness"
+    # before the template's cap is reached. Either way the controller itself
+    # failing stays "possibly": assert the outcome and one of the two legitimate
+    # reasons, not which one the gate meets first.
     top = _hyp(ctl[0].ranking, CONTROLLER)
     assert ctl[0].ranking.verdict_tier is VerdictTier.SUSPECTED
-    assert any("allow_root_cause_confirmed=false" in r for r in top.verdict_gate.reasons), \
-        top.verdict_gate.reasons
+    reasons = top.verdict_gate.reasons
+    assert any("allow_root_cause_confirmed=false" in r
+               or "supports but never anchors" in r for r in reasons), reasons
 
 
 def test_the_controllers_own_unreachability_witnesses_the_root_rung():
@@ -559,7 +563,8 @@ def test_before_the_change_the_outage_had_no_name():
 
 
 def test_engine_semver_moved():
-    assert ENGINE_SEMVER == "3.4.0"
+    # 3.4.0 was this change; later minors (3.5.0: owner D1-D3) keep it.
+    assert tuple(int(x) for x in ENGINE_SEMVER.split(".")) >= (3, 4, 0)
 
 
 def test_the_structure_gate_refuses_without_fan_in():

@@ -53,7 +53,7 @@ def test_audit_covers_every_enabled_signature():
     valid_status = {
         "confirmable_now", "suspected_only", "not_matchable",
         "collection_pending", "normalization_pending",
-        "entity_mismatch", "modality_mismatch",
+        "entity_mismatch", "modality_mismatch", "support_plane_only",
     }
     for r in ROWS.values():
         assert r["status"] in valid_status, r
@@ -159,3 +159,14 @@ def test_write_reports(tmp_path):
     assert len(written) == 2
     for p in written:
         assert tmp_path in __import__("pathlib").Path(p).parents or str(tmp_path) in p
+
+
+def test_a_deliberate_confirm_cap_is_reported_beside_the_status():
+    # P-424934: allow_root_cause_confirmed=False is the template's own verdict
+    # cap. The audit names it on the row (confirm_capped) without moving
+    # `status`, so the producer ratchet above keeps measuring producers.
+    capped = {t.id for t in CAT.enabled_templates() if not t.allow_root_cause_confirmed}
+    assert {"sig.ent.security.exposure-story", "sig.ent.security.hardening-drift-story",
+            "sig.ent.access.admin-link-change-induced"} <= capped
+    for sig_id, r in ROWS.items():
+        assert r["confirm_capped"] is (sig_id in capped), sig_id

@@ -15,6 +15,7 @@ import RcaTicketCard from "../components/rca/RcaTicketCard";
 import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
+import { useDeviceNames } from "../lib/deviceNames";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
@@ -687,6 +688,8 @@ export function CorrelationDetail({ id }: { id: string }) {
   // Event-timeline extras: recorded report times/promotion + the latest
   // verification run — real recorded milestones only (never fabricated).
   const [caseExtras, setCaseExtras] = useState<CaseEventExtras>({});
+  // Inventory names for controller-namespace ids (display only, P-424934).
+  const deviceNames = useDeviceNames();
   // Seam-ownership registry (#113): owner class → the tenant's actual party.
   const [seamOwners, setSeamOwners] = useState<Record<string, SeamOwnerEntry>>({});
 
@@ -755,11 +758,12 @@ export function CorrelationDetail({ id }: { id: string }) {
   // keeps the print to the loss-only labels (the STAMP overlay is interactive-only).
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
-    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners, caseExtras);
+    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners,
+      deviceNames ? { ...caseExtras, deviceNames } : caseExtras);
     const graph = buildTopoGraph(timeline, seams, view, false);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners, caseExtras]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners, caseExtras, deviceNames]);
 
   if (err) return <div className="empty" role="alert">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty" role="status">Loading…</div>;

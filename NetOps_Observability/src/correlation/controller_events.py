@@ -95,6 +95,36 @@ _SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH
 #: ingest time was used instead (exported on /healthz). P6-A, 2026-11-07.
 TS_FALLBACKS = 0
 
+# Tracker 387 on the controller lane (P-424934, 2026-11-11). Owner rule: only an
+# ESTABLISHED session going down is a session failure. The connector stamps what
+# a relayed BGP transition means (`correlation_hints.bgp_transition_class`, from
+# the trap receiver's own classifier, internal/bgpfsm, pinned to
+# collectors/testdata/bgp_transition_classes.json). These classes may not build a
+# session-failure signal: counted here, kept in corr_signals, never windowed
+# (main.handle_controller_event). The keys are producers.BGP_NOT_A_SESSION_FAILURE's
+# (the trap lane's), asserted equal by test_controller_bgp_never_established.py.
+BGP_NOT_A_SESSION_FAILURE: dict[str, int] = {"never_established": 0, "progressing": 0}
+
+
+def bgp_not_a_session_failure(sig: Signal) -> str:
+    """The transition class when `sig` is a relayed BGP down whose session was
+    never established, else "". Absent, "unknown" or any other class leaves the
+    reading as it was — an older connector, or a report that cannot tell, still
+    reaches the window (the trap lane's rule, producers.trap_control_signal)."""
+    if sig.kind != "bgp_adjacency_change":
+        return ""
+    hints = sig.attrs.get("correlation_hints")
+    if not isinstance(hints, dict):
+        return ""
+    cls = str(hints.get("bgp_transition_class") or "")
+    return cls if cls in BGP_NOT_A_SESSION_FAILURE else ""
+
+
+def count_bgp_not_a_session_failure(cls: str) -> None:
+    """Count one relayed transition that built no session-failure signal."""
+    if cls in BGP_NOT_A_SESSION_FAILURE:
+        BGP_NOT_A_SESSION_FAILURE[cls] += 1
+
 
 def _parse_ts(raw: object, fallback: datetime) -> datetime:
     """The controller's event time, or `fallback` (ingest time) — never a guess.
