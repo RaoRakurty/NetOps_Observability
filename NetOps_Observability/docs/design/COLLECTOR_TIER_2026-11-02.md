@@ -134,8 +134,11 @@ traps, heartbeat, standalone + HA groups) + lab RETAIL collector(s) · C4★ sea
 credentials + edge polling + shard leases · C5 flows (goflow2 sequence dedup,
 summaries, local raw) · C6 edge redaction · C7★ collector fate + collection-lost
 hypothesis · C8★ retrospective backlog pass · C9 on-prem controller polling at
-the edge · C10 appliance convergence + parity harness · C11 OTLP-JSON adapter ·
-C12 VM appliance, signed updates, regional endpoints.
+the edge · C10 appliance convergence + parity harness · C10b★ SaaS ingest mode
+(decision 12): direct UDP/TCP telemetry listeners off, the gateway the only way
+in, a refusal metric and a deploy-qualify check that nothing reaches the bus
+unstamped · C11 OTLP-JSON adapter · C12 VM appliance, signed updates, regional
+endpoints.
 
 Owner questions deferred to C3 (memory): where the lab collector runs (separate
 VM vs container on the Correlix host) and who adds the edges' second
@@ -155,3 +158,24 @@ destinations.
 9. Standalone and HA collectors both first-class (owner requirement).
 10. Transport security per §4 (owner requirement: highest standards over the internet).
 11. Residency: region pinned per tenant, carried in the certificate.
+12. Where the tenant is stamped (owner, 2026-11-12). Multi-tenancy matters
+    for cloud hosting; on-prem installs are almost always single-tenant.
+    - The tenant is stamped **once, at the Correlix Ingest Gateway**, from the
+      collector's verified identity (§4 tenant binding). Not at the collector
+      (its claim is payload), not downstream by device name or address.
+    - The Ingest Gateway is **always a Correlix component**. Anything in front
+      of it (L4 load balancer, PrivateLink / Direct Connect, an IPsec or SD-WAN
+      tunnel, an HTTP CONNECT proxy) must not terminate the collector's TLS. An
+      intermediary that must decrypt (a TLS-inspecting proxy, a customer
+      aggregation tier, a managed broker) is supported only in signed-request
+      mode, so the collector's identity and the payload survive the hop.
+    - One collector, or collector group, belongs to exactly one tenant. An MSP
+      runs one per customer.
+    - **SaaS ingest mode** (phase C10b): the direct telemetry listeners on the
+      platform are off, so untagged telemetry cannot exist; a record without
+      a gateway channel stamp is refused, counted and alerted on.
+    - **Defence in depth (tracker 370):** where untagged telemetry can still
+      arrive (the appliance's direct UDP path, traffic before collectors are
+      rolled out), a device name or address claims untagged data only when
+      exactly one owner holds it. A shared identity claims nothing and the
+      data stays platform-only.
