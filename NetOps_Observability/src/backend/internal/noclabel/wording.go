@@ -33,3 +33,27 @@ func LocalisationSentence(subject string, localised bool) string {
 	}
 	return "Evidence concentrates on " + subject + "; not independently localised."
 }
+
+// AnnotationReason is the kind-aware reason an overlay annotation states for one
+// attached observation (§3.9). An interface counter or rate departure
+// (if_metric_anomaly, if_errors, if_util_high) is NOT "an interface state change
+// on this link" — only a link/oper state event is. The path view and the
+// topology overlay call this instead of a fixed string per entity type.
+func AnnotationReason(entityType, kind string) string {
+	k := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(kind)), "_clear")
+	label := Kind(k)
+	low := strings.ToLower(label[:1]) + label[1:]
+	switch {
+	case strings.Contains(k, "link_state") || strings.Contains(k, "if_oper") || strings.Contains(k, "interface_state"):
+		return "interface state change grounded on this link"
+	case strings.Contains(k, "bgp") || strings.Contains(k, "ospf") || strings.Contains(k, "isis") || strings.Contains(k, "adjacency"):
+		return label + " on this session"
+	case entityType == "interface" && (strings.HasPrefix(k, "if_") || strings.Contains(k, "metric")):
+		return label + " on this interface — a counter or rate change, not a state change"
+	case entityType == "interface":
+		return label + " on this interface"
+	case entityType == "device":
+		return low + " on this device — not a link event"
+	}
+	return label + " observed here"
+}

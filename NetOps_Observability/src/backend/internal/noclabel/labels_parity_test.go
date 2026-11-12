@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -176,6 +177,25 @@ func TestHypothesisTitlePrecedence(t *testing.T) {
 	}
 	if got := HypothesisTitle("sig.ent.lan.new-thing", "sig.ent.lan.new-thing"); got == "sig.ent.lan.new-thing" {
 		t.Errorf("a catalog title equal to the id must not leak the raw id")
+	}
+}
+
+func TestAnnotationReasonIsKindAware(t *testing.T) {
+	cases := []struct{ et, kind, want string }{
+		{"interface", "link_state_change", "interface state change grounded on this link"},
+		{"interface", "if_metric_anomaly", "Interface metric anomaly on this interface — a counter or rate change, not a state change"},
+		{"interface", "if_errors_clear", "Interface errors on this interface — a counter or rate change, not a state change"},
+		{"device", "bgp_adjacency_change", "BGP neighbor change on this session"},
+		{"device", "device_alarm", "device alarm on this device — not a link event"},
+		{"path", "probe_loss", "Packet loss observed here"},
+	}
+	for _, c := range cases {
+		if got := AnnotationReason(c.et, c.kind); got != c.want {
+			t.Errorf("AnnotationReason(%q,%q) = %q, want %q", c.et, c.kind, got, c.want)
+		}
+	}
+	if strings.Contains(AnnotationReason("interface", "if_metric_anomaly"), "state change grounded") {
+		t.Error("an interface metric anomaly must never read as a state change on the link")
 	}
 }
 
