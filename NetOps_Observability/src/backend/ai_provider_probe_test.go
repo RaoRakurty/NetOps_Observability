@@ -159,7 +159,7 @@ func TestConfigViewIsAdminOnlyAndCarriesBudget(t *testing.T) {
 	}
 	rec, _ := m["recommended"].(map[string]any)
 	gm, _ := rec["gemini"].(map[string]any)
-	if gm["default"] != "gemini-flash-latest" || gm["fast"] != "gemini-flash-lite-latest" {
+	if gm["default"] != "gemini-2.5-flash" || gm["fast"] != "gemini-flash-lite-latest" || gm["strong"] != "gemini-2.5-flash" {
 		t.Fatalf("recommended = %v", m["recommended"])
 	}
 	bud, _ := m["budget"].(map[string]any)
