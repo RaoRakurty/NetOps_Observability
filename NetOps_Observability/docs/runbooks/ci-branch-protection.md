@@ -109,6 +109,17 @@ The last two were added 2026-09-04. Both are blocking gates that already run
 ruleset was the exact "runs, goes green, enforces nothing" failure this page
 exists to prevent.
 
+**`build · vet · test · race` is an aggregator since 2026-11-12** (CI audit C2).
+The work it used to do in one job runs in parallel jobs — `gofmt · build · vet ·
+go test -race (every package but the root)` and the four-leg matrix `go test
+-race (root package, shard N of 4)` — and the required job passes only when all
+of them passed (it runs `scripts/ci/ci_gate.py` over its `needs`). So the name in
+the ruleset is unchanged and still blocks a merge on any gofmt, build, vet or
+-race failure. Do **not** add the shard checks to the ruleset: their names carry
+the shard index and would change with the shard count; the aggregator already
+holds them. `ci-gate (backend-ci)` checks them as well, but it is not in the
+ruleset, which is exactly why the aggregator keeps the required name.
+
 ### 1.2 Optional in the ruleset — mandatory in the tag gate
 
 A repo admin may leave these off `main`'s ruleset with the cost understood; they

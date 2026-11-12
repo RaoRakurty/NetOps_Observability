@@ -101,19 +101,44 @@ jobs:
       - id: plan
         uses: ./.github/actions/ci-plan
 
-  test:
+  # ── the -race gate, split three ways (CI audit 2026-11-12, C2) ──────────────
+  # `go test -race ./...` in ONE job was the backend PR critical path (39.9 min):
+  # the root package netops/backend runs its ~2,340 tests serially (2,301 s; no
+  # test calls t.Parallel), so it alone set the job's length. Now:
+  #   test-race-pkgs  gofmt · build · vet · -race over every package BUT the root
+  #   test-race-root  -race over the root package, 4 disjoint shards in parallel
+  #   test            the required check `build · vet · test · race`: passes only
+  #                   when both of the above passed (see its comment).
+  #
+  # Go build cache (audit C4): setup-go's own cache keyed on go.sum alone, was
+  # never refreshed (41 MB) and left GOCACHE cold in every job. Every job but
+  # offline-build (which must stay cold) now sets `cache: false` and restores an
+  # explicit per-job cache keyed on the Go sources; only a push to main SAVES,
+  # so PRs restore main's latest cache and never write their own — one cache per
+  # job per main commit keeps the repo inside GitHub's 10 GB cache budget (a
+  # -race GOCACHE is large; per-PR saves would evict main's).
+  test-race-pkgs:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
     # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
-    name: build · vet · test · race
+    name: gofmt · build · vet · go test -race (every package but the root)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: gofmt (blocking, both Go modules)
         # Canonical formatting is a merge gate like vet/staticcheck: `gofmt -l`
         # must print nothing for src/backend AND the installer-gui module. The
@@ -140,21 +165,134 @@ jobs:
       # The plain `go test` runs in its own parallel job (`test-plain`, below):
       # `-race` executes EVERY test the plain run does (no first-party test is
       # excluded under the race build tag), so serialising both here only made
-      # this required job ~10 min longer without gating anything extra.
-      - name: go test -race
+      # this job ~10 min longer without gating anything extra.
+      - name: go test -race (every package except the root, which test-race-root shards)
         # The data-race detector needs cgo (gcc is present on ubuntu-latest).
-        # The main package suite runs ~6m plain; the race detector multiplies
-        # that well past go test's 10m default timeout on 2-core runners.
-        # 60m, not 40m: by 2026-10-03 the root package alone ran ~31-40m under
-        # -race and timed out with nothing hung on several branches (the
-        # running test only seconds old).
+        # The package list is computed, never hand-written, so a new package is
+        # in it automatically; `grep -vx` drops exactly the root import path,
+        # which test-race-root covers. tests/test_backend_ci_speedups.py holds
+        # the two jobs to "every package exactly once".
+        # 60m kept from the unsharded step (by 2026-10-03 the root package alone
+        # ran ~31-40m under -race); without the root this is far shorter.
         env:
           CGO_ENABLED: '1'
-        run: go test -race -timeout 60m ./...
+        run: |
+          set -euo pipefail
+          pkgs="$(go list ./... | grep -vx 'netops/backend')"
+          if [ -z "$pkgs" ]; then
+            echo "::error::no non-root package listed — refusing a -race run over nothing"
+            exit 1
+          fi
+          # shellcheck disable=SC2086 # one import path per word, by design
+          go test -race -timeout 60m $pkgs
       # NOTE: live fuzzing (`-fuzz -fuzztime`) is intentionally NOT a blocking
       # per-PR gate — its worker-coordination times out flakily on 2-core runners
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
       # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+
+  test-race-root:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
+    name: go test -race (root package, shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      # Every shard reports: one red shard must not cancel the others' evidence.
+      fail-fast: false
+      matrix:
+        # Must equal range(ROOT_SHARDS) — tests/test_backend_ci_speedups.py.
+        shard: [0, 1, 2, 3]
+    env:
+      ROOT_SHARDS: '4'
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: restore the Go build cache
+        # ONE key for all four shards (deliberately no shard index): they compile
+        # the identical race test binary, so per-shard caches would be four
+        # copies of one thing in a 10 GB budget. Every shard restores; only
+        # shard 0 saves (below), so there is no save race either.
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
+      - name: list the root package's tests and pick this shard
+        # Listed WITH -race, so it is the exact binary the next step runs.
+        # scripts/ci/go-shard.py: sorted names, name i -> shard i mod N, an
+        # anchored `^(A|B|…)$` written to a file (one argv string is capped at
+        # 128 KiB; the script refuses an oversized regex). It fails on an empty
+        # listing or an empty shard, so a leg can never pass by running nothing
+        # (tests/test_go_shard.py).
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go test -race -list '.*' . > "$RUNNER_TEMP/root-tests.txt"
+          python3 -I ../../scripts/ci/go-shard.py --index "$SHARD" --total "$ROOT_SHARDS" \
+            --in "$RUNNER_TEMP/root-tests.txt" --out "$RUNNER_TEMP/root-shard.re"
+      - name: go test -race -shuffle=on (root package, this shard)
+        # -shuffle=on: shard boundaries move whenever a test is added, so no test
+        # may depend on running after another. go test prints the seed first
+        # ("-test.shuffle N"); reproduce with
+        # `go test -race -shuffle=N -run "$(cat root-shard.re)" .`.
+        # -shuffle is not a cacheable flag, so a shard always executes — a
+        # restored cache can never stand in for a PASS here.
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go test -race -timeout 60m -shuffle=on -run "$(cat "$RUNNER_TEMP/root-shard.re")" .
+      - name: save the Go build cache (push to main, shard 0 only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 0 }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+
+  test:
+    # THE REQUIRED CHECK `build · vet · test · race` (ruleset + runbook §1.1).
+    # Its work moved to test-race-pkgs and test-race-root so the root package
+    # could be sharded; this job keeps the required name and passes ONLY when
+    # both passed, so the branch ruleset still blocks a merge on any -race,
+    # vet, build or gofmt failure with no ruleset change. (ci-gate (backend-ci)
+    # checks them too, but ci-gate is NOT in the ruleset: relying on it alone
+    # would have quietly un-required the root package's ~2,340 tests.)
+    # Same truth table as ci-gate (scripts/ci/ci_gate.py), scoped to its needs.
+    # `!cancelled()` so it RUNS — and fails — when a need failed, rather than
+    # skipping: a skipped required check reads as passing.
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: [plan, test-race-pkgs, test-race-root]
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
+    name: build · vet · test · race
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          jobs: test-race-pkgs=backend test-race-root=backend
 
   test-plain:
     # The non-race run, in PARALLEL with `test` (which runs the same tests under
@@ -172,12 +310,29 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: go test
         # Also runs every Fuzz* target against its SEED corpus deterministically
         # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
         # parsers' regression coverage is here — no flaky live fuzzing needed.
         run: go test -timeout 20m ./...
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   offline-build:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
@@ -265,7 +420,16 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: create the non-superuser app role
         # newPgDB fails CLOSED when its role would bypass RLS (assertRLSCapable):
         # a superuser ignores even FORCE ROW LEVEL SECURITY, which would silently
@@ -300,7 +464,32 @@ jobs:
         # provisionAppRole drops/recreates the public schema, so packages
         # running in parallel would destroy each other's tables mid-run.
         # -count=1 so a cached PASS can never stand in for a real run.
-        run: go test -tags=pgintegration -count=1 -p 1 -timeout 30m ./...
+        #
+        # Only the packages that NEED the database (CI audit 2026-11-12, C3):
+        # `./...` walked 171 packages one at a time (15.4 min) to reach a dozen;
+        # the rest already run plain and under -race in the jobs above.
+        # scripts/ci/go-pg-packages.py selects every package with a
+        # `//go:build pgintegration` file OR a reference to this step's DSN
+        # env vars — the env-gated corpus (internal/metering, internal/users, …)
+        # carries no build tag, so a tag-only selection would silently drop it.
+        # tests/test_backend_ci_speedups.py re-runs the selection and holds its
+        # env-var list to this step's `env:` keys. Still no -run, still -p 1.
+        # The compile guard for the WHOLE tagged tree stays
+        # `go vet -tags=pgintegration ./...` in test-race-pkgs.
+        run: |
+          set -euo pipefail
+          pkgs="$(python3 -I ../../scripts/ci/go-pg-packages.py)"
+          echo "pg packages:"; echo "$pkgs"
+          # shellcheck disable=SC2086 # one package path per word, by design
+          go test -tags=pgintegration -count=1 -p 1 -timeout 30m $pkgs
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   vuln:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
@@ -314,11 +503,28 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
       - name: govulncheck
         run: govulncheck ./...
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   security-lint:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
@@ -332,7 +538,16 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: install linters
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
@@ -374,6 +589,14 @@ jobs:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
           args: ./tlsconfig/... ./internalca/... ./sealing/...
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   full-lint:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
@@ -390,7 +613,16 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       # golangci-lint bundles staticcheck + gosec (+ errcheck/noctx/errorlint/…),
       # so one repo-wide run covers the triage set. Suppressions use golangci's
       # native directives (// #nosec, //nolint) consistently across the tree.
@@ -400,6 +632,14 @@ jobs:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
           args: ./...
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   iris-gates:
     name: Iris release gates (report on PRs, enforced at release tags)
@@ -425,7 +665,16 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
       - name: run the scorers (write gate reports)
         run: |
           go test -count=1 -timeout 20m -run '^TestCompilerAgainstTheGoldenCorpus$' ./internal/nlquery/
@@ -435,6 +684,14 @@ jobs:
       - name: evaluate the gates
         if: always()
         run: go test -count=1 -v -run '^TestIrisReleaseGates$' ./internal/irisgate/
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
   # The one verdict for this workflow: every job the plan selected succeeded, no
   # selected job was skipped or cancelled, nothing unselected went red.
@@ -442,7 +699,7 @@ jobs:
   ci-gate:
     name: ci-gate (backend-ci)
     if: always()
-    needs: [plan, test, test-plain, offline-build, pg-integration, vuln, security-lint, full-lint, iris-gates]
+    needs: [plan, test-race-pkgs, test-race-root, test, test-plain, offline-build, pg-integration, vuln, security-lint, full-lint, iris-gates]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -450,4 +707,4 @@ jobs:
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
-          jobs: test=backend test-plain=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
+          jobs: test-race-pkgs=backend test-race-root=backend test=backend test-plain=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
