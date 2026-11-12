@@ -423,7 +423,7 @@ export default function RcaWorkspace({
           <h3 className="rw-section-title rw-doc-title">{sectionTitle(6)}</h3>
           {pathSlot ? (
             <>
-              <h4 className="rw-doc-h">Network path &amp; causality</h4>
+              <h4 className="rw-doc-h">Network topology &amp; causality</h4>
               <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
             </>
           ) : (

@@ -177,7 +177,7 @@ export function topologyContextHtml(tc: TopologyContext | undefined, spine?: Top
     return `${spine && spine.nodes.length ? topoGraphSvg(spine) : ""}<p class="note">The topology context was not built for this document.</p>`;
   }
   const m = deriveContextModel(tc);
-  let b = `<p class="note" style="margin-bottom:4px">Sources: ${esc(topoSourcesLine(tc))}</p>`;
+  let b = "";
   b += `<p class="body">State: <b>${esc(topoStateLabel(tc.state))}</b> — ${esc(tc.reason)}</p>`;
   if (tc.state === "no_asset_mapping") {
     b += `<div class="decision" style="border-left-color:#b42318;background:#fff5f4;border-color:#ffb5ad"><b>Data-availability error</b> — the affected entity could not be placed in the network topology. This is a gap in the data, not a finding about the network.${tc.unmapped.length ? ` Not in the inventory: ${esc(tc.unmapped.join(", "))}.` : ""}</div>`;
@@ -442,7 +442,7 @@ export function reportHtml(d: RcaCase, objId: string, verdict?: RcaFeedback | nu
   ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
   ${block("Impact & blast radius", kvRows(d.impact))}
   ${block("Event timeline", eventsTable(d.events))}
-  ${block("Network topology & causality", topologyContextHtml(d.topologyContext, d.topoGraph))}
+  ${block(d.topologyContext ? `Network topology & causality — sources: ${topoSourcesLine(d.topologyContext)}` : "Network topology & causality", topologyContextHtml(d.topologyContext, d.topoGraph))}
   ${block("Evidence matrix", evidence)}
   ${block("Confidence ladder", ladder)}
   ${block("Hypothesis ranking", hypotheses)}

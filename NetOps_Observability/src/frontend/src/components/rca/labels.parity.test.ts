@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { signatureNocTitle, hypothesisNocTitle } from "./labels";
+import { signatureNocTitle, hypothesisNocTitle, kindLabel } from "./labels";
 
 // labels.parity.test.ts — the TS half of the noclabel ↔ labels.ts parity
 // contract (RCA document v2 §3.2/§7). src/contracts/noc_label_parity.json is
@@ -49,6 +49,22 @@ describe("labels.ts ↔ noclabel parity (src/contracts/noc_label_parity.json)", 
     for (const c of parity.hypothesis_titles) {
       expect(hypothesisNocTitle(c.id, c.catalog_title), c.id).toBe(c.want);
     }
+  });
+});
+
+// Not pinned by the fixture yet: the kind labels the topology view prints. These
+// three mirror noclabel.Kind word for word (an if_metric_anomaly is a
+// counter/rate departure, never a state change; a device alarm is not a
+// routing or link event).
+describe("kind labels shown in section 6 mirror noclabel.Kind", () => {
+  it.each([
+    ["if_metric_anomaly", "Interface metric anomaly"],
+    ["device_alarm", "Device alarm"],
+    ["device_resource_anomaly", "Device CPU/memory change"],
+    ["mac_flap", "MAC address flap"],
+    ["link_state_change", "Link up/down"],
+  ])("%s → %s", (kind, want) => {
+    expect(kindLabel(kind)).toBe(want);
   });
 });
 

@@ -80,7 +80,7 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   it("renders ONE merged path section (owner P1: no duplicate topology section)", () => {
     renderWS();
     expect(screen.getByTestId("path-slot")).toBeInTheDocument();
-    expect(screen.getByText("Network path & causality")).toBeInTheDocument();
+    expect(screen.getByText("Network topology & causality")).toBeInTheDocument();
     // the old duplicate section is gone
     expect(screen.queryByText("Network path & causal topology")).not.toBeInTheDocument();
     expect(screen.queryByText("Path causality")).not.toBeInTheDocument();

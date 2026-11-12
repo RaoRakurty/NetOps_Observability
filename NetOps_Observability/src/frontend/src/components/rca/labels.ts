@@ -306,7 +306,10 @@ export function kindMeta(kind: string): { modality: string; source: string } {
 const KIND_NOC: Record<string, string> = {
   probe_rtt_anomaly: "Slower response", probe_latency_departure: "Response-time change",
   probe_loss: "Packet loss", dns_latency_high: "Slow DNS", dns_failure_rate: "DNS failures",
-  if_metric_anomaly: "Interface counter change", if_util_high: "High link utilization",
+  // Go noclabel.Kind wording (RCA document v2 §3.1): a counter/rate departure,
+  // NOT a state change — the observed condition that titles P-3E0400.
+  if_metric_anomaly: "Interface metric anomaly", if_util_high: "High link utilization",
+  device_alarm: "Device alarm", mac_flap: "MAC address flap",
   if_errors: "Interface errors", metric_anomaly: "Metric change",
   device_resource_anomaly: "Device CPU/memory change", qos_drops: "QoS drops",
   link_state_change: "Link up/down", lldp_neighbor_change: "Neighbor change",

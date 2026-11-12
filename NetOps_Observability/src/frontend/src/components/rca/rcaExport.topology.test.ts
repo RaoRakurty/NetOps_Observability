@@ -30,7 +30,7 @@ describe("exported RCA document — topology from topology_context", () => {
     expect(html).toContain("cedge-60-07ae8615 is in the inventory, but no neighbour or path data was found for it.");
     expect(html).toContain("Device diagnostic — cedge-60-07ae8615");
     expect(html).toContain("LLDP, CDP, BGP-LS, the persisted topology graph, the SD-WAN overlay, the SD-WAN controller");
-    expect(html).toContain("Sources: inventory only");
+    expect(html).toContain("Network topology &amp; causality — sources: inventory only");
     // the same undirected count the server partial prints under its picture
     expect(html).toContain("6 undirected interface ↔ interface co-occurrence(s)");
     expect(html).not.toMatch(/path-shaped/);
