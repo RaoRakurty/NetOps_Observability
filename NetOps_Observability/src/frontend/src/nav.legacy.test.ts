@@ -212,6 +212,15 @@ describe("canonicalHash — suffix + query preservation", () => {
     expect(canonicalHash("#/monitoring/events")).toBe("#/explore/logs");
   });
 
+  it("the legacy #/flows address lands on Explore → Flows with its query, and the tabs stay canonical", () => {
+    expect(canonicalHash("#/flows")).toBe("#/explore/flows");
+    expect(canonicalHash("#/flows?device=10.0.0.1&if=3")).toBe("#/explore/flows?device=10.0.0.1&if=3");
+    expect(canonicalHash("#/explore/flows")).toBeNull();
+    expect(canonicalHash("#/explore/flows/talking?device=10.0.0.1")).toBeNull();
+    expect(resolveRoute("#/explore/flows/capacity").leaf?.id).toBe("flows");
+    expect(resolveRoute("#/explore/flows").leaf?.label).toBe("Flows");
+  });
+
   it("preserves ?query deep-link params", () => {
     expect(canonicalHash("#/monitoring/correlations?id=abc")).toBe("#/investigate/rca?id=abc");
     expect(canonicalHash("#/logs/cloud?family=dns")).toBe("#/explore/logs/cloud?family=dns");

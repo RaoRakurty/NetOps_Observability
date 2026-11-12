@@ -8,7 +8,7 @@ import { api } from "../services/api";
 
 const cov = (o: Partial<FlowCoverage>): FlowCoverage => ({
   flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, flows_sampling_reported: 0, exporters: 0,
-  platform_monitoring_flows: 0, platform_addresses_configured: false, ...o,
+  platform_monitoring_flows: 0, platform_addresses_configured: false, asn_dataset_loaded: false, flows_with_dataset_as: 0, ...o,
 });
 
 describe("flowEmptyReason — an empty panel says why", () => {

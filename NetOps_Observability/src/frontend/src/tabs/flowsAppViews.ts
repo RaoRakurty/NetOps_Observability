@@ -17,7 +17,7 @@
 //     device/interface fields and the direction toggle do not narrow them, and
 //     the screen has to say so while filters are active.
 //
-// Nothing here renders; tabs/Flows.tsx owns the markup and the fetch loops.
+// Nothing here renders; tabs/flows/talkingSections.tsx owns the markup and the fetch loops.
 
 import { FlowAppRow, FlowAppsResp, FlowServiceRow } from "../services/api";
 

@@ -1,0 +1,82 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2026 Correlix
+
+   flows-tokens.css — the ONE place the flow views' data colours are defined
+   (Flows page redesign P1, 2026-11-12; owner: "elegant and modern … for both
+   dark and light themes"). Explore → Flows and the Logs flow rows
+   (components/logs/FlowRowParts.tsx) both read these, so they look like one
+   product. Components never carry a literal colour: CSS uses var(--flow-*),
+   charts read the same tokens through theme/flowTokens.ts.
+   (flowTokens.test.ts holds the rule and checks the values below.)
+
+   Three families, deliberately separate:
+   · direction — entering (in) and leaving (out): two hues, blue and orange,
+     apart for every common colour-vision deficiency; also used as text, so
+     ≥ 4.5:1 on the surface of every theme;
+   · utilisation — a calm single-hue sequential ramp (u1 < u2 < u3) for normal
+     load, and two semantic bands outside it: warning ≥ 75 %, critical ≥ 90 %;
+   · categorical — eight hues for applications, talkers and protocols, chosen
+     to stay distinguishable for deuteranopia and protanopia, never reused for
+     a threshold.
+
+   Light is :root; every dark theme (dark, oled, indigo, graphite) shares the
+   dark values, matching the rest of the token set. The theme is chosen at
+   login — nothing here adds a toggle. */
+
+:root {
+  --flow-on-accent: #ffffff;
+  --flow-in: #0369a1;
+  --flow-out: #c2410c;
+
+  --flow-util-1: #c3d9f1;
+  --flow-util-2: #7eaee0;
+  --flow-util-3: #3b7fc4;
+  --flow-util-warn: #d97706;
+  --flow-util-crit: #dc2626;
+  --flow-util-warn-fg: #b45309;
+  --flow-util-crit-fg: #b91c1c;
+  --flow-util-track: color-mix(in srgb, var(--fg, #0f172a) 9%, transparent);
+
+  --flow-cat-1: #4f46e5;
+  --flow-cat-2: #0d9488;
+  --flow-cat-3: #d97706;
+  --flow-cat-4: #db2777;
+  --flow-cat-5: #65a30d;
+  --flow-cat-6: #0891b2;
+  --flow-cat-7: #9333ea;
+  --flow-cat-8: #64748b;
+
+  /* semantic aliases — what the views actually name */
+  --flow-spark: var(--flow-cat-1);
+  --flow-src: var(--flow-cat-1);
+  --flow-dst: var(--flow-cat-2);
+  --flow-proto-tcp: var(--flow-cat-1);
+  --flow-proto-udp: var(--flow-cat-2);
+  --flow-proto-icmp: var(--flow-cat-3);
+  --flow-proto-other: var(--flow-cat-8);
+}
+
+:root[data-theme="dark"], :root[data-theme="oled"],
+:root[data-theme="indigo"], :root[data-theme="graphite"] {
+  --flow-on-accent: #ffffff;
+  --flow-in: #38bdf8;
+  --flow-out: #fb923c;
+
+  --flow-util-1: #1f3b5c;
+  --flow-util-2: #2f68a3;
+  --flow-util-3: #5a9fe0;
+  --flow-util-warn: #fbbf24;
+  --flow-util-crit: #f87171;
+  --flow-util-warn-fg: #fbbf24;
+  --flow-util-crit-fg: #f87171;
+  --flow-util-track: color-mix(in srgb, var(--fg, #e7ebf3) 12%, transparent);
+
+  --flow-cat-1: #818cf8;
+  --flow-cat-2: #14b8a6;
+  --flow-cat-3: #fbbf24;
+  --flow-cat-4: #f9a8d4;
+  --flow-cat-5: #4ade80;
+  --flow-cat-6: #67e8f9;
+  --flow-cat-7: #d8b4fe;
+  --flow-cat-8: #94a3b8;
+}

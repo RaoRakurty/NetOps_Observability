@@ -462,7 +462,10 @@ export default function RcaWorkspace({
                 </div>
                 {data.timeline.map((lane, li) => (
                   <div key={li} className="rw-trow">
-                    <div className="rw-tlabel"><span className={`rw-dot ${lane.dot}`} />{lane.label}</div>
+                    <div className="rw-tlabel">
+                      <span className={`rw-dot ${lane.dot}`} />{lane.label}
+                      {lane.href && <a className="rw-tlink" href={lane.href} data-testid="lane-flows-link">See flows</a>}
+                    </div>
                     <div className="rw-ttrack">
                       {lane.markers.map((m, mi) => (
                         <button key={mi} type="button" className={`rw-marker ${m.tone}${detail === m.detail ? " sel" : ""}`}

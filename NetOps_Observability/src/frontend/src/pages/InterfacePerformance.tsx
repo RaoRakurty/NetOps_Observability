@@ -7,6 +7,7 @@ import { api, Device } from "../services/api";
 import {
   Group, MetricLine, MetricTop, BarPanel, fmtBps, fmtPct, fmtBytes, labelSelector, useMetricRange,
 } from "../components/board/panels";
+import { ifRateBps, ifUtilPct } from "../lib/ifUtilisation";
 
 // Interface Performance — per-device / per-interface deep dive.
 // Scoped by a device + interface picker;
@@ -116,8 +117,8 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
 
       <Group title="All interfaces — leaders" hue="#0EA5E9">
         <div className="dm-grid">
-          <MetricTop title="Interfaces by inbound throughput" query={`topk(10, rate(device_if_in_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
-          <MetricTop title="Interfaces by outbound throughput" query={`topk(10, rate(device_if_out_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces by inbound throughput" query={`topk(10, ${ifRateBps(devSel, "in")})`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces by outbound throughput" query={`topk(10, ${ifRateBps(devSel, "out")})`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 
@@ -127,10 +128,10 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
 
       <Group title="Throughput & utilization" hue="#22C55E">
         <div className="dm-grid">
-          <MetricLine title="Throughput — inbound (bits/s)" query={`rate(device_if_in_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
-          <MetricLine title="Throughput — outbound (bits/s)" query={`rate(device_if_out_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
-          <MetricLine title="Inbound utilization (%)" query={`rate(device_if_in_octets${sel}[5m]) * 8 * 100 / ((device_if_speed${sel} > 0) * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
-          <MetricLine title="Outbound utilization (%)" query={`rate(device_if_out_octets${sel}[5m]) * 8 * 100 / ((device_if_speed${sel} > 0) * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Throughput — inbound (bits/s)" query={ifRateBps(sel, "in")} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Throughput — outbound (bits/s)" query={ifRateBps(sel, "out")} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Inbound utilization (%)" query={ifUtilPct(sel, "in")} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Outbound utilization (%)" query={ifUtilPct(sel, "out")} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 

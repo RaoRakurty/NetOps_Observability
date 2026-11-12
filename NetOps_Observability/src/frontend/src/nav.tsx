@@ -358,7 +358,9 @@ export const NAV: NavSection[] = [
       // cloud plane (see pages/LogsExplore.tsx). The Cloud Logs NAV entry moved
       // to Operations → Cloud (owner IA, 2026-09-07) and routes back here.
       { id: "logs", label: "Logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
-      { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
+      // Flows (redesigned 2026-11-12, P1): links first, the flow records explain
+      // them — Right now / Who is talking / Capacity (tabs/Flows.tsx).
+      { id: "flows", label: "Flows", render: (c) => <Flows rangeMinutes={c.rangeMinutes} /> },
       // The separate Events leaf was removed (owner 2026-11-11): the Logs page's
       // Events tab (the default) shows every store, and active alerts have their
       // own page, Operations → Active Alerts. Old links alias to Logs below.

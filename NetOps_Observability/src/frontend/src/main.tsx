@@ -14,6 +14,7 @@ import App from "./App";
 import { captureSSORedirect } from "./services/api";
 import { applyPrefs } from "./theme/prefs";
 import "./styles.css";
+import "./theme/flows-tokens.css";
 
 // Reflect the saved theme/density onto <html> before first paint (no flash).
 applyPrefs();

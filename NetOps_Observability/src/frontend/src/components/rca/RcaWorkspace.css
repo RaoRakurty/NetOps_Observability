@@ -312,6 +312,9 @@
 .rca-ws .rw-thead, .rca-ws .rw-trow { display: grid; grid-template-columns: 150px 1fr; min-height: 38px; }
 .rca-ws .rw-thead { color: #778197; font-size: 12px; }
 .rca-ws .rw-tlabel { padding: 8px 10px; border-right: 1px solid var(--rw-line); display: flex; align-items: center; gap: 6px; }
+.rca-ws .rw-tlabel:has(.rw-tlink) { flex-wrap: wrap; row-gap: 2px; }
+.rca-ws .rw-tlink { flex-basis: 100%; padding-left: 14px; font-size: 14px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.rca-ws .rw-tlink:hover { text-decoration: underline; }
 .rca-ws .rw-ttrack { position: relative; border-bottom: 1px solid #e8edf5;
   background: repeating-linear-gradient(to right,#e9eef6 0,#e9eef6 1px,transparent 1px,transparent 20%); }
 .rca-ws .rw-thead .rw-ttrack { display: grid; grid-template-columns: repeat(6,1fr); align-items: center; }

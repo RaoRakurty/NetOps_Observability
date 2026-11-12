@@ -13,7 +13,7 @@ sidebar_position: 1
 |---|---|---|
 | [Query metrics](/explore/metrics) | **Explore → Metrics** | How is this measured value trending? Pick a metric from the catalog or write a query, and get a chart. |
 | [Search logs](/explore/logs) | **Explore → Logs** | What exactly happened, in the device's own words, and in what order? Full-text search over syslog, traps, firewall logs and sampled flow records. Its **Events** tab, the default, puts them all on one timeline. |
-| [Analyse flows](/explore/flows) | **Explore → Flows** | Who is talking to whom, and how much? Top talkers, conversations, ports, protocols and TCP flags. |
+| [Analyse flows](/explore/flows) | **Explore → Flows** | Which links are busy, who is talking on them, and how close each link is to full. |
 
 **Explore → Saved Searches** holds the searches you named and kept. The alerts that are firing now are on **Operations → Active Alerts**. See [Manage alerts](/monitoring/manage-alerts).
 
