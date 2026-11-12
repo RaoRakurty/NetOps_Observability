@@ -150,6 +150,10 @@ type Answer struct {
 	// Concatenated, the statement texts are Text. Absent on a mode that does
 	// not classify its narrative.
 	Statements []Statement `json:"statements,omitempty"`
+	// Routing is who answered and why (route_policy.go): the deterministic
+	// arms, the model, or the deterministic fallback because the model did
+	// not answer. Set by the server's router, never by the model.
+	Routing *Routing `json:"routing,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

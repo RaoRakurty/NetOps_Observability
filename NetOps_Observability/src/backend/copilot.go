@@ -225,7 +225,11 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// dead-ends. (No key configured at all still explains how to add one.)
 	if attempted {
 		if question != "" {
-			if ans, err := engine().Ask(r.Context(), s.aiPrincipal(claims), question, nil); err == nil {
+			// Every provider just failed this turn: the engine answers WITHOUT
+			// a model, so its routing policy does not wait on one again.
+			eng := engine()
+			eng.LLM, eng.AgentAnswer = nil, nil
+			if ans, err := eng.Ask(r.Context(), s.aiPrincipal(claims), question, nil); err == nil {
 				logInfo("copilot", "provider unavailable — engine fallback answered", map[string]any{"tenant": claims.Tenant})
 				writeJSON(w, http.StatusOK, map[string]any{
 					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
@@ -430,8 +434,13 @@ func providerModel(name string) string {
 	case "openai":
 		return "gpt-4o-mini"
 	case "gemini":
-		// Evergreen alias — Google retires dated 1.x/2.x ids (gemini-1.5-flash now 404s).
-		return "gemini-flash-latest"
+		// The recommended default (ai.RecommendedModels), probe-verified on the
+		// lab 2026-11-12: gemini-2.5-flash answered a probe in 0.59 s while
+		// the moving alias gemini-flash-latest timed out at 10 s. A dated id
+		// can be retired (gemini-1.5-flash now 404s); that fails loudly as
+		// "model not found" in the settings Test and is replaced on purpose,
+		// where an alias changes under a deployment silently.
+		return ai.RecommendedModels()["gemini"].Default
 	case "anthropic":
 		return "claude-sonnet-4-6"
 	}

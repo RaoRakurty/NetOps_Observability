@@ -35,24 +35,29 @@ func aiRouterEnv(t *testing.T) {
 	t.Setenv("COPILOT_MODEL", "claude-sonnet-4-6")
 }
 
-// TestProviderTierBackCompatSingleModel: with ONE model configured, every tier —
-// including the tier-less copilot path — resolves to that model, from the same
-// provider, with the same key. This is the promise made to every deployment that
-// upgrades into the router without touching its settings.
-func TestProviderTierBackCompatSingleModel(t *testing.T) {
+// TestProviderTierSingleModelUsesRecommendedTiers: with ONE model configured
+// and the tier fields blank, the untiered paths call that model and each tier
+// calls the provider's RECOMMENDED model for it — same provider, same key
+// (owner decision 2026-11-12: the lab's single moving-alias model served every
+// tier and timed out on all of them while the recommended tier models
+// answered in under a second).
+func TestProviderTierSingleModelUsesRecommendedTiers(t *testing.T) {
 	aiRouterEnv(t)
 	s := aiCfgTestServer(t)
 	s.copilotCfg.Set(ai.CopilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6"})
 
+	rec := ai.RecommendedModels()["anthropic"]
 	claims := jwtClaims{Role: "viewer", Tenant: "t-a"}
-	for _, tier := range []ai.ModelTier{"", ai.TierDeterministic, ai.TierFast, ai.TierStrong} {
+	for tier, want := range map[ai.ModelTier]string{
+		"": "claude-sonnet-4-6", ai.TierDeterministic: "claude-sonnet-4-6", ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong,
+	} {
 		cands := s.providerCandidatesForTier(claims, tier)
 		if len(cands) != 1 {
 			t.Fatalf("tier %q: want one candidate, got %+v", tier, cands)
 		}
-		if cands[0].model != "claude-sonnet-4-6" || cands[0].name != "anthropic" ||
+		if cands[0].model != want || cands[0].name != "anthropic" ||
 			cands[0].key != "sk-platform-anthropic" || cands[0].source != "platform" {
-			t.Errorf("tier %q: single-model config must resolve unchanged, got %+v", tier, cands[0])
+			t.Errorf("tier %q: want %s from the same provider and key, got %+v", tier, want, cands[0])
 		}
 	}
 	// The tier-less helper the copilot proxy uses must agree with tier "".
@@ -90,10 +95,10 @@ func TestProviderTierPlatformSplit(t *testing.T) {
 			t.Errorf("tier %q: the tier must not change provider or key, got %+v", tier, cands[0])
 		}
 	}
-	// A half-configured split still resolves the unset tier to the default model.
+	// A half-configured split resolves the unset tier to its recommended model.
 	s.copilotCfg.Set(ai.CopilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6", ModelFast: "claude-haiku-4-5-20251001"})
-	if c := s.providerCandidatesForTier(claims, ai.TierStrong); len(c) != 1 || c[0].model != "claude-sonnet-4-6" {
-		t.Errorf("an unset strong tier must fall back to the default model, got %+v", c)
+	if c := s.providerCandidatesForTier(claims, ai.TierStrong); len(c) != 1 || c[0].model != ai.RecommendedModels()["anthropic"].Strong {
+		t.Errorf("an unset strong tier must use the recommended strong model, got %+v", c)
 	}
 }
 
@@ -134,17 +139,19 @@ func TestProviderTierTenantOverridesWin(t *testing.T) {
 		}
 	}
 
-	// A tenant that set only a default model still gets that model at every tier
-	// (it never inherits the PLATFORM's fast/strong choice — different account).
+	// A tenant that set only a default model gets it on the untiered path and
+	// its provider's RECOMMENDED tier models — never the PLATFORM's fast/strong
+	// choice (a different account).
 	if _, err := s.aiTenantCfg.SetTenantSettings("t-c", ai.TenantSettings{
 		Provider: "anthropic", Model: "tenant-c-only", Key: "sk-tenant-c",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, tier := range []ai.ModelTier{ai.TierFast, ai.TierStrong} {
+	rec := ai.RecommendedModels()["anthropic"]
+	for tier, want := range map[ai.ModelTier]string{"": "tenant-c-only", ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong} {
 		c := s.providerCandidatesForTier(jwtClaims{Role: "viewer", Tenant: "t-c"}, tier)
-		if len(c) != 1 || c[0].model != "tenant-c-only" {
-			t.Errorf("tier %q: a single-model tenant must not inherit the platform's tier models, got %+v", tier, c)
+		if len(c) != 1 || c[0].model != want || c[0].model == "platform-fast" || c[0].model == "platform-strong" {
+			t.Errorf("tier %q: a single-model tenant gets %s (never the platform's tier models), got %+v", tier, want, c)
 		}
 	}
 

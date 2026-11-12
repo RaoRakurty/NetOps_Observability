@@ -55,13 +55,21 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   it("renders the case title, subtitle and all status pills", () => {
     const { data } = renderWS();
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(data.title);
-    data.pills.forEach((p) => expect(screen.getByText(p.text)).toBeInTheDocument());
+    data.pills.forEach((p) => expect(screen.getAllByText(p.text).length).toBeGreaterThan(0));
   });
 
   it("renders the executive summary and every why-line", () => {
     const { data } = renderWS();
     expect(screen.getByText(data.summary)).toBeInTheDocument();
-    data.why.forEach((w) => expect(screen.getByText(new RegExp(w.label))).toBeInTheDocument());
+    // the reasoning lines render as labels; "What would confirm it" is the
+    // section-4 checklist, its text the first item
+    data.why.filter((w) => w.label !== "What would confirm it")
+      .forEach((w) => expect(screen.getByText(new RegExp(w.label))).toBeInTheDocument());
+    const confirm = data.why.find((w) => w.label === "What would confirm it");
+    if (confirm) {
+      expect(screen.getByText("What would confirm it")).toBeInTheDocument();
+      expect(screen.getByText(confirm.text)).toBeInTheDocument();
+    }
   });
 
   it("renders every impact row value", () => {
@@ -72,7 +80,7 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   it("renders ONE merged path section (owner P1: no duplicate topology section)", () => {
     renderWS();
     expect(screen.getByTestId("path-slot")).toBeInTheDocument();
-    expect(screen.getByText("Network path & causality")).toBeInTheDocument();
+    expect(screen.getByText("Network topology & causality")).toBeInTheDocument();
     // the old duplicate section is gone
     expect(screen.queryByText("Network path & causal topology")).not.toBeInTheDocument();
     expect(screen.queryByText("Path causality")).not.toBeInTheDocument();
@@ -114,7 +122,8 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   it("renders each hypothesis row and the ticket callout", () => {
     const { data } = renderWS();
     // the #1 hypothesis text can equal the case title — assert presence.
-    data.hypotheses.forEach((h) => expect(screen.getAllByText(h.hypo).length).toBeGreaterThan(0));
+    // section 8 lists the engine's OTHER explanations (never UI-invented rows)
+    data.others.forEach((o) => expect(screen.getAllByText(o.title).length).toBeGreaterThan(0));
     expect(screen.getByText(new RegExp(data.ticket.callout.strong))).toBeInTheDocument();
   });
 
@@ -176,60 +185,33 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
   });
 });
 
-describe("RcaWorkspace — Ask RCA assistant (Iris AI) wiring", () => {
-  const answer = (over: Record<string, unknown> = {}) => ({
-    mode: "problem_explanation", intent: "problem_explanation", modules: ["rca"],
-    text: "Because evidence is single-source.",
-    citations: [{ id: "problem:" + CORR_ID, kind: "finding", label: "wan-r2 bgp", href: "/x" }],
-    disclaimers: [], ...over,
+describe("RcaWorkspace — Iris is docked, one conversation (RCA document v2 §5)", () => {
+  it("docks the Iris slot beside the sheet", () => {
+    const { container } = render(
+      <RcaWorkspace data={suspectedCase()} view="operator" onView={vi.fn()} onExportPdf={vi.fn()}
+        correlationId={CORR_ID} aiSlot={<div data-testid="iris-slot">IRIS</div>} />,
+    );
+    const dock = container.querySelector("aside.rw-dock");
+    expect(dock).not.toBeNull();
+    expect(within(dock as HTMLElement).getByTestId("iris-slot")).toBeInTheDocument();
+    expect(container.querySelector(".rca-ws")?.classList.contains("rw-docked")).toBe(true);
   });
 
-  it("asks the GROUNDED endpoint with the correlation id, never a browser-assembled prompt", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(aiAsk).toHaveBeenCalledOnce();
-    expect(await screen.findByText(/Because evidence is single-source\./)).toBeInTheDocument();
-
-    // The server owns the grounding: the question travels verbatim and the case
-    // is named by its id. No RCA context block, no instructions, no proxy call.
-    const [question, context] = aiAsk.mock.calls[0] as [string, Record<string, string>];
-    expect(context).toEqual({ correlation_id: CORR_ID });
-    expect(question).not.toMatch(/RCA context|Answer using ONLY|Status:|Evidence:/);
-    expect(JSON.stringify(aiAsk.mock.calls[0])).not.toMatch(/RCA context/);
-    expect(copilotChat).not.toHaveBeenCalled();
+  it("keeps the dock in the evidence-detail view too", () => {
+    const { container } = render(
+      <RcaWorkspace data={suspectedCase()} view="debug" onView={vi.fn()} onExportPdf={vi.fn()}
+        aiSlot={<div data-testid="iris-slot">IRIS</div>} />,
+    );
+    expect(container.querySelector("aside.rw-dock")).not.toBeNull();
   });
 
-  it("renders the evidence the grounded answer cited", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(await screen.findByText("wan-r2 bgp")).toBeInTheDocument();
-  });
-
-  it("omits the correlation context when the case has no id (synthetic example)", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS(suspectedCase(), "operator", null);
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(aiAsk).toHaveBeenCalledOnce();
-    expect(aiAsk.mock.calls[0][1]).toBeUndefined();
-  });
-
-  it("is absent for a caller without ai.chat (N-A7; the server still refuses the ask)", async () => {
-    features.mockResolvedValue({ ai_entitlements: ["ai.nlquery"] });
-    renderWS();
-    await vi.waitFor(() => expect(features).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 0));
-    expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+  it("renders no second assistant box and no dock without a slot", () => {
+    const { container } = renderWS();
     expect(screen.queryByText("Ask RCA Assistant")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+    expect(container.querySelector("aside.rw-dock")).toBeNull();
+    expect(container.querySelector(".rca-ws")?.classList.contains("rw-docked")).toBe(false);
     expect(aiAsk).not.toHaveBeenCalled();
-  });
-
-  it("degrades to an honest 'not connected' state when the assistant errors", async () => {
-    aiAsk.mockRejectedValue(new Error("feature disabled"));
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(await screen.findByText(/Assistant not connected/)).toBeInTheDocument();
   });
 });
 
@@ -293,9 +275,12 @@ describe("RcaWorkspace — security evidence reads as its own source class", () 
     expect(screen.getByText("Observed by vuln")).toBeInTheDocument();
   });
 
-  it('accounts security + network evidence as "2 independent sources"', () => {
+  it("never confirms on security + network evidence; the finding is background (owner D1)", () => {
     renderWS(securityCase());
-    expect(screen.getByText("Confirmed — cross-checked by 2 independent sources (Routing & link events + Security evidence).")).toBeInTheDocument();
+    expect(screen.queryByText(/^Confirmed — cross-checked/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Confirmed cause")).not.toBeInTheDocument();
+    const band = screen.getByRole("region", { name: "Background on this device (not a cause)" });
+    expect(within(band).getByText("Known security exposure on this device")).toBeInTheDocument();
   });
 
   it("shows no security row at all for a network-only case", () => {
@@ -349,7 +334,7 @@ describe("RcaWorkspace — confidence ladder fidelity gap (A7)", () => {
   const gapObj = {
     verdict_tier: "suspected",
     hypotheses: JSON.stringify({
-      ranking: { hypotheses: [{ id: "sig.ent.security.exposure-story", verdict: { fidelity_gap: ["netrule.exposed_mgmt"], fidelity_min: "doc_claimed" } }] },
+      ranking: { hypotheses: [{ id: "sig.ent.wan-edge.bgp-peer-flap", verdict: { fidelity_gap: ["netrule.exposed_mgmt"], fidelity_min: "doc_claimed" } }] },
     }),
   };
 
@@ -361,5 +346,56 @@ describe("RcaWorkspace — confidence ladder fidelity gap (A7)", () => {
   it("renders nothing when the engine sent no gap", () => {
     renderWS(securityCase());
     expect(screen.queryByText(/Confirmation held back/)).not.toBeInTheDocument();
+  });
+});
+
+// The NOC RCA document (owner 2026-11-11): ten numbered sections in reading
+// order, the background band, and the collapsible "How to read this RCA" guide.
+describe("RcaWorkspace — the NOC RCA document", () => {
+  it("renders the ten sections in reading order", () => {
+    const { container } = renderWS();
+    const titles = [...container.querySelectorAll(".rw-doc-title")].map((h) => h.textContent);
+    expect(titles).toEqual([
+      "1 · What broke", "2 · Who is affected", "3 · When", "4 · Cause and how sure we are", "5 · How we know",
+      "6 · Where the break is", "7 · Background on this device (not a cause)", "8 · Other explanations considered",
+      "9 · Who owns the fix", "10 · What to do now · Watch for recurrence",
+    ]);
+  });
+
+  it("shows exactly one of the four phrases in section 4", () => {
+    const { data } = renderWS();
+    expect(screen.getByTestId("rca-phrase")).toHaveTextContent(data.confidence.phrase);
+    expect(["Confirmed cause", "Likely cause", "Cause not determined"].some((p) => data.confidence.phrase === p)
+      || data.confidence.phrase.startsWith("Possibly because of ")).toBe(true);
+  });
+
+  it("offers the six-point reading guide as a collapsible help panel", () => {
+    const { container } = renderWS();
+    const panel = container.querySelector("details.rw-howto") as HTMLElement;
+    expect(panel).toBeTruthy();
+    expect(within(panel).getByText("How to read this RCA")).toBeInTheDocument();
+    expect(panel.querySelectorAll("li")).toHaveLength(6);
+  });
+
+  it("an empty background band says so plainly", () => {
+    renderWS();
+    const band = screen.getByRole("region", { name: "Background on this device (not a cause)" });
+    expect(within(band).getByText("Nothing recorded on this device.")).toBeInTheDocument();
+  });
+});
+
+describe("evidence timeline — the traffic lane opens Explore → Flows", () => {
+  it("renders 'See flows' on the traffic lane, scoped to the exporter interface", () => {
+    const tl = timeline({
+      signals: [
+        signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2" }),
+        signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_type: "interface", entity_id: "10.1.0.1:if7" }),
+      ],
+    });
+    renderWS(buildRcaCase(tl, corrObject(), {}, "NetOps", []));
+    const links = screen.getAllByTestId("lane-flows-link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("See flows");
+    expect(links[0].getAttribute("href")).toMatch(/^#\/explore\/flows\?device=10\.1\.0\.1&if=7&from=/);
   });
 });

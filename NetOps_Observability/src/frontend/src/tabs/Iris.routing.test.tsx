@@ -567,7 +567,9 @@ describe("Iris — connect a model (tracker 337 C2/C3/C5)", () => {
     fireEvent.click(await screen.findByTitle("AI models"));
     fireEvent.change(screen.getByPlaceholderText("Paste API key"), { target: { value: "AIza-draft" } });
     await act(async () => { fireEvent.click(screen.getByText("Test connection")); });
-    expect(testCopilotConfig).toHaveBeenCalledWith({ provider: "gemini", key: "AIza-draft", model: undefined });
+    // Every tier field of the form is sent (2026-11-12): blanks are tested as
+    // the provider's recommended models, each with its own verdict.
+    expect(testCopilotConfig).toHaveBeenCalledWith({ provider: "gemini", key: "AIza-draft", model: "", model_fast: "", model_strong: "" });
     expect((await screen.findByTestId("connection-test")).textContent).toContain("The provider rejected this key.");
   });
   it("tells an admin when workspaces have spent today's budget (D4)", async () => {

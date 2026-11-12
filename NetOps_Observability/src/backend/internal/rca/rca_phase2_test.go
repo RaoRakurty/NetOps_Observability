@@ -50,18 +50,21 @@ func fixtureSnapshotBytes(t *testing.T, name string, got []byte) {
 }
 
 var rcaPhase2SectionBands = []string{
-	"1 · Executive summary",
-	"2 · Impact",
-	"3 · What happened",
-	"4 · Trigger",
-	"5 · Root cause and contributing factors",
-	"6 · Detection and response",
-	"7 · Mitigation and service recovery",
-	"8 · Corrective actions",
-	"9 · Lessons learned",
-	"10 · Detailed timeline",
-	"11 · Evidence appendix",
-	"12 · Glossary",
+	"1 · What broke",
+	"2 · Who is affected",
+	"3 · When",
+	"4 · Cause and how sure we are",
+	"5 · How we know",
+	"6 · Where the break is",
+	"7 · Background on this device (not a cause)",
+	"8 · Other explanations considered",
+	"9 · Who owns the fix",
+	"10 · What to do now · Watch for recurrence",
+	"Appendix A · Evidence",
+	"Appendix B · Detailed timeline",
+	"Appendix C · Glossary",
+	"Appendix D · Integrity",
+	"How to read this RCA",
 }
 
 // ---- A. report layout: the 12-section order -----------------------------------
@@ -351,7 +354,7 @@ func TestPhase2DetectionMilestonesRendering(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	doc := string(html)
-	if !strings.Contains(doc, "Detection milestones") || !strings.Contains(doc, "First credible failure") {
+	if !strings.Contains(doc, "Detection milestones") || !strings.Contains(doc, "Earliest attached anomalous observation (detector onset, not fault onset)") {
 		t.Fatal("sourced milestone must render with its label")
 	}
 	if !strings.Contains(doc, "Source of this timestamp") {
@@ -371,14 +374,16 @@ func TestPhase2DetectionMilestonesRendering(t *testing.T) {
 }
 
 func TestPhase2ComparativeDurationsRenderWhenSourced(t *testing.T) {
-	// A case whose trigger observation is in the slice gains a sourced
-	// "first Correlix detection" → detection lag becomes computable.
+	// RCA v2 §3.5: "first Correlix detection" is when Correlix CREATED the case
+	// (the object's version-1 created_at) — a case whose creation stamp was
+	// loaded gains a sourced detection milestone → detection lag is computable.
 	meta := testMeta("open", "suspected", "sig.ent.app.customer-path-degraded",
 		testHyp("sig.ent.app.customer-path-degraded", 0.55, "suspected",
 			[]string{"synthetic_http_failure"}, nil, nil, "app_team", false))
 	trig := testSig("synthetic_http_failure", "active_probe", "prober-fra", "app", "crm-portal", "high", "2026-07-12 18:14:00", true,
 		map[string]any{"probe_scope": "customer_path"})
 	meta["trigger_signal"] = trig["signal_id"]
+	meta["first_version_created_at"] = "2026-07-12T18:14:30.250Z"
 	sigs := []map[string]any{
 		testSig("synthetic_http_failure", "active_probe", "prober-fra", "app", "crm-portal", "high", "2026-07-12 18:12:00", true,
 			map[string]any{"probe_scope": "customer_path"}),

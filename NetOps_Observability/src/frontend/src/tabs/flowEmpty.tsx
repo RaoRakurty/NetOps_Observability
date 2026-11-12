@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// flowEmpty.tsx — honest empty states for Explore Flows. A panel that has
+// flowEmpty.tsx — honest empty states for Explore → Flows (was Flows). A panel that has
 // nothing to draw used to say "No flow records in this window" even when the
 // window held tens of thousands of flows that simply lacked the field the panel
 // groups by (AS numbers, TCP flags …). That sent operators to re-check their
@@ -24,6 +24,9 @@ export type FlowCoverage = {
   /** Flows to or from Correlix's own pollers (tracker 387 PR 13), counted whether shown or not. */
   platform_monitoring_flows: number;
   platform_addresses_configured: boolean;
+  /** The iptoasn dataset is loaded (tracker 387 PR 13d): AS names exist even when exporters send none. */
+  asn_dataset_loaded: boolean;
+  flows_with_dataset_as: number;
 };
 
 /** What the panel groups by — decides which missing field explains it. */
@@ -49,6 +52,8 @@ export function parseCoverage(row: Record<string, unknown> | undefined): FlowCov
     exporters: n(row.exporters),
     platform_monitoring_flows: n(row.platform_monitoring_flows),
     platform_addresses_configured: n(row.platform_addresses_configured) > 0,
+    asn_dataset_loaded: n(row.asn_dataset_loaded) > 0,
+    flows_with_dataset_as: n(row.flows_with_dataset_as),
   };
 }
 

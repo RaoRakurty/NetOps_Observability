@@ -123,6 +123,9 @@ const (
 	ArmSkill      = "skill"
 	ArmCapability = "capability"
 	ArmClassic    = "classic"
+	// ArmModel: a multi-part question no deterministic arm covers whole goes
+	// to the grounded model answer (route_policy.go).
+	ArmModel = "model"
 )
 
 // routed reports the FIRST claim only: a method that later falls back to the

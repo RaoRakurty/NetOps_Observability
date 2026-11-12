@@ -1,0 +1,342 @@
+{
+  "state": "device_only",
+  "sources": [
+    {
+      "kind": "inventory",
+      "status": "read",
+      "rows": 1,
+      "stale": false,
+      "freshness": "current"
+    },
+    {
+      "kind": "lldp",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    },
+    {
+      "kind": "cdp",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    },
+    {
+      "kind": "bgp_ls",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    },
+    {
+      "kind": "topology_graph",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    },
+    {
+      "kind": "sdwan_overlay",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    },
+    {
+      "kind": "controller",
+      "status": "read",
+      "rows": 0,
+      "stale": false,
+      "freshness": "empty"
+    }
+  ],
+  "anchors": [
+    "cedge-60-07ae8615"
+  ],
+  "nodes": [
+    {
+      "id": "cedge-60-07ae8615",
+      "label": "cedge-60-07ae8615",
+      "role": "wan_edge",
+      "source": "inventory",
+      "anchor": true,
+      "managed": true,
+      "last_seen": "2026-11-12T04:57:00Z",
+      "stale": false
+    }
+  ],
+  "edges": [],
+  "more_nodes": 0,
+  "faults": [
+    {
+      "target_type": "interface",
+      "target_id": "cedge-60-07ae8615:Gi3",
+      "device": "cedge-60-07ae8615",
+      "port": "Gi3",
+      "kinds": [
+        "if_metric_anomaly"
+      ],
+      "peak_severity": "warn",
+      "evidence_refs": [
+        "eaf787e3-cc25-5575-90ed-0c2522175d21"
+      ]
+    },
+    {
+      "target_type": "interface",
+      "target_id": "cedge-60-07ae8615:Gi4",
+      "device": "cedge-60-07ae8615",
+      "port": "Gi4",
+      "kinds": [
+        "if_metric_anomaly"
+      ],
+      "peak_severity": "crit",
+      "evidence_refs": [
+        "3258effc-b2c0-5b23-a872-c9b03c145c3c"
+      ]
+    },
+    {
+      "target_type": "interface",
+      "target_id": "cedge-60-07ae8615:Tu1",
+      "device": "cedge-60-07ae8615",
+      "port": "Tu1",
+      "kinds": [
+        "if_metric_anomaly"
+      ],
+      "peak_severity": "crit",
+      "evidence_refs": [
+        "f078d629-8ce1-5ec0-bf4d-823a94324936"
+      ]
+    },
+    {
+      "target_type": "interface",
+      "target_id": "cedge-60-07ae8615:Tu2",
+      "device": "cedge-60-07ae8615",
+      "port": "Tu2",
+      "kinds": [
+        "if_metric_anomaly"
+      ],
+      "peak_severity": "warn",
+      "evidence_refs": [
+        "24907e4f-fd67-52ca-bd55-761c243a1d70"
+      ]
+    },
+    {
+      "target_type": "node",
+      "target_id": "cedge-60-07ae8615",
+      "device": "cedge-60-07ae8615",
+      "kinds": [
+        "device_alarm",
+        "device_resource_anomaly"
+      ],
+      "peak_severity": "high",
+      "evidence_refs": [
+        "0fe46927-309b-51ea-a649-a689c32096c6",
+        "6929a382-062a-5b3c-b999-cd8ceb0376e5"
+      ]
+    }
+  ],
+  "causal": [
+    {
+      "from": "cedge-60-07ae8615",
+      "from_type": "node",
+      "from_kind": "device_resource_anomaly",
+      "to": "cedge-60-07ae8615:Gi4",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "suspected",
+      "directed": true,
+      "basis": "direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)",
+      "direction_conf": 0.8,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615",
+      "from_type": "node",
+      "from_kind": "device_resource_anomaly",
+      "to": "cedge-60-07ae8615:Tu1",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "suspected",
+      "directed": true,
+      "basis": "direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)",
+      "direction_conf": 0.8,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615",
+      "from_type": "node",
+      "from_kind": "device_resource_anomaly",
+      "to": "cedge-60-07ae8615:Tu2",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "suspected",
+      "directed": true,
+      "basis": "direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)",
+      "direction_conf": 0.8,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615",
+      "from_type": "node",
+      "from_kind": "device_resource_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_alarm",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi3",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_alarm",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi3",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_resource_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi3",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Gi4",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi3",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Tu1",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi3",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Tu2",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi4",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_alarm",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi4",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Tu1",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Gi4",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Tu2",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Tu1",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_alarm",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Tu1",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615:Tu2",
+      "to_type": "interface",
+      "to_kind": "if_metric_anomaly",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    },
+    {
+      "from": "cedge-60-07ae8615:Tu2",
+      "from_type": "interface",
+      "from_kind": "if_metric_anomaly",
+      "to": "cedge-60-07ae8615",
+      "to_type": "node",
+      "to_kind": "device_alarm",
+      "relation": "unknown",
+      "directed": false,
+      "basis": "no direction: the two only occurred together; observed on the same device (authoritative)",
+      "direction_conf": 0.0,
+      "evidence_refs": []
+    }
+  ],
+  "reason": "cedge-60-07ae8615 is in the inventory, but no neighbour or path data was found for it.",
+  "remediation": [
+    "Enable LLDP or CDP on cedge-60-07ae8615 and its neighbours, and make sure the neighbour tables are polled (LLDP-MIB / CISCO-CDP-MIB), so its adjacency can be discovered.",
+    "If cedge-60-07ae8615 is an SD-WAN edge, connect the SD-WAN Manager integration (or make the SD-WAN MIB readable) so its tunnels are drawn — the topology map's SD-WAN notices list edges without tunnel data.",
+    "Confirm topology discovery covers this device's network (Features and Discovery settings), then regenerate this report."
+  ]
+}

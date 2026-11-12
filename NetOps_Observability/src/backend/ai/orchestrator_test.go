@@ -346,7 +346,7 @@ func knownMode(m AnswerMode) bool {
 	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp,
 		ModeProductAnswer, ModeModuleHealthSummary, ModeInvestigationPlan, ModeShiftHandoff,
 		ModeTimeRangeOutageSummary, ModeNocFocusRecommendation, ModeIncidentStatusBreakdown,
-		ModeUnavailable:
+		ModeUnavailable, ModeModelAnswer:
 		return true
 	}
 	return false

@@ -104,27 +104,48 @@ export function signatureName(id: string): string {
 // a signature lands. Titles stay neutral and non-overclaiming per rca-copy-precision.
 const SIG_NOC_TITLE: Record<string, string> = {
   // ── WAN edge / middle-mile / internet / cloud (emitted today) ──
-  "sig.ent.middle-mile.dia-egress-latency": "Middle-mile latency increase",
+  "sig.ent.middle-mile.dia-egress-latency": "ISP / DIA egress latency",
+  "sig.ent.middle-mile.dia-egress-loss": "ISP / DIA egress packet loss",
   "sig.ent.middle-mile.physical-degradation": "Middle-mile path degradation",
-  "sig.ent.wan-edge.bgp-peer-flap": "Routing adjacency change",
+  "sig.ent.wan-edge.bgp-peer-flap": "BGP peer flapping — WAN edge",
+  "sig.ent.wan-edge.bgp-peer-down": "BGP peer down — WAN edge",
   "sig.ent.wan-edge.routing-instability": "Routing instability",
   "sig.ent.wan-edge.congestion": "WAN edge congestion",
   "sig.ent.wan-edge.tunnel-mtu-blackhole": "Path MTU blackhole",
-  "sig.ent.access.local-link-fault": "Link state change",
+  "sig.ent.access.local-link-fault": "Local link fault",
   "sig.ent.access.admin-link-change-induced": "Interface shut down by an operator",
   "sig.ent.internet.dns-impairment": "DNS resolution impairment",
   "sig.ent.cloud.region-degradation": "Cloud region degradation",
   "sig.ent.cloud.region-impairment": "Cloud region impairment",
   // ── SD-WAN overlay (Phase 2) ──
   "sig.ent.sdwan.tunnel-sla-breach": "SD-WAN tunnel SLA breach",
-  "sig.ent.sdwan.tunnel-flap": "SD-WAN tunnel flap",
+  "sig.ent.sdwan.tunnel-flap": "SD-WAN tunnel flapping",
+  "sig.ent.sdwan.brownout": "SD-WAN path brownout",
   "sig.ent.wan-edge.ipsec-down": "IPsec tunnel down",
   // ── Cloud reachability (Phase 3) ──
   "sig.ent.cloud.path-blocked": "Cloud path unreachable",
   "sig.ent.cloud.gateway-degradation": "Cloud gateway degradation",
-  // ── LAN / access (Phase 2) ──
+  // ── LAN / access (Phase 2; RCA document v2 §3.2, 2026-11-12). These used to
+  // fall into the cascade's `access` rung and ALL read "Link state change" — a
+  // MAC flap, an OSPF flap and a DNS resolver failure were indistinguishable.
+  // Every access template has its own name now; mirror of noclabel/labels.go. ──
   "sig.ent.access.uplink-down": "Access uplink down",
   "sig.ent.access.qos-drops": "QoS drops on access",
+  "sig.ent.access.mac-flap": "MAC address flapping",
+  "sig.ent.access.ospf-adjacency-flap": "OSPF adjacency flap",
+  "sig.ent.access.ospf-adjacency-stuck": "OSPF adjacency stuck",
+  "sig.ent.access.stp-topology-change": "Spanning-tree topology change",
+  "sig.ent.access.stp-loop-broadcast-storm": "Spanning-tree loop / broadcast storm",
+  "sig.ent.access.vlan-trunk-mismatch": "VLAN missing or pruned on a trunk",
+  "sig.ent.access.dhcp-scope-exhaustion": "DHCP pool exhausted or DHCP path failure",
+  "sig.ent.access.dns-local-resolver-failure": "Local DNS resolver failure",
+  "sig.ent.access.dupip-arp-flux": "Duplicate IP / ARP ownership flip",
+  "sig.ent.access.portsecurity-errdisable": "Port shut down by port security",
+  "sig.ent.access.fhrp-failover": "Gateway redundancy (FHRP) failover",
+  "sig.ent.access.fhrp-split-brain": "Gateway redundancy (FHRP) split brain",
+  "sig.ent.access.pmtud-blackhole": "Path MTU blackhole",
+  "sig.ent.lan.link-flap": "Link flapping — LAN",
+  "sig.ent.lan.stp-topology-change": "Spanning-tree topology change",
   // ── Application (network attribution) ──
   "sig.ent.app.degradation-network-clear": "Application degradation (network clear)",
   // ── Application / SaaS experience lane — each cause names ITS suspect; none
@@ -143,7 +164,23 @@ const SIG_NOC_TITLE: Record<string, string> = {
   // ── Service-provider core · DC fabric · security ──
   "sig.sp.core.mpls-lsp-down": "MPLS LSP down",
   "sig.dc.fabric.uplink-fault": "Fabric uplink fault",
+  "sig.ent.dc.fabric-link-down": "Fabric link down — data center",
   "sig.ent.security.fw-policy-drop": "Firewall policy drop",
+  // Security family (owner review 2026-11-11): every security template has a
+  // NOC title, so a raw template title never reaches an operator. The two
+  // posture/exposure stories are BACKGROUND titles — they describe the device,
+  // never a fault. Mirror of sigTitle in backend/internal/noclabel/labels.go.
+  "sig.ent.security.exposure-story": "Known security exposure on this device",
+  "sig.ent.security.hardening-drift-story": "Hardening gap on this device",
+  "sig.ent.security.threat-signal-story": "Security detection on a failing device",
+  "sig.ent.security.fw-ha-failover-drift": "Firewall HA failover or session drift",
+  "sig.ent.security.fw-aa-session-owner-mismatch": "Firewall session-owner mismatch",
+  "sig.ent.security.nat-snat-exhaustion": "NAT / SNAT port exhaustion",
+  "sig.ent.security.waf-rule-false-positive": "WAF blocking legitimate traffic",
+  "sig.ent.security.waf-body-limit-block": "WAF request-size block",
+  "sig.ent.security.proxy-pac-wpad-failure": "Proxy auto-config (PAC/WPAD) failure",
+  "sig.ent.security.proxy-swg-egress-failure": "Web proxy egress failure",
+  "sig.ent.app.edge-firewall-reject": "Cloud security group rejecting application traffic",
 };
 // Dominant evidence plane → NOC headline when no signature has matched.
 // Titles describe the OBSERVED condition factually — the NOT CONFIRMED / Confidence
@@ -182,8 +219,20 @@ export function friendlyIncidentId(id: string): string {
   return "INC-" + id.slice(0, 6).toUpperCase();
 }
 
+// hypothesisNocTitle names a HYPOTHESIS row (RCA document v2 §3.2; mirror of
+// noclabel.HypothesisTitle): the explicit NOC map first (a raw security
+// template title never reaches an operator), then the engine catalog's own
+// `title` ("Local link fault"), and only then the domain cascade. A hypothesis
+// is named for what it proposes — never for an event phrase guessed from its id.
+export function hypothesisNocTitle(id: string, catalogTitle?: string): string {
+  if (Object.prototype.hasOwnProperty.call(SIG_NOC_TITLE, id)) return SIG_NOC_TITLE[id];
+  const t = (catalogTitle ?? "").trim();
+  if (t && t !== id) return t;
+  return signatureNocTitle(id);
+}
+
 export function signatureNocTitle(id: string): string {
-  if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
+  if (Object.prototype.hasOwnProperty.call(SIG_NOC_TITLE, id)) return SIG_NOC_TITLE[id];
   // app/SaaS BEFORE every network rung: an application-domain signature must
   // never be mislabelled as a network change (owner directive 2026-07-12).
   // Mirrors ai_labels.go signatureNocTitle — keep both sides in sync.
@@ -196,7 +245,9 @@ export function signatureNocTitle(id: string): string {
   if (/mpls|lsp|l3vpn|vrf/.test(id)) return "MPLS / VPN path change";
   if (/dia|middle-mile|internet|provider|congestion|wan/.test(id)) return "WAN / provider path change";
   if (/bgp|ospf|isis|routing/.test(id)) return "Routing adjacency change";
-  if (/link|access|uplink/.test(id)) return "Link state change";
+  // `access` is NOT a token (RCA document v2 §3.2): it names a network domain,
+  // not a link event, and made every access template read "Link state change".
+  if (/link|uplink/.test(id)) return "Link state change";
   if (/nat|fw|firewall|policy|security|waf|proxy/.test(id)) return "Security / policy change";
   if (/device|resource|cpu|mem|hardware|fabric/.test(id)) return "Device health change";
   // honest last resort: an unmapped signature is an anomaly with an
@@ -255,7 +306,10 @@ export function kindMeta(kind: string): { modality: string; source: string } {
 const KIND_NOC: Record<string, string> = {
   probe_rtt_anomaly: "Slower response", probe_latency_departure: "Response-time change",
   probe_loss: "Packet loss", dns_latency_high: "Slow DNS", dns_failure_rate: "DNS failures",
-  if_metric_anomaly: "Interface counter change", if_util_high: "High link utilization",
+  // Go noclabel.Kind wording (RCA document v2 §3.1): a counter/rate departure,
+  // NOT a state change — the observed condition that titles P-3E0400.
+  if_metric_anomaly: "Interface metric anomaly", if_util_high: "High link utilization",
+  device_alarm: "Device alarm", mac_flap: "MAC address flap",
   if_errors: "Interface errors", metric_anomaly: "Metric change",
   device_resource_anomaly: "Device CPU/memory change", qos_drops: "QoS drops",
   link_state_change: "Link up/down", lldp_neighbor_change: "Neighbor change",

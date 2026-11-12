@@ -15,8 +15,10 @@ import RcaTicketCard from "../components/rca/RcaTicketCard";
 import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
+import { isContextStory } from "../components/rca/rcaPhrases";
 import { useDeviceNames } from "../lib/deviceNames";
 import { buildTopoGraph } from "../components/rca/topoGraph";
+import { readTopologyContext, type TopologyContext } from "../components/rca/topologyContext";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
@@ -684,6 +686,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   // permission-gated endpoint the PDF renders from). `loaded` gates the honest
   // empty note so it shows only after the fetch settles, never mid-load.
   const [pathAttr, setPathAttr] = useState<RcaPathAttribution | null>(null);
+  const [topoCtx, setTopoCtx] = useState<TopologyContext | null>(null);
   const [pathLoaded, setPathLoaded] = useState(false);
   // Event-timeline extras: recorded report times/promotion + the latest
   // verification run — real recorded milestones only (never fabricated).
@@ -696,11 +699,14 @@ export function CorrelationDetail({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     setObj(null); setTimeline(null); setReplay(null); setErr("");
-    setPathAttr(null); setPathLoaded(false); setCaseExtras({});
+    setPathAttr(null); setTopoCtx(null); setPathLoaded(false); setCaseExtras({});
     api.rcaReportJson(id)
       .then((r) => {
         if (!alive) return;
         setPathAttr(r.path_attribution ?? null);
+        // RCA document v2 §2: the ONE topology model (validated, never trusted
+        // raw) — the path view and the print fallback both draw from it.
+        setTopoCtx(readTopologyContext(r));
         setPathLoaded(true);
         setCaseExtras((x) => ({
           ...x,
@@ -709,6 +715,13 @@ export function CorrelationDetail({ id }: { id: string }) {
             component_recovered_at: r.times?.component_recovered_at,
           },
           promotion: r.promotion?.manual ? { manual: r.promotion.manual } : undefined,
+          // The server's title (§3.1 title rule) — one title on page and PDF.
+          reportTitle: typeof r.title === "string" ? r.title.slice(0, 300) : undefined,
+          // The server's impact axes — "Who is affected" reads them (never the verdict).
+          impact: {
+            real_user: typeof r.states?.impact_real_user === "string" ? r.states.impact_real_user : undefined,
+            synthetic: typeof r.states?.impact_synthetic === "string" ? r.states.impact_synthetic : undefined,
+          },
         }));
       })
       .catch(() => { if (alive) setPathLoaded(true); }); // report JSON is best-effort; the rest of the inspector still renders
@@ -747,23 +760,27 @@ export function CorrelationDetail({ id }: { id: string }) {
   const { recommendedSteps, recommendedOwner } = useMemo(() => {
     const hyp = parseJSON<any>(obj?.hypotheses, {});
     const ranking = hyp?.ranking ?? {};
-    const topHyp = (ranking.hypotheses ?? []).find((h: any) => h.id === obj?.top_hypothesis)
-      ?? (obj && obj.top_hypothesis !== "undetermined" ? (ranking.hypotheses ?? [])[0] : undefined);
+    // Owner D1 (2026-11-11): the owner and first steps come from the CAUSAL
+    // leader — a background story (standing security finding) never assigns the
+    // fix or sets the first steps.
+    const causalHyps = (ranking.hypotheses ?? []).filter((h: any) => !isContextStory(h?.id, h?.context_story));
+    const topHyp = causalHyps.find((h: any) => h.id === obj?.top_hypothesis)
+      ?? (obj && obj.top_hypothesis !== "undetermined" ? causalHyps[0] : undefined);
     return { recommendedSteps: (topHyp?.verdict?.first_steps ?? []) as string[], recommendedOwner: (topHyp?.verdict?.owner ?? "") as string };
   }, [obj]);
 
   // Map the real correlation object/timeline → the workspace data contract, and
-  // attach the SAME positioned graph the on-screen topology draws (buildTopoGraph)
-  // so the exported PDF renders an identical Network-Path picture. showStamp=false
-  // keeps the print to the loss-only labels (the STAMP overlay is interactive-only).
+  // attach the measured path's graph (buildTopoGraph over the backend spine) and
+  // the server's topology context, so the print fallback draws the same picture
+  // as the page and the server PDF (RCA document v2 §2).
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
     const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners,
-      deviceNames ? { ...caseExtras, deviceNames } : caseExtras);
-    const graph = buildTopoGraph(timeline, seams, view, false);
+      { ...caseExtras, ...(deviceNames ? { deviceNames } : {}), ...(topoCtx ? { topologyContext: topoCtx } : {}) });
+    const graph = buildTopoGraph(timeline);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners, caseExtras, deviceNames]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners, caseExtras, deviceNames, topoCtx]);
 
   if (err) return <div className="empty" role="alert">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty" role="status">Loading…</div>;
@@ -844,8 +861,9 @@ export function CorrelationDetail({ id }: { id: string }) {
       exportDisabled={!timeline}
       debugExtra={replayPanel}
       pathSlot={pathLoaded ? (
-        <RcaPathCausality data={pathAttr} timeline={timeline}
-          ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause} />
+        <RcaPathCausality data={pathAttr} timeline={timeline} context={topoCtx}
+          ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause}
+          measuredBreak={rcaCase.measuredBreak} />
       ) : null}
       aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
       verifySlot={obj.correlation_id

@@ -280,7 +280,8 @@ func TestExpositionCarriesNoTenantOrEntityLabel(t *testing.T) {
 	labelKey := regexp.MustCompile(`[{,]([a-z_]+)=`)
 	allowed := map[string]bool{"grounded": true, "guard": true, "outcome": true, "selected": true, "result": true,
 		"budget": true, "usage_reported": true, "direction": true, "tier": true, "basis": true, "metric": true, "reason": true, "le": true,
-		"class": true} // N-H4 performance class: a closed server-side enum (RequestClasses)
+		"class": true, // N-H4 performance class: a closed server-side enum (RequestClasses)
+		"path":  true} // Iris routing path: a closed server-side enum (RoutingPaths)
 	for _, mt := range labelKey.FindAllStringSubmatch(render(m), -1) {
 		if !allowed[mt[1]] {
 			t.Errorf("label %q is not in the closed, entity-free label set", mt[1])

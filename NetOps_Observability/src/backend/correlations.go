@@ -65,7 +65,14 @@ func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id str
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// enrich sigRows IN PLACE with attached/link_status (read-side derivation).
 	rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-	writeJSON(w, http.StatusOK, rca.BuildPathView(id, meta, sigRows, edgeRows))
+	view := rca.BuildPathView(id, meta, sigRows, edgeRows)
+	// RCA v2 §2: the SAME topology context the RCA report carries — one
+	// builder (rcaTopologyContext), same inputs (the unstamped spine), so the
+	// path view and the document can never draw two different topologies.
+	spine := rcaTopologyFromSpine(s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"])))
+	tc := s.rcaTopologyContext(r.Context(), claimsOf(r), meta, sigRows, edgeRows, &spine, s.reportNow())
+	view.TopologyContext = &tc
+	writeJSON(w, http.StatusOK, view)
 }
 
 // isUUIDToken allowlists a canonical UUID string before it is interpolated
@@ -661,12 +668,21 @@ func (s *server) loadCorrSliceAtScope(ctx context.Context, scope, exclude, id st
 	if version > 0 {
 		metaCond = " AND version = " + intToString(version)
 	}
+	firstCond := ""
 	if exclude != "" {
 		metaCond += " AND " + exclude
+		firstCond = " AND " + exclude
 	}
 	// 1) Object meta: version + window bounds + verdict + missing evidence + trigger.
+	// first_version_created_at (RCA v2 §3.5): when Correlix created the case —
+	// version 1's created_at. Same table, same statement, same tenant scope and
+	// the same exclusion as the outer read, so it can only see the row the caller
+	// could already read; no rows → min() returns the epoch, which the report
+	// treats as absent.
 	metaSQL := `
 SELECT version, tenant_id, state,
+       (SELECT ` + chschema.ISO("min(created_at)") + ` FROM netops.corr_objects
+         WHERE correlation_id = '` + id + `' AND version = 1` + firstCond + `) AS first_version_created_at,
        coalesce(toString(merged_into), '') AS merged_into,
        ` + chschema.ISO("window_start") + ` AS window_start,
        ` + chschema.ISO("window_end") + `   AS window_end,

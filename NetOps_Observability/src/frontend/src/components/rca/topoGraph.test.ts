@@ -176,7 +176,7 @@ describe("layoutSpine — the §10 acceptance path", () => {
   });
 
   it("buildTopoGraph routes the whole RCA object through the spine (screen == PDF)", () => {
-    const g = buildTopoGraph(acceptanceTimeline(), {}, "operator", false);
+    const g = buildTopoGraph(acceptanceTimeline());
     expect(g.mode).toBe("spine");
     expect(g.internal).toBe(false);
     expect(g.nodes.filter((n) => n.data.hopIndex !== undefined)).toHaveLength(6);
@@ -195,7 +195,7 @@ describe("unknown hops", () => {
   };
 
   it("keeps the hop's slot, renders it blind, and never bridges it away", () => {
-    const g = buildTopoGraph(withGap(), {}, "operator", false);
+    const g = buildTopoGraph(withGap());
     const hops = g.nodes.filter((n) => n.data.hopIndex !== undefined);
     expect(hops).toHaveLength(6);                       // NOT dropped
     const gap = hops.find((n) => n.data.hopIndex === 2)!;
@@ -218,7 +218,7 @@ describe("evidence admission (contract §5)", () => {
     const p = acceptancePath() as any;
     delete p.edges[1].evidence;                                 // 1→2: no evidence at all
     p.edges[3].evidence = { ref: "", method: "traceroute_icmp" }; // 3→4: cannot state its ref
-    const g = buildTopoGraph(timeline({ path: p, signals: [sig({ entity_type: "path", entity_id: "a->b" })] }), {}, "operator", false);
+    const g = buildTopoGraph(timeline({ path: p, signals: [sig({ entity_type: "path", entity_id: "a->b" })] }));
     const ids = g.edges.map((e) => `${e.from}->${e.to}`);
     expect(ids).not.toContain("h1->h2");
     expect(ids).not.toContain("h3->h4");
@@ -231,7 +231,7 @@ describe("evidence admission (contract §5)", () => {
   it("drops an evidence branch that cannot state its evidence", () => {
     const p = acceptancePath() as any;
     delete p.evidence_branches[0].evidence;
-    const g = buildTopoGraph(timeline({ path: p, signals: [sig({ entity_type: "path", entity_id: "a->b" })] }), {}, "operator", false);
+    const g = buildTopoGraph(timeline({ path: p, signals: [sig({ entity_type: "path", entity_id: "a->b" })] }));
     expect(g.nodes.filter((n) => n.data.branchOf !== undefined).map((b) => b.data.branchOf)).toEqual([3]);
   });
 });
@@ -250,7 +250,7 @@ describe("no spine on a path-focused RCA", () => {
     const t = pathOnly();
     expect(isPathFocused(t)).toBe(true);
     expect(readServicePath(t)).toBeNull();
-    const g = buildTopoGraph(t, {}, "operator", false);
+    const g = buildTopoGraph(t);
     expect(g.mode).toBe("empty");
     expect(g.nodes).toHaveLength(0);
     expect(g.edges).toHaveLength(0);
@@ -260,14 +260,17 @@ describe("no spine on a path-focused RCA", () => {
     const t = timeline({ path: { spine: [{ label: "no index" }], edges: [], boundaries: [] },
       signals: [sig({ entity_type: "path", entity_id: "a->b" })] });
     expect(readServicePath(t)).toBeNull();
-    expect(buildTopoGraph(t, {}, "operator", false).mode).toBe("empty");
+    expect(buildTopoGraph(t).mode).toBe("empty");
   });
 });
 
-// ── 5. existing network-only RCA does not regress ─────────────────────────────
+// ── 5. network-only RCA: no client-side device area (RCA document v2 §1) ──────
+// The known topology of a network-only case is the SERVER's topology context
+// (topologyContext.ts). The old "context mode" derived a device area + a peer
+// here, which the server PDF did not draw — three derivations, three answers.
 
-describe("network-only RCA (no service path) still renders", () => {
-  it("renders the affected device area + co-affected context", () => {
+describe("network-only RCA (no service path)", () => {
+  it("derives no device area of its own — the topology context owns it", () => {
     const t = timeline({
       verdict_tier: "confirmed",
       signals: [
@@ -276,32 +279,26 @@ describe("network-only RCA (no service path) still renders", () => {
       ],
     });
     expect(isPathFocused(t)).toBe(false);
-    const g = buildTopoGraph(t, {}, "operator", false);
-    expect(g.mode).toBe("context");
-    const fault = g.nodes.find((n) => n.id === "fault")!;
-    expect(fault.data.label).toBe("wan-r2");          // worst-severity locus, not degree
-    expect(fault.data.badge).toContain("Broken");
-    expect(g.nodes.some((n) => n.id === "aff0")).toBe(true);
-    expect(g.bands).toHaveLength(0);
+    const g = buildTopoGraph(t);
+    expect(g.mode).toBe("empty");
+    expect(g.nodes).toHaveLength(0);
+    expect(g.edges).toHaveLength(0);
   });
 
-  it("renders a declared routing peer as the far end of the segment", () => {
+  it("never draws a routing peer guessed from signal attributes", () => {
     const t = timeline({
       verdict_tier: "suspected",
       signals: [sig({ entity_type: "device", entity_id: "wan-r2", kind: "bgp_adjacency_change",
         attrs: JSON.stringify({ peer: "10.255.0.1", state: "down" }) })],
     });
-    const g = buildTopoGraph(t, {}, "operator", false);
-    expect(g.mode).toBe("context");
-    expect(g.nodes.map((n) => n.id)).toContain("peer");
-    const e = g.edges.find((x) => x.to === "peer")!;
-    expect(e.state).toBe("suspected_down");
-    expect(e.label).toBe("BGP neighbor changed");
+    const g = buildTopoGraph(t);
+    expect(g.mode).toBe("empty");
+    expect(g.nodes.map((n) => n.id)).not.toContain("peer");
   });
 
   it("keeps platform self-monitoring objects out of the customer path view", () => {
     const t = timeline({ signals: [sig({ entity_type: "device", entity_id: "clickhouse", kind: "metric_anomaly" })] });
-    const g = buildTopoGraph(t, {}, "operator", false);
+    const g = buildTopoGraph(t);
     expect(g.mode).toBe("internal");
     expect(g.internal).toBe(true);
   });

@@ -359,9 +359,29 @@ func isChangeQuestion(t string) bool {
 	return changeWords.MatchString(t) && !strings.Contains(t, "changed most")
 }
 
-var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|what happened|what's wrong|whats wrong|what is wrong|what wrong|anything wrong|something wrong|why is|why are|slow|broken|down)\b`)
+var incidentWords = regexp.MustCompile(`\b(?:incidents?|outages?|problems?|issues?|rcas?|what happened|what's wrong|whats wrong|what is wrong|what wrong|anything wrong|something wrong|why is|why are|slow|broken|down)\b`)
 
-func isIncidentQuestion(t string) bool { return incidentWords.MatchString(t) }
+// Verdict referents (live 2026-11-12, "Check RCA and identify the one which
+// has confirmed"): a verdict tier belongs to incidents alone, so "the
+// confirmed ones" / "the one which has confirmed" / "list the suspected ones"
+// name incidents even without the noun. verdictWordRe is the tier word;
+// verdictReferentRe the words that point at the incidents it filters, and
+// the framing an operator puts around it ("check …", "identify …", "only").
+var (
+	verdictWordRe     = regexp.MustCompile(`\b(?:confirmed|suspected|undetermined)\b`)
+	verdictReferentRe = regexp.MustCompile(`\b(?:the\s+)?ones?\b(?:\s+(?:which|that|who)(?:\s+(?:has|have|is|are|was|were))?(?:\s+been)?)?`)
+	incidentFramingRe = regexp.MustCompile(`\b(?:check|identify|only|just)\b`)
+	// definitionRe asks what a word MEANS ("what is an rca", "what does
+	// suspected mean"): a product question, never a list of incidents.
+	definitionRe = regexp.MustCompile(`^(?:what(?:'s|s)?|what is|what are)\s+(?:an?)\s+\S+$|\bmean\b$`)
+)
+
+func isIncidentQuestion(t string) bool {
+	if definitionRe.MatchString(t) {
+		return false
+	}
+	return incidentWords.MatchString(t) || (verdictWordRe.MatchString(t) && verdictReferentRe.MatchString(t))
+}
 
 var (
 	logRe  = regexp.MustCompile(`\b(?:logs?|syslog|log messages?|log lines?|search .* logs)\b`)
@@ -1089,6 +1109,10 @@ func (s *state) incidents() (Result, error) {
 		return Result{Intent: "list_incidents", Clarify: clarify}, nil
 	}
 	s.e.re(incidentWords, s.text)
+	if verdictWordRe.MatchString(s.text) {
+		s.e.re(verdictReferentRe, s.text)
+		s.e.re(incidentFramingRe, s.text)
+	}
 	q := &ast.AST{V: 1, Type: ast.IncidentList, Target: "incident", Refs: astRefs(refs), Time: s.time,
 		OrderBy: []ast.OrderKey{{Field: "created_at", Dir: "desc"}}, Limit: s.listLimit()}
 	// Filter words inside an owner name ("cloud-team") are not filters.

@@ -113,6 +113,10 @@ const (
 	cadenceUnknown      cadenceSource = "unknown"
 	cadenceFromSchedule cadenceSource = "schedule"
 	cadenceFromArrivals cadenceSource = "inter_arrival"
+	// cadenceFromSeries — derived per (entity, metric) series (RCA v2 §3.6): the
+	// median of each series' own inter-arrival, never the lane's merged arrivals
+	// (burst polling of several interfaces made a 1 s "cadence" and fake gaps).
+	cadenceFromSeries cadenceSource = "per_series"
 )
 
 // gapInterval is one uncovered interval inside the incident window.
@@ -138,6 +142,12 @@ type LaneCoverageInput struct {
 	Observations []time.Time
 	LaneStart    time.Time // min observation ts (fallback when Observations is nil)
 	LaneEnd      time.Time // max observation ts (fallback when Observations is nil)
+
+	// Series is the lane's observations split per (entity, metric) — the only
+	// honest base for an inter-arrival cadence (RCA v2 §3.6). nil → the engine
+	// treats Observations as ONE series (direct callers that pass one series).
+	// BuildReport always passes it; an empty non-nil slice means "no series".
+	Series [][]time.Time
 
 	TotalCount     int // all observations in this lane in the window
 	AnomalousCount int // case-linked anomalous observations in this lane
@@ -548,6 +558,17 @@ func (e *EvidenceCoverageEngine) assessContinuous(a *CoverageAssessment, in Lane
 		capComplete bool // true when we could NOT verify internal gaps → cap at substantial
 	)
 
+	if cadence <= 0 && len(obs) > 0 {
+		// RCA v2 §3.6: the full series is here but no honest cadence exists
+		// (no schedule, no per-entity series long enough). Without a cadence an
+		// interval between two observations is not known to be a gap, so NO
+		// gap, partial or minimal claim is made: quality is unknown and the
+		// assessment stays silent about intervals.
+		a.Quality = qualityUnknown
+		a.OverlapStart = FmtUTC(maxTime(laneMinTime(in), ws))
+		a.OverlapEnd = FmtUTC(minTime(laneMaxTime(in), we))
+		return
+	}
 	if cadence > 0 && len(obs) > 0 {
 		ratio, lead, trail, internal, internalTot = coveredRatio(obs, ws, we, cadence)
 	} else {
@@ -617,34 +638,61 @@ func classifyContinuousQuality(ratio float64, th coverageThresholds, capComplete
 }
 
 // deriveCadence derives the expected cadence: prefer the configured schedule
-// interval; else the median inter-arrival of the observed series (needs ≥3
-// observations → ≥2 intervals); else unknown (0). NEVER first/last-only.
+// interval; else the per-(entity, metric) series' own inter-arrivals (RCA v2
+// §3.6 — the median of each series' median, using series with ≥3 observations);
+// else unknown (0). NEVER the lane's merged arrivals across entities, and NEVER
+// first/last-only.
 func (e *EvidenceCoverageEngine) deriveCadence(in LaneCoverageInput, obs []time.Time) (time.Duration, cadenceSource) {
 	if in.ScheduleInterval > 0 {
 		return in.ScheduleInterval, cadenceFromSchedule
 	}
-	if len(obs) < 3 {
+	series := in.Series
+	src := cadenceFromSeries
+	if series == nil {
+		// A direct caller passing a single series as Observations.
+		series = [][]time.Time{obs}
+		src = cadenceFromArrivals
+	}
+	var meds []time.Duration
+	for _, sr := range series {
+		if m, ok := medianInterArrival(sr); ok {
+			meds = append(meds, m)
+		}
+	}
+	if len(meds) == 0 {
 		return 0, cadenceUnknown
 	}
-	gaps := make([]time.Duration, 0, len(obs)-1)
-	for i := 1; i < len(obs); i++ {
-		d := obs[i].Sub(obs[i-1])
-		if d > 0 {
+	return medianDuration(meds), src
+}
+
+// medianInterArrival — the median positive gap of one series (needs ≥3
+// observations → ≥2 positive intervals).
+func medianInterArrival(series []time.Time) (time.Duration, bool) {
+	if len(series) < 3 {
+		return 0, false
+	}
+	sorted := append([]time.Time(nil), series...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+	gaps := make([]time.Duration, 0, len(sorted)-1)
+	for i := 1; i < len(sorted); i++ {
+		if d := sorted[i].Sub(sorted[i-1]); d > 0 {
 			gaps = append(gaps, d)
 		}
 	}
 	if len(gaps) < 2 {
-		return 0, cadenceUnknown
+		return 0, false
 	}
-	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
-	med := gaps[len(gaps)/2]
-	if len(gaps)%2 == 0 {
-		med = (gaps[len(gaps)/2-1] + gaps[len(gaps)/2]) / 2
+	m := medianDuration(gaps)
+	return m, m > 0
+}
+
+func medianDuration(ds []time.Duration) time.Duration {
+	s := append([]time.Duration(nil), ds...)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	if len(s)%2 == 0 {
+		return (s[len(s)/2-1] + s[len(s)/2]) / 2
 	}
-	if med <= 0 {
-		return 0, cadenceUnknown
-	}
-	return med, cadenceFromArrivals
+	return s[len(s)/2]
 }
 
 // coveredRatio computes coverage from covered intervals. Each observation attests
@@ -786,6 +834,11 @@ func (e *EvidenceCoverageEngine) finishEligibility(a *CoverageAssessment, in Lan
 
 // ---- legacy-field projection (keeps the current renderers stable) -------------
 
+// hasData reports whether observations were placed in the window — the
+// unknown-cadence assessment records the overlap even though it makes no
+// interval claim.
+func (a CoverageAssessment) hasData() bool { return a.OverlapStart != "" }
+
 // legacyState projects the assessment onto the existing rcaEvidenceLane.State
 // vocabulary (anomalous | normal | inconclusive | no_data). Anomalous lanes stay
 // anomalous; a lane reads `normal` ONLY when normality-eligible; present-but-
@@ -794,8 +847,10 @@ func (a CoverageAssessment) legacyState(anomalous bool) string {
 	if anomalous {
 		return "anomalous"
 	}
-	switch a.Quality {
-	case qualityUnavailable, qualityNotConfigured, qualityUnknown:
+	switch {
+	case a.Quality == qualityUnavailable, a.Quality == qualityNotConfigured:
+		return "no_data"
+	case a.Quality == qualityUnknown && !a.hasData():
 		return "no_data"
 	}
 	if a.NormalityEligible {
@@ -817,7 +872,14 @@ func (a CoverageAssessment) legacyCoverage() string {
 		return "point_in_time"
 	case qualityIrrelevant:
 		return "not_applicable"
-	default: // unavailable | not_configured | unknown
+	case qualityUnknown:
+		if a.hasData() {
+			// data arrived but no honest cadence exists (RCA v2 §3.6): neither a
+			// gap nor full coverage is claimed
+			return "unknown"
+		}
+		return "none"
+	default: // unavailable | not_configured
 		return "none"
 	}
 }

@@ -7,6 +7,10 @@ import type {
 } from "../../services/api";
 import { readServicePath, type SpineKind } from "./servicePath";
 import { isRoutingKind, mentionsInternal, kindLabel, entityLabel } from "./labels";
+import {
+  type TopologyContext, type TopoCtxNode, type TopoCtxEdge, type FaultMark, type CausalRelation,
+  devicePeak, deviceFaultKinds, interfaceFaults, severityTone,
+} from "./topologyContext";
 
 // pathModel.ts — the SINGLE data-derivation for the RCA case path view (owner
 // P1 2026-07-19: "Path causality duplicates Network path and causal topology —
@@ -26,6 +30,16 @@ import { isRoutingKind, mentionsInternal, kindLabel, entityLabel } from "./label
 //  5. NONE — an honest "path not fully discovered". No hop, break or segment is
 //     ever fabricated.
 //
+// TOPOLOGY CONTEXT (RCA document v2 §2, 2026-11-12). When the server sends
+// `topology_context` it is THE topology authority: the four states
+// (topology_with_path · topology_only · device_only · no_asset_mapping) and the
+// three layers (known topology, measured fault overlay, causal overlay) come
+// from it and nothing else. deriveContextModel lays it out with the SAME
+// geometry as the server partial (rca_report_html_topology.go topoEgoSVG /
+// topoDeviceSVG), so the screen, the print fallback and the server PDF draw the
+// same picture. Sources 3–5 above apply only to a server that sends no context
+// (a pre-v2 build): with a context present, the adjacency guess is never used.
+//
 // CANONICAL SEGMENTATION (owner directive 2026-07-19): every rendered segment
 // canonicalizes onto the enterprise connectivity taxonomy —
 //   site_lan → edge_security → wan_edge → carrier → dc_wan_edge → dc_fabric
@@ -41,7 +55,10 @@ import { isRoutingKind, mentionsInternal, kindLabel, entityLabel } from "./label
 //     red break hero sits ON a boundary when the seam between parties is
 //     suspected, WITHIN a segment when a device inside it is suspected.
 
-export type PathMode = "typed" | "derived" | "adjacency" | "internal" | "none";
+// "context" — no path chain to draw, but the server's topology context is
+// present: the view renders its state (device card, known topology, or the
+// data-availability error) instead of the legacy fallbacks.
+export type PathMode = "typed" | "derived" | "context" | "adjacency" | "internal" | "none";
 export type SegmentHealth = "degraded" | "down";
 
 // ── canonical segment taxonomy ────────────────────────────────────────────────
@@ -131,6 +148,245 @@ export interface PathModel {
   ambiguous: boolean;
   notes: string[];
   adjacency?: { device: string; peer: string; kindText: string };
+  // The server's topology context and its layout, when the report carried one.
+  // Rendered beside (typed/derived) or instead of (context mode) the chain.
+  context?: TopologyContext;
+  contextModel?: ContextModel;
+}
+
+// ── topology-context layout (mirrors rca_report_html_topology.go) ────────────
+
+export type OverlayTone = "none" | "amber" | "red";
+
+export interface EgoNodeView {
+  node: TopoCtxNode;
+  x: number; y: number; r: number;
+  tone: OverlayTone;
+  roleText: string;          // role in words, or "not in inventory" for an unmanaged neighbour
+  anomalousPorts: string[];  // interface names carrying evidence (layer 2)
+}
+export interface EgoEdgeView {
+  edge: TopoCtxEdge;
+  x1: number; y1: number; x2: number; y2: number;
+  // A known link the engine joined no evidence across: "?" drawn on its middle.
+  unknownMark?: { x1: number; y1: number; x2: number; y2: number };
+}
+export interface CausalLineView {
+  x1: number; y1: number; x2: number; y2: number;
+  relation: CausalRelation;
+  directed: boolean;
+}
+export interface EgoView {
+  w: number; h: number;
+  nodes: EgoNodeView[];
+  edges: EgoEdgeView[];
+  causal: CausalLineView[];   // cross-device engine edges, offset off the grey link
+}
+export interface PanelPortView {
+  fault: FaultMark;
+  x: number; y: number; w: number; h: number;
+  tone: OverlayTone;
+}
+export interface PanelConnectorView {
+  x1: number; y1: number; x2: number; y2: number;
+  // Absent → a plain thin connector (the port carries evidence but no engine
+  // edge joins it to the device).
+  relation?: CausalRelation;
+  directed: boolean;
+}
+export interface PanelArcView {
+  x: number; y1: number; y2: number; bulge: number;
+  relation: CausalRelation;
+}
+export interface DevicePanelView {
+  node: TopoCtxNode;
+  w: number; h: number;
+  dev: { x: number; y: number; w: number; h: number };
+  devTone: OverlayTone;
+  roleText: string;
+  devKinds: string[];
+  ports: PanelPortView[];
+  connectors: PanelConnectorView[];
+  arcs: PanelArcView[];
+  morePorts: number;
+  undirectedPortPairs: number;
+}
+export interface ContextModel {
+  ego: EgoView | null;          // only when known links exist
+  panels: DevicePanelView[];    // affected devices carrying evidence (≤ 3)
+  panelsCapped: boolean;
+}
+
+const EGO_W = 760;
+const PANEL_W = 760;
+const PANEL_MAX_PORTS = 12;
+const PANEL_MAX = 3;
+
+function relRank(r: string): number {
+  return r === "verified" ? 0 : r === "suspected" ? 1 : 2;
+}
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+}
+function markDevice(type: string, id: string): string {
+  if (type === "node") return id;
+  if (type === "interface") { const i = id.indexOf(":"); return i > 0 ? id.slice(0, i) : ""; }
+  return "";
+}
+function roleWords(n: TopoCtxNode): string {
+  const sub = (n.role ?? "").replace(/_/g, " ");
+  return !n.managed && !sub ? "not in inventory" : sub;
+}
+
+// layoutEgo — anchors on the centre line; with one anchor its neighbours sit on
+// an ellipse around it, with several they alternate on a row above and below
+// (so no link is drawn through another anchor). Identical to topoEgoSVG.
+function layoutEgo(tc: TopologyContext): EgoView {
+  const anchors = tc.nodes.filter((n) => n.anchor);
+  const neigh = tc.nodes.filter((n) => !n.anchor);
+  const h = neigh.length > 8 ? 330 : 250;
+  const cx = EGO_W / 2, cy = h / 2;
+  const pos = new Map<string, [number, number]>();
+  const spacing = Math.min(140, 560 / Math.max(1, anchors.length));
+  anchors.forEach((a, i) => pos.set(a.id, [cx + (i - (anchors.length - 1) / 2) * spacing, cy]));
+  if (anchors.length <= 1) {
+    const rx = EGO_W / 2 - 70, ry = h / 2 - 38;
+    neigh.forEach((n, i) => {
+      const ang = neigh.length === 1 ? 0 : -Math.PI / 2 + (2 * Math.PI * i) / neigh.length;
+      pos.set(n.id, [cx + rx * Math.cos(ang), cy + ry * Math.sin(ang)]);
+    });
+  } else {
+    const top = neigh.filter((_, i) => i % 2 === 0);
+    const bottom = neigh.filter((_, i) => i % 2 === 1);
+    for (const [row, y] of [[top, 40], [bottom, h - 52]] as [TopoCtxNode[], number][]) {
+      row.forEach((n, j) => pos.set(n.id, [50 + (EGO_W - 100) * (j + 0.5) / row.length, y]));
+    }
+  }
+
+  const unknownOnLink = new Set<string>();
+  for (const m of tc.causal) {
+    if (m.from_type === "node" && m.to_type === "node" && !m.from_kind && !m.to_kind) unknownOnLink.add(pairKey(m.from, m.to));
+  }
+  const edges: EgoEdgeView[] = [];
+  for (const e of tc.edges) {
+    const pa = pos.get(e.a), pb = pos.get(e.b);
+    if (!pa || !pb) continue;
+    const v: EgoEdgeView = { edge: e, x1: pa[0], y1: pa[1], x2: pb[0], y2: pb[1] };
+    if (unknownOnLink.has(pairKey(e.a, e.b))) {
+      v.unknownMark = {
+        x1: pa[0] + (pb[0] - pa[0]) * 0.35, y1: pa[1] + (pb[1] - pa[1]) * 0.35,
+        x2: pa[0] + (pb[0] - pa[0]) * 0.65, y2: pa[1] + (pb[1] - pa[1]) * 0.65,
+      };
+    }
+    edges.push(v);
+  }
+
+  // Cross-device engine edges between two DRAWN devices, strongest relation per pair.
+  const best = new Map<string, { from: string; to: string; rel: CausalRelation; directed: boolean }>();
+  for (const m of tc.causal) {
+    if (!m.from_kind && !m.to_kind) continue; // a topology-link mark, drawn on the link
+    const da = markDevice(m.from_type, m.from), db = markDevice(m.to_type, m.to);
+    if (!da || !db || da === db || !pos.has(da) || !pos.has(db)) continue;
+    const k = pairKey(da, db);
+    const cur = best.get(k);
+    if (!cur || relRank(m.relation) < relRank(cur.rel)) best.set(k, { from: da, to: db, rel: m.relation, directed: m.directed });
+  }
+  const causal: CausalLineView[] = [];
+  for (const k of [...best.keys()].sort()) {
+    const pm = best.get(k)!;
+    const pa = pos.get(pm.from)!, pb = pos.get(pm.to)!;
+    const dx = pb[0] - pa[0], dy = pb[1] - pa[1];
+    const l = Math.hypot(dx, dy);
+    if (l === 0) continue;
+    const ox = (-dy / l) * 6, oy = (dx / l) * 6;
+    causal.push({
+      x1: pa[0] + (dx / l) * 20 + ox, y1: pa[1] + (dy / l) * 20 + oy,
+      x2: pb[0] - (dx / l) * 20 + ox, y2: pb[1] - (dy / l) * 20 + oy,
+      relation: pm.rel, directed: pm.directed,
+    });
+  }
+
+  const nodes: EgoNodeView[] = [...anchors, ...neigh].map((n) => {
+    const [x, y] = pos.get(n.id)!;
+    return {
+      node: n, x, y, r: n.anchor ? 18 : 14,
+      tone: severityTone(devicePeak(tc, n.id)),
+      roleText: roleWords(n),
+      anomalousPorts: interfaceFaults(tc, n.id).map((f) => f.port || f.target_id),
+    };
+  });
+  return { w: EGO_W, h, nodes, edges, causal };
+}
+
+// layoutPanel — one affected device with its evidence interfaces and the
+// engine's device ↔ interface marks (strongest per interface). Interface ↔
+// interface marks draw only when directed; undirected ones are counted.
+// Identical to topoDeviceSVG.
+function layoutPanel(tc: TopologyContext, n: TopoCtxNode): DevicePanelView {
+  let ports = interfaceFaults(tc, n.id);
+  let morePorts = 0;
+  if (ports.length > PANEL_MAX_PORTS) { morePorts = ports.length - PANEL_MAX_PORTS; ports = ports.slice(0, PANEL_MAX_PORTS); }
+  const h = Math.max(110, 40 + 30 * ports.length);
+  const devX = 40, devW = 220, portX = 470, portW = 190;
+  const devY = h / 2;
+  const portY = (i: number) => (ports.length === 1 ? devY : 30 + (i * (h - 60)) / (ports.length - 1));
+  const idx = new Map<string, number>();
+  ports.forEach((p, i) => idx.set(p.target_id, i));
+
+  const per = new Map<number, { rel: CausalRelation; directed: boolean; devToPort: boolean }>();
+  let undirectedPortPairs = 0;
+  const arcs: PanelArcView[] = [];
+  for (const m of tc.causal) {
+    const fi = idx.get(m.from), ti = idx.get(m.to);
+    const fIsDev = m.from_type === "node" && m.from === n.id && !!m.from_kind;
+    const tIsDev = m.to_type === "node" && m.to === n.id && !!m.to_kind;
+    if ((fIsDev && ti !== undefined) || (fi !== undefined && tIsDev)) {
+      const i = fi !== undefined && tIsDev ? fi : ti!;
+      const d2p = !(fi !== undefined && tIsDev);
+      const cur = per.get(i);
+      if (!cur || relRank(m.relation) < relRank(cur.rel)) per.set(i, { rel: m.relation, directed: m.directed, devToPort: d2p });
+    } else if (fi !== undefined && ti !== undefined && fi !== ti) {
+      if (m.directed && m.relation !== "unknown") {
+        const x = portX + portW;
+        arcs.push({ x, y1: portY(fi), y2: portY(ti), bulge: x + 30 + 6 * Math.abs(ti - fi), relation: m.relation });
+      } else {
+        undirectedPortPairs++;
+      }
+    }
+  }
+  const connectors: PanelConnectorView[] = ports.map((_, i) => {
+    const y = portY(i);
+    const m = per.get(i);
+    if (!m) return { x1: devX + devW, y1: devY, x2: portX, y2: y, directed: false };
+    return m.devToPort
+      ? { x1: devX + devW, y1: devY, x2: portX, y2: y, relation: m.rel, directed: m.directed }
+      : { x1: portX, y1: y, x2: devX + devW, y2: devY, relation: m.rel, directed: m.directed };
+  });
+  return {
+    node: n, w: PANEL_W, h,
+    dev: { x: devX, y: devY - 27, w: devW, h: 54 },
+    devTone: severityTone(devicePeak(tc, n.id)),
+    roleText: (n.role ?? "").replace(/_/g, " ") || "device",
+    devKinds: deviceFaultKinds(tc, n.id),
+    ports: ports.map((f, i) => ({ fault: f, x: portX, y: portY(i) - 11, w: portW, h: 22, tone: severityTone(f.peak_severity) })),
+    connectors, arcs, morePorts, undirectedPortPairs,
+  };
+}
+
+/** deriveContextModel — the layout of a topology context (pure, deterministic). */
+export function deriveContextModel(tc: TopologyContext): ContextModel {
+  if (tc.state === "no_asset_mapping") return { ego: null, panels: [], panelsCapped: false };
+  const ego = tc.edges.length > 0 ? layoutEgo(tc) : null;
+  const panels: DevicePanelView[] = [];
+  let panelsCapped = false;
+  for (const n of tc.nodes) {
+    if (!n.anchor) continue;
+    const faulted = tc.faults.some((f) => f.device === n.id);
+    if (!faulted && tc.state !== "device_only") continue;
+    if (panels.length === PANEL_MAX) { panelsCapped = true; break; }
+    panels.push(layoutPanel(tc, n));
+  }
+  return { ego, panels, panelsCapped };
 }
 
 // Spine boundary name → typed segment_type (labels.ts SEGMENT_META vocabulary).
@@ -511,9 +767,34 @@ function fromSpine(timeline: CorrTimeline): PathModel | null {
 }
 
 // derivePathModel — the ONE derivation every RCA case path render consumes.
+// `context` is the server's topology context (readTopologyContext); when it is
+// present it decides the topology state and the legacy adjacency/none fallbacks
+// are not used.
 export function derivePathModel(
   data: RcaPathAttribution | null | undefined,
   timeline?: CorrTimeline | null,
+  context?: TopologyContext | null,
+): PathModel {
+  const base = derivePathChain(data, timeline, !!context);
+  if (!context) return base;
+  const withCtx: PathModel = { ...base, context, contextModel: deriveContextModel(context) };
+  // A chain the context does not back is not drawn as a measured path: the
+  // derived spine renders only in topology_with_path (the server attached a
+  // measured path). Typed attribution is the engine's own discovered path and
+  // always renders.
+  if (base.mode === "derived" && context.state !== "topology_with_path") {
+    return { ...emptyModel("context", base.verdict), context, contextModel: withCtx.contextModel };
+  }
+  if (base.mode === "none" || base.mode === "adjacency") {
+    return { ...emptyModel("context", base.verdict), context, contextModel: withCtx.contextModel };
+  }
+  return withCtx;
+}
+
+function derivePathChain(
+  data: RcaPathAttribution | null | undefined,
+  timeline: CorrTimeline | null | undefined,
+  hasContext: boolean,
 ): PathModel {
   // 1) TYPED: the engine's decoded path-causality attribution.
   const typedSegments = data?.path?.segments ?? [];
@@ -551,6 +832,9 @@ export function derivePathModel(
   if (spineModel) return spineModel;
 
   // 3) ADJACENCY: routing evidence names a device + peer — say exactly that.
+  //    Only for a server that sent no topology context (pre-v2): the context
+  //    is the authority, and a client-side guess would contradict the PDF.
+  if (hasContext) return emptyModel("none", timeline.verdict_tier || "suspected");
   const adj = routingContext(timeline);
   if (adj) return { ...emptyModel("adjacency", timeline.verdict_tier || "suspected"), adjacency: adj };
 

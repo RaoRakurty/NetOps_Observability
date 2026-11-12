@@ -72,6 +72,9 @@ type Problem struct {
 	// re-derives the cause statement (engine reasons, AI narrates).
 	OperatorPhrase  string // signature operator_phrase ("" for pre-v1 signatures)
 	ConfidenceLabel string // signature confidence_label: suspected|likely|confirmed
+	// Background: background stories on the device (owner D1), in NOC words —
+	// narrated as background, never as the cause.
+	Background []string
 }
 
 // Display returns the operator-facing problem handle for NARRATIVE text — the

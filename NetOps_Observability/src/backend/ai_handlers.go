@@ -238,6 +238,13 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	if conv != nil && orch.NLQuery != nil {
 		orch.NLQuery = s.aiNLQueryWith(r, claims, &conv.State, conv.ID, &ran)
 	}
+	if conv != nil {
+		qs := make([]string, 0, len(conv.Turns))
+		for _, t := range conv.Turns {
+			qs = append(qs, t.Question)
+		}
+		orch.PriorQuestions = aiPriorQuestions(qs)
+	}
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		s.aiDecisionFinish(r, claims, rec, nil, err)
@@ -259,10 +266,19 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
+	// The routing decision (ai/route_policy.go) is logged and counted, so a
+	// question the deterministic path missed — and whether the model then
+	// answered it — is visible in the api log and on /metrics.
+	path, reason := ai.RoutePathDeterministic, ai.RouteReasonCovered
+	if ans.Routing != nil {
+		path, reason = ans.Routing.Path, ans.Routing.Reason
+	}
+	s.aiScore.ObserveRouting(path, reason)
 	logInfo("ai", "ask", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
 		"intent": ans.Intent, "mode": ans.Mode, "modules": ans.Modules,
 		"provider": ans.Provider, "tier": ai.RouteFor(ans.Mode).Tier, // §10 model-router tier
+		"routing_path": path, "routing_reason": reason,
 		"decision_id": decisionID,
 	})
 	return ans, nil
@@ -355,7 +371,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 	// Every audited tool step also lands in the decision ledger when this
 	// request is a ledgered decision (nil Recorder otherwise: a no-op).
 	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())
-	return &ai.Orchestrator{
+	o := &ai.Orchestrator{
 		DS:       ds,
 		Tools:    tools,
 		LLM:      aiLLM{srv: s, claims: claims},
@@ -391,7 +407,17 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// 3 s): a cancelled request must not strip the network context from a
 		// narration that still runs to its budget.
 		OrgContext: func() string { return s.orgContextBlock(context.WithoutCancel(r.Context()), claims) },
+		// Routing policy (ai/route_policy.go): the caller's own scope and
+		// inventory facts for multi-part questions, from the token and the
+		// caller's visible devices.
+		Scope:     s.aiScopeFacts(claims),
+		Inventory: s.aiInventoryFacts(claims),
 	}
+	// The model-with-tools path for a question no deterministic arm covers:
+	// the agent loop on THIS orchestrator's registry and policy engine (one
+	// brain, N-A5); nil when the caller is not entitled to it.
+	o.AgentAnswer = s.aiAgentAnswer(r, claims, o)
+	return o
 }
 
 // aiNLQuery binds the router's data arm to the caller: the same compiler,
@@ -444,7 +470,7 @@ func (s *server) aiNLQueryRunning(r *http.Request, claims jwtClaims, st *iriscon
 			cx.Conv = &compile.Conversation{Entities: st.Entities, Actors: st.Actors, ChangeIDs: st.ChangeIDs}
 		}
 		ledger := aidecision.FromContext(ctx)
-		c, err := s.nlqCompile(rq, claims, question, cx, opts.AllowModel, opts.BeforeModel)
+		c, err := s.nlqCompileWith(rq, claims, question, cx, opts.AllowModel, opts.BeforeModel, opts.SkipStrongCompile)
 		if err != nil {
 			rec := irisquerylog.Record{Source: irisquerylog.SourceRouter, Question: question, Outcome: irisquerylog.OutcomeError, ConversationID: convID}
 			s.nlqCapture(rq, claims, &rec, start)
@@ -1647,6 +1673,16 @@ func (s *server) nlqCompileQuestion(r *http.Request, claims jwtClaims, question 
 // (allowModel=false: grammar only — the /ask data arm on product-help
 // questions).
 func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool, beforeModel func(context.Context) bool) (nlqCompiled, error) {
+	return s.nlqCompileWith(r, claims, question, cx, allowModel, beforeModel, false)
+}
+
+// nlqCompileWith is nlqCompile with the strong structured compile (plan B3)
+// optional. skipStrong is set by /api/ai/ask for a question the router found
+// no intent for: the routing policy (ai/route_policy.go) hands such a question
+// to the grounded model answer, so the up-to-three-call repair loop of B3 —
+// the lab's 12.9 s "didn't catch that" on 2026-11-12 — is not spent first.
+// The one-call rephrase (B1, fast tier) still runs.
+func (s *server) nlqCompileWith(r *http.Request, claims jwtClaims, question string, cx compile.Context, allowModel bool, beforeModel func(context.Context) bool, skipStrong bool) (nlqCompiled, error) {
 	// One set of lookups per question: the grammar, the rephrase stage and
 	// the fallback read the caller's aliases and inventory through the same
 	// cache. The model-suggestion rung is NOT wired into this ladder: nothing
@@ -1666,6 +1702,9 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 	}
 	if res.Unparsed && allowModel {
 		fb := s.nlqModelFallbackWith(claims, l)
+		if skipStrong {
+			fb.Model = nil // Compile then refuses "unavailable" without a call
+		}
 		rw := s.nlqRewriter(claims, l, resolver)
 		if (fb.Model != nil || rw.Model != nil) && beforeModel != nil && !beforeModel(r.Context()) {
 			// N-G4 tie-break: a troubleshooting method also claims this

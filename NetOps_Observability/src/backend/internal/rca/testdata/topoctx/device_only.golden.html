@@ -1,0 +1,125 @@
+<h2>Network topology &amp; causality — sources: inventory only</h2>
+<div class="note" style="margin-bottom:4px">State: <b>device only — no neighbour or path data</b> — cedge-60-07ae8615 is in the inventory, but no neighbour or path data was found for it.</div>
+
+
+<svg viewBox="0 0 760 160" width="100%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Affected device, its evidence interfaces and the causal marks between them"><rect x="40" y="53.0" width="220" height="54" rx="8" fill="#fff0ee" stroke="#b42318" stroke-width="2"/><text x="150.0" y="71.0" text-anchor="middle" font-size="10.5" font-weight="800" fill="#172033">cedge-60-07ae8615</text><text x="150.0" y="84.0" text-anchor="middle" font-size="8" fill="#64748b">wan edge</text><text x="150.0" y="97.0" text-anchor="middle" font-size="7.5" font-weight="700" fill="#b42318">device: device alarm, device resource anoma…</text><line x1="470.0" y1="30.0" x2="260.0" y2="80.0" stroke="#475467" stroke-width="1.8" stroke-dasharray="1.5 3"/><circle cx="365.0" cy="55.0" r="6.5" fill="#fff" stroke="#475467" stroke-width="1"/><text x="365.0" y="58.2" text-anchor="middle" font-size="9" font-weight="800" fill="#475467">?</text><line x1="260.0" y1="80.0" x2="470.0" y2="63.3" stroke="#b45309" stroke-width="1.8" stroke-dasharray="6 4"/><polygon points="470.0,63.3 463.3,67.4 462.7,60.4" fill="#b45309"/><line x1="260.0" y1="80.0" x2="470.0" y2="96.7" stroke="#b45309" stroke-width="1.8" stroke-dasharray="6 4"/><polygon points="470.0,96.7 462.7,99.6 463.3,92.6" fill="#b45309"/><line x1="260.0" y1="80.0" x2="470.0" y2="130.0" stroke="#b45309" stroke-width="1.8" stroke-dasharray="6 4"/><polygon points="470.0,130.0 462.4,131.8 464.0,125.0" fill="#b45309"/><rect x="470" y="19.0" width="190" height="22" rx="5" fill="#fff4e8" stroke="#b45309" stroke-width="1.6"/><text x="478.0" y="33.5" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="#172033">Gi3</text><text x="653.0" y="33.5" text-anchor="end" font-size="7.5" fill="#b45309">if metric anomaly · WARN</text><rect x="470" y="52.3" width="190" height="22" rx="5" fill="#fff0ee" stroke="#b42318" stroke-width="1.6"/><text x="478.0" y="66.8" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="#172033">Gi4</text><text x="653.0" y="66.8" text-anchor="end" font-size="7.5" fill="#b42318">if metric anomaly · CRIT</text><rect x="470" y="85.7" width="190" height="22" rx="5" fill="#fff0ee" stroke="#b42318" stroke-width="1.6"/><text x="478.0" y="100.2" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="#172033">Tu1</text><text x="653.0" y="100.2" text-anchor="end" font-size="7.5" fill="#b42318">if metric anomaly · CRIT</text><rect x="470" y="119.0" width="190" height="22" rx="5" fill="#fff4e8" stroke="#b45309" stroke-width="1.6"/><text x="478.0" y="133.5" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="#172033">Tu2</text><text x="653.0" y="133.5" text-anchor="end" font-size="7.5" fill="#b45309">if metric anomaly · WARN</text></svg><div class="note">6 undirected interface ↔ interface co-occurrence(s) (relationship unknown) are listed in the causal table.</div>
+
+
+
+<div class="decision" style="margin-top:6px">
+  <b>Device diagnostic — cedge-60-07ae8615</b>
+  <div class="kv" style="margin-top:4px">
+    <span class="k">Device</span><span class="v">cedge-60-07ae8615</span>
+    <span class="k">Role</span><span class="v">wan edge</span>
+    <span class="k">Source</span><span class="v">the inventory</span>
+    <span class="k">Last seen</span><span class="v">current — seen by its inventory source</span>
+    <span class="k">Evidence interfaces</span><span class="v">Gi3 <span style="font-weight:400;color:#64748b">(if metric anomaly)</span> · Gi4 <span style="font-weight:400;color:#64748b">(if metric anomaly)</span> · Tu1 <span style="font-weight:400;color:#64748b">(if metric anomaly)</span> · Tu2 <span style="font-weight:400;color:#64748b">(if metric anomaly)</span></span>
+    <span class="k">Read and empty</span><span class="v" style="font-weight:400">LLDP, CDP, BGP-LS, the persisted topology graph, the SD-WAN overlay, the SD-WAN controller</span>
+    <span class="k">Could not be read</span><span class="v" style="font-weight:400">none</span>
+  </div>
+</div>
+
+
+
+<table style="margin-top:6px"><thead><tr><th style="width:30%">Where (measured)</th><th>Evidence kinds</th><th style="width:14%">Peak severity</th><th style="width:12%">Observations</th></tr></thead><tbody>
+<tr>
+  <td>cedge-60-07ae8615 · <span style="font-family:ui-monospace,monospace">Gi3</span></td>
+  <td>if metric anomaly</td>
+  <td><span class="pill amber" style="font-size:10px">WARN</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 · <span style="font-family:ui-monospace,monospace">Gi4</span></td>
+  <td>if metric anomaly</td>
+  <td><span class="pill red" style="font-size:10px">CRIT</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 · <span style="font-family:ui-monospace,monospace">Tu1</span></td>
+  <td>if metric anomaly</td>
+  <td><span class="pill red" style="font-size:10px">CRIT</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 · <span style="font-family:ui-monospace,monospace">Tu2</span></td>
+  <td>if metric anomaly</td>
+  <td><span class="pill amber" style="font-size:10px">WARN</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 (device)</td>
+  <td>device alarm, device resource anomaly</td>
+  <td><span class="pill amber" style="font-size:10px">HIGH</span></td>
+  <td>2</td>
+</tr>
+</tbody></table>
+<div class="note">Measured fault overlay: where anomalous evidence was observed. It never implies causation on its own.</div>
+
+
+<table style="margin-top:6px"><thead><tr><th style="width:44%">From → to</th><th style="width:12%">Causal link</th><th>Basis</th></tr></thead><tbody>
+<tr>
+  <td>cedge-60-07ae8615 <span class="note">(device resource anomaly)</span> → cedge-60-07ae8615:Gi4 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill amber" style="font-size:10px">suspected</span></td>
+  <td style="font-size:10.5px;color:#475467">direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 <span class="note">(device resource anomaly)</span> → cedge-60-07ae8615:Tu1 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill amber" style="font-size:10px">suspected</span></td>
+  <td style="font-size:10.5px;color:#475467">direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 <span class="note">(device resource anomaly)</span> → cedge-60-07ae8615:Tu2 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill amber" style="font-size:10px">suspected</span></td>
+  <td style="font-size:10.5px;color:#475467">direction from onset order and layer order (direction confidence 0.80); observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615 <span class="note">(device resource anomaly)</span> — cedge-60-07ae8615 <span class="note">(device alarm)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi3 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615 <span class="note">(device alarm)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi3 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615 <span class="note">(device resource anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi3 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Gi4 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi3 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Tu1 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi3 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Tu2 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi4 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615 <span class="note">(device alarm)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi4 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Tu1 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Gi4 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Tu2 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Tu1 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615 <span class="note">(device alarm)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Tu1 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615:Tu2 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr><tr>
+  <td>cedge-60-07ae8615:Tu2 <span class="note">(if metric anomaly)</span> — cedge-60-07ae8615 <span class="note">(device alarm)</span></td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">no direction: the two only occurred together; observed on the same device (authoritative)</td>
+</tr>
+</tbody></table>
+
+<div class="note">Causal overlay from the engine's evidence graph: verified = authoritative grounding, a direction vote and a confirmed verdict; suspected = a direction vote or a suspected verdict; unknown = no direction (co-occurrence only), or a known link the engine joined no evidence across.</div>
+
+
+
+<div class="note" style="margin-top:6px;color:#172033"><b>What would complete this picture</b></div>
+<ol class="actions"><li>Enable LLDP or CDP on cedge-60-07ae8615 and its neighbours, and make sure the neighbour tables are polled (LLDP-MIB / CISCO-CDP-MIB), so its adjacency can be discovered.</li><li>If cedge-60-07ae8615 is an SD-WAN edge, connect the SD-WAN Manager integration (or make the SD-WAN MIB readable) so its tunnels are drawn — the topology map&#39;s SD-WAN notices list edges without tunnel data.</li><li>Confirm topology discovery covers this device&#39;s network (Features and Discovery settings), then regenerate this report.</li></ol>
+

@@ -2,7 +2,8 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE } from "./rcaCase";
+import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE, flowsLaneHref } from "./rcaCase";
+import { flowsHref, parseDeepLink } from "../../lib/flowsLink";
 import { signal, timeline, corrObject } from "../../test/factories";
 
 // These tests pin the ADAPTER (buildRcaCase) — the wiring between a real
@@ -29,13 +30,12 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
     expect(c.title).not.toMatch(/^Possible/);
   });
 
-  it("status pills say NOT CONFIRMED · Low · Incident Active / Analysis Suspected", () => {
+  it("status pills carry ONE certainty phrase (owner D4) + the lifecycle", () => {
     const texts = c.pills.map((p) => p.text);
-    expect(texts).toContain("NOT CONFIRMED");
-    expect(texts).toContain("Confidence: Low");
-    expect(texts).toContain("Incident: Active");
-    expect(texts).toContain("Analysis: Suspected");
-    expect(texts).not.toContain("✓ CONFIRMED");
+    // no cause hypothesis leads (top undetermined) → the fourth phrase
+    expect(texts).toEqual(["Cause not determined", "Incident: Active"]);
+    expect(c.confidence).toMatchObject({ level: "undetermined", phrase: "Cause not determined" });
+    expect(texts.join(" ")).not.toMatch(/Confidence:|Analysis:|CONFIRMED/);
   });
 
   it("decision is HOLD, not escalate", () => {
@@ -52,10 +52,10 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
     expect(c.impact.find((r) => r.k === "Scope type")?.v).toBe("Routing adjacency");
   });
 
-  it("summary names device + peer and states impact not confirmed", () => {
+  it("summary names device + peer and states impact from the impact axes", () => {
     expect(c.summary).toContain("wan-r2");
     expect(c.summary).toContain("192.168.100.5");
-    expect(c.summary).toMatch(/not confirmed/i);
+    expect(c.summary).toMatch(/Customer impact is not measured\./);
   });
 
   it("confidence ladder stops at Suspected (Probable/Confirmed locked)", () => {
@@ -114,10 +114,10 @@ describe("buildRcaCase — confirmed multi-plane object", () => {
   const obj = corrObject({ verdict_tier: "confirmed", top_hypothesis: "bgp-flap", state: "open", signal_count: 3 });
   const c = buildRcaCase(tl, obj, {}, "NetOps", ["Check wan-r2 interface counters"]);
 
-  it("status pills say CONFIRMED · High", () => {
+  it("the phrase pill says Confirmed cause", () => {
     const texts = c.pills.map((p) => p.text);
-    expect(texts).toContain("✓ CONFIRMED");
-    expect(texts).toContain("Confidence: High");
+    expect(texts).toContain("Confirmed cause");
+    expect(c.confidence.level).toBe("confirmed");
   });
 
   it("decision opens an incident on confirmed independent evidence", () => {
@@ -126,8 +126,14 @@ describe("buildRcaCase — confirmed multi-plane object", () => {
     expect(c.decision.text).toMatch(/confirmed by independent evidence/i);
   });
 
-  it("impact reports confirmed customer impact", () => {
-    expect(c.impact[0].v).toBe("Confirmed customer impact");
+  it("impact reads the impact axes, never the verdict (owner review gap 1)", () => {
+    // a confirmed FAULT with a flow change only: impact is indicated, real
+    // users are not measured — the verdict never manufactures impact.
+    expect(c.impact[0].v).toBe("Impact indicated, not measured");
+    expect(c.impact.find((r) => r.k === "Real users")?.v).toBe("not measured");
+    expect(c.affected.find((a) => a.axis === "Real users")?.state).toBe("not measured");
+    expect(c.affected.find((a) => a.axis === "Real traffic (flow records)")?.state).toBe("indicated");
+    expect(JSON.stringify(c)).not.toMatch(/customer impact is confirmed/i);
   });
 
   it("ladder reaches Confirmed", () => {
@@ -181,16 +187,17 @@ describe("buildRcaCase — seam ownership attribution (#113)", () => {
       evidence_missing: '["peer-side routing evidence not observed"]',
     });
     const c = buildRcaCase(tl, obj, {}, "isp", []);
-    const root = c.aside.find((r) => r.k === "Root cause");
-    expect(root?.v).toMatch(/^Not confirmed — possibly because of .+/);
+    const root = c.aside.find((r) => r.k === "Cause");
+    expect(root?.v).toMatch(/^Possibly because of .+/);
+    expect(root?.v).toBe(c.confidence.phrase);
     expect(root?.v).not.toBe("Not identified");
     expect(c.aside.find((r) => r.k === "Evidence state")?.v).toContain("peer-side routing evidence not observed");
   });
 
   it("no supported hypothesis → honest absence wording, no invented cause (#113 point 4)", () => {
     const c = buildRcaCase(suspectedTl, suspectedObj, {}, "", []);
-    const root = c.aside.find((r) => r.k === "Root cause");
-    expect(root?.v).toBe("Not identified — no cause hypothesis has supporting evidence yet");
+    const root = c.aside.find((r) => r.k === "Cause");
+    expect(root?.v).toBe("Cause not determined — no cause hypothesis has supporting evidence yet");
   });
 
   it("confirmed + attribution → 'Owner: <label>' and ticket assignment uses the label", () => {
@@ -248,10 +255,10 @@ describe("buildRcaCase — ≥2 independent-stream confirmation guard", () => {
   });
   const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", state: "open", signal_count: 2 }), {}, "NetOps", []);
 
-  it("downgrades single-stream 'confirmed' to NOT CONFIRMED", () => {
+  it("downgrades single-stream 'confirmed' below Confirmed cause", () => {
     const texts = c.pills.map((p) => p.text);
-    expect(texts).toContain("NOT CONFIRMED");
-    expect(texts).not.toContain("✓ CONFIRMED");
+    expect(texts).not.toContain("Confirmed cause");
+    expect(texts[0]).toMatch(/^Possibly because of /);
   });
   it("does not OPEN an incident on a single stream", () => {
     expect(c.decision.text).not.toMatch(/^OPEN INCIDENT/);
@@ -465,7 +472,7 @@ describe("buildRcaCase — canonical 5-state verdict (convergence)", () => {
   it("a closed object → verdictState 'recovered' and a RECOVERED pill", () => {
     const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", state: "closed", signal_count: 1 }), {}, "NetOps", []);
     expect(c.verdictState).toBe("recovered");
-    expect(c.pills.map((p) => p.text)).toContain("● RECOVERED");
+    expect(c.pills.map((p) => p.text)).toContain("Incident: Recovered");
   });
 
   it("a contradicted top hypothesis → verdictState 'contradicted' + ruledOut populated", () => {
@@ -676,10 +683,12 @@ describe("buildRcaCase — security evidence is its own independent source class
   });
   const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", signal_count: 2 }), {}, "netops", []);
 
-  it("counts security + network evidence as 2 independent sources", () => {
+  it("counts security as a source, but never as a confirming measurement (owner D1/D3)", () => {
     expect(c.evidenceSummary?.sources).toBe(2);
-    expect(c.evidenceSummary?.verdictReason).toContain("2 independent sources");
-    expect(c.evidenceSummary?.verdictReason).toContain("Security evidence");
+    // the exposure story was the engine's top and "confirmed" — it is background
+    expect(c.confidence.phrase).not.toBe("Confirmed cause");
+    expect(c.verdictState).not.toBe("confirmed");
+    expect(c.background.map((b) => b.title)).toContain("Known security exposure on this device");
   });
 
   it("never labels the class with the engine word", () => {
@@ -721,10 +730,9 @@ describe("buildRcaCase — security evidence is its own independent source class
     expect(netOnly.evidence).toHaveLength(ALL_PLANES);
   });
 
-  it('the "Why" rows treat security like any other modality — no special casing', () => {
-    // control_plane is dominant here, so the why-lines read exactly as they do
-    // for a plain routing case: the class only changes the labels, not the logic.
-    expect(c.why.map((w) => w.label)).toEqual(["Why suspected", "Why confirmed", "To confirm"]);
+  it('the "Why" rows never call a security-backed verdict confirmed', () => {
+    expect(c.why.map((w) => w.label)).toEqual(["What the evidence shows", "Why not confirmed", "What would confirm it"]);
+    expect(c.why.find((w) => w.label === "Why not confirmed")?.text).toMatch(/not a measurement of the fault/);
   });
 
   it("security evidence rows are stable (snapshot)", () => {
@@ -744,10 +752,10 @@ describe("buildRcaCase — security evidence alone can never confirm", () => {
     expect(c.evidenceSummary?.verdictReason).toBe("Only security evidence saw this — a second independent source is needed to confirm.");
   });
 
-  it("keeps the header verdict at NOT CONFIRMED even though the engine tier says confirmed", () => {
-    expect(c.pills.map((p) => p.text)).toContain("NOT CONFIRMED");
-    expect(c.pills.map((p) => p.text)).not.toContain("✓ CONFIRMED");
-    expect(c.verdictState).toBe("suspected");
+  it("reads Cause not determined even though the engine tier says confirmed", () => {
+    expect(c.pills.map((p) => p.text)).toContain("Cause not determined");
+    expect(c.pills.map((p) => p.text)).not.toContain("Confirmed cause");
+    expect(c.verdictState).toBe("undetermined");
   });
 
   it("titles and describes it as a security finding without inventing a network cause", () => {
@@ -758,11 +766,13 @@ describe("buildRcaCase — security evidence alone can never confirm", () => {
 });
 
 describe("buildRcaCase — fidelity gap (A7) is rendered only when the engine sends it", () => {
+  // A causal leader carries the gap — a background story's verdict is never the
+  // headline's (owner D1), so its gap would not explain the headline.
   const hypotheses = (verdict: Record<string, unknown>) => JSON.stringify({
-    ranking: { hypotheses: [{ id: "sig.ent.security.exposure-story", verdict }] },
+    ranking: { hypotheses: [{ id: "sig.ent.wan-edge.bgp-peer-flap", verdict }] },
   });
   const tl = timeline({
-    verdict_tier: "suspected", top_hypothesis: "sig.ent.security.exposure-story",
+    verdict_tier: "suspected", top_hypothesis: "sig.ent.wan-edge.bgp-peer-flap",
     signals: [bgpSignal(), securitySignal()],
   });
 
@@ -792,7 +802,116 @@ describe("buildRcaCase — fidelity gap (A7) is rendered only when the engine se
 
   it("never upgrades the verdict the engine gave, gap or no gap", () => {
     const c = buildRcaCase(tl, corrObject({ hypotheses: hypotheses({ fidelity_gap: ["r1"] }) }), {}, "netops", []);
-    expect(c.pills.map((p) => p.text)).toContain("NOT CONFIRMED");
+    expect(c.pills.map((p) => p.text)).not.toContain("Confirmed cause");
+  });
+});
+
+// ── P-424934 (owner review 2026-11-11): a standing exposure finding and a BGP
+// report through vManage, persisted as CONFIRMED with the exposure story on top
+// and a security + via_controller confirming pair. The RCA view must read
+// "Possibly because of …" (or "Cause not determined"), put the finding in the
+// background band, claim no impact and draw no definitive break.
+function p424934(withCausal = true) {
+  const story = {
+    id: "sig.ent.security.exposure-story", confidence: 1, confidence_label: "confirmed",
+    satisfied: ["security_exposure", "bgp_adjacency_change|link_state_change"], missing: [],
+    operator_phrase: "This device carries a known exposure and is showing a network fault at the same time — the two are on one node, not yet proven to be one cause",
+    verdict: {
+      verdict_tier: "confirmed", owner: "netops",
+      independent_pair: ["ctl-vmanage-bfa81d722501", "security:netrule"],
+      trusted_modalities: ["control_plane", "security"],
+      first_steps: ["Open the exposure evidence (advisory + affected version) on this device"],
+    },
+  };
+  const bgp = {
+    id: "sig.ent.wan-edge.bgp-peer-flap", confidence: 1, confidence_label: "suspected",
+    satisfied: ["bgp_adjacency_change"], missing: ["control-plane source"],
+    verdict: { verdict_tier: "suspected", owner: "netops", reasons: ["single modality class (control_plane); need >=2"],
+      first_steps: ["Check the BGP session state and last reset reason on cEDGE-81"] },
+  };
+  const hyps = withCausal ? [story, bgp] : [story];
+  const tl = timeline({
+    verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story",
+    signals: [
+      signal({ kind: "bgp_adjacency_change", source: "controller", modality_class: "control_plane",
+        observer_type: "controller", observer_id: "ctl-vmanage-bfa81d722501", collection_path: "via_controller",
+        entity_id: "cEDGE-81:192.168.200.34", attrs: '{"peer":"192.168.200.34","state":"idle","peer_router_id":"0.0.0.0"}', attached: true }),
+      signal({ kind: "bgp_adjacency_change", source: "controller", modality_class: "control_plane",
+        observer_type: "controller", observer_id: "ctl-vmanage-bfa81d722501", collection_path: "via_controller",
+        entity_id: "cEDGE-81:192.168.200.34", attrs: '{"peer":"192.168.200.34"}', attached: true, ts: "2026-06-16 19:25:40", is_trigger: false }),
+      signal({ kind: "security_exposure", source: "security", modality_class: "security",
+        observer_type: "platform", observer_id: "security:netrule", collection_path: "via_aggregator",
+        entity_id: "cEDGE-81", metric_name: "", attrs: '{"control_title":"Telnet permitted on management lines"}',
+        attached: true, is_trigger: false, ts: "2026-06-16 19:28:00" }),
+    ],
+  });
+  const obj = corrObject({
+    verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story", signal_count: 3,
+    hypotheses: JSON.stringify({ ranking: { hypotheses: hyps } }),
+    affected: JSON.stringify({ devices: ["cEDGE-81"], sites: ["RETAIL-WALMART"] }),
+  });
+  return buildRcaCase(tl, obj, {}, "netops", []);
+}
+
+describe("buildRcaCase — P-424934: a background story never confirms (owner D1/D3/D4)", () => {
+  const c = p424934();
+
+  it("reads 'Possibly because of' the causal story, never 'Confirmed cause'", () => {
+    expect(c.confidence.level).toBe("suspected");
+    expect(c.confidence.phrase).toMatch(/^Possibly because of /);
+    expect(c.pills[0].text).toBe(c.confidence.phrase);
+    expect(JSON.stringify(c.pills)).not.toMatch(/Confirmed cause/);
+    expect(c.verdictState).toBe("suspected");
+  });
+
+  it("titles it by the network story, never the exposure template title", () => {
+    // The causal leader is sig.ent.wan-edge.bgp-peer-flap; its NOC title mirrors
+    // noclabel (src/contracts/noc_label_parity.json, RCA document v2 §3.2).
+    expect(c.title).toBe("BGP peer flapping — WAN edge");
+    expect(c.whatBroke).toBe("BGP peer flapping — WAN edge on cEDGE-81 · site RETAIL-WALMART");
+    expect(JSON.stringify(c)).not.toMatch(/Exposed device is also failing/);
+  });
+
+  it("puts the security finding in the background band — with its control, not as a cause", () => {
+    const titles = c.background.map((b) => b.title);
+    expect(titles).toContain("Known security exposure on this device");
+    expect(titles).toContain("Telnet permitted on management lines");
+    for (const b of c.background) expect(b.detail).toMatch(/background|not a cause/i);
+    // never in "other explanations" either — background is not ranked
+    expect(c.others.map((o) => o.title)).not.toContain("Known security exposure on this device");
+  });
+
+  it("claims no impact: security is never an impact stream and the verdict never implies impact", () => {
+    expect(c.affected.every((a) => a.axis === "Sites" || a.state === "not measured")).toBe(true);
+    expect(c.impact[0].v).toBe("Impact not observable — no impact telemetry in this window");
+    expect(c.decision.text).not.toMatch(/^OPEN INCIDENT/);
+  });
+
+  it("names the sources in plain words and counts one controller as one witness", () => {
+    expect(c.howWeKnow.map((r) => r.text)).toEqual(["vManage reported BGP neighbor change (2 observations)."]);
+    expect(c.oneWitness).toBe("Every observation above came through vManage, so together they count as one witness.");
+  });
+
+  it("never paints a definitive break and takes the owner/steps from the causal story", () => {
+    expect(c.measuredBreak).toBe(false);
+    expect(c.nextActions[0].text).toBe("Check the BGP session state and last reset reason on cEDGE-81");
+  });
+
+  it("a background-only object reads 'Cause not determined'", () => {
+    const only = p424934(false);
+    expect(only.confidence).toMatchObject({ level: "undetermined", phrase: "Cause not determined" });
+    expect(only.background.map((b) => b.title)).toContain("Known security exposure on this device");
+    expect(only.verdictState).toBe("undetermined");
+  });
+});
+
+describe("buildRcaCase — impact axes come from the server report when present", () => {
+  it("a measured real-user axis reads 'Customer impact measured' whatever the verdict", () => {
+    const tl = timeline({ verdict_tier: "suspected", top_hypothesis: "undetermined", signals: [signal({ attached: true })] });
+    const c = buildRcaCase(tl, corrObject(), {}, "netops", [], undefined, { impact: { real_user: "confirmed", synthetic: "not_observable" } });
+    expect(c.affected.find((a) => a.axis === "Real users")?.state).toBe("measured");
+    expect(c.impact[0].v).toBe("Customer impact measured");
+    expect(c.confidence.level).toBe("undetermined"); // impact never lifts the cause
   });
 });
 
@@ -826,5 +945,34 @@ describe("buildRcaCase — controller-namespace ids render as inventory names (P
   it("buildCaseEvents takes the same map", () => {
     const ev = buildCaseEvents(tl, obj, { deviceNames: names });
     expect(ev.some((e) => e.label.includes("cEDGE-81"))).toBe(true);
+  });
+});
+
+// The traffic lane links to Explore → Flows (2026-11-12), scoped to the
+// exporter interface the flow evidence grounds on (`<exporter>:if<ifIndex>`,
+// correlation producers.flow_sample) and to the case window.
+describe("traffic lane → Explore → Flows", () => {
+  const flow = (over: Partial<Parameters<typeof signal>[0]> = {}) =>
+    signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_type: "interface", entity_id: "10.1.0.1:if7", ...over });
+  const ws = Date.parse("2026-06-16T19:25:00Z");
+  const we = Date.parse("2026-06-16T19:26:15Z");
+
+  it("the lane carries a link scoped to the exporter interface and the case window", () => {
+    const c = buildRcaCase(timeline({ signals: [signal({}), flow()] }), corrObject(), {}, "NetOps", []);
+    const lane = c.timeline.find((l) => l.label === "Traffic flow");
+    expect(lane?.href).toBe(flowsHref({ device: "10.1.0.1", ifIndex: "7", from: ws, to: we }));
+    // Only the traffic lane links out.
+    expect(c.timeline.filter((l) => l.href).length).toBe(1);
+  });
+
+  it("prefers attached evidence, and still carries the window when there is no flow evidence", () => {
+    const sigs = [flow({ attached: false, entity_id: "10.9.9.9:if1" }), flow({ entity_id: "10.1.0.1:if3" })];
+    expect(flowsLaneHref(sigs, ws, we)).toContain("device=10.1.0.1&if=3");
+    expect(flowsLaneHref([signal({})], ws, we)).toBe(flowsHref({ from: ws, to: we }));
+    expect(flowsLaneHref([flow({ entity_id: "not-an-interface" })], NaN, NaN)).toBe("#/explore/flows");
+  });
+
+  it("the link reads back as the same device, interface and window", () => {
+    expect(parseDeepLink(flowsLaneHref([flow()], ws, we))).toEqual({ device: "10.1.0.1", ifIndex: "7", from: ws, to: we });
   });
 });

@@ -105,6 +105,8 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 			{Index: 2, Label: "wan-r2", Kind: "wan", State: "down", Fault: "broken"},
 		},
 	}
+	// RCA v2 §2: the document renders the spine through the topology context.
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: meta, Signals: sigs, Spine: &rep.Topology}, TopologyRead{}, nil)
 	html, err := RenderReportHTML(rep)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -115,15 +117,20 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 	if glance < 0 || mgmt < 0 || glance > mgmt {
 		t.Fatalf("at-a-glance must be the FIRST section (glance@%d mgmt@%d)", glance, mgmt)
 	}
-	firstPage := doc[:strings.Index(doc, `<div class="divider"`)]
-	if !strings.Contains(firstPage, "<svg") {
-		t.Fatal("the causality path graph must render on page 1")
+	// The NOC document (owner 2026-11-11) draws the path in section 6, "Where
+	// the break is", above the appendix — red only on a measured break.
+	breakSec := doc[strings.Index(doc, "6 · Where the break is"):strings.Index(doc, "7 · Background on this device")]
+	if !strings.Contains(breakSec, "<svg") {
+		t.Fatal("the causality path graph must render in section 6")
 	}
-	// The broken hop renders RED (#dc2626) on page 1 — the owner's hard ask.
-	if !strings.Contains(firstPage, "#dc2626") {
-		t.Fatal("broken path area must render red on page 1")
+	// The broken hop renders RED (#dc2626) — the owner's hard ask.
+	if !strings.Contains(breakSec, "#dc2626") {
+		t.Fatal("a measured broken path area must render red")
 	}
-	for _, want := range []string{"Where it happened", "What possibly happened", "Possible owner(s)"} {
+	if !strings.Contains(breakSec, "Red marks a break that was measured") {
+		t.Fatal("section 6 must say what red means")
+	}
+	for _, want := range []string{"Where it happened", "Cause", "Possibly because of", "Possible owner(s)"} {
 		if !strings.Contains(doc[glance:mgmt], want) {
 			t.Fatalf("first section missing %q", want)
 		}
@@ -132,18 +139,30 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 
 func TestAtAGlanceHTMLHonestWhenNoPath(t *testing.T) {
 	meta := testMeta("open", "undetermined", "undetermined", nil)
-	rep := buildTestReport(t, meta, []map[string]any{
+	sigs := []map[string]any{
 		testSig("probe_loss", "active_probe", "prober", "path", "prober->svc", "high", "2026-07-12 18:12:00", true, nil),
-	})
-	rep.Topology = TopologyView{Available: false, Reason: "No measured path is attached to this case — the topology is omitted, not inferred."}
+	}
+	rep := buildTestReport(t, meta, sigs)
+	rep.Topology = TopologyView{Available: false, Reason: "this correlation object is not path-shaped (no measured path entity is attached)"}
+	// RCA v2 §2: the section's verdict is the topology context's, never the
+	// spine's reason (P-3E0400).
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: meta, Signals: sigs, Spine: &rep.Topology}, TopologyRead{}, nil)
 	html, err := RenderReportHTML(rep)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	doc := string(html)
-	glance := strings.Index(doc, "Incident at a glance")
-	mgmt := strings.Index(doc, "Management summary")
-	if glance < 0 || !strings.Contains(doc[glance:mgmt], "omitted, not inferred") {
-		t.Fatal("absent path must render its honest reason in the first section")
+	// RCA v2: section 6 ("Where the break is", WS-B's structure) renders the
+	// topology context's verdict (WS-A) — here no_asset_mapping because no device
+	// is attached — never the spine's "not path-shaped" reason, and draws nothing.
+	sec := doc[strings.Index(doc, "6 · Where the break is"):strings.Index(doc, "7 · Background on this device")]
+	if !strings.Contains(sec, "No device or interface is attached") {
+		t.Fatal("absent topology must render its honest reason in section 6")
+	}
+	if strings.Contains(doc, "path-shaped") {
+		t.Fatal(`the spine's "not path-shaped" reason must never be the document's topology verdict`)
+	}
+	if strings.Contains(sec, "<svg") {
+		t.Fatal("nothing is attached — nothing may be drawn")
 	}
 }

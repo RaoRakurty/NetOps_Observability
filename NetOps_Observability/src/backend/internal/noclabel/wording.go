@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Correlix
+
+package noclabel
+
+// wording.go — sentences that more than one RCA surface must say identically
+// (RCA document v2, docs/design/RCA_DOCUMENT_V2_2026-11-12.md §3). The report
+// builder, the HTML/PDF, the path view and Iris call these; none of them
+// composes its own variant. When one changes, every surface changes with it.
+
+import "strings"
+
+// NearestCompetitorNotObserved labels a ranked template none of whose REQUIRED
+// observations was seen (§3.3). It reached the ranking only through an optional
+// clause, so it is a nearest competitor, never an observed or active candidate.
+const NearestCompetitorNotObserved = "nearest competitor — not observed"
+
+// LocalisationSentence is THE localisation sentence (§3.4). When independent
+// evidence localised the fault to an object, it says so; otherwise it says where
+// the evidence concentrates and that this is not a localisation. subject is the
+// device (or other object) the evidence concentrates on; empty → the evidence
+// names no object at all.
+//
+//	localised=false: "Evidence concentrates on cedge-60-07ae8615; not independently localised."
+//	localised=true:  "Fault localised to cedge-60-07ae8615 by independent evidence."
+func LocalisationSentence(subject string, localised bool) string {
+	subject = strings.TrimSpace(subject)
+	switch {
+	case subject == "":
+		return "The evidence does not concentrate on a single object; not localised."
+	case localised:
+		return "Fault localised to " + subject + " by independent evidence."
+	}
+	return "Evidence concentrates on " + subject + "; not independently localised."
+}
+
+// AnnotationReason is the kind-aware reason an overlay annotation states for one
+// attached observation (§3.9). An interface counter or rate departure
+// (if_metric_anomaly, if_errors, if_util_high) is NOT "an interface state change
+// on this link" — only a link/oper state event is. The path view and the
+// topology overlay call this instead of a fixed string per entity type.
+func AnnotationReason(entityType, kind string) string {
+	k := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(kind)), "_clear")
+	label := Kind(k)
+	low := strings.ToLower(label[:1]) + label[1:]
+	switch {
+	case strings.Contains(k, "link_state") || strings.Contains(k, "if_oper") || strings.Contains(k, "interface_state"):
+		return "interface state change grounded on this link"
+	case strings.Contains(k, "bgp") || strings.Contains(k, "ospf") || strings.Contains(k, "isis") || strings.Contains(k, "adjacency"):
+		return label + " on this session"
+	case entityType == "interface" && (strings.HasPrefix(k, "if_") || strings.Contains(k, "metric")):
+		return label + " on this interface — a counter or rate change, not a state change"
+	case entityType == "interface":
+		return label + " on this interface"
+	case entityType == "device":
+		return low + " on this device — not a link event"
+	}
+	return label + " observed here"
+}

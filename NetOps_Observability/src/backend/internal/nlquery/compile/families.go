@@ -84,6 +84,14 @@ var (
 		{regexp.MustCompile(`\bfirewalls?\b`), "firewall"},
 	}
 	invPerSiteRe = regexp.MustCompile(`\b(?:per|by|for each|each|grouped by|broken down by)\s+(?:site|location)\b`)
+	// invConnectedRe: "how many devices are connected" — connected to Correlix,
+	// i.e. in the inventory (live 2026-11-12). Read as the inventory and
+	// disclosed, because "connected" could also mean reachable: the device
+	// list carries each device's reachability verdict. "connected to edge-1"
+	// is topology (resolve's topology rung), never an inventory count.
+	invConnectedRe   = regexp.MustCompile(`\bconnected(?:\s+to\s+(?:correlix|you|us|the platform))?\b`)
+	invConnectedToRe = regexp.MustCompile(`\bconnected\s+to\s+`)
+	invConnectedUsRe = regexp.MustCompile(`^(?:correlix|you|us|the platform)\b`)
 
 	// Device liveness (ast.FilterReachability). reachDeviceRe are the words
 	// only a device can be — they name the target on their own ("anything
@@ -102,6 +110,9 @@ var (
 	// interface, a session, a circuit, an incident — never an inventory answer.
 	otherThingRe = regexp.MustCompile(`\b(?:interfaces?|ports?|links?|intf|bgp|ospf|isis|peers?|neighbou?rs?|sessions?|tunnels?|circuits?|underlay|incidents?|outages?|problems?|issues?|alerts?|alarms?|cases?)\b`)
 )
+
+// ConnectedMeaning is what "connected" in a device count is read as.
+const ConnectedMeaning = "devices in your inventory"
 
 // isDeviceStateQuestion: a question about whether devices are up or down, or
 // how one named device stands, that names nothing but devices. It is tried
@@ -186,6 +197,15 @@ func (s *state) inventory() (Result, bool, error) {
 		if t.target == target {
 			s.e.re(t.re, what)
 		}
+	}
+	if target == "device" && invConnectedRe.MatchString(s.text) {
+		for _, loc := range invConnectedToRe.FindAllStringIndex(s.text, -1) {
+			if !invConnectedUsRe.MatchString(s.text[loc[1]:]) {
+				return Result{}, false, nil // "connected to edge-1": topology, not the inventory
+			}
+		}
+		s.e.re(invConnectedRe, s.text)
+		s.readings = append(s.readings, lex.Reading{From: "connected", To: ConnectedMeaning, Kind: lex.KindSynonym})
 	}
 	s.e.re(countLeadRe, s.text)
 	s.e.re(listLeadRe, s.text)

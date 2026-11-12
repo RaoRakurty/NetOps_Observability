@@ -19,15 +19,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"netops/backend/models"
 	"netops/backend/timeintel"
+	"netops/backend/topology"
 )
 
 // buildRcaReportForID is THE shared report-build path: tenant-scoped slice load
@@ -39,7 +43,16 @@ import (
 // failure it returns the HTTP status to answer with (404 for an invisible or
 // absent id — never revealing whether it exists elsewhere).
 func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id string, version int) (rca.Report, int, error) {
-	return s.buildRcaReportForIDAt(r, claims, id, version, s.reportNow())
+	return s.buildRcaReport(r, claims, id, version, s.reportNow(), true)
+}
+
+// buildRcaReportSummaryForID is the same pipeline WITHOUT the topology read —
+// for the RCA library, which evaluates up to rcaLibraryEvalCap candidates per
+// request and projects only promotion and display fields. The topology stores
+// (collector neighbour tables, the persisted graph) are never read per
+// candidate for a list that does not render them.
+func (s *server) buildRcaReportSummaryForID(r *http.Request, claims jwtClaims, id string, version int) (rca.Report, int, error) {
+	return s.buildRcaReport(r, claims, id, version, s.reportNow(), false)
 }
 
 // reportNow is the RCA generation clock: rcaClock when injected (tests), the
@@ -60,6 +73,10 @@ func (s *server) reportNow() time.Time {
 // clock — the deterministic-regeneration path rebuilds an unchanged analysis
 // at the PRIOR revision's generation instant so it re-renders byte-identically.
 func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id string, version int, now time.Time) (rca.Report, int, error) {
+	return s.buildRcaReport(r, claims, id, version, now, true)
+}
+
+func (s *server) buildRcaReport(r *http.Request, claims jwtClaims, id string, version int, now time.Time, withTopology bool) (rca.Report, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), claimsOf(r), id, version)
 	if err != nil {
 		return rca.Report{}, status, err
@@ -85,6 +102,15 @@ func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id str
 	}
 
 	pathBlock := s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"]))
+	// RCA v2 §2: the ONE topology model, built before BuildReport from the
+	// exact inputs the rca-path-view handler uses — the slice rows as loaded and
+	// the UNSTAMPED spine (the builder stamps it against the case window) — so
+	// the two endpoints produce the same context. Skipped only for the library.
+	var topoCtx rca.TopologyContext
+	if withTopology {
+		spine := rcaTopologyFromSpine(pathBlock)
+		topoCtx = s.rcaTopologyContext(r.Context(), claims, meta, sigRows, edgeRows, &spine, now)
+	}
 	// Merged/superseded source case: resolve the TERMINAL surviving incident,
 	// tenant-scoped and cycle-safe (resolveMergeChain never crosses the owning
 	// tenant boundary). The builder derives the merge record from this + meta.
@@ -110,6 +136,7 @@ func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id str
 		Lifecycle:           lc,
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
+	rep.TopologyContext = topoCtx
 	rca.StampTopologyTemporalRole(&rep)
 
 	// #113 point 3 — RCA creation policy. Candidates and RCA documents are
@@ -120,6 +147,21 @@ func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id str
 	var manual *rca.PromotionRecord
 	if rec, has := s.rcaPromotions.Get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
 		manual = &rec
+	}
+	// Owner D3 (2026-11-11) repeat-offender trigger: how often the same headline
+	// cause hit the same primary device in the 7 days up to this case's end.
+	// Read under the CALLER's tenant scope (row policies). A failed read leaves
+	// the count unknown — the trigger then cannot fire — and is logged (§10).
+	if q, ok := rep.RecurrenceQuery(); ok {
+		rows, rerr := s.chRows(r, q)
+		switch {
+		case rerr != nil:
+			slog.Warn("rca report: repeat-offender count unavailable", "correlation_id", id, "error", rerr)
+		case len(rows) > 0:
+			rep.SetRecurrence(int(asFloat(rows[0]["repeat_count"])))
+		default:
+			rep.SetRecurrence(0)
+		}
 	}
 	rep.Promotion = rca.EvaluatePromotion(&rep, manual)
 	// Artifact class depends on promotion — re-stamp now that it is known
@@ -369,6 +411,295 @@ func rcaTopologyFromSpine(block any) rca.TopologyView {
 		}
 	}
 	return out
+}
+
+// ── RCA v2 §2: the topology context and its source reader ──────────────────
+
+// rcaTopologyReadTimeout bounds one report's whole topology read (§9): the
+// neighbour tables, the persisted graph and the overlay snapshot together.
+const rcaTopologyReadTimeout = 5 * time.Second
+
+// rcaTopologyMaxLinkRows bounds the link rows one read hands the builder (it
+// draws at most rca.TopoCtxMaxNodes nodes; this only stops a pathological
+// fabric from growing the response).
+const rcaTopologyMaxLinkRows = 512
+
+// rcaTopologyContext is the ONE call both endpoints make (the RCA report and
+// the rca-path-view): same inputs, same builder, same output.
+func (s *server) rcaTopologyContext(ctx context.Context, claims jwtClaims, meta map[string]any, sigRows, edgeRows []map[string]any, spine *rca.TopologyView, now time.Time) rca.TopologyContext {
+	return rca.BuildTopologyContext(ctx, serverTopologySource{s: s, claims: claims}, rca.TopologyContextInput{
+		OwnerTenant: canonicalCorrTenant(asString(meta["tenant_id"])),
+		Meta:        meta, Signals: sigRows, Edges: edgeRows,
+		Verdict: asString(meta["verdict_tier"]), Spine: spine, Now: now,
+	})
+}
+
+// serverTopologySource is the production rca.TopologySourceReader. Every row
+// it returns is scoped twice, with parity to rcaPathSpine:
+//
+//   - by the OBJECT OWNER's tenant (canonicalCorrTenant(meta.tenant_id)): a
+//     platform owner reading tenant A's report never receives tenant B's
+//     devices or adjacencies, though B is visible to it elsewhere;
+//   - by the CALLER's visibility: the operator scoped into a restricted tenant
+//     reads nothing, before any store is touched; a restricted owner tenant is
+//     answered like an empty one; a scoped principal reads only its own tenant;
+//     and each source applies its own restriction filter (visibleDevicesFor,
+//     gatherTopoLinksFor, visibleGraphRecords), so a link naming a restricted
+//     tenant's device is dropped even when it hangs off a visible one.
+type serverTopologySource struct {
+	s      *server
+	claims jwtClaims
+}
+
+func (src serverTopologySource) ReadTopology(ctx context.Context, q rca.TopologyQuery) (rca.TopologyRead, error) {
+	s := src.s
+	ctx, cancel := context.WithTimeout(ctx, rcaTopologyReadTimeout)
+	defer cancel()
+	tenant, cross := principalTenant(src.claims)
+	exclude, deny := s.operatorTelemetryRestriction(src.claims, tenant, cross)
+	vis := pathVisibility{deny: deny, exclude: exclude}
+	owner := canonicalCorrTenant(q.OwnerTenant)
+	if vis.deny || vis.hides(owner) || vis.hides(q.OwnerTenant) || (!cross && canonicalCorrTenant(tenant) != owner) {
+		// Indistinguishable from an owner with no inventory (the posture
+		// reasonNoPathEntity holds for the spine).
+		return rca.TopologyRead{}, nil
+	}
+
+	// Inventory: the caller's visible devices that the object owner owns. This
+	// slice is also the RESOLUTION universe for the neighbour tables, so a
+	// neighbour never resolves to another tenant's device (topoLinkMaps).
+	var ownerDevs []models.Device
+	for _, d := range s.visibleDevicesFor(src.claims) {
+		if canonicalCorrTenant(deviceTenant(d)) == owner {
+			ownerDevs = append(ownerDevs, d)
+		}
+	}
+	devByID := make(map[string]models.Device, len(ownerDevs))
+	for _, d := range ownerDevs {
+		devByID[d.ID] = d
+	}
+	ownedID, byName, byAddr := topoLinkMaps(ownerDevs)
+	anchors := map[string]bool{}
+	for _, a := range q.Devices {
+		switch {
+		case ownedID[a] != "" || devByID[a].ID != "":
+			anchors[a] = true
+		case byName[strings.ToLower(strings.TrimSpace(a))] != "":
+			anchors[byName[strings.ToLower(strings.TrimSpace(a))]] = true
+		case byAddr[strings.TrimSpace(a)] != "":
+			anchors[byAddr[strings.TrimSpace(a)]] = true
+		}
+	}
+	var read rca.TopologyRead
+	if len(anchors) == 0 {
+		// Nothing of the owner's inventory to anchor on: no neighbour read can
+		// place anything, so none is made.
+		return read, nil
+	}
+
+	graphNodes := map[string]topology.NodeRecord{}
+	read.Links = append(read.Links, src.liveLinks(ctx, ownerDevs, anchors, &read)...)
+	read.Links = append(read.Links, src.graphLinks(ctx, tenant, cross, owner, anchors, graphNodes, &read)...)
+	read.Links = append(read.Links, src.overlayLinks(q.Now, devByID, anchors, &read)...)
+	if len(read.Links) > rcaTopologyMaxLinkRows {
+		sort.SliceStable(read.Links, func(i, j int) bool { return read.Links[i].ID < read.Links[j].ID })
+		read.Links = read.Links[:rcaTopologyMaxLinkRows]
+	}
+
+	// Inventory rows: the anchors and every resolved neighbour, nothing else.
+	want := map[string]bool{}
+	for a := range anchors {
+		want[a] = true
+	}
+	for _, l := range read.Links {
+		want[l.A], want[l.B] = true, true
+	}
+	ids := make([]string, 0, len(want))
+	for id := range want {
+		if _, ok := devByID[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		d := devByID[id]
+		row := rca.InventoryRow{ID: d.ID, Name: d.Name, Address: d.Address, Source: d.Source,
+			LastSeen: d.LastSeen, Stale: d.DiscoveryStale,
+			Role: firstNonEmpty(d.Labels["role"], d.Type)}
+		if n, ok := graphNodes[d.ID]; ok {
+			row.Role = firstNonEmpty(n.DeviceRole, row.Role, n.Role)
+			row.FirstSeen = n.FirstSeen
+		}
+		read.Inventory = append(read.Inventory, row)
+	}
+	return read, nil
+}
+
+// liveLinks reads the LLDP/CDP/BGP-LS neighbour tables through the SAME
+// normalizer /api/topology/links uses, with the owner's devices as the
+// resolution universe and the caller's restriction applied to both ends.
+func (src serverTopologySource) liveLinks(ctx context.Context, ownerDevs []models.Device, anchors map[string]bool, read *rca.TopologyRead) []rca.TopologyLinkRow {
+	links, err := src.s.gatherTopoLinksFor(ctx, src.claims, ownerDevs)
+	counts := map[string]int{}
+	var out []rca.TopologyLinkRow
+	for _, l := range links {
+		if !anchors[l.Source] && !anchors[l.Target] {
+			continue
+		}
+		protos := rcaTopoProtos(l.SourceProto)
+		for _, p := range protos {
+			counts[p]++
+		}
+		out = append(out, rca.TopologyLinkRow{
+			ID: topoEdgeID(l), Sources: protos,
+			A: l.Source, APort: l.LocalPort, ALabel: l.SourceName,
+			B: l.Target, BPort: l.RemotePort, BLabel: l.TargetName, BManaged: l.Resolved,
+			Relationship: rcaTopoRelationship(protos), Protocol: l.SourceProto,
+			Bidirectional: l.Bidirectional, LastSeen: rcaTopoUnixMilli(l.LastSeen),
+		})
+	}
+	status, detail := rca.TopoReadOK, ""
+	if err != nil {
+		status, detail = rca.TopoReadUnavailable, "the collector's neighbour tables could not be read"
+		logWarn("rca", "topology context: neighbour tables unread — reported as unavailable, not as no adjacency",
+			map[string]any{"error": err.Error()})
+	}
+	for _, k := range []string{rca.TopoSrcLLDP, rca.TopoSrcCDP, rca.TopoSrcBGPLS} {
+		read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: k, Status: status, Rows: counts[k], Detail: detail})
+	}
+	return out
+}
+
+// graphLinks reads the persisted reconciled graph at the CALLER's scope (as
+// /api/topology/graph does), applies the operator-visibility filter, then keeps
+// only the owner tenant's records.
+func (src serverTopologySource) graphLinks(ctx context.Context, tenant string, cross bool, owner string, anchors map[string]bool, nodes map[string]topology.NodeRecord, read *rca.TopologyRead) []rca.TopologyLinkRow {
+	if src.s.topology == nil {
+		read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: rca.TopoSrcGraph, Status: rca.TopoReadNotAvailable, Detail: "the topology graph store is not enabled"})
+		return nil
+	}
+	snap, err := src.s.topology.Snapshot(ctx, tenant, cross)
+	if err != nil {
+		logWarn("rca", "topology context: persisted graph unread — reported as unavailable", map[string]any{"error": err.Error()})
+		read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: rca.TopoSrcGraph, Status: rca.TopoReadUnavailable, Detail: "the persisted topology graph could not be read"})
+		return nil
+	}
+	snap = src.s.visibleGraphRecords(src.claims, snap)
+	for _, n := range snap.Nodes {
+		if canonicalCorrTenant(n.TenantID) == owner {
+			nodes[n.ID] = n
+		}
+	}
+	var out []rca.TopologyLinkRow
+	for _, e := range snap.Edges {
+		if canonicalCorrTenant(e.TenantID) != owner || (!anchors[e.Source] && !anchors[e.Target]) {
+			continue
+		}
+		protos := rcaTopoProtos(e.Protocol)
+		out = append(out, rca.TopologyLinkRow{
+			ID: e.ID, Sources: []string{rca.TopoSrcGraph},
+			A: e.Source, APort: e.SourcePort, ALabel: nodes[e.Source].Label,
+			B: e.Target, BPort: e.TargetPort, BLabel: nodes[e.Target].Label, BManaged: e.Resolved,
+			Relationship: rcaTopoRelationship(protos), Protocol: e.Protocol,
+			Bidirectional: e.Bidirectional, FirstSeen: e.FirstSeen, LastSeen: e.LastSeen, Stale: e.Stale,
+		})
+	}
+	read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: rca.TopoSrcGraph, Status: rca.TopoReadOK, Rows: len(out)})
+	return out
+}
+
+// overlayLinks reads the SD-WAN overlay snapshot (tracker 349) the reconciler
+// keeps in memory. It already folds the SD-WAN Manager integrations' stored BFD
+// sessions in per device (refreshSDWANOverlay, T4b), and each edge says which
+// reported it (Tags["sources"]), so the controller source needs no second,
+// platform-wide session-store scan per report (ctloverlay.Links is that scan).
+// Same rule as attachSDWANOverlay: an overlay edge only when BOTH ends are the
+// owner's visible devices; a transport membership only from one.
+func (src serverTopologySource) overlayLinks(now time.Time, devs map[string]models.Device, anchors map[string]bool, read *rca.TopologyRead) []rca.TopologyLinkRow {
+	snap := src.s.sdwanOverlay.Load()
+	if snap == nil {
+		for _, k := range []string{rca.TopoSrcSDWANOverlay, rca.TopoSrcController} {
+			read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: k, Status: rca.TopoReadNotAvailable, Detail: "no SD-WAN overlay has been inferred on this deployment"})
+		}
+		return nil
+	}
+	stale := !now.IsZero() && now.Sub(snap.at) > 5*time.Minute
+	labels := map[string]string{}
+	for _, n := range snap.res.Nodes {
+		labels[n.ID] = n.Label
+	}
+	counts := map[string]int{}
+	var out []rca.TopologyLinkRow
+	for _, e := range snap.res.Edges {
+		var row rca.TopologyLinkRow
+		switch e.Relationship {
+		case topology.RelOverlay:
+			_, okA := devs[e.Source]
+			_, okB := devs[e.Target]
+			if !okA || !okB || (!anchors[e.Source] && !anchors[e.Target]) {
+				continue
+			}
+			var srcs []string
+			for _, t := range strings.Split(e.Tags["sources"], ",") {
+				switch strings.TrimSpace(t) {
+				case "controller":
+					srcs = append(srcs, rca.TopoSrcController)
+				case "snmp":
+					srcs = append(srcs, rca.TopoSrcSDWANOverlay)
+				}
+			}
+			if len(srcs) == 0 {
+				srcs = []string{rca.TopoSrcSDWANOverlay}
+			}
+			row = rca.TopologyLinkRow{ID: e.ID, Sources: srcs, A: e.Source, B: e.Target, BManaged: true, Relationship: "overlay"}
+		case topology.RelInferred:
+			if _, ok := devs[e.Source]; !ok || !anchors[e.Source] {
+				continue
+			}
+			row = rca.TopologyLinkRow{ID: e.ID, Sources: []string{rca.TopoSrcSDWANOverlay}, A: e.Source, B: e.Target, BLabel: labels[e.Target], Relationship: "membership"}
+		default:
+			continue
+		}
+		row.Protocol, row.Confidence, row.LastSeen, row.Stale = e.Protocol, e.Confidence, snap.at, stale
+		for _, k := range row.Sources {
+			counts[k]++
+		}
+		out = append(out, row)
+	}
+	for _, k := range []string{rca.TopoSrcSDWANOverlay, rca.TopoSrcController} {
+		read.Reads = append(read.Reads, rca.TopologySourceRead{Kind: k, Status: rca.TopoReadOK, Rows: counts[k]})
+	}
+	return out
+}
+
+// rcaTopoProtos splits a "+"-joined protocol list ("lldp+cdp") into source kinds.
+func rcaTopoProtos(p string) []string {
+	var out []string
+	for _, x := range strings.Split(strings.ToLower(p), "+") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	if len(out) == 0 {
+		out = []string{rca.TopoSrcLLDP}
+	}
+	return out
+}
+
+func rcaTopoRelationship(protos []string) string {
+	for _, p := range protos {
+		if p == rca.TopoSrcLLDP || p == rca.TopoSrcCDP {
+			return "physical"
+		}
+	}
+	return "routing"
+}
+
+func rcaTopoUnixMilli(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 func htmlEscape(s string) string {

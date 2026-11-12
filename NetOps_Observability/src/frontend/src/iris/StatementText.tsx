@@ -17,6 +17,7 @@
 // unchanged — the classes never alter what the operator reads.
 
 import type { AiStatement } from "../services/api";
+import CitedText, { type CiteRef } from "./CitedText";
 
 const muted14 = { fontSize: 14, lineHeight: 1.5, color: "var(--muted)" } as const;
 const tag14 = {
@@ -59,13 +60,17 @@ export function statementsMatch(text: string, statements: AiStatement[] | undefi
   return statements.map((s) => s.text ?? "").join("") === text;
 }
 
-export default function StatementText({ text, statements, className }: {
+export default function StatementText({ text, statements, className, citations, onCite }: {
   text: string;
   statements?: AiStatement[];
   className?: string;
+  /** The answer's citations: inline evidence references render as readable
+   *  handles (CitedText) instead of raw ids. */
+  citations?: CiteRef[];
+  onCite?: () => void;
 }) {
   if (!statementsMatch(text, statements)) {
-    return <div className={className}>{text}</div>;
+    return <div className={className}><CitedText text={text} citations={citations} onCite={onCite} /></div>;
   }
   const sts = statements as AiStatement[];
   const notes = Array.from(new Set(sts.map((s) => (s.note || "").trim()).filter(Boolean)));
@@ -76,7 +81,7 @@ export default function StatementText({ text, statements, className }: {
         const trail = st.text.slice(body.length);
         return (
           <span key={i} data-testid="iris-stmt" data-class={st.class} data-grounded={st.grounded ? "yes" : "no"}>
-            {body}
+            <CitedText text={body} citations={citations} onCite={onCite} />
             <span style={tag14} data-testid="iris-stmt-class" title={st.note || undefined}>{statementTag(st)}</span>
             {trail}
           </span>

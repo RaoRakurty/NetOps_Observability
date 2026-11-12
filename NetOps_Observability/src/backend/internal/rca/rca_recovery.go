@@ -229,10 +229,17 @@ func BuildIncidentPhases(firstObs time.Time, ra RecoveryAssessment, monitoringUn
 		})
 	}
 	if ra.ResidualAfterComponent {
+		summary := fmt.Sprintf("Component status recovered at %s, but end-to-end evidence continued failing through %s — the incident entered residual degradation rather than full recovery.",
+			FmtUTC(ra.componentAt), FmtUTC(ra.lastAnomaly))
+		if !ra.servicePresent {
+			// RCA v2 §3.8: with no service-scope (end-to-end) evidence in the
+			// incident, the residual is about the component — never "end-to-end".
+			summary = fmt.Sprintf("A recovery was observed on the component at %s, but anomalies on the same component continued through %s — it did not stay recovered.",
+				FmtUTC(ra.componentAt), FmtUTC(ra.lastAnomaly))
+		}
 		phases = append(phases, IncidentPhase{
 			Type: "residual_degradation", StartAt: FmtUTC(ra.componentAt), EndAt: FmtUTC(ra.lastAnomaly),
-			Summary: fmt.Sprintf("Component status recovered at %s, but end-to-end evidence continued failing through %s — the incident entered residual degradation rather than full recovery.",
-				FmtUTC(ra.componentAt), FmtUTC(ra.lastAnomaly)),
+			Summary: summary,
 		})
 	}
 	if ra.Confirmed {

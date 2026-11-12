@@ -106,7 +106,16 @@ SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
 	// v1 NOC catalog voice contract: the matched signature's own operator
 	// wording + lexical confidence label ride the hypotheses blob — the AI
 	// narrates the engine's phrase instead of re-deriving a cause statement.
-	pr.OperatorPhrase, pr.ConfidenceLabel = ai.TopHypothesisVoice(r["hypotheses"])
+	// Owner D1 (2026-11-11): a background story is never the voice of the
+	// cause. When the persisted top was one, Iris speaks the causal leader with
+	// its own (capped) tier — or "undetermined" — and narrates the story as
+	// background.
+	h := ai.HeadlineOf(r["hypotheses"], pr.Verdict)
+	pr.OperatorPhrase, pr.ConfidenceLabel, pr.Background = h.Phrase, h.Label, h.Background
+	if h.Demoted {
+		pr.Verdict = h.Tier
+		pr.Title = noclabel.ProblemTitle(h.ID, id)
+	}
 	return pr, nil
 }
 

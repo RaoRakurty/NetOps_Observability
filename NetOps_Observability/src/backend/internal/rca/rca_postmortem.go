@@ -47,6 +47,9 @@ const (
 	epistemicReported     = "reported"
 	epistemicUnknown      = "unknown"
 	epistemicContradicted = "contradicted"
+	// epistemicNotObserved — a nearest competitor: none of its required
+	// observations was seen (RCA v2 §3.3). Never "observed".
+	epistemicNotObserved = "not_observed"
 )
 
 // rcaCausalStep is one numbered step of the primary sequence.
@@ -272,6 +275,11 @@ func buildCausalBranches(hyps []rcaHypothesis) ([]rcaCausalBranch, string) {
 		switch {
 		case h.Contradicted:
 			b.EpistemicState = epistemicContradicted
+		case h.CandidacyState == rcaRoleNearestCompetitor:
+			b.EpistemicState = epistemicNotObserved
+			b.CausalRole = noclabel.NearestCompetitorNotObserved
+			b.Tier = ""
+			b.Evidence = nil // optional context matched; nothing it requires was seen
 		case h.ObservationState == "confirmed":
 			b.EpistemicState = epistemicObserved // the condition is a fact; its causal role is not
 		case h.ObservationState == "observed":
@@ -328,6 +336,9 @@ func buildDetailedTimeline(rep *Report) []rcaTimelineEntry {
 		}
 	}
 	for _, s := range rep.Evidence.Symptoms {
+		if s.standing {
+			continue // a standing finding has no onset — background band only
+		}
 		src := "observed by " + orDefault(s.Source, "an attached evidence source")
 		add(s.First, "Symptom onset: "+s.Label, src)
 		if s.Last != "" && s.Last != s.First {
@@ -380,6 +391,7 @@ var rcaGlossaryDefs = []rcaGlossaryEntry{
 	{"seam", "A handoff boundary between two responsible parties on the service path (for example, your network edge and a provider's network). Localizing a fault to a seam narrows ownership; it does not name the root cause."},
 	{"vantage", "A distinct measurement viewpoint (a place observations are taken from). Two vantages seeing the same fault is breadth; one vantage repeating is not."},
 	{"validation scenario", "A deliberately induced, non-production exercise. Its report documents the scenario and never claims production impact or severity."},
+	{"nearest competitor", "An explanation the engine ranked although none of its required observations was seen — only optional context matched. It is listed so you can see what else was weighed; it is not observed and not a live candidate."},
 }
 
 // buildRcaGlossary derives the dynamic glossary: only terms this report
@@ -476,6 +488,9 @@ func buildRcaGlossary(rep *Report) []rcaGlossaryEntry {
 		"seam":                 seamUsed,
 		"vantage":              len(rep.Accounting.LogicalVantages) > 0 || rep.Topology.VantageID != "",
 		"validation scenario":  rep.Validation,
+		"nearest competitor": stepState(epistemicNotObserved) || anyHyp(func(h rcaHypothesis) bool {
+			return h.CandidacyState == rcaRoleNearestCompetitor
+		}),
 	}
 	var out []rcaGlossaryEntry
 	for _, def := range rcaGlossaryDefs {

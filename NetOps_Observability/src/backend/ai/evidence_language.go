@@ -52,7 +52,11 @@ type RankedHypothesis struct {
 	Missing         []string `json:"missing"`
 	Contradictions  []string `json:"contradictions"`
 	OperatorPhrase  string   `json:"operator_phrase"`
-	Verdict         struct {
+	// ContextStory (owner D1, 2026-11-11): a background story about the device
+	// (standing posture/exposure + a fault), never a cause. Pre-flag objects are
+	// caught by noclabel.IsContextStory's template-id list.
+	ContextStory bool `json:"context_story"`
+	Verdict      struct {
 		VerdictTier      string   `json:"verdict_tier"`
 		Reasons          []string `json:"reasons"`
 		ModalityCoverage []string `json:"modality_coverage"`
@@ -179,6 +183,12 @@ func controllerClauseNoc(kind string) string {
 // derived from persisted engine output — nothing is re-scored here.
 func RankedHypothesisItems(id, href string, hyps []RankedHypothesis) []EvidenceItem {
 	var items []EvidenceItem
+	// Owner D1: background stories never rank as a cause. They are narrated
+	// AFTER the causal candidates, as background, with no cause role — so the
+	// grounding layer can never present one as the engine's cause or call it
+	// confirmed.
+	causal, background := splitBackground(hyps)
+	hyps = causal
 	for i, h := range hyps {
 		if i >= 5 {
 			break
@@ -212,7 +222,7 @@ func RankedHypothesisItems(id, href string, hyps []RankedHypothesis) []EvidenceI
 			items = append(items, topHypothesisEvidenceItems(id, href, h)...)
 		}
 	}
-	return items
+	return append(items, backgroundItems(id, href, background)...)
 }
 
 // topHypothesisEvidenceItems — the deep-dive items for the leading hypothesis:
@@ -288,14 +298,100 @@ func topHypothesisEvidenceItems(id, href string, h RankedHypothesis) []EvidenceI
 	return items
 }
 
-// topHypothesisVoice pulls the matched signature's operator_phrase and
-// confidence_label from the corr object's hypotheses blob (ranking.hypotheses[0]
-// — the top hypothesis). Empty for pre-v1 signatures; the wording engine's
-// derived phrasing remains the fallback.
+// TopHypothesisVoice pulls the leading CAUSAL hypothesis's operator_phrase and
+// confidence_label from the corr object's hypotheses blob. A background story
+// (owner D1) is skipped — it is never the voice of the cause. Empty for pre-v1
+// signatures; the wording engine's derived phrasing remains the fallback.
 func TopHypothesisVoice(raw any) (operatorPhrase, confidenceLabel string) {
-	hyps := ParseRankedHypotheses(raw)
-	if len(hyps) == 0 {
-		return "", ""
+	h := HeadlineOf(raw, "")
+	return h.Phrase, h.Label
+}
+
+// Headline is what Iris may say about an incident's cause: the leading causal
+// hypothesis, its tier capped at the object's, and the background stories.
+type Headline struct {
+	ID     string
+	Phrase string // the causal leader's operator_phrase
+	Label  string // its confidence_label
+	// Tier is the verdict Iris may speak. When the persisted top was a
+	// background story, the object tier belonged to THAT story's gate, so the
+	// tier is the causal leader's own gate capped at the object tier, or
+	// "undetermined" when no causal hypothesis exists.
+	Tier string
+	// Demoted: the persisted top was a background story.
+	Demoted bool
+	// Background: each background story in NOC words, for narration as
+	// background — never as the cause.
+	Background []string
+}
+
+var headlineTierRank = map[string]int{"undetermined": 0, "suspected": 1, "confirmed": 2}
+
+// HeadlineOf derives the headline from the blob and the object's verdict tier.
+func HeadlineOf(raw any, objectTier string) Headline {
+	objectTier = strings.ToLower(strings.TrimSpace(objectTier))
+	all := ParseRankedHypotheses(raw)
+	causal, background := splitBackground(all)
+	h := Headline{Tier: objectTier}
+	for _, b := range background {
+		h.Background = append(h.Background, backgroundText(b))
 	}
-	return strings.TrimSpace(hyps[0].OperatorPhrase), strings.TrimSpace(hyps[0].ConfidenceLabel)
+	if len(all) > 0 && isBackgroundStory(all[0]) {
+		h.Demoted = true
+		h.Tier = "undetermined"
+		if len(causal) > 0 {
+			t := strings.ToLower(strings.TrimSpace(causal[0].Verdict.VerdictTier))
+			if _, ok := headlineTierRank[t]; !ok {
+				t = "suspected"
+			}
+			if objectTier != "" && headlineTierRank[t] > headlineTierRank[objectTier] {
+				t = objectTier
+			}
+			h.Tier = t
+		}
+	}
+	if len(causal) > 0 {
+		h.ID = causal[0].ID
+		h.Phrase = strings.TrimSpace(causal[0].OperatorPhrase)
+		h.Label = strings.TrimSpace(causal[0].ConfidenceLabel)
+	}
+	return h
+}
+
+func isBackgroundStory(h RankedHypothesis) bool { return noclabel.IsContextStory(h.ID, h.ContextStory) }
+
+func splitBackground(hyps []RankedHypothesis) (causal, background []RankedHypothesis) {
+	for _, h := range hyps {
+		if isBackgroundStory(h) {
+			background = append(background, h)
+			continue
+		}
+		causal = append(causal, h)
+	}
+	return causal, background
+}
+
+// backgroundText — one background story, in NOC words, marked as background.
+func backgroundText(h RankedHypothesis) string {
+	t := "background on this device (not a cause): " + noclabel.SignatureTitle(h.ID)
+	if p := strings.TrimSpace(h.OperatorPhrase); p != "" {
+		t += " — " + p
+	}
+	return t
+}
+
+// backgroundItems renders the background stories as cited items with NO cause
+// role: they are context for the operator, never a candidate cause.
+func backgroundItems(id, href string, background []RankedHypothesis) []EvidenceItem {
+	var out []EvidenceItem
+	for i, b := range background {
+		if i >= 3 {
+			break
+		}
+		out = append(out, EvidenceItem{
+			CitationID: fmt.Sprintf("background:%s:%d", shortID(id), i),
+			Kind:       "finding", Text: backgroundText(b), Href: href,
+		})
+	}
+	return out
 }

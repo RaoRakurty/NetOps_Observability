@@ -179,6 +179,29 @@
     {"id": "ph-ts-003", "q": "how do i troubleshoot a bgp flap", "expect": "troubleshoot"},
     {"id": "ph-ts-004", "q": "why cant cedge-82 reach the hub", "expect": "troubleshoot"},
     {"id": "ph-ts-005", "q": "diagnose packet loss on vedge-1", "expect": "troubleshoot"},
-    {"id": "ph-ts-006", "q": "bgp neighbor down on cedge-81 what do i check", "expect": "troubleshoot"}
+    {"id": "ph-ts-006", "q": "bgp neighbor down on cedge-81 what do i check", "expect": "troubleshoot"},
+
+    {"id": "ph-lab-7", "source": "lab", "q": "Check RCA and identify the one which has confirmed", "expect": "incidents", "slots": {"verdict": "confirmed"}},
+    {"id": "ph-lab-8", "source": "lab", "q": "list critical issues", "expect": "incidents", "slots": {"verdict": "confirmed"}},
+    {"id": "ph-lab-9", "source": "lab", "q": "tell me which tenant are we in and how many devices are connected and how are they discovereD?", "expect": "compound"},
+    {"id": "ph-lab-10", "source": "lab", "q": "Explain this problem", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-lab-11", "source": "lab", "q": "why is this only suspected and what should I check?", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-verdict-001", "q": "which problems are confirmed", "expect": "incidents", "slots": {"verdict": "confirmed"}},
+    {"id": "ph-verdict-002", "q": "show only confirmed RCAs", "expect": "incidents", "slots": {"verdict": "confirmed"}},
+    {"id": "ph-verdict-003", "q": "list the suspected ones", "expect": "incidents", "slots": {"verdict": "suspected"}},
+    {"id": "ph-verdict-004", "q": "undetermined problems", "expect": "incidents", "slots": {"verdict": "undetermined"}},
+    {"id": "ph-verdict-005", "q": "show me just the confirmed ones", "expect": "incidents", "slots": {"verdict": "confirmed"}},
+    {"id": "ph-multi-001", "q": "which tenant am I in and how many devices do we have", "expect": "compound"},
+    {"id": "ph-multi-002", "q": "how many devices are connected and how were they discovered", "expect": "compound"},
+    {"id": "ph-multi-003", "q": "what workspace is this and how many devices are down", "expect": "compound"},
+    {"id": "ph-multi-004", "q": "how many sites do we have and which tenant are we in?", "expect": "compound"},
+    {"id": "ph-ctx-001", "q": "explain this", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-004", "q": "what happened here", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-005", "q": "why only suspected", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-006", "q": "what should I check", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-008", "q": "who is affected", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-009", "q": "what changed before this", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-010", "q": "what am I looking at", "expect": "rca", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}},
+    {"id": "ph-ctx-011", "q": "what does this page show", "expect": "product_help", "context": {"correlation_id": "4fdcb775-6e0c-5827-8c23-31467149ebff"}}
   ]
 }

@@ -16,6 +16,7 @@ package ai
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -74,10 +75,20 @@ type RecommendedSet struct {
 // pick answers a short request without spending that cap on hidden reasoning
 // (Gemini's flash-lite and Anthropic's 4.x models do not think unless asked).
 // Defaults match the code-side provider defaults (providerModel in the root),
-// so "recommended" and "what runs when nothing is set" are the same model.
+// so "recommended" and "what runs when nothing is set" are the same model. A
+// blank tier field resolves to its recommended model (TierModels.ForProvider).
+//
+// Gemini (2026-11-12): the default and strong pick moved from the moving alias
+// gemini-flash-latest — which timed out on a 10 s probe in the lab that day
+// while the dated gemini-2.5-flash answered in 0.59 s and the fast pick
+// gemini-flash-lite-latest in 0.67 s — to gemini-2.5-flash. A dated id can be
+// retired (gemini-1.5-flash now 404s), and that is the trade: an alias can
+// change under a deployment without notice, a dated id fails loudly as "model
+// not found" in the settings Test (which now probes every tier model) and is
+// replaced deliberately. Review this pick when Google announces 2.5 retirement.
 func RecommendedModels() map[string]RecommendedSet {
 	return map[string]RecommendedSet{
-		"gemini":    {Default: "gemini-flash-latest", Fast: "gemini-flash-lite-latest", Strong: "gemini-flash-latest"},
+		"gemini":    {Default: "gemini-2.5-flash", Fast: "gemini-flash-lite-latest", Strong: "gemini-2.5-flash"},
 		"openai":    {Default: "gpt-4o-mini", Fast: "gpt-4o-mini", Strong: "gpt-4.1"},
 		"anthropic": {Default: "claude-sonnet-4-6", Fast: "claude-haiku-4-5", Strong: "claude-opus-4-8"},
 	}
@@ -89,8 +100,67 @@ func ModelSuggestions() map[string][]string {
 	return map[string][]string{
 		"anthropic": {"claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"},
 		"openai":    {"gpt-4o-mini", "gpt-4.1", "gpt-4o"},
-		"gemini":    {"gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-pro"},
+		"gemini":    {"gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-pro"},
 	}
+}
+
+// TierProbe is one tier model's connection-test verdict: the settings page
+// shows each tier's model with its latency, and warns before saving a model
+// that failed.
+type TierProbe struct {
+	Tier       string `json:"tier"` // "default" | "fast" | "strong"
+	Model      string `json:"model"`
+	OK         bool   `json:"ok"`
+	LatencyMS  int64  `json:"latency_ms"`
+	ErrorClass string `json:"error_class,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+}
+
+// TierProbeModels is the model each tier resolves to for a test (ForProvider:
+// a blank tier is its recommended model), in the order default, fast, strong.
+func TierProbeModels(provider string, models TierModels) [][2]string {
+	return [][2]string{
+		{"default", models.ForProvider(TierDeterministic, provider)},
+		{"fast", models.ForProvider(TierFast, provider)},
+		{"strong", models.ForProvider(TierStrong, provider)},
+	}
+}
+
+// ProbeTiers tests every distinct tier model once, concurrently (so the
+// whole test stays within one ProbeTimeout), and reports a verdict per tier.
+// probe makes one test call; the caller charges and audits it.
+func ProbeTiers(provider string, models TierModels, probe func(model string) ProbeResult) []TierProbe {
+	tiers := TierProbeModels(provider, models)
+	results := map[string]ProbeResult{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, tm := range tiers {
+		m := tm[1]
+		mu.Lock()
+		_, seen := results[m]
+		if !seen {
+			results[m] = ProbeResult{}
+		}
+		mu.Unlock()
+		if seen || m == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(model string) {
+			defer wg.Done()
+			r := probe(model)
+			mu.Lock()
+			results[model] = r
+			mu.Unlock()
+		}(m)
+	}
+	wg.Wait()
+	out := make([]TierProbe, 0, len(tiers))
+	for _, tm := range tiers {
+		r := results[tm[1]]
+		out = append(out, TierProbe{Tier: tm[0], Model: tm[1], OK: r.OK, LatencyMS: r.LatencyMS, ErrorClass: r.ErrorClass, HTTPStatus: r.HTTPStatus})
+	}
+	return out
 }
 
 // ProbeModel picks the model a connection test asks for: the operator's draft
@@ -101,7 +171,7 @@ func ProbeModel(provider, draft string, configured TierModels, configuredFor str
 		return m
 	}
 	if provider == configuredFor {
-		if m := strings.TrimSpace(configured.For(TierFast)); m != "" {
+		if m := strings.TrimSpace(configured.ForProvider(TierFast, provider)); m != "" {
 			return m
 		}
 	}

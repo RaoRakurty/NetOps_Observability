@@ -79,6 +79,11 @@ describe("isCapabilityMiss — the ONLY engine outcome eligible for the plain pr
     expect(isCapabilityMiss(currentState({ mode: "unavailable", intent: "capability" }))).toBe(true);
   });
 
+  it("is false when the server already asked the model and it did not answer (2026-11-12 routing)", () => {
+    expect(isCapabilityMiss(currentState({ mode: "unavailable", intent: "capability", routing: { path: "model_unavailable", reason: "deterministic_miss" } }))).toBe(false);
+    expect(isCapabilityMiss(currentState({ mode: "model_answer", intent: "capability", routing: { path: "model", reason: "deterministic_miss" } }))).toBe(false);
+  });
+
   it("is false for any real answer, however thin", () => {
     expect(isCapabilityMiss(currentState())).toBe(false);
     expect(isCapabilityMiss(currentState({ text: "", citations: [] }))).toBe(false);

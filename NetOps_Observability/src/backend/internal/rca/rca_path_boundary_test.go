@@ -39,6 +39,8 @@ func TestPathBoundaryRespondingHopNotStyledFailed(t *testing.T) {
 		},
 		DropPoint: "The last responding hop was nva-responding.",
 	}
+	// RCA v2 §2: the document renders the spine through the topology context.
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: map[string]any{}, Spine: &rep.Topology}, TopologyRead{}, nil)
 	html, err := RenderReportHTML(rep)
 	if err != nil {
 		t.Fatalf("render: %v", err)

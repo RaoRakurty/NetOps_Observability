@@ -243,11 +243,13 @@ func (s *TenantConfigStore) BYOProvider(tenant string, tier ModelTier, defaultMo
 	if name == "" {
 		name = "anthropic"
 	}
-	model = c.Models().For(tier)
-	if model == "" && defaultModel != nil {
-		model = defaultModel(name)
+	// A blank tier is the provider's recommended tier model (ForProvider,
+	// owner 2026-11-12); a blank single model is the code-side default.
+	models := c.Models()
+	if strings.TrimSpace(models.Default) == "" && defaultModel != nil {
+		models.Default = defaultModel(name)
 	}
-	return name, c.Key, model, true
+	return name, c.Key, models.ForProvider(tier, name), true
 }
 
 func (s *TenantConfigStore) NoPlatformKey(tenant string) bool {

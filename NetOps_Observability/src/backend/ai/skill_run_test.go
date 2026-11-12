@@ -522,13 +522,15 @@ func TestAskSkillClaimsTheCapabilityDeadEnd(t *testing.T) {
 	if got := Classify(q, nil).Intent; got != "capability" {
 		t.Skipf("precondition changed: %q now classifies as %q, not the capability dead end", q, got)
 	}
-	bare, _ := runOrchestrator(t, MockLLM{Reply: "narrative"})
+	// Without skills and without a model it is the capability answer; with a
+	// model the routing policy (route_policy.go) hands it to the model.
+	bare, _ := runOrchestrator(t, nil)
 	base, err := bare.Ask(context.Background(), runPrincipal(), q, nil)
 	if err != nil {
 		t.Fatalf("Ask (skills disabled): %v", err)
 	}
 	if base.Mode != ModeUnavailable {
-		t.Fatalf("precondition: without skills this must be the capability answer, got %q", base.Mode)
+		t.Fatalf("precondition: without skills or a model this must be the capability answer, got %q", base.Mode)
 	}
 
 	o, _ := runOrchestrator(t, MockLLM{Reply: "Peer edge-1 is Idle [verdict:pa]."})
@@ -551,7 +553,9 @@ func TestAskSkillClaimsTheCapabilityDeadEnd(t *testing.T) {
 // A question no skill can ground still gets the honest capability clarification;
 // the layer replaces the dead end only when it has evidence.
 func TestAskCapabilityStillAnswersWhenNoSkillGrounds(t *testing.T) {
-	o, _ := runOrchestrator(t, MockLLM{Reply: "narrative"})
+	// No model: the built-in clarification. (With a model the routing policy
+	// hands the question to it — route_policy_test.go.)
+	o, _ := runOrchestrator(t, nil)
 	o.Skills = loadTestSkills(t)
 	ans, err := o.Ask(context.Background(), runPrincipal(), "who is on call next tuesday", nil)
 	if err != nil {

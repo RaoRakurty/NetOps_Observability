@@ -50,6 +50,7 @@ import { ShellContext } from "../../context/shell";
 import AskIris from "../../components/AskIris";
 import RcaCaseHeader from "../../components/rca/RcaCaseHeader";
 import { buildRcaCase, type RcaCase } from "../../components/rca/rcaCase";
+import { isContextStory } from "../../components/rca/rcaPhrases";
 import TacEscalationPanel from "./TacEscalationPanel";
 import TacCaseChip from "../../components/tac/TacCaseChip";
 import { caseLinkFromIncident } from "./tacModel";
@@ -195,8 +196,9 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
   // The matched signature's playbook — the same derivation the RCA inspector uses.
   const { recommendedSteps, recommendedOwner } = useMemo(() => {
-    const hyp = parseJSON<{ ranking?: { hypotheses?: { id?: string; verdict?: { first_steps?: string[]; owner?: string } }[] } }>(obj?.hypotheses, {});
-    const list = hyp.ranking?.hypotheses ?? [];
+    const hyp = parseJSON<{ ranking?: { hypotheses?: { id?: string; context_story?: boolean; verdict?: { first_steps?: string[]; owner?: string } }[] } }>(obj?.hypotheses, {});
+    // Owner D1: a background story never assigns the fix or sets first steps.
+    const list = (hyp.ranking?.hypotheses ?? []).filter((h) => !isContextStory(h.id, h.context_story));
     const top = list.find((h) => h.id === obj?.top_hypothesis)
       ?? (obj && obj.top_hypothesis !== "undetermined" ? list[0] : undefined);
     return { recommendedSteps: top?.verdict?.first_steps ?? [], recommendedOwner: top?.verdict?.owner ?? "" };

@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/noclabel"
 	"netops/backend/timeintel"
 )
 
@@ -231,8 +232,15 @@ var rcaMilestoneOrder = []string{
 	msFirstAck, msFirstUserReport, msFirstMitigation, msServiceRestoration, msRecoveryValidation,
 }
 
+// msCaseOpeningObservation keys the triggering OBSERVATION (the signal that
+// opened the case). It is not a detection milestone: Correlix's detection is
+// the moment it created the case (RCA v2 §3.5).
+const msCaseOpeningObservation = "case_opening_observation"
+
 var rcaMilestoneLabels = map[string]string{
-	msFirstCredibleFailure: "First credible failure",
+	// RCA v2 §3.5: this is when a detector first flagged something attached to
+	// the case — the detector's onset, never the fault's.
+	msFirstCredibleFailure: "Earliest attached anomalous observation (detector onset, not fault onset)",
 	msFirstServiceImpact:   "First service impact",
 	msFirstDetection:       "First Correlix detection",
 	msFirstAlert:           "First alert",
@@ -274,6 +282,10 @@ type rcaSemanticsInput struct {
 	FirstRealUserTS time.Time // earliest real-user impact-kind observation (zero = none)
 	TriggerSignalID string    // meta trigger_signal (may match nothing in the slice)
 	Signals         []map[string]any
+	// FirstDetectionAt: created_at of the correlation object's VERSION 1 — when
+	// Correlix created the case (RCA v2 §3.5). Zero when not loaded / not
+	// retained → the milestone stays absent, never estimated.
+	FirstDetectionAt time.Time
 
 	Times      rcaReportTimes
 	Monitoring string
@@ -360,29 +372,42 @@ func buildDetectionMilestones(in rcaSemanticsInput) ([]rcaDetectionMilestone, []
 	}
 
 	if !in.FirstObs.IsZero() {
-		put(msFirstCredibleFailure, in.FirstObs, "earliest attached anomalous observation in the correlation window (observed)")
+		put(msFirstCredibleFailure, in.FirstObs, "earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began")
 	}
 	if !in.FirstRealUserTS.IsZero() {
 		put(msFirstServiceImpact, in.FirstRealUserTS, "earliest real-user impact evidence (real-traffic / serving-infrastructure kinds); synthetic failures never populate this milestone")
 	}
 
-	// First Correlix detection: the trigger signal's own observation, when that
-	// signal is present in the slice. No created-at fallback — a milestone the
-	// platform cannot source stays absent.
+	// First Correlix detection (RCA v2 §3.5): when Correlix CREATED the case —
+	// the version-1 created_at of the correlation object. It used to be the
+	// trigger signal's own timestamp, which is the earliest anomalous
+	// observation itself: a "detection lag" of 0 s between one observation and
+	// itself. Not loaded → absent, never estimated.
+	if !in.FirstDetectionAt.IsZero() {
+		put(msFirstDetection, in.FirstDetectionAt, "Correlix created this case (version 1 of the correlation object)")
+	}
+
+	// The case-opening OBSERVATION: the trigger signal, when it is in the slice.
+	// A fact about what opened the case, carried separately — not a milestone.
 	var trig *rcaDetectionMilestone
 	if in.TriggerSignalID != "" && in.TriggerSignalID != "<nil>" {
 		for _, sig := range in.Signals {
 			if fmt.Sprintf("%v", sig["signal_id"]) != in.TriggerSignalID {
 				continue
 			}
+			if rcaIsStandingFindingKind(asString(sig["kind"])) && rcaFindingFirstSeen(sig) == "" {
+				break // an undated standing finding is background, never a dated milestone
+			}
 			if ts, ok := parseChTS(fmt.Sprintf("%v", sig["ts"])); ok {
-				kind := strings.ReplaceAll(fmt.Sprintf("%v", sig["kind"]), "_", " ")
-				m := rcaDetectionMilestone{
-					Key: msFirstDetection, Label: rcaMilestoneLabels[msFirstDetection], TS: FmtUTC(ts),
-					SourceLineage: "correlation trigger observation (" + kind + ") — the evidence that opened this case",
+				kind := strings.ToLower(noclabel.Kind(fmt.Sprintf("%v", sig["kind"])))
+				lineage := "correlation trigger observation (" + kind + ") — the evidence that opened this case"
+				if !in.FirstObs.IsZero() && ts.Equal(in.FirstObs) {
+					lineage += "; it is also the earliest attached anomalous observation"
 				}
-				byKey[msFirstDetection] = m
-				trig = &m
+				trig = &rcaDetectionMilestone{
+					Key: msCaseOpeningObservation, Label: "Case-opening observation", TS: FmtUTC(ts),
+					SourceLineage: lineage,
+				}
 			}
 			break
 		}
@@ -454,6 +479,11 @@ func buildMilestoneComparisons(ms []rcaDetectionMilestone) []rcaMilestoneCompari
 		tb, okTB := parseChTS(strings.TrimSuffix(b.TS, " UTC"))
 		if !okTA || !okTB || tb.Before(ta) {
 			return // a negative comparative duration is a data problem, not a statement
+		}
+		if from == msFirstCredibleFailure && to == msFirstDetection && !tb.After(ta) {
+			// RCA v2 §3.5: both endpoints are the same observation (same stamp) —
+			// a "0 s detection lag" says nothing, so the pair is omitted.
+			return
 		}
 		out = append(out, rcaMilestoneComparison{
 			Name: name, FromKey: from, ToKey: to, DurationMS: tb.Sub(ta).Milliseconds(),

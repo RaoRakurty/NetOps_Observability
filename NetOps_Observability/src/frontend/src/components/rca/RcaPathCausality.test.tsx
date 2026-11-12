@@ -322,3 +322,27 @@ describe("RcaPathCausality — merged fallback chain (pathModel.ts)", () => {
     expect(container.querySelectorAll(".rpc-dev").length).toBe(0);
   });
 });
+
+// Owner review 2026-11-11 (gap 3): "Break here" is claimed only for a break on a
+// MEASUREMENT plane — never for an object whose confirmation rests on a
+// background story or a security rule.
+describe("RcaPathCausality — Break here only on a measured break", () => {
+  it("a confirmed attribution with measuredBreak=false reads 'Possible break here' and never 'Confirmed'", () => {
+    render(<RcaPathCausality data={confirmed} measuredBreak={false} />);
+    expect(screen.queryByText("Break here")).toBeNull();
+    expect(screen.getByText("Possible break here")).toBeTruthy();
+    expect(screen.queryByText("Confirmed")).toBeNull();
+  });
+
+  it("derives it from the timeline: a background-story top never paints a definitive break", () => {
+    const tl = timeline({ verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story", signals: [signal({ attached: true })] });
+    render(<RcaPathCausality data={confirmed} timeline={tl} />);
+    expect(screen.queryByText("Break here")).toBeNull();
+    expect(screen.getByText("Possible break here")).toBeTruthy();
+  });
+
+  it("a measured break keeps 'Break here'", () => {
+    render(<RcaPathCausality data={confirmed} measuredBreak />);
+    expect(screen.getByText("Break here")).toBeTruthy();
+  });
+});

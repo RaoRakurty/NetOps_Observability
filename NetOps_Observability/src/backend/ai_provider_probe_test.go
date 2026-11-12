@@ -98,17 +98,24 @@ func TestTenantConfigTestUsesOnlyTheCallersOwnKey(t *testing.T) {
 	logs := captureProviderLogs(t)
 	h := s.handleAITenantConfigTest
 	code, m, raw := doJSON(t, h, http.MethodPost, "/api/ai/tenant-config/test?as_tenant=t-b", `{}`, aiTenantAdminA)
-	if code != http.StatusOK || m["ok"] != true || g.keys[0] != tenantAKey {
+	if code != http.StatusOK || m["ok"] != true || g.hits() == 0 {
 		t.Fatalf("tenant A: %d %s keys=%v", code, raw, g.keys)
 	}
+	// Every tier model was tested (2026-11-12), each with tenant A's own key.
+	for _, k := range g.keys {
+		if k != tenantAKey {
+			t.Fatalf("tenant A's test must use only its own key: %v", g.keys)
+		}
+	}
+	afterA := g.hits()
 	// Tenant B has no key of its own: refused, and the platform key is NOT tested.
 	code, _, _ = doJSON(t, h, http.MethodPost, "/api/ai/tenant-config/test?as_tenant=t-a", `{}`, aiTenantAdminB)
-	if code != http.StatusBadRequest || g.hits() != 1 {
+	if code != http.StatusBadRequest || g.hits() != afterA {
 		t.Fatalf("tenant B without a key: %d hits=%d keys=%v", code, g.hits(), g.keys)
 	}
 	// B pastes a draft key: that key, and only for this call.
 	code, _, _ = doJSON(t, h, http.MethodPost, "/api/ai/tenant-config/test", fmt.Sprintf(`{"provider":"gemini","key":%q}`, draftKey), aiTenantAdminB)
-	if code != http.StatusOK || g.keys[1] != draftKey {
+	if code != http.StatusOK || g.hits() <= afterA || g.keys[afterA] != draftKey {
 		t.Fatalf("tenant B draft: %d keys=%v", code, g.keys)
 	}
 	if _, _, _, has := s.aiTenantCfg.BYOProvider("t-b", "", providerModel); has {
@@ -152,7 +159,7 @@ func TestConfigViewIsAdminOnlyAndCarriesBudget(t *testing.T) {
 	}
 	rec, _ := m["recommended"].(map[string]any)
 	gm, _ := rec["gemini"].(map[string]any)
-	if gm["default"] != "gemini-flash-latest" || gm["fast"] != "gemini-flash-lite-latest" {
+	if gm["default"] != "gemini-2.5-flash" || gm["fast"] != "gemini-flash-lite-latest" || gm["strong"] != "gemini-2.5-flash" {
 		t.Fatalf("recommended = %v", m["recommended"])
 	}
 	bud, _ := m["budget"].(map[string]any)
