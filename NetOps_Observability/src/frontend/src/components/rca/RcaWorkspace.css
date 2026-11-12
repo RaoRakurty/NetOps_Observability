@@ -97,7 +97,7 @@
   --rw-shadow: 0 1px 2px rgba(0,0,0,.45), 0 10px 30px rgba(0,0,0,.35);
   --rw-shadow-sm: 0 1px 2px rgba(0,0,0,.5);
   --hover: rgba(255, 255, 255, 0.06);
-  --accent-bright: #a5b4fc; --accent-2: #c4b5fd;
+  --accent-bright: #a5b4fc; --accent-2: #c7b8ff;
   --accent-grad: linear-gradient(135deg, #8f96ff 0%, #b7a9ff 100%);
   --accent-soft: rgba(143, 150, 255, 0.16); --accent-soft-2: rgba(183, 169, 255, 0.16);
   --accent-ring: rgba(143, 150, 255, 0.45);
