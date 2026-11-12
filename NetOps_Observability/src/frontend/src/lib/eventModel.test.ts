@@ -278,7 +278,7 @@ describe("syslog", () => {
     const v = toEventView({ ...SYSLOG_AUDIT, _source: src });
     if (v.primaryVisual.kind !== "audit") throw new Error();
     expect(v.primaryVisual.data.unparsed).toBe(true);
-    expect(v.primaryVisual.data.message).toContain("audit user: svc-poller/980840");
+    expect(v.primaryVisual.data.message).toContain("audit user: svc-nms/980840");
   });
 });
 
