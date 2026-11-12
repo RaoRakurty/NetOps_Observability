@@ -175,7 +175,7 @@ export default function SecurityOverview() {
     setHeroEvents([]);
     if (!flagship?.correlation_id) return;
     api.correlationTimeline(flagship.correlation_id)
-      .then((tl: CorrTimeline) => { if (alive) setHeroEvents(buildCaseEvents(tl, flagship)); })
+      .then((tl: CorrTimeline) => { if (alive) setHeroEvents(buildCaseEvents(tl, flagship, { includeStandingFindings: true })); })
       .catch(() => { /* chronology optional — the hero still states the verdict */ });
     return () => { alive = false; };
   }, [flagship]);

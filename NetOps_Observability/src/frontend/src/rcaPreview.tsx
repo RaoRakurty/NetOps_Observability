@@ -80,6 +80,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const p = new URL(url, location.href).pathname;
   const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
   if (!p.startsWith("/api/")) return realFetch(input as any, init);
+  // An e2e spec may inject its own case (window.__RCA_PREVIEW__ via
+  // addInitScript) — e2e/rcaDocument.spec.ts renders P-424934 this way.
+  const fx = (window as unknown as { __RCA_PREVIEW__?: { object: unknown; timeline: unknown; report: unknown } }).__RCA_PREVIEW__;
+  if (fx) {
+    if (p.endsWith("/timeline")) return json(fx.timeline);
+    if (p.includes("/rca-report")) return json(fx.report);
+    if (/^\/api\/correlations\/[^/]+$/.test(p)) return json({ object: fx.object, edges: [] });
+  }
   if (p.endsWith("/timeline")) return json(TIMELINE);
   if (p.includes("/rca-report")) return json({ path_attribution: PATH_ATTR });
   if (p.endsWith("/api/correlations/corr-demo-1")) return json({ object: OBJ, edges: [] });
@@ -89,4 +97,5 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return new Response("not found", { status: 404 });
 }) as typeof window.fetch;
 
-createRoot(document.getElementById("root")!).render(<CorrelationDetail id="corr-demo-1" />);
+const previewId = (window as unknown as { __RCA_PREVIEW__?: { object: { correlation_id: string } } }).__RCA_PREVIEW__?.object.correlation_id ?? "corr-demo-1";
+createRoot(document.getElementById("root")!).render(<CorrelationDetail id={previewId} />);

@@ -11,6 +11,7 @@ import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
 import AskIris from "../AskIris";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 import { useAIEntitlements } from "../../lib/aiEntitlements";
+import { RCA_SECTION_NAMES, HOW_TO_READ, WOULD_CONFIRM_LABEL } from "./rcaPhrases";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -116,6 +117,23 @@ function AskRcaBox({ data, correlationId }: { data: RcaCase; correlationId?: str
         )}
       </div>
     </div>
+  );
+}
+
+// sectionTitle — "N · <name>" from the ONE section-name list the PDF also uses.
+function sectionTitle(n: number): string {
+  return `${n} · ${RCA_SECTION_NAMES[n - 1]}`;
+}
+
+// HowToReadPanel — the one-page "How to read this RCA" guide (owner
+// 2026-11-11), a collapsible help panel. Native <details>: keyboard operable,
+// no script state.
+function HowToReadPanel() {
+  return (
+    <details className="rw-howto">
+      <summary>How to read this RCA</summary>
+      <ol>{HOW_TO_READ.map((t, i) => <li key={i}>{t}</li>)}</ol>
+    </details>
   );
 }
 
@@ -227,154 +245,39 @@ export default function RcaWorkspace({
 
       {view === "operator" ? (
         <>
-          {/* PATH-FIRST (design §5a: the path is the hero). The ONE merged
-              network-path & causality view: typed SRC→DST path with the broken
-              link highlighted, measured-spine fallback, routing-adjacency
-              fallback, honest "path not fully discovered" otherwise. */}
-          {pathSlot && (
-            <>
-              <h3 className="rw-section-title">Network path &amp; causality</h3>
-              <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
-            </>
-          )}
+          {/* The NOC RCA document (owner 2026-11-11): ten sections in the order a
+              NOC engineer reads them. The "How to read this RCA" guide sits on
+              top, collapsed — one click away for whoever needs it. */}
+          <HowToReadPanel />
 
-          {/* summary + impact */}
-          <section className="rw-grid">
-            <div className="rw-panel">
-              <h3>Executive RCA summary</h3>
-              <p>{data.summary}</p>
-              <div className="rw-why">
-                {data.why.map((w, i) => (
-                  <div key={i}><span className={`label ${w.tone}`}>{w.label}:</span> {w.text}</div>
-                ))}
-              </div>
-              {data.ruledOut.length > 0 && (
-                <div className="rw-ruledout">
-                  <span className="label blue">Ruled out:</span>{" "}
-                  {data.ruledOut.join(" · ")}
-                  <div className="rw-ruledout-note">Competing causes the evidence does not support.</div>
-                </div>
-              )}
-              {/* "How was this verified?" (owner 2026-07-18): the verbatim engine
-                  gate reasons live HERE, behind a disclosure — the page prose above
-                  stays in operator language, the audit detail stays reachable. */}
-              {data.verifyDetail && data.verifyDetail.length > 0 && (
-                <details className="rw-verify">
-                  <summary>How was this verified?</summary>
-                  <div className="rw-verify-body">
-                    <div>The engine's verbatim verdict gates for this case:</div>
-                    <ul>{data.verifyDetail.map((r, i) => <li key={i}>{r}</li>)}</ul>
-                  </div>
-                </details>
-              )}
-            </div>
-            <div className="rw-panel">
-              <h3>Impact &amp; blast radius</h3>
-              <KeyVal rows={data.impact} />
-            </div>
+          {/* 1 · What broke */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(1)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            <p className="rw-whatbroke">{data.whatBroke}</p>
+            <p className="rw-doc-text">{data.summary}</p>
           </section>
 
-          {/* Event timeline — chronological, timestamped case events (RCA
-              basics). Sits right after "what happened", before the evidence. */}
-          {data.events && data.events.length > 0 && (
-            <>
-              <h3 className="rw-section-title">Event timeline</h3>
-              <section className="rw-panel rw-events-panel" style={{ marginBottom: 4 }}>
-                <EventTimeline events={data.events} />
-              </section>
-            </>
-          )}
+          {/* 2 · Who is affected — impact evidence only, never the verdict */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(2)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            <div className="rw-table-wrap"><table className="rw-axes">
+              <thead><tr><th>Who</th><th>Status</th><th>What we know</th></tr></thead>
+              <tbody>
+                {data.affected.map((a, i) => (
+                  <tr key={i}>
+                    <td className="rw-axes-k">{a.axis}</td>
+                    <td><span className={`rw-pill ${a.state === "measured" ? "blue" : a.state === "indicated" ? "orange" : "gray"}`}>{a.state}</span></td>
+                    <td>{a.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+            <h4 className="rw-doc-h">Impact &amp; blast radius</h4>
+            <KeyVal rows={data.impact} />
+            <div className="rw-doc-note">Read from impact measurements only — never from the verdict.</div>
+          </section>
 
-          {/* Iris AI — grounded, cited "Ask AI" explanation of this RCA. */}
-          {aiSlot && <section style={{ marginBottom: 4 }}>{aiSlot}</section>}
-
-          {/* RCA Time Intelligence — where this incident's time was spent. */}
-          {timeImpactSlot && (
-            <>
-              <h3 className="rw-section-title">Time impact</h3>
-              <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
-            </>
-          )}
-
-          {/* Similar past incidents (N-F4) — this workspace's closed history. */}
-          {similarSlot && (
-            <>
-              <h3 className="rw-section-title">Similar past incidents</h3>
-              <section style={{ marginBottom: 4 }}>{similarSlot}</section>
-            </>
-          )}
-
-          {/* Active Verification (spec #8) — read-only device interrogation. The
-              panel renders nothing (incl. its own section title) unless the
-              feature + tenant opt-in are on, so no orphan heading appears. */}
-          {verifySlot && <section style={{ marginBottom: 4 }}>{verifySlot}</section>}
-
-          {/* RCA auto-ticketing (#78) — live external ticket status + Create/Sync. */}
-          {ticketSlot && (
-            <>
-              <h3 className="rw-section-title">External ticket</h3>
-              <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
-            </>
-          )}
-
-          {/* cloud application & resources (#81 P3G 1c) — additive; only present
-              when the object carries cloud-plane evidence. Network RCA renders
-              identically when this is absent. */}
-          {data.cloud && (
-            <>
-              <h3 className="rw-section-title">Cloud application &amp; resources</h3>
-              <section className="rw-panel rw-cloud">
-                <div className="rw-cloud-head">
-                  <div className="rw-cloud-id">
-                    <span className="rw-cloud-app">{data.cloud.app || "Cloud application"}</span>
-                    <span className="rw-cloud-meta">
-                      {data.cloud.account && <span>Account {data.cloud.account}</span>}
-                      {data.cloud.region && <span>{data.cloud.region}</span>}
-                      <span>{data.cloud.signalCount} cloud {data.cloud.signalCount === 1 ? "observation" : "observations"}</span>
-                    </span>
-                  </div>
-                  <Pill p={data.cloud.crossPlane ? { tone: "green", text: "Corroborated cross-plane" } : { tone: "orange", text: "Single-plane · suspected" }} />
-                </div>
-
-                {data.cloud.resources.length > 0 && (
-                  <div className="rw-cloud-block">
-                    <h4>Affected cloud resources</h4>
-                    <div className="rw-cloud-res-grid">
-                      {data.cloud.resources.map((r, i) => (
-                        <div key={i} className="rw-cloud-res">
-                          <span className="rw-res-name"><span className={`rw-dot ${r.tone}`} />{r.name}</span>
-                          <span className="rw-res-kind">{r.kind}</span>
-                          <span className="rw-res-finding">{r.finding}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {data.cloud.changes.length > 0 && (
-                  <div className="rw-cloud-block">
-                    <h4>Cloud configuration changes</h4>
-                    <ul className="rw-cloud-changes">
-                      {data.cloud.changes.map((c, i) => <li key={i}><b>{c.name}</b> · {c.detail}</li>)}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="rw-cloud-seam">
-                  <span className={`rw-dot ${data.cloud.crossPlane ? "green" : "orange"}`} />
-                  <b>Cloud ↔ network seam:</b>{" "}
-                  {data.cloud.crossPlane
-                    ? "an independent network observer grounds this across the path."
-                    : "no independent underlay or probe evidence in this window."}
-                </div>
-                <div className="rw-cloud-note">{data.cloud.note}</div>
-              </section>
-            </>
-          )}
-
-          {/* application impact (#81 P5) — additive; only present when the object
-              carries attached fused-identity evidence. Names which apps this incident
-              affects, with provenance; absent → network RCA renders identically. */}
+          {/* application impact (#81 P5) — additive; part of "who is affected" */}
           {data.appImpact && data.appImpact.apps.length > 0 && (
             <>
               <h3 className="rw-section-title">Application impact</h3>
@@ -398,8 +301,131 @@ export default function RcaWorkspace({
             </>
           )}
 
-          {/* evidence matrix */}
-          <h3 className="rw-section-title">Evidence matrix</h3>
+          {/* cloud application & resources (#81 P3G 1c) — additive */}
+          {data.cloud && (
+            <>
+              <h3 className="rw-section-title">Cloud application &amp; resources</h3>
+              <section className="rw-panel rw-cloud">
+                <div className="rw-cloud-head">
+                  <div className="rw-cloud-id">
+                    <span className="rw-cloud-app">{data.cloud.app || "Cloud application"}</span>
+                    <span className="rw-cloud-meta">
+                      {data.cloud.account && <span>Account {data.cloud.account}</span>}
+                      {data.cloud.region && <span>{data.cloud.region}</span>}
+                      <span>{data.cloud.signalCount} cloud {data.cloud.signalCount === 1 ? "observation" : "observations"}</span>
+                    </span>
+                  </div>
+                  <Pill p={data.cloud.crossPlane ? { tone: "green", text: "Corroborated cross-plane" } : { tone: "orange", text: "Single-plane · suspected" }} />
+                </div>
+                {data.cloud.resources.length > 0 && (
+                  <div className="rw-cloud-block">
+                    <h4>Affected cloud resources</h4>
+                    <div className="rw-cloud-res-grid">
+                      {data.cloud.resources.map((r, i) => (
+                        <div key={i} className="rw-cloud-res">
+                          <span className="rw-res-name"><span className={`rw-dot ${r.tone}`} />{r.name}</span>
+                          <span className="rw-res-kind">{r.kind}</span>
+                          <span className="rw-res-finding">{r.finding}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {data.cloud.changes.length > 0 && (
+                  <div className="rw-cloud-block">
+                    <h4>Cloud configuration changes</h4>
+                    <ul className="rw-cloud-changes">
+                      {data.cloud.changes.map((c, i) => <li key={i}><b>{c.name}</b> · {c.detail}</li>)}
+                    </ul>
+                  </div>
+                )}
+                <div className="rw-cloud-seam">
+                  <span className={`rw-dot ${data.cloud.crossPlane ? "green" : "orange"}`} />
+                  <b>Cloud ↔ network seam:</b>{" "}
+                  {data.cloud.crossPlane
+                    ? "an independent network observer grounds this across the path."
+                    : "no independent underlay or probe evidence in this window."}
+                </div>
+                <div className="rw-cloud-note">{data.cloud.note}</div>
+              </section>
+            </>
+          )}
+
+          {/* 3 · When — dated events only */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(3)}</h3>
+          {data.events && data.events.length > 0 ? (
+            <>
+              <h4 className="rw-doc-h">Event timeline</h4>
+              <section className="rw-panel rw-events-panel" style={{ marginBottom: 4 }}>
+                <EventTimeline events={data.events} />
+              </section>
+            </>
+          ) : (
+            <section className="rw-panel rw-doc-sec"><div className="rw-doc-empty">No dated events are recorded for this case.</div></section>
+          )}
+          <div className="rw-doc-note">Dated events only. Standing findings are in section 7.</div>
+          {timeImpactSlot && (
+            <>
+              <h4 className="rw-doc-h">Time impact</h4>
+              <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
+            </>
+          )}
+
+          {/* 4 · Cause and how sure we are — exactly one of the four phrases */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(4)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            <div className={`rw-phrase ${data.confidence.level}`} data-testid="rca-phrase">
+              {data.confidence.phrase}
+              {data.confidence.cause && (data.confidence.level === "confirmed" || data.confidence.level === "likely") ? `: ${data.confidence.cause}` : ""}
+            </div>
+            <div className="rw-why">
+              {data.why.filter((w) => w.label !== WOULD_CONFIRM_LABEL).map((w, i) => (
+                <div key={i}><span className={`label ${w.tone}`}>{w.label}:</span> {w.text}</div>
+              ))}
+            </div>
+            {data.wouldConfirm.length > 0 && (
+              <>
+                <h4 className="rw-doc-h">{WOULD_CONFIRM_LABEL}</h4>
+                <ol className="rw-doc-list">{data.wouldConfirm.map((t, i) => <li key={i}>{t}</li>)}</ol>
+              </>
+            )}
+          </section>
+          {/* Active Verification (spec #8) — the read-only way to confirm it. */}
+          {verifySlot && <section style={{ marginBottom: 4 }}>{verifySlot}</section>}
+          <h4 className="rw-doc-h">
+            Confidence ladder
+            <AskIris topic="rca.confidence-ladder" label="Confidence ladder" />
+          </h4>
+          <section className="rw-panel">
+            <div className="rw-ladder-row">
+              {data.ladder.map((s, i) => <div key={i} className={`rw-ladder-step ${s.state}`}>{s.label}</div>)}
+            </div>
+            <div className="rw-ladder-caption">
+              {data.ladder.map((s, i) => <div key={i}>{s.caption}</div>)}
+            </div>
+            {data.ladderNote && <div className="rw-ladder-note">{data.ladderNote}</div>}
+          </section>
+
+          {/* 5 · How we know — each observation names its source */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(5)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            {data.howWeKnow.length > 0 ? (
+              <ol className="rw-doc-list">{data.howWeKnow.map((r, i) => <li key={i}>{r.text}</li>)}</ol>
+            ) : (
+              <div className="rw-doc-empty">No observation supports a cause yet.</div>
+            )}
+            {data.oneWitness && <div className="rw-doc-caution">{data.oneWitness}</div>}
+            {data.verifyDetail && data.verifyDetail.length > 0 && (
+              <details className="rw-verify">
+                <summary>How was this verified?</summary>
+                <div className="rw-verify-body">
+                  <div>The engine's verbatim verdict gates for this case:</div>
+                  <ul>{data.verifyDetail.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                </div>
+              </details>
+            )}
+          </section>
+          <h4 className="rw-doc-h">Evidence matrix</h4>
           <section className="rw-evidence-grid">
             {data.evidence.map((e, i) => (
               <div key={i} className={`rw-ecard ${e.variant}`}>
@@ -408,17 +434,12 @@ export default function RcaWorkspace({
                   <Pill p={e.pill} />
                 </div>
                 <div className="rw-edesc">{e.desc}</div>
-                {/* Attribution facts about the row (seam, internet exposure, the
-                    witnessing provider) — chips, because they are facts, not prose.
-                    Absent when the engine sent none. */}
                 {e.chips && e.chips.length > 0 && (
                   <div className="rw-echips">
                     {e.chips.map((c, j) => <span key={j} className="rw-echip">{c}</span>)}
                   </div>
                 )}
                 <div className="rw-efinding">{e.finding}</div>
-                {/* The weakest parser-rule tier behind this row — the same badge,
-                    colours and wording the Telemetry Coverage rules table uses. */}
                 {e.fidelity && (
                   <div className="rw-efid">
                     <span className="rw-efid-k">Rule fidelity</span>
@@ -429,30 +450,7 @@ export default function RcaWorkspace({
               </div>
             ))}
           </section>
-
-          {/* confidence ladder. UI-words sweep 5 (tracker 270): each step's
-              caption is a three-word locator ("Localized to wan-r2",
-              "Independent evidence aligned"); what makes a step Probable rather
-              than Confirmed is ai/skills/explain/rca.confidence-ladder.md. */}
-          <h3 className="rw-section-title">
-            Confidence ladder
-            <AskIris topic="rca.confidence-ladder" label="Confidence ladder" />
-          </h3>
-          <section className="rw-panel">
-            <div className="rw-ladder-row">
-              {data.ladder.map((s, i) => <div key={i} className={`rw-ladder-step ${s.state}`}>{s.label}</div>)}
-            </div>
-            <div className="rw-ladder-caption">
-              {data.ladder.map((s, i) => <div key={i}>{s.caption}</div>)}
-            </div>
-            {/* Why the ladder stopped short, when the engine held confirmation
-                back on parser-rule fidelity (A7). The verdict above is the
-                engine's — this line only names the rules to go and validate. */}
-            {data.ladderNote && <div className="rw-ladder-note">{data.ladderNote}</div>}
-          </section>
-
-          {/* evidence timeline */}
-          <h3 className="rw-section-title">Evidence timeline</h3>
+          <h4 className="rw-doc-h">Evidence timeline</h4>
           <section className="rw-panel">
             <div className="rw-timeline-wrap">
               <div className="rw-timeline">
@@ -477,16 +475,12 @@ export default function RcaWorkspace({
               {detail ? <><b>Marker detail:</b> {detail}</> : <>Each marker carries the reason it counted as evidence.</>}
             </div>
           </section>
-
-          {/* failure-propagation ladder (owner directive 2026-07-13): how one
-              failure caused the next; unwitnessed rungs stay visible but read
-              muted — the ladder never claims without evidence */}
           {data.cascade && data.cascade.length > 0 && (
             <>
-              <h3 className="rw-section-title">
+              <h4 className="rw-doc-h">
                 How it propagated
                 <AskIris topic="rca.failure-propagation" label="How it propagated" />
-              </h3>
+              </h4>
               <section className="rw-panel">
                 <div className="rw-cascade">
                   {data.cascade.map((s, i) => (
@@ -500,9 +494,6 @@ export default function RcaWorkspace({
                           <span className="rw-cascade-label">{s.stage}</span>
                           {s.root && s.witnessed && <Pill p={{ tone: "red", text: "Likely origin" }} />}
                         </div>
-                        {/* owner 2026-07-19: no grey observed/not-observed box per rung —
-                            an unwitnessed stage reads muted (rail dot + dim label) and the
-                            ladder explainer below covers the semantics once. */}
                         <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "")}</div>
                       </div>
                     </div>
@@ -515,35 +506,68 @@ export default function RcaWorkspace({
             </>
           )}
 
-          {/* hypotheses + ticket */}
-          <section className="rw-grid" style={{ marginTop: 12 }}>
-            <div className="rw-panel">
-              <h3>Hypothesis ranking</h3>
-              <table>
-                <thead><tr><th>Rank</th><th>Hypothesis</th><th>Confidence</th><th>Reason</th></tr></thead>
-                <tbody>
-                  {data.hypotheses.map((h, i) => (
-                    <tr key={i}>
-                      <td className="rw-rank">{h.rank}</td>
-                      <td><div className="rw-hypo">{h.hypo}</div><div className="rw-small">{h.sub}</div></td>
-                      <td><Pill p={h.conf} /></td>
-                      <td>{h.reason}</td>
-                    </tr>
+          {/* 6 · Where the break is — red only on a measured break */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(6)}</h3>
+          {pathSlot ? (
+            <>
+              <h4 className="rw-doc-h">Network path &amp; causality</h4>
+              <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
+            </>
+          ) : (
+            <section className="rw-panel rw-doc-sec"><div className="rw-doc-empty">Path not measured — no break drawn.</div></section>
+          )}
+          <div className="rw-doc-note">Red: measured break. Dotted: inferred.</div>
+
+          {/* 7 · Background on this device (not a cause) */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(7)}</h3>
+          <section className="rw-panel rw-doc-sec rw-background" aria-label="Background on this device (not a cause)">
+            {data.background.length > 0 ? (
+              <>
+                <ul className="rw-bg-list">
+                  {data.background.map((b, i) => (
+                    <li key={i}>
+                      <div className="rw-bg-title">{b.title}{b.firstSeen && <span className="rw-bg-when"> · first seen {b.firstSeen}</span>}</div>
+                      <div className="rw-bg-detail">{b.detail}</div>
+                      <div className="rw-bg-src">Seen by: {b.source}</div>
+                    </li>
                   ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="rw-panel">
-              <h3>Ticket &amp; escalation decision</h3>
-              <div className={`rw-callout${data.ticket.callout.tone ? " " + data.ticket.callout.tone : ""}`} style={{ marginTop: 0 }}>
-                <strong>{data.ticket.callout.strong}</strong><span>{data.ticket.callout.text}</span>
-              </div>
-              <KeyVal rows={data.ticket.rows} />
-            </div>
+                </ul>
+                <div className="rw-doc-note">Context only — never the cause, the impact or a break.</div>
+              </>
+            ) : (
+              <div className="rw-doc-empty">Nothing recorded on this device.</div>
+            )}
           </section>
 
-          {/* next actions + assistant */}
-          <section className="rw-grid" style={{ marginTop: 12 }}>
+          {/* 8 · Other explanations considered */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(8)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            {data.others.length > 0 ? (
+              <div className="rw-table-wrap"><table className="rw-axes">
+                <thead><tr><th>Explanation</th><th>Why it is not the answer</th></tr></thead>
+                <tbody>{data.others.map((o, i) => <tr key={i}><td className="rw-axes-k">{o.title}</td><td>{o.why}</td></tr>)}</tbody>
+              </table></div>
+            ) : (
+              <div className="rw-doc-empty">No other explanation had evidence in this window.</div>
+            )}
+            {data.ruledOut.length > 0 && (
+              <div className="rw-ruledout">
+                <span className="label blue">Ruled out:</span>{" "}
+                {data.ruledOut.join(" · ")}
+                <div className="rw-ruledout-note">Competing causes the evidence does not support.</div>
+              </div>
+            )}
+          </section>
+
+          {/* 9 · Who owns the fix */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(9)}</h3>
+          <section className="rw-panel rw-doc-sec">
+            <KeyVal rows={[{ k: "Owner", v: data.ownerSection.owner }, { k: "Why", v: data.ownerSection.why }]} />
+          </section>
+
+          {/* 10 · What to do now · Watch for recurrence */}
+          <h3 className="rw-section-title rw-doc-title">{sectionTitle(10)}</h3>
+          <section className="rw-grid">
             <div className="rw-panel">
               <h3>Next actions</h3>
               <ol className="rw-next">
@@ -552,6 +576,32 @@ export default function RcaWorkspace({
                 ))}
               </ol>
             </div>
+            <div className="rw-panel">
+              <h3>Ticket &amp; escalation decision</h3>
+              <div className={`rw-callout${data.ticket.callout.tone ? " " + data.ticket.callout.tone : ""}`} style={{ marginTop: 0 }}>
+                <strong>{data.ticket.callout.strong}</strong><span>{data.ticket.callout.text}</span>
+              </div>
+              <KeyVal rows={data.ticket.rows} />
+              <h4 className="rw-doc-h">Watch for recurrence</h4>
+              <ul className="rw-doc-list">{data.watch.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            </div>
+          </section>
+          {ticketSlot && (
+            <>
+              <h4 className="rw-doc-h">External ticket</h4>
+              <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
+            </>
+          )}
+          {similarSlot && (
+            <>
+              <h4 className="rw-doc-h">Similar past incidents</h4>
+              <section style={{ marginBottom: 4 }}>{similarSlot}</section>
+            </>
+          )}
+
+          {/* Iris AI — grounded, cited questions about this RCA. */}
+          {aiSlot && <section style={{ marginTop: 12, marginBottom: 4 }}>{aiSlot}</section>}
+          <section className="rw-grid" style={{ marginTop: 12 }}>
             <AskRcaPanel data={data} correlationId={correlationId} />
           </section>
         </>
