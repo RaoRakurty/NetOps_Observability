@@ -170,6 +170,17 @@ var (
 	// how-to ("how do I set up SNMP discovery / enable SSO / create a report").
 	// Answered from the curated product knowledge, not live data.
 	reProduct = regexp.MustCompile(`(?i)(\bwhat (is|are|does)\b|\bwhat.?s (a|an|the)\b|\bwhat does\b.*\bmean\b|\bhow does\b|\bhow do(es)? (correlix|the (engine|platform|product|system))\b|\bhow do i (set ?up|configure|enable|create|add|onboard|connect|turn on|register|provision|import|schedule|invite)\b|\bhow to (set ?up|configure|enable|create|add|onboard|connect|import)\b|\bexplain (the|how|correlix)\b|\btell me about\b|\bwhat (can|do) you (do|know)\b|\bwhat is correlix\b)`)
+	// reOwnNetwork names the operator's own network as the subject: "the
+	// network topology", "my devices", "our WAN links". Found live 2026-11-12:
+	// "explain the network topology" matched the product-help wording "explain
+	// the …", was answered from the product docs as "covered", and never reached
+	// the model — which has the tenant's topology through its tools. Network-
+	// level nouns and PLURAL device nouns only: "the health of this device" is
+	// a device question with its own deterministic answer, not an overview. A
+	// screen word right after the noun ("the topology page") keeps it a
+	// product question.
+	reOwnNetwork  = regexp.MustCompile(`(?i)\b(?:my|our|the|this|these|current)\s+(?:(?:whole|entire|overall|physical|logical|wan|lan|sd-?wan|l2|l3|layer ?[23]|ip|bgp|ospf|mpls|underlay|overlay)\s+)?(?:network|topology|devices|routers|switches|firewalls|sites|links|circuits|tunnels|fabric|underlay|overlay|wan|lan|inventory|infrastructure|environment|estate|architecture)\b(?:\s+(?:topology|map|layout|design|architecture|health|status|setup))?`)
+	reScreenAfter = regexp.MustCompile(`(?i)^\s*(?:page|tab|view|screen|panel|card|chart|column|graph|widget|dashboard|menu|settings?|feature|module)s?\b`)
 	// A question about a SCREEN ("what does the Operations Overview page show",
 	// "what does this column mean") and an imperative how-to ("create a monitor
 	// that alerts on …", "connect ServiceNow so …", "what sampling rate should
@@ -379,9 +390,12 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "current_state", Modules: []string{"command_center"},
 			Mode: ModeCurrentStateSummary, Entities: ent, Freshness: FreshnessLive,
 		}
-	case reProduct.MatchString(q):
+	case reProduct.MatchString(q) && !aboutOwnNetwork(q):
 		// "what is a seam / how do I set up SNMP discovery" → answered from the
-		// curated product knowledge (no tenant data). No perms needed.
+		// curated product knowledge (no tenant data). No perms needed. The
+		// product wording alone ("explain the …", "tell me about …") is not
+		// enough when its subject is the operator's OWN network: that is a
+		// question about their data, for the model and its tools.
 		return Plan{
 			Intent: "product_question", Modules: []string{"product_navigation"},
 			Mode: ModeProductAnswer, Entities: ent, Freshness: FreshnessConfig,
@@ -2065,4 +2079,16 @@ func splitEvidence(bundle []EvidenceItem) (supporting, contradicting []string) {
 		}
 	}
 	return supporting, contradicting
+}
+
+// aboutOwnNetwork reports whether q's subject is the operator's own network
+// (reOwnNetwork) rather than one of the product's screens or concepts: a match
+// immediately followed by a screen word ("the topology view") does not count.
+func aboutOwnNetwork(q string) bool {
+	for _, loc := range reOwnNetwork.FindAllStringIndex(q, -1) {
+		if !reScreenAfter.MatchString(q[loc[1]:]) {
+			return true
+		}
+	}
+	return false
 }

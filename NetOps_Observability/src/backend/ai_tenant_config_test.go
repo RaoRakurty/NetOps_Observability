@@ -161,7 +161,7 @@ func TestProviderCandidatesPerTenant(t *testing.T) {
 	t.Setenv("COPILOT_API_KEY", "")
 
 	// No tenant config → the platform chain applies.
-	cands := s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-a"})
+	cands := primaries(t, s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-a"}))
 	if len(cands) != 1 || cands[0].source != "platform" || cands[0].key != "sk-platform-env" {
 		t.Fatalf("default tenant must ride the platform chain: %+v", cands)
 	}
@@ -169,11 +169,11 @@ func TestProviderCandidatesPerTenant(t *testing.T) {
 	// Tenant A brings its own key: it wins OUTRIGHT (single candidate) — and
 	// tenant B still resolves to the platform chain, never A's key.
 	_, _ = s.aiTenantCfg.SetTenantSettings("t-a", ai.TenantSettings{Provider: "anthropic", Model: "claude-sonnet-4-6", Key: "sk-tenant-a"})
-	cands = s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-a"})
+	cands = primaries(t, s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-a"}))
 	if len(cands) != 1 || cands[0].source != "tenant" || cands[0].key != "sk-tenant-a" || cands[0].name != "anthropic" {
 		t.Fatalf("tenant BYO key must win outright: %+v", cands)
 	}
-	for _, c := range s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-b"}) {
+	for _, c := range primaries(t, s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-b"})) {
 		if c.key == "sk-tenant-a" {
 			t.Fatal("CROSS-TENANT LEAK: tenant A's key resolved for tenant B")
 		}
@@ -181,12 +181,12 @@ func TestProviderCandidatesPerTenant(t *testing.T) {
 
 	// Strict tenant: no key of its own + no_platform_key → NOTHING (fail closed).
 	_, _ = s.aiTenantCfg.SetTenantSettings("t-b", ai.TenantSettings{NoPlatformKey: true})
-	if cands := s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-b"}); cands != nil {
+	if cands := primaries(t, s.providerCandidates(jwtClaims{Role: "viewer", Tenant: "t-b"})); cands != nil {
 		t.Fatalf("strict tenant without a key must get no provider: %+v", cands)
 	}
 
 	// The platform owner is never affected by tenant records.
-	cands = s.providerCandidates(aiPlatformOwn)
+	cands = primaries(t, s.providerCandidates(aiPlatformOwn))
 	if len(cands) != 1 || cands[0].source != "platform" {
 		t.Fatalf("cross principal must use the platform chain: %+v", cands)
 	}

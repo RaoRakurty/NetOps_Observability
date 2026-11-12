@@ -43,7 +43,7 @@ export function applyRecommended(
 
 // Plain-language result of a connection test, by the server's closed error
 // class (ai.ClassifyProviderError). Never the provider's own message.
-export function testResultText(r: { ok: boolean; error_class?: string; latency_ms?: number; model?: string }): string {
+export function testResultText(r: { ok: boolean; error_class?: string; http_status?: number; latency_ms?: number; model?: string }): string {
   if (r.ok) {
     const secs = typeof r.latency_ms === "number" ? ` in ${(r.latency_ms / 1000).toFixed(1)} s` : "";
     return `Connected${r.model ? ` to ${r.model}` : ""}${secs}.`;
@@ -56,10 +56,13 @@ export function testResultText(r: { ok: boolean; error_class?: string; latency_m
     case "rate_limited":
       return "The provider says this key is over its quota or rate limit.";
     case "timeout":
-      return "The provider did not answer in time. Check this server's internet access.";
+      return "The provider did not answer in time. The model may be busy, or this server may not reach the internet. Test the recommended model to tell which.";
     case "network":
       return "This server could not reach the provider. Check its internet access or proxy.";
     case "server_error":
+      if (r.http_status === 503 || r.http_status === 529) {
+        return "The provider says this model is overloaded right now. Try again in a few minutes, or pick the recommended model.";
+      }
       return "The provider had a temporary problem. Try again in a minute.";
     case "empty_response":
       return "The provider answered with nothing. Try the recommended model.";
@@ -82,12 +85,22 @@ export type TierLine = { tier: string; ok: boolean; text: string };
 // One line per tier model of a connection test (2026-11-12: the lab's default
 // model timed out while its quick-answer model answered in 0.7 s, and the
 // single verdict could not show it).
+//
+// When another model of the same test answered, the server plainly reaches
+// the provider, so a model that timed out or "could not be reached" is slow or
+// overloaded — never the internet path (2026-11-12: the page said "check this
+// server's internet access" while gemini-2.5-flash answered in 0.8 s).
 export function tierTestLines(r: { tiers?: TierTestResult[] } | null | undefined): TierLine[] {
-  return (r?.tiers ?? []).map((t) => {
+  const tiers = r?.tiers ?? [];
+  const reached = tiers.some((t) => t.ok);
+  return tiers.map((t) => {
     const label = TIER_LABEL[t.tier] ?? t.tier;
+    const why = reached && (t.error_class === "timeout" || t.error_class === "network")
+      ? "It did not answer in time, but another model answered, so this server reaches the provider. This model is slow or overloaded right now. Try again later, or pick the recommended model."
+      : testResultText({ ok: false, error_class: t.error_class, http_status: t.http_status });
     const text = t.ok
       ? `${label}: ${t.model}, ${(t.latency_ms / 1000).toFixed(1)} s.`
-      : `${label}: ${t.model} failed. ${testResultText({ ok: false, error_class: t.error_class })}`;
+      : `${label}: ${t.model} failed. ${why}`;
     return { tier: t.tier, ok: t.ok, text };
   });
 }

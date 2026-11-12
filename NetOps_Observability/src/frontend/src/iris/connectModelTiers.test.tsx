@@ -30,8 +30,26 @@ describe("tier connection test", () => {
     expect(lines.map((l) => l.ok)).toEqual([false, true, true]);
     expect(lines[1].text).toBe("Model for quick answers: gemini-flash-lite-latest, 0.7 s.");
     expect(lines[2].text).toBe("Model for deep investigations: gemini-2.5-flash, 0.6 s.");
-    expect(lines[0].text).toMatch(/^Default model: gemini-flash-latest failed\. The provider did not answer in time/);
+    expect(lines[0].text).toMatch(/^Default model: gemini-flash-latest failed\. It did not answer in time, but another model answered/);
+    expect(lines[0].text).not.toMatch(/internet/);
     expect(tierTestLines(null)).toEqual([]);
+  });
+
+  it("a timeout is only an internet question when no model answered (lab 2026-11-12)", () => {
+    const allSlow = { tiers: [
+      { tier: "default" as const, model: "gemini-flash-latest", ok: false, latency_ms: 10001, error_class: "timeout" },
+      { tier: "fast" as const, model: "gemini-flash-lite-latest", ok: false, latency_ms: 10001, error_class: "timeout" },
+    ] };
+    for (const l of tierTestLines(allSlow)) expect(l.text).toMatch(/did not answer in time\. The model may be busy, or this server may not reach the internet/);
+  });
+
+  it("an overloaded model says so (503 / Anthropic 529)", () => {
+    const busy = { tiers: [
+      { tier: "default" as const, model: "gemini-flash-latest", ok: false, latency_ms: 6966, error_class: "server_error", http_status: 503 },
+      { tier: "strong" as const, model: "gemini-2.5-flash", ok: true, latency_ms: 511 },
+    ] };
+    expect(tierTestLines(busy)[0].text).toBe("Default model: gemini-flash-latest failed. The provider says this model is overloaded right now. Try again in a few minutes, or pick the recommended model.");
+    expect(tierTestLines({ tiers: [{ ...busy.tiers[0], http_status: 500 }] })[0].text).toMatch(/temporary problem/);
   });
 
   it("a blank tier field is its recommended model", () => {

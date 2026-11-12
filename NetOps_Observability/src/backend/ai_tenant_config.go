@@ -82,6 +82,29 @@ var errAITenantDisabled = errors.New("Iris AI isn't enabled for this account —
 type providerCandidate struct {
 	name, key, model string
 	source           string // "tenant" | "platform"
+	// fallback marks the provider's recommended model standing in after the
+	// configured one (withModelFallback): same provider, same key.
+	fallback bool
+}
+
+// withModelFallback puts, right after each candidate, the same provider and
+// key with its fallback model (ai.FallbackModel) — so an overloaded, retired
+// or hanging model is followed by one that model's provider still serves,
+// before the chain moves to the next provider. It adds no provider, no key
+// and no reordering, so every BYO rule of providerCandidatesForTier holds: a
+// tenant with its own key still only ever reaches its own provider and pays
+// for its own calls. At most one fallback per candidate (the call budget is
+// the stage's, so a fallback never extends a request; it only uses the time a
+// fast failure — a 503, a 404 — left over).
+func withModelFallback(cands []providerCandidate) []providerCandidate {
+	out := make([]providerCandidate, 0, 2*len(cands))
+	for _, c := range cands {
+		out = append(out, c)
+		if fb := ai.FallbackModel(c.name, c.model); fb != "" {
+			out = append(out, providerCandidate{name: c.name, key: c.key, model: fb, source: c.source, fallback: true})
+		}
+	}
+	return out
 }
 
 // providerCandidates resolves the provider fallback chain FOR A PRINCIPAL with
@@ -102,8 +125,9 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 //     applies: per-provider env keys, then the UI-stored platform key.
 //
 // The TIER only ever chooses which of one configuration's model names is used.
-// It cannot change the provider, cannot change the key, cannot add a candidate
-// and cannot reorder the chain — so none of the BYO rules above can be reached
+// It cannot change the provider, cannot change the key, cannot add a provider
+// and cannot reorder the chain (the one model fallback per candidate,
+// withModelFallback, is the same provider and key) — so none of the BYO rules above can be reached
 // through it. A tier with no model configured resolves to the provider's
 // recommended model for that tier (ai.TierModels.ForProvider, owner decision
 // 2026-11-12), never to the single default again.
@@ -111,7 +135,7 @@ func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) 
 	tenant, cross := principalTenant(claims)
 	if !cross {
 		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, tier, providerModel); ok {
-			return []providerCandidate{{name: name, key: key, model: model, source: "tenant"}}
+			return withModelFallback([]providerCandidate{{name: name, key: key, model: model, source: "tenant"}})
 		}
 		if s.aiTenantCfg.NoPlatformKey(tenant) {
 			return nil
@@ -147,7 +171,7 @@ func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) 
 		model := models.ForProvider(tier, name)
 		out = append(out, providerCandidate{name: name, key: key, model: model, source: "platform"})
 	}
-	return out
+	return withModelFallback(out)
 }
 
 // ---- HTTP handlers ------------------------------------------------------------

@@ -196,11 +196,18 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// on provider error the next is attempted; the first success wins.
 	attempted := false
 	tenant, _ := principalTenant(claims)
+	down := map[string]bool{} // providers out as a whole (key refused, unreachable): their fallback model is not asked
 	for _, cand := range s.providerCandidates(claims) {
 		name := cand.name
+		if down[name] {
+			continue
+		}
 		attempted = true
 		// The shared guard: breaker, one structured failure log, call metrics.
 		c, err := s.callProviderGuarded(s.egressCtx(r.Context(), claims), tenant, "", cand, system, msgs)
+		if err != nil && ai.ProviderWide(ai.ClassifyProviderError(err)) {
+			down[name] = true
+		}
 		text := c.Text
 		if err == nil && strings.TrimSpace(text) != "" {
 			// Strip any doc citation the model INVENTED (an id not among the
@@ -246,24 +253,41 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
 }
 
-// firstConfiguredProvider resolves the first provider candidate for this
-// principal (tenant BYO key first, then the platform chain) — the agent loop
-// uses exactly one provider per turn (no cross-provider loop resumption, plan
-// §3.d).
-func (s *server) firstConfiguredProvider(claims jwtClaims) (name, key, model string) {
-	if cands := s.providerCandidates(claims); len(cands) > 0 {
-		return cands[0].name, cands[0].key, cands[0].model
+// firstUsableProvider resolves the provider and model the agent loop runs on:
+// the first candidate (tenant BYO key first, then the platform chain, each
+// followed by its same-provider fallback model) that has not already failed
+// in this request (ai.ModelStruck) and whose (tenant, model) breaker would
+// admit a call. The loop uses exactly one provider per turn (no cross-provider
+// loop resumption, plan §3.d). With candidates but none usable it returns the
+// reason (the first skip's error) and an empty key; with no candidate at all,
+// an empty key and nil.
+func (s *server) firstUsableProvider(ctx context.Context, claims jwtClaims) (name, key, model string, skipped error) {
+	tenant, _ := principalTenant(claims)
+	for _, c := range s.providerCandidates(claims) {
+		if serr := ai.ModelStruck(ctx, c.name, c.model); serr != nil {
+			if skipped == nil {
+				skipped = serr
+			}
+			continue
+		}
+		if !s.breakerWouldAdmit(tenant, c) {
+			if skipped == nil {
+				skipped = ai.ErrProviderBreakerOpen
+			}
+			continue
+		}
+		return c.name, c.key, c.model, nil
 	}
-	return "", "", ""
+	return "", "", "", skipped
 }
 
 // tryAgentLoop attempts the tool-driven investigation for this turn. Returns
 // true when it wrote the response (success OR a mid-loop failure that must not
 // silently restart as plain chat); false → caller falls through to plain chat.
 func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, engine func() *ai.Orchestrator, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
-	name, key, model := s.firstConfiguredProvider(claims)
+	name, key, model, _ := s.firstUsableProvider(r.Context(), claims)
 	if key == "" {
-		return false // no provider — plain path renders the "add a key" message
+		return false // no usable provider — the plain path tries the chain or renders the "add a key" message
 	}
 	tenant, _ := principalTenant(claims)
 	if !s.aiToolBudget.Allow(tenant, s.dailyTokensFor(tenant)) {

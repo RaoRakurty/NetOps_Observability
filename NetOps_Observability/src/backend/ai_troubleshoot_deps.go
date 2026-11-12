@@ -2921,20 +2921,18 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 		return nil
 	}
 	return func(ctx context.Context, p ai.Principal, question string, prior []string) (ai.Answer, error) {
-		name, key, model := s.firstConfiguredProvider(claims)
+		// One strike per request, and the breaker's verdict across requests,
+		// per model: the first candidate model still usable runs the loop.
+		name, key, model, skipped := s.firstUsableProvider(ctx, claims)
 		if key == "" {
+			if skipped != nil {
+				return ai.Answer{}, skipped
+			}
 			return ai.Answer{}, ai.ErrAgentUnavailable
 		}
 		tenant, _ := principalTenant(claims)
 		if s.aiToolBudget != nil && !s.aiToolBudget.Allow(tenant, s.dailyTokensFor(tenant)) {
 			return ai.Answer{}, ai.ErrAgentUnavailable // the single grounded call reports the spent budget
-		}
-		// One strike per request, and the breaker's verdict across requests.
-		if serr := ai.ModelStruck(ctx, name); serr != nil {
-			return ai.Answer{}, serr
-		}
-		if s.aiBreaker != nil && !s.aiBreaker.Peek(tenant, name) {
-			return ai.Answer{}, ai.ErrProviderBreakerOpen
 		}
 		reg, pol := agentToolbox(orch)
 		specs := ai.Toolbox{Registry: reg, Policy: pol}.Manifest(p)
@@ -2959,7 +2957,7 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 		}
 		res, err := s.runAgentLoop(ctx, claims, p, reg, pol, specs, system, msgs, nil, call)
 		if err != nil {
-			ai.NoteModelFailed(ctx, name, err)
+			ai.NoteModelFailed(ctx, name, model, err)
 			return ai.Answer{}, err
 		}
 		ai.NoteModelUsed(ctx, name, model)

@@ -266,9 +266,13 @@ type ModelNote struct {
 	mu       sync.Mutex
 	provider string
 	model    string
-	// struck holds, per provider, the failure that makes another call in the
-	// SAME request pointless (ModelStruck).
+	// struck holds the failure that makes another call in the SAME request
+	// pointless (ModelStruck), keyed by strikeKey: a whole provider ("gemini")
+	// or one of its models ("gemini\x00gemini-flash-latest").
 	struck map[string]error
+	// timedOut is, per provider, the models that timed out in this request: a
+	// second model of the same provider timing out strikes the provider.
+	timedOut map[string]map[string]bool
 }
 
 // ── one strike per request (§9: never make the operator wait twice) ─────────
@@ -296,26 +300,60 @@ func strikes(outcome string) bool {
 	return false
 }
 
-// ModelSkippedError is a model call that was not made because the same
-// provider already failed in this request. It unwraps to that first failure,
+// ModelSkippedError is a model call that was not made because the same model,
+// or its whole provider, already failed in this request. It unwraps to that first failure,
 // so the operator's footer and every classifier read the real reason
 // ("timed out"), never a generic one.
 type ModelSkippedError struct {
 	Provider string
+	Model    string // "" when the whole provider was struck
 	First    error
 }
 
 func (e *ModelSkippedError) Error() string {
-	return e.Provider + ": skipped — it already failed in this request: " + e.First.Error()
+	who := e.Provider
+	if e.Model != "" {
+		who += " " + e.Model
+	}
+	return who + ": skipped — it already failed in this request: " + e.First.Error()
 }
 
 func (e *ModelSkippedError) Unwrap() error { return e.First }
 
-// NoteModelFailed records a failed call of provider on the request's note when
-// its class strikes (a no-op without a note or for any other class).
-func NoteModelFailed(ctx context.Context, provider string, err error) {
+// strikeKey names what a strike covers: the whole provider when model is "",
+// else that one model of the provider.
+func strikeKey(provider, model string) string {
+	if model == "" {
+		return provider
+	}
+	return provider + "\x00" + model
+}
+
+// ProviderWide reports whether an outcome class is a fact about the whole
+// provider, not one model: the key is refused, or the provider cannot be
+// reached at all. Everything else that strikes — overloaded (5xx), out of
+// quota (quotas are per model at Google and OpenAI), model retired, or slow —
+// is about the model asked for (found live 2026-11-12: Google answered 503
+// "high demand" for gemini-flash-latest while gemini-2.5-flash answered the
+// same key in 0.5 s; a provider-wide strike threw away the model that worked).
+func ProviderWide(outcome string) bool {
+	return outcome == ProvAuth || outcome == ProvNetwork
+}
+
+// NoteModelFailed records a failed call of (provider, model) on the request's
+// note when its class strikes (a no-op without a note or for any other class).
+// Key and network failures strike the provider; any other striking failure
+// strikes only that model — except that when a SECOND model of the same
+// provider times out in the same request, the provider is struck too, so a
+// provider that hangs on every model costs at most two waits (the 2026-11-11
+// "28 s" bound), not one per model.
+func NoteModelFailed(ctx context.Context, provider, model string, err error) {
 	n, _ := ctx.Value(modelNoteKey{}).(*ModelNote)
-	if n == nil || err == nil || !strikes(ClassifyProviderError(err)) {
+	if n == nil || err == nil {
+		return
+	}
+	outcome := ClassifyProviderError(err)
+	if !strikes(outcome) {
 		return
 	}
 	n.mu.Lock()
@@ -323,22 +361,49 @@ func NoteModelFailed(ctx context.Context, provider string, err error) {
 	if n.struck == nil {
 		n.struck = map[string]error{}
 	}
-	if _, ok := n.struck[provider]; !ok {
-		n.struck[provider] = err
+	put := func(k string) {
+		if _, ok := n.struck[k]; !ok {
+			n.struck[k] = err
+		}
+	}
+	if ProviderWide(outcome) || model == "" {
+		put(strikeKey(provider, ""))
+		return
+	}
+	put(strikeKey(provider, model))
+	if outcome != ProvTimeout {
+		return
+	}
+	if n.timedOut == nil {
+		n.timedOut = map[string]map[string]bool{}
+	}
+	if n.timedOut[provider] == nil {
+		n.timedOut[provider] = map[string]bool{}
+	}
+	n.timedOut[provider][model] = true
+	if len(n.timedOut[provider]) >= 2 {
+		put(strikeKey(provider, ""))
 	}
 }
 
-// ModelStruck returns a *ModelSkippedError when provider already failed in this
-// request (nil otherwise, and always nil without a note).
-func ModelStruck(ctx context.Context, provider string) error {
+// ModelStruck returns a *ModelSkippedError when (provider, model) — or the
+// whole provider — already failed in this request (nil otherwise, and always
+// nil without a note). model "" asks about the provider as a whole.
+func ModelStruck(ctx context.Context, provider, model string) error {
 	n, _ := ctx.Value(modelNoteKey{}).(*ModelNote)
 	if n == nil {
 		return nil
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if first, ok := n.struck[provider]; ok {
+	if first, ok := n.struck[strikeKey(provider, "")]; ok {
 		return &ModelSkippedError{Provider: provider, First: first}
+	}
+	if model == "" {
+		return nil
+	}
+	if first, ok := n.struck[strikeKey(provider, model)]; ok {
+		return &ModelSkippedError{Provider: provider, Model: model, First: first}
 	}
 	return nil
 }

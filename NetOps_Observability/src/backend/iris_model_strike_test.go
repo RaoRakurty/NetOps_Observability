@@ -60,8 +60,12 @@ func TestAProviderThatFailedIsNotCalledAgainInTheSameRequest(t *testing.T) {
 	}
 }
 
-// A timeout strikes: the next stage of the same request does not wait again.
-func TestATimeoutIsWaitedForOncePerRequest(t *testing.T) {
+// A timeout strikes the MODEL that timed out: a later stage of the same request
+// does not wait on it again, but may ask the provider's other model once
+// (2026-11-12: an alias hung while the dated model answered the same key). A
+// second model of the provider timing out strikes the provider, so a request
+// waits at most twice on one provider, never once per stage.
+func TestATimeoutIsWaitedForOncePerModelAndTwicePerProvider(t *testing.T) {
 	s := strikeServer(t)
 	g := startFakeGemini(t, 200, geminiOK)
 	g.mu.Lock()
@@ -70,16 +74,57 @@ func TestATimeoutIsWaitedForOncePerRequest(t *testing.T) {
 	l := aiLLM{srv: s, claims: aiPlatformOwn}
 	msgs := []ai.LLMMessage{{Role: "user", Content: "q"}}
 	ctx, _ := ai.WithModelNote(context.Background())
-	short, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
-	defer cancel()
-	if _, _, _, err := l.CompleteTierWithUsage(short, ai.TierFast, "s", msgs); ai.ClassifyProviderError(err) != ai.ProvTimeout {
-		t.Fatalf("first call: %v", err)
+	stage := func(tier ai.ModelTier) error {
+		c, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
+		defer cancel()
+		_, _, _, err := l.CompleteTierWithUsage(c, tier, "s", msgs)
+		return err
 	}
+	// Stage 1 (fast model) times out; its budget is spent, so its fallback is
+	// not called in it.
+	if err := stage(ai.TierFast); ai.ClassifyProviderError(err) != ai.ProvTimeout || g.hits() != 1 {
+		t.Fatalf("stage 1: %v hits=%d", err, g.hits())
+	}
+	// Stage 2 (strong = the recommended default model) is a different model:
+	// asked once, times out — now two models of the provider timed out.
+	if err := stage(ai.TierStrong); ai.ClassifyProviderError(err) != ai.ProvTimeout || g.hits() != 2 {
+		t.Fatalf("stage 2: %v hits=%d", err, g.hits())
+	}
+	// Stage 3 has NO deadline: without the provider strike it would hang.
 	start := time.Now()
-	_, _, _, err := l.CompleteTierWithUsage(ctx, ai.TierStrong, "s", msgs) // no deadline: without the strike it would hang
-	if ai.ClassifyProviderError(err) != ai.ProvTimeout || ai.FallbackNoteFor(err) != ai.NoteModelTimedOut || time.Since(start) > 100*time.Millisecond || g.hits() != 1 {
-		t.Fatalf("a timed-out provider must not be waited on twice: err=%v after %v hits=%d", err, time.Since(start), g.hits())
+	_, _, _, err := l.CompleteTierWithUsage(ctx, ai.TierFast, "s", msgs)
+	if ai.ClassifyProviderError(err) != ai.ProvTimeout || ai.FallbackNoteFor(err) != ai.NoteModelTimedOut || time.Since(start) > 100*time.Millisecond || g.hits() != 2 {
+		t.Fatalf("a provider whose two models timed out must not be waited on again: err=%v after %v hits=%d", err, time.Since(start), g.hits())
 	}
+}
+
+// The lab case end to end at the LLM seam: the configured model is overloaded
+// (503) and the provider's recommended model answers — Iris answers, with the
+// answering model named, instead of losing the model.
+func TestAnOverloadedModelFallsBackToTheProvidersRecommendedModel(t *testing.T) {
+	s := strikeServer(t)
+	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey, Model: "gemini-flash-latest"})
+	g := startFakeGemini(t, 200, geminiOK)
+	g.mu.Lock()
+	g.statusFor = map[string]int{"gemini-flash-latest": 503}
+	g.mu.Unlock()
+	logs := captureProviderLogs(t)
+	l := aiLLM{srv: s, claims: aiPlatformOwn}
+	ctx, note := ai.WithModelNote(context.Background())
+	text, provider, _, err := l.CompleteTierWithUsage(ctx, "", "s", []ai.LLMMessage{{Role: "user", Content: "q"}})
+	if err != nil || text == "" || provider != "gemini" {
+		t.Fatalf("the fallback model must answer: text=%q provider=%q err=%v", text, provider, err)
+	}
+	if got := note.Model("gemini"); got != "gemini-2.5-flash" {
+		t.Fatalf("the answer must name the model that answered, got %q", got)
+	}
+	if len(logs.find("fallback model answered")) != 1 {
+		t.Fatal("a fallback answer is logged")
+	}
+	if g.keys[len(g.keys)-1] != platformKey {
+		t.Fatal("the fallback rides the same key")
+	}
+	logs.mustNotContain(t, platformKey)
 }
 
 // End to end through /api/ai/ask: a question the grammar cannot read and no
