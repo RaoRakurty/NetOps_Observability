@@ -384,3 +384,127 @@ func TestHealthDetailOwnerKeepsAggregatesUnderProvider(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderScopeSDWANEdgeListedOnce pins the exact symptom tracker 365 was
+// filed for (owner, 2026-10-24): under "Provider" the device inventory listed
+// each SD-WAN edge two or three times — the Provider's own SNMP row plus a
+// tenant's controller (`source: api`) row for the same physical edge.
+//
+// The same edge (name, address, serial) is reported twice: once by the
+// platform's SNMP discovery (untagged, the Provider's) and once by RETAIL's
+// controller integration (RETAIL's), plus a controller-only row RETAIL owns.
+// Cross-tenant records never merge (§3a), so the fix is the narrowing:
+//   - Provider lists the edge ONCE — its own SNMP row — and none of RETAIL's;
+//   - RETAIL's controller rows are reachable only from RETAIL, or from the
+//     explicit All-tenants view, where every row carries its tenant;
+//   - a RETAIL device id under Provider is a 404, never a read.
+//
+// The third copy in the lab came from a platform-owned duplicate of RETAIL's
+// vManage integration — data, not code; TestProviderScopeIsolation's NMS half
+// proves Provider can neither see nor delete RETAIL's integration.
+func TestProviderScopeSDWANEdgeListedOnce(t *testing.T) {
+	srv, s := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "Retail Org"})
+	if st != 201 {
+		t.Fatalf("create org: %d %s", st, b)
+	}
+	orgA := idOf(t, b)
+	st, b = do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "Retail", "org_id": orgA})
+	if st != 201 {
+		t.Fatalf("create tenant: %d %s", st, b)
+	}
+	retail := idOf(t, b)
+	createUserID(t, srv, admin, map[string]any{
+		"username": "retail-op", "password": "Passw0rd!2345", "role": "operator", "tenant_id": retail,
+	})
+	retailOp := login(t, srv, "retail-op", "Passw0rd!2345").Token
+
+	// One physical edge seen by two sources in two tenants, plus a controller
+	// only RETAIL's integration knows about.
+	for _, d := range []models.Device{
+		{ID: "edge1-snmp", Name: "edge1", Address: "10.20.0.1", SerialNumber: "SN-EDGE1", Source: "snmp", TenantID: ""},
+		{ID: "edge1-api", Name: "edge1", Address: "10.20.0.1", SerialNumber: "SN-EDGE1", Source: "api", TenantID: retail},
+		{ID: "vsmart-api", Name: "vsmart", Address: "10.20.0.9", SerialNumber: "SN-VSMART", Source: "api", TenantID: retail},
+	} {
+		if err := s.discovery.Upsert(d); err != nil {
+			t.Fatalf("seed %s: %v", d.ID, err)
+		}
+	}
+
+	type row struct{ id, name, source, tenant string }
+	list := func(token, acting string) []row {
+		t.Helper()
+		st, body := doActing(t, srv, "GET", "/api/devices", token, acting, nil)
+		if st != 200 {
+			t.Fatalf("GET /api/devices (acting %q): %d %s", acting, st, body)
+		}
+		var devs []models.Device
+		if err := json.Unmarshal(body, &devs); err != nil {
+			t.Fatalf("decode devices: %v (%s)", err, body)
+		}
+		out := make([]row, 0, len(devs))
+		for _, d := range devs {
+			out = append(out, row{d.ID, d.Name, d.Source, d.TenantID})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
+		return out
+	}
+
+	// Provider (header, either case): the edge once, as the Provider's own SNMP
+	// row; nothing of RETAIL's.
+	for _, acting := range []string{"global", " GLOBAL "} {
+		prov := list(admin, acting)
+		if len(prov) != 1 || prov[0] != (row{"edge1-snmp", "edge1", "snmp", ""}) {
+			t.Fatalf("Provider (%q) devices = %+v, want only the Provider's own SNMP edge1", acting, prov)
+		}
+	}
+
+	// RETAIL — its own user, the owner acting as RETAIL, and a RETAIL user
+	// sending "global" (ignored: not bound to Global) — sees its controller
+	// rows only.
+	for name, got := range map[string][]row{
+		"retail operator":        list(retailOp, ""),
+		"owner acting as retail": list(admin, retail),
+		"retail operator+global": list(retailOp, "global"),
+	} {
+		if len(got) != 2 || got[0].id != "edge1-api" || got[1].id != "vsmart-api" {
+			t.Fatalf("%s devices = %+v, want edge1-api and vsmart-api", name, got)
+		}
+	}
+
+	// All tenants (no header, or "all"): every row, each labelled with its owner.
+	want := []row{
+		{"edge1-api", "edge1", "api", retail},
+		{"edge1-snmp", "edge1", "snmp", ""},
+		{"vsmart-api", "vsmart", "api", retail},
+	}
+	for _, acting := range []string{"", "all"} {
+		all := list(admin, acting)
+		if len(all) != len(want) {
+			t.Fatalf("all-tenants (%q) devices = %+v, want %+v", acting, all, want)
+		}
+		for i := range want {
+			if all[i] != want[i] {
+				t.Fatalf("all-tenants (%q) row %d = %+v, want %+v (rows must carry their tenant)", acting, i, all[i], want[i])
+			}
+		}
+	}
+
+	// A RETAIL device id under Provider is a 404 — read and delete alike.
+	for _, id := range []string{"edge1-api", "vsmart-api"} {
+		if st, _ := doActing(t, srv, "GET", "/api/devices/"+id, admin, "global", nil); st != 404 {
+			t.Fatalf("Provider GET of RETAIL's %s: %d, want 404", id, st)
+		}
+		if st, _ := doActing(t, srv, "DELETE", "/api/devices/"+id, admin, "global", nil); st != 404 {
+			t.Fatalf("Provider DELETE of RETAIL's %s: %d, want 404", id, st)
+		}
+	}
+	if got := list(admin, retail); len(got) != 2 {
+		t.Fatalf("a refused Provider DELETE still removed RETAIL rows: %+v", got)
+	}
+	if st, b := doActing(t, srv, "GET", "/api/devices/edge1-snmp", admin, "global", nil); st != 200 {
+		t.Fatalf("Provider GET of its own SNMP edge: %d %s, want 200", st, b)
+	}
+}
