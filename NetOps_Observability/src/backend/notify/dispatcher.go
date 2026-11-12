@@ -125,6 +125,17 @@ func (d *Dispatcher) Dispatch(a models.Alert) {
 	}
 }
 
+// deliverJob queues ONE send to a channel that is not in the registered
+// (platform-global) list — the tenant watch lanes (tenant_watch.go) — through
+// the same bounded, retrying, counted pool. Never blocks; a full queue is
+// counted and logged by enqueue.
+func (d *Dispatcher) deliverJob(j sendJob) {
+	if j.ch == nil {
+		return
+	}
+	d.delivery.enqueue(j)
+}
+
 // snapshot copies the channel list under the read lock, so delivery never runs
 // with the registry lock held.
 func (d *Dispatcher) snapshot() []Channel {

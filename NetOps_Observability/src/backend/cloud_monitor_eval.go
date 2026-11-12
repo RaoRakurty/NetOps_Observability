@@ -37,13 +37,17 @@ func newCloudMonitorEvaluator(s *server, interval time.Duration) *cloud.MonitorE
 		},
 		Query: vmQuery,
 		// The dispatcher is the PLATFORM-GLOBAL channel list (a cross-tenant,
-		// platform-admin audience): a tenant's monitor firing reaches the
-		// platform operator, not the tenant — tenants have no alert channels
-		// yet (tracker 359; see the matching note in bgp_alerts.go). The
-		// alert has no platform `layer` label, so the global PagerDuty key's
-		// PlatformScopeFilter never pages for it.
+		// platform-admin audience): the platform operator keeps receiving a
+		// tenant's monitor edges exactly as before. The alert has no platform
+		// `layer` label, so the global PagerDuty key's PlatformScopeFilter
+		// never pages for it.
 		Fire:    func(a models.Alert) { s.notifier.Dispatch(a) },
 		Resolve: func(a models.Alert) { s.notifier.DispatchResolve(a) },
+		// Tracker 359 (owner decision 2026-11-12): the SAME edges also go to
+		// the owning tenant's own RCA lanes — a cloud monitor is a watch the
+		// tenant set up itself. The tenant is the evaluator's loop tenant.
+		TenantFire:    s.tenantWatchFire,
+		TenantResolve: s.tenantWatchResolve,
 	}, interval)
 }
 
