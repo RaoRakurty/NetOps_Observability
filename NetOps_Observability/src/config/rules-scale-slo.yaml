@@ -505,6 +505,74 @@ groups:
           runbook: "docs/runbooks/engine-not-consuming.md"
 
       # ------------------------------------------------------------------
+      # PAGE 1 (third router rule, tracker 353): JOINED, RECORDS ARRIVING,
+      # NOTHING COMMITTED — per PARTITION.
+      #
+      # 2026-10-17 and again 2026-10-30: after an OpenSearch flood-stage event
+      # vector-router came back from a rebalance owning partitions it never
+      # read again. Vector 0.40's kafka source loses its per-partition
+      # consumer task across a revoke/assign (upstream vectordotdev/vector
+      # #22006, open, reported still present on 0.54/0.55), so the member
+      # stays joined and heartbeating, RouterConsumerDead cannot fire, and the
+      # committed offset freezes. RouterConsumerLagGrowing only pages once a
+      # lane grows by > 1000 records in 10 minutes, so a LOW-volume lane
+      # (snmptrap, security, deadletter, cloudcosts — or applogs at night) can
+      # wedge under it indefinitely, and a one-partition wedge on a busy lane
+      # is diluted by its moving siblings in the per-group sum.
+      # KafkaConsumerStalled (rules.yaml) sees the shape but needs lag > 100
+      # for 30 minutes and carries no `tier`, so it reaches nobody's phone.
+      #
+      # This rule reads the broker's offsets per (group, topic, partition):
+      #   the committed offset has not moved in 15m
+      #   AND the partition's END offset rose in the same 15m (records arrived)
+      #   AND records are unread right now (lag > 0)
+      #   AND the group still has a member (else it is RouterConsumerDead).
+      # A quiet lane cannot match (its end offset does not move); a slow lane
+      # cannot match (its committed offset moves). Ownership (one fault, one
+      # page): silent while the lane matches RouterConsumerLagGrowing's growth
+      # condition, so a busy wedged lane pages ONCE, under that rule.
+      # A storage block (OpenSearch read-only, ClickHouse refusing) ALSO
+      # freezes commits — that is correct back-pressure (#209: Kafka is the
+      # buffer) and the annotation sends the operator to storage first.
+      # Fires after ~20 minutes of a wedge (15m window + for: 5m). The router
+      # heals the lane itself within ~5 minutes (cx-lane-watch.sh, 2026-10-30),
+      # so this paging means the self-heal did NOT work, or storage is blocked.
+      # ------------------------------------------------------------------
+      - alert: RouterConsumerWedged
+        expr: |
+          max by (consumergroup, topic, partition) (kafka_consumergroup_lag{consumergroup=~"netops-router-.*"}) > 0
+          and on (consumergroup, topic, partition)
+            max by (consumergroup, topic, partition) (delta(kafka_consumergroup_current_offset{consumergroup=~"netops-router-.*"}[15m])) == 0
+          and on (topic, partition)
+            max by (topic, partition) (delta(kafka_topic_partition_current_offset[15m])) > 0
+          and on (consumergroup)
+            max by (consumergroup) (kafka_consumergroup_members{consumergroup=~"netops-router-.*"}) >= 1
+          unless on (consumergroup)
+            (
+              delta(sum by (consumergroup) (kafka_consumergroup_lag_sum{consumergroup=~"netops-router-.*"})[10m:1m]) > 1000
+              and sum by (consumergroup) (kafka_consumergroup_lag_sum{consumergroup=~"netops-router-.*"}) > 1000
+            )
+        for: 5m
+        labels: { severity: critical, layer: bus, tier: page }
+        annotations:
+          summary: "Router lane {{ $labels.consumergroup }} partition {{ $labels.topic }}/{{ $labels.partition }} is JOINED but NOT CONSUMING — records keep arriving, nothing has been committed for 15 minutes, {{ $value }} unread"
+          description: >-
+            The group has a live member and the partition is receiving records,
+            but its committed offset has not moved in 15 minutes: nothing on
+            this partition is reaching OpenSearch or ClickHouse. FIRST rule out
+            storage back-pressure (OpenSearchFloodStageBlock,
+            OpenSearchClusterRed, VectorSinkBufferFilling,
+            ClickHouseWritesRejected) — a blocked store freezes commits on
+            purpose and the bus retains the data. With storage healthy this is
+            the Vector kafka-source rebalance wedge (upstream
+            vectordotdev/vector#22006): the router's cx-lane-watch self-heal
+            should already have restarted vector-router; check its log for
+            "cx-lane-watch" and the container restart count. If it did not,
+            restart vector-router — acknowledged offsets are committed on the
+            way down and the lane resumes from its last committed offset.
+          runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
       # PAGE 2: INGEST SILENT WHEN IT SHOULD NOT BE.
       #
       # vector-aggregator is the single funnel every non-flow lane crosses
