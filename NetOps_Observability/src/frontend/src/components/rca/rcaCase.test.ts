@@ -2,7 +2,8 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE } from "./rcaCase";
+import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE, flowsLaneHref } from "./rcaCase";
+import { flowsHref, parseDeepLink } from "../../lib/flowsLink";
 import { signal, timeline, corrObject } from "../../test/factories";
 
 // These tests pin the ADAPTER (buildRcaCase) — the wiring between a real
@@ -944,5 +945,34 @@ describe("buildRcaCase — controller-namespace ids render as inventory names (P
   it("buildCaseEvents takes the same map", () => {
     const ev = buildCaseEvents(tl, obj, { deviceNames: names });
     expect(ev.some((e) => e.label.includes("cEDGE-81"))).toBe(true);
+  });
+});
+
+// The traffic lane links to Explore → Flows (2026-11-12), scoped to the
+// exporter interface the flow evidence grounds on (`<exporter>:if<ifIndex>`,
+// correlation producers.flow_sample) and to the case window.
+describe("traffic lane → Explore → Flows", () => {
+  const flow = (over: Partial<Parameters<typeof signal>[0]> = {}) =>
+    signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_type: "interface", entity_id: "10.1.0.1:if7", ...over });
+  const ws = Date.parse("2026-06-16T19:25:00Z");
+  const we = Date.parse("2026-06-16T19:26:15Z");
+
+  it("the lane carries a link scoped to the exporter interface and the case window", () => {
+    const c = buildRcaCase(timeline({ signals: [signal({}), flow()] }), corrObject(), {}, "NetOps", []);
+    const lane = c.timeline.find((l) => l.label === "Traffic flow");
+    expect(lane?.href).toBe(flowsHref({ device: "10.1.0.1", ifIndex: "7", from: ws, to: we }));
+    // Only the traffic lane links out.
+    expect(c.timeline.filter((l) => l.href).length).toBe(1);
+  });
+
+  it("prefers attached evidence, and still carries the window when there is no flow evidence", () => {
+    const sigs = [flow({ attached: false, entity_id: "10.9.9.9:if1" }), flow({ entity_id: "10.1.0.1:if3" })];
+    expect(flowsLaneHref(sigs, ws, we)).toContain("device=10.1.0.1&if=3");
+    expect(flowsLaneHref([signal({})], ws, we)).toBe(flowsHref({ from: ws, to: we }));
+    expect(flowsLaneHref([flow({ entity_id: "not-an-interface" })], NaN, NaN)).toBe("#/explore/flows");
+  });
+
+  it("the link reads back as the same device, interface and window", () => {
+    expect(parseDeepLink(flowsLaneHref([flow()], ws, we))).toEqual({ device: "10.1.0.1", ifIndex: "7", from: ws, to: we });
   });
 });

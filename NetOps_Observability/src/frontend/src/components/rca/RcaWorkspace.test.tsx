@@ -383,3 +383,19 @@ describe("RcaWorkspace — the NOC RCA document", () => {
     expect(within(band).getByText("Nothing recorded on this device.")).toBeInTheDocument();
   });
 });
+
+describe("evidence timeline — the traffic lane opens Explore → Flows", () => {
+  it("renders 'See flows' on the traffic lane, scoped to the exporter interface", () => {
+    const tl = timeline({
+      signals: [
+        signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2" }),
+        signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_type: "interface", entity_id: "10.1.0.1:if7" }),
+      ],
+    });
+    renderWS(buildRcaCase(tl, corrObject(), {}, "NetOps", []));
+    const links = screen.getAllByTestId("lane-flows-link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("See flows");
+    expect(links[0].getAttribute("href")).toMatch(/^#\/explore\/flows\?device=10\.1\.0\.1&if=7&from=/);
+  });
+});

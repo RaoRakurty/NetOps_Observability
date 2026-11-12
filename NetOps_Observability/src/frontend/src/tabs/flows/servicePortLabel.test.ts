@@ -3,9 +3,9 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-vi.mock("../components/EChart", () => ({ default: () => null }));
+vi.mock("../../components/EChart", () => ({ default: () => null }));
 
-import { servicePortLabel } from "./Flows";
+import { servicePortLabel } from "./talkingSections";
 
 describe("servicePortLabel — the likely-service key read back for humans", () => {
   it("names a well-known port and its protocol", () => {

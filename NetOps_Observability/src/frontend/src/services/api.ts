@@ -691,11 +691,15 @@ export type ClickHouseResponse<T = Record<string, any>> = {
 
 // NetFlow dashboard filter-bar selection. All optional; only set keys are sent.
 export type FlowFilters = {
-  src?: string; // initiator (source) IP
-  dst?: string; // responder (destination) IP
+  src?: string; // initiator (source) IP or network (CIDR)
+  dst?: string; // responder (destination) IP or network (CIDR)
+  addr?: string; // either end: one IP or a network (CIDR)
   device?: string; // exporter / sampler IP
   in_if?: string; // ingress interface (SNMP ifIndex)
   out_if?: string; // egress interface
+  if?: string; // either direction on one interface (ifIndex)
+  port?: string; // transport port on either end
+  proto?: string; // IP protocol number
   // "all" includes the flows Correlix's own pollers caused (tracker 387 PR 13);
   // unset, the API leaves them out and the coverage says how many.
   traffic?: string;

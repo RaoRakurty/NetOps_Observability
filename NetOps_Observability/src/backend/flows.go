@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"sort"
 	"strconv"
@@ -45,7 +46,25 @@ func isAlphaToken(s string) bool {
 // from the SPA and makes it cheap to swap the implementation for a
 // materialized view or a dedicated rollup table later.
 
+// flowsReadModule is the RBAC module that gates EVERY read of the flow plane:
+// the nine /api/flows/* analytics handlers here plus /api/flows/apps and
+// /api/flows/services. It is the Explore module, the same gate as the other
+// Explore pages (logs.go logsReadModule) and the one Iris already maps
+// flows:read to (aiPrincipal). Before 2026-11-12 the nine handlers here had
+// only withAuth, so a principal with no grant at all (the zero-permission
+// ingest role whose key is published in a web page) could read flows, while
+// apps/services asked for infrastructure:read. One gate, one answer.
+const flowsReadModule = "explore"
+
+// requireFlowsRead is the one gate every flow handler calls first.
+func (s *server) requireFlowsRead(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	return s.requirePerm(w, r, flowsReadModule, LevelRead)
+}
+
 func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	limit, errLimit := intQuery(r, "limit", 20, 1, 500)
 	if errLimit != nil {
 		writeError(w, http.StatusBadRequest, errLimit)
@@ -176,6 +195,9 @@ SELECT toString(a.ifx) AS k,
 // the SQL server-side and the dimension set allowlisted. Returns rows of
 // {k, bytes_total, packets_total, flows} ordered by bytes desc.
 func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	dim, ok := flowTopDims[strings.ToLower(strings.TrimSpace(r.URL.Query().Get("by")))]
 	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("invalid 'by' dimension"))
@@ -319,6 +341,9 @@ func flowKeyLabel(names iana.Names, kind flowLabelKind, k string) (label, basis 
 // ports) signal. Pure IPFIX/NetFlow, no new collection. ?sort=hosts|ports picks
 // the ordering column (server-side allowlist, injection-safe).
 func (s *server) handleFlowsFanout(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	limit, errLimit := intQuery(r, "limit", 15, 1, 200)
 	if errLimit != nil {
 		writeError(w, http.StatusBadRequest, errLimit)
@@ -361,6 +386,9 @@ SELECT src_addr AS k,
 // names and derives scan/reset heuristics. proto=6 only — flags are
 // meaningless for non-TCP flows.
 func (s *server) handleFlowsFlags(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	limit, errLimit := intQuery(r, "limit", 20, 1, 100)
 	if errLimit != nil {
 		writeError(w, http.StatusBadRequest, errLimit)
@@ -399,6 +427,9 @@ SELECT tcp_flags,
 // flow-type filter as the tabs it explains, so it can never count rows a tab
 // could not show.
 func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -471,6 +502,9 @@ func (s *server) geoDictReady() bool {
 // dictionary has no data yet the response is {"data":[],"geo_enabled":false}
 // and the UI renders onboarding guidance instead of an empty chart.
 func (s *server) handleFlowsGeo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	col := "src_addr"
 	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dim"))) {
 	case "", "src":
@@ -518,6 +552,9 @@ SELECT dictGetOrDefault('netops.geoip_country', 'country', tuple(IPv6StringToNum
 }
 
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -557,6 +594,9 @@ SELECT proto,
 // derives from goflow2's `type`. Lets the UI prove all three flow sources are
 // actually arriving, not just "flows".
 func (s *server) handleFlowsByType(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -578,6 +618,9 @@ SELECT flow_type,
 }
 
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireFlowsRead(w, r); !ok {
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	step := durationQuery(r, "step", time.Minute)
 	tenantClause, empty := s.flowTenantClause(r)
@@ -698,38 +741,88 @@ func flowFilterClause(r *http.Request) (string, error) {
 }
 
 // flowFilterCore is the filter bar alone, without the traffic-class exclusion.
+//
+// Every condition only NARROWS the rows the caller's tenant clause already
+// admits (each is ANDed after it), so no filter can widen what a tenant sees.
+//
+//   - src / dst / addr: one address, or a network in CIDR form; addr matches
+//     either end. A network is parsed by net/netip and rendered from the
+//     parsed prefix, never from the raw value.
+//   - device: the exporter's address (exact).
+//   - in_if / out_if / if: an interface index; if matches either direction.
+//   - port: a transport port on either end; proto: an IP protocol number.
 func flowFilterCore(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	var conds []string
-	for _, f := range []struct{ param, col string }{
-		{"src", "src_addr"}, {"dst", "dst_addr"}, {"device", "sampler_address"},
+	for _, f := range []struct{ param, col, col2 string }{
+		{"src", "src_addr", ""}, {"dst", "dst_addr", ""}, {"addr", "src_addr", "dst_addr"},
 	} {
 		v := strings.TrimSpace(q.Get(f.param))
 		if v == "" {
 			continue
 		}
-		if !isIPish(v) {
+		c, err := flowAddrCond(f.col, v)
+		if err != nil {
 			return "", errors.New("invalid filter value for " + f.param)
 		}
-		conds = append(conds, f.col+" = '"+strings.ReplaceAll(v, "'", "''")+"'")
+		if f.col2 != "" {
+			c2, err := flowAddrCond(f.col2, v)
+			if err != nil {
+				return "", errors.New("invalid filter value for " + f.param)
+			}
+			c = "(" + c + " OR " + c2 + ")"
+		}
+		conds = append(conds, c)
 	}
-	for _, f := range []struct{ param, col string }{
-		{"in_if", "in_if"}, {"out_if", "out_if"},
+	if v := strings.TrimSpace(q.Get("device")); v != "" {
+		if !isIPish(v) {
+			return "", errors.New("invalid filter value for device")
+		}
+		conds = append(conds, "sampler_address = '"+strings.ReplaceAll(v, "'", "''")+"'")
+	}
+	for _, f := range []struct {
+		param, col, col2 string
+		max              int
+	}{
+		{"in_if", "in_if", "", -1}, {"out_if", "out_if", "", -1}, {"if", "in_if", "out_if", -1},
+		{"port", "src_port", "dst_port", 65535}, {"proto", "proto", "", 255},
 	} {
 		v := strings.TrimSpace(q.Get(f.param))
 		if v == "" {
 			continue
 		}
 		n, err := parseIntStrict(v)
-		if err != nil || n < 0 {
+		if err != nil || n < 0 || (f.max >= 0 && n > f.max) {
 			return "", errors.New("invalid filter value for " + f.param)
 		}
-		conds = append(conds, f.col+" = "+intToString(n))
+		c := f.col + " = " + intToString(n)
+		if f.col2 != "" {
+			c = "(" + c + " OR " + f.col2 + " = " + intToString(n) + ")"
+		}
+		conds = append(conds, c)
 	}
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return " AND " + strings.Join(conds, " AND "), nil
+}
+
+// flowAddrCond is the condition for one address filter: equality for a single
+// address (allowlisted by isIPish, then quote-escaped), or isIPAddressInRange
+// for a network. The network literal is the parsed, masked prefix's own
+// String(), so only digits, hex, '.', ':' and '/' ever reach the SQL.
+func flowAddrCond(col, v string) (string, error) {
+	if strings.Contains(v, "/") {
+		p, err := netip.ParsePrefix(v)
+		if err != nil {
+			return "", err
+		}
+		return "isIPAddressInRange(" + col + ", '" + p.Masked().String() + "')", nil
+	}
+	if !isIPish(v) {
+		return "", errors.New("not an address")
+	}
+	return col + " = '" + strings.ReplaceAll(v, "'", "''") + "'", nil
 }
 
 // flowTypeClause restricts flow rows to a single source family when ?type= is

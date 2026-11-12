@@ -36,7 +36,7 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	claims, ok := s.requireFlowsRead(w, r)
 	if !ok {
 		return
 	}

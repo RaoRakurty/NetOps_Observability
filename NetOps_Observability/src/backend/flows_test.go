@@ -134,7 +134,13 @@ func flowsTestServer(t *testing.T) *server {
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
 	d.Upsert(models.Device{ID: "shared-dns", Name: "shared-dns", Address: "10.9.0.1"})
-	return &server{discovery: d}
+	// Every flow handler checks explore:read first (flowsReadModule), so the
+	// built-in roles must resolve for a scoped principal.
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	return &server{discovery: d, roles: roles}
 }
 
 // flowTenantClause: cross-tenant principal gets no restriction.
@@ -179,7 +185,11 @@ func flowsServerNoShared(t *testing.T) *server {
 	t.Helper()
 	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
-	return &server{discovery: d}
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	return &server{discovery: d, roles: roles}
 }
 
 // flowTenantClause: a scoped principal of a tenant with no visible devices
@@ -275,6 +285,46 @@ func TestFlowFilterClause(t *testing.T) {
 	// Non-numeric interface is rejected.
 	if _, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/topn?in_if=abc", nil)); err == nil {
 		t.Error("expected error for non-numeric in_if")
+	}
+}
+
+// The Flows page's chip bar (2026-11-12): either-end address, a network in
+// CIDR form, either-direction interface, a port on either end and an IP
+// protocol. Each is a narrowing AND rendered from parsed values only.
+func TestFlowFilterClauseTrafficChips(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/flows/topn?addr=10.1.0.0/16&src=192.168.1.7/24&dst=fd00::/8&if=7&port=443&proto=6", nil)
+	clause, err := flowFilterClause(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{
+		"(isIPAddressInRange(src_addr, '10.1.0.0/16') OR isIPAddressInRange(dst_addr, '10.1.0.0/16'))",
+		// The network is the MASKED prefix, so a host-in-network value reads as its network.
+		"isIPAddressInRange(src_addr, '192.168.1.0/24')",
+		"isIPAddressInRange(dst_addr, 'fd00::/8')",
+		"(in_if = 7 OR out_if = 7)",
+		"(src_port = 443 OR dst_port = 443)",
+		"proto = 6",
+	} {
+		if !strings.Contains(clause, want) {
+			t.Errorf("clause missing %q:\n%s", want, clause)
+		}
+	}
+	if !strings.HasPrefix(clause, " AND ") || strings.Count(clause, " AND ") != 6 {
+		t.Errorf("every chip must be its own AND condition: %q", clause)
+	}
+	one, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/top?addr=10.1.0.1", nil))
+	if err != nil || !strings.Contains(one, "(src_addr = '10.1.0.1' OR dst_addr = '10.1.0.1')") {
+		t.Errorf("single address on either end: %q, %v", one, err)
+	}
+	for _, bad := range []string{
+		"addr=10.0.0.0/33", "addr=10.0.0.0/8'--", "src=1.2.3.4/x", "addr=" + "a'b",
+		"port=65536", "port=-1", "port=80x", "proto=256", "proto=tcp", "if=-2", "if=1.5",
+		"addr=10.0.0.0%2F8%27%29%20OR%20%271", // "10.0.0.0/8') OR '1"
+	} {
+		if c, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/top?"+bad, nil)); err == nil {
+			t.Errorf("%s: want a refusal, got clause %q", bad, c)
+		}
 	}
 }
 

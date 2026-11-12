@@ -119,7 +119,6 @@ const DEBT: ReadonlyMap<string, number> = new Map([
   ["services/api.debug.ts", 2],
   ["tabs/AccessExplorer.tsx", 1],
   ["tabs/AdminSsoIdp.tsx", 4],
-  ["tabs/Flows.tsx", 6],
   ["tabs/Incidents.tsx", 3],
   ["tabs/Logs.tsx", 5],
   ["tabs/MetricsExplorer.tsx", 1],
@@ -134,7 +133,7 @@ const DEBT: ReadonlyMap<string, number> = new Map([
 ]);
 
 /** The headline number, so a reviewer sees the size of the class at a glance. */
-const DEBT_TOTAL = 102;
+const DEBT_TOTAL = 96;
 
 const HOW_TO_FIX =
   "Convert it: `setErr(operatorError(e, \"<what we were trying to do>.\"))` from lib/errors.ts. " +

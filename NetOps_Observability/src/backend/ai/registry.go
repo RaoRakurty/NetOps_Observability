@@ -420,7 +420,7 @@ var productNav = []ProductNavEntry{
 	{"Generate a report", "#/monitoring/reports", "reports:read", "Use Guided Report Setup to pick an outcome, schedule and recipients.", "reports"},
 	{"Configure ServiceNow", "#/incident/integrations", "administration:read", "Set up the ServiceNow connector under Administration → Incident response → Integrations.", "integrations"},
 	{"App identification confidence", "#/monitoring/appobs", "applications:read", "Service View shows app-identity matches and confidence.", "app_identification"},
-	{"Flow analytics", "#/flows", "flows:read", "Top talkers, conversations, ports, protocols and geo.", "flow_analytics"},
+	{"Flow analytics", "#/explore/flows", "flows:read", "Busiest links with utilisation, who is talking on each link, and link capacity.", "flow_analytics"},
 	{"Logs", "#/explore/logs", "logs:read", "Log Search over syslog, traps, app logs and flows.", "telemetry"},
 	{"Devices / inventory", "#/infrastructure/devices", "infrastructure:read", "Inventory with live health; click a device for its status.", "telemetry"},
 }

@@ -1,170 +1,93 @@
 ---
 title: Analyse flows
-description: Analyse traffic from NetFlow, IPFIX and sFlow records - top talkers, conversations, ports, protocols and TCP flags - with one filter bar across every panel.
+description: Explore → Flows shows the busiest links with their utilisation, who is talking on each link, and link capacity, from NetFlow, IPFIX and sFlow records and the interface counters.
 page_type: task
 sidebar_position: 4
 ---
 
 # Analyse flows
 
-**Explore → Flows** reads the unsampled flow store in ClickHouse. It is a set of themed sections under one filter bar that scopes every panel at once, so a filter you set for top talkers also narrows protocols, ports and flags.
+**Explore → Flows** answers three questions about the network: which links
+are busy right now, who is talking on them, and how close each link is to
+full. The unit of the page is a **link**: one interface on one device, named
+the way the device names it. Interface utilisation is the anchor, and the flow
+records explain it.
 
 ## Before you begin
 
 - Devices exporting flow records. Correlix listens on UDP 2055 for NetFlow, UDP 4739 for IPFIX and UDP 6343 for sFlow. See [Send flow data](/send-data/flows).
-- A window chosen in the top-bar range picker. Panels refresh every 30 seconds.
-- An authenticated session. Every flow query is tenant-scoped before it runs.
+- SNMP collection from the same devices, for utilisation and capacity.
+- An account with read access to **Explore**. Every flow query is scoped to your tenant before it runs.
+- A window chosen in the top-bar range picker. Only the tab on screen refreshes, every 30 seconds, and nothing refreshes while the browser tab is hidden.
 
-:::note Sampling
-Devices usually export sampled flows. Byte and packet counts are scaled by each device's sampling rate, so figures are proportionally accurate and approximate in absolute terms for a low-volume conversation. The log-search view of flows reads a separate 1-in-50 sample and says so; this page reads the canonical store.
-:::
+## Right now
 
-## Steps
+The default tab leads with four figures: inbound and outbound traffic now (from
+the interface counters), the busiest link by utilisation, and the volume seen in
+flow records in the window.
 
-### Step 1 - Choose a section
-
-The left-hand list holds twelve sections: **Traffic Volume**, **Device Health**, **Flows**, **Conversations**, **Applications**, **Services**, **Autonomous Systems**, **Geo IP**, **Source Ports**, **Destination Ports**, **Protocols** and **Flags**.
-
-Each Top-N panel has a bar-or-table toggle. The table view adds sortable **Bytes**, **Packets** and **Flows** columns.
-
-### Step 2 - Filter every panel at once
-
-1. Enter any combination of **Source IP**, **Destination IP**, **Device (exporter IP)**, **Ingress if (index)** and **Egress if (index)**.
-2. Select **Filter**. Active filters appear as badges under the bar, and **Clear** removes them all.
-3. Narrow the flow source to **NetFlow**, **IPFIX** or **sFlow**, or leave it on all sources.
-4. Choose a direction:
-   - **Unidirectional** counts each direction separately, as initiator to responder.
-   - **Bidirectional** merges both directions of a conversation into one row, which is what you want for how much two endpoints exchanged in total.
-
-### Step 3 - Confirm the feed is arriving
-
-Open the **Flows** section. **Source presence** shows one badge per flow type currently arriving, in the form `TYPE: N flows · M exporters`. A device you configured that is missing here is not exporting to the platform, so fix the export before reading any other panel.
-
-**Volume over time** charts bytes and packets, so you can see when a surge happened rather than only that it did.
-
-### Step 4 - Follow the traffic
-
-- **Traffic Volume** ranks exporters and the ingress and egress interfaces carrying the load.
-- **Conversations** ranks the heaviest pairs, and the initiator and responder endpoints individually.
-- **Autonomous Systems** groups by BGP AS number, where the exporter fills the AS fields.
-- **Geo IP** breaks traffic down by initiator and responder country and states the public-traffic share. Private address space has no geography, so an internal lab honestly reads zero per cent public rather than inventing countries. Where GeoIP enrichment has not been provisioned, the panel says so instead of showing an empty map.
-- **Applications** ranks the traffic by the application on each end, so a row reads as an initiator application talking to a destination application.
-- **Services** ranks the same window by the services in your service catalog.
-- **Source Ports**, **Destination Ports** and **Protocols** rank the port and protocol mix.
-- **Flags** reads TCP control bits. Where every TCP flow reports empty flags, the panel states that the exporter is not filling `tcpControlBits` and names how to turn it on, rather than rendering the flags as zero.
-
-### Step 5 - Read the traffic as applications and services
-
-The **Applications** and **Services** sections name the traffic instead of
-numbering it. Both read the window only. The filter bar above them does not
-narrow either one, and both sections say so while a filter is active.
-
-**Applications** resolves each end of the heaviest conversations against the
-attribution ladder. Read three columns carefully:
+**Busiest links** lists one row per link:
 
 | Column | What it means |
 |---|---|
-| **Source** | The initiator's application. **Source not resolved** means the flow row carried no source address to resolve, which is different from an address that resolved to nothing. |
-| **Destination application** | The responder's application. **Unknown / uncatalogued or internal** is a real answer, not a gap: the address matched nothing in the ladder, and the platform names no application rather than guessing one. |
-| **Attribution** | The strongest verdict behind the row: **Confirmed**, **Suspected · not confirmed**, or **Under review**. |
+| **Link** | The device's name and the interface's own name, with the link speed under it when the device reports one. |
+| **In**, **Out** | Flow volume that entered and left on that interface in the window. |
+| **Utilisation** | The busier direction now, in percent of the link speed. A dash means the interface reports no speed. |
+| **Change** | Against the previous window of the same length. **New** means nothing was seen before; a dash means it is not known. |
+| **Trend** | In plus out over the window, from the interface counters. |
 
-Under the table the section states its coverage. The platform resolves the
-heaviest source-and-destination pairs in the window rather than every flow, and
-the sentence names how many pairs that is.
+Select a row to open the link: traffic in and out over time, its top talkers,
+the services on it (by port), and the problems in the window that name the
+device. **Who is talking here** opens the next tab already filtered to the link.
 
-**Services** measures the same window against your service catalog. A service
-with no usable selector shows **Not measured** in bytes, share and flows. That is
-the honest reading: the platform never scanned for it, so its traffic is unknown
-rather than zero. Give the service a selector to measure it. See
-[attribute traffic to applications and services](/explore/application-attribution).
+## Who is talking
 
-Each row in both sections offers **Conversations for this window**, which opens
-the **Conversations** section over the same window. The conversation list is
-address-level, so it is not narrowed to the row you came from, and the control
-says so.
+Conversations, applications, services, services and ports, and protocols, under
+one filter bar. Pick a device and an interface by name, then add an address or
+network (`10.1.0.0/16`), a port, a protocol, an application name, the flow
+source, or fold both directions of a conversation into one row. Each filter is a
+chip you remove on its own.
 
-## Investigate a sudden bandwidth spike
+**Applications** and **Services** answer over the window only: the device,
+interface, address, port and protocol filters do not narrow them, and the page
+says so. The **Application** chip narrows those two lists by name.
 
-A spike seen on an interface chart tells you *that* the link got busy. The flow
-view tells you *which traffic* made it busy.
+**Countries** and **Networks** appear only once their datasets are loaded (see
+**About this data**).
 
-1. Set the top-bar range picker to a window that starts a little before the
-   spike and ends after it.
-2. Open **Flows** and read **Volume over time** to confirm the surge is in the
-   flow data and to see exactly when it started.
-3. Open **Traffic Volume** to find the exporter and the ingress or egress
-   interface that carried the extra load.
-4. Put that exporter's address in **Device (exporter IP)**, and the interface
-   index in **Ingress if** or **Egress if**, then select **Filter**. Every panel
-   except **Applications** and **Services** now covers only that link.
-5. Open **Conversations** to see the heaviest pairs on the link, then
-   **Destination Ports** and **Protocols** to name the traffic. **Applications**
-   reads the whole window, not the filtered link, so use it to name the
-   heaviest conversations you already found.
+## Capacity
 
-If the spike is on a link but **Volume over time** shows no matching surge,
-check **Source presence** first: the exporter for that link may not be sending
-flow records at all.
+Per-link utilisation over the window: the average and the peak of the
+five-minute rate, in percent of the link speed, for the busier direction and for
+each direction. Links are sorted by their peak and grouped by site or by device.
+Only links that report a speed are listed. The 95th percentile, the headroom
+left and the days until a link reaches 90 % are not computed yet.
 
-## What you see
+## About this data
 
-Panels populated from the flow store, and a **Source presence** badge for each protocol actually arriving. The live lab has one flow type arriving from two exporters:
+The drawer states which flow sources are arriving, what the sampling sentence
+says, how many records the window holds, whether Correlix's own polling traffic
+is shown, and whether the country and network datasets are loaded, with the
+script that loads each one.
 
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8000/api/flows/by-type
+Counts are scaled by a device's sampling rate when it reports one and shown as
+received when it does not. Nothing else is estimated.
+
+Device health lives in **Analytics → Device Monitoring**, and TCP flags and scan
+signals in **Security → Threat Detection**.
+
+## From an RCA case
+
+The **Traffic flow** lane of an RCA case's evidence timeline has a **See
+flows** link. It opens Flows with the interface the flow evidence names
+already selected and the case window shaded:
+
+```text
+#/explore/flows?device=<exporter address>&if=<interface index>&from=<start>&to=<end>
 ```
-
-```json
-{
-  "meta": [
-    {"name": "flow_type", "type": "LowCardinality(String)"},
-    {"name": "bytes_total", "type": "UInt64"},
-    {"name": "packets_total", "type": "UInt64"},
-    {"name": "flows", "type": "UInt64"},
-    {"name": "exporters", "type": "UInt64"}
-  ],
-  "data": [
-    {"flow_type": "ipfix", "bytes_total": "173192", "packets_total": "1893", "flows": "268", "exporters": "2"}
-  ],
-  "rows": 1
-}
-```
-
-That response renders as one badge reading `IPFIX: 268 flows · 2 exporters`. A protocol absent from the response has no badge, because no record of that type arrived.
-
-Top talkers come from `/api/flows/top`, which returns ClickHouse column metadata alongside the rows so the type of every column is stated:
-
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8000/api/flows/top
-```
-
-```json
-{
-  "meta": [
-    {"name": "src", "type": "String"},
-    {"name": "dst", "type": "String"},
-    {"name": "bytes_total", "type": "UInt64"},
-    {"name": "packets_total", "type": "UInt64"},
-    {"name": "flows", "type": "UInt64"}
-  ],
-  "data": [
-    {"src": "172.16.13.2", "dst": "224.0.0.5", "bytes_total": "38420", "packets_total": "385", "flows": "54"},
-    {"src": "172.16.14.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
-    {"src": "172.16.11.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
-    {"src": "172.16.15.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
-    {"src": "172.16.13.1", "dst": "224.0.0.5", "bytes_total": "24952", "packets_total": "364", "flows": "51"}
-  ],
-  "rows": 5,
-  "rows_before_limit_at_least": 5
-}
-```
-
-The counters arrive as strings because ClickHouse serialises `UInt64` that way. `224.0.0.5` is the OSPF all-routers multicast group, so this lab's heaviest talkers are its routing protocol, which is what an idle fabric looks like.
 
 ## Related
 
 - [Send flow data](/send-data/flows) for configuring the exporters and the listener ports.
-- [Search logs](/explore/logs) for the sampled flow index and its estimate warning.
-- [Trace paths and tunnels](/infrastructure/paths-and-tunnels) for measured paths rather than observed conversations.
+- [Attribute traffic to applications and services](/explore/application-attribution) for how applications and services are named.
+- [Search logs](/explore/logs) for individual flow records.

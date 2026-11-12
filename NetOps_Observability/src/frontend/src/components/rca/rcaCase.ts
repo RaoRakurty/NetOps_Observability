@@ -13,6 +13,7 @@ import {
   buildAffectedAxes, impactSentence, isStandingFindingKind, hasFirstSeen,
   type KnowRow, type BackgroundItem, type OtherExplanation, type AffectedAxis, type ImpactAxesFromReport,
 } from "./rcaDocument";
+import { flowsHref } from "../../lib/flowsLink";
 
 // rcaCase.ts — the data contract for the RCA workspace + the adapter that maps a
 // real correlation object/timeline into it. The workspace component is pure
@@ -37,7 +38,12 @@ export interface WhyLine { tone: "orange" | "green" | "blue"; label: string; tex
 export interface EvidenceCard { variant: "main" | "confirm" | "missing" | "conflict"; dot: Tone; title: string; pill: RcaPill; desc: string; finding: string; foot: string; chips?: string[]; fidelity?: string; }
 export interface LadderStep { state: "done" | "active" | "next"; label: string; caption: string; }
 export interface TimelineMarker { left: number; tone: Tone; label: string; detail: string; }
-export interface TimelineLane { dot: Tone; label: string; markers: TimelineMarker[]; }
+export interface TimelineLane {
+  dot: Tone; label: string; markers: TimelineMarker[];
+  /** Where to read this lane's raw evidence: the traffic lane opens Explore → Flows
+   *  scoped to the exporter interface and the case window (lib/flowsLink). */
+  href?: string;
+}
 export interface HypothesisRow { rank: string; hypo: string; sub: string; conf: RcaPill; reason: string; }
 // One rung of the failure-propagation ladder (owner directive 2026-07-13): the
 // matched signature's declared cascade — how one failure caused the next — with
@@ -561,6 +567,24 @@ const PLANE_TITLE: Record<string, string> = {
   device_telemetry: "Device health", control_plane: "Routing / link", passive_flow: "Traffic flow", active_probe: "Active checks",
 };
 
+// The flow engine grounds a traffic observation on the exporting interface,
+// `<exporter>:if<ifIndex>` (correlation producers.flow_sample). The case's
+// traffic lane links there: Explore → Flows with that link selected and the
+// case window marked. Attached evidence is preferred; with no flow evidence the
+// link still carries the window, so the operator lands on the right time.
+const FLOW_ENTITY = /^(.+):if(\d{1,10})$/;
+export function flowsLaneHref(signals: readonly CorrSignal[], windowStart: number, windowEnd: number): string {
+  const flows = signals.filter((s) => planeKey(s) === "passive_flow" && !s.kind.endsWith("_clear"));
+  const pick = [...flows.filter((s) => s.attached), ...flows].find((s) => FLOW_ENTITY.test(s.entity_id));
+  const m = pick ? FLOW_ENTITY.exec(pick.entity_id) : null;
+  const ok = (t: number) => Number.isFinite(t) && t > 0;
+  return flowsHref({
+    device: m?.[1], ifIndex: m?.[2],
+    from: ok(windowStart) ? windowStart : undefined,
+    to: ok(windowEnd) && ok(windowStart) ? windowEnd : undefined,
+  });
+}
+
 // The evidence CLASS one observation is accounted under. Routing kinds read as
 // routing/link however they were observed; the security modality is normalised
 // (the wire says "security", the engine enum is SECURITY) so a case-shift can
@@ -925,7 +949,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // impact
   const notTied: string[] = [];
   if (!hasDevice) notTied.push("device-health");
-  if ((att.passive_flow ?? 0) === 0) notTied.push("traffic-flow");
+  if ((att.passive_flow ?? 0) === 0) notTied.push("flows-flow");
   if ((att.active_probe ?? 0) === 0) notTied.push("active-check");
   if (!hasRouting || attachedCount <= 1) notTied.push("peer-side");
   // telemetry-qualified impact: "no impact" may only be said relative to the
@@ -1020,6 +1044,8 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // Show ALL standard evidence lanes (in MODALITY_ORDER), even empty ones — an
   // empty lane is informative: it shows the operator exactly which evidence plane
   // has nothing in this window (what's missing to confirm), not just what fired.
+  const flowLane = lanes.get("passive_flow");
+  if (flowLane) flowLane.href = flowsLaneHref(timeline.signals, t0, t0 + span);
   const timelineLanes = [...MODALITY_ORDER, SECURITY_MODALITY].map((p) => lanes.get(p)).filter((l): l is TimelineLane => !!l);
 
   // hypotheses
