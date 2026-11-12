@@ -15,19 +15,24 @@ loudly, the same as the other Vector suites in this directory.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
+from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from vector_harness import run_vector_test
+from vector_harness import Runner, VectorTestRun, run_vector_test
 
 ROOT = Path(__file__).resolve().parent.parent
 AGG_DIR = ROOT / "deployment" / "docker" / "vector"
@@ -147,19 +152,71 @@ _SKIP = ("docker is unavailable, so the pack suites DID NOT RUN against the ship
 #: host; it also ran close to the 900 s budget. Chunks bound both.
 CASES_PER_RUN = 25
 
+#: Chunks run CONCURRENTLY (CI audit 2026-11-12: the two big suites ran their
+#: chunks one after another for 25.9 min of a 35-40 min job). Each process holds
+#: ~110 MB per case, so a 25-case chunk is ~2.75 GB: 3 at once is ~8.3 GB on the
+#: 16 GB GitHub runner, 4 (the cap) ~11 GB. Override with VECTOR_TEST_WORKERS.
+VECTOR_TEST_WORKERS_DEFAULT = 3
+VECTOR_TEST_WORKERS_MAX = 4
+
+
+def vector_test_workers(env: Mapping[str, str] | None = None) -> int:
+    """VECTOR_TEST_WORKERS clamped to [1, VECTOR_TEST_WORKERS_MAX]; default 3.
+
+    A value that is not an integer is an error, not a silent default: a typo in
+    a CI env must not quietly change the memory profile of the run."""
+    env = os.environ if env is None else env
+    raw = env.get("VECTOR_TEST_WORKERS", "").strip()
+    if not raw:
+        return VECTOR_TEST_WORKERS_DEFAULT
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"VECTOR_TEST_WORKERS={raw!r} is not an integer") from exc
+    return max(1, min(VECTOR_TEST_WORKERS_MAX, n))
+
+
+def run_vector_chunks(label: str, argvs: Sequence[Sequence[str]], *,
+                      workers: int, runner: Runner = subprocess.run,
+                      timeout: float = 900) -> int:
+    """Run one `vector test` argv per chunk on a bounded thread pool.
+
+    Every chunk runs exactly once (through run_vector_test, so the bounded
+    upstream-race retry still applies per chunk). Failures are reported in chunk
+    order, each with its own full report, whatever order the threads finished
+    in. Returns the number of passed cases summed across chunks; the caller
+    compares it with the suite size."""
+    def one(n: int) -> VectorTestRun:
+        return run_vector_test(argvs[n], label=f"{label} part {n + 1}",
+                               timeout=timeout, runner=runner)
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {n: pool.submit(one, n) for n in range(len(argvs))}
+        runs = {n: f.result() for n, f in futures.items()}
+    failures = [f"--- {label} part {n + 1} of {len(argvs)} (exit "
+                f"{runs[n].final.returncode}) ---\n{runs[n].report()}"
+                for n in sorted(runs) if runs[n].final.returncode != 0]
+    assert not failures, ("vector test failed in "
+                          f"{len(failures)} of {len(argvs)} chunk(s):\n"
+                          + "\n".join(failures))
+    return sum(runs[n].output.count("... passed") for n in sorted(runs))
+
 
 def _vector_test(label: str, config: Path, suite_dir: Path, suite: str,
                  expected: int) -> None:
     cases = yaml.safe_load((suite_dir / suite).read_text(encoding="utf-8"))["tests"]
     assert len(cases) == expected
-    passed = 0
     with tempfile.TemporaryDirectory(prefix="cx-vector-suite-") as tmp:
+        argvs: list[list[str]] = []
         for n, start in enumerate(range(0, len(cases), CASES_PER_RUN)):
             chunk = Path(tmp) / f"{n:02d}-{suite}"
             chunk.write_text(yaml.safe_dump({"tests": cases[start:start + CASES_PER_RUN]},
                                             sort_keys=False), encoding="utf-8")
             chunk.chmod(0o644)
             cmd = ["docker", "run", "--rm", "--entrypoint", "vector"]
+            cpus = os.environ.get("VECTOR_TEST_DOCKER_CPUS", "").strip()
+            if cpus:  # local runs on a shared host cap each container
+                cmd += [f"--cpus={cpus}"]
             for kv in ENV_STUBS:
                 cmd += ["-e", kv]
             for src, dst in ((config, "/etc/vector/vector.yaml"),
@@ -168,9 +225,8 @@ def _vector_test(label: str, config: Path, suite_dir: Path, suite: str,
                 cmd += ["-v", f"{src}:{dst}:ro"]
             cmd += [VECTOR_IMAGE, "test", "/etc/vector/vector.yaml",
                     f"/etc/vector/tests/{chunk.name}"]
-            run = run_vector_test(cmd, label=f"{label} part {n + 1}", timeout=900)
-            assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
-            passed += run.output.count("... passed")
+            argvs.append(cmd)
+        passed = run_vector_chunks(label, argvs, workers=vector_test_workers())
     assert passed == expected, f"{passed} of {expected} cases passed"
 
 
@@ -366,3 +422,121 @@ def test_the_engine_honours_an_inventory_vendor():
     ])
     assert guessed["num"] == 2
     assert listed["num"] == 5
+
+
+# ── the parallel chunk runner (CI audit 2026-11-12, C1) ─────────────────────
+#
+# No docker: a stubbed runner stands in for `docker run … vector test`, so these
+# prove the scheduling contract on every host, including the CI job that runs
+# the real chunks.
+
+class _StubVector:
+    """A thread-safe fake `subprocess.run` keyed by the chunk argv's last word."""
+
+    def __init__(self, passed: dict[str, int], fail: frozenset[str] = frozenset(),
+                 delay: float = 0.0):
+        self.passed, self.fail, self.delay = passed, fail, delay
+        self.calls: list[str] = []
+        self.active = self.peak = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, argv, **_kw):
+        chunk = argv[-1]
+        with self._lock:
+            self.calls.append(chunk)
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(self.delay)
+            out = "".join(f"test {chunk}#{i} ... passed\n"
+                          for i in range(self.passed[chunk]))
+            if chunk in self.fail:
+                out += (f"test {chunk}#bad ... failed\n\nfailures:\n\ntest {chunk}#bad:\n"
+                        "  condition failed: .facility == \"x\"\n")
+                return subprocess.CompletedProcess(argv, 1, out, "")
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+def _argvs(n: int) -> list[list[str]]:
+    return [["docker", "run", "vector", "test", f"chunk{i:02d}"] for i in range(n)]
+
+
+@pytest.mark.parametrize("workers", [1, 3, 4])
+def test_every_chunk_runs_exactly_once_and_passed_sums(workers):
+    stub = _StubVector({f"chunk{i:02d}": 25 - i for i in range(7)}, delay=0.01)
+    passed = run_vector_chunks("unit", _argvs(7), workers=workers, runner=stub)
+    assert sorted(stub.calls) == [f"chunk{i:02d}" for i in range(7)]
+    assert passed == sum(25 - i for i in range(7))
+    assert stub.peak <= workers
+
+
+def test_chunks_really_overlap_when_workers_allow():
+    stub = _StubVector({f"chunk{i:02d}": 1 for i in range(6)}, delay=0.2)
+    run_vector_chunks("unit", _argvs(6), workers=3, runner=stub)
+    assert stub.peak == 3
+
+
+def test_a_failing_chunk_fails_with_its_report_in_chunk_order():
+    stub = _StubVector({f"chunk{i:02d}": 2 for i in range(5)},
+                       fail=frozenset({"chunk03", "chunk01"}))
+    with pytest.raises(AssertionError) as exc:
+        run_vector_chunks("unit", _argvs(5), workers=4, runner=stub)
+    msg = str(exc.value)
+    assert "2 of 5 chunk(s)" in msg
+    # each failure carries ITS chunk's report, in chunk order, whatever order
+    # the threads finished in
+    assert msg.index("part 2 of 5") < msg.index("chunk01#bad") < msg.index("part 4 of 5")
+    assert msg.index("part 4 of 5") < msg.index("chunk03#bad")
+    assert "part 1 of 5" not in msg and "part 3 of 5" not in msg
+    assert sorted(stub.calls) == [f"chunk{i:02d}" for i in range(5)]  # none abandoned
+
+
+def test_a_short_chunk_is_left_to_the_total():
+    """Every chunk exits 0 but one ran fewer cases: the sum is honest, so the
+    caller's `passed == expected` catches it."""
+    stub = _StubVector({"chunk00": 25, "chunk01": 24})
+    assert run_vector_chunks("unit", _argvs(2), workers=2, runner=stub) == 49
+
+
+@pytest.mark.parametrize("env, want", [
+    ({}, 3),
+    ({"VECTOR_TEST_WORKERS": ""}, 3),
+    ({"VECTOR_TEST_WORKERS": "1"}, 1),
+    ({"VECTOR_TEST_WORKERS": "2"}, 2),
+    ({"VECTOR_TEST_WORKERS": " 4 "}, 4),
+    ({"VECTOR_TEST_WORKERS": "16"}, 4),
+    ({"VECTOR_TEST_WORKERS": "0"}, 1),
+    ({"VECTOR_TEST_WORKERS": "-3"}, 1),
+])
+def test_worker_count_from_env(env, want):
+    assert vector_test_workers(env) == want
+
+
+def test_worker_default_and_cap_are_what_the_memory_budget_says():
+    assert VECTOR_TEST_WORKERS_DEFAULT == 3
+    assert VECTOR_TEST_WORKERS_MAX == 4
+
+
+def test_a_garbage_worker_count_is_an_error_not_a_default():
+    with pytest.raises(ValueError, match="VECTOR_TEST_WORKERS"):
+        vector_test_workers({"VECTOR_TEST_WORKERS": "three"})
+
+
+def test_the_suite_runner_honours_the_env(monkeypatch):
+    """_vector_test reads the worker count from the environment at call time and
+    still holds the chunk total to the suite size."""
+    seen: dict[str, int] = {}
+
+    def fake(label, argvs, *, workers, **_kw):
+        seen["workers"], seen["chunks"] = workers, len(argvs)
+        return 0
+
+    monkeypatch.setenv("VECTOR_TEST_WORKERS", "2")
+    monkeypatch.setattr(sys.modules[__name__], "run_vector_chunks", fake)
+    with pytest.raises(AssertionError, match="0 of 7 cases passed"):
+        _vector_test("unit", AGG_DIR / "vector.yaml", AGG_DIR / "tests",
+                     "syslog-legacy-grammars.yaml", 7)
+    assert seen == {"workers": 2, "chunks": 1}

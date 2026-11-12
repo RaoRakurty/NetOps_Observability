@@ -150,6 +150,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
+          # npm's download cache (~/.npm), keyed on BOTH lockfiles the step
+          # below installs from; `npm ci` still installs exactly the lockfile.
+          cache: npm
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
       - name: build web assets the images bake in
         run: |
           set -euo pipefail
@@ -289,6 +295,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
+          # npm's download cache (~/.npm), keyed on BOTH lockfiles the step
+          # below installs from; `npm ci` still installs exactly the lockfile.
+          cache: npm
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
       - name: build web assets the images bake in
         run: |
           set -euo pipefail
@@ -454,6 +466,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
+          # npm's download cache (~/.npm), keyed on BOTH lockfiles the step
+          # below installs from; `npm ci` still installs exactly the lockfile.
+          cache: npm
+          cache-dependency-path: |
+            NetOps_Observability/src/frontend/package-lock.json
+            NetOps_Observability/docs-portal/package-lock.json
       - name: build web assets the images bake in
         run: |
           set -euo pipefail
@@ -577,6 +595,11 @@ jobs:
 
       - name: keep the install logs and evidence
         if: ${{ !cancelled() }}
+        # Diagnostics only — the verdict is the steps above. A GitHub artifact
+        # outage (2026-11-12) failed this upload and turned a GREEN leg red, so
+        # a failed upload is reported as a step warning and never decides the
+        # job (tests/test_backend_ci_speedups.py).
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tls-install-selfheal-logs
