@@ -33,8 +33,6 @@ type laneHit struct {
 	resolve                          bool
 }
 
-func (r *laneRecorder) build(l TenantLane) Channel { return &fakeLane{r: r, l: l} }
-
 func (r *laneRecorder) hits() []laneHit {
 	r.mu.Lock()
 	defer r.mu.Unlock()
