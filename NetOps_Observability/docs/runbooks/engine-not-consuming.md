@@ -6,7 +6,7 @@ list, which reads as "a quiet network".
 
 **Alerts that route here:** `CorrelationConsumerDead`, `CorrelationLagGrowing`,
 `CorrConsumerNotRunning`, `CorrConsumerRestartLoop`, `RouterConsumerDead`,
-`RouterConsumerLagGrowing`, `IngestPipelineSilent`, `NMSIngestSilent`,
+`RouterConsumerLagGrowing`, `RouterConsumerWedged`, `IngestPipelineSilent`, `NMSIngestSilent`,
 `NMSIntegrationDown`, `ClickHouseWritesRejected`, `AlertDeliveryBroken`,
 `PlatformAlertsReachNobody`, `CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
 
@@ -273,6 +273,72 @@ Membership is not liveness. Work down in this order:
 **Do not** raise session/heartbeat/max-poll timeouts. That converts a visible
 backlog into a silent one.
 
+#### 3.4.1 vector-router: joined, records arriving, nothing committed (tracker 353)
+
+`RouterConsumerWedged` (page) · watchdog `ENGINE_NOT_CONSUMING: router lane(s)
+JOINED but NOT CONSUMING` · `deploy-qualify.sh` **Q2c** `STALLED` / `FROZEN`.
+
+**The shape.** A `netops-router-*` group still has its member, the partition is
+receiving records, and its committed offset does not move. Seen 2026-10-17
+(`netops-router-applogs`, lag 22,643, Q2 "router consumers joined" PASSED) and
+2026-10-30 (applogs, flows, snmptrap, ~30 h). Both followed an OpenSearch
+flood-stage event.
+
+**The mechanism, reproduced 2026-11-12** against the shipped image
+(`timberio/vector:0.40.0-alpine`, the router's kafka source and
+elasticsearch sink settings verbatim, a throwaway broker, a stub `_bulk`
+answering `503 OpenSearch Security not initialized.`):
+while the sink is retrying, the router process stalls long enough for the broker
+to expire its session; librdkafka logs `SESSTMOUT … revoking assignment and
+rejoining group`, the revoke-time commit fails with
+`Unable to update consumer offset … AssignmentLost (Local: Group partition
+assignment lost)` — **that is the `kafka_offset_update` error in the
+incident**, a symptom of the lost assignment, not its cause — and the member
+rejoins. Vector's kafka source runs one task per partition; across that
+revoke→assign it can come back owning a partition with no task reading it.
+Upstream: [vectordotdev/vector#22006](https://github.com/vectordotdev/vector/issues/22006)
+("On kafka consumer rebalance, Vector consumer stops consuming", 0.40.0, open;
+users report it on 0.47, 0.49, 0.54 and 0.55, and the rdkafka bump in 0.44 did
+not fix it). **Upgrading Vector (tracker 350) is not the fix for this.**
+Vector's own lag gauge is also unreliable after the glitch
+([#21134](https://github.com/vectordotdev/vector/issues/21134)), which is why
+every check here reads the broker's offsets through kafka-exporter instead.
+
+The wedge itself is intermittent: in 12 session expiries and 4 member-join
+rebalances during 503 storms every partition resumed once the stub recovered,
+which matches upstream's "randomly". That is why detection (below) does not
+depend on reproducing it.
+
+**The 503 class is not where data was lost.** In the same reproduction the
+sink retried ~20 minutes of 503s (≈1.86 M document attempts) and discarded
+nothing, while 20 seconds of `401` discarded 3,097 — Vector 0.40 classes
+any 5xx and 429 as retriable (`src/sinks/elasticsearch/retry.rs`), bounded by
+the router's pinned 43-minute envelope (`retry_attempts: 90`). What the sink
+DOES discard (`vector_component_discarded_events_total{intentional="false"}`,
+`VectorEventsDiscarded`) is a **non-retriable** answer — a 4xx other than 429
+(401/403 while the security plugin is still loading its users and roles, 400
+mapping rejections) or a batch that outlived the envelope. Vector 0.40 has no
+option to retry a 4xx; the lane's own audit
+(`bash scripts/bootstrap-opensearch.sh --verify`) and the role/ISM bootstraps
+are the remedy for that class.
+
+**First response.**
+
+1. Rule out storage back-pressure first: `OpenSearchFloodStageBlock`,
+   `OpenSearchClusterRed`, `VectorSinkBufferFilling`, `ClickHouseWritesRejected`.
+   A blocked store freezes commits on purpose (#209: Kafka is the buffer) and
+   restarting the router will not help.
+2. With storage healthy, the router heals itself: `cx-lane-watch.sh` restarts
+   vector-router within ~5 minutes of a wedge (container exit 75 + a
+   `cx-lane-watch:` log line + a restart-count bump the watchdog reports). The
+   page fires after ~20 minutes, so a page means the self-heal did **not**
+   clear it — check `docker logs vector-router | grep cx-lane-watch`.
+3. Restart vector-router. Acknowledgements are end-to-end (F-04), so the lane
+   resumes from its last committed offset and nothing durably unwritten is
+   skipped.
+4. Re-run `scripts/deploy-qualify.sh --no-bootstrap`; Q2c must report every
+   partition consuming or idle.
+
 ### 3.5 Alert delivery itself
 
 ```bash
@@ -350,7 +416,10 @@ dead api.
 ## 4. Prevention
 
 * **`scripts/deploy-qualify.sh`** — run it after every `compose up`. It runs the
-  bootstraps above and then *proves* the consumers joined, lag is draining, the
+  bootstraps above and then *proves* the consumers joined, every router lane
+  and the correlation group is actually **consuming** (Q2c: per partition, the
+  committed offset advanced or there was nothing new to read — membership alone
+  passed during the 2026-10-17 wedge), lag is draining, the
   aggregator and router are emitting, and no `TopicAuthorizationFailedError` /
   `UnknownTopicOrPartitionError` appears in the engine or router logs.
   `docker compose up` exiting 0 is not evidence of anything.
