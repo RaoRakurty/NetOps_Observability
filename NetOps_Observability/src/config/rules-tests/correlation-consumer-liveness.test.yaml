@@ -623,6 +623,178 @@ tests:
         exp_alerts: []
 
   # ==========================================================================
+  # 10b) RouterConsumerWedged (tracker 353) — the 2026-10-17 / 2026-10-30
+  #      shape on a LOW-volume lane: joined, records arriving at 20/min
+  #      (200 per 10m — far under RouterConsumerLagGrowing's 1000), committed
+  #      offset frozen. Before this rule nothing with `tier: page` fired.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1050+20x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "50+20x40"
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",instance="kafka-exporter:9308",job="kafka"}'
+        values: "50+20x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-snmptrap",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-snmptrap
+              topic: netops.snmptrap
+              partition: "0"
+            exp_annotations:
+              summary: "Router lane netops-router-snmptrap partition netops.snmptrap/0 is JOINED but NOT CONSUMING — records keep arriving, nothing has been committed for 15 minutes, 550 unread"
+              description: "The group has a live member and the partition is receiving records, but its committed offset has not moved in 15 minutes: nothing on this partition is reaching OpenSearch or ClickHouse. FIRST rule out storage back-pressure (OpenSearchFloodStageBlock, OpenSearchClusterRed, VectorSinkBufferFilling, ClickHouseWritesRejected) — a blocked store freezes commits on purpose and the bus retains the data. With storage healthy this is the Vector kafka-source rebalance wedge (upstream vectordotdev/vector#22006): the router's cx-lane-watch self-heal should already have restarted vector-router; check its log for \"cx-lane-watch\" and the container restart count. If it did not, restart vector-router — acknowledged offsets are committed on the way down and the lane resumes from its last committed offset."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+      # The lag-growth rule cannot see a 200/10m lane — that is the gap.
+      - eval_time: 25m
+        alertname: RouterConsumerLagGrowing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: RouterConsumerDead
+        exp_alerts: []
+
+  # 10c) A SLOW but moving consumer must stay silent: its committed offset
+  #      advances, however far behind it is.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000+5x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1050+20x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "50+15x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-snmptrap",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts: []
+
+  # 10d) A QUIET lane holding a backlog (no new records) is not this rule:
+  #      nothing is arriving to be wedged on. KafkaConsumerStalled and the
+  #      deploy gate's Q2c FROZEN verdict own a frozen backlog.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-security",topic="netops.security",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.security",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1500x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-security",topic="netops.security",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-security",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts: []
+
+  # 10e) The same wedge with ZERO members is RouterConsumerDead's page, not a
+  #      second one.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1050+20x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-snmptrap",topic="netops.snmptrap",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "50+20x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-snmptrap",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: RouterConsumerDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-snmptrap
+            exp_annotations:
+              summary: "Router lane netops-router-snmptrap has ZERO consumers — vector-router is not draining it; logs/flows/traps on that lane are accumulating on the bus and reaching no store"
+              description: "The group exists (it has committed offsets) and nobody is in it. Nothing on this lane is reaching OpenSearch or ClickHouse, so the UI's log, flow and trap views are silently incomplete for as long as it lasts — the bus retains the data (bounded, see BUS_RETENTION_MS) but a lane that stays dead past retention loses it for good. Check broker authorization FIRST: an empty KRaft ACL store denies every non-super-user principal while every healthcheck stays green. The runbook has the apply-acls.sh and kafka-init bootstrap."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 10f) A BUSY wedged lane (lag +5000 per 10m) pages ONCE, under
+  #      RouterConsumerLagGrowing — one fault, one page.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-applogs",topic="netops.applogs",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.applogs",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000+500x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-applogs",topic="netops.applogs",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-router-applogs",topic="netops.applogs",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-applogs",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: RouterConsumerLagGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-applogs
+            exp_annotations:
+              summary: "Router lane netops-router-applogs lag is GROWING (+5000 in 10m) with a consumer still joined — vector-router is joined but not draining this lane"
+              description: "Joined, heartbeating, and falling behind — the mirror of RouterConsumerDead, and mutually exclusive with it by construction. The router's downstream is the usual cause: OpenSearch rejecting or back-pressuring (see OpenSearchDocumentsRejected, VectorSinkBufferFilling, OpenSearchClusterRed) or the ClickHouse flows sink. Check the router's own component errors (VectorComponentErrors) before touching the broker."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 10g) ONE wedged partition beside a moving sibling is named on its own —
+  #      the per-group sum would hide it (p0 drains, so the lane looks alive).
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-syslog",topic="netops.syslog",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1000+30x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.syslog",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1010+30x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-syslog",topic="netops.syslog",partition="0",instance="kafka-exporter:9308",job="kafka"}'
+        values: "10x40"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="netops-router-syslog",topic="netops.syslog",partition="1",instance="kafka-exporter:9308",job="kafka"}'
+        values: "2000x40"
+      - series: 'kafka_topic_partition_current_offset{topic="netops.syslog",partition="1",instance="kafka-exporter:9308",job="kafka"}'
+        values: "2000+10x40"
+      - series: 'kafka_consumergroup_lag{consumergroup="netops-router-syslog",topic="netops.syslog",partition="1",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+10x40"
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-router-syslog",topic="netops.syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "10+10x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerWedged
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-syslog
+              topic: netops.syslog
+              partition: "1"
+            exp_annotations:
+              summary: "Router lane netops-router-syslog partition netops.syslog/1 is JOINED but NOT CONSUMING — records keep arriving, nothing has been committed for 15 minutes, 250 unread"
+              description: "The group has a live member and the partition is receiving records, but its committed offset has not moved in 15 minutes: nothing on this partition is reaching OpenSearch or ClickHouse. FIRST rule out storage back-pressure (OpenSearchFloodStageBlock, OpenSearchClusterRed, VectorSinkBufferFilling, ClickHouseWritesRejected) — a blocked store freezes commits on purpose and the bus retains the data. With storage healthy this is the Vector kafka-source rebalance wedge (upstream vectordotdev/vector#22006): the router's cx-lane-watch self-heal should already have restarted vector-router; check its log for \"cx-lane-watch\" and the container restart count. If it did not, restart vector-router — acknowledged offsets are committed on the way down and the lane resumes from its last committed offset."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # ==========================================================================
   # 11) ClickHouseWritesRejected — a REJECTED batch is terminal, not a retry.
   # ==========================================================================
   - interval: 1m

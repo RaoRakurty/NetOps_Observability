@@ -4321,20 +4321,22 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
   );
 }
 
-function PagerDutyPagingConnection() {
+export function PagerDutyPagingConnection() {
   const [cfg, setCfg] = useState<ItsmConfig | null>(null);
   const [enabled, setEnabled] = useState(false);
+  // Off until the tenant turns it on: a page wakes someone (tracker 359).
+  const [watch, setWatch] = useState(false);
   const [key, setKey] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.pagerduty?.enabled); }).catch((e: unknown) => setErr(operatorError(e, "The PagerDuty connection could not be read.")));
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.pagerduty?.enabled); setWatch(!!c.pagerduty?.watch_alerts); }).catch((e: unknown) => setErr(operatorError(e, "The PagerDuty connection could not be read.")));
   }, []);
   const save = async () => {
     setErr(""); setMsg("");
     try {
-      const out = await api.saveItsmPagerDutyRCA({ enabled, ...(key.trim() ? { routing_key: key.trim() } : {}) });
-      setCfg(out); setKey(""); setMsg("Saved.");
+      const out = await api.saveItsmPagerDutyRCA({ enabled, watch_alerts: watch, ...(key.trim() ? { routing_key: key.trim() } : {}) });
+      setCfg(out); setKey(""); setWatch(!!out.pagerduty?.watch_alerts); setMsg("Saved.");
     } catch (e) { setErr(operatorError(e, "That connection was not saved.")); }
   };
   const hasKey = !!cfg?.pagerduty?.has_routing_key;
@@ -4354,25 +4356,34 @@ function PagerDutyPagingConnection() {
         {hasKey && <span className="adm-line">key stored (write-only)</span>}
         {msg && <span className="adm-line">{msg}</span>}
       </div>
+      <label style={{ display: "flex", gap: "var(--sp-2)", alignItems: "flex-start", marginTop: "var(--sp-2)", fontSize: "var(--fs-base)" }}>
+        <input type="checkbox" checked={watch} onChange={(e) => setWatch(e.target.checked)} />
+        <span>
+          Also page for my own watches: BGP prefix alerts on my watchlist and my cloud monitors.
+          One page when the alert starts, closed when it clears. Off unless you turn it on.
+        </span>
+      </label>
       <ErrLine msg={err} />
     </div>
   );
 }
 
-function SlackChannelConnection() {
+export function SlackChannelConnection() {
   const [cfg, setCfg] = useState<ItsmConfig | null>(null);
   const [enabled, setEnabled] = useState(false);
+  // On unless the tenant turns it off: a channel message wakes nobody (tracker 359).
+  const [watch, setWatch] = useState(true);
   const [url, setUrl] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.slack?.enabled); }).catch((e: unknown) => setErr(operatorError(e, "The Slack connection could not be read.")));
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.slack?.enabled); setWatch(c.slack?.watch_alerts ?? true); }).catch((e: unknown) => setErr(operatorError(e, "The Slack connection could not be read.")));
   }, []);
   const save = async () => {
     setErr(""); setMsg("");
     try {
-      const out = await api.saveItsmSlackRCA({ enabled, ...(url.trim() ? { webhook_url: url.trim() } : {}) });
-      setCfg(out); setUrl(""); setMsg("Saved.");
+      const out = await api.saveItsmSlackRCA({ enabled, watch_alerts: watch, ...(url.trim() ? { webhook_url: url.trim() } : {}) });
+      setCfg(out); setUrl(""); setWatch(out.slack?.watch_alerts ?? true); setMsg("Saved.");
     } catch (e) { setErr(operatorError(e, "That connection was not saved.")); }
   };
   const hasHook = !!cfg?.slack?.has_webhook;
@@ -4392,6 +4403,13 @@ function SlackChannelConnection() {
         {hasHook && <span className="adm-line">webhook stored (write-only)</span>}
         {msg && <span className="adm-line">{msg}</span>}
       </div>
+      <label style={{ display: "flex", gap: "var(--sp-2)", alignItems: "flex-start", marginTop: "var(--sp-2)", fontSize: "var(--fs-base)" }}>
+        <input type="checkbox" checked={watch} onChange={(e) => setWatch(e.target.checked)} />
+        <span>
+          Also post my own watches here: BGP prefix alerts on my watchlist and my cloud monitors.
+          One message when the alert starts and one when it clears. On unless you turn it off.
+        </span>
+      </label>
       <ErrLine msg={err} />
     </div>
   );

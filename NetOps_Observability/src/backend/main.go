@@ -212,6 +212,11 @@ type server struct {
 	processors    processors.Store  // per-tenant pipeline processor rules (item 121): compiled into the router config
 	userRules     *userRulesStore
 	notifier      *notify.Dispatcher
+	// tenantWatch delivers a tenant's OWN watch alerts (BGP-watch prefix
+	// classes, cloud monitors) to that tenant's own RCA lanes, once per
+	// episode, through notifier's delivery pool (tracker 359,
+	// cloud_notify.go). nil-safe.
+	tenantWatch *notify.TenantWatchRouter
 	// pushBudgets is the process-wide, per-PUSH-SERVER outbound token-bucket
 	// registry (notify/pushbudget.go). Both ntfy senders — the product
 	// notification channel and the platform host-monitoring route — draw from
@@ -1470,6 +1475,9 @@ func newServer() *server {
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
 	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
+	// Tenant watch-alert delivery (tracker 359) reads each tenant's RCA lanes
+	// from the store just built and sends through the notifier's pool.
+	srv.tenantWatch = newTenantWatchRouter(srv)
 	// RCA auto-ticketing store (#78): RLS-scoped pg repo, else in-memory. Always
 	// non-nil; the outbox worker + policy sweeper start in main() only under
 	// FEATURE_RCA_TICKETING (ticketing is opt-in and never blocks correlation).
@@ -5199,6 +5207,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.notifier != nil {
 		s.notifier.WriteMetrics(w)
 	}
+	// Tracker 359: routing outcomes of tenant watch alerts (nil-safe).
+	s.tenantWatch.WriteMetrics(w)
 }
 
 // ---- helpers ----------------------------------------------------------------

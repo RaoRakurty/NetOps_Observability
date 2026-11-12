@@ -221,6 +221,19 @@ export interface CaseEventExtras {
   // The server report's title (RCA document v2 §3.1 title rule lives there):
   // when present it IS the case title, so the page and the PDF never disagree.
   reportTitle?: string;
+  // Inventory id → display name, from the caller's own tenant-scoped inventory
+  // (lib/deviceNames). DISPLAY ONLY: the engine's identity is never rewritten,
+  // and the raw id stays in the evidence/debug views.
+  deviceNames?: ReadonlyMap<string, string>;
+}
+
+// deviceLabel — the operator name of a device token. An id the inventory names
+// (a controller-namespace id like "ctl-vmanage-bfa81d722501", or a scan id)
+// renders as that name ("cEDGE-81", P-424934); anything else keeps the
+// entityLabel rules.
+export function deviceLabel(raw: string, names?: ReadonlyMap<string, string>): string {
+  const name = names?.get(raw.trim());
+  return name ? name : entityLabel(raw);
 }
 
 // buildCaseEvents — pure derivation of the chronological event list from data
@@ -259,7 +272,7 @@ export function buildCaseEvents(timeline: CorrTimeline, obj: CorrObject, extras?
     .slice(0, 10);
   const seenSources = new Set<string>();
   firsts.forEach((s, i) => {
-    const entity = entityLabel(s.entity_id.split(":")[0]);
+    const entity = deviceLabel(s.entity_id.split(":")[0], extras?.deviceNames);
     const source = modalityLabel(isRoutingKind(s.kind) ? "control_plane" : s.modality_class);
     const newSource = !seenSources.has(source);
     seenSources.add(source);
@@ -294,7 +307,7 @@ export function buildCaseEvents(timeline: CorrTimeline, obj: CorrObject, extras?
   // recorded recovery times off the report.
   for (const [k, s] of clearByKind) {
     if (!firstByKind.has(k)) continue;
-    push(s.ts, `${kindLabel(k)} cleared on ${entityLabel(s.entity_id.split(":")[0])}`, "green");
+    push(s.ts, `${kindLabel(k)} cleared on ${deviceLabel(s.entity_id.split(":")[0], extras?.deviceNames)}`, "green");
   }
   const times = extras?.times ?? {};
   if (times.component_recovered_at && times.component_recovered_at !== times.recovered_at) {
@@ -681,7 +694,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     if (mentionsInternal(device)) { device = ""; peer = ""; }
     break;
   }
-  device = device ? entityLabel(device) : "";
+  device = device ? deviceLabel(device, extras?.deviceNames) : "";
 
   // Cloud-dominant objects must NOT be titled by the network plane they happen to
   // ride (cloud_health / database_metric map onto device_telemetry). Detect the
@@ -898,7 +911,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         for (const d of aff.devices) {
           const raw = String(d ?? "").trim();
           if (!raw || mentionsInternal(raw)) continue;
-          set.add(entityLabel(raw));
+          set.add(deviceLabel(raw, extras?.deviceNames));
         }
       }
     } catch { /* affected not JSON → routing-context fallback below */ }
@@ -1002,7 +1015,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     const lane = lanes.get(p);
     if (!lane) continue;
     const left = Math.max(3, Math.min(97, ((Date.parse(s.ts.replace(" ", "T") + "Z") - t0) / span) * 94 + 3));
-    lane.markers.push({ left, tone: s.attached ? (p === "control_plane" ? "orange" : "blue") : "gray", label: kindLabel(s.kind.replace(/_clear$/, "")), detail: `${kindLabel(s.kind)} on ${entityLabel(s.entity_id.split(":")[0])}. ${s.attached ? "Counted as evidence for this issue." : "Seen in the window but not linked."}` });
+    lane.markers.push({ left, tone: s.attached ? (p === "control_plane" ? "orange" : "blue") : "gray", label: kindLabel(s.kind.replace(/_clear$/, "")), detail: `${kindLabel(s.kind)} on ${deviceLabel(s.entity_id.split(":")[0], extras?.deviceNames)}. ${s.attached ? "Counted as evidence for this issue." : "Seen in the window but not linked."}` });
   }
   // Show ALL standard evidence lanes (in MODALITY_ORDER), even empty ones — an
   // empty lane is informative: it shows the operator exactly which evidence plane

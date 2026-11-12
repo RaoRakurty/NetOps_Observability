@@ -1,0 +1,36 @@
+{
+  "name": "Owner D1/D2 (2026-11-11): a security exposure (secbus envelope) and a BGP adjacency drop (device syslog) on one device. The BGP cause leads; the exposure story is background (context_story=true in the blob); nothing confirms on the security finding.",
+  "tenant": "acme",
+  "events": [
+    {
+      "lane": "evidence",
+      "event": {
+        "schema_version": "1",
+        "tenant_id": "acme",
+        "ts": "2026-07-09T09:00:00Z",
+        "kind": "security_exposure",
+        "entity_id": "leaf1",
+        "entity_type": "device",
+        "entity_tokens": ["leaf1", "device:leaf1"],
+        "severity": "high",
+        "native_id": "security|security_exposure|exposure|telnet-untrusted-seam|leaf1|scan-1|f-1",
+        "attrs": {
+          "evidence_class": "exposure",
+          "provider_source": "correlix-netrule",
+          "control_id": "telnet-untrusted-seam",
+          "status": "Fail"
+        }
+      }
+    },
+    {
+      "lane": "syslog",
+      "event": {
+        "hostname": "leaf1",
+        "appname": "BGP-5-ADJCHANGE",
+        "message": "neighbor 10.0.0.2 Down BGP Notification sent",
+        "severity": "err",
+        "timestamp": "2026-07-09T09:00:30Z"
+      }
+    }
+  ]
+}

@@ -16,6 +16,7 @@ import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
 import { isContextStory } from "../components/rca/rcaPhrases";
+import { useDeviceNames } from "../lib/deviceNames";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { readTopologyContext, type TopologyContext } from "../components/rca/topologyContext";
 import { exportRcaPdf } from "../components/rca/rcaExport";
@@ -690,6 +691,8 @@ export function CorrelationDetail({ id }: { id: string }) {
   // Event-timeline extras: recorded report times/promotion + the latest
   // verification run — real recorded milestones only (never fabricated).
   const [caseExtras, setCaseExtras] = useState<CaseEventExtras>({});
+  // Inventory names for controller-namespace ids (display only, P-424934).
+  const deviceNames = useDeviceNames();
   // Seam-ownership registry (#113): owner class → the tenant's actual party.
   const [seamOwners, setSeamOwners] = useState<Record<string, SeamOwnerEntry>>({});
 
@@ -773,11 +776,11 @@ export function CorrelationDetail({ id }: { id: string }) {
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
     const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners,
-      { ...caseExtras, ...(topoCtx ? { topologyContext: topoCtx } : {}) });
+      { ...caseExtras, ...(deviceNames ? { deviceNames } : {}), ...(topoCtx ? { topologyContext: topoCtx } : {}) });
     const graph = buildTopoGraph(timeline);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners, caseExtras, topoCtx]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners, caseExtras, deviceNames, topoCtx]);
 
   if (err) return <div className="empty" role="alert">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty" role="status">Loading…</div>;

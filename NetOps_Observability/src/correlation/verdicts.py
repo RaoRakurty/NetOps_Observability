@@ -19,7 +19,10 @@ of signals that are simultaneously:
   (a) of different modality classes (active_probe / passive_flow /
       control_plane / device_telemetry), AND
   (b) mutually independent observations (different observer, no shared
-      measurement authority).
+      measurement authority), AND
+  (c) both on a MEASUREMENT plane (owner D1, 2026-11-11): a security finding or
+      a controller relay supports a verdict but never anchors the pair; the
+      one exception is a dated security detection (`plane_may_anchor`).
 
 Independence model: transport vs measurement authority
 -------------------------------------------------------
@@ -109,6 +112,44 @@ def conservative_collection_path(paths: frozenset[str] | set[str] | tuple[str, .
 MIN_MODALITIES = 2
 MIN_OBSERVERS = 2
 
+# ── Owner D1 (2026-11-11): support planes ────────────────────────────────────
+# Two planes report ABOUT the network rather than measuring it: the SECURITY
+# lane (a rule or feed's opinion of a device) and the MANAGEMENT_PLANE (a
+# controller relaying what a device told it). Their witnesses still count toward
+# modality and observer coverage, and still satisfy a template's
+# required_modalities, but they never ANCHOR the confirming pair: confirmation
+# needs two MEASUREMENT-plane witnesses (device_telemetry, control_plane,
+# passive_flow, active_probe at trusted authority, active_verification via
+# ssh/snmp). On the lab, all 193 confirmed objects in a week were
+# `security:correlix-netrule ⟂ <device/controller>` pairs.
+#
+# NMS-first T2 (many edges' own observations relayed by one controller) is the
+# designed path for controller evidence to confirm; it is not built here.
+SUPPORT_PLANE_MODALITIES: frozenset[ModalityClass] = frozenset({
+    ModalityClass.SECURITY, ModalityClass.MANAGEMENT_PLANE,
+})
+# The D1 exception: a DATED security event with a mechanism may anchor. Keyed on
+# the evidence class the security lane stamps (secbus kindForClass is 1:1:
+# posture → security_posture, exposure → security_exposure, signal →
+# security_signal), and fail-closed on BOTH halves: the kind must be the dated
+# detection AND its subclass (`attrs.evidence_subclass`, the wire's
+# evidence_class) must say so. A posture or exposure finding, a missing or
+# unknown subclass, or any future security kind does not anchor.
+ANCHORING_SECURITY_EVIDENCE: frozenset[tuple[str, str]] = frozenset({
+    ("security_signal", "signal"),
+})
+
+
+def plane_may_anchor(sig: Signal) -> bool:
+    """D1: may this signal's PLANE anchor a confirming pair? True for every
+    measurement plane; for the support planes only the dated security event."""
+    if sig.modality_class not in SUPPORT_PLANE_MODALITIES:
+        return True
+    if sig.modality_class is not ModalityClass.SECURITY:
+        return False
+    sub = str(sig.attrs.get("evidence_subclass", "") or "") if isinstance(sig.attrs, dict) else ""
+    return (sig.kind, sub.strip().lower()) in ANCHORING_SECURITY_EVIDENCE
+
 
 @dataclass(frozen=True)
 class Witness:
@@ -133,6 +174,16 @@ class Witness:
     # source fed the episode — so with the flag off every Witness compares and
     # hashes exactly as before.
     series_authorities: frozenset[str] = frozenset()
+    # Owner D1: a support-plane witness (SECURITY other than a dated detection,
+    # MANAGEMENT_PLANE). Unlike `support_only` it is still TRUSTED — it satisfies
+    # required_modalities and counts toward coverage — it only cannot anchor.
+    support_plane: bool = False
+
+    @property
+    def may_anchor(self) -> bool:
+        """May this witness be one end of the confirming pair? Trusted AND on a
+        measurement plane (owner D1)."""
+        return self.trusted and not self.support_plane
 
     def authority_buckets(self) -> frozenset[str]:
         """Every measurement-authority bucket this witness belongs to."""
@@ -245,6 +296,7 @@ def witness_of(sig: Signal) -> Witness:
         support_only=support_only,
         origin=origin_device_of(sig) if origin_observer_enabled() else "",
         series_authorities=_series_authorities(sig, authority) if series_admission_enabled() else frozenset(),
+        support_plane=not plane_may_anchor(sig),
     )
 
 
@@ -336,12 +388,13 @@ def coverage(signals: list[Signal] | tuple[Signal, ...]) -> EvidenceCoverage:
     )
 
     # A confirming pair must be cross-modality, mutually independent (incl.
-    # non-fate-shared), AND BOTH trusted — a low-authority or fate-shared probe
-    # can never anchor a confirmed verdict.
+    # non-fate-shared), AND BOTH may anchor — trusted (a low-authority or
+    # fate-shared probe never anchors) and on a measurement plane (owner D1: a
+    # security finding or a controller relay supports, never anchors).
     pair: tuple[str, str] | None = None
     for i, a in enumerate(witnesses):
         for b in witnesses[i + 1:]:
-            if a.trusted and b.trusted and a.modality != b.modality and a.independent_of(b):
+            if a.may_anchor and b.may_anchor and a.modality != b.modality and a.independent_of(b):
                 lo, hi = sorted((a.observer_id, b.observer_id))
                 pair = (lo, hi)
                 break
@@ -475,8 +528,19 @@ def assess(
         reasons.append(f"single observer ({next(iter(cov.observer_ids))}); need ≥{MIN_OBSERVERS}")
     if cov.observer_count >= MIN_OBSERVERS and cov.modality_count >= MIN_MODALITIES \
             and cov.independent_pair is None:
-        shared = "; ".join(",".join(g) for g in cov.fate_groups) or "shared observers"
-        reasons.append(f"no independent cross-modality pair (fate-shared: {shared})")
+        measured = frozenset(
+            w.modality for w in (witness_of(s) for s in signals)
+            if w.may_anchor and w.probe_authority is not ProbeAuthority.DEBUG_ONLY)
+        support = sorted(m.value for m in cov.modality_classes & SUPPORT_PLANE_MODALITIES)
+        if support and len(measured) < MIN_MODALITIES:
+            # Owner D1: the cross-plane agreement rests on a support plane.
+            reasons.append(
+                f"support plane ({', '.join(support)}) supports but never anchors — "
+                f"confirmation needs two independent measurement-plane witnesses "
+                f"(have {len(measured)}: {', '.join(sorted(m.value for m in measured)) or 'none'})")
+        else:
+            shared = "; ".join(",".join(g) for g in cov.fate_groups) or "shared observers"
+            reasons.append(f"no independent cross-modality pair (fate-shared: {shared})")
     for m in sorted(missing_required, key=lambda x: x.value):
         present_low = m is ModalityClass.ACTIVE_PROBE and m in cov.modality_classes
         if present_low:

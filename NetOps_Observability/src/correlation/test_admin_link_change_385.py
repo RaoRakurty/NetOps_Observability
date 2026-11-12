@@ -438,7 +438,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 100  # parser_rules.RULES since tracker 387 final syslog wave (5 pack rows)
+PINNED_RULE_COUNT = 102  # parser_rules.RULES since tracker 388 (SR Linux + SONiC link rows)
 
 
 def test_control_digest_frozen_before_the_change():
@@ -481,10 +481,12 @@ def test_the_parser_is_untouched():
     Re-pinned for the SD-WAN controller token: the two control-connection syslog rows emit
     the lost controller as a token; no link row moved.
     Re-pinned for the ConfD SNMP session grammar that reads no user: no rule row.
-    Re-pinned for the merge of those two; no link row moved."""
-    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token-confd"
+    Re-pinned for the merge of those two; no link row moved.
+    Re-pinned for tracker 388 (syslog link cause): two link rows, SR Linux and SONiC, behind
+    every older one; the trap link rows this file protects did not move."""
+    assert parser_rules.PARSER_REV == "2026-11-12-link-cause-srlinux-sonic"
     assert parser_rules.BAKED_RULES_HASH == (
-        "ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941df8206e71018d92b347ace9bb0")
+        "246b7761c983b90677e247d8d5d83177a582708929f75e4e1dbdd277e26702af")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

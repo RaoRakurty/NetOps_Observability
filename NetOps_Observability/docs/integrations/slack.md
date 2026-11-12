@@ -160,6 +160,20 @@ message per root-cause lifecycle transition (opened / materially updated /
 resolved) — never per raw alert; update noise is bounded by the payload-hash
 gate. Strictly opt-in per tenant. Architecture: integrations/architecture.md.
 
+**Own-watch alerts (tracker 359).** The same tenant webhook also receives the
+tenant's OWN watches — BGP-watch prefix classes on its watchlist (origin
+change, RPKI invalid, bogon, route leak, visibility loss) and its cloud
+monitors; never BGP peer-down, never device/interface alerts. **Default ON**
+for Slack (a channel message wakes nobody); untick **Also post my own watches
+here** on the connection card to stop it (API: `"watch_alerts": false` on
+PUT /api/itsm/slack-rca; omitting the field keeps the stored choice). One
+message when the alert starts and one when it clears, deduped across
+re-evaluations; routed only to the tenant the evaluator stamped; delivered
+through the notify dispatcher's bounded, retrying pool
+(`netops_notify_*_total{channel="tenant-slack"}`,
+`netops_notify_tenant_watch_total{outcome}`). The platform channel keeps
+receiving these alerts as before.
+
 Message identity (#103 UX-2): every message names the incident by its friendly
 Problem ID — title `Opened: [P-XXXXXX] <cause>`, footer `Correlix RCA ·
 P-XXXXXX`, resolve `Resolved — incident P-XXXXXX cleared` — the same handle

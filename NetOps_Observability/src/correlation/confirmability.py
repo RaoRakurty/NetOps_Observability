@@ -94,6 +94,7 @@ from coverage import (
     classify_kind,
 )
 from signals import EVIDENCE_CLASS_BY_KIND, ModalityClass
+from verdicts import ANCHORING_SECURITY_EVIDENCE, SUPPORT_PLANE_MODALITIES
 
 # ── kind → modality class of its PRODUCTION producer ─────────────────────────
 # The audit's ground truth for evidence-independence math. Completeness is
@@ -261,6 +262,45 @@ APP_DOMAINS: frozenset[str] = frozenset({"ent.app"})
 # cannot reach confirmed today and are ALLOWED to ship in that state, each with
 # an owner and a target resolution. Anything not listed fails CI.
 DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
+    # ── Owner D1 (2026-11-11): management_plane supports, never anchors ──────
+    # Each of these reached confirmed on a controller relay + ONE measurement
+    # plane. Under D1 the pair must be two measurement-plane witnesses, so their
+    # best verdict drops to suspected (confirmable_now 32 → 29, owner decision
+    # recorded in the baseline file). Lab fact behind the decision: every
+    # confirmed object of the week before rested on a support plane.
+    "sig.ent.wan-edge.sdwan-tunnel-controller-corroborated": {
+        "reason": "owner D1: its only measurement plane is the optional probe/tunnel "
+                  "clause (active_probe); the controller's tunnel/BFD report is "
+                  "management_plane and may support but never anchor, so the "
+                  "verdict caps at suspected",
+        "owner": "correlix",
+        "date_added": "2026-11-11",
+        "target_resolution": "NMS-first T2 (docs/design/NMS_FIRST_PLAN_2026-10-24.md): "
+                             "each edge's own BFD observation as its own witness, or a "
+                             "second measurement plane (device telemetry on the tunnel's "
+                             "underlay interface) in the template",
+    },
+    "sig.ent.wireless.ap-down-power": {
+        "reason": "owner D1: the AP-down report is the WLC's (management_plane), so "
+                  "the uplink port's link_state_change is the only anchor-eligible "
+                  "plane — one measurement plane caps at suspected",
+        "owner": "correlix",
+        "date_added": "2026-11-11",
+        "target_resolution": "wireless Phase 9 (on hold): a reach probe against the "
+                             "AP management address, or PoE telemetry from the "
+                             "uplink switch, as the second measurement plane",
+    },
+    "sig.ent.wireless.capwap-instability": {
+        "reason": "owner D1: the join-flap report is the WLC's (management_plane); "
+                  "of the optional corroborators only probe_loss is produced today "
+                  "(if_util_high / if_errors are normalization gaps), so one "
+                  "measurement plane caps at suspected",
+        "owner": "correlix",
+        "date_added": "2026-11-11",
+        "target_resolution": "if_errors/if_util_high anomaly producer (#73) on the "
+                             "AP uplinks, which with the CAPWAP-path probe gives two "
+                             "measurement planes",
+    },
     "sig.ent.wireless.ap-software-fault": {
         "reason": "this family is diagnosed by the ABSENCE of the second "
                   "witness — the uplink port staying up is what separates an "
@@ -341,6 +381,18 @@ DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
 }
 
 
+def _kind_may_anchor(kind: str) -> bool:
+    """The audit's view of verdicts.plane_may_anchor, per KIND: a measurement
+    plane anchors; of the support planes only the dated security detection does
+    (its producer always stamps the `signal` subclass the runtime requires)."""
+    m = KIND_MODALITY.get(kind)
+    if m is None:
+        return False
+    if m not in SUPPORT_PLANE_MODALITIES:
+        return True
+    return any(kind == k for k, _sub in ANCHORING_SECURITY_EVIDENCE)
+
+
 def _clause_kinds(t: Template, optional: bool) -> list[frozenset[str]]:
     return [c.kinds() for c in t.requires if c.optional is optional]
 
@@ -374,6 +426,14 @@ def audit_template(t: Template) -> dict:
         if k in KIND_MODALITY and (not app_domain or k in APP_GROUNDABLE_KINDS)
     }
     effective_modalities = groundable_modalities if app_domain else modalities
+    # Owner D1 (verdicts.plane_may_anchor): the confirming pair needs two
+    # MEASUREMENT planes. A support plane (security other than the dated
+    # detection, management_plane) still counts above, never toward the pair.
+    anchor_modalities = {
+        KIND_MODALITY[k] for k in available
+        if k in KIND_MODALITY and _kind_may_anchor(k)
+        and (not app_domain or k in APP_GROUNDABLE_KINDS)
+    }
 
     if not matchable:
         max_verdict = "not_matchable"
@@ -386,8 +446,12 @@ def audit_template(t: Template) -> dict:
     elif not req_modalities_ok:
         # matches, but a demanded modality has no producer path → verdict capped.
         max_verdict, status = "suspected", "modality_mismatch"
-    elif len(effective_modalities) >= 2:
+    elif len(effective_modalities) >= 2 and len(anchor_modalities) >= 2:
         max_verdict, status = "confirmed", "confirmable_now"
+    elif len(effective_modalities) >= 2:
+        # Two planes reach it, but one is a support plane (owner D1): the
+        # agreement can support a suspicion, never anchor a confirmation.
+        max_verdict, status = "suspected", "support_plane_only"
     elif len(modalities) >= 2 and app_domain:
         # a 2nd modality EXISTS but cannot reach the app entity — the honest
         # passive-flow/interface finding this audit exists to surface.
@@ -407,10 +471,18 @@ def audit_template(t: Template) -> dict:
         "pending_collection_kinds": sorted(missing & frozenset(COLLECTION_PENDING)),
         "pending_normalization_kinds": sorted(missing & frozenset(NORMALIZATION_PENDING)),
         "producer_classes_available": sorted(m.value for m in modalities),
+        "anchor_classes_available": sorted(m.value for m in anchor_modalities),
         "app_groundable_classes": sorted(m.value for m in groundable_modalities) if app_domain else None,
         "max_possible_verdict": max_verdict,
         "status": status,
         "demo_ready": status == "confirmable_now",
+        # The template's OWN cap (allow_root_cause_confirmed=False), reported
+        # beside the status and never folded into it. `status` and the ratchet
+        # answer "can the producers that exist reach the gate?"; a deliberate cap
+        # answers "should this family ever claim a cause?" (admin link change,
+        # tracker 385; exposure / hardening-drift stories, P-424934). Folding it in
+        # would make every deliberate cap read as a producer regression.
+        "confirm_capped": not t.allow_root_cause_confirmed,
     }
 
 
@@ -471,7 +543,7 @@ def write_reports(out_dir: str = "build/reports") -> list[str]:
         f"Status counts: `{json.dumps(by_status, sort_keys=True)}`\n\n"
         "## Signatures\n\n"
         + _md_table(rows, ["signature_id", "priority", "status", "max_possible_verdict",
-                           "producer_classes_available", "pending_collection_kinds",
+                           "confirm_capped", "producer_classes_available", "pending_collection_kinds",
                            "pending_normalization_kinds"])
         + "\n## Producer ↔ signature reconciliation\n\n"
         + _md_table(recon, ["kind", "emitted", "modality", "app_groundable",

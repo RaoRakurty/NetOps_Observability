@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,13 +42,25 @@ func (s *Slack) Send(a models.Alert) error {
 	buf, _ := json.Marshal(body) // discard: marshalling an in-memory value cannot fail
 	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(buf))
 	if err != nil {
-		return err
+		return webhookTransportError("slack webhook", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("slack webhook returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// webhookTransportError drops the request URL from a transport failure. An
+// incoming-webhook URL IS the credential, and net/http's *url.Error prints it
+// in full (Post "https://hooks.slack.com/services/…": dial tcp …), so the
+// unscrubbed error put the secret into every delivery-failure log line.
+func webhookTransportError(what string, err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return fmt.Errorf("%s: %s request failed: %w", what, ue.Op, ue.Err)
+	}
+	return fmt.Errorf("%s: request failed", what)
 }
 
 // IncidentNotice is an incident summary posted to Slack with interactive action
@@ -77,7 +90,7 @@ func (s *Slack) SendIncident(n IncidentNotice) error {
 	buf, _ := json.Marshal(BuildIncidentBlocks(n)) // discard: marshalling an in-memory value cannot fail
 	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(buf))
 	if err != nil {
-		return err
+		return webhookTransportError("slack webhook", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {

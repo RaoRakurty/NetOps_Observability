@@ -913,3 +913,36 @@ describe("buildRcaCase — impact axes come from the server report when present"
     expect(c.confidence.level).toBe("undetermined"); // impact never lifts the cause
   });
 });
+
+describe("buildRcaCase — controller-namespace ids render as inventory names (P-424934)", () => {
+  const ID = "ctl-vmanage-bfa81d722501";
+  const tl = timeline({
+    verdict_tier: "suspected",
+    top_hypothesis: "undetermined",
+    signals: [signal({
+      kind: "bgp_adjacency_change", modality_class: "management_plane",
+      entity_id: `${ID}:192.168.200.34`, attrs: '{"peer":"192.168.200.34"}', attached: true,
+    })],
+  });
+  const obj = corrObject({ verdict_tier: "suspected", state: "open", signal_count: 1,
+    affected: JSON.stringify({ devices: [ID] }) });
+  const names = new Map([[ID, "cEDGE-81"]]);
+
+  it("names the device from the inventory in the events and the routing context", () => {
+    const c = buildRcaCase(tl, obj, {}, "NetOps", [], undefined, { deviceNames: names });
+    expect(JSON.stringify(c)).toContain("cEDGE-81");
+    expect(c.events.some((e) => e.label.includes("cEDGE-81"))).toBe(true);
+    expect(c.events.some((e) => e.label.includes(ID))).toBe(false);
+  });
+
+  it("keeps the id when the inventory does not know it (display only, never invented)", () => {
+    const c = buildRcaCase(tl, obj, {}, "NetOps", []);
+    expect(c.events.some((e) => e.label.includes(ID))).toBe(true);
+    expect(JSON.stringify(c)).not.toContain("cEDGE-81");
+  });
+
+  it("buildCaseEvents takes the same map", () => {
+    const ev = buildCaseEvents(tl, obj, { deviceNames: names });
+    expect(ev.some((e) => e.label.includes("cEDGE-81"))).toBe(true);
+  });
+});
