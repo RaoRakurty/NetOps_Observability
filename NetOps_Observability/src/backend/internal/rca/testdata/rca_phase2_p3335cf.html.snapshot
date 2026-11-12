@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8">
-<title>Incident Assessment — Application / service experience change — crm-portal</title>
+<title>Incident Assessment — Synthetic http failure on crm-portal — possible application / service experience change</title>
 <style>
   @page { size: A4; margin: 14mm 12mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -66,7 +66,7 @@
   <span class="doctype">Incident Assessment<br><span style="letter-spacing:0">P-3335CF</span></span>
 </header>
 
-<h1>Application / service experience change — crm-portal</h1>
+<h1>Synthetic http failure on crm-portal — possible application / service experience change</h1>
 <div class="badges">
   
   <span class="pill blue">Artifact class: Operational incident assessment</span>
@@ -79,7 +79,7 @@
   <span class="pill amber">Ticket: Held</span>
   <span class="pill amber">Severity: WARN</span>
 </div>
-<div class="meta">Report <b>rr-3335cfaa1111-v3</b> · Case <b>P-3335CF</b> · Generated <b>2026-07-12 20:00:00 UTC</b> · Leading hypothesis; see analysis state for certainty</div>
+<div class="meta">Report <b>rr-3335cfaa1111-v3</b> · Case <b>P-3335CF</b> · Generated <b>2026-07-12 20:00:00 UTC</b> · The title names what was observed; the leading explanation is still missing required evidence</div>
 <div class="note">Withheld for this artifact class (Operational incident assessment): lessons learned. unpromoted candidate — an operational assessment may exist while the incident is active; suspected/undetermined findings are allowed and lessons-learned editing is not</div>
 
 
@@ -89,15 +89,15 @@
 
 <div class="pmh">1 · What broke</div>
 <section>
-  <p class="lead">Active-check degradation on crm-portal</p>
+  <p class="lead">Synthetic http failure on crm-portal</p>
   <h2>Incident at a glance</h2>
   <div class="kv">
-    <span class="k">Where it happened</span><span class="v">Not localized — the evidence does not support a single location</span>
+    <span class="k">Where it happened</span><span class="v">The evidence does not concentrate on a single object; not localised.</span>
     <span class="k">Cause</span><span class="v">Cause not determined</span>
     <span class="k">Possible owner(s)</span><span class="v">Application team</span>
   </div>
   <h2>Management summary</h2>
-  <div class="mgmt">At 2026-07-12 18:12:00 UTC, One automated check detected a condition of “application / service experience change” affecting crm-portal. The condition is ongoing (1h 48m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The cause remains unconfirmed because independent evidence classes did not corroborate the observations. Decision: Investigate — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident. Escalation follows the policy thresholds stated in the decision section.</div>
+  <div class="mgmt">At 2026-07-12 18:12:00 UTC, One automated check detected a condition of “synthetic http failure” affecting crm-portal. The condition is ongoing (1h 48m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The cause remains unconfirmed because independent evidence classes did not corroborate the observations. Decision: Investigate — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident. Escalation follows the policy thresholds stated in the decision section.</div>
 </section>
 
 
@@ -191,8 +191,11 @@
 
 <div class="pmh">6 · Where the break is</div>
 <section>
+  <p>The evidence does not concentrate on a single object; not localised.</p>
+  
   
   <div class="note">The network path was not measured for this case, so no break is drawn.</div>
+  
   
 </section>
 
@@ -451,7 +454,7 @@
       </td>
   </tr><tr>
     <td><b>Active checks</b><div class="note">continuous</div></td>
-    <td>Complete<div class="note">100% covered</div></td>
+    <td>Unknown</td>
     <td><span class="pill red">Anomalous</span></td>
     <td>3<div class="note">3 anomalous</div></td>
     <td>3 of 3 observations in this window are anomalous and tied to this case.
@@ -498,9 +501,9 @@
   
   <table><thead><tr><th style="width:28%">Milestone</th><th style="width:24%">When</th><th>Source of this timestamp</th></tr></thead><tbody>
   <tr>
-    <td><b>First credible failure</b></td>
+    <td><b>Earliest attached anomalous observation (detector onset, not fault onset)</b></td>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
-    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+    <td>earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began</td>
   </tr>
   </tbody></table>
   
@@ -554,8 +557,8 @@
   <table><thead><tr><th style="width:22%">When</th><th style="width:46%">Event</th><th>Source of this entry</th></tr></thead><tbody>
   <tr>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
-    <td>First credible failure</td>
-    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+    <td>Earliest attached anomalous observation (detector onset, not fault onset)</td>
+    <td>earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began</td>
   </tr><tr>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:12:00 UTC</td>
     <td>Phase begins: degradation — Anomalous evidence persisted across the participating evidence classes.</td>

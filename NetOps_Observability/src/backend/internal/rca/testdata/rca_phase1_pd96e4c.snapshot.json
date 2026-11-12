@@ -55,9 +55,9 @@
     "detection_milestones": [
       {
         "key": "first_credible_failure",
-        "label": "First credible failure",
+        "label": "Earliest attached anomalous observation (detector onset, not fault onset)",
         "ts": "2026-07-12 18:00:00 UTC",
-        "source_lineage": "earliest attached anomalous observation in the correlation window (observed)"
+        "source_lineage": "earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began"
       }
     ],
     "detection_milestones_absent": [
@@ -167,8 +167,8 @@
   "detailed_timeline": [
     {
       "ts": "2026-07-12 18:00:00 UTC",
-      "event": "First credible failure",
-      "source": "earliest attached anomalous observation in the correlation window (observed)"
+      "event": "Earliest attached anomalous observation (detector onset, not fault onset)",
+      "source": "earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began"
     },
     {
       "ts": "2026-07-12 18:00:00 UTC",
@@ -221,7 +221,7 @@
     }
   ],
   "at_a_glance": {
-    "where": "Not localized — the evidence does not support a single location",
+    "where": "The evidence does not concentrate on a single object; not localised.",
     "where_basis": "none",
     "what": "The IPsec tunnel's IKE/DPD keepalives failed, so every application behind the tunnel lost its private path. — the fault condition is confirmed; the underlying root cause is still under investigation.",
     "owners_label": "Possible owner(s)",
@@ -390,7 +390,7 @@
         "v": "[P1] Check the tunnel's IKE_SA on the VPN gateway"
       }
     ],
-    "why_suspected": "Anomalies in routing \u0026 link events, active checks align in the same time window and scope."
+    "why_suspected": "Anomalies in routing \u0026 link events, active checks align in the same time window and scope. The packet loss is not evidence for the leading explanation (IPsec tunnel down — cloud private path), which needs ipsec tunnel status."
   },
   "signal_summary": {
     "total": 2,
@@ -675,19 +675,16 @@
       "finding": "1 of 1 observations in this window are anomalous and tied to this case.",
       "from": "2026-07-12 18:01:00 UTC",
       "to": "2026-07-12 18:01:00 UTC",
-      "coverage": "none",
-      "missing_interval": "2026-07-12 18:00:00 UTC–2026-07-12 18:01:00 UTC",
+      "coverage": "unknown",
       "counts_toward_confidence": true,
       "assessment": {
         "class": "active_probe",
         "strategy": "continuous",
-        "quality": "unavailable",
+        "quality": "unknown",
         "overlap_start": "2026-07-12 18:01:00 UTC",
         "overlap_end": "2026-07-12 18:01:00 UTC",
         "coverage_ratio": 0,
-        "ratio_known": true,
-        "leading_gap": "1m 00s",
-        "missing_interval": "2026-07-12 18:00:00 UTC–2026-07-12 18:01:00 UTC",
+        "ratio_known": false,
         "cadence_known": false,
         "cadence_source": "unknown",
         "freshness_known": false,

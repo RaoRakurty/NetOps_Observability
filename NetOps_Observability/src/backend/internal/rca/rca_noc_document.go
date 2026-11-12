@@ -682,19 +682,21 @@ type rcaDocInput struct {
 	Required  string
 	WhyNot    []string
 	Lanes     map[string]int
+	// Observed is what the evidence actually shows (RCA v2 §3.1) — section 1
+	// names it, never an unobserved clause of the leading hypothesis.
+	Observed rcaObservedCondition
+	// TopMissing: the leading template still misses a required clause.
+	TopMissing bool
 }
 
-// rcaHeadlineTitle — the headline cause in NOC words (a title, never the raw
-// template title).
+// rcaHeadlineTitle — the headline cause in NOC words: the hypothesis row's own
+// title (noclabel.HypothesisTitle — the explicit NOC map, then the catalog
+// title; RCA v2 §3.2), never the event-phrase cascade.
 func rcaHeadlineTitle(h *rcaHypothesis) string {
 	if h == nil {
 		return ""
 	}
-	t := noclabel.SignatureTitle(h.ID)
-	if t == "" || t == h.ID {
-		t = h.Title
-	}
-	return t
+	return h.Title
 }
 
 func buildNocDocument(in rcaDocInput) NocDocument {
@@ -706,12 +708,20 @@ func buildNocDocument(in rcaDocInput) NocDocument {
 	}
 
 	// 1 · What broke — object, symptom, site; never a raw template title.
+	// RCA v2 §3.1: while the leading hypothesis misses a required clause, what
+	// broke is the OBSERVED condition, not the hypothesis.
 	symptom := rcaHeadlineTitle(in.Headline)
+	observedLeads := in.Observed.Label != "" && (in.Headline == nil || in.TopMissing)
+	if observedLeads {
+		symptom = in.Observed.Label
+	}
 	if symptom == "" {
 		symptom = rcaDominantMeasuredNoun(in.Lanes)
 	}
 	object := ""
 	switch {
+	case observedLeads && !rep.FaultLocalization.Localized && in.Observed.Where != "":
+		object = in.Observed.Where
 	case rep.FaultLocalization.Localized && rep.FaultLocalization.Object != "":
 		object = noclabel.Entity(rep.FaultLocalization.Object)
 	case len(rep.Scope.Devices) > 0:
@@ -806,6 +816,12 @@ func buildNocDocument(in rcaDocInput) NocDocument {
 		}
 		why := ""
 		switch {
+		case h.CandidacyState == rcaRoleNearestCompetitor:
+			why = "Not observed — none of the observations it requires was seen"
+			if len(h.Missing) > 0 {
+				why += " (it needs: " + strings.Join(firstN(h.Missing, 3), "; ") + ")"
+			}
+			why += ". Listed as the " + noclabel.NearestCompetitorNotObserved + "."
 		case h.Contradicted && len(h.Contradicting) > 0:
 			why = "Ruled out — evidence against it: " + strings.Join(firstN(h.Contradicting, 3), "; ") + "."
 		case h.Contradicted:

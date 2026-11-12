@@ -92,7 +92,7 @@
   <p class="lead">IPsec tunnel down — cloud private path on lab-svc</p>
   <h2>Incident at a glance</h2>
   <div class="kv">
-    <span class="k">Where it happened</span><span class="v">Not localized — the evidence does not support a single location</span>
+    <span class="k">Where it happened</span><span class="v">The evidence does not concentrate on a single object; not localised.</span>
     <span class="k">Cause</span><span class="v">Confirmed cause: IPsec tunnel down — cloud private path</span>
     <span class="k">Possible owner(s)</span><span class="v">NetOps</span>
   </div>
@@ -181,7 +181,7 @@
   <ol class="actions"><li>The device&#39;s routing events showed ipsec tunnel status (one observation).</li></ol>
   
   
-  <p><b>What the evidence shows:</b> Anomalies in routing &amp; link events, active checks align in the same time window and scope.</p>
+  <p><b>What the evidence shows:</b> Anomalies in routing &amp; link events, active checks align in the same time window and scope. The packet loss is not evidence for the leading explanation (IPsec tunnel down — cloud private path), which needs ipsec tunnel status.</p>
   <p><b>Independent sources:</b> Confirmed by independent evidence.</p>
   
   <div class="note">No causal sequence is proposed for this case — the engine has not matched a propagation pattern, and none is invented.</div>
@@ -191,8 +191,11 @@
 
 <div class="pmh">6 · Where the break is</div>
 <section>
+  <p>The fault condition is confirmed, but the evidence does not converge on a single fault object.</p>
+  
   
   <div class="note">The network path was not measured for this case, so no break is drawn.</div>
+  
   
 </section>
 
@@ -447,12 +450,12 @@
       </td>
   </tr><tr>
     <td><b>Active checks</b><div class="note">continuous</div></td>
-    <td>Unavailable<div class="note">0% covered</div></td>
+    <td>Unknown</td>
     <td><span class="pill red">Anomalous</span></td>
     <td>1<div class="note">1 anomalous</div></td>
     <td>1 of 1 observations in this window are anomalous and tied to this case.
       <div class="note">observed 2026-07-12 18:01:00 UTC → 2026-07-12 18:01:00 UTC</div>
-      <div class="note" style="color:#b45309">leading gap: 1m 00s</div>
+      
       </td>
     <td><div class="note">confidence: <b style="color:#0f7a3d">yes</b></div>
       <div class="note">impact: <b style="color:#0f7a3d">yes</b></div>
@@ -494,9 +497,9 @@
   
   <table><thead><tr><th style="width:28%">Milestone</th><th style="width:24%">When</th><th>Source of this timestamp</th></tr></thead><tbody>
   <tr>
-    <td><b>First credible failure</b></td>
+    <td><b>Earliest attached anomalous observation (detector onset, not fault onset)</b></td>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:00:00 UTC</td>
-    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+    <td>earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began</td>
   </tr>
   </tbody></table>
   
@@ -550,8 +553,8 @@
   <table><thead><tr><th style="width:22%">When</th><th style="width:46%">Event</th><th>Source of this entry</th></tr></thead><tbody>
   <tr>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:00:00 UTC</td>
-    <td>First credible failure</td>
-    <td>earliest attached anomalous observation in the correlation window (observed)</td>
+    <td>Earliest attached anomalous observation (detector onset, not fault onset)</td>
+    <td>earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began</td>
   </tr><tr>
     <td style="font-family:ui-monospace,monospace">2026-07-12 18:00:00 UTC</td>
     <td>Phase begins: degradation — Anomalous evidence persisted across the participating evidence classes.</td>

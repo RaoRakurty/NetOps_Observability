@@ -158,6 +158,59 @@ var sigTitle = map[string]string{
 	"sig.ent.security.proxy-pac-wpad-failure":       "Proxy auto-config (PAC/WPAD) failure",
 	"sig.ent.security.proxy-swg-egress-failure":     "Web proxy egress failure",
 	"sig.ent.app.edge-firewall-reject":              "Cloud security group rejecting application traffic",
+	// Access / LAN family (RCA v2 §3.2, 2026-11-12). These used to fall into the
+	// cascade's `access` rung and ALL read "Link state change" — a MAC flap, an
+	// OSPF flap and a DNS resolver failure were indistinguishable, and P-3E0400
+	// was titled with a link event that never happened. Every access template
+	// now has its own name, and `access` is no longer a cascade token.
+	"sig.ent.access.local-link-fault":           "Local link fault",
+	"sig.ent.access.admin-link-change-induced":  "Interface shut down by an operator",
+	"sig.ent.access.mac-flap":                   "MAC address flapping",
+	"sig.ent.access.ospf-adjacency-flap":        "OSPF adjacency flap",
+	"sig.ent.access.ospf-adjacency-stuck":       "OSPF adjacency stuck",
+	"sig.ent.access.stp-topology-change":        "Spanning-tree topology change",
+	"sig.ent.access.stp-loop-broadcast-storm":   "Spanning-tree loop / broadcast storm",
+	"sig.ent.access.vlan-trunk-mismatch":        "VLAN missing or pruned on a trunk",
+	"sig.ent.access.dhcp-scope-exhaustion":      "DHCP pool exhausted or DHCP path failure",
+	"sig.ent.access.dns-local-resolver-failure": "Local DNS resolver failure",
+	"sig.ent.access.dupip-arp-flux":             "Duplicate IP / ARP ownership flip",
+	"sig.ent.access.portsecurity-errdisable":    "Port shut down by port security",
+	"sig.ent.access.fhrp-failover":              "Gateway redundancy (FHRP) failover",
+	"sig.ent.access.fhrp-split-brain":           "Gateway redundancy (FHRP) split brain",
+	"sig.ent.access.pmtud-blackhole":            "Path MTU blackhole",
+	"sig.ent.access.uplink-down":                "Access uplink down",
+	"sig.ent.access.qos-drops":                  "QoS drops on access",
+	// Entries the frontend mirror carried and this side did not (the two maps had
+	// drifted; src/contracts/noc_label_parity.json now pins both). Where both
+	// sides named a signature differently, this side's name was kept.
+	"sig.ent.middle-mile.physical-degradation": "Middle-mile path degradation",
+	"sig.ent.wan-edge.routing-instability":     "Routing instability",
+	"sig.ent.wan-edge.congestion":              "WAN edge congestion",
+	"sig.ent.wan-edge.tunnel-mtu-blackhole":    "Path MTU blackhole",
+	"sig.ent.wan-edge.ipsec-down":              "IPsec tunnel down",
+	"sig.ent.internet.dns-impairment":          "DNS resolution impairment",
+	"sig.ent.cloud.region-degradation":         "Cloud region degradation",
+	"sig.ent.cloud.path-blocked":               "Cloud path unreachable",
+	"sig.ent.cloud.gateway-degradation":        "Cloud gateway degradation",
+	"sig.ent.sdwan.tunnel-sla-breach":          "SD-WAN tunnel SLA breach",
+	"sig.ent.app.degradation-network-clear":    "Application degradation (network clear)",
+	"sig.sp.core.mpls-lsp-down":                "MPLS LSP down",
+	"sig.dc.fabric.uplink-fault":               "Fabric uplink fault",
+}
+
+// HypothesisTitle names a HYPOTHESIS row (RCA v2 §3.2): the explicit NOC map
+// first (so a raw security template title never reaches an operator), then the
+// engine catalog's own `title` ("Local link fault"), and only then the domain
+// cascade. A hypothesis is a candidate explanation, so it is named for what it
+// proposes — never for an event phrase the cascade guesses from its id.
+func HypothesisTitle(id, catalogTitle string) string {
+	if t, ok := sigTitle[id]; ok {
+		return t
+	}
+	if t := strings.TrimSpace(catalogTitle); t != "" && t != id {
+		return t
+	}
+	return SignatureTitle(id)
 }
 
 // SignatureTitle humanizes a signature id (server mirror of the UI). Returns
@@ -206,7 +259,9 @@ func SignatureTitle(id string) string {
 		return "WAN / provider path change"
 	case contains("bgp", "ospf", "isis", "routing", "peer"):
 		return "Routing adjacency change"
-	case contains("link", "access", "uplink"):
+	// `access` is NOT a token (RCA v2 §3.2): it names a network domain, not a
+	// link event, and made every access template read "Link state change".
+	case contains("link", "uplink"):
 		return "Link state change"
 	case contains("nat", "fw", "firewall", "policy", "security", "waf", "proxy"):
 		return "Security / policy change"

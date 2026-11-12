@@ -328,7 +328,11 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 // caller's tenant (so the engine applies THAT tenant's structured coverage policy —
 // never another tenant's). Scope/collector-health stay `unknown` where no per-lane
 // history is stored (audit §4) — the engine reports them honestly, never fabricated.
-func buildEvidenceCoverage(tenant string, total, anomalous map[string]int, laneObs map[string][]time.Time, laneMin, laneMax map[string]time.Time, hb rcaHypBlob, firstObs, lastObs, now time.Time) []rcaEvidenceLane {
+//
+// RCA v2 §3.6: laneSeries splits each lane per (entity, metric); the cadence is
+// read from those series (or a schedule), never from the lane's merged arrivals.
+// anomalousSigs labels each lane by what actually rode it (§3.7).
+func buildEvidenceCoverage(tenant string, total, anomalous map[string]int, laneObs map[string][]time.Time, laneSeries map[string][][]time.Time, laneMin, laneMax map[string]time.Time, hb rcaHypBlob, anomalousSigs []map[string]any, firstObs, lastObs, now time.Time) []rcaEvidenceLane {
 	trusted := map[string]bool{}
 	if len(hb.Ranking.Hypotheses) > 0 {
 		v := hb.Ranking.Hypotheses[0].Verdict
@@ -355,11 +359,12 @@ func buildEvidenceCoverage(tenant string, total, anomalous map[string]int, laneO
 			Class:       lane,
 			WindowStart: firstObs, WindowEnd: lastObs, Now: now,
 			Observations: laneObs[lane],
+			Series:       rcaNonNilSeries(laneSeries[lane]),
 			LaneStart:    laneMin[lane], LaneEnd: laneMax[lane],
 			TotalCount: n, AnomalousCount: an,
 		})
 		l := rcaEvidenceLane{
-			Class: lane, Label: rcaLaneLabel[lane],
+			Class: lane, Label: rcaLaneLabelIn(lane, anomalousSigs),
 			Observations: n, Anomalous: an,
 			CountsTowardConfidence: an > 0 && trusted[lane],
 			Assessment:             &assessment,
@@ -396,6 +401,8 @@ func rcaCoverageFinding(n, an int, a CoverageAssessment) string {
 			return fmt.Sprintf("%d anomalous state transition(s) in this window tied to this case — a point-in-time control-plane event, not a continuous-coverage lane.", an)
 		}
 		return fmt.Sprintf("%d of %d observations in this window are anomalous and tied to this case.", an, n)
+	case a.Quality == qualityUnknown && !a.CadenceKnown:
+		return fmt.Sprintf("%d observations; the collection interval of these series is not known, so no gap and no full coverage is claimed for the incident window.", n)
 	case a.NormalityEligible:
 		return fmt.Sprintf("%d observations spanning the incident window at the expected cadence; none tied to this case as anomalous.", n)
 	case a.Strategy == strategyEventBased:
@@ -404,6 +411,25 @@ func rcaCoverageFinding(n, an int, a CoverageAssessment) string {
 		missing := orDefault(a.MissingInterval, "unknown")
 		return fmt.Sprintf("%d observations, but coverage did not span the full incident window — no anomaly observed during available coverage. Missing interval: %s. Insufficient to confirm or exclude impact for the full incident.", n, missing)
 	}
+}
+
+// rcaNonNilSeries keeps "no series" distinct from "caller passed no series":
+// BuildReport always knows the split, so an empty lane is an empty, non-nil set.
+func rcaNonNilSeries(s [][]time.Time) [][]time.Time {
+	if s == nil {
+		return [][]time.Time{}
+	}
+	return s
+}
+
+// rcaSeriesKey keys an observation's (entity, metric) series: the entity plus
+// the metric name, or the kind (a *_clear shares its anomaly's series).
+func rcaSeriesKey(sig map[string]any) string {
+	metric := asString(sig["metric_name"])
+	if metric == "" {
+		metric = strings.TrimSuffix(asString(sig["kind"]), "_clear")
+	}
+	return asString(sig["entity_type"]) + ":" + asString(sig["entity_id"]) + "|" + metric
 }
 
 // rcaLaneWindowCoverage reports whether a lane's observation span [laneMin,
@@ -489,6 +515,44 @@ func supportingCaseEvidence(satisfied []string, kindCounts map[string]int, kindO
 	return out
 }
 
+// rcaRoleNearestCompetitor — the causal role AND candidacy state of a ranked
+// template none of whose required clauses was satisfied (RCA v2 §3.3).
+const rcaRoleNearestCompetitor = "nearest_competitor"
+
+// rcaOptionalBonusCap mirrors the engine's OPTIONAL_BONUS_CAP (scoring.py): the
+// most an optional-only match can add to a template's coverage.
+const rcaOptionalBonusCap = 0.1
+
+// rcaNoRequiredClauseSatisfied reports whether a ranked template reached the
+// ranking with NONE of its required clauses satisfied. The engine persists
+// `missing` = the unsatisfied REQUIRED clauses and `satisfied` = required ∪
+// optional hits, with coverage = k/R + optional bonus (≤ 0.1), R = k + |missing|
+// (scoring.py score_template). k ≥ 1 forces coverage ≥ 1/(|missing|+|satisfied|),
+// so a coverage below that bound — and within the optional cap — means k = 0.
+// Pre-coverage blobs fall back to the ranked confidence (= coverage unless
+// contradicted, and a contradicted row is handled before this test).
+func rcaNoRequiredClauseSatisfied(h rcaHypEntry) bool {
+	if len(h.Missing) == 0 || h.Contradicted {
+		return false
+	}
+	cov := h.Coverage
+	if cov == nil {
+		c := h.Confidence
+		cov = &c
+	}
+	if *cov > rcaOptionalBonusCap+1e-9 {
+		return false
+	}
+	bound := 1.0 / float64(len(h.Missing)+len(h.Satisfied))
+	return *cov < bound-1e-9
+}
+
+// rcaTopRequiredMissing reports whether the leading template still misses a
+// required clause — the §3.1 test for whether it may title the report.
+func rcaTopRequiredMissing(hb rcaHypBlob) bool {
+	return len(hb.Ranking.Hypotheses) > 0 && len(hb.Ranking.Hypotheses[0].Missing) > 0
+}
+
 func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers map[string]map[string]bool) []rcaHypothesis {
 	var out []rcaHypothesis
 	for i, h := range hb.Ranking.Hypotheses {
@@ -497,10 +561,9 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 		if h.Confidence <= 0 && len(h.Satisfied) == 0 && !h.Contradicted {
 			continue
 		}
-		title := noclabel.SignatureTitle(h.ID)
-		if title == "" || title == h.ID {
-			title = h.Title
-		}
+		// RCA v2 §3.2: a hypothesis is named for what it proposes — the explicit
+		// NOC map, then the catalog title — never the event-phrase cascade.
+		title := noclabel.HypothesisTitle(h.ID, h.Title)
 		hy := rcaHypothesis{
 			Type: rcaHypothesisType(h.ID),
 			Rank: i + 1, ID: h.ID, Title: title,
@@ -531,6 +594,13 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 		case h.Contradicted:
 			hy.CausalRole, hy.CandidacyState = "ruled_out_as_origin", "ruled_out"
 			// a ruled-out row never renders a live confidence label (audit D7)
+			hy.Label = ""
+		case rcaNoRequiredClauseSatisfied(h):
+			// RCA v2 §3.3: none of its REQUIRED observations was seen — it ranked
+			// only through an optional clause. A nearest competitor, never an
+			// observed or active candidate, and never a live confidence label.
+			hy.ObservationState = "not_observed"
+			hy.CausalRole, hy.CandidacyState = rcaRoleNearestCompetitor, rcaRoleNearestCompetitor
 			hy.Label = ""
 		case hy.Type == "symptom classification":
 			// a symptom names what was observed — it is never ranked as a cause
@@ -645,7 +715,10 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 // no hypothesis qualifies — the caller states the absence, it never invents.
 func firstLiveCauseHypothesis(hyps []rcaHypothesis) *rcaHypothesis {
 	for i := range hyps {
-		if !hyps[i].Contradicted && hyps[i].Type != "symptom classification" {
+		// a nearest competitor (no required observation seen, §3.3) is never
+		// named as even a possible cause
+		if !hyps[i].Contradicted && hyps[i].Type != "symptom classification" &&
+			hyps[i].CandidacyState != rcaRoleNearestCompetitor {
 			return &hyps[i]
 		}
 	}
@@ -737,11 +810,13 @@ func buildAtAGlance(loc FaultLocalization, scope rcaReportScope, hyps []rcaHypot
 		if len(parts) == 0 && len(scope.Devices) > 0 {
 			parts = append(parts, strings.Join(firstN(scope.Devices, 3), ", "))
 		}
+		// RCA v2 §3.4: THE localisation sentence, identical to the report body
+		// and the path view.
 		if len(parts) > 0 {
-			g.Where = strings.Join(parts, " · ") + " — observed scope; the fault is not localized to a single object"
+			g.Where = noclabel.LocalisationSentence(strings.Join(parts, " · "), false)
 			g.WhereBasis = "scope"
 		} else {
-			g.Where = "Not localized — the evidence does not support a single location"
+			g.Where = noclabel.LocalisationSentence("", false)
 			g.WhereBasis = "none"
 		}
 	}
@@ -903,7 +978,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 		a := byKind[k]
 		row := rcaSymptomRow{
 			Label: noclabel.Kind(k), Kind: k,
-			Source:       orDefault(rcaLaneLabel[a.lane], rcaTitleCase(a.lane)),
+			Source:       orDefault(rcaLaneLabelIn(a.lane, anomalous), rcaTitleCase(a.lane)),
 			Observations: a.n,
 			Buckets:      bucketObservationTimes(a.times, firstObs, lastObs, rcaSymptomBuckets),
 			standing:     rcaIsStandingFindingKind(k) && !a.dated,
@@ -924,7 +999,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 	soloLane := ""
 	if len(laneAnomalous) == 1 {
 		for lane := range laneAnomalous {
-			soloLane = strings.ToLower(orDefault(rcaLaneLabel[lane], lane))
+			soloLane = strings.ToLower(orDefault(rcaLaneLabelIn(lane, anomalous), lane))
 		}
 	}
 	switch {
@@ -1064,10 +1139,138 @@ func rcaSeverityIncidentBasis(sevIncident string, validation bool, impactSyn, im
 
 // ---- titles -----------------------------------------------------------------------------------
 
-// buildRcaTitle: evidence-based, deterministic, service-name-first (§2).
+// rcaObservedCondition is what the evidence actually shows (RCA v2 §3.1): the
+// observed kind that carries the leading template's satisfied clauses (else the
+// dominant anomalous kind), and where it was seen. It never names a clause that
+// was not observed. Empty Label → no anomalous evidence to name.
+type rcaObservedCondition struct {
+	Kind       string // engine kind of the observed condition
+	Label      string // "Interface metric anomaly"
+	Where      string // "cedge-60-07ae8615 (4 interfaces)" — the object, not a service
+	Device     string // the device the condition concentrates on ("" when none)
+	Interfaces int    // distinct interfaces on Device carrying the condition
+}
+
+// Phrase renders "<Label> on <Where>" (or the label alone).
+func (c rcaObservedCondition) Phrase() string {
+	if c.Where == "" {
+		return c.Label
+	}
+	return c.Label + " on " + c.Where
+}
+
+// rcaPlural returns "" for one and "s" otherwise.
+func rcaPlural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// buildObservedCondition derives the observed condition from the attached
+// anomalous evidence and the leading template's satisfied clauses.
+func buildObservedCondition(hb rcaHypBlob, scope rcaReportScope, anomalous []map[string]any) rcaObservedCondition {
+	counts := map[string]int{}
+	for _, sig := range anomalous {
+		k := asString(sig["kind"])
+		if k == "" || rcaIsStandingFindingKind(k) || asString(sig["modality_class"]) == "security" {
+			continue // a standing finding or a security rule never names what broke
+		}
+		counts[k]++
+	}
+	pick := ""
+	if len(hb.Ranking.Hypotheses) > 0 {
+		best := 0
+		for _, clause := range hb.Ranking.Hypotheses[0].Satisfied {
+			for _, alt := range strings.Split(clause, "|") {
+				alt = strings.TrimSpace(alt)
+				if counts[alt] > best {
+					best, pick = counts[alt], alt
+				}
+			}
+		}
+	}
+	if pick == "" {
+		keys := make([]string, 0, len(counts))
+		for k := range counts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		best := 0
+		for _, k := range keys {
+			if counts[k] > best {
+				best, pick = counts[k], k
+			}
+		}
+	}
+	if pick == "" {
+		return rcaObservedCondition{}
+	}
+	c := rcaObservedCondition{Kind: pick, Label: noclabel.Kind(pick)}
+	// Where: the device the condition concentrates on, with its interfaces.
+	devSigs := map[string]int{}
+	devIfs := map[string]map[string]bool{}
+	for _, sig := range anomalous {
+		if asString(sig["kind"]) != pick {
+			continue
+		}
+		eid := asString(sig["entity_id"])
+		dev := ""
+		switch asString(sig["entity_type"]) {
+		case "interface":
+			if d, ifn, ok := strings.Cut(eid, ":"); ok && d != "" {
+				dev = d
+				if devIfs[dev] == nil {
+					devIfs[dev] = map[string]bool{}
+				}
+				devIfs[dev][ifn] = true
+			}
+		case "device":
+			dev = eid
+		}
+		if dev != "" {
+			devSigs[dev]++
+		}
+	}
+	devs := make([]string, 0, len(devSigs))
+	for d := range devSigs {
+		devs = append(devs, d)
+	}
+	sort.Slice(devs, func(i, j int) bool {
+		if devSigs[devs[i]] != devSigs[devs[j]] {
+			return devSigs[devs[i]] > devSigs[devs[j]]
+		}
+		return devs[i] < devs[j]
+	})
+	switch {
+	case len(devs) > 0:
+		c.Device = devs[0]
+		c.Interfaces = len(devIfs[c.Device])
+		c.Where = noclabel.Entity(c.Device)
+		if c.Interfaces > 0 {
+			c.Where += fmt.Sprintf(" (%d interface%s)", c.Interfaces, rcaPlural(c.Interfaces))
+		}
+		if n := len(devs) - 1; n > 0 {
+			c.Where += fmt.Sprintf(" and %d more device%s", n, rcaPlural(n))
+		}
+	case len(scope.Devices) > 0:
+		c.Device = scope.Devices[0]
+		c.Where = noclabel.Entity(c.Device)
+	}
+	return c
+}
+
+// buildRcaTitle: evidence-based, deterministic, service-name-first (§2), and —
+// RCA v2 §3.1 — the title names the OBSERVED condition. Only a fully satisfied
+// signature (no required clause missing) may title the report with its own
+// condition; while the leading template still misses a required clause, the
+// observed condition leads and the hypothesis is a suffix:
+//
+//	"Interface metric anomaly on cedge-60-07ae8615 (4 interfaces) — possible local link fault"
+//
 // Returns (title, subtitle, problemNoun) — problemNoun feeds the management
-// summary ("temporary connectivity degradation to X").
-func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, laneAnomalous map[string]int, changes []rcaCloudChange) (string, string, string) {
+// summary ("a condition of “interface metric anomaly”").
+func buildRcaTitle(hb rcaHypBlob, topHyp, incident string, scope rcaReportScope, laneAnomalous map[string]int, anomalous []map[string]any, changes []rcaCloudChange) (string, string, string) {
 	service := ""
 	if len(scope.Services) > 0 {
 		service = scope.Services[0]
@@ -1082,22 +1285,50 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 		// The window quiesced without recovery evidence — never claim recovery.
 		suffix = " — no longer observed"
 	}
+	obs := buildObservedCondition(hb, scope, anomalous)
+	// where: the named service first; otherwise the object the evidence is on.
+	where := ""
+	switch {
+	case service != "":
+		where = " on " + service
+	case obs.Where != "":
+		where = " on " + obs.Where
+	}
 
-	// A matched signature names the condition (factual, not verdict-bearing).
 	if topHyp != "" && topHyp != "undetermined" && strings.HasPrefix(topHyp, "sig.") {
-		t := noclabel.SignatureTitle(topHyp)
-		noun := strings.ToLower(t)
-		if service != "" {
-			return t + " — " + service + suffix, "Leading hypothesis; see analysis state for certainty", noun
+		var top rcaHypEntry
+		if len(hb.Ranking.Hypotheses) > 0 && hb.Ranking.Hypotheses[0].ID == topHyp {
+			top = hb.Ranking.Hypotheses[0]
 		}
-		return t + suffix, "Leading hypothesis; see analysis state for certainty", noun
+		switch {
+		case len(top.Missing) == 0:
+			// Fully satisfied: the signature names the condition (factual, not
+			// verdict-bearing — the badges carry certainty).
+			t := noclabel.SignatureTitle(topHyp)
+			noun := strings.ToLower(t)
+			if service != "" {
+				return t + " — " + service + suffix, "Leading hypothesis; see analysis state for certainty", noun
+			}
+			return t + where + suffix, "Leading hypothesis; see analysis state for certainty", noun
+		case obs.Label != "" && !rcaNoRequiredClauseSatisfied(top):
+			// A required clause is missing: the observation leads, the
+			// hypothesis follows as "possible …".
+			hyp := rcaMidSentence(noclabel.HypothesisTitle(top.ID, top.Title))
+			return obs.Label + where + " — possible " + hyp + suffix,
+				"The title names what was observed; the leading explanation is still missing required evidence",
+				strings.ToLower(obs.Label)
+		case obs.Label != "":
+			return obs.Label + where + suffix,
+				"The title names what was observed; no explanation has its required evidence",
+				strings.ToLower(obs.Label)
+		}
 	}
 
 	// No signature: describe the dominant anomalous evidence class factually.
 	// "Network change" is permitted ONLY when an actual change event exists (§2).
 	dominant, best := "", 0
-	for lane, n := range laneAnomalous {
-		if n > best {
+	for _, lane := range rcaLaneOrder {
+		if n := laneAnomalous[lane]; n > best {
 			best, dominant = n, lane
 		}
 	}
@@ -1109,6 +1340,9 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 		"management_plane": "controller-reported anomaly",
 		"security":         "security finding",
 	}[dominant]
+	if dominant == "control_plane" && !rcaLaneHasRoutingOrLinkKind(anomalous, "control_plane") {
+		noun = "device alarm" // §3.7: a generic alarm is not a routing/link event
+	}
 	if noun == "" {
 		noun = "telemetry anomaly"
 	}
@@ -1136,13 +1370,57 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 
 // ---- why / confirmation wording (§16) ------------------------------------------------------------
 
-func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneAnomalous map[string]int) (whySusp string, whyNot []string, required string) {
+// rcaNonWitnessSentence (RCA v2 §3.7) says when attached anomalous evidence is
+// NOT a witness for any clause of the leading template — a generic device alarm
+// riding the control-plane lane next to a "local link fault" proves nothing
+// about the link. Empty when every attached kind is one of the template's
+// clause alternatives, or when there is no signature leader.
+func rcaNonWitnessSentence(hb rcaHypBlob, anomalous []map[string]any) string {
+	if len(hb.Ranking.Hypotheses) == 0 || !strings.HasPrefix(hb.Ranking.Hypotheses[0].ID, "sig.") {
+		return ""
+	}
+	top := hb.Ranking.Hypotheses[0]
+	clauseKinds := map[string]bool{}
+	var needs []string
+	for _, c := range append(append([]string(nil), top.Satisfied...), top.Missing...) {
+		for _, alt := range strings.Split(c, "|") {
+			clauseKinds[strings.TrimSpace(alt)] = true
+		}
+		needs = appendUnique(needs, rcaMidSentence(humanizeClause(c)))
+	}
+	var outside []string
+	for _, s := range anomalous {
+		k := asString(s["kind"])
+		if k == "" || clauseKinds[k] || rcaIsStandingFindingKind(k) || asString(s["modality_class"]) == "security" {
+			continue
+		}
+		outside = appendUnique(outside, rcaMidSentence(noclabel.Kind(k)))
+	}
+	if len(outside) == 0 {
+		return ""
+	}
+	hyp := noclabel.HypothesisTitle(top.ID, top.Title)
+	verb := "is"
+	if len(outside) > 1 {
+		verb = "are"
+	}
+	return fmt.Sprintf("The %s %s not evidence for the leading explanation (%s), which needs %s.",
+		strings.Join(outside, " and the "), verb, hyp, strings.Join(needs, " and "))
+}
+
+func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneAnomalous map[string]int, anomalous []map[string]any) (whySusp string, whyNot []string, required string) {
 	var lanes []string
 	for _, l := range rcaLaneOrder {
 		if laneAnomalous[l] > 0 {
-			lanes = append(lanes, strings.ToLower(rcaLaneLabel[l]))
+			// §3.7: each lane is named by what actually rode it
+			lanes = append(lanes, strings.ToLower(rcaLaneLabelIn(l, anomalous)))
 		}
 	}
+	defer func() {
+		if nw := rcaNonWitnessSentence(hb, anomalous); nw != "" {
+			whySusp = strings.TrimSpace(whySusp + " " + nw)
+		}
+	}()
 	switch {
 	case len(lanes) == 1 && lanes[0] == "active checks" && sig.Probe != nil:
 		whySusp = CountNoun(len(sig.Probe.AffectedVantages), "active-check source") + " reported degradation to the same target during an overlapping time window."
@@ -1222,11 +1500,19 @@ func rcaComposeSummary(sents []rcaSummarySentence, capWords int) (string, bool) 
 }
 
 func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra RecoveryAssessment, merge *rcaIncidentMerge) (string, bool) {
-	subject := "the monitored service"
-	if len(scope.Services) > 0 {
+	// RCA v2 §3.8: never "the monitored service" without service-scope
+	// evidence — the subject is the named service, else the object the evidence
+	// is on, else the evidence itself.
+	subject := "the observed components"
+	switch {
+	case len(scope.Services) > 0:
 		subject = scope.Services[0]
-	} else if len(scope.Targets) > 0 {
+	case len(scope.Targets) > 0:
 		subject = noclabel.Entity(scope.Targets[0])
+	case len(scope.Devices) == 1:
+		subject = noclabel.Entity(scope.Devices[0])
+	case len(scope.Devices) > 1:
+		subject = fmt.Sprintf("%s and %d more device%s", noclabel.Entity(scope.Devices[0]), len(scope.Devices)-1, rcaPlural(len(scope.Devices)-1))
 	}
 	// Sentences are collected with their trim priority (length discipline):
 	// what-happened / still-happening / impact are PROTECTED; the monitoring
@@ -1254,8 +1540,16 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	// still happening / duration. Component vs service recovery are stated
 	// SEPARATELY (P1.2): a conflicting timeline is explained, never averaged.
 	switch {
-	case ra.ResidualAfterComponent && times.ComponentRecoveredAt != "" && !times.RecoveredCaptured:
+	case ra.ResidualAfterComponent && times.ComponentRecoveredAt != "" && !times.RecoveredCaptured && ra.servicePresent:
 		addP(fmt.Sprintf("A component recovered at %s, but end-to-end service checks continued failing through %s — the incident entered residual degradation rather than full recovery, and service recovery is not confirmed.",
+			times.ComponentRecoveredAt, orDefault(times.LastAnomalous, "the end of the window")))
+		if incident == "active" && times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0 {
+			addP(fmt.Sprintf("The condition is ongoing (%s elapsed).", FmtDur(time.Duration(times.DurationMS)*time.Millisecond)))
+		}
+	case ra.ResidualAfterComponent && times.ComponentRecoveredAt != "" && !times.RecoveredCaptured:
+		// §3.8: no service-scope evidence took part — say what was seen on the
+		// component, never "end-to-end service checks".
+		addP(fmt.Sprintf("A recovery was observed on the affected component at %s, but anomalies on the same component continued through %s, so it is not recovered.",
 			times.ComponentRecoveredAt, orDefault(times.LastAnomalous, "the end of the window")))
 		if incident == "active" && times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0 {
 			addP(fmt.Sprintf("The condition is ongoing (%s elapsed).", FmtDur(time.Duration(times.DurationMS)*time.Millisecond)))

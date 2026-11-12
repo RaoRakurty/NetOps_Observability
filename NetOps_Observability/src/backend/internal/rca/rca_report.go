@@ -145,6 +145,11 @@ type Report struct {
 	// service/vantage names primary, addresses secondary, seam + state per hop.
 	// Available=false renders as an honest absence, never an invented diagram.
 	Topology TopologyView `json:"topology"`
+	// TopologyContext (RCA v2 §2) is the ONE topology model the report, the path
+	// view, the UI and the PDF consume — built by the topology workstream (WS-A,
+	// topology_context.go) and attached by the HTTP layer. nil → section 6 falls
+	// back to the measured-spine projection above.
+	TopologyContext *TopologyContext `json:"topology_context,omitempty"`
 	// PathAttribution is the path-causality RCA P2 on-path device attribution
 	// (design §2.4): the named upstream-most on-path cause, its verdict lift, the
 	// explained-away/discounted faults, the honesty-cap reason, and the discovered
@@ -676,6 +681,54 @@ var rcaLaneLabel = map[string]string{
 
 var rcaLaneOrder = []string{"device_telemetry", "control_plane", "passive_flow", "active_probe", "management_plane"}
 
+// rcaRoutingLinkTokens — kind substrings that make an observation a routing or
+// link event. Anything else riding the control-plane lane (a generic
+// device_alarm, a syslog "major alarm") is not one (RCA v2 §3.7).
+var rcaRoutingLinkTokens = []string{
+	"bgp", "ospf", "isis", "adjacency", "route", "routing", "link_state", "lldp",
+	"cdp", "stp", "vrrp", "hsrp", "fhrp", "mac_flap", "if_oper", "interface_state",
+	"tunnel", "bfd", "omp", "control_connection", "sdwan_control",
+}
+
+// rcaIsRoutingOrLinkKind reports whether an engine kind is a routing/link event.
+func rcaIsRoutingOrLinkKind(kind string) bool {
+	k := strings.ToLower(strings.TrimSuffix(kind, "_clear"))
+	for _, t := range rcaRoutingLinkTokens {
+		if strings.Contains(k, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// rcaLaneHasRoutingOrLinkKind reports whether any anomalous observation on the
+// lane is a routing/link event. A lane with no anomalous observation reports
+// true, so its generic label stands.
+func rcaLaneHasRoutingOrLinkKind(anomalous []map[string]any, lane string) bool {
+	seen := false
+	for _, sig := range anomalous {
+		if asString(sig["modality_class"]) != lane {
+			continue
+		}
+		seen = true
+		if rcaIsRoutingOrLinkKind(asString(sig["kind"])) {
+			return true
+		}
+	}
+	return !seen
+}
+
+// rcaLaneLabelIn labels an evidence lane by what actually rode it (RCA v2 §3.7):
+// the control-plane lane reads "Routing & link events" only when a routing or
+// link event is among its anomalous observations; a lane carrying only device
+// alarms says so.
+func rcaLaneLabelIn(lane string, anomalous []map[string]any) string {
+	if lane == "control_plane" && !rcaLaneHasRoutingOrLinkKind(anomalous, lane) {
+		return "Device alarms"
+	}
+	return rcaLaneLabel[lane]
+}
+
 // Owner tokens (catalog verdict.owner) → team language. Mirror of OWNER_LABEL
 // in labels.ts.
 var OwnerTeam = map[string]string{
@@ -806,9 +859,12 @@ func FmtDur(d time.Duration) string {
 
 // rcaHypEntry is one ranked hypothesis as the engine persisted it.
 type rcaHypEntry struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Confidence      float64  `json:"confidence"`
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	Confidence float64 `json:"confidence"`
+	// Coverage is the engine's PRE-penalty clause coverage (required share +
+	// optional bonus); nil on blobs persisted before the engine wrote it.
+	Coverage        *float64 `json:"coverage,omitempty"`
 	ConfidenceLabel string   `json:"confidence_label"`
 	Contradicted    bool     `json:"contradicted"`
 	Contradictions  []string `json:"contradictions"`
@@ -979,7 +1035,10 @@ func BuildReport(in ReportInput) Report {
 		laneMin, laneMax         = map[string]time.Time{}, map[string]time.Time{}
 		// laneObs: the full per-observation timestamp series per lane, feeding the
 		// Phase C coverage engine's rich path (internal-gap + inter-arrival cadence).
-		laneObs                 = map[string][]time.Time{}
+		laneObs = map[string][]time.Time{}
+		// laneSeriesBy: the same observations split per (entity, metric) — the
+		// only honest base for a cadence (RCA v2 §3.6).
+		laneSeriesBy            = map[string]map[string][]time.Time{}
 		firstObs, lastObs       time.Time
 		firstRealUserTS         time.Time
 		peakSevRank             int
@@ -1008,6 +1067,11 @@ func BuildReport(in ReportInput) Report {
 				laneMax[lane] = ts
 			}
 			laneObs[lane] = append(laneObs[lane], ts)
+			if laneSeriesBy[lane] == nil {
+				laneSeriesBy[lane] = map[string][]time.Time{}
+			}
+			sk := rcaSeriesKey(sig)
+			laneSeriesBy[lane][sk] = append(laneSeriesBy[lane][sk], ts)
 		}
 		laneTotal[lane]++
 		// Semantic recovery evidence (§17): status lanes signal recovery as
@@ -1101,7 +1165,18 @@ func BuildReport(in ReportInput) Report {
 	// slack test. Both impact axes and both renderers read one assessment, so they can
 	// never disagree (kills the false "none detected" on insufficient coverage).
 	tenant := fmt.Sprintf("%v", meta["tenant_id"])
-	coverage := buildEvidenceCoverage(tenant, laneTotal, laneAnomalous, laneObs, laneMin, laneMax, hb, firstObs, lastObs, in.Now)
+	laneSeries := map[string][][]time.Time{}
+	for lane, bySeries := range laneSeriesBy {
+		keys := make([]string, 0, len(bySeries))
+		for k := range bySeries {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			laneSeries[lane] = append(laneSeries[lane], bySeries[k])
+		}
+	}
+	coverage := buildEvidenceCoverage(tenant, laneTotal, laneAnomalous, laneObs, laneSeries, laneMin, laneMax, hb, anomalous, firstObs, lastObs, in.Now)
 
 	// ---- states -------------------------------------------------------------------
 	// Recovery is an ASSESSMENT, not a synonym for "the window closed": an
@@ -1570,7 +1645,13 @@ func BuildReport(in ReportInput) Report {
 	// It narrows where the fault lives; it never names the cause. Root cause
 	// stays unidentified until a causal mechanism AND causal object are
 	// established — which a signature verdict alone can never do.
-	loc := FaultLocalization{Statement: "The fault has not been localized to a specific domain or object."}
+	// RCA v2 §3.4: one localisation sentence everywhere — where the evidence
+	// concentrates, and that this is not a localisation.
+	obsCond := buildObservedCondition(hb, scope, anomalous)
+	loc := FaultLocalization{Statement: noclabel.LocalisationSentence(noclabel.Entity(obsCond.Device), false)}
+	if obsCond.Device == "" {
+		loc.Statement = noclabel.LocalisationSentence("", false)
+	}
 	if analysis == "confirmed" {
 		locus := groundedLocus(in.Edges)
 		// §16: a transport-family fault (underlay/tunnel/ipsec) localizes to the
@@ -1619,7 +1700,7 @@ func BuildReport(in ReportInput) Report {
 		if !loc.Localized && locus != "" {
 			loc = FaultLocalization{
 				Localized:  true,
-				Statement:  fmt.Sprintf("Fault localized to %s by independent evidence.", noclabel.Entity(locus)),
+				Statement:  noclabel.LocalisationSentence(noclabel.Entity(locus), true),
 				Object:     locus,
 				ObjectType: "grounded entity (localization boundary)",
 			}
@@ -1646,7 +1727,7 @@ func BuildReport(in ReportInput) Report {
 			if len(root.EvidenceMissing) >= 6 {
 				break
 			}
-			root.EvidenceMissing = appendUnique(root.EvidenceMissing, m)
+			root.EvidenceMissing = appendUnique(root.EvidenceMissing, rcaHumanEvidenceMissing(m, hb))
 		}
 		root.Statement = fmt.Sprintf(
 			"Root cause has not been identified — possibly because of %s (unconfirmed best hypothesis).",
@@ -1696,13 +1777,13 @@ func BuildReport(in ReportInput) Report {
 	phases := BuildIncidentPhases(firstObs, ra, times.MonitoringUntil)
 
 	// ---- wording ----------------------------------------------------------------------------------
-	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
+	title, subtitle, problemNoun := buildRcaTitle(hb, topHyp, incident, scope, laneAnomalous, anomalous, changes)
 	if validation {
 		// Postmortem spec: a validation artifact must never resemble a
 		// production postmortem — the TITLE carries the class, not just a pill.
 		title = "Validation scenario — " + title
 	}
-	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
+	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous, anomalous)
 
 	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra, merge)
 
@@ -1711,7 +1792,7 @@ func BuildReport(in ReportInput) Report {
 		Analysis: analysis, Incident: incident, Hyp: hb, Signals: sigSummary,
 		Decision: decision, Ownership: ownership, Ctx: ictx,
 		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
-		Residual: ra.ResidualAfterComponent, Validation: validation,
+		Residual: ra.ResidualAfterComponent, ServiceScope: ra.servicePresent, Validation: validation,
 		Merge: merge,
 	})
 
@@ -1778,7 +1859,8 @@ func BuildReport(in ReportInput) Report {
 		Root: root, Evidence: rep.Evidence, Impact: impact, ImpactSyn: impactSyn, ImpactRU: impactRU,
 		FirstObs: firstObs, FirstRealUserTS: firstRealUserTS,
 		TriggerSignalID: asString(meta["trigger_signal"]), Signals: in.Signals,
-		Times: times, Monitoring: monitoring, Lifecycle: in.Lifecycle,
+		FirstDetectionAt: rcaFirstVersionCreatedAt(meta),
+		Times:            times, Monitoring: monitoring, Lifecycle: in.Lifecycle,
 	})
 	// Provenance-carrying impact values (spec §2): real-user counts are never
 	// derived from synthetic/flow evidence; missing = "not measured", never zero.
@@ -1818,6 +1900,7 @@ func BuildReport(in ReportInput) Report {
 	rep.Document = buildNocDocument(rcaDocInput{
 		Rep: &rep, Headline: headline, HB: hb, Anomalous: anomalous,
 		Required: required, WhyNot: whyNot, Lanes: laneAnomalous,
+		Observed: obsCond, TopMissing: rcaTopRequiredMissing(hb),
 	})
 	// Artifact-class pre-stamp: promotion is unknown at build time (the HTTP
 	// layer re-stamps once evaluated) — the honest default is unpromoted, which
@@ -1830,6 +1913,62 @@ func BuildReport(in ReportInput) Report {
 	// never emitted as a final assessment (P1 gate).
 	applyReportQualityGate(&rep, in.Now)
 	return rep
+}
+
+// rcaHumanEvidenceMissing turns one engine evidence_missing line
+// ("sig.ent.access.local-link-fault: needs link_state_change") into operator
+// words ("Link up/down"): the leader's own id prefix is dropped (the section is
+// already about it), another template is named by its NOC title, a "needs"
+// clause is humanized like every other clause, and a gate reason goes through
+// the same reason language as "why it is not firmer". No raw template id or
+// kind token reaches the document.
+func rcaHumanEvidenceMissing(line string, hb rcaHypBlob) string {
+	prefix, rest := "", strings.TrimSpace(line)
+	if id, tail, ok := strings.Cut(rest, ": "); ok && strings.HasPrefix(id, "sig.") {
+		rest = strings.TrimSpace(tail)
+		if len(hb.Ranking.Hypotheses) == 0 || hb.Ranking.Hypotheses[0].ID != id {
+			title := ""
+			for _, h := range hb.Ranking.Hypotheses {
+				if h.ID == id {
+					title = h.Title
+				}
+			}
+			prefix = noclabel.HypothesisTitle(id, title) + ": "
+		}
+	}
+	switch {
+	case strings.HasPrefix(rest, "needs "):
+		rest = humanizeClause(strings.TrimPrefix(rest, "needs "))
+	default:
+		rest = strings.Join(FriendlyReasons([]string{rest}), "")
+	}
+	return strings.Join(noclabel.HumanizeMissing([]string{prefix + rest}), "")
+}
+
+// rcaFirstVersionCreatedAt reads when Correlix created the case: the meta field
+// first_version_created_at (the version-1 row's created_at, loaded with the
+// object under the same tenant scope), or the object's own created_at when the
+// loaded row IS version 1. Anything else — not loaded, not retained, the epoch
+// a ClickHouse min() over no rows returns — is zero: absent, never estimated.
+func rcaFirstVersionCreatedAt(meta map[string]any) time.Time {
+	parse := func(v string) time.Time {
+		v = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), " UTC"))
+		if v == "" || v == "<nil>" {
+			return time.Time{}
+		}
+		t, ok := parseChTS(v)
+		if !ok || t.Year() < 2000 {
+			return time.Time{}
+		}
+		return t
+	}
+	if t := parse(asString(meta["first_version_created_at"])); !t.IsZero() {
+		return t
+	}
+	if int(asFloat(meta["version"])) == 1 {
+		return parse(asString(meta["created_at"]))
+	}
+	return time.Time{}
 }
 
 // reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE

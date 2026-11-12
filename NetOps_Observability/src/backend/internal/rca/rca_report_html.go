@@ -31,6 +31,8 @@ import (
 	"html/template"
 	"strings"
 	"time"
+
+	"netops/backend/internal/noclabel"
 )
 
 var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.FuncMap{
@@ -109,11 +111,12 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 		}
 		return v
 	},
+	"nearestCompetitor": func() string { return noclabel.NearestCompetitorNotObserved },
 	"hasLessons": func(l rcaLessonsLearned) bool {
 		return len(l.WhatWorkedWell)+len(l.WhatDidNotWorkAsIntended)+len(l.WhereDefensesLimitedImpact)+
 			len(l.AssumptionsProvedIncorrect)+len(l.DetectionGaps)+len(l.ResponseGaps) > 0
 	},
-}).Parse(rcaReportTmplSrc))
+}).Parse(rcaReportTmplSrc + rcaTopologyContextPartialSrc))
 
 // rcaDensityBarHTML renders one symptom's bucketed observation density as a
 // print-safe inline bar: NEUTRAL ink whose opacity tracks recurrence — volume
@@ -363,7 +366,7 @@ func rcaTitleCase(s string) string {
 // ReportTemplateVersion identifies the document template for the
 // immutability block (postmortem Phase 1): bump on ANY change to
 // rcaReportTmplSrc so a stored revision names the template that rendered it.
-const ReportTemplateVersion = "tmpl-2026.11.11-noc"
+const ReportTemplateVersion = "tmpl-2026.11.12-v2"
 
 func RenderReportHTML(rep Report) ([]byte, error) {
 	// The topology is attached by the HTTP layer AFTER BuildReport, so section
@@ -594,9 +597,12 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <!-- ============================ 6 · WHERE THE BREAK IS ============================ -->
 <div class="pmh">6 · Where the break is</div>
 <section>
+  <p>{{.FaultLocalization.Statement}}</p>
+  {{if .TopologyContext}}{{template "topologyContext" .TopologyContext}}{{else}}
   {{if .Topology.Available}}{{pathGraph .Topology}}{{end}}
   <div class="note">{{.Document.Path.Note}}</div>
   {{if .Topology.DropPoint}}<div class="note" style="font-weight:600">{{.Topology.DropPoint}}</div>{{end}}
+  {{end}}
 </section>
 
 <!-- ============================ 7 · BACKGROUND (NOT A CAUSE) ============================ -->
@@ -764,13 +770,13 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <h2>Hypothesis ranking (engine detail)</h2>
   {{if .Hypotheses}}
   <table><thead><tr><th style="width:5%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:26%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
-  {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.7"{{end}}>
+  {{range .Hypotheses}}<tr{{if or .Contradicted (eq .CandidacyState "nearest_competitor")}} style="opacity:.7"{{end}}>
     <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
-    <td><b>{{.Title}}</b>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
+    <td><b>{{.Title}}</b>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}{{if eq .CandidacyState "nearest_competitor"}} <span class="pill gray">{{nearestCompetitor}}</span>{{end}}
         {{if .Problem}}<div class="note" style="color:#334155">{{.Problem}}</div>{{end}}
-        <div class="note">condition: {{humanState .ObservationState}} · causal role: {{humanState .CausalRole}}</div></td>
-    <td>{{title .Label}}</td>
-    <td>{{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}{{if .Contradicting}}<div class="note">contradicted by: {{range $i, $s := .Contradicting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}</td>
+        {{if eq .CandidacyState "nearest_competitor"}}<div class="note">none of its required observations was seen</div>{{else}}<div class="note">condition: {{humanState .ObservationState}} · causal role: {{humanState .CausalRole}}</div>{{end}}</td>
+    <td>{{if .Label}}{{title .Label}}{{else}}—{{end}}</td>
+    <td>{{if eq .CandidacyState "nearest_competitor"}}{{if .Supporting}}<div class="note">optional context only: {{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{else}}—{{end}}{{else}}{{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}{{end}}{{if .Contradicting}}<div class="note">contradicted by: {{range $i, $s := .Contradicting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}</td>
     <td>{{range $i, $s := .ConfirmWhen}}{{if $i}}; {{end}}{{$s}}{{end}}</td>
   </tr>{{end}}
   </tbody></table>

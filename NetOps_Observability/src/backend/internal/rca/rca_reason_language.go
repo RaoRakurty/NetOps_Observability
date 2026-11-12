@@ -88,6 +88,7 @@ var (
 	reLowAuthority    = regexp.MustCompile(`(?i)required modality (\w+) present but only low-authority`)
 	reModalityMissing = regexp.MustCompile(`(?i)required modality missing[^:]*:\s*(\w+)`)
 	reGteNotation     = regexp.MustCompile(`≥\s*(\d+)`)
+	reSoloObserver    = regexp.MustCompile(`(?i)^single observer \(([^)]+)\)`)
 )
 
 // friendlyReason rewrites one engine reason into operator language.
@@ -116,6 +117,9 @@ func friendlyReason(r string) string {
 	}
 	if strings.Contains(strings.ToLower(r), "cannot confirm without an independent trusted modality") {
 		return "A second independent source is needed to confirm."
+	}
+	if m := reSoloObserver.FindStringSubmatch(r); m != nil {
+		return fmt.Sprintf("Only one source (%s) reported this — a second, independent source is needed to confirm.", m[1])
 	}
 	for t, label := range reasonTokenLabel {
 		r = reasonTokenRe[t].ReplaceAllLiteralString(r, label)

@@ -4,8 +4,8 @@
   "display_id": "P-3335CF",
   "version": 3,
   "report_type": "Incident Assessment",
-  "title": "Application / service experience change — crm-portal",
-  "subtitle": "Leading hypothesis; see analysis state for certainty",
+  "title": "Synthetic http failure on crm-portal — possible application / service experience change",
+  "subtitle": "The title names what was observed; the leading explanation is still missing required evidence",
   "validation": false,
   "generated_at": "2026-07-12 20:00:00 UTC",
   "maturity": {
@@ -53,9 +53,9 @@
     "detection_milestones": [
       {
         "key": "first_credible_failure",
-        "label": "First credible failure",
+        "label": "Earliest attached anomalous observation (detector onset, not fault onset)",
         "ts": "2026-07-12 18:12:00 UTC",
-        "source_lineage": "earliest attached anomalous observation in the correlation window (observed)"
+        "source_lineage": "earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began"
       }
     ],
     "detection_milestones_absent": [
@@ -165,8 +165,8 @@
   "detailed_timeline": [
     {
       "ts": "2026-07-12 18:12:00 UTC",
-      "event": "First credible failure",
-      "source": "earliest attached anomalous observation in the correlation window (observed)"
+      "event": "Earliest attached anomalous observation (detector onset, not fault onset)",
+      "source": "earliest attached anomalous observation in the correlation window — when a detector first flagged it, not when the fault began"
     },
     {
       "ts": "2026-07-12 18:12:00 UTC",
@@ -219,7 +219,7 @@
     }
   ],
   "at_a_glance": {
-    "where": "Not localized — the evidence does not support a single location",
+    "where": "The evidence does not concentrate on a single object; not localised.",
     "where_basis": "none",
     "what": "No cause hypothesis has supporting evidence yet — the anomaly is recorded without a claimed cause.",
     "owners_label": "Possible owner(s)",
@@ -304,7 +304,7 @@
     ]
   },
   "summary": {
-    "management": "At 2026-07-12 18:12:00 UTC, One automated check detected a condition of “application / service experience change” affecting crm-portal. The condition is ongoing (1h 48m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The cause remains unconfirmed because independent evidence classes did not corroborate the observations. Decision: Investigate — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident. Escalation follows the policy thresholds stated in the decision section.",
+    "management": "At 2026-07-12 18:12:00 UTC, One automated check detected a condition of “synthetic http failure” affecting crm-portal. The condition is ongoing (1h 48m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The cause remains unconfirmed because independent evidence classes did not corroborate the observations. Decision: Investigate — Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident. Escalation follows the policy thresholds stated in the decision section.",
     "noc": [
       {
         "k": "Incident",
@@ -673,19 +673,18 @@
       "finding": "3 of 3 observations in this window are anomalous and tied to this case.",
       "from": "2026-07-12 18:12:00 UTC",
       "to": "2026-07-12 18:16:00 UTC",
-      "coverage": "full",
+      "coverage": "unknown",
       "counts_toward_confidence": true,
       "assessment": {
         "class": "active_probe",
         "strategy": "continuous",
-        "quality": "complete",
+        "quality": "unknown",
         "overlap_start": "2026-07-12 18:12:00 UTC",
         "overlap_end": "2026-07-12 18:16:00 UTC",
-        "coverage_ratio": 1,
-        "ratio_known": true,
-        "expected_cadence": "2m 00s",
-        "cadence_known": true,
-        "cadence_source": "inter_arrival",
+        "coverage_ratio": 0,
+        "ratio_known": false,
+        "cadence_known": false,
+        "cadence_source": "unknown",
         "freshness_known": false,
         "scope_relevance": "unknown",
         "collector_health": "unknown",
@@ -696,6 +695,7 @@
         "impact_eligible": true,
         "normality_eligible": false,
         "normality_reasons": [
+          "coverage_incomplete",
           "anomaly_present"
         ]
       }
@@ -743,7 +743,7 @@
   ],
   "fault_localization": {
     "localized": false,
-    "statement": "The fault has not been localized to a specific domain or object."
+    "statement": "The evidence does not concentrate on a single object; not localised."
   },
   "root_cause": {
     "identified": false,
@@ -845,7 +845,7 @@
     "count_7d": 0
   },
   "document": {
-    "what_broke": "Active-check degradation on crm-portal",
+    "what_broke": "Synthetic http failure on crm-portal",
     "who_affected": [
       {
         "axis": "Real users",
