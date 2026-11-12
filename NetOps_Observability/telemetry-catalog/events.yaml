@@ -35,6 +35,16 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-11-sdwan-controller-token-confd — the merge of the two revisions below: the SD-WAN control-connection
+# rows emit the lost controller as a grounding token, and the ConfD `via snmp`
+# session grammar reads no user. Nothing else moved.
+#
+# 2026-11-11-sdwan-controller-token — the SD-WAN control-connection rows
+# (`syslog.sdwan.control_connection.down` / `.up`) also emit the lost controller
+# (`peer-system-ip`) as a grounding token, as the trap rows already did, so several
+# edges' losses of one controller meet on it (the engine's controller fan-in). No
+# grammar, kind, severity or attr moved.
+#
 # 2026-11-11-syslog-final-wave-confd — the merge of the two revisions below: the final
 # syslog wave's grammars and rule rows, and the ConfD `via snmp` session grammar that
 # reads no user. Nothing else moved.
@@ -176,7 +186,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-11-syslog-final-wave-confd
+parser_rev: 2026-11-11-sdwan-controller-token-confd
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #

@@ -278,6 +278,10 @@ const KIND_NOC: Record<string, string> = {
   security_signal: "Security detection",
   // tracker 385: how the engine names the discriminator that rules out a link fault.
   "link_state_change[link_cause=admin]": "Interface shut down by an operator",
+  // SD-WAN controller fan-in (2026-11-11): the structure-conditioned discriminator
+  // that rules out the edge-local reading (`<absent clause>@<structure class>`).
+  "sdwan_control_down|controller_control_connection_loss@controller_fan_in":
+    "Several edges lost the same SD-WAN controller",
 };
 // "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {

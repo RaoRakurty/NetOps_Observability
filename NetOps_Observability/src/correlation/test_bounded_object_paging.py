@@ -96,7 +96,22 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # leaves are `catalog_version` and `engine`. The durable form of that proof is
 # test_admin_link_change_385.py::
 # test_no_link_cause_evidence_is_byte_identical_with_and_without_385.
-FIXTURE_GOLDEN = "c83fd3b4ede97dbe"
+#
+# RE-FROZEN, 2026-11-11, SD-WAN controller fan-in (was "c83fd3b4ede97dbe").
+# ENGINE_SEMVER went 3.3.0 -> 3.4.0 and the catalog moved (structure class
+# controller_fan_in, the sdwan-controller-unreachable template, the edge-local
+# template's mandatory clause, Discriminator.attested). This object carries no
+# control-connection loss, so its DECISION cannot move, and that was CHECKED by a
+# JSON diff of the hypotheses blob against origin/main da6452a0: the only
+# differing leaf is `ranking/catalog_version`. The durable form of that proof is
+# test_sdwan_controller_fan_in.py::
+# test_no_control_loss_evidence_is_byte_identical_with_and_without_the_change.
+#
+# RE-FROZEN, 2026-11-11, Fable review fixes on the same branch (was
+# "4d155b6650f11505"): the controller template's operator phrase / blast radius
+# became conditional, so catalog_version moved. JSON diff of the blob against
+# 68abe8a6: the only differing leaf is `ranking/catalog_version`.
+FIXTURE_GOLDEN = "0c87be7cb31b263f"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,
