@@ -184,5 +184,7 @@ func buildRichFixtureReport(t *testing.T) Report {
 		},
 		DropPoint: "The last responding hop was correlix-vpn-nat-01 (provider boundary); the destination did not respond beyond this point.",
 	}
+	// RCA v2 §2: the document draws the spine through the topology context.
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: meta, Signals: sigs, Spine: &rep.Topology}, TopologyRead{}, nil)
 	return rep
 }

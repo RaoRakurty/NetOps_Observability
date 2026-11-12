@@ -154,7 +154,9 @@ func (s *server) handleRcaReportsLibrary(w http.ResponseWriter, r *http.Request)
 	evaluated := 0
 	reports := make([]rcaLibraryReport, 0, len(ids))
 	for _, id := range ids {
-		rep, status, err := s.buildRcaReportForID(r, claims, id, 0)
+		// Summary build: the shared pipeline minus the topology read, which a
+		// list of up to rcaLibraryEvalCap rows never renders (RCA v2 §2).
+		rep, status, err := s.buildRcaReportSummaryForID(r, claims, id, 0)
 		evaluated++
 		if err != nil {
 			if status == http.StatusNotFound {

@@ -86,7 +86,6 @@
     <span class="k">Why</span><span class="v" style="font-weight:400">named by the &#34;IPsec tunnel down — cloud private path&#34; hypothesis (confirmed)</span>
   </div>
   
-  <div class="note"></div>
   
 </section>
 
@@ -540,10 +539,10 @@
 </section>
 
 <section>
-  <h2>Network path &amp; causality (measured)</h2>
   
-  <div class="note"></div>
-  
+  <h2>Network topology &amp; causality</h2>
+<div class="note">The topology context was not built for this document.</div>
+
 </section>
 
 

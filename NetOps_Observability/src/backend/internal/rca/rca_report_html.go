@@ -359,7 +359,7 @@ func rcaTitleCase(s string) string {
 // ReportTemplateVersion identifies the document template for the
 // immutability block (postmortem Phase 1): bump on ANY change to
 // rcaReportTmplSrc so a stored revision names the template that rendered it.
-const ReportTemplateVersion = "tmpl-2026.07.19-p2"
+const ReportTemplateVersion = "tmpl-2026.11.12-topoctx"
 
 func RenderReportHTML(rep Report) ([]byte, error) {
 	var buf bytes.Buffer
@@ -478,12 +478,9 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <span class="k">{{.AtAGlance.OwnersLabel}}</span><span class="v">{{range $i, $o := .AtAGlance.Owners}}{{if $i}} · {{end}}{{$o}}{{end}}</span>
     {{if .AtAGlance.OwnersReason}}<span class="k">Why</span><span class="v" style="font-weight:400">{{.AtAGlance.OwnersReason}}</span>{{end}}
   </div>
-  {{if .Topology.Available}}
-  {{pathGraph .Topology}}
-  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; hop-by-hop detail in the evidence appendix.</div>
-  {{else}}
-  <div class="note">{{.Topology.Reason}}</div>
-  {{end}}
+  {{/* RCA v2 WS-A (minimal placement edit — WS-B owns this file's section
+       structure and moves it): the ONE topology model, rca_report_html_topology.go. */}}
+  {{template "topologyContextBrief" .TopologyContext}}
 </section>
 
 <section>
@@ -874,26 +871,11 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 
 <section>
-  <h2>Network path &amp; causality (measured)</h2>
-  {{if .Topology.Available}}
-  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.RelationToIncident}} · temporal role: <b>{{humanState .Topology.RelationToIncident}}</b>{{end}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
-  {{if .Topology.TemporalNote}}<div class="note" style="color:#b45309;font-weight:600">{{.Topology.TemporalNote}}</div>{{end}}
-  {{pathGraph .Topology}}
-  <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
-  {{range .Topology.Hops}}<tr>
-    <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
-    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if respondingMark .}} <span class="pill gray">◍ last responding hop — boundary after</span>{{else if eq .Fault "broken"}} <span class="pill red">✕ failed hop</span>{{else if eq .Fault "suspected"}} <span class="pill amber">✕ suspected failed hop</span>{{end}}</td>
-    <td style="font-family:ui-monospace,monospace">{{.Address}}</td>
-    <td>{{title .Kind}}</td>
-    <td><span class="pill {{if eq .State "down"}}red{{else if eq .State "degraded"}}amber{{else if eq .State "unknown"}}gray{{else}}green{{end}}">{{title .State}}</span></td>
-    <td>{{if .SeamID}}provider boundary ({{.Boundary}}){{else}}{{.Boundary}}{{end}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  {{if .Topology.DropPoint}}<div class="note" style="font-weight:600">{{.Topology.DropPoint}}</div>{{end}}
-  <div class="note">Only the measured path is drawn. An unknown hop is preserved as unknown — never bridged. A probe source→target relationship does not by itself imply physical causality.</div>
-  {{else}}
-  <div class="note">{{.Topology.Reason}}</div>
-  {{end}}
+  {{/* RCA v2 WS-A (minimal placement edit — WS-B places this in NOC section 6
+       "Where the break is"): the ONE topology model, rca_report_html_topology.go.
+       The measured spine renders INSIDE it when present; its absence is never
+       the section's verdict. */}}
+  {{template "topologyContext" .TopologyContext}}
 </section>
 
 {{if .CloudChanges}}

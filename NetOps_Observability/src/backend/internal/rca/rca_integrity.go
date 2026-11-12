@@ -80,6 +80,9 @@ func ComputeReportIntegrity(rep Report) (ReportIntegrity, error) {
 		}
 		cp.Semantics.Symptoms = syms
 	}
+	// Topology freshness (RCA v2 §2): last-seen / observed-at stamps follow the
+	// poll and reconcile clock, not the analysis (TopologyContextForHash).
+	cp.TopologyContext = TopologyContextForHash(cp.TopologyContext)
 	if cp.Times.DurationBasis == "elapsed_still_active" {
 		cp.Times.DurationMS = 0
 		// The still-ticking elapsed duration also appears FORMATTED in the
