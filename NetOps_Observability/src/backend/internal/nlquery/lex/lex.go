@@ -39,6 +39,9 @@ type Text struct {
 	Norm string
 	// Tokens are Norm's words, in order.
 	Tokens []string
+	// Readings are the shorthand expansions that carry meaning ("rn" →
+	// "right now"); the caller discloses them with the answer.
+	Readings []Reading
 }
 
 // accents folds the Latin letters an operator's keyboard or a pasted site name
@@ -85,6 +88,83 @@ var punctRe = regexp.MustCompile(`[^a-z0-9:/._@%&' -]+`)
 // the grammar always read it, and "what's" never reaches here for that reason.
 var contractions = map[string][]string{
 	"we're": {"we", "are"}, "what're": {"what", "are"}, "where're": {"where", "are"}, "how're": {"how", "are"},
+	// The negative forms of the state verbs, so "aren't established" reads as
+	// the grammar's "not established".
+	"aren't": {"are", "not"}, "isn't": {"is", "not"}, "wasn't": {"was", "not"}, "weren't": {"were", "not"},
+	"arent": {"are", "not"}, "isnt": {"is", "not"},
+}
+
+// abbreviation is one chat-speak or NOC shorthand an operator types for a
+// word the grammar knows. disclose marks the ones that carry meaning (a time,
+// an object): reading "rn" as "right now" changes the window, so it is said
+// with the answer (D2). The framing ones ("pls", "w/", "r") change nothing a
+// query depends on and are expanded silently.
+type abbreviation struct {
+	to       []string
+	disclose bool
+}
+
+// abbreviations is closed and code-owned (held-out phrasings never appear
+// here, N-H3). Only whole tokens are expanded: "r1" or "u-turn" are names.
+var abbreviations = map[string]abbreviation{
+	"rn": {[]string{"right", "now"}, true}, "atm": {[]string{"right", "now"}, true},
+	"yday": {[]string{"yesterday"}, true}, "yest": {[]string{"yesterday"}, true},
+	"nbr": {[]string{"neighbor"}, true}, "nbrs": {[]string{"neighbors"}, true},
+	"iface": {[]string{"interface"}, true}, "ifaces": {[]string{"interfaces"}, true},
+	"cfg": {[]string{"config"}, true},
+	"pls": {[]string{"please"}, false}, "plz": {[]string{"please"}, false},
+	"w/": {[]string{"with"}, false}, "r": {[]string{"are"}, false}, "u": {[]string{"you"}, false},
+	"ur": {[]string{"your"}, false}, "thx": nil0, "ty": nil0,
+}
+
+// nil0 is an abbreviation that reads as nothing ("thx").
+var nil0 = abbreviation{}
+
+// KindAbbreviation readings say which shorthand was expanded.
+const KindAbbreviation = "abbreviation"
+
+// expandAbbreviation returns the words a token stands for and the reading to
+// disclose ("" when silent); ok is false when the token is not shorthand.
+func expandAbbreviation(tok string) (words []string, rd *Reading, ok bool) {
+	a, ok := abbreviations[tok]
+	if !ok {
+		return nil, nil, false
+	}
+	if a.disclose {
+		rd = &Reading{From: tok, To: strings.Join(a.to, " "), Kind: KindAbbreviation}
+	}
+	return a.to, rd, true
+}
+
+// ExpandAbbreviations expands the shorthand tokens of a space-separated text,
+// keeping each token's sentence punctuation ("rn?" → "right now?"), and
+// returns the readings to disclose.
+func ExpandAbbreviations(text string) (string, []Reading) {
+	toks := strings.Fields(text)
+	out := make([]string, 0, len(toks))
+	var rds []Reading
+	for _, t := range toks {
+		core := strings.TrimRight(t, "?!.,;:")
+		tail := t[len(core):]
+		words, rd, ok := expandAbbreviation(core)
+		if !ok {
+			out = append(out, t)
+			continue
+		}
+		if rd != nil {
+			rds = append(rds, *rd)
+		}
+		if len(words) == 0 {
+			if tail != "" && len(out) > 0 {
+				out[len(out)-1] += tail
+			}
+			continue
+		}
+		w := append([]string(nil), words...)
+		w[len(w)-1] += tail
+		out = append(out, w...)
+	}
+	return strings.Join(out, " "), rds
 }
 
 // smallNumbers are the number words read as digits. "one" is deliberately
@@ -127,8 +207,16 @@ func Normalize(q string) Text {
 	s = strings.TrimRight(s, ". ")
 	raw := strings.Fields(s)
 	toks := make([]string, 0, len(raw))
+	var rds []Reading
 	for i := 0; i < len(raw); i++ {
 		w := raw[i]
+		if words, rd, ok := expandAbbreviation(w); ok {
+			toks = append(toks, words...)
+			if rd != nil {
+				rds = append(rds, *rd)
+			}
+			continue
+		}
 		if parts, ok := contractions[w]; ok {
 			toks = append(toks, parts...)
 			continue
@@ -151,7 +239,7 @@ func Normalize(q string) Text {
 		}
 		toks = append(toks, w)
 	}
-	return Text{Raw: q, Norm: strings.Join(toks, " "), Tokens: toks}
+	return Text{Raw: q, Norm: strings.Join(toks, " "), Tokens: toks, Readings: rds}
 }
 
 // Squash is the name key: Fold, then only letters and digits. Two names with

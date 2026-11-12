@@ -101,10 +101,16 @@ func TestInventoryQuestions(t *testing.T) {
 			t.Errorf("%q: an inventory question has no window: %+v", c.q, r.AST.Time)
 		}
 	}
-	for _, q := range []string{"how many routers", "how many firewalls in dallas", "how many devices and sites"} {
-		if r := run(t, q, cx); r.AST != nil {
-			t.Errorf("%q must not be answered as every device: %+v", q, r.AST)
+	// A role word is a device-type filter (phrasing eval 2026-11-12), never
+	// every device.
+	for q, typ := range map[string]string{"how many routers": "router", "how many firewalls in dallas": "firewall"} {
+		r := run(t, q, cx)
+		if r.AST == nil || len(r.AST.Filters) != 1 || r.AST.Filters[0].Field != ast.FilterDeviceType || r.AST.Filters[0].Values[0] != typ {
+			t.Errorf("%q must count only %ss: %+v", q, typ, r.AST)
 		}
+	}
+	if r := run(t, "how many devices and sites", cx); r.AST != nil {
+		t.Errorf("two kinds named must not be one count: %+v", r.AST)
 	}
 }
 

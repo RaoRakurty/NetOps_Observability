@@ -51,11 +51,15 @@ const (
 	// left Unparsed both before and after, the oracle's verdict changed for
 	// exactly one, refused → accepted: no guard became stricter. The
 	// population-stable floor is minKeyPathReach below, which only rises.
-	minOracleAcceptance = 0.58
+	// Lowered again 0.58 → 0.57 on 2026-11-12 (phrasing eval: device liveness,
+	// BGP state, recency windows): the grammar took 7 more answerable
+	// phrasings (408 → 415), 6 of which the oracle had accepted (159 → 153), so
+	// the share left to the model is harder; the key path rose 0.830 → 0.832.
+	minOracleAcceptance = 0.57
 	// minKeyPathReach: of every answerable phrasing, the share answered by the
 	// grammar or accepted by the model path behind it (the key path end to
 	// end). Ratchet: raise, never lower.
-	minKeyPathReach          = 0.825
+	minKeyPathReach          = 0.83
 	minOracleAnsweredPrec    = 0.99
 	minRepairAcceptanceRatio = 0.95 // repaired acceptances / oracle acceptances
 	// maxUnguardedWidening caps phrasings where a widened answer passes because

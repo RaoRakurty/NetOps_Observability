@@ -67,6 +67,24 @@ func (t QueryType) Known() bool {
 // IsInventory reports a count or list of the caller's visible entities.
 func (t QueryType) IsInventory() bool { return t == EntityCount || t == EntityList }
 
+// Device inventory filters ("which devices are down", "how many routers do we
+// have"). Only a device count or list carries them; each field's values are
+// closed.
+const (
+	// FilterReachability is the collectors' liveness verdict
+	// (internal/devreach): the one status every inventory surface shows.
+	FilterReachability = "reachability"
+	// FilterDeviceType is the device's functional type (inferred from its
+	// SNMP signals, operator-overridable).
+	FilterDeviceType = "type"
+)
+
+// DeviceReachabilities are the values of FilterReachability (devreach.Up …).
+var DeviceReachabilities = []string{"up", "down", "partial", "unknown"}
+
+// DeviceTypes are the values of FilterDeviceType (inferDeviceType).
+var DeviceTypes = []string{"router", "switch", "firewall", "load-balancer", "ap", "wlc", "cloud-gw", "generic"}
+
 // IsMetric reports whether the query reads metric series.
 func (t QueryType) IsMetric() bool {
 	return t == MetricSeries || t == MetricTopK || t == MetricFilter || t == CompareWindows

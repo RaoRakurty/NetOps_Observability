@@ -68,6 +68,9 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		// for Provider rows; pinned below to keep calling principalTenant.
 		"Changes":  {"changeLedgerTenant(h.claims)"},
 		"Circuits": {"h.s.deviceVisibilityFor(h.claims)"},
+		// "which devices are down": the liveness read carries the caller's
+		// metric scope filter, exactly like the inventory page's.
+		"DeviceReachability": {"h.s.metricsScopeFiltersFor(h.claims)"},
 	}
 	for method, needles := range want {
 		if src[method] == "" {
