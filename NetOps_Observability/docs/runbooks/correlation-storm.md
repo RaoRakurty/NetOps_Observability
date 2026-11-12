@@ -127,6 +127,15 @@ SELECT count() FROM (
 WHERE state != 'open';
 ```
 
-Non-zero after a pass, with `state_repaired=` in the api log, means the repair
-ran but the fold did not take — check ClickHouse merges on `corr_current`. No
-`corr-current-reconcile` lines at all means the worker is not running.
+Every repair is a bounded batch: `CORR_CURRENT_RECONCILE_BATCH` objects per
+statement (default 5000, oldest first), at most
+`CORR_CURRENT_RECONCILE_MAX_BATCHES` statements per step per pass (default 20).
+A backlog bigger than one pass's budget drains over passes; the gauge always
+shows the whole backlog, and each step logs
+`step=<orphan|drift|state_drift> found=N` then `repaired=R residual=N-R`.
+
+Non-zero after a pass with `residual=0` in the api log means the repair ran but
+the fold did not take — check ClickHouse merges on `corr_current`. A residual
+that shrinks pass over pass is a backlog draining (raise the batch budget only
+if it must drain faster). No `corr-current-reconcile` lines at all means the
+worker is not running.
