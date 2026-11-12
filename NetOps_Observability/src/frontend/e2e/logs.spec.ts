@@ -46,7 +46,7 @@ const SYSLOG = {
   _source: {
     timestamp: at(90_000), signal: "syslog", hostname: "vEdge-52", source_ip: "192.168.222.102", appname: "confd",
     facility: "user", severity: "notice", vendor: "unknown", parser_status: "unparsed",
-    message: "4220 - - audit user: svc-poller/980840 created new session via snmp from 127.0.0.1:54511 with udp",
+    message: "4220 - - audit user: svc-nms/980840 created new session via snmp from 127.0.0.1:54511 with udp",
     tenant_attribution: "unmatched", topic: "netops.syslog", partition: 2,
   },
 };

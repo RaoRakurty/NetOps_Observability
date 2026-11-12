@@ -183,7 +183,7 @@ export const SYSLOG_AUDIT: LogHit = {
     hostname: "vedge-52-0a0b4db6", source_ip: "192.168.222.102", device_id: "vedge-52-0a0b4db6",
     vendor: "cisco", platform: "SD-WAN", model: "vEdge", tenant_id: "global", tenant_attribution: "platform_owned",
     appname: "confd", syslog_facility: "user", severity: "notice", normalized_severity: "notice",
-    message: "audit user: svc-poller/980840 created new session via snmp from 127.0.0.1:54511 with udp",
+    message: "audit user: svc-nms/980840 created new session via snmp from 127.0.0.1:54511 with udp",
     event_type: "sdwan_session_created", event_category: "management_audit",
     audit_action: "created new session", audit_source: "127.0.0.1:54511", audit_via: "snmp (udp)", session_id: "980840",
     parser_status: "parsed", parser_id: "cisco-sdwan.audit",

@@ -4,6 +4,8 @@
 // Minimal typed API client. Paths are relative — nginx (or Vite dev
 // proxy) routes /api and /admin to the Go backend.
 
+import { printHtmlDocument } from "../lib/printHtml";
+
 // Port Intelligence workbench row (#94) — flattened port+transceiver+health.
 export type PortRow = {
   device: string;
@@ -6552,9 +6554,11 @@ export const api = {
     request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
   // Canonical server-side RCA report (owner directive 2026-07-12). PDF via the
   // backend's controlled renderer (no browser print chrome); when the PDF
-  // sidecar is off, falls back to the server-rendered HTML in a new tab.
-  // Returns which format was delivered.
-  downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "html"> => {
+  // sidecar is off (always, on a customer bundle — licence audit D6) the SAME
+  // server-rendered document goes straight to the browser's Save-as-PDF
+  // dialog in place. It used to open in a new tab, which left the operator on
+  // a bare page with no way to save it. Returns which path delivered it.
+  downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "print"> => {
     const headers = authHeaders();
     const base = `/api/correlations/${encodeURIComponent(id)}/rca-report`;
     const pdf = await fetch(`${base}?format=pdf`, { headers });
@@ -6570,11 +6574,13 @@ export const api = {
     }
     const html = await fetch(`${base}?format=html`, { headers });
     if (!html.ok) throw new Error(`report render failed (${html.status})`);
-    const blob = await html.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return "html";
+    // Only a document is ever written into the print frame — never an error
+    // body or anything else a misbehaving proxy might return with a 200.
+    if (!(html.headers.get("content-type") || "").toLowerCase().startsWith("text/html")) {
+      throw new Error("report render returned no document");
+    }
+    if (!printHtmlDocument(await html.text())) throw new Error("could not open the print dialog");
+    return "print";
   },
   // Canonical server-side RCA report as JSON (same endpoint the PDF/HTML render
   // from). The path-causality P3 render reads `path_attribution` off this; the
