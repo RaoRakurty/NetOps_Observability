@@ -65,8 +65,17 @@ type DeviceFilter struct {
 	Sites []string
 }
 
-// DeviceRef is one visible device.
-type DeviceRef struct{ ID, Name, Site string }
+// DeviceRef is one visible device. Type is its functional type
+// (ast.DeviceTypes; "" when the scope does not know it).
+type DeviceRef struct{ ID, Name, Site, Type string }
+
+// ReachabilityScope is the OPTIONAL Scope seam for device liveness ("which
+// devices are down"): the reachability verdict (ast.DeviceReachabilities) of
+// each of ids, read in the caller's scope. A Scope without it answers every
+// device "unknown" and says so — never "down".
+type ReachabilityScope interface {
+	DeviceReachability(ctx context.Context, ids []string) (map[string]string, error)
+}
 
 // CircuitFilter selects visible circuits, with DeviceFilter's semantics:
 // AND across fields, OR within one, empty = unconstrained.

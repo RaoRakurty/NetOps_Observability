@@ -416,6 +416,17 @@ type nlqRan struct {
 // recorded on the query log, and ran (may be nil) receives the query that
 // answered.
 func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.State, convID string, ran *nlqRan) ai.NLQueryFunc {
+	return s.aiNLQueryRunning(r, claims, st, convID, ran, s.nlqRun)
+}
+
+// nlqRunFunc executes one validated query in the caller's scope.
+type nlqRunFunc func(r *http.Request, claims jwtClaims, checked *nlqast.AST, vr validate.Result) (*plan.ResultSet, error)
+
+// aiNLQueryRunning is aiNLQueryWith with the executor named: production always
+// passes s.nlqRun. The phrasing eval (iris_phrasing_eval_test.go) passes a
+// recorder, so it scores the data arm's REAL decisions — compile, admit,
+// clarify, refuse — without reading any backend.
+func (s *server) aiNLQueryRunning(r *http.Request, claims jwtClaims, st *irisconvo.State, convID string, ran *nlqRan, run nlqRunFunc) ai.NLQueryFunc {
 	if s.nlqCatalog == nil || s.roles == nil || !s.roles.Allows(claims.Role, "infrastructure", LevelRead) {
 		return nil
 	}
@@ -454,7 +465,7 @@ func (s *server) aiNLQueryWith(r *http.Request, claims jwtClaims, st *irisconvo.
 			s.nlqCapture(rq, claims, &rec, start)
 			return ai.DataAnswer{Status: ai.DataNotData}, nil
 		}
-		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec)
+		d, err := s.nlqDataAnswer(rq, claims, c, ran, &rec, run)
 		if err != nil {
 			rec.Outcome = irisquerylog.OutcomeError
 		}
@@ -577,7 +588,7 @@ func nlqAdmits(c nlqCompiled, opts ai.DataOpts) bool {
 
 // nlqDataAnswer turns one compiled question into the data arm's answer; rec
 // (never nil) receives what the run produced — counts only.
-func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan, rec *irisquerylog.Record) (ai.DataAnswer, error) {
+func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled, ran *nlqRan, rec *irisquerylog.Record, run nlqRunFunc) (ai.DataAnswer, error) {
 	notData := ai.DataAnswer{Status: ai.DataNotData}
 	switch {
 	case c.res.Unparsed && c.res.Decline == "" && len(c.asks) > 0 && nlqEveryWordOffered(c.res):
@@ -629,7 +640,7 @@ func (s *server) nlqDataAnswer(r *http.Request, claims jwtClaims, c nlqCompiled,
 		return ai.DataAnswer{Status: ai.DataAnswered, Intent: c.res.Intent, Payload: payload, Notes: c.readingNotes(),
 			Text: "I understood the question but can't run it as asked: " + strings.Join(msgs, "; ") + "."}, nil
 	}
-	rs, err := s.nlqRun(r, claims, c.checked, *c.vr)
+	rs, err := run(r, claims, c.checked, *c.vr)
 	nlqLedgerRun(aidecision.FromContext(r.Context()), c, rs, err)
 	if errors.Is(err, plan.ErrNotFound) {
 		rec.Outcome = irisquerylog.OutcomeError
@@ -1641,6 +1652,12 @@ func (s *server) nlqCompile(r *http.Request, claims jwtClaims, question string, 
 	// cache. The model-suggestion rung is NOT wired into this ladder: nothing
 	// a model suggests is ever applied to a query without the operator
 	// confirming it first.
+	// One strike per request (ai.ModelStruck): the tie-break, the rephrase and
+	// the strong compile share the request's note, so a provider that timed
+	// out once is not waited on again by the next stage. /api/ai/ask already
+	// carries a note (Orchestrator.Ask); /api/ai/query/compile gets its own.
+	noted, _ := ai.WithModelNote(r.Context())
+	r = r.WithContext(noted)
 	l := newNLQLookups(s, r, claims)
 	resolver := resolve.Resolver{Cat: s.nlqCatalog, L: l, Topo: l}
 	res, err := compile.Compiler{Cat: s.nlqCatalog, R: resolver}.Compile(r.Context(), question, cx)

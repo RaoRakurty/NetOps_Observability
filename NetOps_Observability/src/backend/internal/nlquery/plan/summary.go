@@ -305,13 +305,17 @@ func capitalizeFirst(s string) string {
 // sites:" with the largest groups first. Zero is a real count here (the
 // caller's inventory was read), so it is said as zero.
 func summarizeCount(b *strings.Builder, q *ast.AST, rs *ResultSet) {
-	noun := q.Target
+	noun := inventoryNoun(q)
 	if len(q.GroupBy) == 0 {
 		n := 0
 		if len(rs.Rows) == 1 {
 			n, _ = rs.Rows[0]["count"].(int)
 		}
-		fmt.Fprintf(b, "You can see %d %s%s.", n, noun, plural(n, "", "s"))
+		if st := reachPhrase(q); st != "" {
+			fmt.Fprintf(b, "%d %s%s you can see %s %s.", n, noun, plural(n, "", "s"), plural(n, "is", "are"), st)
+		} else {
+			fmt.Fprintf(b, "You can see %d %s%s.", n, noun, plural(n, "", "s"))
+		}
 		writeNotes(b, rs)
 		return
 	}
@@ -334,10 +338,16 @@ func summarizeCount(b *strings.Builder, q *ast.AST, rs *ResultSet) {
 
 // summarizeInventory lists the visible entities ("3 devices: …").
 func summarizeInventory(b *strings.Builder, q *ast.AST, rs *ResultSet) {
-	noun := q.Target
+	noun := inventoryNoun(q)
+	key := q.Target
 	n := len(rs.Rows)
+	st := reachPhrase(q)
 	if n == 0 {
-		fmt.Fprintf(b, "You can see no %ss here.", noun)
+		if st != "" {
+			fmt.Fprintf(b, "No %s you can see is %s.", noun, st)
+		} else {
+			fmt.Fprintf(b, "You can see no %ss here.", noun)
+		}
 		writeNotes(b, rs)
 		return
 	}
@@ -345,17 +355,64 @@ func summarizeInventory(b *strings.Builder, q *ast.AST, rs *ResultSet) {
 	if rs.Truncated {
 		more = " (more exist; showing the first)"
 	}
-	fmt.Fprintf(b, "%d %s%s%s:", n, noun, plural(n, "", "s"), more)
+	switch {
+	case st != "":
+		fmt.Fprintf(b, "%d %s%s %s %s%s:", n, noun, plural(n, "", "s"), plural(n, "is", "are"), st, more)
+	case rs.Rows[0]["reachability"] != nil:
+		fmt.Fprintf(b, "%d %s%s%s — %s:", n, noun, plural(n, "", "s"), more, reachTally(rs.Rows))
+	default:
+		fmt.Fprintf(b, "%d %s%s%s:", n, noun, plural(n, "", "s"), more)
+	}
 	for i, r := range rs.Rows {
 		if i == summaryItems {
 			fmt.Fprintf(b, "\n… and %d more.", n-summaryItems)
 			break
 		}
-		line := str(r[noun])
-		if site := str(r["site"]); site != "" && noun != "site" {
+		line := str(r[key])
+		if site := str(r["site"]); site != "" && key != "site" {
 			line += " (" + site + ")"
+		}
+		if rv := str(r["reachability"]); rv != "" && st == "" {
+			line += ": " + rv
 		}
 		b.WriteString("\n• " + line)
 	}
 	writeNotes(b, rs)
+}
+
+// inventoryNoun is what an inventory answer counts: the target, or the one
+// device type the question named ("router").
+func inventoryNoun(q *ast.AST) string {
+	for _, f := range q.Filters {
+		if f.Field == ast.FilterDeviceType && len(f.Values) == 1 && f.Values[0] != "generic" {
+			return f.Values[0]
+		}
+	}
+	return q.Target
+}
+
+// reachPhrase is the reachability a filtered inventory asked for ("down",
+// "down or partial"); "" when the query has no reachability filter.
+func reachPhrase(q *ast.AST) string {
+	for _, f := range q.Filters {
+		if f.Field == ast.FilterReachability {
+			return strings.Join(f.Values, " or ")
+		}
+	}
+	return ""
+}
+
+// reachTally is "3 up, 1 down" over the rows' reachability, in a fixed order.
+func reachTally(rows []Row) string {
+	n := map[string]int{}
+	for _, r := range rows {
+		n[str(r["reachability"])]++
+	}
+	var parts []string
+	for _, k := range ast.DeviceReachabilities {
+		if n[k] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n[k], k))
+		}
+	}
+	return strings.Join(parts, ", ")
 }

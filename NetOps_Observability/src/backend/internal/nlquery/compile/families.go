@@ -59,30 +59,87 @@ func (s *state) severityFilter(q *ast.AST, text string) {
 var (
 	countLeadRe = regexp.MustCompile(`^(?:so\s+)?(?:how many|count(?: of| the| all)?|number of|the number of|total(?: number of)?)\b`)
 	listLeadRe  = regexp.MustCompile(`^(?:so\s+)?(?:list|show|display|give|tell|which|what)\b`)
+	// stateLeadRe opens a question about how devices STAND ("is cedge-81 up",
+	// "any devices down", "status of edge-a", "devices down in the last hour").
+	stateLeadRe = regexp.MustCompile(`^(?:so\s+)?(?:is|are|any|anything|check|status of|state of|health of|(?:network )?devices?|routers?|switch(?:es)?|firewalls?|boxes|nodes)\b`)
 	// invQualRe are the words that say "the inventory you know about".
-	invQualRe = regexp.MustCompile(`\b(?:onboarded|discovered|monitored|managed|visible|known|in (?:the |your |our )?inventory|can you see|do you see|you can see|you see|can i see|i can see|do we have|we have|do i have|i have|are there|there are|in total|total|altogether|all|of them)\b`)
-	// invTargetRes name WHAT is counted. Only the generic nouns: a role word
-	// ("routers", "firewalls") would need a role filter the inventory does not
-	// carry, so it is left not understood rather than answered for every device.
+	invQualRe = regexp.MustCompile(`\b(?:onboarded|discovered|monitored|managed|visible|known|in (?:the |your |our )?inventory|can you see|do you see|you can see|you see|can i see|i can see|do we have|we have|do i have|i have|(?:do|does|are) (?:we|you|i) (?:monitor|manage)(?:ing)?|we (?:monitor|manage)|are there|there are|in total|total|altogether|all|of them|that are|that is|currently|still)\b`)
+	// invTargetRes name WHAT is counted.
 	invTargetRes = []struct {
 		re     *regexp.Regexp
 		target string
 	}{
-		{regexp.MustCompile(`\b(?:devices?|boxes|nodes|network devices)\b`), "device"},
+		{regexp.MustCompile(`\b(?:devices?|box(?:es)?|nodes|network devices)\b`), "device"},
 		{regexp.MustCompile(`\b(?:sites?|locations?)\b`), "site"},
 		{regexp.MustCompile(`\b(?:circuits?|wan links?)\b`), "circuit"},
 	}
+	// invRoleRes are the device-type words: a device count or list filtered by
+	// the device's functional type (ast.FilterDeviceType).
+	invRoleRes = []struct {
+		re  *regexp.Regexp
+		typ string
+	}{
+		{regexp.MustCompile(`\brouters?\b`), "router"},
+		{regexp.MustCompile(`\bswitch(?:es)?\b`), "switch"},
+		{regexp.MustCompile(`\bfirewalls?\b`), "firewall"},
+	}
 	invPerSiteRe = regexp.MustCompile(`\b(?:per|by|for each|each|grouped by|broken down by)\s+(?:site|location)\b`)
+
+	// Device liveness (ast.FilterReachability). reachDeviceRe are the words
+	// only a device can be — they name the target on their own ("anything
+	// unreachable"); a bare "down" also fits an incident or an interface.
+	reachDownRe   = regexp.MustCompile(`\b(?:down|unreachable|offline|not responding|not reachable|unresponsive|not up)\b`)
+	reachUpRe     = regexp.MustCompile(`\b(?:up|reachable|online|alive|responding)\b`)
+	reachDeviceRe = regexp.MustCompile(`\b(?:unreachable|offline|not responding|not reachable|unresponsive)\b`)
+	// upPhrasalRe: "up" in a phrasal verb is not a state ("pull up the devices").
+	upPhrasalRe = regexp.MustCompile(`\b(?:pull|bring|look|set|show)\s+up\b`)
+	// allUpRe asks whether EVERY device is up: answered with the tally, not a
+	// list of the up ones.
+	allUpRe = regexp.MustCompile(`^(?:so\s+)?(?:are|is)\s+(?:all|every|everything)\b`)
+	// standingRe asks how one named device stands ("is vedge-1 ok").
+	standingRe = regexp.MustCompile(`\b(?:ok|okay|fine|healthy|alright|good|status|state|health)\b`)
+	// otherThingRe names something that is not a device as a whole: an
+	// interface, a session, a circuit, an incident — never an inventory answer.
+	otherThingRe = regexp.MustCompile(`\b(?:interfaces?|ports?|links?|intf|bgp|ospf|isis|peers?|neighbou?rs?|sessions?|tunnels?|circuits?|underlay|incidents?|outages?|problems?|issues?|alerts?|alarms?|cases?)\b`)
 )
 
-// inventory compiles "how many devices …" / "list the sites …". ok is false
-// when the question is not an inventory question at all.
+// isDeviceStateQuestion: a question about whether devices are up or down, or
+// how one named device stands, that names nothing but devices. It is tried
+// before the incident family, which would otherwise claim the word "down".
+func isDeviceStateQuestion(text string) bool {
+	if otherThingRe.MatchString(text) {
+		return false
+	}
+	return reachDownRe.MatchString(text) || (reachUpRe.MatchString(text) && !upPhrasalRe.MatchString(text)) || standingRe.MatchString(text)
+}
+
+// reachFilter is the reachability a question asks for, or nil: a device that
+// is named is listed with its verdict, never filtered out of its own answer.
+func (s *state) reachFilter(namedDevice bool) *ast.Filter {
+	if namedDevice || allUpRe.MatchString(s.text) {
+		s.e.re(reachDownRe, s.text)
+		s.e.re(reachUpRe, s.text)
+		return nil
+	}
+	switch {
+	case s.e.re(reachDownRe, s.text):
+		return &ast.Filter{Field: ast.FilterReachability, Op: "eq", Values: []string{"down"}}
+	case !upPhrasalRe.MatchString(s.text) && s.e.re(reachUpRe, s.text):
+		return &ast.Filter{Field: ast.FilterReachability, Op: "eq", Values: []string{"up"}}
+	}
+	return nil
+}
+
+// inventory compiles "how many devices …" / "list the sites …" / "which
+// routers are down" / "is cedge-81 up". ok is false when the question is not
+// an inventory question at all.
 func (s *state) inventory() (Result, bool, error) {
 	count := countLeadRe.MatchString(s.text)
-	if !count && !listLeadRe.MatchString(s.text) {
+	stateLead := stateLeadRe.MatchString(s.text)
+	if !count && !listLeadRe.MatchString(s.text) && !stateLead {
 		return Result{}, false, nil
 	}
-	target := ""
+	target, role := "", ""
 	what := invPerSiteRe.ReplaceAllString(s.text, " ") // "per site" groups, it is not counted
 	for _, t := range invTargetRes {
 		if t.re.MatchString(what) {
@@ -92,8 +149,19 @@ func (s *state) inventory() (Result, bool, error) {
 			target = t.target
 		}
 	}
-	if target == "" {
-		return Result{}, false, nil
+	for _, r := range invRoleRes {
+		if r.re.MatchString(what) {
+			if (target != "" && target != "device") || (role != "" && role != r.typ) {
+				return Result{}, false, nil
+			}
+			target, role = "device", r.typ
+		}
+	}
+	if target == "" && reachDeviceRe.MatchString(s.text) {
+		target = "device" // "anything unreachable": only a device can be
+	}
+	if (target == "" || target == "device") && otherThingRe.MatchString(s.text) {
+		return Result{}, false, nil // an interface, a session, an incident: not the device inventory
 	}
 	refs, clarify, err := s.mentions([]string{"site", "device"})
 	if err != nil {
@@ -102,6 +170,18 @@ func (s *state) inventory() (Result, bool, error) {
 	if len(clarify) > 0 {
 		return Result{Intent: "count_entities", Clarify: clarify}, true, nil
 	}
+	named := hasRefType(refs, "device")
+	if target == "" && named && stateLead && isDeviceStateQuestion(s.text) {
+		target = "device" // "is cedge-81 up", "status of edge-a"
+	}
+	if target == "" || (stateLead && !count && target == "device" && !named && !reachDownRe.MatchString(s.text) && !reachUpRe.MatchString(s.text) && role == "") {
+		// A state lead with no state ("is device inventory enabled") is not
+		// an inventory question.
+		return Result{}, false, nil
+	}
+	if target != "device" && stateLead && !count && !listLeadRe.MatchString(s.text) {
+		return Result{}, false, nil
+	}
 	for _, t := range invTargetRes {
 		if t.target == target {
 			s.e.re(t.re, what)
@@ -109,8 +189,26 @@ func (s *state) inventory() (Result, bool, error) {
 	}
 	s.e.re(countLeadRe, s.text)
 	s.e.re(listLeadRe, s.text)
+	s.e.re(stateLeadRe, s.text)
 	s.e.re(invQualRe, s.text)
 	q := &ast.AST{V: 1, Type: ast.EntityList, Target: target, Refs: astRefs(refs)}
+	if target == "device" {
+		if role != "" {
+			for _, r := range invRoleRes {
+				s.e.re(r.re, what)
+			}
+			q.Filters = append(q.Filters, ast.Filter{Field: ast.FilterDeviceType, Op: "eq", Values: []string{role}})
+		}
+		if f := s.reachFilter(named); f != nil {
+			q.Filters = append(q.Filters, *f)
+		}
+		if named {
+			s.e.re(standingRe, s.text)
+		}
+		// The inventory has no window: liveness is the collectors' current
+		// verdict (said with the answer), so a window word is not read as one.
+		s.readings = dropReadings(s.readings, lex.KindWindow)
+	}
 	intent := "list_entities"
 	if count {
 		q.Type, intent = ast.EntityCount, "count_entities"
@@ -119,6 +217,17 @@ func (s *state) inventory() (Result, bool, error) {
 		}
 	}
 	return Result{Intent: intent, AST: q, Entities: refs}, true, nil
+}
+
+// dropReadings removes the readings of one kind.
+func dropReadings(rs []lex.Reading, kind string) []lex.Reading {
+	out := rs[:0]
+	for _, r := range rs {
+		if r.Kind != kind {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ---- superlatives --------------------------------------------------------------

@@ -38,7 +38,7 @@ import (
 // Accuracy floors (ratchet: raise when the measured value rises; never lower).
 const (
 	minQuestionAccuracy   = 0.73
-	minParaphraseAccuracy = 0.45
+	minParaphraseAccuracy = 0.47
 	// Per-metric floors (N-C6). Coverage is reported, not floored: an honesty
 	// fix that turns a wrong compile into "not understood" LOWERS coverage and
 	// raises answered precision, which is the trade this design wants.

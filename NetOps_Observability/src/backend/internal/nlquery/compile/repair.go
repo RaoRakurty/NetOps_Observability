@@ -68,6 +68,10 @@ var grammarWords = []string{
 	"critical", "severe", "major", "urgent", "priority", "altogether", "known", "visible", "onboarded",
 	"discovered", "monitored", "managed", "inventory", "nodes", "locations", "cannot", "cant", "dont",
 	"locate", "lookup", "search", "wrong", "anything", "something",
+	// Phrasing eval (2026-11-12): device liveness, standing, BGP state.
+	"alarm", "alive", "alright", "check", "doing", "fine", "good", "isis", "manage",
+	"monitor", "offline", "okay", "online", "ospf", "reachable", "responding",
+	"unreachable", "unresponsive",
 }
 
 // Vocabulary is the grammar's closed vocabulary: BaseVocabulary plus every

@@ -186,7 +186,7 @@ func (c *checker) fieldMatrix() {
 		forbid(q.Predicate != nil, "predicate")
 		forbid(q.CompareTo != nil, "compare_to")
 		forbid(q.IncidentID != "", "incident_id")
-		forbid(len(q.Filters) > 0, "filters")
+		c.inventoryFilters()
 		forbid(len(q.OrderBy) > 0, "order_by")
 		forbid(q.Time.Kind != "", "time_range")
 		forbid(q.Type == ast.EntityCount && q.Limit != 0, "limit")
@@ -201,6 +201,36 @@ func (c *checker) fieldMatrix() {
 	if q.Target != "" {
 		if _, ok := c.cat.Entity(q.Target); !ok {
 			c.fail("target", CodeInvalidValue, q.Target, "unknown entity type", suggest(q.Target, entityNames(c.cat), nil)...)
+		}
+	}
+}
+
+// inventoryFilters admits the device inventory filters (reachability, type)
+// and nothing else: on a device count or list only, each field once, eq/in
+// over its closed values.
+func (c *checker) inventoryFilters() {
+	q := c.q
+	allowed := map[string][]string{ast.FilterReachability: ast.DeviceReachabilities, ast.FilterDeviceType: ast.DeviceTypes}
+	seen := map[string]bool{}
+	for i, f := range q.Filters {
+		path := fmt.Sprintf("filters[%d]", i)
+		vals, ok := allowed[f.Field]
+		switch {
+		case q.Target != "device" || !ok:
+			c.fail(path, CodeForbiddenFieldForType, f.Field, "an inventory query filters devices by reachability or type only", ast.FilterReachability, ast.FilterDeviceType)
+			continue
+		case seen[f.Field]:
+			c.fail(path, CodeInvalidValue, f.Field, f.Field+" is filtered once")
+			continue
+		case f.Op != "eq" && f.Op != "in", len(f.Values) == 0, f.Op == "eq" && len(f.Values) != 1:
+			c.fail(path+".op", CodeInvalidValue, f.Op, "use eq with one value or in with several")
+			continue
+		}
+		seen[f.Field] = true
+		for _, v := range f.Values {
+			if !contains(vals, v) {
+				c.fail(path+".values", CodeInvalidValue, v, "not a "+f.Field+" value", vals...)
+			}
 		}
 	}
 }

@@ -23,6 +23,9 @@ const (
 	KindSynonym   = "synonym"    // another word for a catalog term
 	KindSeverity  = "severity"   // a severity word mapped onto a catalog filter
 	KindImplicitN = "implicit_n" // a superlative with no number ("busiest" → top 5)
+	// KindWindow: a vague recency word read as a concrete window ("lately"
+	// → the last 24 hours).
+	KindWindow = "window"
 	// KindRephrase: the fast AI model rephrased the whole question and the
 	// grammar read the rephrase (hybrid NLU plan B1). From is the question,
 	// To the rephrase.
@@ -34,7 +37,7 @@ func (r Reading) Note() string {
 	switch r.Kind {
 	case KindSeverity:
 		return "I read \"" + r.From + "\" as " + r.To + "."
-	case KindImplicitN:
+	case KindImplicitN, KindWindow:
 		return "I read \"" + r.From + "\" as the " + r.To + "."
 	case KindRephrase:
 		return "I read your question as \"" + r.To + "\" (rephrased by the AI model — check the query shown with this answer)."
@@ -160,7 +163,7 @@ var plainWords = func() map[string]bool {
 		thank hello please sorry check checks checked green yellow amber blue black white grey gray business
 		aws azure gcp cloud clouds vpc vpcs vnet subnet subnets prefix prefixes route routes routing
 		mpls ospf isis eigrp bgp evpn vxlan lacp stp lldp cdp snmp gnmi netconf syslog trap traps
-		retail branch store stores bank banks clinic clinics school schools campus warehouse`) {
+		retail branch store stores bank banks clinic clinics school schools campus warehouse fire fires`) {
 		m[w] = true
 	}
 	return m
@@ -309,8 +312,11 @@ func CoreWords() []string { return append([]string(nil), coreWords...) }
 // "list top isues today" reaches the incident rules. The repairs are returned
 // so the answer can disclose them.
 func ClassifierRepair(q string) (string, []Reading) {
-	r := CoreVocab().RepairText(strings.Join(strings.Fields(Fold(q)), " "), nil)
-	return r.Text, r.Readings
+	// Shorthand first ("rn" → "right now"), so the router and the grammar read
+	// the same words (lex.Normalize expands the same table).
+	text, abbr := ExpandAbbreviations(strings.Join(strings.Fields(Fold(q)), " "))
+	r := CoreVocab().RepairText(text, nil)
+	return r.Text, append(abbr, r.Readings...)
 }
 
 // Exact reports a vocabulary word exactly as listed (no inflection).

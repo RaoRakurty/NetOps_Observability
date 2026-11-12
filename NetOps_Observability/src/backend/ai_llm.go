@@ -75,6 +75,15 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	skipped := 0
 	ctx = l.srv.egressCtx(ctx, l.claims)
 	for _, cand := range cands {
+		// One strike per request (ai.ModelStruck): a provider that already
+		// timed out or failed in THIS request is not waited on again.
+		if serr := ai.ModelStruck(ctx, cand.name); serr != nil {
+			lastErr = serr
+			logInfo("ai.provider", "model call skipped: the provider already failed in this request",
+				map[string]any{"tenant": tenant, "provider": cand.name, "tier": string(tier), "stage": ai.StageOf(ctx),
+					"error_class": ai.ClassifyProviderError(serr)})
+			continue
+		}
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
 			l.charge(c, chars)
@@ -88,6 +97,7 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 		if errors.Is(err, ai.ErrProviderBreakerOpen) {
 			skipped++
 		}
+		ai.NoteModelFailed(ctx, cand.name, err)
 		lastErr = err
 		// Raw provider error stays server-side (SR-022); fall through to the next.
 	}

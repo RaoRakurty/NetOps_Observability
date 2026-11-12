@@ -43,8 +43,25 @@ func (p Planner) inventory(ctx context.Context, sc Scope, q *ast.AST, rs *Result
 		if err != nil {
 			return err
 		}
+		devs = keepTypes(devs, filterValues(q, ast.FilterDeviceType))
+		reach := map[string]string{}
+		wantReach := filterValues(q, ast.FilterReachability)
+		if wantReach != nil || q.Type == ast.EntityList {
+			reach = p.reachability(ctx, sc, devs, rs)
+		}
 		for _, d := range devs {
-			items = append(items, Row{"device": firstNonEmpty(d.Name, d.ID), "id": "device:" + d.ID, "site": d.Site})
+			row := Row{"device": firstNonEmpty(d.Name, d.ID), "id": "device:" + d.ID, "site": d.Site}
+			if wantReach != nil || q.Type == ast.EntityList {
+				r := firstNonEmpty(reach[d.ID], ReachUnknown)
+				if wantReach != nil && !wantReach[r] {
+					continue
+				}
+				row["reachability"] = r
+			}
+			if d.Type != "" && filterValues(q, ast.FilterDeviceType) != nil {
+				row["type"] = d.Type
+			}
+			items = append(items, row)
 		}
 	case "circuit":
 		cs, err := sc.Circuits(ctx, CircuitFilter{Sites: sites, Devices: devIDs})
@@ -82,6 +99,69 @@ func (p Planner) inventory(ctx context.Context, sc Scope, q *ast.AST, rs *Result
 	}
 	rs.Rows = items
 	return nil
+}
+
+// ReachUnknown is the verdict of a device no collector has polled recently, or
+// whose reachability could not be read: never "down".
+const ReachUnknown = "unknown"
+
+// NoteReachabilityNow is said with every reachability answer: it is the live
+// verdict, not a history.
+const NoteReachabilityNow = "Reachability is the collectors' current verdict (their last 3 minutes of polls), not a history."
+
+// NoteReachabilityUnread is said when the reachability could not be read.
+const NoteReachabilityUnread = "Device reachability could not be read just now, so every device shows as unknown."
+
+// reachability reads the verdict of devs through the optional
+// ReachabilityScope; on any failure every device is unknown and the answer
+// says why.
+func (p Planner) reachability(ctx context.Context, sc Scope, devs []DeviceRef, rs *ResultSet) map[string]string {
+	rs.Notes = append(rs.Notes, NoteReachabilityNow)
+	rsc, ok := sc.(ReachabilityScope)
+	if !ok || len(devs) == 0 {
+		if !ok {
+			rs.Notes = append(rs.Notes, NoteReachabilityUnread)
+		}
+		return map[string]string{}
+	}
+	ids := make([]string, 0, len(devs))
+	for _, d := range devs {
+		ids = append(ids, d.ID)
+	}
+	m, err := rsc.DeviceReachability(ctx, ids)
+	if err != nil {
+		rs.Notes = append(rs.Notes, NoteReachabilityUnread)
+		return map[string]string{}
+	}
+	return m
+}
+
+// filterValues is the value set of the query's filter on field (nil = none).
+func filterValues(q *ast.AST, field string) map[string]bool {
+	for _, f := range q.Filters {
+		if f.Field == field {
+			out := map[string]bool{}
+			for _, v := range f.Values {
+				out[v] = true
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// keepTypes keeps the devices of the wanted types (nil = all).
+func keepTypes(devs []DeviceRef, want map[string]bool) []DeviceRef {
+	if want == nil {
+		return devs
+	}
+	var out []DeviceRef
+	for _, d := range devs {
+		if want[d.Type] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // countRows is the count, or one count per group (largest first, then by

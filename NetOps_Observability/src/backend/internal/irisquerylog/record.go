@@ -204,7 +204,8 @@ const MaxReadings = 16
 const maxRephraseRunes = 200
 
 // readingKinds is the closed set a stored reading may carry (lex.Kind*).
-var readingKinds = map[string]bool{lex.KindTypo: true, lex.KindSynonym: true, lex.KindSeverity: true, lex.KindImplicitN: true, lex.KindRephrase: true}
+var readingKinds = map[string]bool{lex.KindTypo: true, lex.KindSynonym: true, lex.KindSeverity: true, lex.KindImplicitN: true, lex.KindRephrase: true,
+	lex.KindAbbreviation: true, lex.KindWindow: true}
 
 // boundedReadings keeps the well-formed readings: a known kind, non-empty
 // words, each clipped, at most MaxReadings.
