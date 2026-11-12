@@ -178,8 +178,16 @@ func TestTenantWatchSlackClearReadsAsResolved(t *testing.T) {
 	ok.Summary = `Cloud monitor "High CPU": cpu worst reading 10`
 	r.Resolve("acme", ok)
 	waitUntil(t, "fire + clear", func() bool { return len(rec.hits()) == 2 })
-	if got := rec.hits()[1].summary; !strings.HasPrefix(got, "Resolved: ") {
-		t.Fatalf("Slack clear must say it resolved, got %q", got)
+	// The dispatcher's worker pool delivers the two jobs concurrently, so their
+	// arrival order is not defined: find the clear by content, not by index.
+	var resolved []string
+	for _, h := range rec.hits() {
+		if strings.HasPrefix(h.summary, "Resolved: ") {
+			resolved = append(resolved, h.summary)
+		}
+	}
+	if len(resolved) != 1 || !strings.Contains(resolved[0], "worst reading 10") {
+		t.Fatalf("exactly the Slack clear must say it resolved, got %q", resolved)
 	}
 }
 
