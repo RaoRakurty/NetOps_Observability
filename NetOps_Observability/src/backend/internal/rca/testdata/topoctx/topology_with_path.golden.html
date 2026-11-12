@@ -1,0 +1,92 @@
+<h2>Network topology &amp; causality — sources: measured path, LLDP, persisted topology graph, inventory</h2>
+<div class="note" style="margin-bottom:4px">State: <b>topology with measured path</b> — A measured path is attached to this case, and the known topology around the affected devices is drawn with it.</div>
+
+
+<div class="note" style="margin:6px 0 2px"><b>Measured path</b> — vantage v1 · observed 2026-11-12 04:52:00 · temporal role: <b>incident time</b></div>
+
+<svg viewBox="0 0 296 132" width="100%" style="max-width:296px;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality"><line x1="89" y1="52" x2="207" y2="52" stroke="#cbd5e1" stroke-width="1.6" stroke-dasharray="5 4"/><circle cx="74" cy="52" r="13" fill="#ecfdf5" stroke="#0f9f4f" stroke-width="2"/><text x="74" y="18" text-anchor="middle" font-size="8" font-weight="700" letter-spacing=".06em" fill="#475569">LAST RESPONDING HOP</text><line x1="148" y1="41" x2="148" y2="112" stroke="#b45309" stroke-width="1.8" stroke-dasharray="4 3"/><text x="148" y="122" text-anchor="middle" font-size="8" font-weight="800" fill="#b45309">✕ visibility boundary</text><text x="74" y="32" text-anchor="middle" font-size="8" fill="#64748b">Lan</text><text x="74" y="82" text-anchor="middle" font-size="9.5" font-weight="700" fill="#0f172a">core-r1</text><circle cx="222" cy="52" r="13" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/><text x="222" y="32" text-anchor="middle" font-size="8" fill="#64748b">Unknown</text><text x="222" y="82" text-anchor="middle" font-size="9.5" font-weight="700" fill="#0f172a">unknown hop</text></svg>
+<table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
+<tr>
+  <td style="font-family:ui-monospace,monospace">1</td>
+  <td><b>core-r1</b> <span class="pill gray">◍ last responding hop — boundary after</span></td>
+  <td style="font-family:ui-monospace,monospace"></td>
+  <td>Lan</td>
+  <td><span class="pill green">Responding</span></td>
+  <td></td>
+</tr><tr>
+  <td style="font-family:ui-monospace,monospace">2</td>
+  <td><b>(no response — unknown hop)</b></td>
+  <td style="font-family:ui-monospace,monospace"></td>
+  <td>Unknown</td>
+  <td><span class="pill gray">Unknown</span></td>
+  <td></td>
+</tr>
+</tbody></table>
+
+<div class="note">Only the measured path is drawn as a path. An unknown hop is preserved as unknown — never bridged. A probe source→target relationship does not by itself imply physical causality.</div>
+
+<svg viewBox="0 0 760 250" width="100%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Known topology around the affected devices with fault and causal overlays"><line x1="310.0" y1="125.0" x2="450.0" y2="125.0" stroke="#94a3b8" stroke-width="1.5"/><line x1="310.0" y1="125.0" x2="380.0" y2="40.0" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="2 3"/><line x1="334.5" y1="95.2" x2="355.5" y2="69.8" stroke="#475467" stroke-width="1.8" stroke-dasharray="1.5 3"/><circle cx="345.0" cy="82.5" r="6.5" fill="#fff" stroke="#475467" stroke-width="1"/><text x="345.0" y="85.7" text-anchor="middle" font-size="9" font-weight="800" fill="#475467">?</text><line x1="330.0" y1="131.0" x2="430.0" y2="131.0" stroke="#b42318" stroke-width="1.8"/><polygon points="430.0,131.0 423.0,134.5 423.0,127.5" fill="#b42318"/><circle cx="310.0" cy="125.0" r="18" fill="#fff0ee" stroke="#b42318" stroke-width="2"/><text x="310.0" y="154.0" text-anchor="middle" font-size="9" font-weight="700" fill="#172033">core-r1</text><text x="310.0" y="164.0" text-anchor="middle" font-size="7.5" fill="#64748b">core router</text><text x="310.0" y="102.0" text-anchor="middle" font-size="7.5" font-weight="700" fill="#b42318">anomalous: Gi1</text><circle cx="450.0" cy="125.0" r="18" fill="#fff4e8" stroke="#b45309" stroke-width="2"/><text x="450.0" y="154.0" text-anchor="middle" font-size="9" font-weight="700" fill="#172033">core-r2</text><text x="450.0" y="164.0" text-anchor="middle" font-size="7.5" fill="#64748b">core router</text><circle cx="380.0" cy="40.0" r="14" fill="#f8fafc" stroke="#64748b" stroke-width="2" stroke-dasharray="3 2"/><text x="380.0" y="65.0" text-anchor="middle" font-size="9" font-weight="700" fill="#172033">isp-pe</text><text x="380.0" y="75.0" text-anchor="middle" font-size="7.5" fill="#64748b">not in inventory</text></svg><svg viewBox="0 0 760 110" width="100%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Affected device, its evidence interfaces and the causal marks between them"><rect x="40" y="28.0" width="220" height="54" rx="8" fill="#fff0ee" stroke="#b42318" stroke-width="2"/><text x="150.0" y="46.0" text-anchor="middle" font-size="10.5" font-weight="800" fill="#172033">core-r1</text><text x="150.0" y="59.0" text-anchor="middle" font-size="8" fill="#64748b">core router</text><text x="150.0" y="72.0" text-anchor="middle" font-size="7.5" font-weight="700" fill="#b42318">device: device resource anomaly</text><line x1="260.0" y1="55.0" x2="470.0" y2="55.0" stroke="#b42318" stroke-width="1.8"/><polygon points="470.0,55.0 463.0,58.5 463.0,51.5" fill="#b42318"/><rect x="470" y="44.0" width="190" height="22" rx="5" fill="#fff0ee" stroke="#b42318" stroke-width="1.6"/><text x="478.0" y="58.5" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="#172033">Gi1</text><text x="653.0" y="58.5" text-anchor="end" font-size="7.5" fill="#b42318">if metric anomaly · CRIT</text></svg><svg viewBox="0 0 760 110" width="100%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Affected device, its evidence interfaces and the causal marks between them"><rect x="40" y="28.0" width="220" height="54" rx="8" fill="#fff4e8" stroke="#b45309" stroke-width="2"/><text x="150.0" y="46.0" text-anchor="middle" font-size="10.5" font-weight="800" fill="#172033">core-r2</text><text x="150.0" y="59.0" text-anchor="middle" font-size="8" fill="#64748b">core router</text><text x="150.0" y="72.0" text-anchor="middle" font-size="7.5" font-weight="700" fill="#b45309">device: bgp adjacency change</text><text x="470.0" y="58.0" font-size="9" fill="#64748b">No interface carries attached evidence.</text></svg>
+
+<div class="note">Legend: grey line = known link (dotted = stale) · amber/red device or port = anomalous evidence observed there (no causation implied) · <b>solid arrow</b> = verified causal link · <b>dashed arrow</b> = suspected · <b>?</b> = relationship unknown.</div>
+<table><thead><tr><th style="width:22%">Device</th><th style="width:22%">Neighbour</th><th style="width:18%">Ports</th><th style="width:14%">Link</th><th style="width:12%">First seen</th><th>Freshness</th></tr></thead><tbody>
+<tr>
+  <td>core-r1</td>
+  <td>core-r2</td>
+  <td style="font-family:ui-monospace,monospace">Gi1 → Gi2</td>
+  <td>physical<div class="note">lldp · LLDP, the persisted topology graph</div></td>
+  <td>2026-11-10 05:00 UTC</td>
+  <td><span class="pill green" style="font-size:10px">current</span></td>
+</tr><tr>
+  <td>core-r1</td>
+  <td>isp-pe</td>
+  <td style="font-family:ui-monospace,monospace">Gi3 → —</td>
+  <td>physical<div class="note">cdp · the persisted topology graph</div></td>
+  <td>2026-11-09 05:00 UTC</td>
+  <td><span class="pill gray" style="font-size:10px">stale</span></td>
+</tr>
+</tbody></table>
+<div class="note">Known topology as the sources state it when this report was generated; "first seen" says whether a link was already known at incident time ("after incident" = first seen after the case window).</div>
+
+
+
+<table style="margin-top:6px"><thead><tr><th style="width:30%">Where (measured)</th><th>Evidence kinds</th><th style="width:14%">Peak severity</th><th style="width:12%">Observations</th></tr></thead><tbody>
+<tr>
+  <td>r1 · <span style="font-family:ui-monospace,monospace">Gi1</span></td>
+  <td>if metric anomaly</td>
+  <td><span class="pill red" style="font-size:10px">CRIT</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>r1 (device)</td>
+  <td>device resource anomaly</td>
+  <td><span class="pill amber" style="font-size:10px">HIGH</span></td>
+  <td>1</td>
+</tr><tr>
+  <td>r2 (device)</td>
+  <td>bgp adjacency change</td>
+  <td><span class="pill amber" style="font-size:10px">WARN</span></td>
+  <td>1</td>
+</tr>
+</tbody></table>
+<div class="note">Measured fault overlay: where anomalous evidence was observed. It never implies causation on its own.</div>
+
+
+<table style="margin-top:6px"><thead><tr><th style="width:44%">From → to</th><th style="width:12%">Causal link</th><th>Basis</th></tr></thead><tbody>
+<tr>
+  <td>r1 <span class="note">(device resource anomaly)</span> → r1:Gi1 <span class="note">(if metric anomaly)</span></td>
+  <td><span class="pill red" style="font-size:10px">verified</span></td>
+  <td style="font-size:10.5px;color:#475467">direction from onset order and layer order (direction confidence 0.80); joined across a known link (authoritative)</td>
+</tr><tr>
+  <td>r1:Gi1 <span class="note">(if metric anomaly)</span> → r2 <span class="note">(bgp adjacency change)</span></td>
+  <td><span class="pill red" style="font-size:10px">verified</span></td>
+  <td style="font-size:10.5px;color:#475467">direction from onset order and layer order (direction confidence 0.80); joined across a known link (authoritative)</td>
+</tr><tr>
+  <td>r1 — ext:isp-pe</td>
+  <td><span class="pill gray" style="font-size:10px">? unknown</span></td>
+  <td style="font-size:10.5px;color:#475467">known link (persisted topology graph); no evidence was joined across it</td>
+</tr>
+</tbody></table>
+
+<div class="note">Causal overlay from the engine's evidence graph: verified = authoritative grounding, a direction vote and a confirmed verdict; suspected = a direction vote or a suspected verdict; unknown = no direction (co-occurrence only), or a known link the engine joined no evidence across.</div>
+
+
+

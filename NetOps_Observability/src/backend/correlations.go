@@ -65,7 +65,14 @@ func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id str
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// enrich sigRows IN PLACE with attached/link_status (read-side derivation).
 	rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-	writeJSON(w, http.StatusOK, rca.BuildPathView(id, meta, sigRows, edgeRows))
+	view := rca.BuildPathView(id, meta, sigRows, edgeRows)
+	// RCA v2 §2: the SAME topology context the RCA report carries — one
+	// builder (rcaTopologyContext), same inputs (the unstamped spine), so the
+	// path view and the document can never draw two different topologies.
+	spine := rcaTopologyFromSpine(s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"])))
+	tc := s.rcaTopologyContext(r.Context(), claimsOf(r), meta, sigRows, edgeRows, &spine, s.reportNow())
+	view.TopologyContext = &tc
+	writeJSON(w, http.StatusOK, view)
 }
 
 // isUUIDToken allowlists a canonical UUID string before it is interpolated

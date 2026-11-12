@@ -105,6 +105,8 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 			{Index: 2, Label: "wan-r2", Kind: "wan", State: "down", Fault: "broken"},
 		},
 	}
+	// RCA v2 §2: the document renders the spine through the topology context.
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: meta, Signals: sigs, Spine: &rep.Topology}, TopologyRead{}, nil)
 	html, err := RenderReportHTML(rep)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -132,10 +134,14 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 
 func TestAtAGlanceHTMLHonestWhenNoPath(t *testing.T) {
 	meta := testMeta("open", "undetermined", "undetermined", nil)
-	rep := buildTestReport(t, meta, []map[string]any{
+	sigs := []map[string]any{
 		testSig("probe_loss", "active_probe", "prober", "path", "prober->svc", "high", "2026-07-12 18:12:00", true, nil),
-	})
-	rep.Topology = TopologyView{Available: false, Reason: "No measured path is attached to this case — the topology is omitted, not inferred."}
+	}
+	rep := buildTestReport(t, meta, sigs)
+	rep.Topology = TopologyView{Available: false, Reason: "this correlation object is not path-shaped (no measured path entity is attached)"}
+	// RCA v2 §2: the section's verdict is the topology context's, never the
+	// spine's reason (P-3E0400).
+	rep.TopologyContext = AssembleTopologyContext(TopologyContextInput{Meta: meta, Signals: sigs, Spine: &rep.Topology}, TopologyRead{}, nil)
 	html, err := RenderReportHTML(rep)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -143,7 +149,10 @@ func TestAtAGlanceHTMLHonestWhenNoPath(t *testing.T) {
 	doc := string(html)
 	glance := strings.Index(doc, "Incident at a glance")
 	mgmt := strings.Index(doc, "Management summary")
-	if glance < 0 || !strings.Contains(doc[glance:mgmt], "omitted, not inferred") {
-		t.Fatal("absent path must render its honest reason in the first section")
+	if glance < 0 || !strings.Contains(doc[glance:mgmt], "No device or interface is attached") {
+		t.Fatal("absent topology must render its honest reason in the first section")
+	}
+	if strings.Contains(doc, "path-shaped") {
+		t.Fatal(`the spine's "not path-shaped" reason must never be the document's topology verdict`)
 	}
 }

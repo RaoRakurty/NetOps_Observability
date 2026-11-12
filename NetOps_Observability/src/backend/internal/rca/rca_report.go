@@ -145,6 +145,15 @@ type Report struct {
 	// service/vantage names primary, addresses secondary, seam + state per hop.
 	// Available=false renders as an honest absence, never an invented diagram.
 	Topology TopologyView `json:"topology"`
+	// TopologyContext is the ONE topology model of the case (RCA document v2
+	// §2, topology_context.go): known topology + measured fault overlay +
+	// causal overlay, in one of four states. The document's topology section
+	// renders it (the "topologyContext" partial); Topology above stays the
+	// measured spine only, carried inside it as Spine when present. Set by the
+	// HTTP layer, which owns the topology stores; the path view embeds the same
+	// builder output. omitzero: a report built without the HTTP layer (pure
+	// BuildReport, the library's summary build) carries no unbuilt block.
+	TopologyContext TopologyContext `json:"topology_context,omitzero"`
 	// PathAttribution is the path-causality RCA P2 on-path device attribution
 	// (design §2.4): the named upstream-most on-path cause, its verdict lift, the
 	// explained-away/discounted faults, the honesty-cap reason, and the discovered

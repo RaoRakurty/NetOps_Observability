@@ -73,6 +73,11 @@ type PathView struct {
 	MissingEvidenceSummary []string       `json:"missing_evidence_summary"`
 	LayerCoverage          *LayerCoverage `json:"layer_coverage,omitempty"`
 	AppImpact              *AppImpact     `json:"app_impact,omitempty"`
+	// TopologyContext is the SAME builder output the RCA report carries
+	// (topology_context.go, RCA document v2 §2) — one builder, two endpoints.
+	// Set by the rca-path-view handler; nil (omitted) on the ticketing paths,
+	// which read the view without a principal and draw no topology.
+	TopologyContext *TopologyContext `json:"topology_context,omitempty"`
 }
 
 // AppImpact mirrors the engine's ObjectSnapshot.app_impact projection (#81 P5):
