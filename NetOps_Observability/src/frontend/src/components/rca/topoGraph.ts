@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { CorrTimeline, CorrSignal, Seam } from "../../services/api";
-import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity } from "./labels";
-import { kindForRole, type ShapeKind } from "../graph/shapes";
+import type { CorrTimeline } from "../../services/api";
+import { C, seamOwnerColor, isInternalEntity } from "./labels";
+import type { ShapeKind } from "../graph/shapes";
 import {
-  readServicePath, isPathFocused, transformationLabel, spineKindLabel, hopStateLabel,
+  readServicePath, transformationLabel, spineKindLabel, hopStateLabel,
   type ServicePath, type SpineNode, type SpineKind, type SpineEvidence,
 } from "./servicePath";
 
@@ -24,13 +24,8 @@ import {
 //   · mark NAT / proxy / load-balancer / tunnel transformations;
 //   · attach metrics/logs/flows/alerts/traces as evidence branches OFF the spine;
 //   · render NO edge that cannot state its evidence (§5).
-// A path-focused object with NO spine renders an honest empty state — we never
-// invent a path (that empty state is decided by the caller from `mode: "empty"`).
-//
-// Network-only objects (device / interface / routing evidence, no path) keep the
-// CONTEXT view: the affected device area and its ownership boundary. That view is
-// placed from SEVERITY and the object's own declared relations — never from node
-// degree, and it is never used for a path-focused object.
+// An object with NO spine yields an empty graph — we never invent a path. Its
+// known topology comes from the server's topology context (topologyContext.ts).
 
 export type FaultStatus = "broken" | "suspected" | "possible";
 export type EdgeState = "healthy" | "degraded" | "suspected_down" | "confirmed_down" | "unknown";
@@ -104,38 +99,6 @@ export interface TopoGraph {
   path?: ServicePath;   // the backend spine this layout came from (mode === "spine")
 }
 
-function brokenElement(s: CorrSignal): string {
-  if (s.entity_type === "interface") {
-    const iface = s.entity_id.split(":").slice(1).join(":");
-    return `${iface || "interface"} · ${kindLabel(s.kind)}`;
-  }
-  return kindLabel(s.kind);
-}
-
-function parseAttrs(s?: string): Record<string, any> {
-  try { return JSON.parse(s || "{}"); } catch { return {}; }
-}
-
-// What kind of evidence a signal is, for the fault's "what's broken" chips. The
-// physical/control-plane cause (link down, BGP/routing) outranks device-resource
-// (CPU/mem) — which is usually a SYMPTOM or co-occurrence, not the cause.
-function elementRank(kind: string): number {
-  if (/link_state|interface|carrier|los|fcs/i.test(kind)) return 5;
-  if (/bgp|adjacency|peer|ospf|isis|ldp|route/i.test(kind)) return 4;
-  if (/flow|traffic|discard|drop/i.test(kind)) return 2;
-  if (/resource|cpu|mem|temperat|fan|power|disk/i.test(kind)) return 1;
-  return 3;
-}
-type RankedEl = { label: string; rank: number };
-function faultEls(d?: { els: RankedEl[] }): string[] {
-  if (!d) return [];
-  const strong = d.els.some((e) => e.rank >= 4);
-  return d.els.filter((e) => !strong || e.rank >= 2).sort((a, b) => b.rank - a.rank).map((e) => e.label);
-}
-
-const SEV_RANK: Record<string, number> = { crit: 4, high: 3, warn: 2, info: 1 };
-
-const COL = 200;          // context-mode column pitch
 const COL_SPINE = 200;    // spine hop pitch — x is a PURE FUNCTION of hop_index
 const NODE_W = 124;       // TopoNode width (shape centred in it)
 const BAND_PAD = 26;
@@ -337,185 +300,21 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
   return { nodes, edges, bands, internal: false, mode: "spine", path };
 }
 
-// ═══ CONTEXT MODEL (network-only objects — no service path) ═════════════════════
-
-// computeTopoModel — the evidence-derived model behind the on-screen overlays
-// (legend, STAMP toggle, empty states). Exported so the component and the canvas
-// are driven by ONE source of truth.
-export function computeTopoModel(timeline: CorrTimeline, seams: Record<string, Seam>) {
-  return computeModel(timeline, seams);
-}
-function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>) {
-  const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
+// buildTopoGraph — PURE: RCA object → the backend spine's positioned graph, for
+// the client print fallback (rcaExport.ts) that draws the measured path.
+//   spine    → the backend's ordered service path (the ONLY path layout)
+//   internal → the platform observing itself — never dressed as a customer path
+//   empty    → no spine. The known topology around the affected devices is the
+//              server's topology context (RCA document v2 §2), drawn by
+//              RcaTopologyContext and rcaExport from that one struct — this file
+//              no longer derives a device area of its own (the "context mode"
+//              that drew a node the server PDF denied is gone).
+export function buildTopoGraph(timeline: CorrTimeline): TopoGraph {
   const path = readServicePath(timeline);
-  const pathFocused = isPathFocused(timeline);
-
-  // Path METRICS (loss / RTT / jitter) are evidence, not structure — they label
-  // the measurement, they never place a hop.
-  const pathSigs = sigs.filter((s) => s.entity_type === "path");
-  const lossPct = (() => {
-    const s = pathSigs.find((x) => /loss/.test(x.kind));
-    if (!s) return NaN;
-    const v = Number(s.value);
-    return isFinite(v) ? (v <= 1 ? v * 100 : v) : NaN;
-  })();
-  const rttMs = (() => {
-    const cand = pathSigs.filter((x) => /rtt|latency/.test(x.kind) && isFinite(Number(x.value)));
-    const s = cand.find((x) => /\[stamp\]/.test(x.metric_name)) ?? cand[0];
-    return s ? Number(s.value) : NaN;
-  })();
-  const jitterMs = (() => {
-    const s = pathSigs.find((x) => /jitter/.test(x.kind) || /jitter/.test(x.metric_name));
-    return s ? Number(s.value) : NaN;
-  })();
-  const lossTxt = isFinite(lossPct) && lossPct > 0 ? `${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss` : "";
-  const measuredDegraded = (isFinite(lossPct) && lossPct > 0) || pathSigs.some((x) => /rtt|latency/.test(x.kind));
-  const stampParts: string[] = [];
-  if (isFinite(lossPct) && lossPct > 0) stampParts.push(`${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss`);
-  if (isFinite(rttMs)) stampParts.push(`${rttMs.toFixed(rttMs < 10 ? 2 : 1)} ms rtt`);
-  if (isFinite(jitterMs)) stampParts.push(`${jitterMs.toFixed(2)} ms jitter`);
-  const stampTxt = stampParts.join("  ·  ");
-  const hasStamp = stampParts.length > 0;
-
-  // Affected DEVICE AREA — devices and interfaces only. An app / cloud resource is
-  // NOT bucketed onto a pseudo-device (that collapse is what produced the old
-  // single-node star); those entities belong on the backend's spine.
-  type Dev = { dev: string; els: RankedEl[]; worst: number };
-  const devs = new Map<string, Dev>();
-  for (const s of sigs) {
-    if (s.entity_type !== "device" && s.entity_type !== "interface") continue;
-    const dev = s.entity_type === "interface" ? s.entity_id.split(":")[0] : s.entity_id;
-    if (!dev) continue;
-    const d = devs.get(dev) ?? { dev, els: [], worst: 0 };
-    const label = brokenElement(s);
-    if (!d.els.some((x) => x.label === label)) d.els.push({ label, rank: elementRank(s.kind) });
-    d.worst = Math.max(d.worst, SEV_RANK[s.severity] ?? 1);
-    devs.set(dev, d);
-  }
-  // DECISION #76 — platform services / monitoring agents are how we OBSERVE, not
-  // the customer network. Drop them from the view.
-  for (const k of [...devs.keys()]) if (isInternalEntity(k)) devs.delete(k);
-
-  // Fault locus = the WORST-SEVERITY affected device. Deliberately NOT the
-  // highest-degree node: node-degree layout is forbidden (contract §7).
-  const locusDev = [...devs.values()].sort((a, b) => b.worst - a.worst || a.dev.localeCompare(b.dev))[0]?.dev;
-
-  // Routing far end — used ONLY when the device itself DECLARED its neighbour
-  // (attrs.peer / attrs.neighbor). We no longer guess a peer out of an entity id.
-  const peer = (() => {
-    for (const s of sigs) {
-      if (!/bgp|peer|adjacency|neighbor|ldp|ospf|isis/i.test(s.kind)) continue;
-      const a = parseAttrs(s.attrs);
-      const p = String(a.peer || a.neighbor || "").trim();
-      if (p && !isInternalEntity(p)) {
-        return { peer: p, rel: /bgp/i.test(s.kind) ? "BGP session" : "Peering", state: String(a.state || "") };
-      }
-    }
-    return undefined;
-  })();
-
-  const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
-  const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
-
-  // Platform self-monitoring object (every attached entity is our own infra) →
-  // never dressed up as a customer path.
-  const entities = sigs.map((s) => s.entity_id).filter(Boolean);
-  const internal = !path && entities.length > 0 && entities.every(isInternalEntity);
-
-  return { path, pathFocused, lossTxt, measuredDegraded, stampTxt, hasStamp, devs, locusDev, seam, peer, internal };
-}
-
-// buildTopoGraph — PURE: RCA object → positioned nodes + edges + bands. Both
-// renderers consume this, so screen and PDF cannot diverge.
-//   spine  → the backend's ordered service path (the ONLY path layout)
-//   context→ network-only object: the affected device area + its boundary
-//   empty  → path-focused but NO spine: the caller says so. We invent nothing.
-export function buildTopoGraph(
-  timeline: CorrTimeline,
-  seams: Record<string, Seam>,
-  view: "operator" | "debug",
-  showStamp: boolean,
-): TopoGraph {
-  const model = computeModel(timeline, seams);
-  const nodes: TopoGraphNode[] = [];
-  const edges: TopoGraphEdge[] = [];
-
-  // 1) THE BACKEND'S SPINE WINS. Screen and PDF both get it for free.
-  if (model.path) return layoutSpine(model.path, timeline.verdict_tier);
-
-  if (model.internal) return { nodes, edges, bands: [], internal: true, mode: "internal" };
-
-  const meta = STATUS_META[statusForVerdict(timeline.verdict_tier)];
-  const { measuredDegraded, devs, locusDev, seam, peer } = model;
-  void showStamp;
-
-  const locus = locusDev ? devs.get(locusDev) : undefined;
-  // 2) A path-focused object with no spine AND no grounded context is an HONEST
-  //    BLANK — not a star. But when the case grounds on a device/seam/peer, the
-  //    DECLARED structure renders (context mode) so every confirmed/suspected
-  //    incident carries a topology with its fault marked — same treatment the
-  //    LAN/WAN issues get. Declared structure is evidence, not invention.
-  if (!locus && !seam && !peer) return { nodes, edges, bands: [], internal: false, mode: "empty" };
-
-  const faultEdgeState: EdgeState = statusForVerdict(timeline.verdict_tier) === "broken" ? "confirmed_down" : "suspected_down";
-  const node = (n: TopoGraphNode) => nodes.push(n);
-  const link = (from: string, to: string, o: { state?: EdgeState; label?: string; fromHandle?: string } = {}) => {
-    edges.push({ from, to, state: o.state ?? "healthy", label: o.label, fromHandle: o.fromHandle });
-  };
-
-  // ===== CONTEXT MODE: the affected device area (network-only object) ==========
-  let col = 0;
-  let prev: string | null = null;
-
-  if (seam) {
-    const vis = seam.visibility ?? "";
-    const ownerColor = seamOwnerColor(seam.control_plane_owner);
-    node({ id: "seam", x: col * COL, y: 0, data: {
-      kind: "gateway", tone: ownerColor,
-      // Debug keeps the raw engine word ("seam"); operator view says "handoff" —
-      // "boundary" is reserved for the path-spine zones (labels.ts relationLabel).
-      label: view === "debug" ? (seam.seam_id || "seam") : (seam.display_name || "Provider handoff"),
-      sub: `${view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner)}${vis ? " · " + (view === "debug" ? vis : visibilityLabel(seam.visibility)) : ""}`,
-      hasIn: false,
-    } });
-    prev = "seam"; col++;
-  }
-
-  if (locus) {
-    node({ id: "fault", x: col * COL, y: 0, data: {
-      kind: kindForRole(locus.dev), tone: meta.color, pulse: true, size: 62,
-      label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}`,
-      chips: faultEls(locus).slice(0, 4), hasBottom: true, hasIn: !!prev,
-    } });
-    if (prev) link(prev, "fault", { state: measuredDegraded ? "degraded" : "healthy" });
-    prev = "fault"; col++;
-
-    // Also-affected devices sit BELOW the locus as context (never on the primary
-    // axis, and never used to imply a path).
-    const others = [...devs.values()].filter((d) => d.dev !== locus.dev);
-    others.slice(0, 4).forEach((d, i) => {
-      const aid = `aff${i}`;
-      node({ id: aid, x: (col - 1) * COL + (i - (others.length - 1) / 2) * 140, y: 150, data: {
-        kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev),
-        sub: faultEls(d)[0] || "also affected", hasIn: true, hasOut: false,
-      } });
-      link("fault", aid, { fromHandle: "b", state: "unknown" });
-    });
-  }
-
-  // The far end of a routing session the device itself declared — the segment the
-  // adjacency change is about (a flap is device → peer, not a lone node).
-  if (peer) {
-    const down = /down|idle|active|flap/i.test(peer.state);
-    node({ id: "peer", x: col * COL, y: 0, data: {
-      kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true,
-      sub: `${peer.rel.toLowerCase()} peer`, hasOut: false, hasIn: !!prev,
-    } });
-    if (prev) link(prev, "peer", {
-      state: down ? faultEdgeState : (timeline.verdict_tier === "confirmed" ? "healthy" : "degraded"),
-      label: /bgp/i.test(peer.rel) ? "BGP neighbor changed" : `${peer.rel} changed`,
-    });
-  }
-
-  return { nodes, edges, bands: [], internal: false, mode: nodes.length ? "context" : "empty" };
+  if (path) return layoutSpine(path, timeline.verdict_tier);
+  const entities = timeline.signals
+    .filter((s) => s.attached && !s.kind.endsWith("_clear"))
+    .map((s) => s.entity_id).filter(Boolean);
+  const internal = entities.length > 0 && entities.every(isInternalEntity);
+  return { nodes: [], edges: [], bands: [], internal, mode: internal ? "internal" : "empty" };
 }
