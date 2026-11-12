@@ -152,6 +152,26 @@ type Report struct {
 	// on-path cause — an honest absence, never an invented one.
 	PathAttribution *PathAttribution `json:"path_attribution,omitempty"`
 
+	// Background (owner D1, 2026-11-11): context stories, standing security
+	// findings and unrelated in-window changes. Shown in its own band — "on this
+	// device, not a cause" — never the headline, never impact, never a break.
+	Background []rcaBackgroundItem `json:"background"`
+	// ConfirmingPair: the headline verdict's independent confirming pair and
+	// whether both members are MEASUREMENT planes (security and the management
+	// plane are verdict planes: they support, they never anchor). Read by the
+	// promotion gate, the decision wording and the real-user impact axis.
+	ConfirmingPair rcaConfirmingPair `json:"confirming_pair"`
+	// Eligibility: the facts the RCA-document triggers read (owner D3).
+	Eligibility rcaDocEligibility `json:"document_eligibility"`
+	// Recurrence: how often the same headline cause hit the same primary device
+	// in the last 7 days — stamped by the HTTP layer (it owns the tenant-scoped
+	// read); Known=false until then.
+	Recurrence rcaRecurrence `json:"recurrence"`
+	// Document: the NOC RCA document (owner 2026-11-11) — the ten sections in
+	// reading order plus the "How to read this RCA" guide. A pure projection of
+	// the fields above, so it is excluded from the integrity hash.
+	Document NocDocument `json:"document"`
+
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
 	mgmtTrimmed bool
@@ -222,6 +242,9 @@ type TopologyView struct {
 // StampTopologyTemporalRole classifies the attached path observation's
 // temporal role against the incident window (P1.8, audit D9).
 func StampTopologyTemporalRole(rep *Report) {
+	// The topology arrives after BuildReport: keep the document's section 6 in
+	// step with what will be drawn.
+	defer func() { rep.Document.Path = buildPathSection(rep) }()
 	t := &rep.Topology
 	if !t.Available || t.ObservedAt == "" {
 		return
@@ -403,6 +426,10 @@ type rcaSymptomRow struct {
 	Last         string `json:"last"`
 	Observations int    `json:"observations"`
 	Buckets      []int  `json:"buckets"`
+	// standing: a posture/exposure finding with no first-seen time — a standing
+	// property, not an event. It stays in the evidence appendix but never
+	// enters the detailed timeline (owner review 2026-11-11, gap 5).
+	standing bool
 }
 
 type rcaSignalSummary struct {
@@ -644,6 +671,7 @@ var rcaLaneLabel = map[string]string{
 	"passive_flow":     "Traffic flow",
 	"active_probe":     "Active checks",
 	"management_plane": "Controller / management plane",
+	"security":         "Security findings",
 }
 
 var rcaLaneOrder = []string{"device_telemetry", "control_plane", "passive_flow", "active_probe", "management_plane"}
@@ -776,37 +804,46 @@ func FmtDur(d time.Duration) string {
 
 // ---- hypotheses blob decoding --------------------------------------------------
 
+// rcaHypEntry is one ranked hypothesis as the engine persisted it.
+type rcaHypEntry struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Confidence      float64  `json:"confidence"`
+	ConfidenceLabel string   `json:"confidence_label"`
+	Contradicted    bool     `json:"contradicted"`
+	Contradictions  []string `json:"contradictions"`
+	Satisfied       []string `json:"satisfied"`
+	Missing         []string `json:"missing"`
+	BlastRadius     string   `json:"blast_radius"`
+	OperatorPhrase  string   `json:"operator_phrase"`
+	// ContextStory (owner D1, engine contract 2026-11-11): the hypothesis is a
+	// BACKGROUND story about the device (a standing posture or exposure finding
+	// co-occurring with a fault), never a cause. Objects persisted before the
+	// engine emitted the flag are caught by noclabel.IsContextStory's id list.
+	ContextStory bool `json:"context_story"`
+	CausalChain  []struct {
+		Stage     string   `json:"stage"`
+		Witnessed bool     `json:"witnessed"`
+		Root      bool     `json:"root"`
+		Note      string   `json:"note"`
+		Kinds     []string `json:"kinds"`
+	} `json:"causal_chain"`
+	Verdict struct {
+		Tier              string   `json:"verdict_tier"`
+		Owner             string   `json:"owner"`
+		Layer             string   `json:"layer"`
+		Reasons           []string `json:"reasons"`
+		FirstSteps        []string `json:"first_steps"`
+		IndependentPair   []string `json:"independent_pair"`
+		ModalityCoverage  []string `json:"modality_coverage"`
+		ObserverCoverage  []string `json:"observer_coverage"`
+		TrustedModalities []string `json:"trusted_modalities"`
+	} `json:"verdict"`
+}
+
 type rcaHypBlob struct {
 	Ranking struct {
-		Hypotheses []struct {
-			ID              string   `json:"id"`
-			Title           string   `json:"title"`
-			Confidence      float64  `json:"confidence"`
-			ConfidenceLabel string   `json:"confidence_label"`
-			Contradicted    bool     `json:"contradicted"`
-			Contradictions  []string `json:"contradictions"`
-			Satisfied       []string `json:"satisfied"`
-			Missing         []string `json:"missing"`
-			BlastRadius     string   `json:"blast_radius"`
-			CausalChain     []struct {
-				Stage     string   `json:"stage"`
-				Witnessed bool     `json:"witnessed"`
-				Root      bool     `json:"root"`
-				Note      string   `json:"note"`
-				Kinds     []string `json:"kinds"`
-			} `json:"causal_chain"`
-			Verdict struct {
-				Tier              string   `json:"verdict_tier"`
-				Owner             string   `json:"owner"`
-				Layer             string   `json:"layer"`
-				Reasons           []string `json:"reasons"`
-				FirstSteps        []string `json:"first_steps"`
-				IndependentPair   []string `json:"independent_pair"`
-				ModalityCoverage  []string `json:"modality_coverage"`
-				ObserverCoverage  []string `json:"observer_coverage"`
-				TrustedModalities []string `json:"trusted_modalities"`
-			} `json:"verdict"`
-		} `json:"hypotheses"`
+		Hypotheses []rcaHypEntry `json:"hypotheses"`
 	} `json:"ranking"`
 	GroundingContext struct {
 		Seams []struct {
@@ -909,16 +946,28 @@ type ReportInput struct {
 
 func BuildReport(in ReportInput) Report {
 	meta := in.Meta
-	hb := decodeHypotheses(meta)
-	verdict := strings.ToLower(fmt.Sprintf("%v", meta["verdict_tier"]))
+	// Owner D1 (2026-11-11): background stories leave the causal ranking before
+	// anything is worded. Every downstream reader (title, analysis, ownership,
+	// actions, hypotheses, accounting) sees the CAUSAL blob; the stories go to
+	// the background band. When the persisted top was a background story, the
+	// headline verdict is the causal leader's own gate, capped at the object's.
+	hbAll := decodeHypotheses(meta)
+	hb, ctxStories := splitContextStories(hbAll)
+	verdict := headlineVerdict(fmt.Sprintf("%v", meta["verdict_tier"]), hbAll, hb)
 	state := strings.ToLower(fmt.Sprintf("%v", meta["state"]))
 	// The ranking blob is the live analysis; the scalar column can lag it
 	// (Phase 0 finding D1b: report title disagreed with the workspace on the
 	// same case). Prefer the ranking's leader whenever it is present.
 	topHyp := fmt.Sprintf("%v", meta["top_hypothesis"])
-	if len(hb.Ranking.Hypotheses) > 0 && hb.Ranking.Hypotheses[0].ID != "" {
+	switch {
+	case len(hb.Ranking.Hypotheses) > 0 && hb.Ranking.Hypotheses[0].ID != "":
 		topHyp = hb.Ranking.Hypotheses[0].ID
+	case len(hbAll.Ranking.Hypotheses) > 0:
+		topHyp = "undetermined" // only background stories ranked — no cause leads
 	}
+	// The confirming pair of the headline verdict (D3): read once, used by the
+	// real-user impact axis, the decision wording and the promotion gate.
+	pair := buildConfirmingPair(hb, in.Signals)
 	version := int(asFloat(meta["version"]))
 
 	// ---- classify the slice ----------------------------------------------------
@@ -984,10 +1033,17 @@ func BuildReport(in ReportInput) Report {
 		}
 		anomalous = append(anomalous, sig)
 		laneAnomalous[lane]++
-		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+		// Corroboration for incident severity counts MEASUREMENT observers only:
+		// a security rule is evidence about the device, never a second witness
+		// of the fault (owner D3, 2026-11-11).
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" && lane != "security" {
 			anomObservers[o] = true
 		}
-		if tsOK {
+		// A standing security finding (posture / exposure) is re-sent with a
+		// fresh timestamp on every scan: it has no onset, so it never dates the
+		// incident (first observed, duration) unless it carries its own
+		// first-seen time (owner review 2026-11-11, gap 5).
+		if tsOK && !(rcaIsStandingFindingKind(kind) && rcaFindingFirstSeen(sig) == "") {
 			if firstObs.IsZero() || ts.Before(firstObs) {
 				firstObs = ts
 			}
@@ -1063,7 +1119,9 @@ func BuildReport(in ReportInput) Report {
 	// recovery evidence is at/after the last qualifying anomaly in every
 	// participating scope. A tunnel-up while probes keep failing is component
 	// recovery + residual degradation, never incident recovery.
-	ra := ReconcileRecovery(anomalous, clears)
+	// An undated standing finding has no lifecycle — it never opens, holds or
+	// closes a recovery scope (owner review 2026-11-11, gap 5).
+	ra := ReconcileRecovery(rcaDatedAnomalies(anomalous), clears)
 	recovered := ra.At // zero unless the incident-level gate passed
 	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
 	switch {
@@ -1157,7 +1215,11 @@ func BuildReport(in ReportInput) Report {
 	}
 	impactRU := "not_observable"
 	switch {
-	case impactRealUser > 0 && analysis == "confirmed":
+	case impactRealUser > 0 && analysis == "confirmed" && !pair.Refutes():
+		// Real-user evidence is upgraded to confirmed only when the fault itself
+		// was confirmed by two MEASUREMENT sources (D3): a security rule or a
+		// controller's statement in the pair never turns an indicator into
+		// confirmed impact.
 		impactRU = "confirmed"
 	case impactRealUser > 0:
 		impactRU = "detected"
@@ -1231,8 +1293,8 @@ func BuildReport(in ReportInput) Report {
 	sevIncident := peakSev
 	var sevCodes []string
 	anomLanes := 0
-	for _, n := range laneAnomalous {
-		if n > 0 {
+	for lane, n := range laneAnomalous {
+		if n > 0 && lane != "security" { // a verdict plane never corroborates severity
 			anomLanes++
 		}
 	}
@@ -1610,7 +1672,7 @@ func BuildReport(in ReportInput) Report {
 	ownership := buildOwnership(analysis, loc.Localized, ictx.ServiceClassification, hb, sigSummary, kindCounts)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
-	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, FmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
+	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, FmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow, !pair.Refutes())
 	decision.TicketRecommended = ticketRecommended
 	decision.TicketRecommendReason = ticketRecReason
 	if isMerged {
@@ -1735,6 +1797,28 @@ func BuildReport(in ReportInput) Report {
 	rep.Timeline = buildDetailedTimeline(&rep)
 	// Glossary: dynamic — derived from what THIS report actually uses.
 	rep.Glossary = buildRcaGlossary(&rep)
+
+	// ---- the NOC document (owner D1/D3/D4, 2026-11-11) --------------------------
+	rep.ConfirmingPair = pair
+	rep.Background = buildBackground(ctxStories, in.Signals, changes)
+	headline := firstLiveCauseHypothesis(hyps)
+	rep.Eligibility = rcaDocEligibility{
+		CausalHeadline:   headline != nil && strings.HasPrefix(topHyp, "sig."),
+		ContextOnly:      len(ctxStories) > 0 && headline == nil,
+		NeverEstablished: rcaNeverEstablishedOnly(anomalous),
+		ControllerOrHub:  rcaIsControllerOrHub(anomalous),
+		Sites:            len(scope.Sites),
+	}
+	if len(scope.Devices) > 0 {
+		rep.Eligibility.PrimaryDevice = scope.Devices[0]
+	}
+	if rep.Eligibility.CausalHeadline {
+		rep.Eligibility.HeadlineID = topHyp
+	}
+	rep.Document = buildNocDocument(rcaDocInput{
+		Rep: &rep, Headline: headline, HB: hb, Anomalous: anomalous,
+		Required: required, WhyNot: whyNot, Lanes: laneAnomalous,
+	})
 	// Artifact-class pre-stamp: promotion is unknown at build time (the HTTP
 	// layer re-stamps once evaluated) — the honest default is unpromoted, which
 	// yields operational assessment (or validation assessment for a validation

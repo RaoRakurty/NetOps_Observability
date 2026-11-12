@@ -328,6 +328,9 @@ func buildDetailedTimeline(rep *Report) []rcaTimelineEntry {
 		}
 	}
 	for _, s := range rep.Evidence.Symptoms {
+		if s.standing {
+			continue // a standing finding has no onset — background band only
+		}
 		src := "observed by " + orDefault(s.Source, "an attached evidence source")
 		add(s.First, "Symptom onset: "+s.Label, src)
 		if s.Last != "" && s.Last != s.First {

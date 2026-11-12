@@ -21,6 +21,10 @@ func promoReport(analysis, impact string, dur time.Duration, validation bool) Re
 		Validation: validation,
 		States:     ReportStates{Analysis: analysis, Impact: impact, ImpactRealUser: "unknown", ImpactSynthetic: "confirmed"},
 		Times:      rcaReportTimes{DurationMS: dur.Milliseconds()},
+		// a measured network cause — the facts BuildReport derives for a real
+		// outage whose confirming pair is two measurement sources (D3)
+		Eligibility:    rcaDocEligibility{CausalHeadline: true, PrimaryDevice: "wan-r2", HeadlineID: "sig.ent.wan-edge.bgp-peer-down"},
+		ConfirmingPair: rcaConfirmingPair{Observers: []string{"wan-r2", "prober"}, Measured: true, Basis: "Two independent sources measured the same fault."},
 	}
 }
 

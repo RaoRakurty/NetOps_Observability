@@ -39,6 +39,12 @@ func Kind(kind string) string {
 		return "Inventory drift"
 	case "topology_change":
 		return "Topology change"
+	case "security_posture":
+		return "Security hardening finding"
+	case "security_exposure":
+		return "Security exposure finding"
+	case "security_signal":
+		return "Security detection"
 	}
 	title := strings.ReplaceAll(base, "_", " ")
 	if title == "" {

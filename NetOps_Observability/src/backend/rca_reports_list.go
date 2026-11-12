@@ -84,18 +84,45 @@ func rcaLibraryRow(rep rca.Report) rcaLibraryReport {
 }
 
 // rcaLibraryPrefilterSQL — phase (a): the tenant-scoped candidate prefilter.
-// Only rows that could possibly auto-promote (confirmed, non-merged, at least
-// the auto-promotion duration) inside the window, newest first, hard-capped.
-// Pure so its bounded shape is unit-testable. Duration reuses the SAME
-// constant the promotion criteria enforce — the two can never drift.
+// Only rows that could possibly auto-promote inside the window, newest first,
+// hard-capped. Owner D3 (2026-11-11) gave promotion three triggers, so the
+// prefilter is no longer tier-only — a row is a candidate when ANY of them
+// could hold:
+//
+//   - real outage: confirmed, at least the auto-promotion duration;
+//   - multi-site: a suspected/confirmed object naming ≥ 2 sites;
+//   - repeat offender: its (top hypothesis, primary device) pair occurred
+//     ≥ 3 times in the 7 days before the window started or since.
+//
+// It is a SUPERSET: the per-candidate report build decides (context stories,
+// never-established peers and the measurement-pair rule are read from the
+// built report). Pure so its bounded shape is unit-testable; duration, site
+// and repeat thresholds reuse the SAME constants the promotion criteria
+// enforce — they can never drift.
 func rcaLibraryPrefilterSQL(days int) string {
+	window := intToString(days * 86400)
+	repeatWindow := intToString(days*86400 + int(rca.RepeatOffenderWindow.Seconds()))
 	return `
 SELECT toString(correlation_id) AS correlation_id
   FROM netops.corr_current FINAL
- WHERE verdict_tier = 'confirmed'
-   AND state != 'merged'
-   AND dateDiff('second', window_start, window_end) >= ` + intToString(int(rca.PromotionMinDuration.Seconds())) + `
-   AND window_end >= now() - INTERVAL ` + intToString(days*86400) + ` SECOND
+ WHERE state != 'merged'
+   AND window_end >= now() - INTERVAL ` + window + ` SECOND
+   AND (
+        (verdict_tier = 'confirmed'
+         AND dateDiff('second', window_start, window_end) >= ` + intToString(int(rca.PromotionMinDuration.Seconds())) + `)
+     OR (verdict_tier != 'undetermined' AND top_hypothesis != 'undetermined'
+         AND JSONLength(affected, 'sites') >= ` + intToString(rca.MultiSiteMin) + `)
+     OR (verdict_tier != 'undetermined' AND top_hypothesis != 'undetermined'
+         AND (top_hypothesis, JSONExtractString(affected, 'devices', 1)) IN (
+             SELECT top_hypothesis, JSONExtractString(affected, 'devices', 1)
+               FROM netops.corr_current FINAL
+              WHERE state != 'merged'
+                AND top_hypothesis != 'undetermined'
+                AND JSONExtractString(affected, 'devices', 1) != ''
+                AND window_end >= now() - INTERVAL ` + repeatWindow + ` SECOND
+              GROUP BY top_hypothesis, JSONExtractString(affected, 'devices', 1)
+             HAVING count() >= ` + intToString(rca.RepeatOffenderMin) + `))
+   )
  ORDER BY window_end DESC
  LIMIT ` + intToString(rcaLibraryEvalCap) + `
  FORMAT JSON`

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"netops/backend/internal/rca"
@@ -120,6 +121,21 @@ func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id str
 	var manual *rca.PromotionRecord
 	if rec, has := s.rcaPromotions.Get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
 		manual = &rec
+	}
+	// Owner D3 (2026-11-11) repeat-offender trigger: how often the same headline
+	// cause hit the same primary device in the 7 days up to this case's end.
+	// Read under the CALLER's tenant scope (row policies). A failed read leaves
+	// the count unknown — the trigger then cannot fire — and is logged (§10).
+	if q, ok := rep.RecurrenceQuery(); ok {
+		rows, rerr := s.chRows(r, q)
+		switch {
+		case rerr != nil:
+			slog.Warn("rca report: repeat-offender count unavailable", "correlation_id", id, "error", rerr)
+		case len(rows) > 0:
+			rep.SetRecurrence(int(asFloat(rows[0]["repeat_count"])))
+		default:
+			rep.SetRecurrence(0)
+		}
 	}
 	rep.Promotion = rca.EvaluatePromotion(&rep, manual)
 	// Artifact class depends on promotion — re-stamp now that it is known

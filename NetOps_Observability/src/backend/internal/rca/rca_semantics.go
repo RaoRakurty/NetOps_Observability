@@ -375,6 +375,9 @@ func buildDetectionMilestones(in rcaSemanticsInput) ([]rcaDetectionMilestone, []
 			if fmt.Sprintf("%v", sig["signal_id"]) != in.TriggerSignalID {
 				continue
 			}
+			if rcaIsStandingFindingKind(asString(sig["kind"])) && rcaFindingFirstSeen(sig) == "" {
+				break // an undated standing finding is background, never a dated milestone
+			}
 			if ts, ok := parseChTS(fmt.Sprintf("%v", sig["ts"])); ok {
 				kind := strings.ReplaceAll(fmt.Sprintf("%v", sig["kind"]), "_", " ")
 				m := rcaDetectionMilestone{
