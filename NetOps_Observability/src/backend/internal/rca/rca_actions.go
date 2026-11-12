@@ -116,6 +116,16 @@ var rcaActionFamilies = []rcaActionFamily{
 		EvidenceKinds:  []string{"cloud", "route"},
 		ExpectedOutput: "the route-table entries for the affected prefix, next-hop/attachment state, and any recent route changes",
 	},
+	{
+		// Security family (owner review 2026-11-11): a security finding's own
+		// steps (open the exposure, compare the capture time with the fault
+		// onset) apply only when security evidence took part.
+		Name:           "security",
+		StepTokens:     []string{"exposure", "advisory", "hardening", "posture", "telnet"},
+		EvidenceKinds:  []string{"security_"},
+		Lanes:          []string{"security"},
+		ExpectedOutput: "the finding's rule, the configuration evidence it cites, and when the finding was first seen compared with the fault onset",
+	},
 }
 
 // rcaTokenize splits an action step into lower-case word tokens (letters and
@@ -185,7 +195,10 @@ type rcaActionInput struct {
 	LaneAnomalous map[string]int
 	KindCounts    map[string]int
 	Residual      bool // anomalies continued after a component recovery
-	Validation    bool
+	// ServiceScope: service-scope (end-to-end) evidence took part in the
+	// incident. Without it no action may speak of end-to-end checks (§3.8).
+	ServiceScope bool
+	Validation   bool
 	// Merge: set on a merged/superseded source case. A merged source must NOT
 	// continue issuing restoration actions — they belong to the surviving
 	// incident (P1 merge ownership of side effects).
@@ -328,7 +341,17 @@ func planActions(in rcaActionInput) []rcaAction {
 
 	// (d) residual-degradation gate: while end-to-end checks still fail after a
 	// component recovery, closing/monitoring is blocked by a P1 validation task.
-	if in.Residual && stillFailing {
+	if in.Residual && stillFailing && !in.ServiceScope {
+		// RCA v2 §3.8: no service-scope evidence took part — the residual is on
+		// the component; never ask to "validate end-to-end service recovery".
+		add(rcaAction{
+			Action:              "Find out why the component did not stay recovered — a recovery was observed, but anomalies continued on the same component",
+			Owner:               in.Ownership.TriageOwner,
+			OperationalPriority: "P1", Purpose: "restoration",
+			ExpectedResult: "the component's anomalies stop after the recovery, or the part that is still failing is isolated",
+			EscalateWhen:   "anomalies continue on the component after its recovery",
+		})
+	} else if in.Residual && stillFailing {
 		add(rcaAction{
 			Action:              "Validate end-to-end service recovery — component status recovered while service checks continued failing",
 			Owner:               in.Ownership.TriageOwner,

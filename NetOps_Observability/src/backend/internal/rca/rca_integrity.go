@@ -17,7 +17,7 @@ import (
 
 // ReportPolicyVersion names the honesty/derivation policy that produced the
 // report — bump when promotion criteria or state-derivation rules change.
-const ReportPolicyVersion = "rca-policy-2026.07.19-p1"
+const ReportPolicyVersion = "rca-policy-2026.11.11-noc"
 
 // ReportIntegrity is the immutability block a generated document embeds.
 type ReportIntegrity struct {
@@ -49,6 +49,11 @@ func ComputeReportIntegrity(rep Report) (ReportIntegrity, error) {
 	cp.GeneratedAt = ""
 	cp.Integrity = nil
 	cp.Evidence.LastObservation = ""
+	// The NOC document is a pure projection of fields hashed elsewhere in the
+	// report (states, hypotheses, times, ownership, background) and carries the
+	// ticking elapsed duration of a still-active case — hashed, it would re-leak
+	// the wall clock and add no analysis discrimination.
+	cp.Document = NocDocument{}
 	// The quality gate's evaluation stamp is generation-time metadata, exactly
 	// like GeneratedAt. Unnormalized it broke the revision register's
 	// idempotency whenever two identical renders straddled a second boundary

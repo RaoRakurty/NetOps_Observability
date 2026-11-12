@@ -31,6 +31,15 @@ func Kind(kind string) string {
 		return "Interface errors"
 	case "if_util_high":
 		return "High link utilization"
+	case "if_metric_anomaly":
+		// RCA v2 §3.1: the observed condition that titles P-3E0400. It is a
+		// counter/rate departure on an interface, NOT a state change.
+		return "Interface metric anomaly"
+	case "mac_flap":
+		return "MAC address flap"
+	case "device_alarm":
+		// A generic device alarm: never a routing or link event (§3.7).
+		return "Device alarm"
 	case "device_resource_anomaly":
 		return "Device CPU/memory change"
 	case "flow_volume_anomaly":
@@ -39,6 +48,12 @@ func Kind(kind string) string {
 		return "Inventory drift"
 	case "topology_change":
 		return "Topology change"
+	case "security_posture":
+		return "Security hardening finding"
+	case "security_exposure":
+		return "Security exposure finding"
+	case "security_signal":
+		return "Security detection"
 	}
 	title := strings.ReplaceAll(base, "_", " ")
 	if title == "" {

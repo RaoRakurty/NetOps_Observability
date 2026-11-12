@@ -20,11 +20,13 @@ func TestEvidenceCoveragePartialNotNormal(t *testing.T) {
 			"2026-07-12 18:10:00", true, map[string]any{"probe_scope": "customer_path"}),
 		testSig("probe_loss", "active_probe", "prober", "path", "prober->10.60.10.10", "crit",
 			"2026-07-12 18:25:00", true, map[string]any{"probe_scope": "customer_path"}),
-		// device-health telemetry present but stops at 18:15 — before the last anomaly
-		testSig("cpu_util", "device_telemetry", "dev-1", "device", "dev-1", "info",
-			"2026-07-12 18:10:00", false, nil),
-		testSig("cpu_util", "device_telemetry", "dev-1", "device", "dev-1", "info",
-			"2026-07-12 18:15:00", false, nil),
+		// device-health telemetry present but stops at 18:15 — before the last
+		// anomaly. One (entity, metric) series polled every minute, so its
+		// cadence is known (RCA v2 §3.6) and the missing tail is a real gap.
+	}
+	for _, ts := range []string{"18:10:00", "18:11:00", "18:12:00", "18:13:00", "18:14:00", "18:15:00"} {
+		sigs = append(sigs, testSig("cpu_util", "device_telemetry", "dev-1", "device", "dev-1", "info",
+			"2026-07-12 "+ts, false, nil))
 	}
 	rep := buildTestReport(t, meta, sigs)
 
