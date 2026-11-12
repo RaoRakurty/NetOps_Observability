@@ -61,6 +61,8 @@ type phrasingSlots struct {
 	Skill      string `json:"skill,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
 	Target     string `json:"target,omitempty"`
+	// Verdict: the incident list is filtered to this verdict tier.
+	Verdict string `json:"verdict,omitempty"`
 }
 
 type phrasingCase struct {
@@ -70,6 +72,10 @@ type phrasingCase struct {
 	Expect string        `json:"expect"`
 	Alt    []string      `json:"alt,omitempty"`
 	Slots  phrasingSlots `json:"slots"`
+	// Context is the UI context the question is asked with — the RCA
+	// workspace passes {"correlation_id": …}, so the problem in view is the
+	// subject (route_policy.go).
+	Context map[string]string `json:"context,omitempty"`
 }
 
 func (c phrasingCase) split() evalsplit.Split {
@@ -150,6 +156,9 @@ var phrasingLabels = map[string]func(o phrasingObs) bool{
 	"troubleshoot": func(o phrasingObs) bool {
 		return o.arm == ai.ArmSkill || o.arm == ai.ArmClassic && o.intent == "network_kb"
 	},
+	// compound: a multi-part question every part of which is answered on the
+	// deterministic path (route_policy.go), in one answer.
+	"compound": func(o phrasingObs) bool { return o.arm == ai.ArmData && o.intent == ai.IntentMultiQuestion },
 }
 
 // slotsHold checks the case's slots against the observation; "" = all hold.
@@ -158,7 +167,7 @@ func (c phrasingCase) slotsHold(o phrasingObs) string {
 	if sl.Skill != "" && o.skill != sl.Skill {
 		return "skill " + o.skill + " ≠ " + sl.Skill
 	}
-	needQ := sl.Metric != "" || sl.Device != "" || sl.State != "" || sl.AllDevices || sl.MinWindow != "" || sl.Limit > 0 || sl.Target != ""
+	needQ := sl.Metric != "" || sl.Device != "" || sl.State != "" || sl.AllDevices || sl.MinWindow != "" || sl.Limit > 0 || sl.Target != "" || sl.Verdict != ""
 	if !needQ {
 		return ""
 	}
@@ -206,7 +215,20 @@ func (c phrasingCase) slotsHold(o phrasingObs) string {
 	if sl.Target != "" && o.q.Target != sl.Target && !(len(o.q.GroupBy) == 1 && o.q.GroupBy[0] == sl.Target) {
 		return "target " + o.q.Target + " ≠ " + sl.Target
 	}
+	if sl.Verdict != "" && !phrasingHasVerdict(o.q, sl.Verdict) {
+		return "verdict " + sl.Verdict + " not filtered"
+	}
 	return ""
+}
+
+// phrasingHasVerdict: the incident list is filtered to exactly that verdict.
+func phrasingHasVerdict(q *nlqast.AST, verdict string) bool {
+	for _, f := range q.Filters {
+		if f.Field == "verdict_tier" && len(f.Values) == 1 && f.Values[0] == verdict {
+			return true
+		}
+	}
+	return false
 }
 
 // phrasingHasState: the query asks for that up/down state — a reachability
@@ -302,9 +324,10 @@ func phrasingFixture(t *testing.T) (*server, jwtClaims) {
 	return s, a
 }
 
-// observePhrasing asks one question through the router and reports its first
+// observePhrasingIn asks one question through the router and reports its first
 // claim. Downstream reads are cut off the moment the claim is made.
-func observePhrasing(t *testing.T, s *server, a jwtClaims, q string) phrasingObs {
+// uiContext is the UI context the question is asked with (nil = none).
+func observePhrasingIn(t *testing.T, s *server, a jwtClaims, q string, uiContext map[string]string) phrasingObs {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -322,9 +345,14 @@ func observePhrasing(t *testing.T, s *server, a jwtClaims, q string) phrasingObs
 			cancel() // the claim is the measurement; nothing downstream is read
 		}
 	}
-	ans, _ := o.Ask(r.Context(), s.aiPrincipal(a), q, nil) // a downstream error after the claim is not the router's
+	ans, _ := o.Ask(r.Context(), s.aiPrincipal(a), q, uiContext) // a downstream error after the claim is not the router's
 	obs.arm, obs.mode = claim.Arm, string(claim.Mode)
-	pl := ai.Classify(q, nil)
+	var pl ai.Plan
+	if ai.ProblemInView(q, uiContext) != "" {
+		pl = ai.Classify(q, uiContext)
+	} else {
+		pl = ai.Classify(q, nil)
+	}
 	obs.intent = pl.Intent
 	if claim.Arm == ai.ArmData {
 		obs.intent = ans.Intent
@@ -357,7 +385,7 @@ func TestIrisPhrasingEval(t *testing.T) {
 	byLabel := map[string]map[evalsplit.Split]*phrasingTally{}
 	var misses []string
 	for _, c := range cases {
-		o := observePhrasing(t, s, a, c.Q)
+		o := observePhrasingIn(t, s, a, c.Q, c.Context)
 		ok, why := false, ""
 		for _, l := range append([]string{c.Expect}, c.Alt...) {
 			if phrasingLabels[l](o) {

@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ConnectModelBanner } from "../components/ConnectModelBanner";
-import { applyRecommended, answerFootnote, testResultText, GEMINI_FREE_TIER_WARNING } from "../iris/connectModel";
+import { applyRecommended, answerFootnote, saveWarnings, testResultText, tierTestLines, GEMINI_FREE_TIER_WARNING } from "../iris/connectModel";
 import { AI_NAME } from "../brand";
 import {
   api,
@@ -89,6 +89,12 @@ import { useShell } from "../context/shell";
 // `is_grounded` flag. It costs one extra provider call at most, only on a
 // question the engine already declined, and it never carries the grounded claim.
 //
+// Since the 2026-11-12 routing policy (ai/route_policy.go) the engine itself
+// hands a question it cannot cover to the model, grounded in the caller's data,
+// so a capability miss now reaches this retry only from an older server: an
+// answer whose routing says the model was already asked (model_unavailable)
+// is never retried.
+//
 // The model-driven agent loop (FEATURE_AI_TOOLS) is deliberately NOT the default
 // route for free text: it is off by default, entitled per tenant, and its tool
 // replies are not yet fenced as data (tracker 333), so it cannot carry the
@@ -170,8 +176,13 @@ const INTENT_BADGE: Record<string, string> = {
 // intent "capability". It is the ONLY engine outcome that may be retried on the
 // plain chat proxy — an access refusal, a not-built answer mode or any real
 // answer stays exactly as the engine wrote it.
+//
+// Since the 2026-11-12 routing policy the server itself hands an uncovered
+// question to the model; when it answers "unavailable" with routing
+// model_unavailable, the model was already asked in that request and did not
+// answer, so a second try on the proxy would only wait on it again.
 export function isCapabilityMiss(ans: AiAnswer): boolean {
-  return ans.mode === "unavailable" && ans.intent === "capability";
+  return ans.mode === "unavailable" && ans.intent === "capability" && ans.routing?.path !== "model_unavailable";
 }
 
 // groundedChipLabel is the per-answer provenance claim. "cited" is asserted only
@@ -307,6 +318,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   // C3: the latest "Test connection" verdict shown under the settings form.
   const [cfgTest, setCfgTest] = useState<ProviderTestResult | null>(null);
   const [testingCfg, setTestingCfg] = useState(false);
+  // Warn-before-save (never block): tier models that failed the latest test.
+  const [saveWarn, setSaveWarn] = useState<string[]>([]);
   // Slash-command menu (like Claude Code): typing "/" surfaces pre-made questions.
   // The list is the SERVER command registry (single source of truth); the static
   // set is only a fallback if the fetch fails.
@@ -348,8 +361,16 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
 
   const modelChoices = cfg?.model_suggestions?.[cfg.provider] ?? [];
 
-  const saveCfg = async () => {
+  const saveCfg = async (anyway = false) => {
     if (!cfg) return;
+    // A model that failed its last test is saved only after a second click:
+    // the operator is told, never stopped (owner 2026-11-12).
+    const warn = saveWarnings(cfgTest, { provider: cfg.provider, model: cfg.model, model_fast: cfg.model_fast ?? "", model_strong: cfg.model_strong ?? "" }, cfg.recommended);
+    if (!anyway && warn.length > 0) {
+      setSaveWarn(warn);
+      return;
+    }
+    setSaveWarn([]);
     setSavingCfg(true);
     setError(null);
     try {
@@ -378,9 +399,18 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     setError(null);
     try {
       if (scope === "platform" && cfg) {
-        setCfgTest(await api.testCopilotConfig({ provider: cfg.provider, key: keyDraft.trim() || undefined, model: (cfg.model_fast || cfg.model || "").trim() || undefined }));
+        // Every tier model of the form is tested (a blank one as its
+        // recommended model), each with its own verdict and latency.
+        setCfgTest(await api.testCopilotConfig({
+          provider: cfg.provider, key: keyDraft.trim() || undefined,
+          model: cfg.model.trim(), model_fast: (cfg.model_fast ?? "").trim(), model_strong: (cfg.model_strong ?? "").trim(),
+        }));
+        setSaveWarn([]);
       } else if (tcfg) {
-        setCfgTest(await api.testAITenantConfig({ provider: tcfg.provider || undefined, key: tKeyDraft.trim() || undefined, model: (tcfg.model_fast || tcfg.model || "").trim() || undefined }));
+        setCfgTest(await api.testAITenantConfig({
+          provider: tcfg.provider || undefined, key: tKeyDraft.trim() || undefined,
+          model: (tcfg.model || "").trim(), model_fast: (tcfg.model_fast ?? "").trim(), model_strong: (tcfg.model_strong ?? "").trim(),
+        }));
       }
     } catch (e) {
       setCfgTest(null);
@@ -732,12 +762,20 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
             onChange={(t) => setCfg({ ...cfg, model_fast: t.fast, model_strong: t.strong })} />
           </details>
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
+            <button className="dash-btn accent" onClick={() => { void saveCfg(saveWarn.length > 0); }} disabled={savingCfg}>
+              {savingCfg ? "Saving…" : saveWarn.length > 0 ? "Save anyway" : "Save"}
+            </button>
             <button className="dash-btn" onClick={() => testCfg("platform")} disabled={testingCfg || (!cfg.key_present && !keyDraft.trim())}>
               {testingCfg ? "Testing…" : "Test connection"}
             </button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+          {saveWarn.length > 0 && (
+            <div className="op-save-warn" role="alert" data-testid="iris-save-warn">
+              {saveWarn.map((w) => <p key={w} style={{ margin: 0 }}>{w}</p>)}
+              <p style={{ margin: 0 }}>Iris falls back to the evidence answer when a model fails. Save anyway, or pick a model that passed.</p>
+            </div>
+          )}
           <ConnectionTestLine result={cfgTest ?? cfg.last_test ?? null} />
 
           {/* Per-workspace access (platform owner): which customer workspaces get
@@ -946,7 +984,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
-                  ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} />
+                  ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} citations={chatCites[i]} onCite={leave} />
                   : renderContent(m.content)}
               {/* What the statement rules removed or reworded (N-B4). */}
               {m.role === "assistant" && !grounded[i] && chatDisc[i] && chatDisc[i].length > 0 && (
@@ -1171,7 +1209,7 @@ function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite
       )}
 
       {/* Statement classes (N-B4): each sentence with the server's class. */}
-      {ans.text && <StatementText className="op-text" text={ans.text} statements={ans.statements} />}
+      {ans.text && <StatementText className="op-text" text={ans.text} statements={ans.statements} citations={ans.citations} onCite={onCite} />}
       {/* Lines of investigation (N-B3): what each check observed, beside the
           correlation engine's verdict — never a cause of Iris's own. */}
       {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
@@ -1353,13 +1391,18 @@ function extractAssistantText(r: CopilotChatResponse): string {
 // behaviour of every install that never sets them.
 // ConnectionTestLine — the latest "Test connection" verdict (C3/C6 "last
 // tested"), in plain words; never the provider's own message.
-function ConnectionTestLine({ result }: { result: ProviderTestResult | null }) {
+export function ConnectionTestLine({ result }: { result: ProviderTestResult | null }) {
   if (!result) return null;
   return (
-    <p className={`op-conn-test ${result.ok ? "ok" : "bad"}`} role="status" data-testid="connection-test">
-      {testResultText(result)}
+    <div className={`op-conn-test ${(result.tiers?.length ? result.tiers.every((t) => t.ok) : result.ok) ? "ok" : "bad"}`} role="status" data-testid="connection-test">
+      {result.tiers?.length ? (result.tiers.every((t) => t.ok) ? "Every model answered." : "A model did not answer.") : testResultText(result)}
       {result.tested_at && <span className="op-conn-when"> Tested {result.tested_at.replace("T", " ").replace(/\.\d+Z$|Z$/, " UTC")}.</span>}
-    </p>
+      {result.tiers?.length ? (
+        <ul className="op-conn-tiers" data-testid="connection-test-tiers">
+          {tierTestLines(result).map((l) => <li key={l.tier} className={l.ok ? "ok" : "bad"}>{l.text}</li>)}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

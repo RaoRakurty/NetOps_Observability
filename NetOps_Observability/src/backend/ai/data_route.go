@@ -77,6 +77,11 @@ type DataOpts struct {
 	// parse is recorded as not_data — the classic path answers it — and a
 	// lookup that found nothing is left to that path too.
 	ClassicIntent string
+	// SkipStrongCompile leaves out the strong structured model compile (B3,
+	// up to three calls) — set for a question the router found no intent for,
+	// which the grounded model answer takes when the grammar cannot
+	// (route_policy.go). The fast one-call rephrase still runs.
+	SkipStrongCompile bool
 }
 
 // NLQueryFunc answers a question with the NL query engine, in the caller's
@@ -107,7 +112,11 @@ func (o *Orchestrator) answerData(ctx context.Context, p Principal, question str
 		}
 	}
 	emitTrace(o.Trace, TraceEvent{Type: TraceToolStarted, Tool: "nl_query"})
-	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation", ClassicIntent: plan.Intent}
+	opts := DataOpts{AllowModel: plan.Intent != "product_question" && plan.Intent != "product_navigation", ClassicIntent: plan.Intent,
+		// One model budget for a miss (route_policy.go): an intent-less question
+		// the grammar cannot read goes to the grounded model answer, not
+		// through the strong compile's repair loop first.
+		SkipStrongCompile: plan.Intent == "capability" && o.LLM != nil}
 	if listingCue.MatchString(question) {
 		opts.IncidentRefOnly, opts.AllowModel = true, false
 	}

@@ -167,7 +167,7 @@ func TestProviderFailureIsLoggedWithClassAndNoSecret(t *testing.T) {
 		t.Fatalf("want exactly one failure line, got %d: %v", len(got), logs.lines)
 	}
 	f := got[0]
-	if f["provider"] != "gemini" || f["model"] != "gemini-flash-latest" || f["tier"] != "fast" ||
+	if f["provider"] != "gemini" || f["model"] != ai.RecommendedModels()["gemini"].Fast || f["tier"] != "fast" ||
 		f["error_class"] != ai.ProvModelNotFound || f["http_status"] != 404 || f["provider_reason"] != "NOT_FOUND" {
 		t.Fatalf("failure line fields: %v", f)
 	}
@@ -292,15 +292,20 @@ func TestProviderDefaultModelFollowsProvider(t *testing.T) {
 		t.Fatalf("defaults = %+v, want gemini with an empty model", got)
 	}
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey})
-	for _, tier := range []ai.ModelTier{"", ai.TierFast, ai.TierStrong} {
+	rec := ai.RecommendedModels()["gemini"]
+	for tier, want := range map[ai.ModelTier]string{"": rec.Default, ai.TierFast: rec.Fast, ai.TierStrong: rec.Strong} {
 		c := s.providerCandidatesForTier(aiPlatformOwn, tier)
-		if len(c) != 1 || c[0].name != "gemini" || c[0].model != "gemini-flash-latest" {
-			t.Fatalf("tier %q candidates = %+v", tier, c)
+		if len(c) != 1 || c[0].name != "gemini" || c[0].model != want {
+			t.Fatalf("tier %q candidates = %+v, want %s", tier, c, want)
 		}
 	}
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Model: "gemini-2.5-pro"})
+	if c := s.providerCandidatesForTier(aiPlatformOwn, ""); c[0].model != "gemini-2.5-pro" {
+		t.Fatalf("an explicit operator model must win on the default path: %+v", c)
+	}
+	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Model: "gemini-2.5-pro", ModelFast: "gemini-2.5-pro"})
 	if c := s.providerCandidatesForTier(aiPlatformOwn, ai.TierFast); c[0].model != "gemini-2.5-pro" {
-		t.Fatalf("an explicit operator model must win: %+v", c)
+		t.Fatalf("an explicit tier model must win: %+v", c)
 	}
 	// An env model configured for ANOTHER provider never reaches gemini.
 	t.Setenv("COPILOT_PROVIDER", "anthropic")
@@ -310,7 +315,7 @@ func TestProviderDefaultModelFollowsProvider(t *testing.T) {
 	if got := s2.copilotCfg.Get(); got.Model != "" {
 		t.Fatalf("COPILOT_MODEL for anthropic leaked into the gemini config: %q", got.Model)
 	}
-	if c := s2.providerCandidatesForTier(aiPlatformOwn, ai.TierFast); len(c) != 1 || c[0].model != "gemini-flash-latest" {
+	if c := s2.providerCandidatesForTier(aiPlatformOwn, ai.TierFast); len(c) != 1 || c[0].model != ai.RecommendedModels()["gemini"].Fast {
 		t.Fatalf("candidates = %+v", c)
 	}
 }

@@ -255,6 +255,73 @@ a device does not narrow it yet), "why cant cedge-82 reach the hub" (no method l
 disclosed. A true event-volume ranking needs a syslog count by device, which the NL engine
 does not have.
 
+### Follow-ups of 2026-11-12 (routing policy, verdicts, compound and RCA-context questions)
+
+The lab, right after the phrasing work shipped: "Check RCA and identify the one which has
+confirmed" got "I didn't quite catch that" after 12.9 s with a healthy model; "tell me which
+tenant are we in and how many devices are connected and how are they discovereD?" was answered
+by the integrations module ("connected" had been "corrected" to "connector"); "Explain this
+problem" in the RCA workspace returned product help. 22 cases were added, all dev: five lab
+cases (`source: lab`) and 17 synthetic ones whose ids hash to dev. Two new fields: `context`
+(the UI context, here the RCA workspace's `correlation_id`) and the `verdict` slot; one new
+label, `compound` (every part of a multi-part question answered on the deterministic path).
+
+Measured 2026-11-12 (floors unchanged, 0.98 / 0.84):
+
+| | Dev | Held-out |
+|---|---|---|
+| main, the 165 cases | 137/139 (0.99) | 22/26 (0.85) |
+| main, the 187 cases (22 new: 10/22) | 147/161 (0.91) | 22/26 (0.85) |
+| after (22 new: 22/22) | 159/161 (0.99) | 22/26 (0.85) |
+
+On main, four of the five lab cases failed (only "list critical issues" passed), and so did
+every compound case and "what does this page show" with a problem in view (answered as the
+problem).
+
+What changed:
+
+- **A real word is never "corrected"** (`lex`). A word that is the same stem as a vocabulary
+  word with a different regular ending ("connect·ed" / "connect·or", "discover·y" /
+  "discover·ed") is a word of its own; so is every form of an ordinary word next to a domain
+  term ("collector" is not "connector"). `lex.NearDomainWords` is the audit list, asserted on
+  the router's and the grammar's vocabularies. "atm" is shorthand only as the last word ("show
+  atm interfaces" keeps the network term). Casing never matters ("discovereD").
+- **Verdict referents** (grammar): a verdict tier belongs to incidents alone, so "the one which
+  has confirmed", "list the suspected ones", "show only confirmed RCAs" are incident lists
+  filtered by verdict. "Critical" has no severity column to read: it stays owner decision D1,
+  confirmed incidents, and the answer says so ("I read "critical" as confirmed incidents.").
+  "What is an RCA" is a definition, never a list.
+- **"Connected"** in a device count is read as the inventory and disclosed; "connected to
+  edge-1" stays topology.
+- **Multi-part questions** (`lex.SplitClauses`, `ai/route_policy.go`): "… and how many …" is a
+  second question. Each part is answered on its own when every part is covered: which tenant or
+  view the caller is in (from the token: a tenant, the Provider view or the platform owner's All
+  tenants view), counts from the grammar, and how devices were discovered (the per-device
+  source in the caller's visible inventory). A part nothing deterministic covers sends the
+  whole question to the model. A method that claims the whole message still investigates it.
+- **The problem in view is the subject** (RCA_DOCUMENT_V2 §5): with a `correlation_id` in the
+  context, a question is answered by that problem's grounded explanation — one model call, no
+  tie-break, rephrase or compile — unless it names the product's screens. A complaint naming
+  something specific still runs its troubleshooting method with the problem as anchor. Another
+  tenant's id reads as not found, with no evidence.
+
+**Routing policy (owner, 2026-11-12).** The deterministic path answers only when it covers the
+whole question. A question with no recognised intent, or a multi-part question with an
+uncovered part, goes to the model, grounded in the caller's data: the agent loop when the
+caller has AI investigations, otherwise one strong-tier call over a bounded evidence block
+(scope, inventory by source, active problems with their verdicts) whose citations are
+verified. "I didn't quite catch that" appears only when no model answered, and the answer says
+why. Every answer carries `routing` {path, reason}; the api logs it on the `ask` line and
+counts it in `netops_ai_routing_total{path,reason}`.
+
+**The 12.9 s.** Reproduced offline with a healthy fake model: the miss made four model calls —
+the fast rephrase (refused: no vocabulary) and then the strong structured compile with its two
+repair rounds (`invalid_after_repair`), each a full strong-tier call. The one-strike rule
+covers failing providers, not a working model that keeps producing an unusable query. Now a
+question with no intent skips the strong compile in `/api/ai/ask`: the rephrase (one fast call)
+runs, then the model answers it. The strong compile still serves `/api/ai/query/compile` and
+questions with a recognised intent.
+
 ## Replay (N-H2, offline leg)
 
 Replay runs one frozen incident through the real answer path and reports what came

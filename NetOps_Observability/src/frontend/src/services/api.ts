@@ -2009,6 +2009,18 @@ export type ProviderTestResult = {
   error_class?: string;
   http_status?: number;
   tested_at?: string;
+  // Every tier model's own verdict (2026-11-12): a blank tier is tested as its
+  // provider's recommended model, each distinct model once.
+  tiers?: TierTestResult[];
+};
+
+export type TierTestResult = {
+  tier: "default" | "fast" | "strong";
+  model: string;
+  ok: boolean;
+  latency_ms: number;
+  error_class?: string;
+  http_status?: number;
 };
 
 export type AIBudgetStatus = {
@@ -6791,9 +6803,9 @@ export const api = {
     }),
   // "Test connection" (C3): one bounded probe; a blank key tests the stored one.
   // The key is used for this call only — never saved by the test.
-  testCopilotConfig: (body: { provider: string; key?: string; model?: string }) =>
+  testCopilotConfig: (body: { provider: string; key?: string; model?: string; model_fast?: string; model_strong?: string }) =>
     request<ProviderTestResult>("/api/copilot/config/test", { method: "POST", body: JSON.stringify(body) }),
-  testAITenantConfig: (body: { provider?: string; key?: string; model?: string }) =>
+  testAITenantConfig: (body: { provider?: string; key?: string; model?: string; model_fast?: string; model_strong?: string }) =>
     request<ProviderTestResult>("/api/ai/tenant-config/test", { method: "POST", body: JSON.stringify(body) }),
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
@@ -10699,6 +10711,9 @@ export type AiAnswer = {
   // Statement classes (N-B4) — every sentence of `text`, classified by the
   // server. Optional: an older backend sends none and the text renders plain.
   statements?: AiStatement[];
+  // Who answered and why (2026-11-12 routing policy): the deterministic arms,
+  // the model, or the built-in fallback because the model did not answer.
+  routing?: { path: "deterministic" | "model" | "model_unavailable"; reason: string };
   disclaimers: string[];
   provider?: string;
   // The model that answered (C6 footnote); absent for an evidence-only answer.

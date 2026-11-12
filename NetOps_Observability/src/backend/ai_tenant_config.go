@@ -104,9 +104,9 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 // The TIER only ever chooses which of one configuration's model names is used.
 // It cannot change the provider, cannot change the key, cannot add a candidate
 // and cannot reorder the chain — so none of the BYO rules above can be reached
-// through it. With no per-tier model configured (every deployment until an
-// operator sets one) every tier resolves to the same single model the chain
-// resolved before, which is why this change is invisible to an existing install.
+// through it. A tier with no model configured resolves to the provider's
+// recommended model for that tier (ai.TierModels.ForProvider, owner decision
+// 2026-11-12), never to the single default again.
 func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) []providerCandidate {
 	tenant, cross := principalTenant(claims)
 	if !cross {
@@ -117,9 +117,11 @@ func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) 
 			return nil
 		}
 	}
+	if s.copilotCfg == nil {
+		return nil // no platform configuration wired: nothing to call
+	}
 	storedKey := s.copilotCfg.APIKey()
 	cfg := s.copilotCfg.Get()
-	tiered := cfg.Models().For(tier)
 	var out []providerCandidate
 	for _, name := range copilotProviderChain() {
 		key := providerKey(name)
@@ -129,14 +131,20 @@ func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) 
 		if key == "" {
 			continue
 		}
-		model := providerModel(name)
 		// A per-tier (or single) model override applies only to the provider it
 		// was configured FOR: a model name is provider-specific, and riding the
 		// anthropic model into the openai fallback produces exactly the baffling
-		// failure the provider-switch key rule already exists to prevent.
-		if name == cfg.Provider && tiered != "" {
-			model = tiered
+		// failure the provider-switch key rule already exists to prevent. A
+		// blank tier is that provider's recommended tier model, never the
+		// single default again (ai.TierModels.ForProvider, owner 2026-11-12).
+		models := ai.TierModels{}
+		if name == cfg.Provider {
+			models = cfg.Models()
 		}
+		if strings.TrimSpace(models.Default) == "" {
+			models.Default = providerModel(name) // env override, else the code default
+		}
+		model := models.ForProvider(tier, name)
 		out = append(out, providerCandidate{name: name, key: key, model: model, source: "platform"})
 	}
 	return out
@@ -279,7 +287,7 @@ func (s *server) handleAITenantConfigTest(w http.ResponseWriter, r *http.Request
 		}
 	}
 	model := ai.ProbeModel(name, req.model, tc.Models(), ai.NormalizeProvider(tc.Provider))
-	writeJSON(w, http.StatusOK, s.runProviderProbe(r, claims, name, key, model))
+	writeJSON(w, http.StatusOK, s.providerTest(r, claims, name, key, model, req.tierModels(name, tc.Models(), ai.NormalizeProvider(tc.Provider))))
 }
 
 // handleAITenants: GET /api/ai/tenants (list entitlements) and

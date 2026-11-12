@@ -103,6 +103,10 @@ func (v *Vocab) Has(w string) bool {
 	if v.words[w] || v.words[Singular(w)] || v.words[w+"s"] || v.words[w+"es"] {
 		return true
 	}
+	// "statuses", "addresses": the -es plural of a word ending in s.
+	if stem, ok := strings.CutSuffix(w, "es"); ok && len(stem) >= 3 && strings.HasSuffix(stem, "s") && v.words[stem] {
+		return true
+	}
 	for _, suf := range []string{"ed", "ing"} {
 		if stem, ok := strings.CutSuffix(w, suf); ok && len(stem) >= 3 {
 			if v.words[stem] || v.words[stem+"e"] || (len(stem) > 3 && stem[len(stem)-1] == stem[len(stem)-2] && v.words[stem[:len(stem)-1]]) {
@@ -163,10 +167,24 @@ var plainWords = func() map[string]bool {
 		thank hello please sorry check checks checked green yellow amber blue black white grey gray business
 		aws azure gcp cloud clouds vpc vpcs vnet subnet subnets prefix prefixes route routes routing
 		mpls ospf isis eigrp bgp evpn vxlan lacp stp lldp cdp snmp gnmi netconf syslog trap traps
-		retail branch store stores bank banks clinic clinics school schools campus warehouse fire fires`) {
+		retail branch store stores bank banks clinic clinics school schools campus warehouse fire fires
+		collector collect collection selector select selection director direct detector detect detection
+		inspector inspect inspection protector protect protection reflector reflect projector project
+		connect connection connectivity monitor poll identify confirm suspect locate provide integrate
+		tenant tenants account accounts customer customers member members person people`) {
 		m[w] = true
 	}
 	return m
+}()
+
+// plainVocab is plainWords as a vocabulary, so a regular form of a plain word
+// ("collecting", "inspected") is plain too (SameWordFamily).
+var plainVocab = func() *Vocab {
+	ws := make([]string, 0, len(plainWords))
+	for w := range plainWords {
+		ws = append(ws, w)
+	}
+	return NewVocab(ws)
 }()
 
 // Correct returns the one vocabulary word w is a misspelling of, or — when
@@ -174,7 +192,7 @@ var plainWords = func() map[string]bool {
 // never applied). Both are empty when w is a word, is not repairable, or is
 // close to nothing.
 func (v *Vocab) Correct(w string) (fix string, ties []string) {
-	if !v.Repairable(w) {
+	if !v.Repairable(w) || v.inFamily(w) || plainVocab.inFamily(w) {
 		return "", nil
 	}
 	limit := MaxTypoDistance(len(w))
@@ -205,6 +223,120 @@ func (v *Vocab) Correct(w string) (fix string, ties []string) {
 		at = at[:maxCandidates]
 	}
 	return "", at
+}
+
+// ── word families: a real word is never a typo of its sibling ───────────────
+//
+// Found live 2026-11-12: "how many devices are connected" was read as "how
+// many devices are connector" — "connected" is two edits from the vocabulary
+// word "connector", and the edit-distance guard alone cannot tell a misspelling
+// from a different, correctly spelt form of the same word. The general rule: a
+// word that is the SAME STEM as a vocabulary word with a different regular
+// ending ("connect·ed" / "connect·or", "discover·y" / "discover·ed",
+// "monitor·ing" / "monitor·ed") is a word of its own. It is left as typed —
+// understood if some reader knows it, otherwise simply not understood — and
+// never rewritten into the sibling. A true misspelling has no such stem and
+// is still repaired.
+
+// derivedEndings are the regular English endings that make one word out of
+// another. Order matters only for readability; every ending is tried.
+var derivedEndings = []string{
+	"ations", "ation", "ions", "ion", "ings", "ing", "ors", "or", "ers", "er", "ed",
+	"ivity", "ive", "ity", "ments", "ment", "able", "ance", "ence", "ery", "ies", "ly", "y",
+}
+
+// inflectionEndings change a word's number or spelling, not the word: a pair
+// that differs ONLY by these ("statuss" / "status") is a misspelling, which
+// Has already covers for real plurals.
+var inflectionEndings = []string{"es", "s", "e", ""}
+
+// stems returns w's candidate stems, each with the ending it was cut at. A
+// doubled final consonant before an ending is undone too ("polling" → "pol",
+// "poll"; "planned" → "plan").
+func stems(w string) map[string]string {
+	out := map[string]string{}
+	add := func(stem, end string) {
+		if len(stem) < 3 {
+			return
+		}
+		if _, ok := out[stem]; !ok || end != "" {
+			out[stem] = end
+		}
+		if n := len(stem); end != "" && n > 3 && stem[n-1] == stem[n-2] && !strings.ContainsRune("aeiou", rune(stem[n-1])) {
+			if _, ok := out[stem[:n-1]]; !ok {
+				out[stem[:n-1]] = end
+			}
+		}
+	}
+	for _, list := range [][]string{derivedEndings, inflectionEndings} {
+		for _, e := range list {
+			if s, ok := strings.CutSuffix(w, e); ok {
+				add(s, e)
+				// "configure" / "configuration": a stem may keep a silent e.
+				if e != "" && e != "e" {
+					add(s+"e", e)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func isDerived(end string) bool {
+	for _, e := range derivedEndings {
+		if e == end {
+			return true
+		}
+	}
+	return false
+}
+
+// SameWordFamily reports that a and b are different forms of one stem (at
+// least one of them carrying a derivational ending, so "statuss" / "status"
+// is NOT a family pair but "connected" / "connector" is). Letters only.
+func SameWordFamily(a, b string) bool {
+	if a == b || !lettersOnly(a) || !lettersOnly(b) {
+		return false
+	}
+	sb := stems(b)
+	for stem, ea := range stems(a) {
+		eb, ok := sb[stem]
+		if !ok || ea == eb {
+			continue
+		}
+		if isDerived(ea) || isDerived(eb) {
+			return true
+		}
+	}
+	return false
+}
+
+// NearDomainWords is the audit list (2026-11-12) of correctly spelt operator
+// words that sit near a vocabulary word — the class of the "connected" →
+// "connector" regression. Tests on every vocabulary (the router's and the
+// grammar's) assert none of them is ever "corrected".
+func NearDomainWords() []string {
+	return []string{
+		"connected", "connection", "connections", "connecting", "connect", "connectivity",
+		"discovered", "discovery", "discovering", "monitor", "monitoring", "monitored",
+		"polling", "polled", "status", "statuses", "configured", "configuration", "configuring",
+		"alerting", "alerted", "routed", "routing", "linked", "peering", "peered", "tunneling",
+		"failed", "dropped", "dropping", "flapped", "managing", "management", "deploying",
+		"onboarding", "collected", "collecting", "collector", "reported", "reporting",
+		"healthy", "impacting", "affecting", "degrading", "located", "providing",
+		"changing", "switching", "sessions", "packets", "tenants", "integrated", "integrating",
+		"identify", "identified", "confirm", "suspect",
+	}
+}
+
+// inFamily reports a word that shares a stem with some vocabulary word.
+func (v *Vocab) inFamily(w string) bool {
+	for _, c := range v.list {
+		if absInt(len(c)-len(w)) <= 6 && c[0] == w[0] && SameWordFamily(w, c) {
+			return true
+		}
+	}
+	return false
 }
 
 func absInt(n int) int {
