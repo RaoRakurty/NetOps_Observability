@@ -100,8 +100,9 @@ Three things changed at stage [1] because of it, nothing else:
 - `syslog.link.state_change`: a `%LINEPROTO-*-UPDOWN` down line from a sender with no process
   tag (`appname` `unknown`, IOS-format) is `warn`, because IOS logs the same line after a
   fault and after a `shutdown`; the first line of the pair says which. `%LINK-3-UPDOWN` opens,
-  and `%LINK-5-CHANGED` emits nothing. EOS logs a tag and only the protocol line, so it stays
-  `high`. No typed row reads PRI.
+  and `%LINK-5-CHANGED ... administratively down` is a `warn` link change with
+  `link_cause=admin` (tracker 388, `vendor-packs/cisco_ios.yaml`). EOS logs a tag and only the
+  protocol line, so it stays `high` with no cause. No typed row reads PRI.
 `.facility` no longer carries the PRI facility (that is `syslog_facility`): `local` is a screen
 literal, and a fleet on local7 would have passed every line through the prefilter.
 `ev.timestamp` is the device's own time when it can be believed. An RFC 3164 time has no zone
@@ -112,6 +113,12 @@ frame with `Z` or an offset keeps its timestamp whatever it says, because it can
 re-stamping would fabricate freshness, as `buffer_signal` already reasons, which clamps the
 future and counts the past. So a wrong clock with a stated zone does not correlate, and
 `clock_skew_signal` reports it.
+
+**Syslog link cause (tracker 388).** The packs stamp `link_cause` in the trap rows'
+vocabulary (admin | fault | unknown) only where the line itself states it: IOS/IOS-XE, IOS XR,
+NX-OS, Junos, SR Linux (oper-down-reason) and SONiC (portmgrd). Every such row is `warn`, so
+stages [5]/[6] read it exactly as they read the admin trap (test_link_cause_syslog_388.py).
+EOS and SR OS syslog, the Viptela interface trap and the controller relay carry none.
 
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).

@@ -1,0 +1,222 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Nokia SR Linux (7220 IXR, 7250 IXR-6e/10e, 7730 SXR), tracker 388 (the syslog link
+# cause) under tracker 387 plan §6a. Format: telemetry-catalog/README.md, "Vendor packs".
+# Nokia SR OS is the separate pack nokia_sros.yaml: the two operating systems share no
+# log format.
+#
+# SCOPE. Only the chassis application's port and subinterface state events. Every other
+# SR Linux line keeps the hand-written `srlinux.v1` grammar in vector.yaml (subsystem,
+# summary, severity letter), and the vendor-neutral rows that already read them (IS-IS,
+# LLDP) are untouched: this grammar does not match their lines.
+#
+# EVIDENCE. `doc_claimed`. The message text and event names are Nokia's, read on
+# 2026-11-12 from the SR Linux 26.3 Log Events Guide, chassis application:
+#   portDown          (warning) "Interface <interface_name> is now down for reason: <oper_down_reason>"
+#   portUp            (notice)  "Interface <interface_name> is now up"
+#   subinterfaceDown  (warning) "The subinterface <subinterface_name> is now down for reason: <oper_down_reason>"
+#   subinterfaceUp    (notice)  "The subinterface <subinterface_name> is now up"
+#   https://documentation.nokia.com/srlinux/26-3/books/log-events/log-chassis.html
+# The reason is the YANG enumeration of the interface's `oper-down-reason` leaf,
+# srl_nokia-interfaces.yang (nokia/srlinux-yang-models v26.3.1), typedefs
+# `port-oper-down-reason` and `subif-oper-down-reason`.
+# The framing around the text, `<application>|<pid>|<tid>|<seq>|EV|<eventName>|<S>: `,
+# is the one the lab's SR Linux spine wrote for its lldp and isis events (2026-06-13,
+# telemetry-catalog/fixtures/syslog_events.jsonl). No chassis line was captured, so a
+# fixture is that framing around the documented text.
+pack: nokia_srlinux
+vendor: nokia
+description: Nokia SR Linux data-center switches and routers (chassis port and subinterface events).
+
+# The one-letter severity after the event name, as srlinux.v1 in vector.yaml reads it.
+severity_words:
+  C: 2
+  E: 3
+  W: 4
+  N: 5
+  I: 6
+  D: 7
+
+grammars:
+  - id: srlinux_port_event
+    parser_id: nokia_srlinux.v1
+    literal: '|EV|'
+    pattern: '^(?P<app>[a-z][a-z0-9_]{0,31})\|\d{1,10}\|\d{1,10}\|\d{1,12}\|EV\|(?P<obj>port|subinterface)(?:Down|Up)\|(?P<sev>[CEWNID]): (?:The subinterface|Interface) (?P<ifname>[A-Za-z][\w/.:-]{0,63}) is now (?P<state>down|up)(?: for reason: (?P<reason>[a-z0-9-]{1,64}))?'
+    facility: '{app}'
+    event_type: '{obj}_{state}'
+    summary: 'Interface {ifname} is {state}[ for reason {reason}]'
+    severity: {word: sev}
+    native_text: sev
+    # D3: no chassis port event is critical; a down line reaches the engine only through
+    # the typed row below, at warn.
+    alarm_floor: 2
+    fields:
+      title: 'Interface {ifname} {state}[ ({reason})] on {host}'
+      correlation_key: 'link:{device}:{ifname}'
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis (portDown, portUp, subinterfaceDown, subinterfaceUp), https://documentation.nokia.com/srlinux/26-3/books/log-events/log-chassis.html; framing: lab SR Linux lldp/isis events, telemetry-catalog/fixtures/syslog_events.jsonl'
+
+rules:
+  # Tracker 388: SR Linux names the reason on every down line, so the cause is the
+  # device's own word, in the trap rows' vocabulary (events.yaml `trap_link_cause`):
+  #   admin    the port, subinterface, LAG or the card it sits on was administratively
+  #            disabled on this device: port-admin-disabled, lag-admin-disabled,
+  #            mda-admin-disabled, and the subinterface's admin-disabled
+  #   fault    the device named a failure: transceiver-oper-down, connector-down,
+  #            crc-monitor-fail-threshold, symbol-monitor-fail-threshold, cfm-ccm-defect
+  #   unknown  every other reason (lower-layer-down, port-down, other, a hold or reload
+  #            timer, a resource limit ...): it names a state or a consequence, not a
+  #            cause, and is never guessed.
+  # An up line states no cause. `warn`: a pack row never opens alone (D3); an admin
+  # down is the change half stage [5] (`_admin_change_only`) and the template
+  # `sig.ent.access.admin-link-change-induced` act on.
+  - rule_id: syslog.srlinux.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [nokia]
+    fidelity_status: doc_claimed
+    # The screen literals are the four event names (`portdown` ...), never a word as
+    # common as `interface`: the ingest pre-filter admits a line holding any of them.
+    pattern_src: 'EV\|(?:portDown|portUp|subinterfaceDown|subinterfaceUp)\|[A-Z]:\s'
+    guard:
+      all:
+        - {re: [msg, 'EV\|(?:portDown|portUp|subinterfaceDown|subinterfaceUp)\|[A-Z]:\s', '']}
+        - {re: [msg, '\|EV\|(?:port|subinterface)(?:Down|Up)\|[A-Z]:\s(?:The\ssubinterface|Interface)\s\S{1,128}\sis\snow\s(?:down|up)', '']}
+    extract:
+      ifname: {re: [[msg, '(?:The subinterface|Interface) (\S{1,128}) is now ', 1, '']]}
+      state:
+        case:
+          - {when: {re: [msg, ' is now down', '']}, value: down}
+          - {when: {always: true}, value: up}
+      link_reason: {re: [[msg, ' is now down for reason: ([a-z0-9-]{1,64})', 1, '']]}
+      link_cause:
+        case:
+          - when: {all: [{eq: ['$state', down]}, {re: ['$link_reason', '^(?:(?:port|lag|mda)-)?admin-disabled$', '']}]}
+            value: admin
+          - when: {all: [{eq: ['$state', down]}, {re: ['$link_reason', '^(?:transceiver-oper-down|connector-down|crc-monitor-fail-threshold|symbol-monitor-fail-threshold|cfm-ccm-defect)$', '']}]}
+            value: fault
+          - when: {eq: ['$state', down]}
+            value: unknown
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: warn
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        link_cause: {var: link_cause}
+        link_reason: {var: link_reason}
+        tag: {var: tag}
+      omit_empty: [link_cause, link_reason]
+
+guidance:
+  - event_types: [port_down, subinterface_down]
+    impact:
+      - An interface or subinterface went down; traffic and adjacencies over it stop or move.
+    next_checks:
+      - Run show interface for the interface and read its oper-down-reason; port-admin-disabled means it was shut.
+      - Check the transceiver (show platform transceiver) and the far end of the link.
+
+wanted:
+  - symptom: LAG and LACP member state
+    kind: link_state_change
+    why_absent: the lag application's events were not read for this pack (tracker 388 covered the chassis port events only)
+
+fixtures:
+  - name: an SR Linux port shut by the operator carries the admin cause and cannot open
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis portDown, https://documentation.nokia.com/srlinux/26-3/books/log-events/log-chassis.html; reason port-admin-disabled from srl_nokia-interfaces.yang v26.3.1 port-oper-down-reason'
+    hostname: leaf1
+    appname: '-'
+    severity: warning
+    message: 'chassis|1580|1580|00031|EV|portDown|W: Interface ethernet-1/1 is now down for reason: port-admin-disabled'
+    expect:
+      vendor: nokia
+      vendor_source: format
+      parser_id: nokia_srlinux.v1
+      parser_status: parsed
+      facility: chassis
+      event_type: port_down
+      summary: Interface ethernet-1/1 is down for reason port-admin-disabled
+      title: Interface ethernet-1/1 down (port-admin-disabled) on leaf1
+      correlation_key: 'link:leaf1:ethernet-1/1'
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'leaf1:ethernet-1/1'}
+
+  - name: an SR Linux port whose transceiver went down carries the fault cause
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis portDown; reason transceiver-oper-down from srl_nokia-interfaces.yang v26.3.1 port-oper-down-reason'
+    hostname: leaf1
+    appname: '-'
+    severity: warning
+    message: 'chassis|1580|1580|00032|EV|portDown|W: Interface ethernet-1/2 is now down for reason: transceiver-oper-down'
+    expect:
+      parser_status: parsed
+      event_type: port_down
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: fault, entity: 'leaf1:ethernet-1/2'}
+
+  - name: an SR Linux port down for a lower layer names no cause
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis portDown; reason lower-layer-down from srl_nokia-interfaces.yang v26.3.1 port-oper-down-reason'
+    hostname: leaf1
+    appname: '-'
+    severity: warning
+    message: 'chassis|1580|1580|00033|EV|portDown|W: Interface lag1 is now down for reason: lower-layer-down'
+    expect:
+      parser_status: parsed
+      event_type: port_down
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: unknown, entity: 'leaf1:lag1'}
+
+  - name: an SR Linux subinterface shut by the operator carries the admin cause
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis subinterfaceDown; reason admin-disabled from srl_nokia-interfaces.yang v26.3.1 subif-oper-down-reason'
+    hostname: leaf1
+    appname: '-'
+    severity: warning
+    message: 'chassis|1580|1580|00034|EV|subinterfaceDown|W: The subinterface ethernet-1/1.0 is now down for reason: admin-disabled'
+    expect:
+      parser_status: parsed
+      event_type: subinterface_down
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'leaf1:ethernet-1/1.0'}
+
+  - name: an SR Linux subinterface down because its port is down names no cause
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis subinterfaceDown; reason port-down from srl_nokia-interfaces.yang v26.3.1 subif-oper-down-reason'
+    hostname: leaf1
+    appname: '-'
+    severity: warning
+    message: 'chassis|1580|1580|00035|EV|subinterfaceDown|W: The subinterface ethernet-1/2.0 is now down for reason: port-down'
+    expect:
+      parser_status: parsed
+      event_type: subinterface_down
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: unknown, entity: 'leaf1:ethernet-1/2.0'}
+
+  - name: an SR Linux port up states no cause
+    fidelity: doc_claimed
+    source: 'Nokia SR Linux 26.3 Log Events Guide, chassis portUp, https://documentation.nokia.com/srlinux/26-3/books/log-events/log-chassis.html'
+    hostname: leaf1
+    appname: '-'
+    severity: notice
+    message: 'chassis|1580|1580|00036|EV|portUp|N: Interface ethernet-1/1 is now up'
+    expect:
+      parser_status: parsed
+      event_type: port_up
+      summary: Interface ethernet-1/1 is up
+      title: Interface ethernet-1/1 up on leaf1
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'leaf1:ethernet-1/1'}
+
+  - name: an SR Linux event of another application is not this grammar
+    fidelity: doc_claimed
+    source: 'negative case: the lab SR Linux LLDP line (telemetry-catalog/fixtures/syslog_events.jsonl) stays srlinux.v1 and its vendor-neutral row'
+    hostname: spine1
+    appname: '-'
+    severity: info
+    message: 'lldp|6876|6876|00043|EV|remotePeerRemoved|I: LLDP remote peer removed on interface ethernet-1/1: System leaf1 with chassis ID 00:1C:73:AD:88:2A, port Ethernet1'
+    expect: {}
+    signal: {kind: lldp_neighbor_change, severity: high, opens_alone: true, state: down, entity: 'spine1:ethernet-1/1'}

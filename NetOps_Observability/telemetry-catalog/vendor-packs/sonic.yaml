@@ -11,10 +11,14 @@
 # below.
 #
 # EVIDENCE. No SONiC box and no sonic-vs on the lab yet (research §6). `doc_claimed`; the
-# one line is napalm-logs' (Apache-2.0) INTERFACE_DOWN / INTERFACE_UP sample.
+# orchagent line is napalm-logs' (Apache-2.0) INTERFACE_DOWN / INTERFACE_UP sample. The
+# portmgrd line (tracker 388) is the format string in sonic-swss `cfgmgr/portmgr.cpp`
+# (`"Configure %s admin status to %s"`, master 498460e6) and appears verbatim in the
+# syslog of sonic-net/sonic-swss issue #2913, which also shows the program as
+# `swss#portmgrd` / `swss#orchagent` (the container name before the daemon's).
 pack: sonic
 vendor: sonic
-description: SONiC switches (orchagent interface state).
+description: SONiC switches (orchagent interface state, portmgrd admin status).
 
 grammars:
   # `:- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28`:
@@ -23,7 +27,7 @@ grammars:
   - id: orchagent_oper_status
     parser_id: sonic.v1
     literal: 'setHostIntfsOperStatus: '
-    apps: [orchagent]
+    apps: [orchagent, 'swss#orchagent']
     pattern: 'setHostIntfsOperStatus: Set operation status (?P<state>UP|DOWN) to host interface (?P<ifname>[A-Za-z][\w/.:-]{0,63})'
     facility: orchagent
     event_type: 'host_intf_oper_status_{state}'
@@ -34,10 +38,63 @@ grammars:
     fidelity: doc_claimed
     source: 'napalm-logs INTERFACE_DOWN / INTERFACE_UP SONiC samples (Apache-2.0), https://napalm-logs.readthedocs.io/en/latest/messages/INTERFACE_DOWN.html'
 
+  # `:- doTask: Configure Ethernet184 admin status to down`: portmgrd applying a port's
+  # CONFIG_DB `admin_status` (`config interface shutdown` / `startup`) to the kernel
+  # netdev. It logs the configured value, so it says the port was shut (tracker 388).
+  # It also logs on the port's first configuration at start-up, where the default is
+  # down: that is still the configured state, not a failure.
+  - id: portmgrd_admin_status
+    parser_id: sonic.v1
+    literal: ' admin status to '
+    apps: [portmgrd, 'swss#portmgrd']
+    pattern: 'Configure (?P<ifname>[A-Za-z][\w/.:-]{0,63}) admin status to (?P<state>up|down)\b'
+    facility: portmgrd
+    event_type: 'port_admin_status_{state}'
+    summary: 'Interface {ifname} administratively {state}'
+    fields:
+      title: 'Interface {ifname} administratively {state} on {host}'
+      correlation_key: 'link:{device}:{ifname}'
+    fidelity: doc_claimed
+    source: 'sonic-swss cfgmgr/portmgr.cpp "Configure %s admin status to %s" (master 498460e6); line in the syslog of sonic-net/sonic-swss issue #2913'
+
 rules:
+  # Tracker 388: the shutdown itself. `link_cause=admin` is the change half stage [5]
+  # (`_admin_change_only`) and the template `sig.ent.access.admin-link-change-induced`
+  # act on. Only the down line emits: an admin up is not a link event, and the port's
+  # operational up arrives on its own line. `warn`: a shutdown never opens.
+  - rule_id: syslog.sonic.link.admin_down
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [sonic]
+    fidelity_status: doc_claimed
+    pattern_src: 'Configure [A-Za-z][\w/.:-]{0,63} admin status to down\b'
+    guard:
+      all:
+        - {contains: [tag, 'PORTMGRD']}
+        - {re: [msg, 'Configure [A-Za-z][\w/.:-]{0,63} admin status to down\b', '']}
+    severity: warn
+    extract:
+      ifname: {re: [[msg, 'Configure ([A-Za-z][\w/.:-]{0,63}) admin status to down', 1, '']]}
+      state: {const: down}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      native_id: '{host}|link|{ifname}|down|admin|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        link_cause: {const: admin}
+        link_reason: {const: admin status down}
+        tag: {var: tag}
+
   # Below the open floor (D3): a SONiC port down reaches the engine as the link change it
   # is, joins a component, and its trap or poll twin is what opens alone. No link_cause:
-  # the line does not say whether the port was shut.
+  # the line does not say whether the port was shut (portmgrd's line above does).
   - rule_id: syslog.sonic.link.state_change
     lane: syslog
     source: syslog
@@ -76,6 +133,12 @@ guidance:
     next_checks:
       - Run show interfaces status and show interfaces transceiver presence for the port.
       - Check whether the port was shut in config_db and the far end of the link.
+  - event_types: [port_admin_status_down]
+    impact:
+      - A port was shut in the configuration; traffic and adjacencies over it stop or move.
+    next_checks:
+      - Run show interfaces status for the port and confirm the shutdown was planned.
+      - Check what depended on the port before bringing it back with config interface startup.
 
 wanted:
   - symptom: BGP, BFD and zebra events
@@ -125,3 +188,46 @@ fixtures:
     message: ':- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet28'
     expect: {}
     signal: null
+
+  - name: a portmgrd shutdown carries the admin cause and cannot open
+    fidelity: doc_claimed
+    source: 'sonic-net/sonic-swss issue #2913 syslog (swss#portmgrd); format string cfgmgr/portmgr.cpp "Configure %s admin status to %s"'
+    hostname: sonic1
+    appname: 'swss#portmgrd'
+    severity: notice
+    message: ':- doTask: Configure Ethernet184 admin status to down'
+    expect:
+      vendor: sonic
+      vendor_source: format
+      parser_id: sonic.v1
+      parser_status: parsed
+      facility: portmgrd
+      event_type: port_admin_status_down
+      summary: Interface Ethernet184 administratively down
+      title: Interface Ethernet184 administratively down on sonic1
+      correlation_key: 'link:sonic1:Ethernet184'
+    signal: {rule_id: syslog.sonic.link.admin_down, kind: link_state_change, severity: warn, opens_alone: false, state: down, link_cause: admin, entity: 'sonic1:Ethernet184'}
+
+  - name: a portmgrd startup parses and emits nothing
+    fidelity: doc_claimed
+    source: 'format string cfgmgr/portmgr.cpp "Configure %s admin status to %s" with admin_status up (config interface startup)'
+    hostname: sonic1
+    appname: portmgrd
+    severity: notice
+    message: ':- doTask: Configure Ethernet184 admin status to up'
+    expect:
+      parser_status: parsed
+      event_type: port_admin_status_up
+    signal: null
+
+  - name: the swss container spelling of orchagent is the same grammar, with no cause
+    fidelity: doc_claimed
+    source: 'sonic-net/sonic-swss issue #2913 syslog (swss#orchagent setHostIntfsOperStatus)'
+    hostname: sonic1
+    appname: 'swss#orchagent'
+    severity: notice
+    message: ':- setHostIntfsOperStatus: Set operation status DOWN to host interface Ethernet184'
+    expect:
+      parser_status: parsed
+      event_type: host_intf_oper_status_down
+    signal: {rule_id: syslog.sonic.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sonic1:Ethernet184'}

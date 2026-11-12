@@ -700,7 +700,15 @@ measurement has not run, so nothing here is PROVEN at scale.
 - Stage [6]: `local-link-fault` and `lastmile-circuit-flap` are contradicted by it, and
   `sig.ent.access.admin-link-change-induced` scores it.
 - Evidence with no `link_cause=admin` is byte-identical bar `engine` and `catalog_version`.
-- Only trap link events carry `link_cause` today; the other sources are an open tracker row.
+- Sources of `link_cause` (tracker 388): the standard and Cisco link traps; syslog from
+  IOS/IOS-XE (`%LINK-5-CHANGED ... administratively down`), IOS XR (`%PKT_INFRA-LINK-5-CHANGED
+  ... Administratively Down`), NX-OS (`ETHPORT IF_DOWN_*` reason), Junos (`SNMP_TRAP_LINK_DOWN`
+  ifAdminStatus), SR Linux (chassis `portDown`/`subinterfaceDown` oper-down-reason) and SONiC
+  (portmgrd `admin status to down`). BUILD: pack fixtures plus engine tests through stages
+  [5]/[6] (`test_vendor_packs_wave1_387.py`, `test_link_cause_syslog_388.py`); every syslog
+  row is `doc_claimed`, no capture. Still without a cause: Arista EOS syslog, SR OS syslog,
+  the Viptela interface trap (its varbinds cannot say), the controller relay, and Nokia's
+  polled `tmnxPortReasonDownFlags` — tracker 388.
 ## 24. Configurable source authority (tracker 337 N-F6, 2026-11-09)
 
 Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
