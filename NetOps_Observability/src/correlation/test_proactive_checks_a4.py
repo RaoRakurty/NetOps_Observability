@@ -519,7 +519,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-11-syslog-final-wave-confd: the ConfD SNMP session grammar reads no user; the
     # V1 pool has no ConfD line.
     # 2026-11-11-sdwan-controller-token-confd: the merge of the two above; the V1 pool has neither line.
-    assert parser_rules.PARSER_REV == "2026-11-11-sdwan-controller-token-confd", (
+    # 2026-11-12-link-cause-srlinux-sonic: tracker 388 SR Linux and SONiC link rows; the V1 pool
+    # has neither format.
+    assert parser_rules.PARSER_REV == "2026-11-12-link-cause-srlinux-sonic", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

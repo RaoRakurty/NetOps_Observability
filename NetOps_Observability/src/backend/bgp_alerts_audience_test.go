@@ -6,15 +6,14 @@ package backend
 // bgp_alerts_audience_test.go — tracker 359: who a tenant's BGP-watch alert
 // actually reaches.
 //
-// Tenants have no alert channels today. The notifier the evaluator rides holds
-// the PLATFORM-GLOBAL channel list (platform-admin configured, a cross-tenant
-// audience), so the alert reaches the platform operator — and the one global
-// destination that PAGES, the PagerDuty key, is wrapped in
-// notify.PlatformScopeFilter, which forwards only platform self-health
-// (`layer` ∈ PlatformLayers). This pins the half of that statement the code
-// enforces: a customer BGP alert, fired or resolved, never pages the platform
-// key, and it carries the evaluator's tenant (never a platform layer) so a
-// future per-tenant router has the attribution it needs.
+// The notifier the evaluator rides holds the PLATFORM-GLOBAL channel list
+// (platform-admin configured, a cross-tenant audience), so the alert reaches
+// the platform operator — and the one global destination that PAGES, the
+// PagerDuty key, is wrapped in notify.PlatformScopeFilter, which forwards only
+// platform self-health (`layer` ∈ PlatformLayers). This pins that a customer
+// BGP alert, fired or resolved, never pages the platform key, and that it
+// carries the evaluator's tenant (never a platform layer). Delivery to the
+// tenant's OWN lanes is pinned in tenant_watch_isolation_test.go.
 
 import (
 	"sync"

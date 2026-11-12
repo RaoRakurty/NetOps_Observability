@@ -59,7 +59,17 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.4.0"  # 3.4.0: SD-WAN controller fan-in (2026-11-11) — stage [6]
+ENGINE_SEMVER = "3.5.0"  # 3.5.0 = owner decisions D1-D3 on top of 3.4.0 (below).
+# 3.5.0: owner decisions 2026-11-11 (Fable RCA review). D1
+# stage [7]: security and management_plane witnesses support but never anchor the
+# confirming pair (a dated security detection excepted). D2 stage [6]: context
+# stories rank below every viable causal template and carry "context_story": true in
+# the blob. D3 stage [5]: a component of standing security findings opens no object.
+# 3.3.1: P-424934 — the exposure and hardening-drift stories
+# carry allow_root_cause_confirmed=False (stage [7]): a standing property with no onset
+# never confirms one cause, however many planes agree. Evidence that ranks neither story
+# top is byte-identical bar this version and catalog_version.
+# 3.4.0: SD-WAN controller fan-in (2026-11-11) — stage [6]
 # structure class `controller_fan_in` (>=2 distinct edges, per lane, lost their
 # control connection to the SAME controller: scoring.controller_fan_in), the
 # sig.ent.wan-edge.sdwan-controller-unreachable template it gates, and a
@@ -3310,8 +3320,13 @@ def _break_ties_by_seam_affinity(
     if not labels:
         return ranking
     top_conf = hyps[0].confidence_rank
+    # Owner D2: a context story never displaces a causal leader (rank() already
+    # sorted it below every viable causal template), so the run stops at the
+    # first hypothesis of the other class.
+    top_context = hyps[0].context_story
     k = 1
-    while k < len(hyps) and hyps[k].confidence_rank == top_conf:
+    while k < len(hyps) and hyps[k].confidence_rank == top_conf \
+            and hyps[k].context_story == top_context:
         k += 1
     if k < 2:
         return ranking
@@ -3478,6 +3493,43 @@ def admin_link_change_metric_lines() -> tuple[str, ...]:
          "kept; no object opened."),
         "# TYPE corr_admin_link_change_singletons_total counter",
         f"corr_admin_link_change_singletons_total {_ADMIN_LINK_CHANGE_SINGLETONS_TOTAL}",
+    )
+
+
+# Owner D3 (2026-11-11): standing security findings — a failed hardening control,
+# a known exposure — are properties of a device, not events. A component made of
+# nothing else opens no object by itself, whatever its severity or edges; the
+# evidence stays in the window and corr_signals, so a grounded network fault
+# later folds it in as context. A dated detection (security_signal) is an event
+# and is NOT in this set.
+STANDING_SECURITY_KINDS: frozenset[str] = frozenset({"security_posture", "security_exposure"})
+
+
+def _standing_findings_only(comp: tuple[Node, ...]) -> bool:
+    """True when every node of the component is a standing security finding."""
+    return bool(comp) and all(n.kind in STANDING_SECURITY_KINDS for n in comp)
+
+
+_STANDING_FINDING_SINGLETONS_TOTAL = 0
+
+
+def _count_standing_finding_singleton() -> None:
+    global _STANDING_FINDING_SINGLETONS_TOTAL
+    _STANDING_FINDING_SINGLETONS_TOTAL += 1
+
+
+def standing_finding_singletons_total() -> int:
+    return _STANDING_FINDING_SINGLETONS_TOTAL
+
+
+def standing_finding_metric_lines() -> tuple[str, ...]:
+    """The counter's exposition lines; the name is owned by the module that counts."""
+    return (
+        ("# HELP corr_security_standing_finding_singletons_total Cohort touches of a "
+         "component made only of standing security findings (posture / exposure), "
+         "which opens no object by itself (owner D3). The evidence is kept."),
+        "# TYPE corr_security_standing_finding_singletons_total counter",
+        f"corr_security_standing_finding_singletons_total {_STANDING_FINDING_SINGLETONS_TOTAL}",
     )
 
 
@@ -3719,6 +3771,12 @@ def run_window(
         comp_keys = {n.key for n in comp}
         comp_edges = tuple(e for k in sorted(comp_keys)
                            for e in edges_by_from.get(k, ()))
+        if _standing_findings_only(comp):
+            # Owner D3: background, not an incident. Counted where a cohort
+            # touches it; the signals stay in the window and corr_signals.
+            if cohort_keys is None or not cohort_keys.isdisjoint(comp_keys):
+                _count_standing_finding_singleton()
+            continue
         admin_only = not comp_edges and _admin_change_only(comp[0], open_floor)
         if admin_only and (cohort_keys is None or comp[0].key in cohort_keys):
             # Counted where a cohort touches the node, not on each re-evaluation

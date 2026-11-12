@@ -41,7 +41,7 @@ func NewRegistry() *Registry {
 	reg("catalyst_9800", Catalyst9800Auth{}, catalyst9800Poller(), nil, Catalyst9800Transformer{})
 	// vmanage uses the shape-routing transformer so BOTH lanes work through the
 	// single Transformer seam: alarms → events/states, approute → metrics.
-	reg("vmanage", VManageAuth{}, vmanagePoller(), nil, VManageAutoTransformer{})
+	reg("vmanage", VManageAuth{}, vmanagePoller(), nil, NewVManageAutoTransformer())
 	reg("ndfc", NDFCAuth{}, ndfcPoller(), nil, NDFCTransformer{})
 	reg("prime", PrimeAuth{}, primePoller(), nil, PrimeTransformer{})
 	reg("versa_director", VersaAuth{}, versaPoller(), nil, VersaDirectorTransformer{})

@@ -52,6 +52,12 @@ type MonitorEvalDeps struct {
 	// Fire / Resolve dispatch notifications on state EDGES only.
 	Fire    func(a models.Alert)
 	Resolve func(a models.Alert)
+	// TenantFire / TenantResolve hand the SAME edges to the owning tenant's
+	// own lanes (tracker 359). tenant is the evaluator's own loop tenant — the
+	// store key the monitor was read from — never a label or anything the
+	// monitor definition carries. Optional: nil = no tenant delivery.
+	TenantFire    func(tenant string, a models.Alert)
+	TenantResolve func(tenant string, a models.Alert)
 	// Now is the clock seam (nil → time.Now().UTC).
 	Now func() time.Time
 }
@@ -276,9 +282,15 @@ func (e *MonitorEvaluator) transition(tenant string, m Monitor, state, reason st
 	}
 	if state == MonitorStateFiring && prev != MonitorStateFiring {
 		e.deps.Fire(alert)
+		if e.deps.TenantFire != nil {
+			e.deps.TenantFire(tenant, alert)
+		}
 	}
 	if prev == MonitorStateFiring && state != MonitorStateFiring {
 		e.deps.Resolve(alert)
+		if e.deps.TenantResolve != nil {
+			e.deps.TenantResolve(tenant, alert)
+		}
 	}
 }
 

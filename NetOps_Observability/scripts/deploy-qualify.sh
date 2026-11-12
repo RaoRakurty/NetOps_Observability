@@ -166,6 +166,12 @@ WHAT IT DOES
           subscription at start(), so ONE refused lane means the engine
           consumes nothing on all of them (tracker 309)
       Q2  every netops-router-* consumer group has a live member
+      Q2c every netops-router-* group AND netops-correlation is CONSUMING,
+          judged per partition from the broker's offsets (kafka-exporter):
+          the committed offset advanced, or the partition had no new records
+          and no backlog. Records arriving while the committed offset stays
+          put FAILS — membership alone passed during the 2026-10-17 router
+          wedge (tracker 353, upstream vectordotdev/vector#22006)
       Q3  correlation lag is draining, not strictly increasing
       Q4  vector-aggregator sinks are emitting events
       Q5  vector-router sinks are emitting events
@@ -216,6 +222,16 @@ CONFIG (all optional; a bare checkout works with the defaults)
     DQ_AGG_INSTANCE        Vector aggregator scrape instance  (vector-aggregator:9598)
     DQ_ROUTER_INSTANCE     Vector router scrape instance      (vector-router:9598)
     DQ_HEARTBEAT_MAX_AGE   Q8 freshness bound, seconds        (default 900)
+    DQ_Q2_MIN_OBSERVE      Q2c: seconds a quiet partition is watched before
+                           it counts as idle; extends the window if needed,
+                           within the global deadline        (default 120)
+    DQ_Q2_COMMIT_GRACE     Q2c: records newer than this are not yet expected
+                           to be committed (commit cadence + one scrape)
+                                                              (default 60)
+    DQ_Q2_IDLE_LAG_MAX     Q2c: unread records an input-less partition may
+                           hold and still count as idle       (default 100)
+    DQ_Q2_MAX_STALENESS    Q2c: maximum age of kafka-exporter's newest
+                           offset sample, seconds             (default 120)
 EOF
 }
 
@@ -1186,6 +1202,276 @@ elif [ "$Q2_FOUND" -eq 0 ]; then
 else
   record FAIL REQUIRED "Q2 router consumers joined" \
     "only $Q2_LIVE of $Q2_FOUND discovered netops-router-* groups have a live member after ${TIMEOUT_SEC}s. Memberless: ${Q2_MISSING:-<none>}"
+fi
+
+# --- Q2c: every consumer group is CONSUMING, not merely joined (tracker 353) --
+# Q2 proves a member is in each router group. On 2026-10-17 (and again on
+# 2026-10-30) that was TRUE while netops-router-applogs consumed nothing for
+# over an hour: Vector 0.40's kafka source can lose its per-partition consumer
+# task across a rebalance (upstream vectordotdev/vector#22006, open, reported
+# still present on 0.54/0.55), and the group member stays joined, heartbeating
+# and owning the partition while nothing reads it. Q2 PASSED during the stall.
+# Membership is not consumption.
+#
+# So this check reads the BROKER's view, per partition, through kafka-exporter
+# (which talks to whatever BROKER_URLS names — the embedded bus or an external
+# Kafka-compatible service, same as every other consumer-group check here):
+#   C = the group's COMMITTED offset  kafka_consumergroup_current_offset
+#   E = the partition's END offset    kafka_topic_partition_current_offset
+# and judges each (group, topic, partition) over the qualification window:
+#   CONSUMING  C advanced.
+#   IDLE       E did not advance (no input) and the backlog E - C is within
+#              DQ_Q2_IDLE_LAG_MAX — a quiet lane is not a failure.
+#   STALLED    E advanced (records arrived) while C did not move — FAIL. The
+#              end-offset rise must be visible at least DQ_Q2_COMMIT_GRACE
+#              seconds before the last sample, so a record that lands in the
+#              final moments (commit cadence 5 s + one 30 s scrape) is never
+#              mistaken for a stall.
+#   FROZEN     no input, nothing committed, and a backlog above the tolerance —
+#              FAIL: a consumer sitting on unread records is not idle.
+#   PENDING    not observed long enough yet (DQ_Q2_MIN_OBSERVE).
+# Every router lane AND the correlation group are judged; a partition-level
+# wedge cannot hide behind a sibling partition that is moving, because nothing
+# is summed. A committed offset that moves BACKWARDS (group reset) re-baselines
+# that partition rather than reading as progress.
+Q2C_GROUPS='netops-router-.*|netops-correlation'
+Q2C_COMMITTED="kafka_consumergroup_current_offset{consumergroup=~\"$Q2C_GROUPS\"}"
+Q2C_END='kafka_topic_partition_current_offset'
+Q2C_FRESH="time() - max(timestamp(kafka_consumergroup_current_offset{consumergroup=~\"$Q2C_GROUPS\"}))"
+Q2C_MIN_OBSERVE="${DQ_Q2_MIN_OBSERVE:-120}"
+Q2C_GRACE="${DQ_Q2_COMMIT_GRACE:-60}"
+Q2C_IDLE_LAG_MAX="${DQ_Q2_IDLE_LAG_MAX:-100}"
+Q2C_MAX_STALENESS="${DQ_Q2_MAX_STALENESS:-120}"
+Q2C_LABEL="Q2c consumer groups consuming"
+
+# vm_rows: one TAB-separated row per series — the requested label values in
+# order, then the sample value. A series missing any requested label is
+# skipped (it cannot be keyed). Failure reasons go to stderr, like vm_scalar.
+# shellcheck disable=SC2329  # called from q2c_sample, which shellcheck cannot see is invoked
+vm_rows() {  # $1 = PromQL, $2.. = label names
+  local expr="$1" body
+  shift
+  if ! body="$(vm_body "$expr")"; then
+    printf 'VictoriaMetrics query transport failed: %s\n' "$(oneline "$body" 140)" >&2
+    return 1
+  fi
+  case "$body" in
+    *'"status":"success"'*) : ;;
+    *) printf 'VictoriaMetrics returned a non-success response: %s\n' "$(oneline "$body" 140)" >&2
+       return 1 ;;
+  esac
+  printf '%s' "$body" | awk -v want="$*" '
+    BEGIN { RS = "\\{\"metric\":"; n = split(want, L, " ") }
+    NR > 1 {
+      row = ""
+      for (i = 1; i <= n; i++) {
+        pat = "\"" L[i] "\":\"[^\"]*\""
+        if (!match($0, pat)) next
+        v = substr($0, RSTART, RLENGTH); sub(/^"[^"]*":"/, "", v); sub(/"$/, "", v)
+        row = row v "\t"
+      }
+      if (!match($0, /"value":\[[^,]*,"[^"]*"/)) next
+      s = substr($0, RSTART, RLENGTH); sub(/.*,"/, "", s); sub(/"$/, "", s)
+      print row s
+    }'
+}
+
+# One observation: "epoch<TAB>group<TAB>topic<TAB>partition<TAB>C<TAB>E" per
+# partition the groups hold. E comes from the topic side, joined on
+# (topic, partition); a group partition with no end-offset series is dropped
+# rather than guessed.
+# shellcheck disable=SC2329  # called from the Q2c loop below
+q2c_sample() {
+  local now committed end
+  now="$(date +%s)"
+  committed="$(vm_rows "$Q2C_COMMITTED" consumergroup topic partition)" || return 1
+  end="$(vm_rows "$Q2C_END" topic partition)" || return 1
+  # NF guards: an empty query result arrives as one blank line, which must not
+  # become a bogus key.
+  awk -F '\t' -v OFS='\t' -v now="$now" '
+    NR == FNR { if (NF >= 3) e[$1 SUBSEP $2] = $3; next }
+    NF < 4 { next }
+    ($2 SUBSEP $3) in e { print now, $1, $2, $3, $4, e[$2 SUBSEP $3] }
+  ' <(printf '%s\n' "$end") <(printf '%s\n' "$committed")
+}
+
+# The judge. PURE: reads every sample row so far on stdin, prints one verdict
+# row per (group, topic, partition):
+#   group<TAB>topic<TAB>partition<TAB>VERDICT<TAB>detail
+# $1 = min observe (s), $2 = commit grace (s), $3 = idle lag tolerance,
+# $4 = 1 on the final evaluation (PENDING partitions with enough history are
+#      then decided from the evidence that predates the grace period).
+q2c_judge() {
+  awk -F '\t' -v OFS='\t' -v minobs="$1" -v grace="$2" -v tol="$3" -v final="$4" '
+    function lagtxt(e, c) { return (c < 0) ? "unknown (never committed)" : (e - c) }
+    {
+      n++; ep[n] = $1 + 0; key[n] = $2 SUBSEP $3 SUBSEP $4
+      cc[n] = $5 + 0; ee[n] = $6 + 0
+      if ($1 + 0 > last) last = $1 + 0
+    }
+    END {
+      cut = last - grace
+      for (i = 1; i <= n; i++) {
+        k = key[i]
+        if (!(k in bep) || cc[i] < lc[k]) {
+          # first sight, or the committed offset went BACKWARDS: re-baseline
+          bep[k] = ep[i]; bc[k] = cc[i]; be[k] = ee[i]; mep[k] = ""
+          if (!(k in order)) { order[k] = ++nk; keys[nk] = k }
+        }
+        lep[k] = ep[i]; lc[k] = cc[i]; le[k] = ee[i]
+        if (ep[i] <= cut && ep[i] > bep[k]) { mep[k] = ep[i]; mc[k] = cc[i]; me[k] = ee[i] }
+      }
+      for (j = 1; j <= nk; j++) {
+        k = keys[j]; split(k, part, SUBSEP)
+        span = lep[k] - bep[k]
+        dc = lc[k] - bc[k]; de = le[k] - be[k]
+        if (dc > 0) {
+          v = "CONSUMING"; d = "committed +" dc " in " span "s"
+        } else if (span < minobs) {
+          v = "PENDING"; d = "observed " span "s of the " minobs "s needed"
+        } else if (mep[k] != "" && me[k] > be[k]) {
+          v = "STALLED"
+          d = "end offset +" (me[k] - be[k]) " (already by " (lep[k] - mep[k]) "s before the last sample) while the committed offset stayed at " lc[k] " for " span "s; lag now " lagtxt(le[k], lc[k])
+        } else if (de == 0) {
+          if (lc[k] >= 0 && le[k] - lc[k] > tol) {
+            v = "FROZEN"; d = "no new records and nothing committed in " span "s, with " (le[k] - lc[k]) " records still unread (tolerance " tol ")"
+          } else {
+            v = "IDLE"; d = "no new records in " span "s; lag " lagtxt(le[k], lc[k])
+          }
+        } else if (final == 1 && mep[k] != "") {
+          # Records arrived only inside the grace period: too recent to expect
+          # a commit. Judge the part of the window that predates them.
+          if (lc[k] >= 0 && me[k] - lc[k] > tol) {
+            v = "FROZEN"; d = "nothing committed in " span "s with " (me[k] - lc[k]) " records unread before the latest arrivals (tolerance " tol ")"
+          } else {
+            v = "IDLE"; d = "quiet for " (mep[k] - bep[k]) "s; records arrived only in the last " grace "s, too recent to expect a commit"
+          }
+        } else {
+          v = "PENDING"; d = "records arrived in the last " grace "s; waiting for the commit"
+        }
+        print part[1], part[2], part[3], v, d
+      }
+    }'
+}
+
+q2c_numeric_ok=1
+for q2c_knob in "DQ_Q2_MIN_OBSERVE=$Q2C_MIN_OBSERVE" "DQ_Q2_COMMIT_GRACE=$Q2C_GRACE" \
+                "DQ_Q2_IDLE_LAG_MAX=$Q2C_IDLE_LAG_MAX" "DQ_Q2_MAX_STALENESS=$Q2C_MAX_STALENESS"; do
+  case "${q2c_knob#*=}" in
+    ''|*[!0-9]*) warn "${q2c_knob%%=*} must be a whole number, got '${q2c_knob#*=}'"; q2c_numeric_ok=0 ;;
+  esac
+done
+if [ "$q2c_numeric_ok" -eq 1 ] && [ "$Q2C_MIN_OBSERVE" -le "$Q2C_GRACE" ]; then
+  # A stall is only provable from a sample taken before the grace period, so
+  # the observation must be longer than the grace. Say so instead of quietly
+  # judging nothing.
+  warn "DQ_Q2_MIN_OBSERVE (${Q2C_MIN_OBSERVE}s) must exceed DQ_Q2_COMMIT_GRACE (${Q2C_GRACE}s) — raising it to $(( Q2C_GRACE + 60 ))s."
+  Q2C_MIN_OBSERVE=$(( Q2C_GRACE + 60 ))
+fi
+
+# q2c_fresh: 0 when kafka-exporter's offsets are recent; reason on stderr
+# otherwise. A dead exporter leaves the LAST values in VictoriaMetrics, and
+# frozen numbers would read as "idle" — the exact rubber stamp this check
+# exists to remove.
+# shellcheck disable=SC2329  # called below
+q2c_fresh() {
+  local age
+  if ! age="$(vm_scalar "$Q2C_FRESH" 2>&1)"; then
+    printf 'cannot read the committed-offset series age: %s\n' "$age" >&2
+    return 1
+  fi
+  if ! is_num "$age"; then printf 'non-numeric series age %s\n' "$age" >&2; return 1; fi
+  if num_gt "$age" "$Q2C_MAX_STALENESS"; then
+    printf 'the newest committed-offset sample is %ss old (limit %ss) — kafka-exporter or its scrape is not current, so frozen numbers would read as idle lanes\n' "${age%%.*}" "$Q2C_MAX_STALENESS" >&2
+    return 1
+  fi
+  return 0
+}
+
+if [ "$METRICS_OK" -eq 0 ]; then
+  record SKIP REQUIRED "$Q2C_LABEL" "$VICTORIA_SKIP_REASON"
+elif [ -z "$EXPORTER_CID" ]; then
+  record SKIP REQUIRED "$Q2C_LABEL" "$EXPORTER_SKIP_REASON"
+elif [ "$q2c_numeric_ok" -eq 0 ]; then
+  record SKIP REQUIRED "$Q2C_LABEL" "a DQ_Q2_* knob is not a whole number (see the warning above) — consumption was not evaluated"
+elif ! have_time; then
+  deadline_skip "$Q2C_LABEL"
+elif ! q2c_why="$(q2c_fresh 2>&1)"; then
+  record SKIP REQUIRED "$Q2C_LABEL" "$q2c_why"
+else
+  # The observation must span at least MIN_OBSERVE (+ one poll, so the last
+  # sample lands past it) even when earlier checks used up the shared window —
+  # bounded by the global budget, never beyond it (§9).
+  q2c_start="$(date +%s)"
+  q2c_until="$DEADLINE"
+  q2c_need=$(( q2c_start + Q2C_MIN_OBSERVE + POLL_INTERVAL ))
+  [ "$q2c_until" -lt "$q2c_need" ] && q2c_until="$q2c_need"
+  [ "$q2c_until" -gt "$(( GLOBAL_DEADLINE - 5 ))" ] && q2c_until=$(( GLOBAL_DEADLINE - 5 ))
+  q2c_rows=''
+  q2c_err=''
+  q2c_verdicts=''
+  q2c_final=0
+  while :; do
+    if ! q2c_s="$(q2c_sample 2>&1)"; then
+      q2c_err="$q2c_s"
+      break
+    fi
+    [ -n "$q2c_s" ] && q2c_rows="${q2c_rows:+$q2c_rows$'\n'}$q2c_s"
+    q2c_now="$(date +%s)"
+    [ "$q2c_now" -ge "$q2c_until" ] && q2c_final=1
+    q2c_verdicts=''
+    if [ -n "$q2c_rows" ] && ! q2c_verdicts="$(printf '%s\n' "$q2c_rows" |
+          q2c_judge "$Q2C_MIN_OBSERVE" "$Q2C_GRACE" "$Q2C_IDLE_LAG_MAX" "$q2c_final" 2>&1)"; then
+      q2c_err="the Q2c judge itself failed: $q2c_verdicts"
+      q2c_verdicts=''
+      break
+    fi
+    # Early PASS: every partition already CONSUMING or IDLE. A STALLED/FROZEN
+    # partition keeps the poll going — a late commit turns it CONSUMING.
+    # Counted with awk rather than `grep -q` on purpose: under pipefail an
+    # early-exiting grep SIGPIPEs its writer and the pipeline's status lies.
+    q2c_open="$(printf '%s\n' "$q2c_verdicts" | awk -F '\t' 'NF >= 4 && $4 != "CONSUMING" && $4 != "IDLE" { n++ } END { print n + 0 }')"
+    if [ -n "$q2c_verdicts" ] && [ "$q2c_open" -eq 0 ]; then
+      break
+    fi
+    [ "$q2c_final" -eq 1 ] && break
+    q2c_left=$(( q2c_until - q2c_now ))
+    printf '    %s… Q2c consumption: not decided yet (%ds left) — %s%s\n' "$C_SKIP" "$q2c_left" \
+      "$(printf '%s\n' "$q2c_verdicts" | cut -f4 | sort | uniq -c | tr -s ' ' | tr '\n' ' ')" "$C_OFF"
+    if [ "$q2c_left" -lt "$POLL_INTERVAL" ]; then sleep "$q2c_left"; else sleep "$POLL_INTERVAL"; fi
+  done
+
+  q2c_bad="$(printf '%s\n' "$q2c_verdicts" | awk -F '\t' '$4 == "STALLED" || $4 == "FROZEN" { printf "%s %s[%s] %s: %s; ", $4, $1, $3, $2, $5 }')"
+  q2c_pending="$(printf '%s\n' "$q2c_verdicts" | awk -F '\t' '$4 == "PENDING" { printf "%s[%s] %s: %s; ", $1, $3, $2, $5 }')"
+  q2c_summary="$(printf '%s\n' "$q2c_verdicts" | awk -F '\t' '
+    NF >= 4 { g[$1] = 1; v[$4]++; if ($4 == "CONSUMING") cg[$1] = 1 }
+    END {
+      ng = 0; for (x in g) ng++
+      ncg = 0; for (x in cg) ncg++
+      printf "%d group(s): %d partition(s) consuming (in %d group(s)), %d idle", ng, v["CONSUMING"] + 0, ncg, v["IDLE"] + 0
+    }')"
+  # Freshness is re-read at the END: a verdict resting on samples that went
+  # stale during the window (exporter died mid-run) is not a verdict — frozen
+  # numbers read as FROZEN/IDLE, never as the truth.
+  q2c_stale=''
+  if [ -z "$q2c_err" ] && [ -n "$q2c_verdicts" ] && ! q2c_why="$(q2c_fresh 2>&1)"; then
+    q2c_stale="$q2c_why"
+  fi
+  if [ -n "$q2c_err" ]; then
+    record SKIP REQUIRED "$Q2C_LABEL" "an offset sample could not be read: $(oneline "$q2c_err" 200)"
+  elif [ -n "$q2c_stale" ]; then
+    record SKIP REQUIRED "$Q2C_LABEL" "at the end of the window: $q2c_stale"
+  elif [ -z "$q2c_verdicts" ]; then
+    record SKIP REQUIRED "$Q2C_LABEL" "kafka-exporter exports no committed-offset series for any netops-router-* or netops-correlation group — consumption CANNOT be evaluated (Q1/Q2 say whether the groups exist at all)."
+  elif [ -n "$q2c_bad" ]; then
+    record FAIL REQUIRED "$Q2C_LABEL" \
+      "$(oneline "$q2c_bad" 900)— a joined group that does not commit is not consuming (the 2026-10-17 / 2026-10-30 router wedge, upstream vectordotdev/vector#22006). If OpenSearch/ClickHouse is refusing writes the lane is back-pressured instead (check OpenSearchFloodStageBlock / VectorSinkBufferFilling first); otherwise the router's cx-lane-watch self-heal should restart it within ~5 minutes — re-run this gate after it has. Runbook: docs/runbooks/engine-not-consuming.md §3.4. ($q2c_summary)"
+  elif [ -n "$q2c_pending" ]; then
+    record SKIP REQUIRED "$Q2C_LABEL" \
+      "the window closed before these partitions could be judged: $(oneline "$q2c_pending" 400)— raise --timeout / DQ_GLOBAL_TIMEOUT. Not evaluated is not passed. ($q2c_summary)"
+  else
+    record PASS REQUIRED "$Q2C_LABEL" "$q2c_summary — every partition either committed new offsets or had no new records to consume"
+  fi
 fi
 
 # --- Q3: correlation lag is DRAINING, not merely present --------------------

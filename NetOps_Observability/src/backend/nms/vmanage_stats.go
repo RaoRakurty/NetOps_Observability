@@ -69,7 +69,17 @@ func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byt
 // every stream through one Transformer seam, so without this the statistics
 // stream would fall into the alarms parser and the metric lane would stay
 // silently empty.
-type VManageAutoTransformer struct{}
+type VManageAutoTransformer struct {
+	// bgp carries each BGP peer's reports across polls (vmanage_bgp_memory.go).
+	// nil (the zero value) keeps classification to one poll's reports.
+	bgp *vmBGPMemory
+}
+
+// NewVManageAutoTransformer is the transformer with its cross-poll BGP memory —
+// one per Registry, i.e. per Runtime, so the memory is owned, not global.
+func NewVManageAutoTransformer() VManageAutoTransformer {
+	return VManageAutoTransformer{bgp: newVMBGPMemory(vmBGPMemoryMaxPeers, vmBGPMemoryReports, vmBGPMemoryTTLms)}
+}
 
 func (VManageAutoTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
 	// Per-device real-time rows first: each carries keys no alarm ever has.

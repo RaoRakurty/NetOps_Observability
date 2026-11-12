@@ -3,7 +3,8 @@
 
 # Nokia SR OS (7750 SR, 7250 IXR, 7450 ESS and kin), tracker 387 plan §6a, wave 1.
 # Format: telemetry-catalog/README.md, "Vendor packs". SR Linux is NOT here: its
-# pipe-separated form is the hand-written `srlinux.v1` grammar in vector.yaml.
+# pipe-separated form is the hand-written `srlinux.v1` grammar in vector.yaml, and its
+# port and subinterface events are the nokia_srlinux pack (tracker 388).
 #
 # EVIDENCE. No SR OS box is on the lab and no free image exists (research §6), so every
 # row is `doc_claimed`. The line shape and every event name, id, default severity and

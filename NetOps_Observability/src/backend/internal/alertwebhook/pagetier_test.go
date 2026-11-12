@@ -3,7 +3,7 @@
 
 package alertwebhook
 
-// pagetier_test.go — the mechanical pin under the "four conditions, nine rules"
+// pagetier_test.go — the mechanical pin under the "four conditions, twelve rules"
 // comment in hostroute.go.
 //
 // The routing contract of this package is that ONLY a server-controlled
@@ -107,6 +107,9 @@ func TestPageRuleNamesAreTheFourApprovedConditions(t *testing.T) {
 		"CorrelationLagGrowing":    "1. an engine consumer is not consuming",
 		"RouterConsumerDead":       "1. an engine consumer is not consuming",
 		"RouterConsumerLagGrowing": "1. an engine consumer is not consuming",
+		// Tracker 353: the same condition per partition, for the low-volume
+		// lane the lag-growth threshold cannot see. Not a fifth condition.
+		"RouterConsumerWedged":     "1. an engine consumer is not consuming",
 		"CorrConsumerNotRunning":   "1. an engine consumer is not consuming",
 		"CorrConsumerRestartLoop":  "1. an engine consumer is not consuming",
 		"IngestPipelineSilent":     "2. ingest silent when it should not be",

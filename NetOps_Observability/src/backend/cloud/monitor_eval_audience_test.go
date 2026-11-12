@@ -6,11 +6,13 @@ package cloud
 // monitor_eval_audience_test.go — tracker 359: a tenant's cloud-monitor alert
 // is attributed to that tenant and never pages the platform PagerDuty key.
 //
-// Tenants have no alert channels yet; the integrator hands Fire/Resolve to the
-// platform-global notifier. The only global destination that pages is wrapped
-// in notify.PlatformScopeFilter, which forwards platform self-health (`layer`
+// The integrator hands Fire/Resolve to the platform-global notifier, and (since
+// the 2026-11-12 owner decision) TenantFire/TenantResolve to the owning
+// tenant's own lanes. The only global destination that pages is wrapped in
+// notify.PlatformScopeFilter, which forwards platform self-health (`layer`
 // label) only. This pins that a monitor firing and clearing carries the
-// evaluator's own tenant and no platform layer, so it stays off that key.
+// evaluator's own tenant and no platform layer, so it stays off that key, and
+// that the tenant handed to the tenant lane is the evaluator's own.
 
 import (
 	"context"
@@ -72,5 +74,50 @@ func TestMonitorAlertsCarryTenantAndNeverPageThePlatformKey(t *testing.T) {
 	}
 	if probe.sent != 0 || probe.resolved != 0 {
 		t.Fatalf("tenant monitor alert reached the platform paging key: sent=%d resolved=%d", probe.sent, probe.resolved)
+	}
+}
+
+// TestMonitorTenantDeliveryCarriesTheEvaluatorsTenant — tracker 359: the
+// tenant handed to TenantFire/TenantResolve is the store key the monitor was
+// read from, not a label and not anything in the monitor definition. A
+// monitor whose NAME impersonates another tenant still routes to its owner.
+func TestMonitorTenantDeliveryCarriesTheEvaluatorsTenant(t *testing.T) {
+	store := NewMonitorStore("")
+	for _, tenant := range []string{"acme", "globex"} {
+		def := Monitor{ID: "m-" + tenant, Name: "tenant_id=globex", Metric: "cloud_cpu_util",
+			Mode: MonitorModeThreshold, Condition: MonitorCondAbove, Threshold: 90,
+			Enabled: true, LastState: MonitorStateNever}
+		if fits, err := store.Upsert(tenant, def); err != nil || !fits {
+			t.Fatal("seed monitor failed")
+		}
+	}
+	type edge struct{ kind, tenant, id string }
+	var edges []edge
+	val := 95.0
+	e := NewMonitorEvaluator(store, MonitorEvalDeps{
+		ResourceIDs:   func(context.Context, string) ([]string, error) { return []string{"i-1"}, nil },
+		Query:         func(context.Context, string) map[string]float64 { return map[string]float64{"i-1": val} },
+		Fire:          func(models.Alert) {},
+		Resolve:       func(models.Alert) {},
+		TenantFire:    func(tn string, a models.Alert) { edges = append(edges, edge{"fire", tn, a.ID}) },
+		TenantResolve: func(tn string, a models.Alert) { edges = append(edges, edge{"resolve", tn, a.ID}) },
+		Now:           func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+	}, time.Minute)
+
+	e.evaluateAll(context.Background()) // both fire
+	e.evaluateAll(context.Background()) // still firing — no new edge
+	val = 10
+	e.evaluateAll(context.Background()) // both resolve
+	want := map[edge]bool{
+		{"fire", "acme", "cloud-monitor-m-acme"}: true, {"fire", "globex", "cloud-monitor-m-globex"}: true,
+		{"resolve", "acme", "cloud-monitor-m-acme"}: true, {"resolve", "globex", "cloud-monitor-m-globex"}: true,
+	}
+	if len(edges) != len(want) {
+		t.Fatalf("want exactly one fire + one resolve per monitor, got %v", edges)
+	}
+	for _, ed := range edges {
+		if !want[ed] {
+			t.Fatalf("edge routed to the wrong tenant (or extra edge): %+v in %v", ed, edges)
+		}
 	}
 }

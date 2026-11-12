@@ -175,10 +175,14 @@ def test_a_change_with_no_fault_is_half_coverage(family_on) -> None:
 
 def test_a_required_change_is_still_a_witness(family_on) -> None:
     """Context-only applies to OPTIONAL clauses. In change-induced the change is
-    required evidence: a controller push and an independent device fault can
-    confirm together."""
+    required evidence and counts toward coverage — but a controller push is
+    management_plane, which since owner D1 (2026-11-11) supports and never
+    anchors: with ONE measurement plane beside it the story stays suspected."""
     s = score(CHANGE_INDUCED, controller_change(), syslog_bgp())
-    assert s.verdict_gate.tier is VerdictTier.CONFIRMED
+    assert s.coverage == 1.0
+    assert ModalityClass.MANAGEMENT_PLANE in s.verdict_gate.coverage.trusted_modalities
+    assert s.verdict_gate.tier is VerdictTier.SUSPECTED
+    assert any("supports but never anchors" in r for r in s.verdict_gate.reasons)
 
 
 def test_the_same_change_seen_twice_never_self_confirms(family_on) -> None:

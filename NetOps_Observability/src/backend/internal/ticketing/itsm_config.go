@@ -50,7 +50,15 @@ type ServiceNowConfig struct {
 type PagerDutyRCAConfig struct {
 	Enabled    bool   `json:"enabled"`
 	RoutingKey string `json:"routing_key,omitempty"`
+	// WatchAlerts opts this lane into the tenant's OWN watch alerts (its
+	// BGP-watch prefix classes and cloud monitors; tracker 359). nil = never
+	// chosen = OFF for PagerDuty: a page wakes someone, so it is opt-in.
+	WatchAlerts *bool `json:"watch_alerts,omitempty"`
 }
+
+// WatchAlertsOn is the effective choice: PagerDuty is OFF unless the tenant
+// turned it on.
+func (c PagerDutyRCAConfig) WatchAlertsOn() bool { return c.WatchAlerts != nil && *c.WatchAlerts }
 
 // SlackRCAConfig is the per-tenant Slack destination for RCA auto-ticketing
 // (#103-E): the tenant's OWN incoming-webhook URL (a bearer secret —
@@ -58,7 +66,15 @@ type PagerDutyRCAConfig struct {
 type SlackRCAConfig struct {
 	Enabled    bool   `json:"enabled"`
 	WebhookURL string `json:"webhook_url,omitempty"`
+	// WatchAlerts opts this lane into the tenant's own watch alerts. nil =
+	// never chosen = ON for Slack: a channel message wakes nobody, and a tenant
+	// that set up a watch and a Slack lane expects to hear about it there.
+	WatchAlerts *bool `json:"watch_alerts,omitempty"`
 }
+
+// WatchAlertsOn is the effective choice: Slack is ON unless the tenant turned
+// it off.
+func (c SlackRCAConfig) WatchAlertsOn() bool { return c.WatchAlerts == nil || *c.WatchAlerts }
 
 type JiraConfig struct {
 	Enabled           bool   `json:"enabled"`
@@ -220,13 +236,23 @@ func (s *ITSMConfigStore) Set(tenant string, in ITSMConfig) error {
 		// block must never silently disable RCA paging. The dedicated
 		// /api/itsm/pagerduty-rca endpoint is the explicit mutation path.
 		in.PagerDuty = prev.PagerDuty
-	} else if in.PagerDuty.RoutingKey == "" {
-		in.PagerDuty.RoutingKey = prev.PagerDuty.RoutingKey
+	} else {
+		if in.PagerDuty.RoutingKey == "" {
+			in.PagerDuty.RoutingKey = prev.PagerDuty.RoutingKey
+		}
+		if in.PagerDuty.WatchAlerts == nil {
+			in.PagerDuty.WatchAlerts = prev.PagerDuty.WatchAlerts
+		}
 	}
 	if in.Slack == (SlackRCAConfig{}) {
 		in.Slack = prev.Slack
-	} else if in.Slack.WebhookURL == "" {
-		in.Slack.WebhookURL = prev.Slack.WebhookURL
+	} else {
+		if in.Slack.WebhookURL == "" {
+			in.Slack.WebhookURL = prev.Slack.WebhookURL
+		}
+		if in.Slack.WatchAlerts == nil {
+			in.Slack.WatchAlerts = prev.Slack.WatchAlerts
+		}
 	}
 
 	if err := ValidateITSM(in); err != nil {
@@ -385,6 +411,9 @@ func (s *ITSMConfigStore) SetPagerDutyRCA(tenant string, in PagerDutyRCAConfig) 
 	if in.RoutingKey == "" {
 		in.RoutingKey = cfg.PagerDuty.RoutingKey
 	}
+	if in.WatchAlerts == nil { // omitted = keep the tenant's earlier choice
+		in.WatchAlerts = cfg.PagerDuty.WatchAlerts
+	}
 	if in.Enabled && strings.TrimSpace(in.RoutingKey) == "" {
 		return errors.New("PagerDuty (RCA): routing key is required when enabled")
 	}
@@ -404,6 +433,9 @@ func (s *ITSMConfigStore) SetSlackRCA(tenant string, in SlackRCAConfig) error {
 	cfg := s.cfgs[tenant]
 	if in.WebhookURL == "" {
 		in.WebhookURL = cfg.Slack.WebhookURL
+	}
+	if in.WatchAlerts == nil { // omitted = keep the tenant's earlier choice
+		in.WatchAlerts = cfg.Slack.WatchAlerts
 	}
 	if in.Enabled {
 		if strings.TrimSpace(in.WebhookURL) == "" {
@@ -448,11 +480,15 @@ func (s *ITSMConfigStore) Public(tenant string) map[string]any {
 			"enabled":         cfg.PagerDuty.Enabled,
 			"has_routing_key": cfg.PagerDuty.RoutingKey != "",
 			"configured":      cfg.PagerDuty.Enabled && cfg.PagerDuty.RoutingKey != "",
+			// The EFFECTIVE choice (default applied), so the UI never has to
+			// know the per-lane default.
+			"watch_alerts": cfg.PagerDuty.WatchAlertsOn(),
 		},
 		"slack": map[string]any{
-			"enabled":     cfg.Slack.Enabled,
-			"has_webhook": cfg.Slack.WebhookURL != "",
-			"configured":  cfg.Slack.Enabled && cfg.Slack.WebhookURL != "",
+			"enabled":      cfg.Slack.Enabled,
+			"has_webhook":  cfg.Slack.WebhookURL != "",
+			"configured":   cfg.Slack.Enabled && cfg.Slack.WebhookURL != "",
+			"watch_alerts": cfg.Slack.WatchAlertsOn(),
 		},
 		"jira": map[string]any{
 			"enabled":            jr.Enabled,

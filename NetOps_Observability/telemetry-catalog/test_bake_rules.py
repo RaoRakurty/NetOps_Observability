@@ -56,7 +56,9 @@ def test_the_lanes_are_the_declared_ones(rows):
     # · 95 with the SONiC orchagent link row (387 wave 2)
     # · 100 with 387's final syslog wave: the SD-WAN gateway lost (two rows, one per line
     #   shape) and three known_benign rows (fp-um default MAC, kernel hrtimer, OSPF DD 2-Way).
-    assert len(runtime) == 100, (
+    # · 102 with tracker 388's syslog link cause: SR Linux port/subinterface state and the
+    #   SONiC portmgrd shutdown.
+    assert len(runtime) == 102, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 
@@ -243,7 +245,10 @@ def test_the_two_link_rows_are_the_only_ones_that_drop_an_attr(rows):
                          "trap.sdwan.bgp_peer", "trap.bfd.session", "trap.bfd.session.clear",
                          # tracker 388: a link UP names no cause, so the key is absent,
                          # the trap rows' meaning on the syslog twin.
-                         "syslog.junos.link.state_change"}
+                         "syslog.junos.link.state_change",
+                         # tracker 388: SR Linux names a reason only on a down line, so an
+                         # up line carries neither the cause nor the reason.
+                         "syslog.srlinux.link.state_change"}
 
 
 def test_a_pattern_src_must_be_a_live_node_of_its_own_guard(loaded):

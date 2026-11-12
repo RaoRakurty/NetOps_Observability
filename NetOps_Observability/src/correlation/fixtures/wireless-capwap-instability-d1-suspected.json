@@ -1,5 +1,5 @@
 {
-  "name": "AP join flaps while a path probe sees loss on the AP-controller path: CAPWAP instability, two witnesses",
+  "name": "AP join flaps while a path probe sees loss on the AP-controller path: CAPWAP instability, suspected (D1)",
   "signals": [
     {
       "kind": "wireless_ap_join_flap",
@@ -21,12 +21,16 @@
       "collection_path": "direct",
       "ts_offset_s": 45,
       "deviation": 4.0,
-      "attrs": {"probe_intent": "customer_path", "vantage_type": "enterprise_agent"}
+      "attrs": {
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent"
+      }
     }
   ],
   "expect": {
     "top": "sig.ent.wireless.capwap-instability",
-    "tier": "confirmed",
+    "tier": "suspected",
     "owner": "netops"
-  }
+  },
+  "comment": "Owner D1 (2026-11-11): the controller's report is management_plane, which supports but never anchors the confirming pair; with ONE measurement-plane witness the verdict is suspected, the honest 'possibly because of X'. It was 'confirmed' before D1."
 }
