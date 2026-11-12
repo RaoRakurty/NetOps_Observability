@@ -72,6 +72,8 @@ var grammarWords = []string{
 	"alarm", "alive", "alright", "check", "doing", "fine", "good", "isis", "manage",
 	"monitor", "offline", "okay", "online", "ospf", "reachable", "responding",
 	"unreachable", "unresponsive",
+	// Follow-ups 2026-11-12: verdict referents, RCA nouns, "connected".
+	"identify", "only", "just", "ones", "one", "rca", "rcas", "connected", "platform",
 }
 
 // Vocabulary is the grammar's closed vocabulary: BaseVocabulary plus every

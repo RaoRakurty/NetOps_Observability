@@ -46,7 +46,8 @@ test("a platform admin with no key sees the banner; it opens the settings and Te
   await panel.getByPlaceholder("Paste API key").fill("AIza-e2e-draft");
   await panel.getByRole("button", { name: "Test connection" }).click();
   await expect(panel.getByTestId("connection-test")).toContainText("Connected to gemini-flash-lite-latest in 0.4 s.");
-  expect(fake.connTests).toEqual([{ provider: "gemini", key: "AIza-e2e-draft" }]);
+  // Every tier field of the form is sent (2026-11-12); blanks test as the recommended models.
+  expect(fake.connTests).toEqual([{ provider: "gemini", key: "AIza-e2e-draft", model: "", model_fast: "", model_strong: "" }]);
   // The key never shows on the page.
   await expect(page.locator("body")).not.toContainText("AIza-e2e-draft");
 });

@@ -382,16 +382,19 @@ func (sc *statementContext) changeEstablished() bool {
 func (sc *statementContext) citedKnown(sentence string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range reBracketRef.FindAllStringSubmatch(sentence, -1) {
-		id := strings.ToLower(strings.TrimSpace(m[1]))
-		if id == "" || seen[id] {
-			continue
+	for _, m := range reBracketList.FindAllStringSubmatch(sentence, -1) {
+		// One bracket may cite several ids ("[problem:a, problem:b]").
+		for _, part := range reCiteSep.Split(m[1], -1) {
+			id := strings.ToLower(strings.TrimSpace(part))
+			if id == "" || seen[id] {
+				continue
+			}
+			if _, ok := sc.items[id]; !ok {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
 		}
-		if _, ok := sc.items[id]; !ok {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
 	}
 	return out
 }
@@ -453,7 +456,7 @@ var (
 // stripCitations removes every bracketed evidence id, so a lexical test reads
 // the PROSE: a citation id like "hypothesis:ab12:0" must never act as a hedge.
 func stripCitations(s string) string {
-	return reBracketRef.ReplaceAllStringFunc(s, func(m string) string {
+	return reBracketList.ReplaceAllStringFunc(s, func(m string) string {
 		if strings.Contains(m, ":") {
 			return ""
 		}

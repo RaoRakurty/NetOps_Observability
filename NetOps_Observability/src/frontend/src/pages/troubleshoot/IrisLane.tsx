@@ -190,7 +190,7 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
           {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
 
           {/* Statement classes (N-B4): each sentence with the server's class. */}
-          <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} />
+          <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} citations={ans.citations} />
 
           {cites.length > 0 && (
             <div className="tsl-cites" aria-label="Evidence citations">

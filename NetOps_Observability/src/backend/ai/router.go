@@ -48,7 +48,9 @@ type ModelRoute struct {
 // behavior (deterministic modes skip the provider entirely).
 func RouteFor(mode AnswerMode) ModelRoute {
 	switch mode {
-	case ModeProblemExplanation, ModeTroubleshootFinding:
+	case ModeProblemExplanation, ModeTroubleshootFinding, ModeModelAnswer:
+		// A model answer to a question no deterministic arm covered
+		// (route_policy.go) reasons over several evidence items and is verified.
 		// A skill answer reasons over several tool results at once and MUST be
 		// verified — it is the most fabrication-prone surface we have.
 		return ModelRoute{Tier: TierStrong, UseLLM: true, Verify: true}
@@ -86,7 +88,7 @@ func ClassFor(mode AnswerMode, intent string) (RequestClass, string) {
 		return ClassData, "answered"
 	case ModeProblemExplanation, ModeTopIncidentExplanation, ModeNocFocusRecommendation, ModeCurrentStateSummary,
 		ModeModuleHealthSummary, ModeTopologyPathExplanation, ModeEvidenceExplanation, ModeMissingEvidenceExplained,
-		ModeItsmUpdate, ModeExecutiveSummary:
+		ModeItsmUpdate, ModeExecutiveSummary, ModeModelAnswer:
 		return ClassRCA, "answered"
 	case ModeTroubleshootFinding:
 		return ClassInvestigation, "answered"
@@ -136,6 +138,48 @@ func (t TierModels) For(tier ModelTier) string {
 		// Falls through to Default — see the doc comment.
 	}
 	return t.Default
+}
+
+// ForProvider returns the model to call for a tier on provider: a tier
+// override when one is set, else the provider's RECOMMENDED model for that
+// tier (RecommendedModels), else Default, else the provider's recommended
+// default.
+//
+// Owner decision 2026-11-12, after the lab's "Iris not using Gemini": the
+// platform config named one model (gemini-flash-latest, a moving Google alias
+// that timed out even on a tiny probe that day) with both tier fields blank,
+// so EVERY tier called it. The recommended tier models (flash-lite for the fast
+// tier, a probe-verified flash for the strong tier) were answering in under a
+// second. A blank tier is now "the recommended model for this tier", not "the
+// single default again"; an operator who wants one model everywhere names it
+// in each tier field.
+func (t TierModels) ForProvider(tier ModelTier, provider string) string {
+	rec, known := RecommendedModels()[NormalizeProvider(provider)]
+	switch tier {
+	case TierFast:
+		if m := strings.TrimSpace(t.Fast); m != "" {
+			return m
+		}
+		if known && rec.Fast != "" {
+			return rec.Fast
+		}
+	case TierStrong:
+		if m := strings.TrimSpace(t.Strong); m != "" {
+			return m
+		}
+		if known && rec.Strong != "" {
+			return rec.Strong
+		}
+	case TierDeterministic:
+		// The default model, as For.
+	}
+	if m := strings.TrimSpace(t.Default); m != "" {
+		return m
+	}
+	if known {
+		return rec.Default
+	}
+	return ""
 }
 
 // ErrNoProvider is the honest "nothing to call" answer: the orchestrator was

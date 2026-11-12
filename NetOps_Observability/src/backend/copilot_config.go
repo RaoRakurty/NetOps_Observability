@@ -17,6 +17,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	"netops/backend/ai"
 	"netops/backend/internal/vault"
@@ -175,26 +176,96 @@ func (s *server) handleCopilotConfigTest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	model := ai.ProbeModel(name, req.model, cfg.Models(), cfg.Provider)
-	res := s.runProviderProbe(r, claims, name, key, model)
-	s.copilotCfg.SetLastTest(res)
-	writeJSON(w, http.StatusOK, res)
+	out := s.providerTest(r, claims, name, key, model, req.tierModels(name, cfg.Models(), cfg.Provider))
+	s.copilotCfg.SetLastTest(out.ProbeResult)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// providerTestResponse is the connection-test verdict: the historical
+// single-model fields (the fast tier, as before) plus every tier model's own
+// verdict and latency (owner 2026-11-12: the Test must show which tier model
+// is slow or failing — the lab's default model timed out while its fast one
+// answered).
+type providerTestResponse struct {
+	ai.ProbeResult
+	Tiers []ai.TierProbe `json:"tiers,omitempty"`
+}
+
+// providerTest runs a connection test: each distinct tier model once
+// (concurrently; each call charged and audited by runProviderProbe), and the
+// historical single verdict for model — reusing that model's tier result
+// rather than calling it twice.
+func (s *server) providerTest(r *http.Request, claims jwtClaims, name, key, model string, models ai.TierModels) providerTestResponse {
+	var mu sync.Mutex
+	seen := map[string]ai.ProbeResult{}
+	probe := func(m string) ai.ProbeResult {
+		mu.Lock()
+		res, ok := seen[m]
+		mu.Unlock()
+		if ok {
+			return res
+		}
+		res = s.runProviderProbe(r, claims, name, key, m)
+		mu.Lock()
+		seen[m] = res
+		mu.Unlock()
+		return res
+	}
+	tiers := ai.ProbeTiers(name, models, probe)
+	return providerTestResponse{ProbeResult: probe(model), Tiers: tiers}
 }
 
 // providerTestRequest is a decoded, normalized connection-test body.
-type providerTestRequest struct{ provider, key, model string }
+type providerTestRequest struct {
+	provider, key, model string
+	// fast / strong are the form's tier fields; tiersSent says the form sent
+	// any model field at all (then the form is the draft to test, blanks
+	// included — a blank tier is its recommended model).
+	fast, strong string
+	tiersSent    bool
+}
+
+// tierModels is the tier set a test probes: the form's draft when it sent
+// one, else the stored configuration when it is for this provider, else the
+// provider's recommendations.
+func (q providerTestRequest) tierModels(provider string, configured ai.TierModels, configuredFor string) ai.TierModels {
+	if q.tiersSent {
+		return ai.TierModels{Default: q.model, Fast: q.fast, Strong: q.strong}
+	}
+	if provider == configuredFor {
+		return configured
+	}
+	return ai.TierModels{}
+}
 
 // decodeProviderTest bounds and validates a connection-test body.
 func decodeProviderTest(w http.ResponseWriter, r *http.Request) (providerTestRequest, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, copilotTestBody)
 	var raw struct {
-		Provider string `json:"provider"`
-		Key      string `json:"key"`
-		Model    string `json:"model"`
+		Provider    string  `json:"provider"`
+		Key         string  `json:"key"`
+		Model       string  `json:"model"`
+		ModelFast   *string `json:"model_fast"`
+		ModelStrong *string `json:"model_strong"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		return providerTestRequest{}, errors.New("invalid request body")
 	}
 	out := providerTestRequest{key: strings.TrimSpace(raw.Key), model: strings.TrimSpace(raw.Model)}
+	if raw.ModelFast != nil || raw.ModelStrong != nil {
+		out.tiersSent = true
+		if raw.ModelFast != nil {
+			out.fast = strings.TrimSpace(*raw.ModelFast)
+		}
+		if raw.ModelStrong != nil {
+			out.strong = strings.TrimSpace(*raw.ModelStrong)
+		}
+		for _, m := range []string{out.fast, out.strong} {
+			if m != "" && !probeModelName.MatchString(m) {
+				return providerTestRequest{}, errors.New("invalid model name")
+			}
+		}
+	}
 	if p := strings.TrimSpace(raw.Provider); p != "" {
 		if out.provider = ai.NormalizeProvider(p); out.provider == "" {
 			return providerTestRequest{}, errors.New("unknown provider — use gemini, anthropic or openai")

@@ -28,8 +28,13 @@ import (
 //	DISCLOSES the removal the way the citation strip does.
 
 var (
-	// A bracketed reference the model emitted, e.g. "[problem:abc]" / "[log:os:1]".
-	reBracketRef = regexp.MustCompile(`\[([^\]]{1,160})\]`)
+	// reBracketList is a bracketed reference the model emitted — one id
+	// ("[problem:abc]", "[log:os:1]") or a list of them ("[problem:a,
+	// problem:b]"); the bound was 160 bytes for one id until 2026-11-12, which
+	// let a long list escape the check. reCiteSep separates the ids of a list.
+	// (1000 is Go's largest repeat count.)
+	reBracketList = regexp.MustCompile(`\[([^\]\[]{1,1000})\]`)
+	reCiteSep     = regexp.MustCompile(`\s*[,;]\s*`)
 	// Cleanup of artifacts left after removing a reference.
 	reDoubleSpace   = regexp.MustCompile(`[ \t]{2,}`)
 	reSpaceBeforeP  = regexp.MustCompile(`\s+([.,;:!?])`)
@@ -57,19 +62,34 @@ func VerifyGrounding(text string, validIDs []string) VerifyResult {
 			valid[s] = true
 		}
 	}
-	cleaned := reBracketRef.ReplaceAllStringFunc(text, func(m string) string {
+	cleaned := reBracketList.ReplaceAllStringFunc(text, func(m string) string {
 		inner := strings.TrimSpace(m[1 : len(m)-1]) // drop the surrounding [ ]
-		low := strings.ToLower(inner)
 		// Only judge tokens shaped like an evidence citation id (kind:detail); a
 		// bracket without a colon isn't a citation we vouch for, so leave it.
-		if !strings.Contains(low, ":") {
+		if !strings.Contains(inner, ":") {
 			return m
 		}
-		if valid[low] {
-			return m // real citation — keep it
+		// A model may cite several ids in one bracket ("[problem:a, problem:b]").
+		// Each is judged on its own: the real ones stay, an invented one goes.
+		// Before 2026-11-12 the list was judged as ONE id — a list of real ids
+		// was stripped as invented, and a list too long for the old 160-byte
+		// match escaped the check entirely and reached the operator raw.
+		var kept []string
+		for _, part := range reCiteSep.Split(inner, -1) {
+			id := strings.TrimSpace(part)
+			if id == "" {
+				continue
+			}
+			if valid[strings.ToLower(id)] {
+				kept = append(kept, id) // real citation — keep it
+				continue
+			}
+			res.Removed = append(res.Removed, id) // fabricated — strip it
 		}
-		res.Removed = append(res.Removed, inner) // fabricated — strip it
-		return ""
+		if len(kept) == 0 {
+			return ""
+		}
+		return "[" + strings.Join(kept, ", ") + "]"
 	})
 	if len(res.Removed) > 0 {
 		cleaned = tidyAfterStrip(cleaned)

@@ -86,10 +86,9 @@ func TestMultiQuestionDataAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ans.Intent == IntentMultiQuestion || ans.Mode == ModeDataQuery {
-		t.Fatalf("a non-data part hands the message back: %+v", ans)
-	}
-	if len(asked) == 0 || asked[len(asked)-1] != "how many devices can you see? tell me a joke" {
-		t.Fatalf("the whole message is then read as before: %q", asked)
+	// Routing policy (route_policy.go): a part nothing deterministic covers
+	// hands the WHOLE message to the model — never half-answered here.
+	if ans.Mode != ModeModelAnswer || ans.Routing == nil || ans.Routing.Reason != RouteReasonCompound {
+		t.Fatalf("a non-data part sends the message to the model: %+v", ans)
 	}
 }

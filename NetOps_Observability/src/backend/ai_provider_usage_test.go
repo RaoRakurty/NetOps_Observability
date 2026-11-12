@@ -31,6 +31,9 @@ const geminiThinkingOK = `{"candidates":[{"content":{"role":"model","parts":[{"t
 
 func TestAnsweredProviderCallsAreMeasured(t *testing.T) {
 	s := platformGeminiServer(t)
+	// A thinking alias on the fast tier, named explicitly (the recommended
+	// fast model, flash-lite, sends no thinking setting at all).
+	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey, ModelFast: "gemini-flash-latest"})
 	s.aiProvCalls = aiprovider.NewMetrics(nil)
 	s.aiToolBudget = ai.NewDailyBudget()
 	var mu sync.Mutex

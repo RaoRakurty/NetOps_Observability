@@ -96,6 +96,17 @@ type Orchestrator struct {
 	// the layer is not wired and NOTHING about any answer changes. Nothing that
 	// crosses this seam identifies a tenant or an entity (§3a).
 	Score ScoreSink
+	// Routing policy (route_policy.go). AgentAnswer is the server's model-with-
+	// tools path (nil = not wired: the in-package grounded answer runs). Scope
+	// is the caller's own scope from the token, and Inventory its device
+	// inventory in aggregate — both nil when not wired, and their parts of a
+	// question are then simply not covered here. PriorQuestions are the
+	// operator's earlier questions in the conversation (never the assistant's
+	// replies), context for a model answer only.
+	AgentAnswer    AgentAnswerFunc
+	Scope          *ScopeFacts
+	Inventory      func(ctx context.Context, p Principal) (InventoryFacts, error)
+	PriorQuestions []string
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -417,6 +428,11 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	ctx, note := WithModelNote(ctx)
 	ans, err := o.ask(ctx, p, question, uiContext)
 	if err == nil {
+		// Every answer carries its routing decision (route_policy.go); a path
+		// that did not set one is a deterministic arm that covered it.
+		if ans.Routing == nil {
+			ans.Routing = &Routing{Path: RoutePathDeterministic, Reason: RouteReasonCovered}
+		}
 		// C6: the per-answer footnote names the model that answered — read at
 		// the one exit from the request's note, so no LLM seam changes shape.
 		if ans.Provider != "" && ans.Provider != "none" && ans.Model == "" {
@@ -444,22 +460,72 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// otherwise runs before the explain keyword match, so a question about the
 	// page is answered from that page's documentation, not from whichever
 	// definition happens to share a word with it.
-	if _, named := explainTopicFromAsk(question, uiContext); !named {
+	//
+	// A problem in view (route_policy.go ProblemInView) is the subject of every
+	// question asked about it: neither page help nor a keyword-matched
+	// explanation may answer "explain this problem" with product text. A
+	// question explicitly about the product's screens drops the subject.
+	subject := ProblemInView(question, uiContext)
+	classifyCtx := uiContext
+	if subject == "" {
+		classifyCtx = withoutSubject(uiContext)
+	}
+	_, named := explainTopicFromAsk(question, uiContext)
+	if !named && subject == "" {
 		if ans, handled := o.answerPageHelp(question, uiContext); handled {
 			o.routed(ArmPageHelp, ans.Mode)
 			return ans, nil
 		}
 	}
-	if ans, handled := o.answerExplain(question, uiContext); handled {
-		o.routed(ArmExplain, ans.Mode)
-		return ans, nil
+	if named || subject == "" {
+		if ans, handled := o.answerExplain(question, uiContext); handled {
+			o.routed(ArmExplain, ans.Mode)
+			return ans, nil
+		}
 	}
 
-	plan := Classify(question, uiContext)
+	plan := Classify(question, classifyCtx)
 	// A misspelt word the router repaired ("isues" → "issues") is disclosed
 	// on whatever answer follows (D2): nothing is read differently silently.
 	if _, readings := lex.ClassifierRepair(question); len(readings) > 0 {
 		defer func() { discloseReadings(&ans, readings) }()
+	}
+
+	if subject != "" {
+		// A troubleshooting method still investigates a complaint asked in
+		// the RCA view with that problem as its anchor ("bgp neighbor down
+		// on edge-1, peer is idle") — but not a question about the problem
+		// itself ("why is this only suspected?"): that is its explanation,
+		// at one model call.
+		if o.Skills != nil {
+			if match, ok := SelectSkill(o.Skills, question, plan); ok && (match.Score > 0 || !reAboutTheProblem.MatchString(question)) {
+				o.routed(ArmSkill, ModeTroubleshootFinding)
+				if ans, handled := o.answerSkill(ctx, p, question, plan, match, uiContext, nil); handled {
+					ans.Routing = &Routing{Path: RoutePathDeterministic, Reason: RouteReasonProblemContext}
+					return ans, nil
+				}
+			}
+		}
+		return o.answerSubject(ctx, p, question, plan)
+	}
+
+	// Several questions in one message (route_policy.go): answered part by
+	// part when every part is covered here; handed to the model when a part
+	// is not (and no single recognised intent claims them all).
+	if parts := splitQuestion(question); len(parts) > 1 {
+		answers, covered, classicOnly := o.compoundCoverage(ctx, p, parts)
+		switch {
+		case covered:
+			o.routed(ArmData, ModeDataQuery)
+			out := composeParts(answers)
+			out.Routing = &Routing{Path: RoutePathDeterministic, Reason: RouteReasonCompoundCovered}
+			return out, nil
+		case !classicOnly && !o.skillClaims(question, plan):
+			// A method that claims the whole message ("an app is slow. Is it
+			// the network or the provider?") investigates it as before.
+			o.routed(ArmModel, ModeModelAnswer)
+			return o.compoundByModel(ctx, p, question, plan, answers), nil
+		}
 	}
 
 	// The question router's DATA arm (N-G4) runs before module governance and
@@ -520,14 +586,21 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	// current-state briefing); it reads no data and needs no module.
 	if plan.Intent == "capability" {
 		o.routed(ArmCapability, ModeUnavailable)
+		// Routing policy (route_policy.go): no deterministic intent covers the
+		// question, so the model answers it from the caller's data. Only when
+		// no model answers does the built-in fallback run, saying why.
+		mans, ok, merr := o.answerByModel(ctx, p, question, plan.Intent, RouteReasonMiss)
+		if ok {
+			return mans, nil
+		}
 		// A protocol or vendor question the classifier could not place is often
 		// exactly what the TAC catalogue covers ("bgp neighbour down on SR
 		// Linux"): answer from that knowledge before falling back to the
 		// capability clarification. No tenant data is read.
 		if ans, ok := o.answerTACKnowledge(plan, disc, o.tacFor(question, 2)); ok {
-			return ans, nil
+			return modelUnavailable(ans, RouteReasonMiss, merr), nil
 		}
-		return o.answerCapability(plan), nil
+		return modelUnavailable(o.answerCapability(plan), RouteReasonMiss, merr), nil
 	}
 
 	o.routed(ArmClassic, plan.Mode)

@@ -102,19 +102,24 @@ var contractions = map[string][]string{
 type abbreviation struct {
 	to       []string
 	disclose bool
+	// last: expanded only as the question's final word. "atm" is chat for
+	// "at the moment" at the end of a sentence ("what's down atm") but a real
+	// network term before a noun ("show atm interfaces"): a token that is
+	// also a domain term is never rewritten where it can be that term.
+	last bool
 }
 
 // abbreviations is closed and code-owned (held-out phrasings never appear
 // here, N-H3). Only whole tokens are expanded: "r1" or "u-turn" are names.
 var abbreviations = map[string]abbreviation{
-	"rn": {[]string{"right", "now"}, true}, "atm": {[]string{"right", "now"}, true},
-	"yday": {[]string{"yesterday"}, true}, "yest": {[]string{"yesterday"}, true},
-	"nbr": {[]string{"neighbor"}, true}, "nbrs": {[]string{"neighbors"}, true},
-	"iface": {[]string{"interface"}, true}, "ifaces": {[]string{"interfaces"}, true},
-	"cfg": {[]string{"config"}, true},
-	"pls": {[]string{"please"}, false}, "plz": {[]string{"please"}, false},
-	"w/": {[]string{"with"}, false}, "r": {[]string{"are"}, false}, "u": {[]string{"you"}, false},
-	"ur": {[]string{"your"}, false}, "thx": nil0, "ty": nil0,
+	"rn": {to: []string{"right", "now"}, disclose: true}, "atm": {to: []string{"right", "now"}, disclose: true, last: true},
+	"yday": {to: []string{"yesterday"}, disclose: true}, "yest": {to: []string{"yesterday"}, disclose: true},
+	"nbr": {to: []string{"neighbor"}, disclose: true}, "nbrs": {to: []string{"neighbors"}, disclose: true},
+	"iface": {to: []string{"interface"}, disclose: true}, "ifaces": {to: []string{"interfaces"}, disclose: true},
+	"cfg": {to: []string{"config"}, disclose: true},
+	"pls": {to: []string{"please"}}, "plz": {to: []string{"please"}},
+	"w/": {to: []string{"with"}}, "r": {to: []string{"are"}}, "u": {to: []string{"you"}},
+	"ur": {to: []string{"your"}}, "thx": nil0, "ty": nil0,
 }
 
 // nil0 is an abbreviation that reads as nothing ("thx").
@@ -125,9 +130,9 @@ const KindAbbreviation = "abbreviation"
 
 // expandAbbreviation returns the words a token stands for and the reading to
 // disclose ("" when silent); ok is false when the token is not shorthand.
-func expandAbbreviation(tok string) (words []string, rd *Reading, ok bool) {
+func expandAbbreviation(tok string, final bool) (words []string, rd *Reading, ok bool) {
 	a, ok := abbreviations[tok]
-	if !ok {
+	if !ok || (a.last && !final) {
 		return nil, nil, false
 	}
 	if a.disclose {
@@ -143,10 +148,10 @@ func ExpandAbbreviations(text string) (string, []Reading) {
 	toks := strings.Fields(text)
 	out := make([]string, 0, len(toks))
 	var rds []Reading
-	for _, t := range toks {
+	for i, t := range toks {
 		core := strings.TrimRight(t, "?!.,;:")
 		tail := t[len(core):]
-		words, rd, ok := expandAbbreviation(core)
+		words, rd, ok := expandAbbreviation(core, i == len(toks)-1 || tail != "")
 		if !ok {
 			out = append(out, t)
 			continue
@@ -210,7 +215,7 @@ func Normalize(q string) Text {
 	var rds []Reading
 	for i := 0; i < len(raw); i++ {
 		w := raw[i]
-		if words, rd, ok := expandAbbreviation(w); ok {
+		if words, rd, ok := expandAbbreviation(w, i == len(raw)-1); ok {
 			toks = append(toks, words...)
 			if rd != nil {
 				rds = append(rds, *rd)

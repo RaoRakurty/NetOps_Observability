@@ -6,7 +6,7 @@
 // step, the admin banner, the per-answer footnote and the first-login landing
 // all read these, and the unit tests pin them.
 
-import type { AIBudgetStatus, RecommendedModels } from "../services/api";
+import type { AIBudgetStatus, RecommendedModels, TierTestResult } from "../services/api";
 
 // D6: gemini is pre-selected; the order is the order the tiles show.
 export const PROVIDER_ORDER = ["gemini", "anthropic", "openai"] as const;
@@ -68,6 +68,56 @@ export function testResultText(r: { ok: boolean; error_class?: string; latency_m
     default:
       return "The test did not succeed. Try again, or pick the recommended model.";
   }
+}
+
+// The operator's words for each tier (the settings form's own labels).
+export const TIER_LABEL: Record<string, string> = {
+  default: "Default model",
+  fast: "Model for quick answers",
+  strong: "Model for deep investigations",
+};
+
+export type TierLine = { tier: string; ok: boolean; text: string };
+
+// One line per tier model of a connection test (2026-11-12: the lab's default
+// model timed out while its quick-answer model answered in 0.7 s, and the
+// single verdict could not show it).
+export function tierTestLines(r: { tiers?: TierTestResult[] } | null | undefined): TierLine[] {
+  return (r?.tiers ?? []).map((t) => {
+    const label = TIER_LABEL[t.tier] ?? t.tier;
+    const text = t.ok
+      ? `${label}: ${t.model}, ${(t.latency_ms / 1000).toFixed(1)} s.`
+      : `${label}: ${t.model} failed. ${testResultText({ ok: false, error_class: t.error_class })}`;
+    return { tier: t.tier, ok: t.ok, text };
+  });
+}
+
+// The models a save will use, per tier: a blank tier is its provider's
+// recommended model (the server's rule, ai.TierModels.ForProvider).
+export function resolvedTierModels(
+  draft: ModelFields,
+  recommended: Record<string, RecommendedModels> | undefined,
+): Record<"default" | "fast" | "strong", string> {
+  const r = recommended?.[draft.provider];
+  return {
+    default: draft.model.trim() || r?.default || "",
+    fast: draft.model_fast.trim() || r?.fast || "",
+    strong: draft.model_strong.trim() || r?.strong || "",
+  };
+}
+
+// Warnings before a save (warn, never block): each tier whose model FAILED the
+// latest test of the same provider and is still the model this save will use.
+export function saveWarnings(
+  test: { provider?: string; tiers?: TierTestResult[] } | null | undefined,
+  draft: ModelFields,
+  recommended: Record<string, RecommendedModels> | undefined,
+): string[] {
+  if (!test?.tiers?.length || (test.provider && test.provider !== draft.provider)) return [];
+  const will = resolvedTierModels(draft, recommended);
+  return test.tiers
+    .filter((t) => !t.ok && will[t.tier] === t.model)
+    .map((t) => `${TIER_LABEL[t.tier] ?? t.tier} ${t.model} failed its last test.`);
 }
 
 // The admin banner (C5, D4). Platform view first (key missing, then spent
