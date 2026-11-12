@@ -51,6 +51,7 @@ import (
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/devreach"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
@@ -467,11 +468,10 @@ func (s *server) aiSecurityFindings(claims jwtClaims) func(context.Context, ai.P
 			return nil, ai.ErrForbidden
 		}
 		tenant, cross := principalTenant(claims)
-		keys, _ := s.visibleDeviceKeys(claims)
-		addrs, _ := s.visibleDeviceAddrs(claims)
+		claim, _ := s.untaggedClaimFor(claims) // unambiguous identities only (tracker 370)
 		p := secapi.Principal{
 			Tenant: tenant, Cross: cross, Subject: claims.Sub,
-			DeviceKeys: keys, DeviceAddrs: addrs,
+			DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		}
 		f := secapi.Filters{Current: q.Current}
 		if q.Severity != "" {
@@ -2239,9 +2239,29 @@ func (h *nlqScope) visibleDevices() []plan.DeviceRef {
 	assign := h.s.geoAssignments(tenant, cross)
 	var out []plan.DeviceRef
 	for _, d := range h.s.visibleDevicesFor(h.claims) {
-		out = append(out, plan.DeviceRef{ID: d.ID, Name: d.Name, Site: sotSiteFor(d, assign)})
+		typ := d.Type
+		if typ == "" {
+			typ = inferDeviceType(d)
+		}
+		out = append(out, plan.DeviceRef{ID: d.ID, Name: d.Name, Site: sotSiteFor(d, assign), Type: typ})
 	}
 	return out
+}
+
+// DeviceReachability is plan.ReachabilityScope: the collectors' liveness
+// verdict for each of ids, read through the same scoped VictoriaMetrics entry
+// point and caller filter as the inventory page (stampDeviceReadFields). An
+// id the caller cannot see is never in its filter, so it reads "unknown".
+func (h *nlqScope) DeviceReachability(ctx context.Context, ids []string) (map[string]string, error) {
+	maxUp, minUp, ok := h.s.collectorReachability(ctx, h.s.metricsScopeFiltersFor(h.claims))
+	if !ok {
+		return nil, errReachabilityUnread
+	}
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		out[id] = devreach.Fold(maxUp, minUp, id)
+	}
+	return out, nil
 }
 
 func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.DeviceRef, error) {

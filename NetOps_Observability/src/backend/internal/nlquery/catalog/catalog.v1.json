@@ -650,7 +650,10 @@
     "flap"
    ],
    "superlatives": [
-    "flappiest"
+    "flappiest",
+    "noisiest",
+    "loudest",
+    "chattiest"
    ],
    "entity_types": [
     "interface"
@@ -1045,6 +1048,7 @@
     "bgp resets",
     "session flaps",
     "peer flaps",
+    "flapping",
     "flaps",
     "resets"
    ],

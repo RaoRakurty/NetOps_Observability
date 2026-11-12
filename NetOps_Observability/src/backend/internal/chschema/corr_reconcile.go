@@ -43,9 +43,44 @@ func CorrDriftSelect(lookbackDays int) string {
         WHERE c.created_at < l.created_at`
 }
 
-// CorrDriftRepairSQL re-projects every drifted/missing in-window object.
-func CorrDriftRepairSQL(lookbackDays int) string {
-	return CorrCurrentNarrowInsertPrefix + CorrDriftSelect(lookbackDays) + `)`
+// ── Bounded repair batches (tracker 328) ─────────────────────────────────────
+//
+// Every repair statement is capped at `limit` picked objects, oldest first.
+// The repair runs under the api's exec budget (chDDLBudget, 10 s) and reads the
+// wide hypotheses blob for every picked row: measured on the lab 2026-11-12,
+// the restamped repair's SELECT side costs ~1.2 s / 74 MiB per 17k rows, so the
+// 2026-09-19 backlog (56k rows) as ONE statement sits near the budget on a busy
+// 4-core host and, failing, would fail again every pass. A bounded batch always
+// fits; the reconciler loops batches (each re-pick excludes rows the previous
+// one repaired: they leave the drift set), so a large backlog drains in a few
+// passes instead of never.
+//
+// The count statements stay UNBOUNDED: the gauge reports the whole backlog, not
+// one batch of it.
+
+// CorrRepairBatchFloor is the smallest batch a repair statement accepts; a
+// non-positive limit is raised to it (bounded is the only shape — a typo can
+// slow the repair down, never make it unbounded).
+const CorrRepairBatchFloor = 1
+
+// corrRepairBatch appends the oldest-first LIMIT to a pick. `created` and the
+// tie-breakers are the pick's own output columns (qualified for the drift
+// pick's join). Deterministic order: a capped pass always repairs the oldest
+// drift first, and a batch re-run picks the same rows.
+func corrRepairBatch(created, tenant, id string, limit int) string {
+	if limit < CorrRepairBatchFloor {
+		limit = CorrRepairBatchFloor
+	}
+	return `
+        ORDER BY ` + created + `, ` + tenant + `, ` + id + `
+        LIMIT ` + strconv.Itoa(limit)
+}
+
+// CorrDriftRepairSQL re-projects up to `limit` drifted/missing in-window
+// objects, oldest first.
+func CorrDriftRepairSQL(lookbackDays, limit int) string {
+	return CorrCurrentNarrowInsertPrefix + CorrDriftSelect(lookbackDays) +
+		corrRepairBatch("l.created_at", "l.tenant_id", "l.correlation_id", limit) + `)`
 }
 
 // CorrDriftCountSQL measures drift without repairing (observability +
@@ -90,9 +125,11 @@ func CorrStateDriftSelect() string {
         WHERE state != 'open'`
 }
 
-// CorrStateDriftRepairSQL re-projects every state-drifted object, restamped.
-func CorrStateDriftRepairSQL() string {
-	return CorrCurrentRestampedInsertPrefix + CorrStateDriftSelect() + `)`
+// CorrStateDriftRepairSQL re-projects up to `limit` state-drifted objects,
+// restamped, oldest terminal version first.
+func CorrStateDriftRepairSQL(limit int) string {
+	return CorrCurrentRestampedInsertPrefix + CorrStateDriftSelect() +
+		corrRepairBatch("created_at", "tenant_id", "correlation_id", limit) + `)`
 }
 
 // CorrStateDriftCountSQL measures state drift without repairing.
@@ -156,9 +193,12 @@ func CorrOrphanClosePickSQL(hours int) string {
         WHERE state = 'open'`
 }
 
-// CorrOrphanCloseSQL writes the closing versions for every orphaned open object.
-func CorrOrphanCloseSQL(hours int) string {
-	return corrOrphanCloseInsertHead + CorrOrphanClosePickSQL(hours) + `)`
+// CorrOrphanCloseSQL writes closing versions for up to `limit` orphaned open
+// objects, oldest last version first. Bounded like the repairs: it copies
+// every wide history column verbatim.
+func CorrOrphanCloseSQL(hours, limit int) string {
+	return corrOrphanCloseInsertHead + CorrOrphanClosePickSQL(hours) +
+		corrRepairBatch("created_at", "tenant_id", "correlation_id", limit) + `)`
 }
 
 // CorrOrphanCountSQL measures the orphan backlog without writing (logging +
@@ -170,4 +210,6 @@ func CorrOrphanCountSQL(hours int) string {
 // corrCurrentReconcileLoop runs the drift detect/repair on a timer.
 // CORR_CURRENT_RECONCILE_INTERVAL (default 1h, 0 = disabled) /
 // CORR_CURRENT_RECONCILE_LOOKBACK_DAYS (default 7, floor 1) /
-// CORR_ORPHAN_OPEN_CLOSE_HOURS (default 24, 0 = orphan sweep disabled).
+// CORR_ORPHAN_OPEN_CLOSE_HOURS (default 24, 0 = orphan sweep disabled) /
+// CORR_CURRENT_RECONCILE_BATCH (rows per repair statement, default 5000) /
+// CORR_CURRENT_RECONCILE_MAX_BATCHES (statements per step per pass, default 20).

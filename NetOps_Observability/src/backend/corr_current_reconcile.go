@@ -36,12 +36,17 @@ package backend
 // Every pass publishes what it found and repaired (netops_corr_current_*), so
 // drift that the repair cannot clear is an alert, not a log line.
 //
+// Every write is a BOUNDED batch (CORR_CURRENT_RECONCILE_BATCH objects, at most
+// CORR_CURRENT_RECONCILE_MAX_BATCHES statements per step per pass): each repair
+// runs under the 10 s exec budget and reads the wide hypotheses blob per row,
+// so an unbounded statement over a large backlog could fail every pass and
+// leave the drift permanent by another route (tracker 328, 2026-11-12).
+//
 // Repaired rows lose only engine-derived, env-dependent decoration that
 // history does not carry (chaos_fixture): the next engine persist re-tags it.
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -135,72 +140,136 @@ func (c serverReconcileCH) count(ctx context.Context, sql, column string) (int, 
 	return int(asFloat(rows[0][column])), nil
 }
 
-func (c serverReconcileCH) exec(_ context.Context, sql string) error {
-	if msg := chExecErr(c.base, sql); msg != "" {
-		return errors.New(msg)
+// exec runs one repair statement under the exec budget (chDDLBudget) AND the
+// loop's context, so a shutdown abandons an in-flight batch instead of waiting
+// it out (§9: every IO is bounded).
+func (c serverReconcileCH) exec(ctx context.Context, sql string) error {
+	if err := chExecErrTyped(ctx, c.base, sql); err != nil {
+		return fmt.Errorf("%s: %w", chStatementHead(sql), err)
 	}
 	return nil
+}
+
+// corrReconcileConfig is one pass's tuning, resolved once from the env.
+type corrReconcileConfig struct {
+	lookbackDays int // drift scan window on history (floor 1)
+	orphanHours  int // orphan horizon (0 = sweep disabled)
+	batch        int // objects per repair statement
+	maxBatches   int // repair statements per step per pass
+}
+
+const (
+	// corrReconcileBatchDefault: ~0.4 s / ~22 MiB of the repair's wide read on
+	// the lab (2026-11-12 measurement, scaled) — far inside the 10 s exec budget.
+	corrReconcileBatchDefault = 5000
+	corrReconcileBatchCeiling = 50000
+	// corrReconcileMaxBatchesDefault: 100k objects per step per pass at the
+	// default batch, so the 2026-09-19 backlog (56k) drains in one pass.
+	corrReconcileMaxBatchesDefault = 20
+	corrReconcileMaxBatchesCeiling = 200
+)
+
+// envIntInRange reads a positive int knob; anything unparseable or below 1
+// falls back to def, anything above ceiling is clamped (a typo can slow the
+// repair down or bound it tighter, never make it unbounded).
+func envIntInRange(key string, def, ceiling int) int {
+	raw := envOr(key, "")
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return def
+	}
+	if n > ceiling {
+		return ceiling
+	}
+	return n
+}
+
+// corrReconcileConfigFromEnv resolves every reconciler knob.
+func corrReconcileConfigFromEnv() corrReconcileConfig {
+	return corrReconcileConfig{
+		lookbackDays: envIntInRange("CORR_CURRENT_RECONCILE_LOOKBACK_DAYS", 7, 3650),
+		orphanHours:  corrOrphanOpenCloseHours(),
+		batch:        envIntInRange("CORR_CURRENT_RECONCILE_BATCH", corrReconcileBatchDefault, corrReconcileBatchCeiling),
+		maxBatches:   envIntInRange("CORR_CURRENT_RECONCILE_MAX_BATCHES", corrReconcileMaxBatchesDefault, corrReconcileMaxBatchesCeiling),
+	}
+}
+
+// repairInBatches drains `found` rows with bounded statements: ceil(found/batch)
+// batches, capped at maxBatches, stopping on the first error or a cancelled
+// context. Each statement re-picks, and rows a previous batch repaired have
+// left the pick (they are no longer drifted/open), so batches make progress and
+// an extra batch is a no-op. Returns the rows claimed repaired — an estimate
+// from the count (rows that change between the count and the insert are picked
+// up or dropped by the next pass), never more than were found.
+func repairInBatches(ctx context.Context, ch corrReconcileCH, found int, cfg corrReconcileConfig, stmt func(limit int) string) (int, error) {
+	batch := max(cfg.batch, 1)
+	batches := min((found+batch-1)/batch, max(cfg.maxBatches, 1))
+	repaired := 0
+	for i := 0; i < batches; i++ {
+		if err := ctx.Err(); err != nil {
+			return repaired, err
+		}
+		if err := ch.exec(ctx, stmt(batch)); err != nil {
+			return repaired, err
+		}
+		repaired += min(batch, found-repaired)
+	}
+	return repaired, nil
 }
 
 // corrReconcilePass runs one reconcile pass. Each step is independent: a failed
 // step is counted and logged and the next step still runs (a broken drift count
 // must not also stop the state repair — that is how drift became permanent).
-func corrReconcilePass(ctx context.Context, ch corrReconcileCH, st *corrReconcileStats, lookbackDays, orphanHours int) {
+// Gauges report what each step FOUND (the whole backlog); repairs are bounded
+// batches, so a backlog larger than one pass's budget drains over passes and
+// logs its residue.
+func corrReconcilePass(ctx context.Context, ch corrReconcileCH, st *corrReconcileStats, cfg corrReconcileConfig) {
 	fail := func(step string, err error) {
+		if ctx.Err() != nil {
+			// Shutdown, not a fault: the next boot's pass resumes the drain.
+			log.Printf("corr-current-reconcile: %s abandoned (context done): %v", step, err)
+			return
+		}
 		st.failuresTotal.Add(1)
 		log.Printf("corr-current-reconcile: %s failed: %v", step, err)
+	}
+	// step counts one kind, publishes the gauge, then repairs it in batches.
+	step := func(name, column, countSQL string, gauge *atomic.Int64, done *atomic.Int64, stmt func(int) string) {
+		n, err := ch.count(ctx, countSQL, column)
+		if err != nil {
+			fail(name+" count", err)
+			return
+		}
+		gauge.Store(int64(n))
+		if n == 0 {
+			return
+		}
+		log.Printf("corr-current-reconcile: step=%s found=%d batch=%d max_batches=%d action=repair", name, n, cfg.batch, cfg.maxBatches)
+		repaired, err := repairInBatches(ctx, ch, n, cfg, stmt)
+		done.Add(int64(repaired))
+		if err != nil {
+			fail(name+" repair", err)
+		}
+		log.Printf("corr-current-reconcile: step=%s repaired=%d residual=%d", name, repaired, n-repaired)
 	}
 	// Orphaned-open sweep FIRST: the closing versions it writes are exactly
 	// what the drift repair below re-projects in the same pass.
 	st.orphaned.Store(0)
-	if orphanHours > 0 {
-		if n, err := ch.count(ctx, chschema.CorrOrphanCountSQL(orphanHours), "orphaned"); err != nil {
-			fail("orphan count", err)
-		} else {
-			st.orphaned.Store(int64(n))
-			if n > 0 {
-				log.Printf("corr-current-reconcile: orphaned_open=%d threshold_hours=%d action=close", n, orphanHours)
-				if err := ch.exec(ctx, chschema.CorrOrphanCloseSQL(orphanHours)); err != nil {
-					fail("orphan close", err)
-				} else {
-					st.orphanClosedTotal.Add(int64(n))
-					log.Printf("corr-current-reconcile: orphan_closed=%d (janitor closing versions written to history)", n)
-				}
-			}
-		}
+	if cfg.orphanHours > 0 {
+		step("orphan", "orphaned", chschema.CorrOrphanCountSQL(cfg.orphanHours), &st.orphaned, &st.orphanClosedTotal,
+			func(limit int) string { return chschema.CorrOrphanCloseSQL(cfg.orphanHours, limit) })
 	}
-	// Drift inside the lookback: a projection write was lost.
-	if n, err := ch.count(ctx, chschema.CorrDriftCountSQL(lookbackDays), "drifted"); err != nil {
-		fail("drift count", err)
-	} else {
-		st.drifted.Store(int64(n))
-		if n > 0 {
-			// Structured, observable repair (§10): the projection dual-write
-			// lost writes (see the engine's corr_current_projection_write_failures_total).
-			log.Printf("corr-current-reconcile: drifted_rows=%d lookback_days=%d action=repair", n, lookbackDays)
-			if err := ch.exec(ctx, chschema.CorrDriftRepairSQL(lookbackDays)); err != nil {
-				fail("drift repair", err)
-			} else {
-				st.repairedTotal.Add(int64(n))
-				log.Printf("corr-current-reconcile: repaired=%d (projection re-seeded from corr_objects)", n)
-			}
-		}
-	}
-	// State drift at any age (tracker 328).
-	if n, err := ch.count(ctx, chschema.CorrStateDriftCountSQL(), "state_drifted"); err != nil {
-		fail("state drift count", err)
-	} else {
-		st.stateDrifted.Store(int64(n))
-		if n > 0 {
-			log.Printf("corr-current-reconcile: state_drifted_rows=%d action=repair (open in projection, terminal in history)", n)
-			if err := ch.exec(ctx, chschema.CorrStateDriftRepairSQL()); err != nil {
-				fail("state drift repair", err)
-			} else {
-				st.repairedTotal.Add(int64(n))
-				log.Printf("corr-current-reconcile: state_repaired=%d (projection re-seeded from history, restamped)", n)
-			}
-		}
-	}
+	// Drift inside the lookback: a projection write was lost (see the engine's
+	// corr_current_projection_write_failures_total).
+	step("drift", "drifted", chschema.CorrDriftCountSQL(cfg.lookbackDays), &st.drifted, &st.repairedTotal,
+		func(limit int) string { return chschema.CorrDriftRepairSQL(cfg.lookbackDays, limit) })
+	// State drift at any age (tracker 328): open in the projection, terminal in
+	// history, however old the terminal version is.
+	step("state_drift", "state_drifted", chschema.CorrStateDriftCountSQL(), &st.stateDrifted, &st.repairedTotal,
+		chschema.CorrStateDriftRepairSQL)
 	st.lastRunUnix.Store(time.Now().Unix())
 }
 
@@ -210,13 +279,7 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 		log.Printf("corr-current-reconcile: disabled (CORR_CURRENT_RECONCILE_INTERVAL=0)")
 		return
 	}
-	lookback := 7
-	if raw := envOr("CORR_CURRENT_RECONCILE_LOOKBACK_DAYS", ""); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 1 {
-			lookback = n
-		}
-	}
-	orphanHours := corrOrphanOpenCloseHours()
+	cfg := corrReconcileConfigFromEnv()
 	base := envOr("CLICKHOUSE_URL", "")
 	if base == "" {
 		return
@@ -230,6 +293,6 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		corrReconcilePass(ctx, ch, &s.corrReconcile, lookback, orphanHours)
+		corrReconcilePass(ctx, ch, &s.corrReconcile, cfg)
 	}
 }

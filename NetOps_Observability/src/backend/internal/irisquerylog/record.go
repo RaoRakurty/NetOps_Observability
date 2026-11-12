@@ -199,8 +199,13 @@ type Reading struct {
 // MaxReadings bounds the readings kept per record.
 const MaxReadings = 16
 
+// maxRephraseRunes bounds a rephrase reading's two sides (the model's line is
+// at most 200 characters; the question it rephrased is clipped to the same).
+const maxRephraseRunes = 200
+
 // readingKinds is the closed set a stored reading may carry (lex.Kind*).
-var readingKinds = map[string]bool{lex.KindTypo: true, lex.KindSynonym: true, lex.KindSeverity: true, lex.KindImplicitN: true}
+var readingKinds = map[string]bool{lex.KindTypo: true, lex.KindSynonym: true, lex.KindSeverity: true, lex.KindImplicitN: true, lex.KindRephrase: true,
+	lex.KindAbbreviation: true, lex.KindWindow: true}
 
 // boundedReadings keeps the well-formed readings: a known kind, non-empty
 // words, each clipped, at most MaxReadings.
@@ -210,7 +215,11 @@ func boundedReadings(in []Reading) []Reading {
 		if !readingKinds[r.Kind] || strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" {
 			continue
 		}
-		out = append(out, Reading{From: clipRunes(r.From, 64), To: clipRunes(r.To, 64), Kind: r.Kind})
+		n := 64
+		if r.Kind == lex.KindRephrase {
+			n = maxRephraseRunes // a whole question and its rephrase, not one word
+		}
+		out = append(out, Reading{From: clipRunes(r.From, n), To: clipRunes(r.To, n), Kind: r.Kind})
 		if len(out) == MaxReadings {
 			break
 		}

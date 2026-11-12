@@ -24,8 +24,10 @@ import (
 //
 //  1. every query rides the caller's tenant_scope (row policy: tagged rows);
 //  2. app-layer narrowing for untagged rows — telemetry reads narrow to the
-//     principal's own devices (addrTenantClauseFor/deviceTenantCondFor, the same
-//     guards the REST surfaces use), and correlation reads are STRICT
+//     principal's own stamped rows plus untagged rows its UNAMBIGUOUS device
+//     identities claim — ones no other owner holds, tracker 370
+//     (addrTenantClauseFor/deviceTenantCondFor, the same guards the REST
+//     surfaces use), and correlation reads are STRICT
 //     (corrRowVisible: untagged correlation intel is platform-only — device
 //     names are not globally unique, so device-matching would cross-match).
 //
@@ -36,7 +38,7 @@ type aiDataSource struct {
 	srv    *server
 	ctx    context.Context
 	scope  string    // s.chTenantScope(r) — encodes tenant / __all__ for cross-tenant
-	claims jwtClaims // caller claims for OS/VM scoping helpers (visibleDevice*)
+	claims jwtClaims // caller claims for OS/VM scoping helpers (untaggedClaimFor, visibleDevice*)
 }
 
 // corrRowVisible enforces strict tenancy on correlation intel app-side, as

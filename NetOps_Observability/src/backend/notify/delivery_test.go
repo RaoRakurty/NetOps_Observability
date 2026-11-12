@@ -134,15 +134,24 @@ func TestPermanentFailureIsCountedAndLogged(t *testing.T) {
 	// own attempt increment races it on a loaded runner (it fails under -race in
 	// CI, never locally). Wait for the budget rather than sampling it once.
 	waitUntil(t, "the retry budget to be exhausted", func() bool { return c.attempts.Load() == deliveryAttempts })
-	logMu.Lock()
-	defer logMu.Unlock()
-	found := false
-	for _, l := range logged {
-		if strings.HasPrefix(l, "error: ") && strings.Contains(l, "did not go out") {
-			found = true
+	// The give-up path stamps the failure counter BEFORE it writes the error
+	// log, so on a loaded -race runner the log can land a moment after the
+	// counter: wait for it the same way, then assert (it failed in CI on
+	// 2026-11-11 with an empty log, never locally).
+	hasErrorLog := func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		for _, l := range logged {
+			if strings.HasPrefix(l, "error: ") && strings.Contains(l, "did not go out") {
+				return true
+			}
 		}
+		return false
 	}
-	if !found {
+	waitUntil(t, "the permanent-failure error log", hasErrorLog)
+	if !hasErrorLog() {
+		logMu.Lock()
+		defer logMu.Unlock()
 		t.Fatalf("a permanently failed page produced no error log: %v", logged)
 	}
 }

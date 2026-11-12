@@ -123,7 +123,11 @@ func normalizedTenants(tenants []string) []string {
 // create a device with any id, so {device=~"10.255.255.40"} alone read another
 // tenant's controller series once a tenant named a device 10.255.255.40 (F1,
 // 2026-10-24). Series with no tenant_id (SNMP, gNMI, probes) still match on
-// the empty alternative; the device filter keeps bounding them.
+// the empty alternative; the device filter keeps bounding them. Cloud-lane
+// series also arrive with tenant_id "" (or a tenant Vector guessed from the
+// resource name), which is why metricsScopeFilters binds every device filter
+// to resource_id="": the empty alternative here never admits a series whose
+// only claim to the caller is a name match (tracker 392).
 func metricsTenantScoped(filters []string, tenant string) []string {
 	clause := `,tenant_id=~"(?i)(|` + regexAlternation(normalizedTenants([]string{tenant})) + `)"`
 	out := make([]string, 0, len(filters))
@@ -192,9 +196,21 @@ func metricsScopeFilters(ids, names []string, cross bool) []string {
 		// Empty namespace: match nothing.
 		return []string{metricsNoVisibleDeviceFilter}
 	}
+	// Every filter here is a DEVICE-lane filter, so every one is bound to
+	// resource_id="": a series carrying a resource_id is a cloud-lane series,
+	// and its ownership is the cloud inventory, never a device id or name. The
+	// cloud poller labels `device` with the resource NAME and sends no tenant;
+	// Vector looks that name up in device_tenant (network devices) and stamps
+	// what it finds. So without this binding a tenant that created a device
+	// whose id was another tenant's cloud resource name read that resource's
+	// series — with tenant_id "" before the device existed, and with its OWN
+	// tenant_id after, because Vector then resolved the name to it (tracker
+	// 392). Cloud series are served by the inventory-scoped cloud endpoints
+	// (/api/cloud/metrics/series, monitors, SLOs, the Service View), which
+	// select by the caller's own resource ids.
 	var filters []string
 	if idRe := regexAlternation(ids); idRe != "" {
-		filters = append(filters, `{device=~"`+idRe+`"}`)
+		filters = append(filters, `{device=~"`+idRe+`",resource_id=""}`)
 	}
 	if nameRe := regexAlternation(names); nameRe != "" {
 		// hostname (Telegraf) and a raw gnmic `source` tag carry the device
@@ -206,8 +222,8 @@ func metricsScopeFilters(ids, names []string, cross bool) []string {
 		// constants in `source` ("derived", "sdwan-system", "mpls-l3vpn"), so a
 		// tenant that named a device after one read every tenant's series
 		// (2026-10-11). Device names are set by the device owner (sysName).
-		filters = append(filters, `{hostname=~"`+nameRe+`",device=""}`)
-		filters = append(filters, `{source=~"`+nameRe+`",device=""}`)
+		filters = append(filters, `{hostname=~"`+nameRe+`",device="",resource_id=""}`)
+		filters = append(filters, `{source=~"`+nameRe+`",device="",resource_id=""}`)
 	}
 	return filters
 }

@@ -55,6 +55,7 @@ from catalog import (
 from scoring import (
     STRUCTURE_ATTESTING_KINDS,
     STRUCTURE_ENTITY_ATTESTED,
+    STRUCTURE_FAN_IN_ATTESTED,
     _build_inapplicable_score,
     _build_ungrounded_score,
     evidence_kinds,
@@ -118,9 +119,11 @@ def ungated_rank(catalog: Catalog, evidence):
 def test_every_declared_class_is_known_to_the_evaluator():
     """A template could otherwise declare a class nothing ever attests and be
     silently, permanently suppressed — a fail-closed typo. Every value the
-    catalog can write must be attestable by one of the two mechanisms, or be
-    the deliberately-empty `device_tier`."""
-    known = set(STRUCTURE_ATTESTING_KINDS) | set(STRUCTURE_ENTITY_ATTESTED)
+    catalog can write must be attestable by one of the three mechanisms (kind,
+    entity shape, controller fan-in count), or be the deliberately-empty
+    `device_tier`."""
+    known = (set(STRUCTURE_ATTESTING_KINDS) | set(STRUCTURE_ENTITY_ATTESTED)
+             | set(STRUCTURE_FAN_IN_ATTESTED))
     declared = {c for t in CAT.templates for c in t.requires_structure}
     assert declared <= known, f"declared but unknown to scoring: {declared - known}"
     for cls, kinds in STRUCTURE_ATTESTING_KINDS.items():
@@ -185,7 +188,7 @@ def test_the_audit_is_pinned():
     that quietly loses its declaration, or a new family that declares one, has
     to come through this list — which is the whole point of auditing all 146
     rather than patching the one that was reported."""
-    assert (len(CAT.templates), len(ALL_TEMPLATES)) == (150, 104)
+    assert (len(CAT.templates), len(ALL_TEMPLATES)) == (151, 105)
     assert {t.id: tuple(t.requires_structure) for t in CAT.templates
             if t.requires_structure} == {
         "sig.ent.wan-edge.congestion": ("transit_path",),
@@ -201,6 +204,7 @@ def test_the_audit_is_pinned():
         "sig.ent.fabric.server-bonding-mode-mismatch": ("redundancy_group",),
         "sig.ent.middle-mile.interconnect-lag-member-loss": ("redundancy_group",),
         "sig.ent.fabric.overlay-underlay-mtu-mismatch": ("overlay_encap",),
+        "sig.ent.wan-edge.sdwan-controller-unreachable": ("controller_fan_in",),
     }
 
 

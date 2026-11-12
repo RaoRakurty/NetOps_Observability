@@ -57,6 +57,7 @@ func secLaneServer(t *testing.T) (*server, *seclane.Lane) {
 	deps.CHQuery = func(context.Context, string, string) ([]map[string]any, error) { return nil, nil }
 	deps.Seams = func(context.Context, string) ([]seclane.SeamRow, error) { return nil, nil }
 	deps.Spool = nil
+	deps.Episodes = seclane.NewMemEpisodes() // never the host's /data
 
 	lane, err := seclane.New(deps)
 	if err != nil {
@@ -215,6 +216,90 @@ func TestSecurityLaneRoutesAreRegisteredOnlyWhenTheLaneIsOn(t *testing.T) {
 	for _, p := range paths {
 		if _, pattern := on.Handler(httptest.NewRequest(http.MethodGet, p, nil)); pattern != p {
 			t.Fatalf("%s was NOT registered with the lane on (pattern %q)", p, pattern)
+		}
+	}
+}
+
+// TestSecurityLaneFindingEpisodesAreTenantKeyed — §3a for findings-on-change
+// (owner D2), through the REAL securityLaneDeps wiring: each tenant's episode
+// state holds only its own identities, the findings-store seed names only the
+// scanned tenant's indices, and a second pass re-sends nothing to the engine.
+func TestSecurityLaneFindingEpisodesAreTenantKeyed(t *testing.T) {
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	d := discovery.NewDiscoveryAggregator()
+	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme", Monitored: true})
+	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex", Monitored: true})
+	s := &server{roles: roles, discovery: d}
+	s.secStore = secapi.NewFileStore("")
+
+	type sent struct{ topic, key string }
+	var out []sent
+	var seedPaths []string
+	store := seclane.NewFileEpisodes(t.TempDir(), seclane.TenantSeg)
+	clock := time.Date(2026, 11, 11, 4, 0, 0, 0, time.UTC)
+
+	deps := s.securityLaneDeps()
+	deps.Now = func() time.Time { return clock }
+	deps.Tenants = func() []string { return []string{"acme", "globex"} }
+	deps.Publish = func(_ context.Context, topic string, recs []seclane.Record) (int, error) {
+		for _, r := range recs {
+			out = append(out, sent{topic, r.Key})
+		}
+		return len(recs), nil
+	}
+	deps.Search = func(_, path string, _ any) (*http.Response, error) {
+		if strings.Contains(path, "secfindings") {
+			seedPaths = append(seedPaths, path)
+		}
+		return nil, context.Canceled // the store is unreachable: the seed falls back to the scan
+	}
+	deps.CHQuery = func(context.Context, string, string) ([]map[string]any, error) { return nil, nil }
+	deps.Seams = func(context.Context, string) ([]seclane.SeamRow, error) { return nil, nil }
+	deps.Spool = nil
+	deps.Episodes = store
+
+	lane, err := seclane.New(deps)
+	if err != nil {
+		t.Fatalf("seclane.New: %v", err)
+	}
+	lane.ScanAll(context.Background())
+
+	for _, p := range seedPaths {
+		if strings.Contains(p, "netops-secfindings-*") ||
+			(strings.Contains(p, "-acme-") && strings.Contains(p, "-globex-")) {
+			t.Fatalf("TENANT LEAK: a seed read named more than one tenant's findings: %s", p)
+		}
+	}
+	if len(seedPaths) != 2 {
+		t.Fatalf("want one seed read per tenant, got %v", seedPaths)
+	}
+	for _, tenant := range []string{"acme", "globex"} {
+		st, err := store.Load(context.Background(), tenant)
+		if err != nil || !st.Seeded || len(st.Open) == 0 {
+			t.Fatalf("%s episode state: seeded=%v open=%d err=%v", tenant, st.Seeded, len(st.Open), err)
+		}
+		for nid := range st.Open {
+			if !strings.Contains(nid, "|"+tenant+"|") {
+				t.Fatalf("TENANT LEAK: %s's episode state holds %s", tenant, nid)
+			}
+		}
+	}
+
+	out = nil
+	clock = clock.Add(15 * time.Minute)
+	lane.ScanAll(context.Background())
+	if len(out) == 0 {
+		t.Fatal("the second pass stored nothing — the audit trail must still get every scan")
+	}
+	for _, r := range out {
+		if r.topic != "netops.security.audit" {
+			t.Fatalf("an unchanged second pass sent a record to %s (key %s) — the engine must not hear it again", r.topic, r.key)
+		}
+		if r.key != "acme" && r.key != "globex" {
+			t.Fatalf("record keyed %q", r.key)
 		}
 	}
 }

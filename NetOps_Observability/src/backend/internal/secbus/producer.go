@@ -124,6 +124,19 @@ func WithMetrics(m *Metrics) Option {
 	}
 }
 
+// WithTopic points the producer at a topic other than TopicSecurityEvidence. It
+// accepts only the two security topics: a producer that could be aimed at any
+// netops.* lane would be a way to write security evidence into a lane whose
+// consumers do not expect it. Anything else keeps the default.
+func WithTopic(topic string) Option {
+	return func(p *Producer) {
+		switch topic {
+		case TopicSecurityEvidence, TopicSecurityAudit:
+			p.topic = topic
+		}
+	}
+}
+
 // withClock injects sleep + jitter (used by tests for determinism).
 func withClock(sleep func(context.Context, time.Duration) error, jitter func() float64) Option {
 	return func(p *Producer) {
@@ -163,6 +176,39 @@ func NewProducer(pub Publisher, opts ...Option) (*Producer, error) {
 
 // Metrics exposes the producer's counters (for a health/metrics surface).
 func (p *Producer) Metrics() *Metrics { return p.metrics }
+
+// Topic is the topic this producer writes to.
+func (p *Producer) Topic() string { return p.topic }
+
+// PublishEvents produces already-built evidence events (FromFinding output the
+// caller has annotated, e.g. with StampEpisode, or a ClearEvent) with the same
+// bounded retry and fail-safe accounting as Publish. Each record is keyed by the
+// event's own TenantID (§3a: the tenant was stamped from the finding upstream).
+// An event with no tenant or no native_id is refused (skipped, counted) rather
+// than shipped under an empty partition key or without an identity.
+func (p *Producer) PublishEvents(ctx context.Context, evs []EvidenceEvent) (int, error) {
+	recs := make([]Record, 0, len(evs))
+	for _, ev := range evs {
+		if ev.TenantID == "" || ev.NativeID == "" {
+			p.metrics.skipped.Add(1)
+			log.Printf("secbus: skip evidence event with no tenant or identity (kind=%q)", ev.Kind)
+			continue
+		}
+		recs = append(recs, Record{Key: ev.TenantID, Value: ev})
+	}
+	if len(recs) == 0 {
+		return 0, nil
+	}
+	n, err := p.produceWithRetry(ctx, recs)
+	if err != nil {
+		p.metrics.dropped.Add(int64(len(recs)))
+		log.Printf("secbus: dropping %d security evidence record(s) for %s after %d attempt(s): %v",
+			len(recs), p.topic, p.maxTry, err)
+		return 0, err
+	}
+	p.metrics.published.Add(int64(n))
+	return n, nil
+}
 
 // Publish converts findings to evidence events and produces them onto the topic,
 // keyed by tenant so a tenant's evidence stays ordered and co-partitions with

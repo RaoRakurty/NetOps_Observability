@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-11-syslog-final-wave-confd'
+PARSER_REV = '2026-11-11-sdwan-controller-token-confd'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -1783,7 +1783,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
               'modality': 'control_plane',
               'entity': {'type': 'device', 'id': '{host}'},
               'native_id': '{host}|control_connection|{peer_type|?}|{peer|?}|{ts_ms}',
-              'tokens': [{'t': '{host}'}],
+              'tokens': [{'t': '{host}'}, {'t': '{peer}'}],
               'attrs': {'peer_type': {'var': 'peer_type'}, 'peer': {'var': 'peer'}},
               'kind': 'controller_control_connection_loss'},
      'markers': [],
@@ -1807,7 +1807,7 @@ _ROWS: tuple[dict[str, Any], ...] = (
               'modality': 'control_plane',
               'entity': {'type': 'device', 'id': '{host}'},
               'native_id': '{host}|control_connection|{peer_type|?}|{peer|?}|{ts_ms}',
-              'tokens': [{'t': '{host}'}],
+              'tokens': [{'t': '{host}'}, {'t': '{peer}'}],
               'attrs': {'peer_type': {'var': 'peer_type'}, 'peer': {'var': 'peer'}},
               'kind': 'controller_control_connection_loss_clear'},
      'markers': [],
@@ -4110,6 +4110,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '55b109a4e67d0843bb3206402d6348513356ee53a0fa958f7c1d57ce8b9dcd5b'
+BAKED_RULES_HASH = 'ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941df8206e71018d92b347ace9bb0'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

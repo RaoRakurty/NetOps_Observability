@@ -105,10 +105,6 @@ var (
 	perRe    = regexp.MustCompile(`\b(?:per|by|grouped by|group by|broken down by|break down by|for each|each)\s+(site|device|provider|actor|person|type|seam|owner|seam class|state)\b`)
 )
 
-// normalize is the shared normaliser's reading (lex.Normalize): the grammar,
-// the model compiler and the question router fold text the same way.
-func normalize(q string) string { return lex.Normalize(q).Norm }
-
 // Compile compiles one question.
 func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Result, error) {
 	if cx.Loc == nil {
@@ -117,7 +113,10 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	if cx.Now.IsZero() {
 		cx.Now = time.Now()
 	}
-	text := normalize(question)
+	// The shared normaliser (lex.Normalize): the grammar, the model compiler
+	// and the question router fold text the same way.
+	nt := lex.Normalize(question)
+	text := nt.Norm
 	if text == "" {
 		return Result{Unparsed: true}, nil
 	}
@@ -128,11 +127,15 @@ func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Res
 	if err != nil {
 		return Result{}, err
 	}
+	// Shorthand the normaliser expanded ("rn" → "right now") is disclosed
+	// like a repair (D2).
+	rep.Readings = append(append([]lex.Reading(nil), nt.Readings...), rep.Readings...)
 	// A misspelt action or instruction is still one ("restrat edge-1").
 	if rep.Text != text && declined(rep.Text) {
 		return Result{Decline: DeclineNotAQuery}, nil
 	}
-	text = rep.Text
+	// "what's up with X" is the idiom for "how is X", never the state "up".
+	text = upWithRe.ReplaceAllString(rep.Text, "status of")
 	res, err := c.compileText(ctx, question, text, cx)
 	if err != nil {
 		return res, err
@@ -226,6 +229,13 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 	if hasTime {
 		st.time = tp.tr
 		st.e.phrase(tp.span)
+	} else if m := recencyRe.FindString(text); m != "" {
+		// "any bgp peers flapping lately": a vague recency is a real window,
+		// not the validator's short default — the last day, said with the
+		// answer.
+		st.time = ast.TimeRange{Kind: ast.TimeRelative, Last: RecencyWindow}
+		st.e.phrase(m)
+		st.readings = append(st.readings, lex.Reading{From: m, To: "last 24 hours", Kind: lex.KindWindow})
 	}
 	// Understood but unanswerable: log and flow questions compile to the
 	// reserved query types so the validator refuses them precisely.
@@ -261,6 +271,13 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 			st.compareFromScratch(r.AST)
 		}
 		return st.done(r), err
+	}
+	// "which devices are down", "is cedge-81 up": device liveness is the
+	// inventory's answer, tried before the incident family claims "down".
+	if isDeviceStateQuestion(text) && !severityRe.MatchString(text) {
+		if r, ok, err := st.inventory(); ok || err != nil {
+			return st.done(r), err
+		}
 	}
 	if isIncidentQuestion(text) || severityRe.MatchString(text) {
 		r, err := st.incidents()
@@ -311,6 +328,31 @@ func (s *state) done(r Result) Result {
 	return r
 }
 
+// deviceWordRe names devices as the thing ranked; rankWordRe is a ranking
+// with no number ("highest", "most").
+var (
+	// Generic nouns only: a role word ("routers") would need a role filter a
+	// metric query does not carry, so it is left not understood.
+	deviceWordRe = regexp.MustCompile(`\b(?:devices?|box(?:es)?|nodes)\b`)
+	rankWordRe   = regexp.MustCompile(`\b(?:top|busiest|highest|worst|most|lowest|best)\b`)
+)
+
+// standingStateRe asks how a state metric stands ("bgp status", "is bgp ok",
+// "how is bgp doing", "check bgp"): read as the state itself.
+var standingStateRe = regexp.MustCompile(`\b(?:status|state|ok|okay|fine|healthy|health|doing|check|looking)\b`)
+
+// upWithRe is the "what's up with" idiom (the normaliser has already dropped
+// the "'s").
+var upWithRe = regexp.MustCompile(`\b(?:what|whats|what is)\s+up\s+with\b`)
+
+// recencyRe are the vague recency words read as RecencyWindow when the
+// question names no window of its own. "recent" is not one: "the 5 most
+// recent changes" counts items (listLimit), it does not set a window.
+var recencyRe = regexp.MustCompile(`\b(?:lately|recently|these days)\b`)
+
+// RecencyWindow is the window a vague recency word is read as.
+const RecencyWindow = "24h"
+
 var changeWords = regexp.MustCompile(`\b(?:changed?|changes|changing|modified|modifications?|deployed|deploys?|deployments?|touched|edited|pushed|who touched|config backups?|what else did|rolled out)\b`)
 
 func isChangeQuestion(t string) bool {
@@ -330,11 +372,18 @@ var (
 // down" — questions with no metric word — onto the state metric of the
 // named target.
 func (c Compiler) stateMetric(text string) ([]catalog.AliasHit, string) {
-	if !regexp.MustCompile(`\b(?:down|up|flapping)\b`).MatchString(text) {
-		return nil, ""
-	}
 	pick := func(name, target string) ([]catalog.AliasHit, string) {
 		return []catalog.AliasHit{{Kind: "metric", Name: name, For: target}}, ""
+	}
+	// "bgp status on edge-1", "is bgp ok", "show bgp peers", "how is bgp
+	// doing": a BGP question with no measure asks for the sessions' state.
+	if regexp.MustCompile(`\bbgp\b`).MatchString(text) &&
+		(standingStateRe.MatchString(text) || listLeadRe.MatchString(text) || stateLeadRe.MatchString(text) ||
+			regexp.MustCompile(`\b(?:peers?|sessions?|neighbou?rs?)\b`).MatchString(text)) {
+		return pick("bgp_session_state", "bgp_peer")
+	}
+	if !regexp.MustCompile(`\b(?:down|up|flapping|established)\b`).MatchString(text) {
+		return nil, ""
 	}
 	switch {
 	case regexp.MustCompile(`\b(?:bgp|peers?|sessions?|neighbou?rs?)\b`).MatchString(text):
@@ -593,7 +642,7 @@ var targetWords = []struct {
 	{regexp.MustCompile(`\b(?:interfaces?|ports?|links?|intf)\b`), "interface"},
 	{regexp.MustCompile(`\b(?:circuits?|underlay|wan|sdwan underlay|direct connect|mpls|links?)\b`), "circuit"},
 	{regexp.MustCompile(`\b(?:bgp|peers?|neighbou?rs?|sessions?)\b`), "bgp_peer"},
-	{regexp.MustCompile(`\b(?:devices?|routers?|switch(?:es)?|firewalls?|boxes)\b`), "device"},
+	{regexp.MustCompile(`\b(?:devices?|routers?|switch(?:es)?|firewalls?|box(?:es)?)\b`), "device"},
 }
 
 func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
@@ -643,16 +692,46 @@ func (s *state) metric(hits []catalog.AliasHit) (Result, error) {
 	}
 	// No target word: the question is ABOUT the entity it names ("packet loss
 	// on dfw-edge-1" is about a device) — the validator decides if it applies.
+	// A device CONTAINS its interfaces and BGP sessions: "crc errors on
+	// edge-1" asks about edge-1's interfaces, so a device that can narrow the
+	// metric's own target keeps that target.
 	if !anyTargetWord(s.text) && len(refs) > 0 && refs[0].EntityType != "site" && refs[0].EntityType != "provider" {
-		if _, ok := s.c.Cat.Entity(refs[0].EntityType); ok && !contains(m.EntityTypes, refs[0].EntityType) {
+		contained := refs[0].EntityType == "device" && (target == "interface" || target == "bgp_peer") && s.c.Cat.Reachable(target, "device")
+		if _, ok := s.c.Cat.Entity(refs[0].EntityType); ok && !contains(m.EntityTypes, refs[0].EntityType) && !contained {
 			target = refs[0].EntityType
 		}
+	}
+	// Every alias of the chosen metric the question used names it ("how many
+	// prefixes is edge-1 receiving": both words are the metric).
+	for _, a := range m.Aliases {
+		if containsPhrase(s.text, a) {
+			s.e.phrase(a)
+		}
+	}
+	if len(m.ValueEnum) > 0 {
+		s.e.re(standingStateRe, s.text) // "bgp status", "is bgp ok": the state itself
 	}
 	s.explainTargetWords(target, refs)
 	q := &ast.AST{V: 1, Type: ast.MetricSeries, Target: target, Metric: m.Name, Agg: s.aggFor(m), Refs: astRefs(refs), Time: s.time}
 	if g := perRe.FindStringSubmatch(s.text); g != nil && (g[1] == "site" || g[1] == "device" || g[1] == "provider") {
 		q.GroupBy = []string{g[1]}
 		s.e.phrase(g[0])
+	}
+	// "top 5 devices by interface errors", "noisiest device": a ranking that
+	// names DEVICES over a metric of their interfaces or sessions ranks the
+	// devices — the metric grouped by device.
+	if len(q.GroupBy) == 0 && target != "device" && !hasRefType(refs, "device", "interface", "bgp_peer") && s.c.Cat.Reachable(target, "device") &&
+		deviceWordRe.MatchString(s.text) && (s.sup != "" || topNRe.MatchString(s.text) || rankWordRe.MatchString(s.text)) {
+		q.GroupBy = []string{"device"}
+		s.e.re(deviceWordRe, s.text)
+	}
+	if s.sup != "" {
+		// A superlative is a reading of the metric it ranks by: say which.
+		label := m.Name
+		if len(m.Aliases) > 0 {
+			label = m.Aliases[0]
+		}
+		s.readings = append(s.readings, lex.Reading{From: s.sup, To: label, Kind: lex.KindSynonym})
 	}
 	switch {
 	case s.sup != "":
@@ -767,8 +846,11 @@ func (s *state) stateQuestion(m *catalog.Metric, q *ast.AST) bool {
 		q.Time = ast.TimeRange{Kind: ast.TimeRelative, Last: "5m"}
 	}
 	switch {
-	case m.Name == "bgp_session_state" && strings.Contains(s.text, "down"):
+	case m.Name == "bgp_session_state" && (strings.Contains(s.text, "down") || strings.Contains(s.text, "not established")):
 		q.Predicate = &ast.Predicate{Op: "ne", Value: m.ValueEnum["established"]}
+	case m.Name == "bgp_session_state":
+		// "up" / "established": a BGP session is up when it is established.
+		q.Predicate = &ast.Predicate{Op: "eq", Value: m.ValueEnum["established"]}
 	case strings.Contains(s.text, "down"):
 		q.Predicate = &ast.Predicate{Op: "eq", Value: m.ValueEnum["down"]}
 	default:

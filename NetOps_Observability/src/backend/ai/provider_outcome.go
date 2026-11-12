@@ -266,6 +266,81 @@ type ModelNote struct {
 	mu       sync.Mutex
 	provider string
 	model    string
+	// struck holds, per provider, the failure that makes another call in the
+	// SAME request pointless (ModelStruck).
+	struck map[string]error
+}
+
+// ── one strike per request (§9: never make the operator wait twice) ─────────
+//
+// Found live 2026-11-11: with the model provider timing out, "which devices
+// are down right now?" took 28 s — the route tie-break (5 s), the rephrase
+// (8 s) and the strong compile (8 s, whose failure finally opened the
+// breaker) each waited out their own budget in turn, one after the other,
+// before the deterministic answer was shown. The breaker is per (tenant,
+// provider) across requests and needs three failures; within ONE request the
+// first timeout is already the answer. After a provider fails a call in a way
+// that will not change within seconds, every later model call of the same
+// request skips that provider at once, and the request ends on the
+// deterministic path, bounded by ONE model budget instead of the sum of them.
+
+// strikes reports whether an outcome class makes a provider not worth a second
+// call in the same request: it is slow or down (timeout, network, 5xx), out of
+// quota, or refusing the key or model. A bad request shape or an empty answer
+// is about that call's prompt, not the provider, so it does not strike.
+func strikes(outcome string) bool {
+	switch outcome {
+	case ProvTimeout, ProvNetwork, ProvServer, ProvRateLimited, ProvAuth, ProvModelNotFound:
+		return true
+	}
+	return false
+}
+
+// ModelSkippedError is a model call that was not made because the same
+// provider already failed in this request. It unwraps to that first failure,
+// so the operator's footer and every classifier read the real reason
+// ("timed out"), never a generic one.
+type ModelSkippedError struct {
+	Provider string
+	First    error
+}
+
+func (e *ModelSkippedError) Error() string {
+	return e.Provider + ": skipped — it already failed in this request: " + e.First.Error()
+}
+
+func (e *ModelSkippedError) Unwrap() error { return e.First }
+
+// NoteModelFailed records a failed call of provider on the request's note when
+// its class strikes (a no-op without a note or for any other class).
+func NoteModelFailed(ctx context.Context, provider string, err error) {
+	n, _ := ctx.Value(modelNoteKey{}).(*ModelNote)
+	if n == nil || err == nil || !strikes(ClassifyProviderError(err)) {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.struck == nil {
+		n.struck = map[string]error{}
+	}
+	if _, ok := n.struck[provider]; !ok {
+		n.struck[provider] = err
+	}
+}
+
+// ModelStruck returns a *ModelSkippedError when provider already failed in this
+// request (nil otherwise, and always nil without a note).
+func ModelStruck(ctx context.Context, provider string) error {
+	n, _ := ctx.Value(modelNoteKey{}).(*ModelNote)
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if first, ok := n.struck[provider]; ok {
+		return &ModelSkippedError{Provider: provider, First: first}
+	}
+	return nil
 }
 
 type modelNoteKey struct{}

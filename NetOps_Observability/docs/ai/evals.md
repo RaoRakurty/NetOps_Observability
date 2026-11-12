@@ -114,6 +114,7 @@ cases by hand:
 | NL query (`internal/nlquery/testdata/golden`) | `nlquery` | 215 | 32 |
 | Golden Q&A (`golden-qa.json`) | `qa` | 152 | 29 |
 | Golden incidents (`ai/testdata/golden_incidents`) | `incidents` | 23 | 3 |
+| Phrasing (`ai/testdata/phrasing_golden.json`) | `phrasing` | 165 | 26 |
 
 **Reporting.** `TestCompilerAgainstTheGoldenCorpus`, `TestModelPathAgainstTheGoldenCorpus`,
 `TestGoldenDocsRetrieval` and `TestGoldenIncidentCorpus` log each split, and the
@@ -160,6 +161,99 @@ ratchet floors are still judged on all cases together. Measured 2026-11-09:
 
 Any future calibration, such as the `incidentfp` weights listed as not calibrated in
 `docs/audit/INVARIANTS.md`, must use the dev split only.
+
+## Phrasing eval (deterministic routing)
+
+Owner question, 2026-11-11: "can it understand any natural way of asking?". On the lab,
+with the model provider timing out, "which devices are down right now?" became a 28 s
+troubleshooting walk, "show me the noisiest device today" got "I didn't quite catch
+that", and "any bgp peers flapping lately" searched one device's syslog.
+
+`ai/testdata/phrasing_golden.json` holds 165 realistic NOC utterances: device state,
+incidents, health, BGP/OSPF/interfaces, top-N and "noisiest", flows, changes, RCA,
+history, product help and troubleshooting, in casual, slang, typo and shorthand forms
+("rn", "pls", "w/", "whch", "anything on fire"). Each is labelled with the route it should
+take and, where it matters, slots (metric, device, state, every-device scope, a minimum
+window, limit). `TestIrisPhrasingEval` (root package) asks each one through the real
+router with no model: the classic and skill arms exactly as `/api/ai/ask` builds them, and
+the data arm with its real grammar, resolver, admission and validator in tenant A's scope.
+Only the final executor is a recorder, so nothing reads a backend. It runs in about two
+seconds.
+
+Split: `evalsplit` corpus `phrasing`. The six lab utterances are `source: lab`, always dev
+and always gated (a lab regression fails the test outright). Synthetic cases are held out
+by hash: 26 of 159. Held-out misses are printed only with `IRIS_PHRASING_SHOW_HELDOUT=1`.
+`TestPhrasingHeldOutCasesAreAbsentFromSources` (`ai/`) scans the router, the grammar and
+normaliser (`internal/nlquery`) and the root `ai_*.go`. Three held-out utterances were
+already canonical examples in router comments before the set existed. They are recorded
+in `phrasingKnownContamination`, not hidden.
+
+Measured 2026-11-12 (floors ratchet: `minPhrasingDev` 0.98, `minPhrasingHeldOut` 0.84):
+
+| Label | Dev before | Dev after | Held-out before | Held-out after |
+|---|---|---|---|---|
+| device_state | 2/23 | 23/23 | 0/2 | 2/2 |
+| bgp | 5/17 | 17/17 | 0/1 | 1/1 |
+| top_n | 6/11 | 11/11 | 1/5 | 3/5 |
+| health | 7/12 | 12/12 | 3/4 | 3/4 |
+| incidents | 17/19 | 19/19 | 3/3 | 3/3 |
+| interfaces | 9/11 | 11/11 | 0/1 | 1/1 |
+| device_metric | 5/7 | 6/7 | — | — |
+| flows | 6/7 | 7/7 | 1/1 | 1/1 |
+| rca | 6/7 | 7/7 | 0/1 | 0/1 |
+| troubleshoot | 4/5 | 4/5 | 4/4 | 4/4 |
+| changes, history, shift, product_help | 20/20 | 20/20 | 4/4 | 4/4 |
+| **all** | **87/139 (0.63)** | **137/139 (0.99)** | **16/26 (0.62)** | **22/26 (0.85)** |
+
+What changed, each a general rule with a positive and a negative unit test:
+
+- **Shorthand** (`lex`): "rn"/"atm" → right now, "nbr(s)", "iface(s)", "cfg", "yday"; "pls",
+  "w/", "r", "u" as framing; "aren't"/"isn't" → "are not"/"is not". The router and the
+  grammar read the same table. A meaningful expansion is disclosed ("I read "rn" as "right
+  now".").
+- **Device liveness** (grammar + planner): "which devices are down / offline / unreachable",
+  "any boxes not responding", "is cedge-81 up / ok / reachable", "status of edge-a", "how
+  many switches are down" compile to a device list or count with a `reachability` filter
+  (and a `type` filter for router, switch or firewall). The planner reads the collectors'
+  verdict through the optional `plan.ReachabilityScope`, implemented in the root with the
+  caller's metric scope filter. A named device is listed with its verdict and is never
+  filtered out of its own answer. An unread verdict is "unknown", never "down", and the
+  answer says so. The same read now keeps a zero: before, a device whose every poll failed
+  read "unknown" and one with a failing collector read "up", on the inventory page too.
+- **BGP**: "bgp status / is bgp ok / show bgp peers / check bgp on X" → session state;
+  "flapping" next to a BGP word → BGP flaps; "aren't established" → not established.
+- **Recency**: "lately", "recently", "these days" with no window → the last 24 hours,
+  disclosed. "Most recent N" still counts items.
+- **Containment and ranking**: "crc errors on edge-1" is that device's interfaces. A
+  ranking that names devices over an interface metric groups by device. "noisiest",
+  "loudest" and "chattiest" rank devices by interface flaps, and every superlative now
+  discloses the metric it was read as.
+- **Router**: "anything on fire", "anything going wrong", "what's up with the network",
+  "all good / everything green", a lone "status", "why … the top problem", and "what's
+  eating the wan" each land on their intent. "What do I check" is a diagnostic cue, so the
+  data arm leaves it to the methods.
+
+Effect on the other corpora: compiler questions 126 → 127 of 171, paraphrases 237 → 243 of
+512, answered precision 0.890 → 0.892; held-out compiler numbers unchanged. The model path's
+key-path reach rose 0.830 → 0.832. The grammar took 7 more answerable phrasings, 6 of which
+the model oracle had accepted, so `minOracleAcceptance` moved 0.58 → 0.57 under the same
+rule as 2026-11-10.
+
+**Slow model, one wait (§9).** The lab's 28 s was three model calls waiting out their own
+budgets one after another: the route tie-break (5 s), the rephrase (8 s), then the strong
+compile or the narration. The breaker needs three failures across requests. Now the first
+call in a request that times out, or fails as down, rate-limited or refusing the key,
+strikes that provider for the rest of that request (`ai.NoteModelFailed` /
+`ai.ModelStruck`). A later stage skips it at once with the first failure's class, so the
+footer still reads "timed out". A request waits for at most one model budget.
+`iris_model_strike_test.go` pins this end to end: a failing provider is called once per
+ask, and twice when the strike is disabled.
+
+**Still failing:** "show me latency on cedge-81" (latency belongs to circuits and probes;
+a device does not narrow it yet), "why cant cedge-82 reach the hub" (no method lists
+"can't reach"), and four held-out cases. "Noisiest" is read as interface flaps, which is
+disclosed. A true event-volume ranking needs a syslog count by device, which the NL engine
+does not have.
 
 ## Replay (N-H2, offline leg)
 

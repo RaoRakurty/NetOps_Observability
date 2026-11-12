@@ -149,7 +149,10 @@ func TestCommunityMaskDoesNotChangeTheTenantScopedQuery(t *testing.T) {
 			withCommunities(t, s, labCommunityFixture)
 		}
 		w := httptest.NewRecorder()
-		s.handleLogsSearch(w, req(http.MethodGet, "/api/logs/search?signal=syslog&as_tenant=globex", "", acme()))
+		// A fixed window: the default "last 15 minutes" reads the wall clock, so two
+		// runs that straddle a second boundary sent different ranges and failed
+		// the byte-for-byte comparison below (seen in CI on train 7, 2026-11-12).
+		s.handleLogsSearch(w, req(http.MethodGet, "/api/logs/search?signal=syslog&as_tenant=globex&from=2026-11-11T00:00:00Z&to=2026-11-11T00:15:00Z", "", acme()))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d", w.Code)
 		}

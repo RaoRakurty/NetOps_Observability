@@ -75,6 +75,15 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	skipped := 0
 	ctx = l.srv.egressCtx(ctx, l.claims)
 	for _, cand := range cands {
+		// One strike per request (ai.ModelStruck): a provider that already
+		// timed out or failed in THIS request is not waited on again.
+		if serr := ai.ModelStruck(ctx, cand.name); serr != nil {
+			lastErr = serr
+			logInfo("ai.provider", "model call skipped: the provider already failed in this request",
+				map[string]any{"tenant": tenant, "provider": cand.name, "tier": string(tier), "stage": ai.StageOf(ctx),
+					"error_class": ai.ClassifyProviderError(serr)})
+			continue
+		}
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
 			l.charge(c, chars)
@@ -88,6 +97,7 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 		if errors.Is(err, ai.ErrProviderBreakerOpen) {
 			skipped++
 		}
+		ai.NoteModelFailed(ctx, cand.name, err)
 		lastErr = err
 		// Raw provider error stays server-side (SR-022); fall through to the next.
 	}
@@ -141,7 +151,9 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 		return ai.Completion{}, ai.ErrProviderBreakerOpen
 	}
 	start := time.Now()
-	c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, msgs)
+	// A fast-tier call asks for the least hidden reasoning the model offers
+	// (ai/thinking.go); other tiers keep the provider default.
+	c, err := ai.CallProviderUsage(ai.WithTierThinking(ctx, tier), cand.name, cand.key, cand.model, system, msgs)
 	took := time.Since(start)
 	outcome := ai.ClassifyProviderError(err)
 	// A deadline that expired because the CALLER'S context ended (client gone)
@@ -153,6 +165,11 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 	switch {
 	case err == nil:
 		s.aiBreaker.Record(tenant, cand.name, false)
+		// Every answered call is measured too: model, stage, latency and the
+		// provider's own tokens, hidden reasoning included (aiprovider/usage.go).
+		s.aiProvCalls.RecordSuccess(aiprovider.Call{Tenant: tenant, Provider: cand.name, Model: cand.model, Tier: tierLabel,
+			Stage: ai.StageOf(ctx), KeySource: cand.source, Latency: took, InputTokens: c.Usage.InputTokens,
+			OutputTokens: c.Usage.OutputTokens, ThinkingTokens: c.Usage.ThinkingTokens, UsageReported: c.Usage.Reported})
 	case ai.CountsAgainstProvider(outcome):
 		s.aiBreaker.Record(tenant, cand.name, true)
 	default:

@@ -129,10 +129,19 @@ type ProviderScore struct {
 // TokenUsage is a provider's own accounting for one completion. Reported is the
 // load-bearing field: false means this platform does not know what that call
 // cost, and saying so is the honest answer.
+//
+// OutputTokens is every BILLED output token, the model's hidden reasoning
+// included (that is how all three providers price it). ThinkingTokens is the
+// reasoning share of OutputTokens, when the provider reports it: Gemini
+// usageMetadata.thoughtsTokenCount (reported BESIDE candidatesTokenCount, so
+// the transport adds it in), Anthropic usage.output_tokens_details.
+// thinking_tokens and OpenAI usage.completion_tokens_details.reasoning_tokens
+// (both already inside the output count).
 type TokenUsage struct {
-	InputTokens  int64
-	OutputTokens int64
-	Reported     bool
+	InputTokens    int64
+	OutputTokens   int64
+	ThinkingTokens int64
+	Reported       bool
 }
 
 // score returns the configured sink, or nil. Kept as a helper so every call

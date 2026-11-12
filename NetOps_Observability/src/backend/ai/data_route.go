@@ -84,7 +84,7 @@ type DataOpts struct {
 type NLQueryFunc func(ctx context.Context, p Principal, question string, opts DataOpts) (DataAnswer, error)
 
 // diagnosticCue marks a question that asks for a diagnosis, not a listing.
-var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|fix|explain)\b`)
+var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|fix|explain)\b|\bwhat (?:do|should) (?:i|we) (?:check|look at|do)\b`)
 
 // listingCue is a symptom phrasing that is a listing when it names a thing:
 // "what's wrong with edge-1" is that device's incidents. The data arm takes

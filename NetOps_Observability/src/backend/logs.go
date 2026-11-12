@@ -148,9 +148,10 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 		return "", nil, nil, false, true
 	}
 	tenant, cross := principalTenant(claims)
-	keys, _ := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
-	if f := oslog.TenantFilter(tenant, cross, keys, addrs); f != nil {
+	// Untagged documents are claimed only through identities no other owner
+	// holds (tracker 370).
+	claim, _ := s.untaggedClaimFor(claims)
+	if f := oslog.TenantFilter(tenant, cross, claim.Keys, claim.Addrs); f != nil {
 		filters = append(filters, f)
 	}
 	// App logs are the platform's OWN container/API logs — platform owner only

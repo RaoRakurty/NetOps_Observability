@@ -20,9 +20,10 @@ func serverWithDevices() *server {
 	return &server{discovery: d}
 }
 
-func TestVisibleDeviceAddrsTenantIsolation(t *testing.T) {
+func TestUntaggedClaimAddrsTenantIsolation(t *testing.T) {
 	s := serverWithDevices()
-	addrs, cross := s.visibleDeviceAddrs(jwtClaims{Role: RoleOperator, Tenant: "acme"})
+	claim, cross := s.untaggedClaimFor(jwtClaims{Role: RoleOperator, Tenant: "acme"})
+	addrs := claim.Addrs
 	if cross {
 		t.Fatal("scoped acme operator must not be cross-tenant")
 	}
@@ -41,17 +42,19 @@ func TestVisibleDeviceAddrsTenantIsolation(t *testing.T) {
 	}
 }
 
-func TestVisibleDeviceAddrsCrossTenant(t *testing.T) {
+func TestUntaggedClaimAddrsCrossTenant(t *testing.T) {
 	s := serverWithDevices()
-	addrs, cross := s.visibleDeviceAddrs(jwtClaims{Role: RoleSuperAdmin})
+	claim, cross := s.untaggedClaimFor(jwtClaims{Role: RoleSuperAdmin})
+	addrs := claim.Addrs
 	if !cross || addrs != nil {
 		t.Fatalf("super-admin should be cross-tenant (nil addrs), got cross=%v addrs=%v", cross, addrs)
 	}
 }
 
-func TestVisibleDeviceKeysTenantIsolation(t *testing.T) {
+func TestUntaggedClaimKeysTenantIsolation(t *testing.T) {
 	s := serverWithDevices()
-	keys, cross := s.visibleDeviceKeys(jwtClaims{Role: RoleReadOnly, Tenant: "globex"})
+	claim, cross := s.untaggedClaimFor(jwtClaims{Role: RoleReadOnly, Tenant: "globex"})
+	keys := claim.Keys
 	if cross {
 		t.Fatal("scoped globex must not be cross-tenant")
 	}

@@ -311,6 +311,33 @@ DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
         "target_resolution": "if_errors/if_discards anomaly producer (#73; "
                              "NORMALIZATION_PENDING entries in coverage.py)",
     },
+    "sig.ent.wan-edge.sdwan-control-connection-loss": {
+        "reason": "matchable since 2026-11-11 (its mandatory kind used to be the "
+                  "producer-less sdwan_control_down). One edge losing its control "
+                  "connections is ONE transition: the edge's own syslog/trap "
+                  "(control_plane at runtime) and the controller's relay of it are "
+                  "the same box, and this audit maps the kind to management_plane "
+                  "only (one class per kind), so no independent second plane exists",
+        "owner": "correlix",
+        "date_added": "2026-11-11",
+        "target_resolution": "an independent witness of the edge's transport "
+                             "(a platform probe of the edge, or the underlay "
+                             "interface episode) as an optional clause",
+    },
+    "sig.ent.wan-edge.sdwan-controller-unreachable": {
+        "reason": "capped by design (allow_root_cause_confirmed=false): the "
+                  "edges agreeing they lost the controller says the sessions "
+                  "died, not that the controller itself failed rather than a "
+                  "shared path to it — 'possibly because of this controller'. "
+                  "No producer observes the controller itself from an "
+                  "independent plane, and no contrast (the edges' surviving "
+                  "controller sessions) reaches the bus",
+        "owner": "correlix",
+        "date_added": "2026-11-11",
+        "target_resolution": "NMS-first T2 (per-edge witnesses relayed by the "
+                             "controller) plus a direct reachability probe of "
+                             "the controller",
+    },
 }
 
 

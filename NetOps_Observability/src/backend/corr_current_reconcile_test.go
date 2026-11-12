@@ -19,8 +19,8 @@ import (
 func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 	for name, sql := range map[string]string{
 		"backfill":    chschema.CorrCurrentBackfillSQL(),
-		"drift":       chschema.CorrDriftRepairSQL(7),
-		"state drift": chschema.CorrStateDriftRepairSQL(),
+		"drift":       chschema.CorrDriftRepairSQL(7, 5000),
+		"state drift": chschema.CorrStateDriftRepairSQL(5000),
 	} {
 		// Exact-row keying: engine restarts reset version counters, so
 		// (tenant, id, version) alone can match two history rows (tracker 328).
@@ -123,7 +123,7 @@ func TestOrphanClosePickIsNarrowAndBounded(t *testing.T) {
 }
 
 func TestOrphanCloseWritesAuditableHistoryVersion(t *testing.T) {
-	sql := chschema.CorrOrphanCloseSQL(24)
+	sql := chschema.CorrOrphanCloseSQL(24, 5000)
 	for _, want := range []string{
 		"INSERT INTO netops.corr_objects",
 		"version + 1, 'closed'",
@@ -206,11 +206,11 @@ func TestCorrStateDriftRepairIsStateKeyedUnboundedAndRestamped(t *testing.T) {
 			t.Errorf("state drift pick folds wide column %q (#100)", wide)
 		}
 	}
-	rep := chschema.CorrStateDriftRepairSQL()
+	rep := chschema.CorrStateDriftRepairSQL(5000)
 	if !strings.HasPrefix(rep, chschema.CorrCurrentRestampedInsertPrefix) || !strings.Contains(rep, "now64(3),") {
 		t.Error("state repair must restamp created_at, or a newer stale row keeps winning the fold")
 	}
-	if strings.Contains(chschema.CorrDriftRepairSQL(7), "now64(3),") || strings.Contains(chschema.CorrCurrentBackfillSQL(), "now64(3),") {
+	if strings.Contains(chschema.CorrDriftRepairSQL(7, 5000), "now64(3),") || strings.Contains(chschema.CorrCurrentBackfillSQL(), "now64(3),") {
 		t.Error("drift repair and backfill must keep history's own created_at")
 	}
 	if !strings.Contains(chschema.CorrStateDriftCountSQL(), "AS state_drifted") {
@@ -241,8 +241,8 @@ func (f *fakeReconcileCH) exec(_ context.Context, sql string) error {
 func TestCorrReconcilePassRepairsEveryKindAndCounts(t *testing.T) {
 	ch := &fakeReconcileCH{counts: map[string]int{"orphaned": 2, "drifted": 3, "state_drifted": 5}}
 	var st corrReconcileStats
-	corrReconcilePass(context.Background(), ch, &st, 7, 24)
-	want := []string{chschema.CorrOrphanCloseSQL(24), chschema.CorrDriftRepairSQL(7), chschema.CorrStateDriftRepairSQL()}
+	corrReconcilePass(context.Background(), ch, &st, testReconcileCfg(24))
+	want := []string{chschema.CorrOrphanCloseSQL(24, 5000), chschema.CorrDriftRepairSQL(7, 5000), chschema.CorrStateDriftRepairSQL(5000)}
 	if len(ch.execs) != len(want) {
 		t.Fatalf("execs = %d, want %d (orphan close, drift repair, state repair in that order)", len(ch.execs), len(want))
 	}
@@ -271,8 +271,8 @@ func TestCorrReconcilePassStepsAreIndependent(t *testing.T) {
 		countErr: map[string]error{"orphaned": errors.New("boom"), "drifted": errors.New("boom")},
 	}
 	var st corrReconcileStats
-	corrReconcilePass(context.Background(), ch, &st, 7, 24)
-	if len(ch.execs) != 1 || ch.execs[0] != chschema.CorrStateDriftRepairSQL() {
+	corrReconcilePass(context.Background(), ch, &st, testReconcileCfg(24))
+	if len(ch.execs) != 1 || ch.execs[0] != chschema.CorrStateDriftRepairSQL(5000) {
 		t.Fatalf("state repair must still run after earlier steps fail; execs=%d", len(ch.execs))
 	}
 	if st.failuresTotal.Load() != 2 || st.repairedTotal.Load() != 4 {
@@ -283,7 +283,7 @@ func TestCorrReconcilePassStepsAreIndependent(t *testing.T) {
 func TestCorrReconcilePassFailedRepairIsCountedNotClaimed(t *testing.T) {
 	ch := &fakeReconcileCH{counts: map[string]int{"drifted": 3, "state_drifted": 1}, execErr: errors.New("ch down")}
 	var st corrReconcileStats
-	corrReconcilePass(context.Background(), ch, &st, 7, 0) // orphan sweep disabled
+	corrReconcilePass(context.Background(), ch, &st, testReconcileCfg(0)) // orphan sweep disabled
 	if len(ch.execs) != 2 {
 		t.Fatalf("execs = %d, want 2 (orphan sweep disabled)", len(ch.execs))
 	}

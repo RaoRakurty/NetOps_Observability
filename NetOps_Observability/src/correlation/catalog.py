@@ -164,16 +164,30 @@ def _clause_kinds(clause: Clause) -> frozenset[str]:
     return value
 
 
+# The structural classes a template may require (`Template.requires_structure`)
+# or a discriminator may condition on (`Discriminator.attested`). Documented in
+# full at the "structural grounding vocabulary" block below; declared here
+# because Discriminator, which precedes that block, names it too.
+StructureClass = Literal["device_tier", "redundancy_group", "overlay_encap",
+                         "transit_path", "controller_fan_in"]
+
+
 class Discriminator(BaseModel):
     """Look-alike killer: if the 'absent' clause IS present in evidence, this
     template is contradicted (score ×0.2) and ``else_prefer`` must be scored
-    as a competitor — competing hypotheses by construction, never collapsed."""
+    as a competitor — competing hypotheses by construction, never collapsed.
+
+    ``attested`` (optional) narrows it: the contradiction fires only when the
+    evidence ALSO attests that structure class (scoring.evidence_structure).
+    Used where the look-alike is told apart by structure rather than by a kind —
+    one edge losing its controllers vs many edges losing the same one."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     absent: Clause                   # the thing that must NOT be in evidence
     within_s: float = Field(default=600.0, gt=0)
     else_prefer: str = Field(min_length=1)
+    attested: StructureClass | None = None
 
 
 class Verdict(BaseModel):
@@ -297,8 +311,16 @@ DeploymentScope = Literal["onprem_only", "cloud_only", "hybrid"]
 # congested interface faces a provider. That residual is named, not papered
 # over; closing it means giving the scorer a seam/role context and re-keying
 # the rank memo, which is its own piece of work.
-StructureClass = Literal["device_tier", "redundancy_group", "overlay_encap",
-                         "transit_path"]
+#
+#   controller_fan_in two or more DISTINCT SD-WAN edges (as one lane spells them)
+#                     report losing their control connection to the SAME
+#                     controller. Structural fan-in: the shared element is the
+#                     candidate common cause (owner D1, NMS_FIRST_PLAN). Attested
+#                     from the controller each edge names
+#                     (`signals.controller_peer`), counted by
+#                     `scoring.controller_fan_in`.
+#
+# `StructureClass` itself is declared above `Discriminator`.
 
 
 class Template(BaseModel):
@@ -392,6 +414,23 @@ class Catalog(BaseModel):
                     raise ValueError(f"{t.id}: else_prefer {d.else_prefer!r} not in catalog")
                 if d.else_prefer == t.id:
                     raise ValueError(f"{t.id}: discriminator prefers itself")
+                # A discriminator whose `absent` clause can be satisfied by the
+                # very evidence the template's mandatory clause needs would
+                # contradict the template every time it matched — unless it is
+                # narrowed: by a clause predicate (attrs / attrs_not /
+                # min_deviation, tracker 385) or by a structure (`attested`,
+                # the SD-WAN controller fan-in). Unnarrowed, it is an authoring
+                # slip that silently caps the template at x0.2: refuse it.
+                mandatory = {k for c in t.requires if not c.optional for k in c.kinds()}
+                overlap = d.absent.kinds() & mandatory
+                narrowed = (d.attested is not None or d.absent.attrs is not None
+                            or d.absent.attrs_not is not None
+                            or d.absent.min_deviation is not None)
+                if overlap and not narrowed:
+                    raise ValueError(
+                        f"{t.id}: discriminator absent clause {sorted(overlap)} overlaps "
+                        f"the template's mandatory clause and is not narrowed — set "
+                        f"`attested` (or a clause predicate) or it contradicts every match")
             # v1 NOC-catalog lint: a template that declares seams opted into the
             # voice contract — both phrasings are mandatory, and a confirmable
             # template must not be confirmable from a single evidence plane
@@ -533,6 +572,11 @@ CHANGE_INDUCED_FAULT_KINDS = (
     "controller_control_connection_loss|ospf_adjacency_change|isis_adjacency_change|"
     "if_metric_anomaly|bgp_state_anomaly|igp_state_anomaly"
 )
+
+# 2026-11-10 outage: many edges losing the same SD-WAN controller (stage [6]
+# structure `controller_fan_in`). Named once: the edge-local template's
+# discriminator prefers it.
+SDWAN_CONTROLLER_UNREACHABLE_TEMPLATE_ID = "sig.ent.wan-edge.sdwan-controller-unreachable"
 
 # tracker 385: the change-induced sibling for an operator's interface shutdown.
 ADMIN_LINK_CHANGE_TEMPLATE_ID = "sig.ent.access.admin-link-change-induced"
@@ -1924,24 +1968,33 @@ BUILTIN_TEMPLATES: list[dict] = [
         "false_positives": ["expected dual-active designs", "monitoring seeing both contexts", "maintenance failback"],
     },
     {
+        # The EDGE-LOCAL reading: this edge lost its control connections. Until
+        # 2026-11-11 its one mandatory kind was `sdwan_control_down`, which no
+        # producer emits (coverage.py ledger), so the template could never rank:
+        # the kind every producer DOES emit — the edge's own syslog/trap and the
+        # controller's relay — was only an optional clause. Both now satisfy the
+        # mandatory clause (the optional duplicate is gone: it would only have
+        # padded coverage and the satisfied count).
         "id": "sig.ent.wan-edge.sdwan-control-connection-loss",
         "title": "SD-WAN controller/control-connection loss",
         "domain": "ent.wan-edge",
         "seams": ["WAN_SDWAN"],
         "deployment_scope": "hybrid",
         "requires": [
-            {"kind": "sdwan_control_down", "entity_type": "device"},
+            {"kind": "sdwan_control_down|controller_control_connection_loss", "entity_type": "device"},
             {"kind": "tunnel_flap|path_change", "optional": True},
             {"kind": "cert_expiry_warning", "optional": True},
-            # NMS corroboration: the controller's own control-connection/OMP loss
-            # (management-plane witness), optional so existing detection is unchanged.
-            {"kind": "controller_control_connection_loss", "entity_type": "device", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
             # Data-path SLA breach without control loss is the tunnel family.
             {"absent": {"kind": "tunnel_degraded"}, "within_s": 300,
              "else_prefer": "sig.ent.wan-edge.sdwan-tunnel-degraded"},
+            # Many edges losing the SAME controller is not an edge-local fault:
+            # the shared controller is the candidate cause.
+            {"absent": {"kind": "sdwan_control_down|controller_control_connection_loss"},
+             "attested": "controller_fan_in", "within_s": 300,
+             "else_prefer": SDWAN_CONTROLLER_UNREACHABLE_TEMPLATE_ID},
         ],
         "direction_expect": "controller -> control-connections -> edge-policy/steering",
         "verdict": {
@@ -1956,6 +2009,83 @@ BUILTIN_TEMPLATES: list[dict] = [
         "manager_phrase": "WAN orchestration visibility and control is impaired, which can destabilize path steering and failover.",
         "blast_radius": "policy/steering for edges that lost the controller",
         "false_positives": ["controller maintenance", "certificate rotation window", "management-plane-only outage"],
+    },
+    {
+        # 2026-11-10 lab outage: the vSmart was shut down; every edge lost its
+        # control connection to it, so OMP, centralized policy (and the cflowd
+        # flow-export config it carries) and BFD went with it. Stage [6]: the
+        # `controller_fan_in` structure gate admits this template only when >=2
+        # distinct edges name the SAME controller as the session they lost
+        # (scoring.controller_fan_in); the hypothesis note names it. The edges
+        # meet each other only on the shared controller address (a rank-7
+        # token). Capped at suspected — "possibly because of this controller":
+        # the edges agreeing they lost it says the sessions died, not that the
+        # controller itself failed rather than a shared path to it; that needs
+        # contrast (the edges keeping their other controller sessions) or the
+        # controller's own state from an independent observer, which no
+        # producer supplies yet (NMS-first D1/T2). Vendor-neutral by kind: Cisco
+        # Catalyst SD-WAN (vSmart, vManage, vBond) is the producer today; Versa
+        # (Controller/Director), VMware VeloCloud (Gateway/Orchestrator) and
+        # Fortinet SD-WAN (FortiManager) would feed the same kinds through their
+        # connectors.
+        "id": SDWAN_CONTROLLER_UNREACHABLE_TEMPLATE_ID,
+        "title": "SD-WAN controller unreachable (many edges lost the same controller)",
+        "domain": "ent.wan-edge",
+        "seams": ["WAN_SDWAN"],
+        "deployment_scope": "hybrid",
+        "requires_structure": ["controller_fan_in"],
+        "allow_root_cause_confirmed": False,
+        "confirm_cap_reason": (
+            "confirmed capped to suspected: several edges agree they lost this controller, "
+            "but that the controller itself failed (not a shared path to it) needs the "
+            "controller's own state or contrast from the edges' other controller sessions "
+            "(allow_root_cause_confirmed=false)"),
+        "requires": [
+            # The anchor: without a control-connection loss the template has
+            # nothing to say, and a zero row would displace visible competitors.
+            {"kind": "sdwan_control_down|controller_control_connection_loss", "entity_type": "device",
+             "anchor": True},
+            # What follows from losing the controller: the overlay's tunnels.
+            {"kind": "controller_bfd_down|controller_tunnel_state|tunnel_down|tunnel_flap",
+             "optional": True},
+            # The controller's own state, as its manager reports it.
+            {"kind": "controller_device_unreachable", "optional": True},
+        ],
+        # Empty on purpose (NMS-first D1): the edges' own reports are
+        # control_plane, a controller's relay is management_plane, and the
+        # general independence gate decides which pair may confirm.
+        "required_modalities": [],
+        "direction_expect": "controller -> edge control connections -> OMP/policy -> BFD tunnels + flow export",
+        "causal_chain": [
+            {"stage": "SD-WAN controller", "root": True,
+             "witness": "controller_device_unreachable",
+             "unobserved_note": "The controller's own state was not seen; the conclusion rests on several edges losing it at once"},
+            {"stage": "Edge control connections to the controller",
+             "witness": "sdwan_control_down|controller_control_connection_loss",
+             "unobserved_note": "No control-connection loss seen"},
+            {"stage": "Overlay tunnels (BFD)",
+             "witness": "controller_bfd_down|controller_tunnel_state|tunnel_down|tunnel_flap",
+             "unobserved_note": "No tunnel or BFD loss seen on these edges"},
+        ],
+        "verdict": {
+            "owner": "sdwan_vendor", "layer": "control-plane (SD-WAN controller)",
+            "first_steps": [
+                "Check the controller named in this hypothesis: is it running, and does the SD-WAN manager still reach it?",
+                "On one affected edge, list its control connections and their history: one controller gone while the manager and orchestrator stay up points at that controller, not the edge's transport",
+                "When the controller is back, confirm overlay routes, BFD tunnels and flow export return on the edges",
+            ],
+        },
+        # Conditional on purpose: an edge that still holds a session to a second
+        # controller keeps its overlay routes and policy, and no producer tells
+        # the engine whether one survived.
+        "operator_phrase": "Possibly an SD-WAN controller outage: several edges lost their control connection to the same controller at once. If it was their only controller of that kind, the edges may lose overlay routing and centralized policy, and with them tunnels and policy-driven features such as flow export.",
+        "manager_phrase": "The SD-WAN control system appears to have lost contact with several sites at once; tunnels, traffic steering and traffic reporting can stop until it is back.",
+        "blast_radius": "the edges that lost that controller; where it was their only one, their overlay routes, centralized policy (including flow export) and BFD tunnels",
+        "false_positives": [
+            "planned controller maintenance or upgrade",
+            "a shared transport outage at the affected edges' sites (those edges lose every controller, not just this one)",
+            "a controller that is up but refusing connections (certificate, clock or allow-list)",
+        ],
     },
     {
         "id": "sig.ent.wan-edge.ipsec-rekey-mismatch",

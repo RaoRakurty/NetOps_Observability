@@ -5,6 +5,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -85,6 +86,48 @@ func reportedSite(d models.Device, facts collectors.OverlayDeviceFacts) (id, sou
 	return "", ""
 }
 
+// errReachabilityUnread: the collectors' liveness could not be read.
+var errReachabilityUnread = errors.New("device reachability could not be read")
+
+// collectorReachability reads per-device max/min of collector_target_up over
+// the last 3 minutes (devreach.Fold's input), under the caller's metric scope
+// filters f (metricsScopeFiltersFor — the chokepoint rule), bounded to 3 s.
+// ok is false when either read failed; both maps are then nil.
+func (s *server) collectorReachability(ctx context.Context, f []string) (maxUp, minUp map[string]float64, ok bool) {
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	const q = `last_over_time(collector_target_up{collector!="netconf"}[3m])`
+	maxUp, okMax := s.qVecKeyedScoped(qctx, "max by (device) ("+q+")", "device", f)
+	minUp, okMin := s.qVecKeyedScoped(qctx, "min by (device) ("+q+")", "device", f)
+	if !okMax || !okMin {
+		return nil, nil, false
+	}
+	return maxUp, minUp, true
+}
+
+// qVecKeyedScoped is one value per key from a by-key VM vector query under
+// the caller's filters, KEEPING zeros. qVecByScoped drops a 0 (it keeps a
+// running max from 0), which for collector_target_up erased exactly the
+// answer that matters: a device whose every poll failed (max 0) read
+// "unknown" instead of "down", and one with a failing collector (min 0) read
+// "up" instead of "partial" (found by the phrasing eval, 2026-11-12). The
+// query is already aggregated by key, so a key appears once.
+func (s *server) qVecKeyedScoped(ctx context.Context, query, key string, filters []string) (map[string]float64, bool) {
+	samples, err := s.vmInstantScoped(ctx, query, filters)
+	if err != nil {
+		return nil, false
+	}
+	out := map[string]float64{}
+	for _, sm := range samples {
+		if k := sm.Labels[key]; k != "" {
+			if v, seen := out[k]; !seen || sm.Value > v {
+				out[k] = sm.Value
+			}
+		}
+	}
+	return out, true
+}
+
 // stampDeviceReadFields fills the read-only, server-stamped fields of an
 // inventory read (tracker 349 follow-up, owner report 2026-10-10):
 //
@@ -100,15 +143,9 @@ func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds
 	if len(ds) == 0 {
 		return ds
 	}
-	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	f := s.metricsScopeFiltersFor(claims)
-	const q = `last_over_time(collector_target_up{collector!="netconf"}[3m])`
-	maxUp, okMax := s.qVecByScoped(qctx, "max by (device) ("+q+")", "device", f)
-	minUp, okMin := s.qVecByScoped(qctx, "min by (device) ("+q+")", "device", f)
-	if !okMax || !okMin {
+	maxUp, minUp, ok := s.collectorReachability(ctx, s.metricsScopeFiltersFor(claims))
+	if !ok {
 		logWarn("devices", "collector reachability unread — every device reads 'unknown' this request", map[string]any{"devices": len(ds)})
-		maxUp, minUp = nil, nil
 	}
 	locs, err := collectors.FetchSysLocationMap(ctx)
 	if err != nil {
