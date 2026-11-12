@@ -285,8 +285,12 @@ func (s *server) firstUsableProvider(ctx context.Context, claims jwtClaims) (nam
 // true when it wrote the response (success OR a mid-loop failure that must not
 // silently restart as plain chat); false → caller falls through to plain chat.
 func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, engine func() *ai.Orchestrator, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
-	name, key, model, _ := s.firstUsableProvider(r.Context(), claims)
+	name, key, model, skipped := s.firstUsableProvider(r.Context(), claims)
 	if key == "" {
+		if skipped != nil {
+			logInfo("ai", "agent loop skipped: every configured model is paused or already failed", map[string]any{
+				"tenant": claims.Tenant, "error_class": ai.ClassifyProviderError(skipped)})
+		}
 		return false // no usable provider — the plain path tries the chain or renders the "add a key" message
 	}
 	tenant, _ := principalTenant(claims)
