@@ -5,7 +5,16 @@
 // detail against a fetch mock for layout screenshots. Not part of the app build
 // (no import from the app entry); deleted when review is done.
 import { createRoot } from "react-dom/client";
+import "./styles.css";
 import { CorrelationDetail } from "./tabs/Correlations";
+
+// ?theme=dark|light renders the case in that app theme (the RCA sheet follows
+// the theme through its --rw-* tokens — RCA document v2 look, 2026-11-12).
+{
+  const theme = new URLSearchParams(location.search).get("theme");
+  if (theme === "dark" || theme === "light") document.documentElement.setAttribute("data-theme", theme);
+  document.body.style.background = "var(--bg)";
+}
 
 const now = Date.now();
 const iso = (msAgo: number) => new Date(now - msAgo).toISOString().replace("T", " ").slice(0, 19);
@@ -82,8 +91,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!p.startsWith("/api/")) return realFetch(input as any, init);
   // An e2e spec may inject its own case (window.__RCA_PREVIEW__ via
   // addInitScript) — e2e/rcaDocument.spec.ts renders P-424934 this way.
-  const fx = (window as unknown as { __RCA_PREVIEW__?: { object: unknown; timeline: unknown; report: unknown } }).__RCA_PREVIEW__;
+  const fx = (window as unknown as { __RCA_PREVIEW__?: { object: unknown; timeline: unknown; report: unknown; routes?: Record<string, unknown> } }).__RCA_PREVIEW__;
   if (fx) {
+    // Extra endpoints a spec mocks (features, the Iris ask/conversation API);
+    // every non-GET call is recorded so the spec can assert what was sent.
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method !== "GET") {
+      const w = window as unknown as { __RCA_PREVIEW_CALLS__?: { path: string; body: unknown }[] };
+      let body: unknown = null;
+      try { body = typeof init?.body === "string" ? JSON.parse(init.body) : null; } catch { body = init?.body ?? null; }
+      (w.__RCA_PREVIEW_CALLS__ ??= []).push({ path: p, body });
+    }
+    if (fx.routes && Object.prototype.hasOwnProperty.call(fx.routes, p)) return json(fx.routes[p]);
     if (p.endsWith("/timeline")) return json(fx.timeline);
     if (p.includes("/rca-report")) return json(fx.report);
     if (/^\/api\/correlations\/[^/]+$/.test(p)) return json({ object: fx.object, edges: [] });

@@ -864,8 +864,10 @@ describe("buildRcaCase — P-424934: a background story never confirms (owner D1
   });
 
   it("titles it by the network story, never the exposure template title", () => {
-    expect(c.title).toBe("Routing adjacency change");
-    expect(c.whatBroke).toBe("Routing adjacency change on cEDGE-81 · site RETAIL-WALMART");
+    // The causal leader is sig.ent.wan-edge.bgp-peer-flap; its NOC title mirrors
+    // noclabel (src/contracts/noc_label_parity.json, RCA document v2 §3.2).
+    expect(c.title).toBe("BGP peer flapping — WAN edge");
+    expect(c.whatBroke).toBe("BGP peer flapping — WAN edge on cEDGE-81 · site RETAIL-WALMART");
     expect(JSON.stringify(c)).not.toMatch(/Exposed device is also failing/);
   });
 

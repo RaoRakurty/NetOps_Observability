@@ -185,60 +185,33 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
   });
 });
 
-describe("RcaWorkspace — Ask RCA assistant (Iris AI) wiring", () => {
-  const answer = (over: Record<string, unknown> = {}) => ({
-    mode: "problem_explanation", intent: "problem_explanation", modules: ["rca"],
-    text: "Because evidence is single-source.",
-    citations: [{ id: "problem:" + CORR_ID, kind: "finding", label: "wan-r2 bgp", href: "/x" }],
-    disclaimers: [], ...over,
+describe("RcaWorkspace — Iris is docked, one conversation (RCA document v2 §5)", () => {
+  it("docks the Iris slot beside the sheet", () => {
+    const { container } = render(
+      <RcaWorkspace data={suspectedCase()} view="operator" onView={vi.fn()} onExportPdf={vi.fn()}
+        correlationId={CORR_ID} aiSlot={<div data-testid="iris-slot">IRIS</div>} />,
+    );
+    const dock = container.querySelector("aside.rw-dock");
+    expect(dock).not.toBeNull();
+    expect(within(dock as HTMLElement).getByTestId("iris-slot")).toBeInTheDocument();
+    expect(container.querySelector(".rca-ws")?.classList.contains("rw-docked")).toBe(true);
   });
 
-  it("asks the GROUNDED endpoint with the correlation id, never a browser-assembled prompt", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(aiAsk).toHaveBeenCalledOnce();
-    expect(await screen.findByText(/Because evidence is single-source\./)).toBeInTheDocument();
-
-    // The server owns the grounding: the question travels verbatim and the case
-    // is named by its id. No RCA context block, no instructions, no proxy call.
-    const [question, context] = aiAsk.mock.calls[0] as [string, Record<string, string>];
-    expect(context).toEqual({ correlation_id: CORR_ID });
-    expect(question).not.toMatch(/RCA context|Answer using ONLY|Status:|Evidence:/);
-    expect(JSON.stringify(aiAsk.mock.calls[0])).not.toMatch(/RCA context/);
-    expect(copilotChat).not.toHaveBeenCalled();
+  it("keeps the dock in the evidence-detail view too", () => {
+    const { container } = render(
+      <RcaWorkspace data={suspectedCase()} view="debug" onView={vi.fn()} onExportPdf={vi.fn()}
+        aiSlot={<div data-testid="iris-slot">IRIS</div>} />,
+    );
+    expect(container.querySelector("aside.rw-dock")).not.toBeNull();
   });
 
-  it("renders the evidence the grounded answer cited", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(await screen.findByText("wan-r2 bgp")).toBeInTheDocument();
-  });
-
-  it("omits the correlation context when the case has no id (synthetic example)", async () => {
-    aiAsk.mockResolvedValue(answer());
-    renderWS(suspectedCase(), "operator", null);
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(aiAsk).toHaveBeenCalledOnce();
-    expect(aiAsk.mock.calls[0][1]).toBeUndefined();
-  });
-
-  it("is absent for a caller without ai.chat (N-A7; the server still refuses the ask)", async () => {
-    features.mockResolvedValue({ ai_entitlements: ["ai.nlquery"] });
-    renderWS();
-    await vi.waitFor(() => expect(features).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 0));
-    expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+  it("renders no second assistant box and no dock without a slot", () => {
+    const { container } = renderWS();
     expect(screen.queryByText("Ask RCA Assistant")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+    expect(container.querySelector("aside.rw-dock")).toBeNull();
+    expect(container.querySelector(".rca-ws")?.classList.contains("rw-docked")).toBe(false);
     expect(aiAsk).not.toHaveBeenCalled();
-  });
-
-  it("degrades to an honest 'not connected' state when the assistant errors", async () => {
-    aiAsk.mockRejectedValue(new Error("feature disabled"));
-    renderWS();
-    fireEvent.click(await screen.findByRole("button", { name: "Ask" }));
-    expect(await screen.findByText(/Assistant not connected/)).toBeInTheDocument();
   });
 });
 

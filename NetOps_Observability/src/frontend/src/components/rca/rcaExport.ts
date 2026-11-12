@@ -2,8 +2,13 @@
 // Copyright 2026 Correlix
 
 import type { RcaCase, RcaPill, KV, Tone, CaseEvent } from "./rcaCase";
-import { kindForRole, type ShapeKind } from "../graph/shapes";
+import type { ShapeKind } from "../graph/shapes";
 import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";
+import { deriveContextModel, type ContextModel, type DevicePanelView, type OverlayTone } from "./pathModel";
+import {
+  type TopologyContext, topoStateLabel, topoSourcesLine, topoSourceLabel, readAndEmptySources,
+  unreadSources, causalRelationLabel, topoTS, humanWord, interfaceFaults,
+} from "./topologyContext";
 import { fmtDateTime } from "../../lib/time";
 import { rcaVerdictLine } from "./labels";
 import { fidelityLabel } from "../../lib/fidelity";
@@ -30,12 +35,6 @@ const TONE: Record<Tone, { fg: string; bg: string; bd: string }> = {
   red: { fg: "#d92d20", bg: "#fff0ee", bd: "#ffd0cc" },
   gray: { fg: "#667085", bg: "#eef1f6", bd: "#d8dee8" },
   purple: { fg: "#6d5dfc", bg: "#f3f1ff", bd: "#ddd7ff" },
-};
-const NODE: Record<string, { fg: string; bg: string; bd: string }> = {
-  good: { fg: "#087c3d", bg: "#effcf4", bd: "#1aaf5d" },
-  warn: { fg: "#c45a00", bg: "#fff7ed", bd: "#f59e0b" },
-  bad: { fg: "#c5221a", bg: "#fff1f1", bd: "#ef4444" },
-  info: { fg: "#2563eb", bg: "#eff6ff", bd: "#3b82f6" },
 };
 const EDGE: Record<string, string> = { good: "#22c55e", warn: "#f59e0b", bad: "#ef4444" };
 
@@ -82,84 +81,143 @@ function shapeInner(kind: ShapeKind, fill: string, stroke: string): string {
   }
 }
 
-// Causal-topology SVG — print-safe re-creation of the on-screen RcaTopology graph
-// (the live React-Flow canvas can't be serialized). Same visual language: device
-// TYPE = shape, health = colour; toned edges (dashed when degraded) with metric
-// labels + a legend. A node's shape falls back to kindForRole(name) when the case
-// didn't carry one, so every report draws icons rather than bare boxes.
-function topoSvg(topo: RcaCase["topology"]): string {
-  if (!topo || topo.nodes.length === 0) return "";
-  const nodes = topo.nodes, N = nodes.length;
-  const ICON = 46, NW = 132, COLGAP = 58, ROWGAP = 98, PADX = 12, PADTOP = 12;
+// ── Network topology & causality — from the server's topology context ────────
+// RCA document v2 §2: the print fallback draws the SAME struct the screen and
+// the server PDF draw (topologyContext.ts), with the SAME geometry
+// (pathModel.ts deriveContextModel mirrors rca_report_html_topology.go). The
+// words are the server partial's words. The old client-side "affected devices"
+// chain (topoSvg) is gone: it drew a node the server PDF denied.
 
-  // Resolve edges to explicit (from,to). Supports the graph form (from/to set) AND
-  // the legacy positional chain (edge i joins node i↔i+1).
-  const E = topo.edges.map((e, i) => ({ from: e.from ?? i, to: e.to ?? i + 1, state: e.state ?? "good", label: e.label }))
-    .filter((e) => e.from >= 0 && e.to >= 0 && e.from < N && e.to < N && e.from !== e.to);
-
-  // Layered layout — longest-path layer from the sources (no incoming edge), so
-  // two probe sources sit in column 0 and their shared target in column 1.
-  const layer = new Array(N).fill(0);
-  for (let pass = 0; pass < N; pass++) {
-    let changed = false;
-    for (const e of E) if (layer[e.to] < layer[e.from] + 1) { layer[e.to] = layer[e.from] + 1; changed = true; }
-    if (!changed) break;
+// The server report's print palette (rca_report_html_topology.go).
+const TP = {
+  ink: "#172033", muted: "#64748b", link: "#94a3b8", linkDim: "#cbd5e1", nodeFill: "#f8fafc",
+  amber: "#b45309", amberBg: "#fff4e8", red: "#b42318", redBg: "#fff0ee", unknown: "#475467",
+};
+function tpTone(t: OverlayTone): { fill: string; stroke: string } {
+  return t === "red" ? { fill: TP.redBg, stroke: TP.red } : t === "amber" ? { fill: TP.amberBg, stroke: TP.amber } : { fill: TP.nodeFill, stroke: TP.muted };
+}
+function tpArrow(x1: number, y1: number, x2: number, y2: number, colour: string): string {
+  const dx = x2 - x1, dy = y2 - y1, l = Math.hypot(dx, dy);
+  if (l === 0) return "";
+  const ux = dx / l, uy = dy / l, size = 7;
+  const bx = x2 - ux * size, by = y2 - uy * size, px = -uy * size * 0.5, py = ux * size * 0.5;
+  return `<polygon points="${x2.toFixed(1)},${y2.toFixed(1)} ${(bx + px).toFixed(1)},${(by + py).toFixed(1)} ${(bx - px).toFixed(1)},${(by - py).toFixed(1)}" fill="${colour}"/>`;
+}
+function tpCausal(x1: number, y1: number, x2: number, y2: number, rel: string, directed: boolean): string {
+  let colour = TP.unknown, dash = ` stroke-dasharray="1.5 3"`;
+  if (rel === "verified") { colour = TP.red; dash = ""; }
+  else if (rel === "suspected") { colour = TP.amber; dash = ` stroke-dasharray="6 4"`; }
+  let out = `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${colour}" stroke-width="1.8"${dash}/>`;
+  if (directed && rel !== "unknown") out += tpArrow(x1, y1, x2, y2, colour);
+  if (rel === "unknown") {
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    out += `<circle cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="6.5" fill="#fff" stroke="${colour}" stroke-width="1"/><text x="${mx.toFixed(1)}" y="${(my + 3.2).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="800" fill="${colour}">?</text>`;
   }
-  const maxLayer = Math.max(0, ...layer);
-  const perLayer = new Array(maxLayer + 1).fill(0);
-  const rowOf = new Array(N).fill(0);
-  for (let i = 0; i < N; i++) rowOf[i] = perLayer[layer[i]]++;
-  const maxRows = Math.max(1, ...perLayer);
+  return out;
+}
+const tpSvgOpen = (w: number, h: number, label: string) =>
+  `<svg viewBox="0 0 ${w} ${h.toFixed(0)}" width="100%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="${esc(label)}">`;
 
-  const cx = (i: number) => PADX + layer[i] * (NW + COLGAP) + NW / 2;
-  const cy = (i: number) => {
-    const totalH = maxRows * ROWGAP, colH = perLayer[layer[i]] * ROWGAP;
-    return PADTOP + (totalH - colH) / 2 + rowOf[i] * ROWGAP + ICON / 2;
-  };
-  const W = PADX * 2 + (maxLayer + 1) * NW + maxLayer * COLGAP;
-  const H = PADTOP + maxRows * ROWGAP + 28;
-  const s = ICON / 100;
-  const markers = ["good", "warn", "bad"].map((st) =>
-    `<marker id="ah-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${EDGE[st]}"/></marker>`).join("");
-  let parts = "";
+function egoSvg(ego: NonNullable<ContextModel["ego"]>): string {
+  let b = tpSvgOpen(ego.w, ego.h, "Known topology around the affected devices with fault and causal overlays");
+  for (const e of ego.edges) {
+    const st = e.edge.stale ? `stroke="${TP.linkDim}" stroke-width="1.5" stroke-dasharray="2 3"` : `stroke="${TP.link}" stroke-width="1.5"`;
+    b += `<line x1="${e.x1.toFixed(1)}" y1="${e.y1.toFixed(1)}" x2="${e.x2.toFixed(1)}" y2="${e.y2.toFixed(1)}" ${st}/>`;
+    if (e.unknownMark) b += tpCausal(e.unknownMark.x1, e.unknownMark.y1, e.unknownMark.x2, e.unknownMark.y2, "unknown", false);
+  }
+  for (const c of ego.causal) b += tpCausal(c.x1, c.y1, c.x2, c.y2, c.relation, c.directed);
+  for (const n of ego.nodes) {
+    const { fill, stroke } = tpTone(n.tone);
+    b += `<circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${n.r}" fill="${fill}" stroke="${stroke}" stroke-width="2"${n.node.managed ? "" : ` stroke-dasharray="3 2"`}/>`;
+    if (n.node.stale) b += `<text x="${n.x.toFixed(1)}" y="${(n.y + 3).toFixed(1)}" text-anchor="middle" font-size="7.5" fill="${TP.muted}">stale</text>`;
+    b += `<text x="${n.x.toFixed(1)}" y="${(n.y + n.r + 11).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${TP.ink}">${esc(clip(n.node.label, 22))}</text>`;
+    if (n.roleText) b += `<text x="${n.x.toFixed(1)}" y="${(n.y + n.r + 21).toFixed(1)}" text-anchor="middle" font-size="7.5" fill="${TP.muted}">${esc(clip(n.roleText, 26))}</text>`;
+    if (n.anomalousPorts.length) b += `<text x="${n.x.toFixed(1)}" y="${(n.y - n.r - 5).toFixed(1)}" text-anchor="middle" font-size="7.5" font-weight="700" fill="${stroke}">anomalous: ${esc(clip(n.anomalousPorts.join(" · "), 40))}</text>`;
+  }
+  return b + "</svg>";
+}
 
-  // edges — curved bezier from source's right to target's left, dashed when degraded
-  for (const e of E) {
-    const col = EDGE[e.state] ?? "#cad5e5";
-    const x1 = cx(e.from) + ICON / 2 + 3, y1 = cy(e.from), x2 = cx(e.to) - ICON / 2 - 5, y2 = cy(e.to);
-    const mx = (x1 + x2) / 2, dash = e.state === "good" ? "" : ` stroke-dasharray="7 5"`;
-    parts += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="${e.state === "good" ? 2.2 : 3}"${dash} marker-end="url(#ah-${e.state})"/>`;
-    if (e.label) {
-      const lx = mx, ly = (y1 + y2) / 2 - 8, tw = e.label.length * 5.4 + 12;
-      parts += `<rect x="${lx - tw / 2}" y="${ly - 10}" width="${tw}" height="15" rx="7.5" fill="#fff" stroke="${col}"/>`;
-      parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9" font-weight="800" fill="${col}">${esc(e.label)}</text>`;
+function panelSvg(p: DevicePanelView): string {
+  let b = tpSvgOpen(p.w, p.h, "Affected device, its evidence interfaces and the causal marks between them");
+  const dev = tpTone(p.devTone);
+  for (const c of p.connectors) {
+    b += c.relation
+      ? tpCausal(c.x1, c.y1, c.x2, c.y2, c.relation, c.directed)
+      : `<line x1="${c.x1.toFixed(1)}" y1="${c.y1.toFixed(1)}" x2="${c.x2.toFixed(1)}" y2="${c.y2.toFixed(1)}" stroke="${TP.linkDim}" stroke-width="1"/>`;
+  }
+  for (const a of p.arcs) {
+    const colour = a.relation === "verified" ? TP.red : TP.amber;
+    const dash = a.relation === "verified" ? "" : ` stroke-dasharray="6 4"`;
+    b += `<path d="M ${a.x.toFixed(1)} ${a.y1.toFixed(1)} C ${a.bulge.toFixed(1)} ${a.y1.toFixed(1)} ${a.bulge.toFixed(1)} ${a.y2.toFixed(1)} ${(a.x + 2).toFixed(1)} ${a.y2.toFixed(1)}" fill="none" stroke="${colour}" stroke-width="1.6"${dash}/>`;
+    b += tpArrow(a.bulge, a.y2, a.x + 2, a.y2, colour);
+  }
+  const cx = p.dev.x + p.dev.w / 2, cy = p.dev.y + p.dev.h / 2;
+  b += `<rect x="${p.dev.x}" y="${p.dev.y.toFixed(1)}" width="${p.dev.w}" height="${p.dev.h}" rx="8" fill="${dev.fill}" stroke="${dev.stroke}" stroke-width="2"/>`;
+  b += `<text x="${cx.toFixed(1)}" y="${(cy - 9).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="800" fill="${TP.ink}">${esc(clip(p.node.label, 30))}</text>`;
+  b += `<text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="8" fill="${TP.muted}">${esc(clip(p.roleText, 36))}</text>`;
+  if (p.devKinds.length) b += `<text x="${cx.toFixed(1)}" y="${(cy + 17).toFixed(1)}" text-anchor="middle" font-size="7.5" font-weight="700" fill="${dev.stroke}">${esc(clip("device: " + p.devKinds.map(humanWord).join(", "), 44))}</text>`;
+  for (const pt of p.ports) {
+    const t = tpTone(pt.tone);
+    const y = pt.y + pt.h / 2;
+    b += `<rect x="${pt.x}" y="${pt.y.toFixed(1)}" width="${pt.w}" height="${pt.h}" rx="5" fill="${t.fill}" stroke="${t.stroke}" stroke-width="1.6"/>`;
+    b += `<text x="${pt.x + 8}" y="${(y + 3.5).toFixed(1)}" font-size="9" font-weight="800" font-family="ui-monospace,monospace" fill="${TP.ink}">${esc(clip(pt.fault.port || pt.fault.target_id, 14))}</text>`;
+    b += `<text x="${pt.x + pt.w - 7}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="7.5" fill="${t.stroke}">${esc(clip(pt.fault.kinds.map(humanWord).join(", ") + " · " + pt.fault.peak_severity.toUpperCase(), 30))}</text>`;
+  }
+  if (p.ports.length === 0) b += `<text x="470" y="${(cy + 3).toFixed(1)}" font-size="9" fill="${TP.muted}">No interface carries attached evidence.</text>`;
+  b += "</svg>";
+  const notes: string[] = [];
+  if (p.morePorts > 0) notes.push(`${p.morePorts} more evidence interface(s) are listed in the table.`);
+  if (p.undirectedPortPairs > 0) notes.push(`${p.undirectedPortPairs} undirected interface ↔ interface co-occurrence(s) (relationship unknown) are listed in the causal table.`);
+  return b + (notes.length ? `<p class="note">${esc(notes.join(" "))}</p>` : "");
+}
+
+/** The print body of the topology section — exported for the parity tests. */
+export function topologyContextHtml(tc: TopologyContext | undefined, spine?: TopoGraph): string {
+  if (!tc) {
+    return `${spine && spine.nodes.length ? topoGraphSvg(spine) : ""}<p class="note">The topology context was not built for this document.</p>`;
+  }
+  const m = deriveContextModel(tc);
+  let b = `<p class="note" style="margin-bottom:4px">Sources: ${esc(topoSourcesLine(tc))}</p>`;
+  b += `<p class="body">State: <b>${esc(topoStateLabel(tc.state))}</b> — ${esc(tc.reason)}</p>`;
+  if (tc.state === "no_asset_mapping") {
+    b += `<div class="decision" style="border-left-color:#b42318;background:#fff5f4;border-color:#ffb5ad"><b>Data-availability error</b> — the affected entity could not be placed in the network topology. This is a gap in the data, not a finding about the network.${tc.unmapped.length ? ` Not in the inventory: ${esc(tc.unmapped.join(", "))}.` : ""}</div>`;
+  } else {
+    if (tc.state === "topology_with_path" && spine && spine.nodes.length) b += `<p class="note"><b>Measured path</b></p>${topoGraphSvg(spine)}`;
+    if (m.ego) {
+      b += egoSvg(m.ego);
+      b += `<p class="note">Legend: grey line = known link (dotted = stale) · amber/red device or port = anomalous evidence observed there (no causation implied) · <b>solid arrow</b> = verified causal link · <b>dashed arrow</b> = suspected · <b>?</b> = relationship unknown.${tc.state === "topology_only" ? " No measured path is attached: the causal path across this topology is <b>unverified</b>." : ""}${tc.more_nodes ? ` ${tc.more_nodes} more neighbour(s) not drawn.` : ""}</p>`;
+    } else if (tc.state === "topology_only") {
+      b += `<p class="note">No measured path is attached: the causal path across this topology is <b>unverified</b>.</p>`;
+    }
+    for (const p of m.panels) b += panelSvg(p);
+    if (m.panelsCapped) b += `<p class="note">Detail panels are drawn for the first 3 affected devices; the tables list every one.</p>`;
+    if (tc.state === "device_only") {
+      const empty = readAndEmptySources(tc).map((s) => topoSourceLabel(s.kind)).join(", ") || "—";
+      const unread = unreadSources(tc).map((s) => topoSourceLabel(s.kind)).join(", ") || "none";
+      for (const n of tc.nodes.filter((x) => x.anchor)) {
+        const ports = interfaceFaults(tc, n.id).map((f) => `${esc(f.port || f.target_id)} <span style="color:#64748b">(${esc(f.kinds.map(humanWord).join(", "))})</span>`).join(" · ") || "none";
+        const seen = n.stale ? `stale${n.last_seen ? ` — last seen ${esc(topoTS(n.last_seen))}` : ""}` : n.last_seen ? `current — seen by its inventory source${n.first_seen ? ` (known since ${esc(topoTS(n.first_seen))})` : ""}` : "not recorded";
+        b += `<div class="decision" style="margin-top:6px"><b>Device diagnostic — ${esc(n.label)}</b>` +
+          kvRows([{ k: "Device", v: n.label }, { k: "Role", v: n.role ? humanWord(n.role) : "not classified" }, { k: "Source", v: topoSourceLabel(n.source) }]) +
+          `<div class="kv"><span class="k">Last seen</span><span class="v">${seen}</span></div>` +
+          `<div class="kv"><span class="k">Evidence interfaces</span><span class="v">${ports}</span></div>` +
+          `<div class="kv"><span class="k">Read and empty</span><span class="v" style="font-weight:400">${esc(empty)}</span></div>` +
+          `<div class="kv"><span class="k">Could not be read</span><span class="v" style="font-weight:400">${esc(unread)}</span></div></div>`;
+      }
+    }
+    if (tc.faults.length) {
+      b += `<table style="margin-top:6px"><thead><tr><th>Where (measured)</th><th>Evidence kinds</th><th>Peak severity</th><th>Observations</th></tr></thead><tbody>` +
+        tc.faults.map((f) => `<tr><td>${f.target_type === "interface" ? `${esc(f.device)} · <span style="font-family:ui-monospace,monospace">${esc(f.port || "")}</span>` : `${esc(f.device)} (device)`}</td><td>${esc(f.kinds.map(humanWord).join(", "))}</td><td>${esc(f.peak_severity.toUpperCase())}</td><td>${f.evidence_refs.length}</td></tr>`).join("") +
+        `</tbody></table><p class="note">Measured fault overlay: where anomalous evidence was observed. It never implies causation on its own.</p>`;
+    }
+    if (tc.causal.length) {
+      b += `<table style="margin-top:6px"><thead><tr><th>From → to</th><th>Causal link</th><th>Basis</th></tr></thead><tbody>` +
+        tc.causal.slice(0, 30).map((c) => `<tr><td>${esc(c.from)}${c.from_kind ? ` <span style="color:#64748b">(${esc(humanWord(c.from_kind))})</span>` : ""} ${c.directed ? "→" : "—"} ${esc(c.to)}${c.to_kind ? ` <span style="color:#64748b">(${esc(humanWord(c.to_kind))})</span>` : ""}</td><td>${esc(causalRelationLabel(c.relation))}</td><td style="font-size:10.5px;color:#475467">${esc(c.basis)}</td></tr>`).join("") +
+        `</tbody></table>${tc.causal.length > 30 ? `<p class="note">${tc.causal.length - 30} more causal link(s) are in the full report.</p>` : ""}`;
     }
   }
-
-  // nodes — device-type shape + name + meta + status tag
-  nodes.forEach((nd, i) => {
-    const c = NODE[nd.kind] ?? NODE.info; const x = cx(i), y = cy(i);
-    const shape: ShapeKind = nd.shape ?? kindForRole(nd.name);
-    parts += `<g transform="translate(${x - ICON / 2},${y - ICON / 2}) scale(${s})">${shapeInner(shape, c.bg, c.bd)}</g>`;
-    parts += `<text x="${x}" y="${y + ICON / 2 + 13}" text-anchor="middle" font-size="11.5" font-weight="800" fill="#172033">${esc(clip(nd.name, 16))}</text>`;
-    if (nd.meta) parts += `<text x="${x}" y="${y + ICON / 2 + 25}" text-anchor="middle" font-size="9" fill="#697386">${esc(clip(nd.meta, 22))}</text>`;
-    if (nd.tag) {
-      const t = TONE[nd.tag.tone] ?? TONE.gray; const tw = nd.tag.text.length * 5.4 + 12;
-      parts += `<rect x="${x - tw / 2}" y="${y + ICON / 2 + 31}" width="${tw}" height="14" rx="7" fill="${t.bg}" stroke="${t.bd}"/>`;
-      parts += `<text x="${x}" y="${y + ICON / 2 + 41}" text-anchor="middle" font-size="8.5" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
-    }
-  });
-
-  // legend
-  const leg: [string, string][] = [["good", "Healthy"], ["warn", "Degraded"], ["bad", "Down / fault"]];
-  let lx = PADX, legend = ""; const legendY = H - 9;
-  for (const [st, lbl] of leg) {
-    legend += `<line x1="${lx}" y1="${legendY}" x2="${lx + 18}" y2="${legendY}" stroke="${EDGE[st]}" stroke-width="3"${st === "good" ? "" : ` stroke-dasharray="7 5"`}/>`;
-    legend += `<text x="${lx + 24}" y="${legendY + 3.5}" font-size="9" fill="#697386">${lbl}</text>`;
-    lx += 24 + lbl.length * 5.4 + 22;
-  }
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 720)}px;display:block;margin:6px auto" role="img" aria-label="Causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
+  if (tc.remediation.length) b += `<p class="body" style="margin-top:6px"><b>What would complete this picture</b></p><ol>${tc.remediation.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>`;
+  return b;
 }
 
 // EdgeState → the legend's light-theme edge colour (good/warn/bad). A down or
@@ -354,6 +412,7 @@ export function reportHtml(d: RcaCase, objId: string, verdict?: RcaFeedback | nu
   .kv .k { color:#64748b; min-width: 150px; }
   .kv .v { color:#172033; font-weight:600; }
   p.body { margin: 3px 0; }
+  p.note { margin: 3px 0; font-size: 11px; color: #64748b; }
   .verdict-fb { font-size:11.5px; color:#334155; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #64748b; border-radius:6px; padding:7px 11px; margin-bottom:12px; }
   .decision { background:#fff7ed; border:1px solid #fed7aa; border-left:3px solid #d66a00; border-radius:6px; padding:9px 12px; margin-bottom:6px; }
   table { width:100%; border-collapse: collapse; font-size:12px; }
@@ -383,7 +442,7 @@ export function reportHtml(d: RcaCase, objId: string, verdict?: RcaFeedback | nu
   ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
   ${block("Impact & blast radius", kvRows(d.impact))}
   ${block("Event timeline", eventsTable(d.events))}
-  ${block("Network path & causal topology", d.topoGraph ? topoGraphSvg(d.topoGraph) : topoSvg(d.topology))}
+  ${block("Network topology & causality", topologyContextHtml(d.topologyContext, d.topoGraph))}
   ${block("Evidence matrix", evidence)}
   ${block("Confidence ladder", ladder)}
   ${block("Hypothesis ranking", hypotheses)}

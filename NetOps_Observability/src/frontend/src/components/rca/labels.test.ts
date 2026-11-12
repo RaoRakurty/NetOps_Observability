@@ -38,8 +38,8 @@ describe("friendlyIncidentId — INC-XXXXXX handle", () => {
 // domain-correct fallback, and the specific cloud-mislabel bug fix.
 describe("signatureNocTitle — scenario library", () => {
   it("maps every emitted-today signature to a factual title", () => {
-    expect(signatureNocTitle("sig.ent.wan-edge.bgp-peer-flap")).toBe("Routing adjacency change");
-    expect(signatureNocTitle("sig.ent.middle-mile.dia-egress-latency")).toBe("Middle-mile latency increase");
+    expect(signatureNocTitle("sig.ent.wan-edge.bgp-peer-flap")).toBe("BGP peer flapping — WAN edge");
+    expect(signatureNocTitle("sig.ent.middle-mile.dia-egress-latency")).toBe("ISP / DIA egress latency");
     expect(signatureNocTitle("sig.ent.cloud.region-degradation")).toBe("Cloud region degradation");
   });
 

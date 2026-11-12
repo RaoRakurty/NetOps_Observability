@@ -3,14 +3,12 @@
 
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
-import { api, type AiAnswer } from "../../services/api";
 import type { RcaCase, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 import FidelityBadge from "../FidelityBadge";
 import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
 import AskIris from "../AskIris";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
-import { useAIEntitlements } from "../../lib/aiEntitlements";
 import { RCA_SECTION_NAMES, HOW_TO_READ, WOULD_CONFIRM_LABEL } from "./rcaPhrases";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
@@ -21,104 +19,17 @@ import { RCA_SECTION_NAMES, HOW_TO_READ, WOULD_CONFIRM_LABEL } from "./rcaPhrase
 // Security / quality:
 //  · CSP-safe — React event handlers only, no inline <script>, no
 //    dangerouslySetInnerHTML; every value is rendered as escaped React text.
-//  · Scoped — all styles live under `.rca-ws` (RcaWorkspace.css), isolated from
-//    the app's dark theme in both directions.
+//  · Scoped — all styles live under `.rca-ws` (RcaWorkspace.css) and follow the
+//    app theme through --rw-* tokens (light AND dark values, no literals).
 //  · Honest — a suspected single-signal case renders sparse (locked ladder
 //    steps, muted unwitnessed rungs); nothing is promoted to confirmed by the
 //    view, and epistemic state is never a grey chip (owner 2026-07-19).
 
 
-// AskRcaPanel — the RCA assistant box, wired to the GROUNDED engine.
-//
-// It sends the operator's question VERBATIM to POST /api/ai/ask with the
-// correlation id as context, exactly as RcaAskAi does. The server retrieves the
-// tenant-scoped evidence for that case, redacts it, grounds the model on it and
-// verifies the citations before answering.
-//
-// It used to assemble the prompt HERE (tracker 330): an instruction preamble,
-// then a flattened "RCA context:" block, then the operator's text concatenated
-// AFTER it — so a question containing "\n\nRCA context:" rewrote its own
-// grounding, the server-originated case text never passed Redact, and the reply
-// was rendered with no citation verification at all. None of that is recoverable
-// in the browser, and none of it needs to be: the id is all the server needs.
-//
-// N-A7: the box exists only for a caller holding ai.chat. That is cosmetic —
-// /api/ai/ask refuses without it — so a caller without it is not shown a box
-// that can only answer "not available".
-function AskRcaPanel({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
-  const ent = useAIEntitlements();
-  if (!ent.has("ai.chat")) return null;
-  return <AskRcaBox data={data} correlationId={correlationId} />;
-}
-
-function AskRcaBox({ data, correlationId }: { data: RcaCase; correlationId?: string }) {
-  const [q, setQ] = useState(data.assistant.questions[0] ?? "");
-  const [busy, setBusy] = useState(false);
-  const [answer, setAnswer] = useState<AiAnswer | null>(null);
-  const [offline, setOffline] = useState(false);
-
-  const ask = async (question: string) => {
-    const text = question.trim();
-    if (!text || busy) return;
-    setBusy(true); setAnswer(null); setOffline(false);
-    try {
-      // No context id (a synthetic/example case) → still grounded, just without
-      // the case key. Never a browser-assembled substitute for it.
-      const ans = await api.aiAsk(text, correlationId ? { correlation_id: correlationId } : undefined);
-      if (ans?.text) setAnswer(ans); else setOffline(true);
-    } catch {
-      setOffline(true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="rw-panel rw-assistant">
-      <h3>Ask RCA Assistant</h3>
-      <h4>Suggested operator questions</h4>
-      <div className="rw-small">
-        {data.assistant.questions.map((s, i) => (
-          <div key={i}>
-            <button type="button" className="rw-ask-suggest" onClick={() => { setQ(s); ask(s); }}>• {s}</button>
-          </div>
-        ))}
-      </div>
-      <div className="rw-assistant-q">
-        <input value={q} onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") ask(q); }}
-          aria-label="Ask RCA Assistant" placeholder="Ask about this RCA…" />
-        <button className="rw-btn primary" type="button" disabled={busy} onClick={() => ask(q)}>
-          {busy ? "Asking…" : "Ask"}
-        </button>
-      </div>
-      {/* Live region (4.1.3): the async answer is announced when it arrives. */}
-      <div className="rw-tdetail" style={{ marginTop: 10 }} role="status" aria-live="polite" aria-busy={busy}>
-        {answer ? (
-          <>
-            <div><b>Iris AI:</b> {answer.text}</div>
-            {/* The evidence the server actually read — clickable back into the
-                source view, so the answer is never a black box. */}
-            {answer.citations && answer.citations.length > 0 && (
-              <div className="rw-small" style={{ marginTop: 8 }}>
-                {answer.citations.slice(0, 8).map((c) => (
-                  <a key={c.id} className="rw-ask-suggest" href={c.href} title={c.label}>{c.label || c.id}</a>
-                ))}
-              </div>
-            )}
-            {answer.disclaimers && answer.disclaimers.length > 0 && (
-              <div className="rw-small" style={{ marginTop: 6 }}>{answer.disclaimers.join(" ")}</div>
-            )}
-          </>
-        ) : offline ? (
-          <><b>Assistant not connected.</b> Iris AI isn&apos;t enabled yet — an administrator can connect a provider and key under Assistant settings. Until then, use the suggested reasoning: {data.assistant.sampleAnswer}</>
-        ) : (
-          <><b>Sample answer:</b> {data.assistant.sampleAnswer}</>
-        )}
-      </div>
-    </div>
-  );
-}
+// Iris in the RCA view (RCA document v2 §5) is ONE docked conversation — the
+// `aiSlot` (RcaAskAi), scoped to this problem. The second "Ask RCA Assistant"
+// box that used to sit at the bottom of the sheet is gone: two assistants on one
+// page answered the same question two ways.
 
 // sectionTitle — "N · <name>" from the ONE section-name list the PDF also uses.
 function sectionTitle(n: number): string {
@@ -207,7 +118,7 @@ export default function RcaWorkspace({
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   similarSlot?: ReactNode;    // Similar past incidents (tracker 337 N-F4)
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
-  aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
+  aiSlot?: ReactNode;         // Iris, docked beside the sheet — a conversation scoped to this problem
   verifySlot?: ReactNode;     // Active Verification (spec #8) — read-only device interrogation card
   // Operator verdict feedback (Project 2 P7) — "was this verdict right?".
   // Rendered as a compact full-width row under the case aside, where the reader
@@ -215,9 +126,11 @@ export default function RcaWorkspace({
   feedbackSlot?: ReactNode;
 }) {
   const [detail, setDetail] = useState<string>("");
+  void correlationId; // kept on the contract for callers; Iris reads it via aiSlot
 
   return (
-    <div className="rca-ws">
+    <div className={`rca-ws${aiSlot ? " rw-docked" : ""}`}>
+      <div className="rw-main">
       {/* topbar */}
       <div className="rw-topbar">
         <div className="rw-brand">
@@ -599,11 +512,6 @@ export default function RcaWorkspace({
             </>
           )}
 
-          {/* Iris AI — grounded, cited questions about this RCA. */}
-          {aiSlot && <section style={{ marginTop: 12, marginBottom: 4 }}>{aiSlot}</section>}
-          <section className="rw-grid" style={{ marginTop: 12 }}>
-            <AskRcaPanel data={data} correlationId={correlationId} />
-          </section>
         </>
       ) : (
         <>
@@ -635,6 +543,10 @@ export default function RcaWorkspace({
           </section>
         </>
       )}
+      </div>
+      {/* Iris, docked beside the sheet (RCA document v2 §5) — a conversation
+          scoped to this problem; it stays in view while the sheet scrolls. */}
+      {aiSlot && <aside className="rw-dock">{aiSlot}</aside>}
     </div>
   );
 }

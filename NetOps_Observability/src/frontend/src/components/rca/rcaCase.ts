@@ -4,10 +4,9 @@
 import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason, evidenceSourceLabel, isSecurityModality, securityClassTitle, securityProvider, seamTypeLabel, SECURITY_MODALITY, SECURITY_SOURCE_LABEL } from "./labels";
 import { weakestFidelity } from "../../lib/fidelity";
-import { kindForRole, type ShapeKind } from "../graph/shapes";
 import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
-import { readServicePath } from "./servicePath";
+import type { TopologyContext } from "./topologyContext";
 import { phraseFor, isContextStory as isContextStoryId, type ConfidenceLevel } from "./rcaPhrases";
 import {
   parseRanking, splitRanking, headlineTier, headlineOf, buildHowWeKnow, buildBackground, buildOthers,
@@ -25,18 +24,10 @@ import {
 // reference — never presented as live data.
 
 export type Tone = "green" | "orange" | "blue" | "red" | "gray" | "purple";
-export type NodeKind = "good" | "warn" | "bad" | "info";
 
 export interface RcaPill { tone: Tone; text: string; }
 export interface KV { k: string; v: string; mono?: boolean; tone?: Tone; }
 export interface WhyLine { tone: "orange" | "green" | "blue"; label: string; text: string; }
-// kind = health state (→ colour); shape = device type (→ icon), matching the
-// on-screen RcaTopology convention so the PDF reads in the same visual language.
-export interface TopoNode { kind: NodeKind; abbr: string; name: string; meta: string; tag?: RcaPill; shape?: ShapeKind; chips?: string[]; }
-// from/to are node indices for an ARBITRARY graph (e.g. two probe sources
-// converging on one target). When omitted, the edge is positional (edge i joins
-// node i↔i+1) — the legacy linear-chain form, still supported.
-export interface TopoEdge { state: "good" | "warn" | "bad"; label?: string; side?: -1 | 1; from?: number; to?: number; }
 // `chips` are short attribution facts that qualify the row (the seam it sits on,
 // whether the asset faces the internet, which provider witnessed it) — rendered
 // as chips because they are FACTS about the row, not prose. `fidelity` is the
@@ -224,6 +215,12 @@ export interface CaseEventExtras {
   includeStandingFindings?: boolean;
   promotion?: { manual?: { promoted_by: string; promoted_at: string } };
   verification?: VerificationRun | null;
+  // The report's validated topology context (readTopologyContext) — carried onto
+  // the case so the print fallback draws from the same struct as the screen.
+  topologyContext?: TopologyContext;
+  // The server report's title (RCA document v2 §3.1 title rule lives there):
+  // when present it IS the case title, so the page and the PDF never disagree.
+  reportTitle?: string;
 }
 
 // buildCaseEvents — pure derivation of the chronological event list from data
@@ -333,12 +330,16 @@ export interface RcaCase {
   summary: string;
   why: WhyLine[];
   impact: KV[];
-  // legacy compact chain (EXAMPLE_CASE + buildRcaCase fallback). When `topoGraph`
-  // is set, the PDF renders the rich shared graph instead and this is a fallback.
-  topology?: { nodes: TopoNode[]; edges: TopoEdge[] };
-  // the SAME positioned graph the on-screen RcaTopology draws (built by
-  // buildTopoGraph) — wired in by CorrelationDetail so the PDF matches the page.
+  // The measured path's positioned graph (buildTopoGraph over the backend
+  // spine) — wired in by CorrelationDetail so the print fallback draws the same
+  // measured path the page does.
   topoGraph?: TopoGraph;
+  // The server's topology context (RCA document v2 §2) — the ONE source of the
+  // known topology, the fault overlay and the causal overlay for the screen AND
+  // the print fallback. Absent on a pre-v2 server: the print then says so. The
+  // old client-side "affected devices" chain is gone (it drew nodes the server
+  // PDF denied).
+  topologyContext?: TopologyContext;
   evidence: EvidenceCard[];
   ladder: LadderStep[];
   // A7 (flag-gated in the engine): the parser rules whose evidence was NOT
@@ -426,21 +427,6 @@ export const EXAMPLE_CASE: RcaCase = {
     { k: "SD-WAN path", v: "DIA-primary → AWS TGW" }, { k: "Application", v: "Checkout API" },
     { k: "Users affected", v: "~184 active sessions" }, { k: "Scope status", v: "Limited to Dallas egress path" },
   ],
-  topology: {
-    nodes: [
-      { kind: "good", abbr: "LAN", name: "Dallas LAN", meta: "access healthy" },
-      { kind: "good", abbr: "FW", name: "edge-fw-1", meta: "no drops" },
-      { kind: "warn", abbr: "WAN", name: "wan-r2", meta: "BGP flap", tag: { tone: "orange", text: "ROOT CAUSE" } },
-      { kind: "bad", abbr: "ISP", name: "192.168.100.5", meta: "primary underlay", tag: { tone: "red", text: "packet loss" } },
-      { kind: "info", abbr: "TGW", name: "AWS TGW", meta: "path recovered" },
-      { kind: "bad", abbr: "APP", name: "Checkout API", meta: "5xx spike", tag: { tone: "red", text: "IMPACT" } },
-    ],
-    edges: [
-      { state: "good" }, { state: "warn", label: "BGP neighbor changed", side: -1 },
-      { state: "bad", label: "loss 18.4% · jitter 74 ms", side: 1 }, { state: "good" },
-      { state: "bad", label: "p95 920 ms · 5xx +12.8%", side: -1 },
-    ],
-  },
   evidence: [
     { variant: "main", dot: "orange", title: "Routing / BGP", pill: { tone: "orange", text: "Main evidence" }, desc: "BGP state, route updates, peer adjacency", finding: "Neighbor 192.168.100.5 changed state on wan-r2.", foot: "1 event used · no conflicting peer record yet" },
     { variant: "confirm", dot: "green", title: "SD-WAN telemetry", pill: { tone: "green", text: "Confirms" }, desc: "Tunnel SLA, loss, jitter, failover", finding: "Primary DIA tunnel loss reached 18.4%; SLA fail triggered.", foot: "3 observations used · aligned within +7s" },
@@ -713,6 +699,11 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     : hasCloudEarly ? (cloudAppEarly ? `Cloud application issue — ${cloudAppEarly}` : "Cloud service issue")
       : (PLANE_NOC_TITLE[dominantMeasured || dominant] ?? "Telemetry anomaly — cause undetermined");
   if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Device & routing change";
+  // The server report's title wins (RCA document v2 §3.1: the title names the
+  // OBSERVED condition; an unconfirmed hypothesis is only a suffix). One title
+  // rule, in one place — the page and the PDF read the same words.
+  const serverTitle = (extras?.reportTitle ?? "").trim();
+  if (serverTitle) title = serverTitle;
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
   // lifecycle (user state model): active → recovering (clears seen, still open) →
@@ -1034,75 +1025,10 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   ]);
   if (!confirmed) nextActions.push({ badge: "HOLD", tone: "green", text: "Hold ticketing/escalation until a second independent source confirms the fault." });
 
-  // causal topology — a compact, honest chain. Only placed when a real device is
-  // known; the peer node appears when the routing adjacency resolved one. Suspected
-  // objects render the device as SUSPECTED (amber), confirmed as ROOT CAUSE (red).
-  const mkAbbr = (n: string): string => (/^[\d[]/.test(n) ? "NET" : (n.replace(/[^a-zA-Z]/g, "").slice(0, 3).toUpperCase() || "DEV"));
-  // probe/path destinations read as cloud (internet/SaaS) or a target bullseye —
-  // mirrors RcaTopology.destKind so the PDF picks the same icon.
-  const destShape = (n: string): ShapeKind => (/cloud|internet|inet|aws|azure|gcp|tgw|transit|saas/i.test(n) ? "cloud" : "target");
-  // Build a COMPLETE small graph (not a single chain) so the report localizes the
-  // issue the same way for EVERY verdict tier: the routing device + peer AND every
-  // affected path segment, deduped, with arbitrary edges (two probe sources can
-  // converge on one target). topoSvg lays it out left→right by layer.
-  let topology: RcaCase["topology"];
-  {
-    const idx = new Map<string, number>();
-    const tNodes: TopoNode[] = [];
-    const tEdges: TopoEdge[] = [];
-    const addNode = (name: string, o: { kind: NodeKind; shape?: ShapeKind; meta?: string; tag?: RcaPill }): number => {
-      const key = name.toLowerCase();
-      let i = idx.get(key);
-      if (i === undefined) {
-        i = tNodes.length;
-        tNodes.push({ kind: o.kind, abbr: mkAbbr(name), name, shape: o.shape ?? kindForRole(name), meta: o.meta ?? "", tag: o.tag });
-        idx.set(key, i);
-      } else if (o.tag && !tNodes[i].tag) {
-        tNodes[i].tag = o.tag; // upgrade a plain node to the tagged anchor
-      }
-      return i;
-    };
-    const addEdge = (from: number, to: number, label: string) => {
-      if (from !== to && !tEdges.some((e) => e.from === from && e.to === to)) {
-        tEdges.push({ state: confirmed ? "bad" : "warn", label, side: -1, from, to });
-      }
-    };
-    // 1) routing context: device (anchor) → peer
-    if (device) {
-      const di = addNode(device, {
-        kind: confirmed ? "bad" : "warn", shape: kindForRole(device),
-        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly detected",
-        tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
-      });
-      if (peer) addEdge(di, addNode(peer, { kind: "info", shape: kindForRole(peer), meta: "adjacency peer" }), hasRouting ? kindLabel(routeKind) : "evidence");
-    }
-    // 2) every affected path segment ("a -> b"), deduped — the ACTUAL connections
-    try {
-      const aff = JSON.parse(obj.affected || "{}") as { paths?: string[]; devices?: string[] };
-      for (const p of (aff.paths ?? []).slice(0, 6)) {
-        const hops = p.split(/->|→/).map((s) => s.trim()).filter(Boolean);
-        for (let h = 0; h < hops.length - 1; h++) {
-          const last = h === hops.length - 2;
-          const ai = addNode(hops[h], { kind: "info", shape: kindForRole(hops[h]), meta: h === 0 ? "source" : "hop" });
-          const bi = addNode(hops[h + 1], {
-            kind: last ? (confirmed ? "bad" : "warn") : "info", shape: last ? destShape(hops[h + 1]) : kindForRole(hops[h + 1]),
-            // §15: never assert a "PATH" when no path was identified — the node is
-            // the probe TARGET; the check, not the route, is what degraded.
-            meta: last ? "target" : "hop", tag: last ? { tone: confirmed ? "red" : "orange", text: confirmed ? "DEGRADED TARGET" : "SUSPECTED TARGET" } : undefined,
-          });
-          addEdge(ai, bi, last ? "active-probe loss/latency" : "");
-        }
-      }
-      // 3) fallback: affected devices with no path/peer — at least plot the nodes
-      if (tNodes.length === 0) for (const d of (aff.devices ?? []).slice(0, 6)) addNode(d, { kind: confirmed ? "bad" : "warn", meta: "affected device", tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "AFFECTED" : "SUSPECTED" } });
-    } catch { /* affected not JSON */ }
-    // A service-path object is rendered from the BACKEND's ordered spine (the
-    // shared `topoGraph`, which the PDF prefers) — never from this legacy
-    // "a -> b"-string chain, which cannot express cloud objects, hop order,
-    // boundaries or evidence. When a spine exists, this fallback is suppressed so
-    // the report and the screen provably draw the SAME graph (contract §7).
-    if (tNodes.length > 0 && !readServicePath(timeline)) topology = { nodes: tNodes.slice(0, 8), edges: tEdges };
-  }
+  // (The client-side "affected devices" topology chain that lived here is gone —
+  // RCA document v2 §1: it was a third derivation that drew nodes the server PDF
+  // denied. The known topology is the server's topology context, attached by
+  // CorrelationDetail as `topologyContext`.)
 
   const subtitle = confirmed ? "Independent evidence across multiple planes"
     : (hasDevice && hasRouting) ? "Device-health and routing/link evidence"
@@ -1231,7 +1157,11 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     : [{ ...parseRanking(JSON.stringify({ ranking: { hypotheses: [{ id: timeline.top_hypothesis, confidence: 1 }] } }))[0] }];
   const background = buildBackground(backgroundStories, timeline.signals);
   const others = buildOthers(causalRanked, headline);
-  const whatBroke = `${title}${device ? ` on ${device}` : affectedDevices[0] ? ` on ${affectedDevices[0]}` : ""}${affectedSites[0] ? ` · site ${affectedSites[0]}${affectedSites.length > 1 ? ` (+${affectedSites.length - 1} more)` : ""}` : ""}`;
+  // A server title that already names its object ("… on cedge-60-07ae8615 …")
+  // is never suffixed a second time.
+  const objectName = device || affectedDevices[0] || "";
+  const onObject = !objectName || title.includes(objectName) ? "" : ` on ${objectName}`;
+  const whatBroke = `${title}${onObject}${affectedSites[0] ? ` · site ${affectedSites[0]}${affectedSites.length > 1 ? ` (+${affectedSites.length - 1} more)` : ""}` : ""}`;
   const ownerSection = owner
     ? { owner: ownerDisplay(owner), why: confirmed ? "The confirmed cause sits in this party's domain." : "Named by the leading explanation — unconfirmed, so treat it as the likely owner, not the accountable one." }
     : { owner: "NOC triage", why: "No explanation has narrowed the fault to a party yet." };
@@ -1302,7 +1232,8 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       { k: "Observations", v: `${evidenceSummary.observations} collected` },
     ],
     evidenceSummary,
-    summary, why, impact, topology,
+    summary, why, impact,
+    ...(extras?.topologyContext ? { topologyContext: extras.topologyContext } : {}),
     evidence, ladder,
     ...(fidelityGap.length ? { fidelityGap } : {}),
     ...(fidelityMin ? { fidelityMin } : {}),

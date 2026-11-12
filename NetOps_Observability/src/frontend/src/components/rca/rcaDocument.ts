@@ -15,13 +15,15 @@
 // Pure functions over the object + timeline — no React, no I/O.
 
 import type { CorrSignal } from "../../services/api";
-import { entityLabel, kindLabel, signatureNocTitle } from "./labels";
+import { entityLabel, kindLabel, hypothesisNocTitle } from "./labels";
 import { isContextStory } from "./rcaPhrases";
 
 export interface RankedHyp {
   id: string;
   title: string;
   confidence: number;
+  // The template's clause coverage (engine scoring); absent on older objects.
+  coverage?: number;
   confidenceLabel: string;
   contradicted: boolean;
   contradictions: string[];
@@ -38,6 +40,25 @@ export interface RankedHyp {
 
 const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x ?? "")).filter(Boolean) : []);
 
+// The engine's ceiling for what optional clauses alone can score (mirror of
+// rcaOptionalBonusCap in internal/rca/rca_report_wording.go).
+const OPTIONAL_BONUS_CAP = 0.1;
+
+/**
+ * RCA document v2 §3.3 — none of the template's REQUIRED observations was seen;
+ * it ranked only through an optional clause. Mirror of the server's
+ * rcaNoRequiredClauseSatisfied: coverage at or under the optional-bonus cap and
+ * below one clause's worth (1 / clauses). A "satisfied" entry can be an optional
+ * clause, so an empty-satisfied test alone would miss MAC flap / OSPF / DNS on
+ * P-3E0400, which each matched an optional interface or resource clause.
+ */
+export function noRequiredClauseSatisfied(h: Pick<RankedHyp, "missing" | "satisfied" | "contradicted" | "confidence" | "coverage">): boolean {
+  if (h.missing.length === 0 || h.contradicted) return false;
+  const cov = h.coverage ?? h.confidence;
+  if (cov > OPTIONAL_BONUS_CAP + 1e-9) return false;
+  return cov < 1 / (h.missing.length + h.satisfied.length) - 1e-9;
+}
+
 /** The persisted ranking, typed. Malformed/absent → []. */
 export function parseRanking(hypotheses: string | undefined | null): RankedHyp[] {
   let raw: unknown[] = [];
@@ -51,6 +72,7 @@ export function parseRanking(hypotheses: string | undefined | null): RankedHyp[]
       id: String(h.id ?? ""),
       title: String(h.title ?? ""),
       confidence: Number(h.confidence ?? 0) || 0,
+      ...(typeof h.coverage === "number" && Number.isFinite(h.coverage) ? { coverage: h.coverage } : {}),
       confidenceLabel: String(h.confidence_label ?? ""),
       contradicted: !!h.contradicted,
       contradictions: arr(h.contradictions),
@@ -201,7 +223,7 @@ export function buildBackground(stories: RankedHyp[], signals: CorrSignal[]): Ba
     const phrase = h.operatorPhrase.trim();
     out.push({
       kind: "context_story",
-      title: signatureNocTitle(h.id),
+      title: hypothesisNocTitle(h.id, h.title),
       detail: `${phrase ? (phrase.endsWith(".") ? phrase : phrase + ".") + " " : ""}${BACKGROUND_NOTE}`,
       source: "security findings evaluated against this device",
     });
@@ -241,12 +263,15 @@ export function buildOthers(causal: RankedHyp[], headline: RankedHyp | undefined
     .filter((h) => h !== headline && (h.confidence > 0 || h.satisfied.length > 0 || h.contradicted))
     .slice(0, 5)
     .map((h) => {
-      const title = signatureNocTitle(h.id);
+      const title = hypothesisNocTitle(h.id, h.title);
       const human = (xs: string[]) => xs.slice(0, 3).map((k) => k.split("|").map((p) => kindLabel(p.trim())).join(" or ")).join("; ");
       let why: string;
       if (h.contradicted && h.contradictions.length) why = `Ruled out — evidence against it: ${human(h.contradictions)}.`;
       else if (h.contradicted) why = "Ruled out — the evidence contradicts it.";
       else if (/experience|degraded/i.test(h.id)) why = "Describes what was seen, not why — it is not a cause.";
+      // RCA document v2 §3.3: a template with NO required evidence satisfied was
+      // never observed — it is the nearest competitor, never "observed"/"active".
+      else if (noRequiredClauseSatisfied(h)) why = `Nearest competitor — not observed: none of its required evidence was seen (${human(h.missing)}).`;
       else if (h.missing.length) why = `Ranked lower — still missing: ${human(h.missing)}.`;
       else why = "Ranked lower — it matches less of the evidence than the leading explanation.";
       return { title, why };

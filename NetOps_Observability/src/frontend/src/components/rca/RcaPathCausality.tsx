@@ -9,6 +9,8 @@ import {
   tierLabel, tierTone, confidenceLabel, kindLabel,
 } from "./labels";
 import { derivePathModel, type PathModel, type PathSegmentView, type PathBoundary } from "./pathModel";
+import type { TopologyContext } from "./topologyContext";
+import RcaTopologyContext from "./RcaTopologyContext";
 import AskIris from "../AskIris";
 
 // RcaPathCausality — THE single RCA case path view (owner P1 2026-07-19: the
@@ -30,6 +32,10 @@ import AskIris from "../AskIris";
 //  · honest degradation — no typed path → the backend's measured spine; no
 //    spine → the named routing adjacency; nothing → "path not fully
 //    discovered". No hop and no break is ever invented.
+//  · the server's TOPOLOGY CONTEXT (RCA document v2 §2) when the report carries
+//    one: its four states and three layers render through RcaTopologyContext —
+//    beside the chain when a path exists, instead of the legacy fallbacks when
+//    none does. With a context present the client never guesses an adjacency.
 //
 // Customer-facing labels only (no schema kinds / backend names). Renders inside
 // the RcaWorkspace light report surface; tokens carry dark-safe fallbacks.
@@ -177,9 +183,12 @@ function OwnershipLine({ ownership, possibleCause }: { ownership?: string; possi
   );
 }
 
-export default function RcaPathCausality({ data, timeline, ownership, possibleCause, measuredBreak }: {
+export default function RcaPathCausality({ data, timeline, context, ownership, possibleCause, measuredBreak }: {
   data: RcaPathAttribution | null | undefined;
   timeline?: CorrTimeline | null;   // fallback derivation (measured spine / routing adjacency)
+  // The report's validated topology_context (readTopologyContext). Absent on a
+  // pre-v2 server; then the legacy fallbacks apply.
+  context?: TopologyContext | null;
   ownership?: string;               // seam-ownership display ("Lumen (DIA #12345) · ISP / carrier")
   possibleCause?: string;           // honest "possibly because of X" phrase (unconfirmed cases only)
   // Owner review 2026-11-11 (gap 3): "Break here" is claimed only for a break
@@ -188,7 +197,7 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
   // whenever the object's top is a background story.
   measuredBreak?: boolean;
 }) {
-  const rawModel: PathModel = useMemo(() => derivePathModel(data, timeline), [data, timeline]);
+  const rawModel: PathModel = useMemo(() => derivePathModel(data, timeline, context), [data, timeline, context]);
   const measured = measuredBreak ?? !isContextStory(timeline?.top_hypothesis);
   // An unmeasured break never reads "Confirmed" on the path, however the
   // object's tier was reached.
@@ -265,6 +274,21 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
             )}
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // The server's topology context, no path chain: its state IS the view (device
+  // card, known topology with the causal path unverified, or the
+  // data-availability error). Nothing is drawn that the context does not carry.
+  if (model.mode === "context" && model.context && model.contextModel) {
+    return (
+      <div className="rpc">
+        <style>{RPC_CSS}</style>
+        {(ownership || possibleCause) && (
+          <div className="rpc-headline"><OwnershipLine ownership={ownership} possibleCause={possibleCause} /></div>
+        )}
+        <RcaTopologyContext tc={model.context} model={model.contextModel} />
       </div>
     );
   }
@@ -425,6 +449,13 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
         </div>
       )}
 
+      {/* the known topology around the affected devices (server context) */}
+      {model.context && model.contextModel && (
+        <div className="rpc-context">
+          <RcaTopologyContext tc={model.context} model={model.contextModel} />
+        </div>
+      )}
+
       {/* off-path faults the engine ruled out — severity is not causality */}
       {model.discounted.length > 0 && (
         <div className="rpc-discounted">
@@ -448,112 +479,113 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
 // light document surface) with dark-safe fallbacks. The break is the ONLY loud
 // element; healthy hops are quiet nodes; unknown spans are dotted absence.
 const RPC_CSS = `
-.rpc { font-size: 14px; color: var(--rw-text, var(--fg, #172033)); }
-.rpc-empty { display: flex; gap: 8px; align-items: baseline; color: var(--rw-muted, var(--muted, #6a7384));
-  border: 1px dashed var(--rw-line, var(--border, #dce3ee)); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
-.rpc-empty-mark { color: var(--rw-muted2, #8a94a6); font-weight: 700; }
+.rpc { font-size: 14px; color: var(--rw-text); }
+.rpc-empty { display: flex; gap: 8px; align-items: baseline; color: var(--rw-muted);
+  border: 1px dashed var(--rw-line); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+.rpc-empty-mark { color: var(--rw-muted2); font-weight: 700; }
 
-.rpc-cap { border: 1px solid var(--rw-orange, #d66a00); background: var(--rw-orange2, #fff4e8);
-  color: var(--rw-orange, #b45309); border-radius: 9px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px; }
+.rpc-cap { border: 1px solid var(--rw-orange); background: var(--rw-orange2);
+  color: var(--rw-orange); border-radius: 9px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px; }
 .rpc-cap b { color: inherit; }
 
 .rpc-headline { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
 .rpc-verdict { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rpc-lift { display: inline-flex; align-items: center; gap: 6px; }
-.rpc-lift-arrow { color: var(--rw-green, #0f9f4f); font-weight: 800; }
-.rpc-lift-fact { font-size: 12.5px; color: var(--rw-muted, #6a7384); }
-.rpc-claim { font-size: 15px; line-height: 1.45; color: var(--rw-text, var(--fg, #172033)); }
-.rpc-claim b { color: var(--rw-text, var(--fg, #172033)); }
+.rpc-lift-arrow { color: var(--rw-green); font-weight: 800; }
+.rpc-lift-fact { font-size: 12.5px; color: var(--rw-muted); }
+.rpc-claim { font-size: 15px; line-height: 1.45; color: var(--rw-text); }
+.rpc-claim b { color: var(--rw-text); }
 .rpc-claim-seg { font-weight: 800; }
-.rpc-claim-dev { color: var(--rw-red, #dc2626); }
-.rpc-ownerline { font-size: 13px; line-height: 1.5; color: var(--rw-muted, var(--muted, #6a7384)); }
-.rpc-ownerline b { color: var(--rw-text, var(--fg, #172033)); }
+.rpc-claim-dev { color: var(--rw-red); }
+.rpc-ownerline { font-size: 13px; line-height: 1.5; color: var(--rw-muted); }
+.rpc-ownerline b { color: var(--rw-text); }
 .rpc-owner-name { font-weight: 800; }
 
 .rpc-pill { display: inline-flex; align-items: center; border-radius: 7px; padding: 2px 9px;
   font-size: 12.5px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent; }
-.rpc-pill.red { background: var(--rw-red2, #fff0ee); color: var(--rw-red, #dc2626); border-color: #ffd0cc; }
-.rpc-pill.orange { background: var(--rw-orange2, #fff4e8); color: var(--rw-orange, #d66a00); border-color: #ffd3a9; }
-.rpc-pill.blue { background: var(--rw-blue2, #eef4ff); color: var(--rw-blue, #2563eb); border-color: #c9dbff; }
-.rpc-pill.green { background: var(--rw-green2, #eafaf1); color: var(--rw-green, #0f9f4f); border-color: #bfeccf; }
-.rpc-pill.gray { background: #eef1f6; color: #667085; border-color: #d8dee8; }
-.rpc-pill.purple { background: var(--rw-purple2, #f3f1ff); color: var(--rw-purple, #6d5dfc); border-color: #ddd7ff; }
+.rpc-pill.red { background: var(--rw-red2); color: var(--rw-red); border-color: var(--rw-red-line); }
+.rpc-pill.orange { background: var(--rw-orange2); color: var(--rw-orange); border-color: var(--rw-orange-line); }
+.rpc-pill.blue { background: var(--rw-blue2); color: var(--rw-blue); border-color: var(--rw-blue-line); }
+.rpc-pill.green { background: var(--rw-green2); color: var(--rw-green); border-color: var(--rw-green-line); }
+.rpc-pill.gray { background: var(--rw-gray2); color: var(--rw-muted); border-color: var(--rw-gray-line); }
+.rpc-pill.purple { background: var(--rw-purple2); color: var(--rw-purple); border-color: var(--rw-purple-line); }
 .rpc-pill.ghost { opacity: .62; }
 
 .rpc-ribbon-wrap { overflow-x: auto; padding-bottom: 4px; }
 .rpc-ribbon { display: flex; align-items: flex-end; gap: 6px; min-width: min-content; padding-top: 2px; }
 .rpc-seg-wrap { display: flex; align-items: flex-end; gap: 6px; }
-.rpc-arrow { align-self: center; color: var(--rw-muted2, #8a94a6); font-size: 15px; padding: 0 1px; }
+.rpc-arrow { align-self: center; color: var(--rw-muted2); font-size: 15px; padding: 0 1px; }
 
 /* a classified segment: a quiet cap (identity only) over a row of small nodes */
 .rpc-seg { display: flex; flex-direction: column; gap: 4px; }
-.rpc-seg-cap { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--rw-muted, #6a7384); }
-.rpc-seg-tick { width: 14px; height: 3px; border-radius: 2px; background: var(--seg-color, #8a94a6); }
+.rpc-seg-cap { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--rw-muted); }
+.rpc-seg-tick { width: 14px; height: 3px; border-radius: 2px; background: var(--seg-color); }
 .rpc-seg-name { font-weight: 800; letter-spacing: .02em; }
-.rpc-seg-provider { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
-.rpc-seg-flag { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
+.rpc-seg-provider { font-weight: 700; border: 1px solid var(--rw-line); border-radius: 5px; padding: 0 4px; }
+.rpc-seg-flag { font-weight: 700; border: 1px solid var(--rw-line); border-radius: 5px; padding: 0 4px; }
 .rpc-seg-health { font-weight: 800; letter-spacing: .02em; }
-.rpc-seg-health.down { color: var(--rw-red, #dc2626); }
-.rpc-seg-health.degraded { color: var(--rw-orange, #d66a00); }
+.rpc-seg-health.down { color: var(--rw-red); }
+.rpc-seg-health.degraded { color: var(--rw-orange); }
 .rpc-seg-devs { display: flex; align-items: stretch; gap: 6px; }
-.rpc-seg-empty { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); font-style: italic; align-self: center; }
+.rpc-seg-empty { font-size: 12.5px; color: var(--rw-muted2); font-style: italic; align-self: center; }
 
 /* device node — small, quiet; the cause is the only loud one */
 .rpc-dev { display: flex; align-items: center; gap: 7px; text-decoration: none; color: inherit;
-  border: 1px solid var(--rw-line, var(--border, #dce3ee)); border-radius: 8px; padding: 5px 8px;
-  background: var(--rw-panel, var(--surface, #fff)); }
+  border: 1px solid var(--rw-line); border-radius: 8px; padding: 5px 8px;
+  background: var(--rw-panel); }
 a.rpc-dev { cursor: pointer; }
-a.rpc-dev:hover { border-color: var(--rw-blue, #2563eb); background: var(--rw-blue2, #eef4ff); }
-a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue, #2563eb); outline-offset: 1px; }
-.rpc-dev.cause { border: 2px solid var(--rw-red, #dc2626); background: var(--rw-red2, #fff0ee);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red, #dc2626) 18%, transparent); }
+a.rpc-dev:hover { border-color: var(--rw-blue); background: var(--rw-blue2); }
+a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue); outline-offset: 1px; }
+.rpc-dev.cause { border: 2px solid var(--rw-red); background: var(--rw-red2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red) 18%, transparent); }
 .rpc-dev.downstream { opacity: .8; }
 .rpc-dev-abbr { flex: none; min-width: 30px; text-align: center; font-size: 12.5px; font-weight: 800;
-  letter-spacing: .03em; color: var(--rw-muted, #6a7384); background: var(--rw-soft, #edf2f8);
+  letter-spacing: .03em; color: var(--rw-muted); background: var(--rw-soft);
   border-radius: 5px; padding: 3px 4px; }
-.rpc-dev.cause .rpc-dev-abbr { color: #fff; background: var(--rw-red, #dc2626); font-size: 12.5px; }
+.rpc-dev.cause .rpc-dev-abbr { color: var(--rw-on-fill); background: var(--rw-red); font-size: 12.5px; }
 .rpc-dev-body { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .rpc-dev-role { font-weight: 700; font-size: 13px; }
-.rpc-dev-name { font-size: 12.5px; color: var(--rw-muted, #6a7384); font-family: var(--rw-mono, ui-monospace, monospace);
+.rpc-dev-name { font-size: 12.5px; color: var(--rw-muted); font-family: var(--rw-mono, ui-monospace, monospace);
   overflow: hidden; text-overflow: ellipsis; max-width: 140px; white-space: nowrap; }
 .rpc-dev-tag { align-self: flex-start; margin-top: 2px; font-size: 12.5px; font-weight: 800; border-radius: 5px; padding: 1px 5px; }
-.rpc-dev-tag.cause { color: #fff; background: var(--rw-red, #dc2626); }
-.rpc-dev-tag.down { color: var(--rw-muted, #6a7384); border: 1px solid var(--rw-line, #dce3ee); }
+.rpc-dev-tag.cause { color: var(--rw-on-fill); background: var(--rw-red); }
+.rpc-dev-tag.down { color: var(--rw-muted); border: 1px solid var(--rw-line); }
 
 /* visible vertical boundary between adjacent segments — the seam. Labeled when
    ownership changes; the RED variant is the break hero ON the seam. */
 .rpc-boundary { display: inline-flex; flex-direction: column; align-items: center; align-self: stretch;
   justify-content: flex-end; gap: 3px; padding: 0 4px; position: relative; }
 .rpc-boundary-rule { width: 2px; flex: 1; min-height: 30px; border-radius: 1px;
-  background: var(--rw-line, var(--border, #dce3ee)); }
+  background: var(--rw-line); }
 .rpc-boundary-label { font-size: 12.5px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
-  color: var(--rw-muted2, #8a94a6); }
-.rpc-boundary.suspected .rpc-boundary-rule { background: var(--rw-red, #dc2626); width: 3px; }
-.rpc-boundary.suspected .rpc-boundary-label { color: var(--rw-red, #dc2626); }
-.rpc-boundary-x { color: #fff; background: var(--rw-red, #dc2626); border-radius: 50%;
+  color: var(--rw-muted2); }
+.rpc-boundary.suspected .rpc-boundary-rule { background: var(--rw-red); width: 3px; }
+.rpc-boundary.suspected .rpc-boundary-label { color: var(--rw-red); }
+.rpc-boundary-x { color: var(--rw-on-fill); background: var(--rw-red); border-radius: 50%;
   width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
   font-size: 12.5px; font-weight: 800;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red, #dc2626) 18%, transparent); }
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red) 18%, transparent); }
 
 /* an INFERRED segment — topologically required, zero responding hops. Dotted
    identity, never dressed as measured. */
-.rpc-seg.inferred .rpc-seg-tick { background: transparent; border-bottom: 3px dotted var(--seg-color, #8a94a6); height: 0; }
-.rpc-seg.inferred .rpc-seg-name { color: var(--rw-muted2, #8a94a6); }
-.rpc-seg-inferred-body { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); font-style: italic;
-  align-self: center; padding: 4px 8px; border: 1px dotted var(--rw-muted2, #8a94a6);
+.rpc-seg.inferred .rpc-seg-tick { background: transparent; border-bottom: 3px dotted var(--seg-color); height: 0; }
+.rpc-seg.inferred .rpc-seg-name { color: var(--rw-muted2); }
+.rpc-seg-inferred-body { font-size: 12.5px; color: var(--rw-muted2); font-style: italic;
+  align-self: center; padding: 4px 8px; border: 1px dotted var(--rw-muted2);
   border-radius: 8px; cursor: help; white-space: nowrap; }
 
 /* collapsed unknown span — dotted absence with a count, detail on hover */
 .rpc-gap { display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; align-self: center; padding: 4px 10px; border-bottom: 2px dotted var(--rw-muted2, #8a94a6);
-  color: var(--rw-muted2, #8a94a6); cursor: help; }
+  gap: 1px; align-self: center; padding: 4px 10px; border-bottom: 2px dotted var(--rw-muted2);
+  color: var(--rw-muted2); cursor: help; }
 .rpc-gap-dots { font-weight: 800; letter-spacing: 3px; line-height: 1; }
 .rpc-gap-count { font-size: 12.5px; white-space: nowrap; }
 
-.rpc-path-note, .rpc-path-fact { margin-top: 9px; font-size: 12.5px; color: var(--rw-muted, #6a7384); }
-.rpc-discounted { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rw-line, var(--border, #dce3ee)); font-size: 13px; }
-.rpc-discounted-h { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--rw-blue, #2563eb); }
-.rpc-discounted-items { color: var(--rw-muted, #6a7384); }
-.rpc-discounted-item { color: var(--rw-muted, #6a7384); }
-.rpc-discounted-note { font-size: 12.5px; color: var(--rw-muted2, #8a94a6); margin-top: 3px; }
+.rpc-context { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rw-line); }
+.rpc-path-note, .rpc-path-fact { margin-top: 9px; font-size: 12.5px; color: var(--rw-muted); }
+.rpc-discounted { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rw-line); font-size: 13px; }
+.rpc-discounted-h { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--rw-blue); }
+.rpc-discounted-items { color: var(--rw-muted); }
+.rpc-discounted-item { color: var(--rw-muted); }
+.rpc-discounted-note { font-size: 12.5px; color: var(--rw-muted2); margin-top: 3px; }
 `;
