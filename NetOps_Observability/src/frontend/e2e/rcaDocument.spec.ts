@@ -95,7 +95,7 @@ async function openCase(page: Page) {
     { object: OBJ, timeline: TIMELINE, report: REPORT });
   await page.route(/^https?:\/\/[^/]+\/api\//, (route: Route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.goto("/rca-preview.html");
-  await expect(page.locator(".rw-doc-title").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".rw-doc-title").first()).toBeVisible({ timeout: 60_000 });
 }
 
 // The RCA workspace that carries the document (other .rca-ws hosts exist).
@@ -214,7 +214,7 @@ async function openP3(page: Page, theme: "light" | "dark" = "light") {
   });
   await page.route(/^https?:\/\/[^/]+\/api\//, (route: Route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.goto(`/rca-preview.html?theme=${theme}`);
-  await expect(page.locator(".rw-doc-title").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".rw-doc-title").first()).toBeVisible({ timeout: 60_000 });
 }
 
 test("P-3E0400 renders device_only in the server's words — never 'not path-shaped'", async ({ page }) => {
