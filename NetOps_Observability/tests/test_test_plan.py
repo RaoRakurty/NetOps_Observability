@@ -118,6 +118,7 @@ def test_cli_prints_a_plan():
 
 # ── CI job selection (--ci-groups) ──────────────────────────────────────────
 import json
+import re
 
 import pytest
 import yaml
@@ -303,9 +304,51 @@ def test_wired_workflow_shape(name):
             assert "needs.plan" not in cond, jid
             continue
         assert mapping[jid] in tp.CI_GROUPS
-        assert jobs[jid]["needs"] == "plan", jid
+        needs = jobs[jid]["needs"]
+        needs = [needs] if isinstance(needs, str) else needs
+        assert needs[0] == "plan", jid
+        # An aggregator (backend-ci's required `test`) may also wait on jobs —
+        # but only mapped jobs of ITS OWN group, so it can never be skipped by
+        # another group's plan decision.
+        for dep in needs[1:]:
+            assert dep in mapping and mapping[dep] == mapping[jid], (jid, dep)
         # skip ONLY on an explicit 'false' from a plan that ran — never on failure
         assert "!cancelled()" in cond and f"needs.plan.outputs.{mapping[jid]} != 'false'" in cond, jid
+
+
+def test_backend_root_race_is_sharded_fail_closed():
+    """CI audit 2026-11-12, C2: the root package's -race run is a 4-shard matrix
+    whose regex comes from scripts/ci/go-shard.py, and the required check
+    `build · vet · test · race` cannot pass unless every shard passed."""
+    jobs = _wf("backend-ci")["jobs"]
+    root = jobs["test-race-root"]
+    assert root["needs"] == "plan"
+    assert root["if"] == "${{ !cancelled() && needs.plan.outputs.backend != 'false' }}"
+    assert "== 'true'" not in root["if"]
+    matrix = root["strategy"]["matrix"]
+    assert matrix["shard"] == list(range(int(root["env"]["ROOT_SHARDS"])))
+    assert root["strategy"]["fail-fast"] is False
+    runs = "\n".join(s.get("run", "") for s in root["steps"])
+    assert "go test -race -list '.*' ." in runs
+    assert "scripts/ci/go-shard.py" in runs and '--index "$SHARD"' in runs
+    assert '--total "$ROOT_SHARDS"' in runs
+    assert re.search(r'go test -race -timeout 60m -shuffle=on -run "\$\(cat "\$RUNNER_TEMP/root-shard\.re"\)" \.$',
+                     runs, re.MULTILINE)
+    assert root["env"]["SHARD"] == "${{ matrix.shard }}"
+
+    gate = jobs["ci-gate"]
+    step = next(s for s in gate["steps"] if s.get("uses") == "./.github/actions/ci-gate")
+    mapping = dict(pair.split("=") for pair in step["with"]["jobs"].split())
+    assert mapping["test-race-root"] == "backend" and mapping["test-race-pkgs"] == "backend"
+
+    # the required name is the aggregator, and it judges both halves
+    req = jobs["test"]
+    assert req["name"] == "build · vet · test · race"
+    assert req["needs"] == ["plan", "test-race-pkgs", "test-race-root"]
+    assert req["if"] == "${{ !cancelled() && needs.plan.outputs.backend != 'false' }}"
+    agg = next(s for s in req["steps"] if s.get("uses") == "./.github/actions/ci-gate")
+    assert agg["with"]["needs"] == "${{ toJSON(needs) }}"
+    assert set(agg["with"]["jobs"].split()) == {"test-race-pkgs=backend", "test-race-root=backend"}
 
 
 @pytest.mark.parametrize("name", NEVER_SKIPPED)
