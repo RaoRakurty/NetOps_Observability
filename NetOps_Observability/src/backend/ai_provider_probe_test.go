@@ -44,7 +44,7 @@ func TestCopilotConfigTestIsPlatformAdminOnlyAndNeverKeepsTheKey(t *testing.T) {
 		t.Fatal("a refused caller must not reach the provider")
 	}
 	code, m, raw := doJSON(t, s.handleCopilotConfigTest, http.MethodPost, "/api/copilot/config/test", body, aiPlatformOwn)
-	if code != http.StatusOK || m["ok"] != true || m["provider"] != "gemini" || m["model"] != "gemini-flash-lite-latest" {
+	if code != http.StatusOK || m["ok"] != true || m["provider"] != "gemini" || m["model"] != ai.RecommendedModels()["gemini"].Fast {
 		t.Fatalf("test: %d %s", code, raw)
 	}
 	if _, ok := m["latency_ms"]; !ok {

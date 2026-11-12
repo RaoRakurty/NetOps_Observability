@@ -49,7 +49,7 @@ func TestConnectionTestReportsEveryTierModel(t *testing.T) {
 	want := map[string]struct {
 		model string
 		ok    bool
-	}{"default": {"gemini-flash-latest", false}, "fast": {"gemini-flash-lite-latest", true}, "strong": {"gemini-2.5-flash", true}}
+	}{"default": {"gemini-flash-latest", false}, "fast": {ai.RecommendedModels()["gemini"].Fast, true}, "strong": {ai.RecommendedModels()["gemini"].Strong, true}}
 	for _, x := range tiers {
 		tp, _ := x.(map[string]any)
 		tier, _ := tp["tier"].(string)

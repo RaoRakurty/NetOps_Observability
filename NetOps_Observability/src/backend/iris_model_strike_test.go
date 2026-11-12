@@ -116,7 +116,7 @@ func TestAnOverloadedModelFallsBackToTheProvidersRecommendedModel(t *testing.T) 
 	if err != nil || text == "" || provider != "gemini" {
 		t.Fatalf("the fallback model must answer: text=%q provider=%q err=%v", text, provider, err)
 	}
-	if got := note.Model("gemini"); got != "gemini-2.5-flash" {
+	if got := note.Model("gemini"); got != ai.RecommendedModels()["gemini"].Default {
 		t.Fatalf("the answer must name the model that answered, got %q", got)
 	}
 	if len(logs.find("fallback model answered")) != 1 {
@@ -183,13 +183,13 @@ func TestAgentLoopMovesToTheFallbackModelWhenTheConfiguredOneIsOverloaded(t *tes
 	if err != nil {
 		t.Fatalf("the fallback model must answer: %v (calls %v)", err, g.urls)
 	}
-	if ans.Provider != "gemini" || ans.Model != "gemini-2.5-flash" {
+	if ans.Provider != "gemini" || ans.Model != ai.RecommendedModels()["gemini"].Default {
 		t.Fatalf("the answer must name the model that answered: %s/%s", ans.Provider, ans.Model)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	last := g.urls[len(g.urls)-1]
-	if !strings.Contains(g.urls[0], "gemini-flash-latest:") || !strings.Contains(last, "gemini-2.5-flash:") || g.keys[len(g.keys)-1] != platformKey {
+	if !strings.Contains(g.urls[0], "gemini-flash-latest:") || !strings.Contains(last, ai.RecommendedModels()["gemini"].Default+":") || g.keys[len(g.keys)-1] != platformKey {
 		t.Fatalf("configured model first, then the fallback on the same key: %v", g.urls)
 	}
 }
