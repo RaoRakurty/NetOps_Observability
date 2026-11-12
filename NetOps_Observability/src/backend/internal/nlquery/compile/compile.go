@@ -105,7 +105,6 @@ var (
 	perRe    = regexp.MustCompile(`\b(?:per|by|grouped by|group by|broken down by|break down by|for each|each)\s+(site|device|provider|actor|person|type|seam|owner|seam class|state)\b`)
 )
 
-
 // Compile compiles one question.
 func (c Compiler) Compile(ctx context.Context, question string, cx Context) (Result, error) {
 	if cx.Loc == nil {
