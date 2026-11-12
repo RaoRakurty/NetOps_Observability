@@ -73,6 +73,7 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	}
 	var lastErr error
 	skipped := 0
+	ctx = l.srv.egressCtx(ctx, l.claims)
 	for _, cand := range cands {
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {
@@ -96,6 +97,24 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 	// Wrapped, not replaced: the caller's honest footer ("timed out", "paused")
 	// is decided from the class of the last failure.
 	return "", "", ai.TokenUsage{}, fmt.Errorf("no AI provider answered: %w", lastErr)
+}
+
+// egressCtx attaches the CALLER's community mask to a provider call's context
+// (ai.WithEgressScrub): its own tenant's values plus the platform's, every
+// tenant's only for a cross-tenant caller (internal/credscrub). It replaces the
+// process default (the union, kept for callers with no request) because the
+// model's answer comes back to this caller: an answer that echoed "***" where
+// the caller's own log held another tenant's community would tell the caller
+// the string is one. Every request path that reaches ai.ProviderDo goes through
+// here: aiLLM (the grounded engine, Iris NL), the copilot's plain chat and its
+// agent loop.
+func (s *server) egressCtx(ctx context.Context, claims jwtClaims) context.Context {
+	if s == nil || s.credScrub == nil {
+		return ctx
+	}
+	cs := s.credScrub
+	tenant, cross := principalTenant(claims)
+	return ai.WithEgressScrub(ctx, func(body []byte) []byte { return cs.For(tenant, cross).MaskJSON(body) })
 }
 
 // errAIBudgetExhausted is the refusal once a tenant's daily token budget is spent.
@@ -122,7 +141,9 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 		return ai.Completion{}, ai.ErrProviderBreakerOpen
 	}
 	start := time.Now()
-	c, err := ai.CallProviderUsage(ctx, cand.name, cand.key, cand.model, system, msgs)
+	// A fast-tier call asks for the least hidden reasoning the model offers
+	// (ai/thinking.go); other tiers keep the provider default.
+	c, err := ai.CallProviderUsage(ai.WithTierThinking(ctx, tier), cand.name, cand.key, cand.model, system, msgs)
 	took := time.Since(start)
 	outcome := ai.ClassifyProviderError(err)
 	// A deadline that expired because the CALLER'S context ended (client gone)
@@ -134,6 +155,11 @@ func (s *server) callProviderGuarded(ctx context.Context, tenant string, tier ai
 	switch {
 	case err == nil:
 		s.aiBreaker.Record(tenant, cand.name, false)
+		// Every answered call is measured too: model, stage, latency and the
+		// provider's own tokens, hidden reasoning included (aiprovider/usage.go).
+		s.aiProvCalls.RecordSuccess(aiprovider.Call{Tenant: tenant, Provider: cand.name, Model: cand.model, Tier: tierLabel,
+			Stage: ai.StageOf(ctx), KeySource: cand.source, Latency: took, InputTokens: c.Usage.InputTokens,
+			OutputTokens: c.Usage.OutputTokens, ThinkingTokens: c.Usage.ThinkingTokens, UsageReported: c.Usage.Reported})
 	case ai.CountsAgainstProvider(outcome):
 		s.aiBreaker.Record(tenant, cand.name, true)
 	default:

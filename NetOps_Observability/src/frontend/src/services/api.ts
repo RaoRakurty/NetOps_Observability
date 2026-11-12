@@ -4,6 +4,8 @@
 // Minimal typed API client. Paths are relative — nginx (or Vite dev
 // proxy) routes /api and /admin to the Go backend.
 
+import { printHtmlDocument } from "../lib/printHtml";
+
 // Port Intelligence workbench row (#94) — flattened port+transceiver+health.
 export type PortRow = {
   device: string;
@@ -5268,6 +5270,59 @@ export interface PlatformFeatures {
   store_load_error: string;
 }
 
+/** Which kinds of platform alert a channel receives (internal/platformalert). */
+export interface PlatformAlertTiers {
+  page: boolean;
+  warning: boolean;
+}
+
+/** GET /api/platform/alerting/host-route — secrets appear only as *_set. */
+export interface PlatformAlertRoute {
+  /** topic is empty for an API-key caller (the topic is a credential); topic_set always says whether one exists. */
+  ntfy: { enabled: boolean; server: string; topic: string; topic_set: boolean; token_set: boolean; tiers: PlatformAlertTiers };
+  sms: {
+    enabled: boolean;
+    account_sid: string;
+    auth_token_set: boolean;
+    from: string;
+    to: string[];
+    tiers: PlatformAlertTiers;
+    max_per_hour: number;
+  };
+  page_routed: boolean;
+  warning_routed: boolean;
+  /** ok | stale (re-read failing, last good in force) | cached (never read since start-up; the on-host copy is in force) | unreadable (nothing in force). */
+  store_status: "ok" | "stale" | "cached" | "unreadable";
+  ignored_env: string[];
+  updated_by?: string;
+  updated_at?: string;
+  sms_budget_remaining: number;
+}
+
+/** PUT body. An empty secret keeps the saved one; clear_* removes it. */
+export interface PlatformAlertRouteUpdate {
+  ntfy: { enabled: boolean; server: string; topic: string; token: string; clear_token: boolean; tiers: PlatformAlertTiers };
+  sms: {
+    enabled: boolean;
+    account_sid: string;
+    auth_token: string;
+    clear_auth_token: boolean;
+    from: string;
+    to: string[];
+    tiers: PlatformAlertTiers;
+    max_per_hour: number;
+  };
+  replace_unreadable: boolean;
+}
+
+export type PlatformAlertVerdict = "ok" | "auth_rejected" | "rate_limited" | "unreachable" | "refused" | "not_configured";
+
+export interface PlatformAlertTestResult {
+  channel: "ntfy" | "sms";
+  verdict: PlatformAlertVerdict;
+  message: string;
+}
+
 export interface VrfRoutingInstance {
   name: string;
   /** "bgp_control_plane", or the VRF MIB the device answered ("mpls-l3vpn", "viptela-vpn", …). */
@@ -5880,6 +5935,17 @@ export const api = {
     }),
   restartPlatform: () => request<{ status: string }>("/api/platform/restart", { method: "POST" }),
 
+  // Platform alerts (owner 2026-11-11) — where the stack's OWN alerts go.
+  // Platform-owner only (requirePlatformAdmin); a tenant admin gets 403.
+  platformAlertRoute: () => request<PlatformAlertRoute>("/api/platform/alerting/host-route"),
+  savePlatformAlertRoute: (u: PlatformAlertRouteUpdate) =>
+    request<PlatformAlertRoute>("/api/platform/alerting/host-route", { method: "PUT", body: JSON.stringify(u) }),
+  testPlatformAlertRoute: (channel: "ntfy" | "sms") =>
+    request<PlatformAlertTestResult>("/api/platform/alerting/host-route/test", {
+      method: "POST",
+      body: JSON.stringify({ channel }),
+    }),
+
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),
   saveTokenPolicy: (p: { access_ttl_seconds: number; refresh_ttl_seconds: number }) =>
@@ -6488,9 +6554,11 @@ export const api = {
     request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
   // Canonical server-side RCA report (owner directive 2026-07-12). PDF via the
   // backend's controlled renderer (no browser print chrome); when the PDF
-  // sidecar is off, falls back to the server-rendered HTML in a new tab.
-  // Returns which format was delivered.
-  downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "html"> => {
+  // sidecar is off (always, on a customer bundle — licence audit D6) the SAME
+  // server-rendered document goes straight to the browser's Save-as-PDF
+  // dialog in place. It used to open in a new tab, which left the operator on
+  // a bare page with no way to save it. Returns which path delivered it.
+  downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "print"> => {
     const headers = authHeaders();
     const base = `/api/correlations/${encodeURIComponent(id)}/rca-report`;
     const pdf = await fetch(`${base}?format=pdf`, { headers });
@@ -6506,11 +6574,13 @@ export const api = {
     }
     const html = await fetch(`${base}?format=html`, { headers });
     if (!html.ok) throw new Error(`report render failed (${html.status})`);
-    const blob = await html.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return "html";
+    // Only a document is ever written into the print frame — never an error
+    // body or anything else a misbehaving proxy might return with a 200.
+    if (!(html.headers.get("content-type") || "").toLowerCase().startsWith("text/html")) {
+      throw new Error("report render returned no document");
+    }
+    if (!printHtmlDocument(await html.text())) throw new Error("could not open the print dialog");
+    return "print";
   },
   // Canonical server-side RCA report as JSON (same endpoint the PDF/HTML render
   // from). The path-causality P3 render reads `path_attribution` off this; the
@@ -10290,6 +10360,12 @@ export type SecLaneScanStatus = {
   trigger: string; // ticker | manual
   duration_ms: number;
   findings_emitted: number;
+  /** Owner D2 (2026-11-11): what correlation was told this run — findings that
+   *  are new, changed or (when clears are on) cleared. Optional: a lane older
+   *  than D2 does not send it, and absent is not zero. */
+  transitions_emitted?: number;
+  /** Findings this run re-confirmed without change: stored, not re-sent. */
+  unchanged_suppressed?: number;
   findings_truncated: number;
   devices_assessed: number;
   errors?: string[];

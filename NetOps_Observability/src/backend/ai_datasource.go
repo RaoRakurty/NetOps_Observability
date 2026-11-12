@@ -13,6 +13,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/irisreplay"
 )
 
@@ -23,8 +24,10 @@ import (
 //
 //  1. every query rides the caller's tenant_scope (row policy: tagged rows);
 //  2. app-layer narrowing for untagged rows — telemetry reads narrow to the
-//     principal's own devices (addrTenantClauseFor/deviceTenantCondFor, the same
-//     guards the REST surfaces use), and correlation reads are STRICT
+//     principal's own stamped rows plus untagged rows its UNAMBIGUOUS device
+//     identities claim — ones no other owner holds, tracker 370
+//     (addrTenantClauseFor/deviceTenantCondFor, the same guards the REST
+//     surfaces use), and correlation reads are STRICT
 //     (corrRowVisible: untagged correlation intel is platform-only — device
 //     names are not globally unique, so device-matching would cross-match).
 //
@@ -35,7 +38,7 @@ type aiDataSource struct {
 	srv    *server
 	ctx    context.Context
 	scope  string    // s.chTenantScope(r) — encodes tenant / __all__ for cross-tenant
-	claims jwtClaims // caller claims for OS/VM scoping helpers (visibleDevice*)
+	claims jwtClaims // caller claims for OS/VM scoping helpers (untaggedClaimFor, visibleDevice*)
 }
 
 // corrRowVisible enforces strict tenancy on correlation intel app-side, as
@@ -493,7 +496,50 @@ func (d aiDataSource) ListProblemsInWindow(ctx context.Context, _ ai.Principal, 
 // netops.flows / netops.findings tenant_iso row policy via d.scope (a non-cross
 // caller sees only its own + untagged rows). Unknown query → ErrNotImplemented;
 // no data → empty result (honest, not an error).
+//
+// Every result leaves through the configured-community mask (internal/credscrub):
+// a tool result is both what Iris shows and what the agent loop sends to an
+// external provider (§15 LLM06), and search_logs carries device text in which
+// ConfD names an SNMP session by its community.
 func (d aiDataSource) ModuleQuery(ctx context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
+	tr, err := d.moduleQuery(ctx, p, query, args)
+	if err != nil {
+		return tr, err
+	}
+	var cs credscrub.View
+	if d.srv != nil {
+		// The caller's own set: its tenant's communities plus the platform's
+		// (every tenant's only for a cross-tenant caller), never another
+		// tenant's (credscrub: Tenancy).
+		cs = d.srv.credScrub.For(p.Tenant, p.Cross)
+	}
+	return maskToolResult(cs, tr), nil
+}
+
+// maskToolResult masks the configured communities in every text a tool result
+// carries (item text, links, notes). A zero View masks nothing.
+func maskToolResult(cs credscrub.View, tr ai.ToolResult) ai.ToolResult {
+	if len(tr.Items) > 0 {
+		items := make([]ai.EvidenceItem, len(tr.Items))
+		for i, it := range tr.Items {
+			it.Text = cs.Mask(it.Text)
+			it.Href = cs.Mask(it.Href)
+			it.CitationID = cs.Mask(it.CitationID)
+			items[i] = it
+		}
+		tr.Items = items
+	}
+	if len(tr.Notes) > 0 {
+		notes := make([]string, len(tr.Notes))
+		for i, n := range tr.Notes {
+			notes[i] = cs.Mask(n)
+		}
+		tr.Notes = notes
+	}
+	return tr
+}
+
+func (d aiDataSource) moduleQuery(ctx context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
 	d = d.with(ctx)
 	switch query {
 	case "top_talkers":

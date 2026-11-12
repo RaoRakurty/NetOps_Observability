@@ -59,7 +59,8 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.4.0"  # 3.4.0: owner decisions 2026-11-11 (Fable RCA review). D1
+ENGINE_SEMVER = "3.5.0"  # 3.5.0 = owner decisions D1-D3 on top of 3.4.0 (below).
+# 3.5.0: owner decisions 2026-11-11 (Fable RCA review). D1
 # stage [7]: security and management_plane witnesses support but never anchor the
 # confirming pair (a dated security detection excepted). D2 stage [6]: context
 # stories rank below every viable causal template and carry "context_story": true in
@@ -68,6 +69,13 @@ ENGINE_SEMVER = "3.4.0"  # 3.4.0: owner decisions 2026-11-11 (Fable RCA review).
 # carry allow_root_cause_confirmed=False (stage [7]): a standing property with no onset
 # never confirms one cause, however many planes agree. Evidence that ranks neither story
 # top is byte-identical bar this version and catalog_version.
+# 3.4.0: SD-WAN controller fan-in (2026-11-11) — stage [6]
+# structure class `controller_fan_in` (>=2 distinct edges, per lane, lost their
+# control connection to the SAME controller: scoring.controller_fan_in), the
+# sig.ent.wan-edge.sdwan-controller-unreachable template it gates, and a
+# structure-conditioned discriminator (Discriminator.attested) that rules out the
+# edge-local reading when the losses fan in. Byte-identical (bar this version and
+# catalog_version) for evidence with no control-connection loss.
 # 3.3.0: tracker 385 — a no-edge link_state_change node whose
 # every opening-severity signal is link_cause=admin opens no object (stage [5]), and
 # stage [6] scores an admin link change as a change, not a link fault. Byte-identical

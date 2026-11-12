@@ -243,7 +243,8 @@ func TestADeviceNameCannotInjectMatchersIntoTheScope(t *testing.T) {
 	evil := `x"}|{device=~".*`
 	f := metricsTenantScoped(metricsScopeFilters([]string{"a-core"}, []string{evil, "a\\b", "nl\nx"}, false), "t_a")
 	for _, flt := range f {
-		if n := len(vmMatcherRe.FindAllStringSubmatch(strings.Trim(flt, "{}"), -1)); n > 3 {
+		// name matcher + device="" + resource_id="" + tenant_id: four, never more.
+		if n := len(vmMatcherRe.FindAllStringSubmatch(strings.Trim(flt, "{}"), -1)); n > 4 {
 			t.Fatalf("injected matchers: %d matchers in %q", n, flt)
 		}
 	}

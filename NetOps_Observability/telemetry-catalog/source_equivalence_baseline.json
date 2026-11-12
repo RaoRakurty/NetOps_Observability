@@ -1,14 +1,14 @@
 {
   "catalyst_center_only": 8,
-  "everything": 20,
-  "gnmi_push": 16,
+  "everything": 22,
+  "gnmi_push": 18,
   "meraki_only": 8,
   "ndfc_only": 6,
   "prime_only": 8,
-  "snmp_only": 9,
-  "snmp_push": 17,
-  "syslog_only": 16,
+  "snmp_only": 11,
+  "snmp_push": 19,
+  "syslog_only": 18,
   "versa_only": 7,
-  "vmanage_only": 9,
-  "vmanage_push": 20
+  "vmanage_only": 11,
+  "vmanage_push": 22
 }

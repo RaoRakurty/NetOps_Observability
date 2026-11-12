@@ -156,7 +156,7 @@ func TestKafkaStageIsNotObservableWithNoPeekSeam(t *testing.T) {
 	f := newFakeBackend()
 	d := f.deps()
 	d.KafkaPeek = nil
-	e := New(d).KafkaStage(context.Background(), KindSyslog, testMarker)
+	e := New(d).KafkaStage(context.Background(), Principal{Subject: "owner", Cross: true}, KindSyslog, testMarker)
 	if e.Verdict != VerdictNotObservable {
 		t.Errorf("a missing seam was reported as %s", e.Verdict)
 	}

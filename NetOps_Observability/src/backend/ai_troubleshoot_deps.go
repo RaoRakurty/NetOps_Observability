@@ -467,11 +467,10 @@ func (s *server) aiSecurityFindings(claims jwtClaims) func(context.Context, ai.P
 			return nil, ai.ErrForbidden
 		}
 		tenant, cross := principalTenant(claims)
-		keys, _ := s.visibleDeviceKeys(claims)
-		addrs, _ := s.visibleDeviceAddrs(claims)
+		claim, _ := s.untaggedClaimFor(claims) // unambiguous identities only (tracker 370)
 		p := secapi.Principal{
 			Tenant: tenant, Cross: cross, Subject: claims.Sub,
-			DeviceKeys: keys, DeviceAddrs: addrs,
+			DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		}
 		f := secapi.Filters{Current: q.Current}
 		if q.Severity != "" {

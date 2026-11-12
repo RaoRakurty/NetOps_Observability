@@ -82,9 +82,9 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 	}
 	// Same doc-level tenant boundary as the human Logs tab (osTenantFilter):
 	// own tagged docs + untagged docs from own devices only.
-	keys, _ := d.srv.visibleDeviceKeys(d.claims)
-	addrs, _ := d.srv.visibleDeviceAddrs(d.claims)
-	if f := oslog.TenantFilter(p.Tenant, p.Cross, keys, addrs); f != nil {
+	// "Own devices" means identities no other owner holds (tracker 370).
+	claim, _ := d.srv.untaggedClaimFor(d.claims)
+	if f := oslog.TenantFilter(p.Tenant, p.Cross, claim.Keys, claim.Addrs); f != nil {
 		filters = append(filters, f)
 	}
 	// Optional device narrowing — a filter clause, never string-built into the

@@ -400,6 +400,65 @@ CLAUSE_ATTR_KEYS: frozenset[str] = frozenset({"link_cause"})
 CLAUSE_ATTR_MAX_LEN = 64
 
 
+#: The kinds that state "this SD-WAN edge lost its control connection to a
+#: controller": the device's own syslog / trap (events.yaml, cisco_sdwan pack,
+#: trap.sdwan.control_connection / trap.sdwan.omp) and the controller's relay of
+#: the same transition (nms/vmanage_kinds.go). `sdwan_control_down` is the
+#: catalog's vendor-neutral name with no producer yet (coverage.py ledger).
+CONTROL_LOSS_KINDS: frozenset[str] = frozenset({
+    "controller_control_connection_loss", "sdwan_control_down",
+})
+#: An identifier-shaped controller name: an address (v4/v6), a system-ip or an
+#: inventory id. Anything else (free text, a template placeholder) names nobody.
+_CONTROLLER_PEER_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.:_-]{0,63}$")
+_CONTROLLER_PEER_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+_MIB_ENUM_SUFFIX_RE = re.compile(r"\(\d{1,6}\)$")
+
+
+def controller_peer(sig: Signal) -> tuple[str, str]:
+    """The controller a control-connection loss names: ``(peer, peer_type)``.
+
+    Stage-[1] vocabulary read by the stage-[6] fan-in gate
+    (scoring.controller_fan_in). Every producer of a CONTROL_LOSS_KINDS signal
+    already carries the far end of the lost session, under the name its lane uses:
+
+      * syslog / trap — ``attrs["peer"]`` (``peer-system-ip`` / the trap's peer
+        varbind) and ``attrs["peer_type"]`` (``vsmart`` | ``vbond`` | ``vmanage``);
+      * controller — ``attrs["peer_id"]``, which nms/identity.go may have rewritten
+        to an inventory id; the address it replaced rides in
+        ``correlation_hints.controller_peer_id`` and is preferred, so all three
+        lanes spell one controller by the same system-ip. ``peer_type`` rides in
+        the hints.
+
+    Fail-closed and bounded (zero-trust: attrs are wire data): a non-string, an
+    over-long or non-identifier value, or a peer equal to the reporting entity
+    itself, names no controller — ``("", "")``. A kind outside CONTROL_LOSS_KINDS
+    names none either. ``peer_type`` is lower-cased and only kept when it is a
+    short word (a numeric MIB enum stays "")."""
+    if sig.kind not in CONTROL_LOSS_KINDS:
+        return "", ""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    hints = attrs.get("correlation_hints")
+    hints = hints if isinstance(hints, dict) else {}
+    peer = ""
+    for raw in (attrs.get("peer"), hints.get("controller_peer_id"), attrs.get("peer_id")):
+        if isinstance(raw, str) and _CONTROLLER_PEER_RE.match(raw.strip()):
+            peer = raw.strip()
+            break
+    if not peer or peer == sig.entity_id:
+        return "", ""
+    ptype = ""
+    for raw in (attrs.get("peer_type"), hints.get("peer_type")):
+        if not isinstance(raw, str):
+            continue
+        # The trap receiver renders a MIB enum as `name(n)` (`vsmart(3)`).
+        word = _MIB_ENUM_SUFFIX_RE.sub("", raw.strip().lower())
+        if _CONTROLLER_PEER_TYPE_RE.match(word):
+            ptype = word
+            break
+    return peer, ptype
+
+
 def clause_attr(sig: Signal, key: str) -> str:
     """Bounded, fail-closed read of one clause-testable attrs value. Malformed
     attrs, a non-string value and an absent key are all "" (zero-trust: the wire

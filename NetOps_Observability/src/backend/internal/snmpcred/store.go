@@ -348,6 +348,36 @@ func (s *Store) ResolveAll() []Credential {
 	return out
 }
 
+// TenantCommunity is one stored community and the tenant that owns it ("" =
+// platform-owned).
+type TenantCommunity struct {
+	TenantID  string
+	Community string
+}
+
+// Communities returns every stored community with its owning tenant, across
+// ALL tenants (a v3 profile keeps one only if it was edited from v2c; it is
+// still a secret, so it is included). It feeds internal/credscrub, which masks
+// each caller's OWN tenant's values (plus the platform's) wherever a log line
+// repeats one. It is never for display, an API answer or a log line.
+func (s *Store) Communities() []TenantCommunity {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TenantCommunity, 0, len(s.creds))
+	for _, c := range s.creds {
+		if c.Community != "" {
+			out = append(out, TenantCommunity{TenantID: c.TenantID, Community: c.Community})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TenantID != out[j].TenantID {
+			return out[i].TenantID < out[j].TenantID
+		}
+		return out[i].Community < out[j].Community
+	})
+	return out
+}
+
 // Upsert creates or replaces a credential. On update, empty secret fields keep
 // the existing stored secret (so the UI need not re-send them).
 func (s *Store) Upsert(c Credential) (Public, error) {

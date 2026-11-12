@@ -230,7 +230,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync: bounded fetch → encode → stream.
-	data, err := logexport.FetchBounded(r.Context(), openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(r.Context(), openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024), s.logValueMasker(spec.MaskTenant, spec.MaskCross))
 	if err != nil {
 		if errors.Is(err, logexport.ErrTooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, err)
@@ -600,14 +600,16 @@ func exportMaxTimeRange() time.Duration {
 // including the operator-visibility compliance restriction (so an export can never
 // exfiltrate a restricted tenant's telemetry, even via the async worker later).
 func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logexport.Spec {
-	keys, cross := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
-	tenant, _ := principalTenant(claims)
+	// Unambiguous identities only (tracker 370): an export frozen with a name
+	// another owner also holds would carry that owner's untagged lines out.
+	claim, cross := s.untaggedClaimFor(claims)
+	tenant, principalCross := principalTenant(claims)
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return logexport.Spec{
 		Query: query, From: from, To: to, Signal: signal, Format: format,
-		Tenant: tenant, Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
+		Tenant: tenant, Cross: cross, DeviceKeys: claim.Keys, DeviceAddrs: claim.Addrs,
 		ExcludeTenants: exclude, DenyAll: deny, RequestedBy: claims.Sub,
+		MaskTenant: tenant, MaskCross: principalCross,
 	}
 }
 
@@ -716,7 +718,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	start, end := exportTimeRange(spec.From, spec.To)
 
 	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseExporting, time.Now().UTC(), spec.Signal)
-	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024), p.srv.logValueMasker(spec.MaskTenant, spec.MaskCross))
 	if err != nil {
 		// Size-cap breaches are deterministic → dead-letter, don't retry.
 		dead := errors.Is(err, logexport.ErrTooLarge) || p.dead(job)

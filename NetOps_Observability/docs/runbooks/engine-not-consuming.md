@@ -8,7 +8,7 @@ list, which reads as "a quiet network".
 `CorrConsumerNotRunning`, `CorrConsumerRestartLoop`, `RouterConsumerDead`,
 `RouterConsumerLagGrowing`, `IngestPipelineSilent`, `NMSIngestSilent`,
 `NMSIntegrationDown`, `ClickHouseWritesRejected`, `AlertDeliveryBroken`,
-`CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
+`PlatformAlertsReachNobody`, `CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
 
 ---
 
@@ -75,7 +75,7 @@ broken alert delivery obviously cannot rely on alert delivery).
 
 | Alert class | Route | Destination | Depends on |
 |---|---|---|---|
-| **Platform self-health** — everything vmalert sends through the receiver (layers stack/host/clickhouse/platform, the four page conditions, the warning tier) | `internal/alertwebhook` host route | the **host-monitoring ntfy topic** — the same phone channel `scripts/stack-watchdog.sh` uses (`PLATFORM_ALERTS_NTFY_TOPIC`, default `WATCHDOG_NTFY_TOPIC`) | nothing but the topic. It works on an install with **no** notification channel configured, because it is how the stack reports on itself |
+| **Platform self-health** — everything vmalert sends through the receiver (layers stack/host/clickhouse/platform, the four page conditions, the warning tier) | `internal/alertwebhook` host route, destinations from `internal/platformalert` | the channels set on **Platform → Platform alerts** in the web console: ntfy and/or Twilio SMS, by tier (default: pages to every enabled channel, the warning digest to ntfy only — SMS costs money). Configured in the GUI only since 2026-11-11 (owner decision); `PLATFORM_ALERTS_NTFY_*` is retired and ignored (one boot WARN names it), and `WATCHDOG_NTFY_TOPIC` is no longer a fallback | the platform-global setting, cached in memory as the last good copy (an unreadable store keeps it in force and is loud). Independent of the product notification channels |
 | **Product / tenant** — monitor rules, BGP watch, per-tenant security findings | `notify.Dispatcher` | the channels configured in Settings → Notification channels | operator configuration; still **refuses** the watchdog topic (watchdog independence, #101) |
 
 Tier → push priority on the host route: `tier: page` → **high**, everything
@@ -84,8 +84,17 @@ else firing → **default**, a resolution → **low**. The `AlertingHeartbeat` i
 phone every 30 minutes is how a pager gets muted. Delivery is counted in
 `netops_alert_webhook_pushed_total{route="host_monitoring",tier}` and
 `netops_alert_webhook_push_failures_total{route,reason}`
-(`reason="not_configured"` means no topic is set — see
-`netops_alert_webhook_host_route_enabled`).
+(`reason="not_configured"` means no channel is configured at all — see
+`netops_alert_webhook_host_route_enabled`; a tier the administrator routed
+nowhere on purpose is counted in `netops_alert_webhook_host_unrouted_total`
+instead). The configuration's own health is `netops_platform_alert_*`
+(`store_readable`, `store_ever_read`, `page_routed`, `sms_budget_remaining`).
+
+SMS cap: at most `max_per_hour` text messages an hour across all recipients
+(default 10, one message per recipient, set on the page), half of it reserved
+for pages. Past the cap the SMS is refused locally
+(`reason="budget_exhausted"`, an ERROR line for a page) while ntfy still
+carries the page.
 
 Platform alerts still reach the product dispatcher as well, unchanged; the host
 route is an **additional** destination, sharing the same cool-down, so nothing
@@ -286,8 +295,10 @@ docker compose logs --tail=50 vmalert | grep -i notifier
 | `enabled == 0` | `VMALERT_WEBHOOK_TOKEN` unset → route not registered (fail-closed, by design) | set it in `deployment/docker/.env`; `scripts/install.py` generates it |
 | `vmalert` will not start, compose says `environment variable "VMALERT_WEBHOOK_TOKEN" required by secret … is not set` | since D-16 (2026-09-03) the token reaches vmalert as a compose **secret file** (`-notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password`), not in the url userinfo — argv is disclosed verbatim by `docker inspect`. Compose refuses to materialise a secret from an unset variable, and says which one. | set `VMALERT_WEBHOOK_TOKEN` in `deployment/docker/.env` (`scripts/install.py` mints it on every install) |
 | `enabled == 1`, heartbeat stale | vmalert down/wedged, flag reverted to `-notifier.blackhole`, or a token mismatch | check `netops_alert_webhook_unauthorized_total`; compare the token on both sides |
-| `netops_alert_webhook_host_route_enabled == 0` | no host-monitoring topic: platform alerts reach the configured product channels only, and an install with none configured is silent | set `PLATFORM_ALERTS_NTFY_TOPIC` (or `WATCHDOG_NTFY_TOPIC`) in `deployment/docker/.env` |
-| `netops_alert_webhook_push_failures_total{reason="send_error"}` rising | the ntfy server/token is wrong, or ntfy is unreachable from the api | check the api log line `platform alert push to host monitoring FAILED` (it never carries the topic) |
+| `netops_alert_webhook_host_route_enabled == 0` | no channel receives page-tier platform alerts: they reach the configured product channels only, and an install with none configured is silent. The admin page shows a banner | configure a channel on **Platform → Platform alerts** and press **Send test**. Env does nothing here (`PLATFORM_ALERTS_NTFY_*` is retired) |
+| `netops_platform_alert_store_readable == 0` | the saved platform alert settings could not be re-read (store down, vault unseal failure); the last good settings stay in force. At start-up the api falls back to the sealed on-host copy `data/platform_alert_route.lastgood.json` (`store_from_cache 1`, page shows "last copy kept on this server") so pages keep reaching the configured channels. `store_ever_read == 0` means neither could be read — opening the copy still needs the vault, the one dependency it cannot remove — so nothing is in force | fix the store / vault; the api retries the store and the copy every minute. If the record is beyond repair, re-enter it on the page and tick *Replace the saved settings* |
+| **`PlatformAlertsReachNobody`** (page, condition 4 — the alerting path broken at its last hop) / watchdog **`PLATFORM_ALERTS_UNROUTED`** (critical) | the receiver is fed, but `netops_platform_alert_page_routed == 0` (no channel receives pages), `store_ever_read == 0` (nothing in force), or the routing gauge is absent from a scraped api. The rule waits `for: 15m`; the watchdog pages after 10 minutes at 0 and only once the gauge is older than that window — so a fresh install has time to be configured, and then pages through the watchdog's own ntfy **on purpose** | configure a channel on **Platform → Platform alerts** and press **Send test**; for `store_ever_read == 0`, fix Postgres / the vault. `PLATFORM_ALERT_ROUTE_CHECK=0` disables the watchdog block |
+| `netops_alert_webhook_push_failures_total{reason="send_error"}` rising | the ntfy server/token or the Twilio credentials/numbers are wrong, or the provider is unreachable from the api (the page's **Send test** names which) | check the api log line `platform alert push to host monitoring FAILED` (it never carries the topic) |
 | `..._push_failures_total{reason="rate_limited"}` rising | the ntfy server is refusing (429) even after the bounded retry ladder — the free public server limits per topic/IP | check `netops_alert_webhook_push_retries_total`; move to a self-hosted/paid ntfy, or lengthen `PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` |
 | `..._push_failures_total{reason="budget_exhausted"}` rising | *we* refused locally: the hourly push budget is spent. Warnings stop at the page reserve; only a `tier="page"` refusal is logged at ERROR | inspect `netops_alert_webhook_push_budget_remaining` (`-1` = guard disabled); raise `PLATFORM_ALERTS_PUSH_BUDGET` only after confirming the server itself is not rate-limiting |
 | `netops_alert_webhook_push_budget_remaining` pinned at the reserve | normal under a warning storm — warnings are being held back so a page can still go out | nothing; confirm with `netops_alert_webhook_digest_alerts_total` |

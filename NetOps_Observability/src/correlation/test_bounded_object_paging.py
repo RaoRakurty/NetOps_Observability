@@ -97,6 +97,20 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # test_admin_link_change_385.py::
 # test_no_link_cause_evidence_is_byte_identical_with_and_without_385.
 #
+# RE-FROZEN, 2026-11-11, SD-WAN controller fan-in (was "c83fd3b4ede97dbe").
+# ENGINE_SEMVER went 3.3.0 -> 3.4.0 and the catalog moved (structure class
+# controller_fan_in, the sdwan-controller-unreachable template, the edge-local
+# template's mandatory clause, Discriminator.attested). This object carries no
+# control-connection loss, so its DECISION cannot move, and that was CHECKED by a
+# JSON diff of the hypotheses blob against origin/main da6452a0: the only
+# differing leaf is `ranking/catalog_version`. The durable form of that proof is
+# test_sdwan_controller_fan_in.py::
+# test_no_control_loss_evidence_is_byte_identical_with_and_without_the_change.
+#
+# RE-FROZEN, 2026-11-11, Fable review fixes on the same branch (was
+# "4d155b6650f11505"): the controller template's operator phrase / blast radius
+# became conditional, so catalog_version moved. JSON diff of the blob against
+# 68abe8a6: the only differing leaf is `ranking/catalog_version`.
 # RE-FROZEN, 2026-11-11, P-424934 (was "c83fd3b4ede97dbe"). ENGINE_SEMVER went
 # 3.3.0 -> 3.3.1 and the catalog moved (allow_root_cause_confirmed=False and a cap
 # reason on the exposure / hardening-drift stories). This object carries no
@@ -110,7 +124,14 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # and no context story, so its DECISION cannot move: CHECKED by diffing the
 # persisted row against the 3.3.1 one — identical blob modulo catalog_version;
 # only `catalog_version` and `engine_version` differ.
-FIXTURE_GOLDEN = "4c1a60751e3a0bd3"
+# RE-FROZEN, 2026-11-12, merge of owner D1-D3 with the SD-WAN controller fan-in
+# (was "0c87be7cb31b263f" on main 3.4.0). ENGINE_SEMVER 3.4.0 -> 3.5.0 and the catalog
+# moved (both changes' templates in one catalog). CHECKED by diffing every hashed
+# input (nodes, signals, edges, hypotheses blob, engine) against origin/main 170112c6:
+# exactly two leaves differ — `engine` and `hypotheses/ranking/catalog_version`.
+# This object carries no security evidence and no control-connection loss, so its
+# DECISION cannot move, and it did not.
+FIXTURE_GOLDEN = "1189fe8c3ee56756"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

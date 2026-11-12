@@ -19,7 +19,6 @@ import { api, setToken } from "../src/services/api";
 const budgets = budgetsJson as unknown as Record<string, Budget>;
 
 // Pages under test.
-import Events from "../src/pages/Events";
 import Correlations from "../src/tabs/Correlations";
 import Logs from "../src/tabs/Logs";
 import Devices from "../src/pages/Devices";
@@ -86,9 +85,8 @@ function licenceView() {
 
 // ── payloads, built ONCE (outside every timed region) ────────────────────────
 synth.resetRand();
-const EVENT_SYSLOG = synth.syslogHits(2400);
-const EVENT_TRAPS = synth.trapHits(2400);
-const EVENT_ALERTS = synth.alerts(200);  // 2400 + 2400 + 200 = 5,000 events
+// Active alerts — the device inventory reads them for its per-device badge.
+const ALERT_ROWS = synth.alerts(200);
 const CORR_ROWS = synth.correlations(2000);
 const LOG_HITS = synth.syslogHits(20000);
 const DEVICE_ROWS = synth.devices(2000);
@@ -131,7 +129,7 @@ const noop = () => {};
 beforeEach(() => {
   // Stub only what these pages fetch on mount; everything else stays real, so
   // an api rename breaks this suite instead of silently measuring a stub.
-  vi.spyOn(api, "alerts").mockResolvedValue(EVENT_ALERTS as never);
+  vi.spyOn(api, "alerts").mockResolvedValue(ALERT_ROWS as never);
   vi.spyOn(api, "features").mockResolvedValue({} as never);
   vi.spyOn(api, "devices").mockResolvedValue(DEVICE_ROWS as never);
   vi.spyOn(api, "deviceLocations").mockResolvedValue({ devices: [] } as never);
@@ -148,16 +146,12 @@ beforeEach(() => {
   vi.spyOn(api, "correlations").mockResolvedValue({
     data: CORR_ROWS, rows: CORR_ROWS.length, next_cursor: "",
   } as never);
-  // Both the Events feed and the Log search call searchLogs; they are told
-  // apart by the bounded window the Log search always sends (`to`). Each is
-  // handed its FULL scenario payload rather than one server page — the budget
-  // is for the loaded-through state ("Load more" pressed to the end), which is
-  // what an operator working a storm actually ends up looking at.
-  vi.spyOn(api, "searchLogs").mockImplementation(((opts: { signal?: string; to?: string }) => {
-    if (opts?.to) return Promise.resolve(synth.osEnvelope(LOG_HITS));      // Log search
-    if (opts?.signal === "snmptrap") return Promise.resolve(synth.osEnvelope(EVENT_TRAPS));
-    return Promise.resolve(synth.osEnvelope(EVENT_SYSLOG));                 // Events feed
-  }) as never);
+  // The Log search is handed its FULL scenario payload rather than one server
+  // page — the budget is for the loaded-through state, which is what an
+  // operator working a storm actually ends up looking at. It opens on the
+  // Events tab (every store), which is the merged timeline the removed
+  // Explore → Events page used to measure (owner 2026-11-11).
+  vi.spyOn(api, "searchLogs").mockImplementation((() => Promise.resolve(synth.osEnvelope(LOG_HITS))) as never);
 
   // BGP operations — a dozen independent panels on one screen, each stubbed at
   // its own volume. The page auto-selects the worst-classified watched prefix
@@ -243,15 +237,6 @@ function scenario(
 }
 
 describe("frontend render budgets (high-EPS payloads)", () => {
-  it(
-    "events feed — 5,000 events on one timeline",
-    scenario("events-feed", "5,000 events", () => <Events sinceSeconds={3600} />, {
-      update: () => <Events sinceSeconds={3600} />,
-      verify: hasRows(5000),
-    }),
-    120_000,
-  );
-
   it(
     "RCA list — 2,000 correlation objects",
     scenario("rca-list", "2,000 correlations", () => <Correlations />, {

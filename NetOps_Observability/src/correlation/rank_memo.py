@@ -45,6 +45,7 @@ Per-signal inputs `rank` reads (transitively):
 | `attrs["corroborates_kinds"]` | `scoring.py:93`, `scoring.py:485` | only for `kind == active_verification_result` |
 | `attrs["refutes_kinds"]` | `scoring.py:236` | only for `kind == active_verification_healthy` |
 | `signals.CLAUSE_ATTR_KEYS` (`attrs["link_cause"]`), via `clause_attr` | `scoring._clause_attrs_hold` (tracker 385), reached from `clause_matches` + `_verification_corroborates` | clause `attrs` / `attrs_not` predicates; absent and "" are one class |
+| `sig.source`, `signals.controller_peer(sig)` (`attrs["peer"]` / `["peer_id"]` / `["peer_type"]`, `correlation_hints.controller_peer_id` / `.peer_type`) | `scoring.controller_fan_in`, reached from `evidence_structure` (the `controller_fan_in` structure gate, a structure-conditioned discriminator) and the fan-in note | ONLY for `kind in signals.CONTROL_LOSS_KINDS` |
 | `attrs["fidelity"]`, `attrs["rule_id"]` | `scoring.py` A7 cap (`fidelity_weighting_enabled()`) | ONLY when `CORR_FIDELITY_WEIGHTING` is on — see `signal_projection` |
 | `attrs["origin_device"]` (via `Witness.origin`) | `verdicts.Witness.independent_of` (E1) | ONLY when `CORR_ORIGIN_OBSERVER` is on — see `_witness_projection` |
 | `attrs["series_sources"]` (via `Witness.series_authorities`) | `verdicts.Witness.independent_of` + `coverage` fate groups (P6 PR-C2) | ONLY when `CORR_SERIES_ADMISSION` is on — see `_witness_projection` |
@@ -72,7 +73,7 @@ Catalog / caller inputs:
 | `tenant` | NOT read by `rank`. Folded into the key anyway — CLAUDE.md §3a: a cached verdict must be structurally unable to cross a tenant boundary, even when the two tenants' evidence projections are identical and the result would be equal by value. |
 
 NOT in the key, and the property test perturbs every one of them:
-`ts`, `signal_id` / `native_id` / `source` / `stored_signal_id` (but see ORDER
+`ts`, `signal_id` / `native_id` / `source` (except on a control-loss kind, above) / `stored_signal_id` (but see ORDER
 below), `severity` (nothing in `scoring.py` or `verdicts.py` reads it — the
 severity floor is `engine.py`'s, before `rank`), `site`, `path_id`,
 `service_id`, `metric_name`, `value`, `baseline`, the SIGN of `deviation`,
@@ -348,8 +349,10 @@ from scoring import (
 )
 from signals import (
     CLAUSE_ATTR_KEYS,
+    CONTROL_LOSS_KINDS,
     Signal,
     clause_attr,
+    controller_peer,
     fidelity_of,
     fidelity_weighting_enabled,
     origin_observer_enabled,
@@ -971,6 +974,11 @@ def signal_projection(sig: Signal) -> tuple:
         # `clause_attr`. Unconditional: the predicates are not flag-gated. Stays
         # ahead of the witness, which test_T1d reads as the last element.
         tuple(clause_attr(sig, k) for k in sorted(CLAUSE_ATTR_KEYS)),
+        # The SD-WAN controller fan-in gate (scoring.controller_fan_in) reads the
+        # lane and the controller a control loss names; only for those kinds, as
+        # the verification kinds above. Stays ahead of the witness (test_T1d).
+        ((sig.source.value, *controller_peer(sig))
+         if kind in CONTROL_LOSS_KINDS else ()),
         _witness_projection(witness_of(sig)),
     )
     if fidelity_weighting_enabled():

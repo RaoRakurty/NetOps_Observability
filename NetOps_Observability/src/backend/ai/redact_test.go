@@ -381,11 +381,38 @@ func TestRedactSecretsMasksTheRefusedCommunityInBothPlaces(t *testing.T) {
 	}
 }
 
-// A successful SNMP session names a real account in the same slot; that stays
-// (owner D7). Only the refused request's "user" is a credential.
+// A session's group line names a real account in the same slot; that stays
+// (owner D7). Only the refused request's "user" and the via-snmp session's
+// "user" are credentials as far as a pattern can tell.
 func TestRedactSecretsKeepsTheAccountOfASuccessfulSNMPSession(t *testing.T) {
 	in := "audit user: fixture-person/0 assigned to groups: operator"
 	if got := RedactSecrets(in); got != in {
 		t.Errorf("an account name was masked: %q", got)
+	}
+}
+
+// Found live 2026-11-11: ConfD names an ACCEPTED v1/v2c SNMP session by its
+// community. The opening line says "via snmp", so its user slot is masked even
+// when the community is configured nowhere; a person's session on any other
+// interface keeps its account (owner D7).
+func TestRedactSecretsMasksTheUserOfAConfdSNMPSession(t *testing.T) {
+	comm := "fixture-comm-" + strings.Repeat("q", 6)
+	for in, want := range map[string]string{
+		"audit user: " + comm + "/49119 created new session via snmp from 127.0.0.1:54873 with udp": "audit user: ***/49119 created new session via snmp from 127.0.0.1:54873 with udp",
+		"audit user: public/1 created new session via SNMP from 10.0.0.1:161 with udp":              "audit user: ***/1 created new session via SNMP from 10.0.0.1:161 with udp",
+		"confd[812]: audit user: " + comm + "/7 created new session via snmp":                       "confd[812]: audit user: ***/7 created new session via snmp",
+	} {
+		if got := RedactSecrets(in); got != want {
+			t.Errorf("RedactSecrets(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+	for _, in := range []string{
+		"audit user: fixture-person/7 created new session via cli from 192.0.2.7:51234 with ssh",
+		"audit user: fixture-person/8 created new session via netconf from 192.0.2.7:51235 with ssh",
+		"audit user: fixture-person/9 created new session via snmpish from 192.0.2.7:1 with udp",
+	} {
+		if got := RedactSecrets(in); got != in {
+			t.Errorf("a person's session account was masked: %q", got)
+		}
 	}
 }

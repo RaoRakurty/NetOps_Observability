@@ -41,9 +41,9 @@ func TestMetricsScopeFiltersScopedWithDevices(t *testing.T) {
 	}
 	joined := strings.Join(got, " ")
 	for _, want := range []string{
-		`{device=~"core-1"}`,
-		`{hostname=~"core-1\\.acme",device=""}`, // RE2-escaped, then PromQL-string-escaped
-		`{source=~"core-1\\.acme",device=""}`,
+		`{device=~"core-1",resource_id=""}`,
+		`{hostname=~"core-1\\.acme",device="",resource_id=""}`, // RE2-escaped, then PromQL-string-escaped
+		`{source=~"core-1\\.acme",device="",resource_id=""}`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing filter %q in %v", want, got)
@@ -72,8 +72,8 @@ func TestMetricsScopeFiltersScopedNoDevices(t *testing.T) {
 // device matcher is emitted (no empty hostname/source matchers).
 func TestMetricsScopeFiltersIdsOnly(t *testing.T) {
 	got := metricsScopeFilters([]string{"a", "b"}, nil, false)
-	if len(got) != 1 || got[0] != `{device=~"a|b"}` {
-		t.Fatalf(`expected single {device=~"a|b"}; got %v`, got)
+	if len(got) != 1 || got[0] != `{device=~"a|b",resource_id=""}` {
+		t.Fatalf(`expected single {device=~"a|b",resource_id=""}; got %v`, got)
 	}
 }
 

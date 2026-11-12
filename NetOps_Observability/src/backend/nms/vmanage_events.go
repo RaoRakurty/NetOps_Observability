@@ -85,6 +85,22 @@ func vmEventSeverity(s string) string {
 	return normSeverity(s)
 }
 
+// vmPeerType: a control session's far-end role (vsmart | vbond | vmanage | …),
+// lower-cased. Controller output is untrusted, so anything that is not one short
+// word is no role at all ("").
+func vmPeerType(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" || len(s) > 24 {
+		return ""
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return ""
+		}
+	}
+	return s
+}
+
 // vmBGPState: only "established" is up; idle/active/connect/… are not.
 func vmBGPState(s string) string {
 	if strings.EqualFold(strings.TrimSpace(s), "established") {
@@ -219,8 +235,11 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 			EventType: r.EventName, NormalizedEventType: normType, Severity: severity,
 			Category: strings.ToLower(r.Component), DeviceID: r.SystemIP, DeviceName: r.HostName,
 			InterfaceName: firstNonEmpty(det["if-name"], det["interface"]),
-			PeerID:        firstNonEmpty(det["peer"], det["neighbor"]),
-			Message:       r.EventName + " " + strings.TrimSpace(r.Details), EvidenceRole: roleForEventType(normType),
+			// A control-connection / OMP transition names the far end as
+			// `peer-system-ip` (BGP uses `peer`): without it the engine could
+			// not tell which controller several edges lost together.
+			PeerID:  firstNonEmpty(det["peer"], det["neighbor"], det["peer-system-ip"]),
+			Message: r.EventName + " " + strings.TrimSpace(r.Details), EvidenceRole: roleForEventType(normType),
 			CorrelationHints: map[string]string{"component": r.Component, "system_ip": r.SystemIP},
 		}
 		// Tracker 387 on the controller lane: what the BGP transition MEANS. The
@@ -239,6 +258,10 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 				// what a just-torn-down established session reports.
 				e.CorrelationHints["bgp_peer_routerid"] = "unset"
 			}
+		}
+		if pt := vmPeerType(det["peer-type"]); pt != "" {
+			// vsmart | vbond | vmanage — which controller role the lost session ran to.
+			e.CorrelationHints["peer_type"] = pt
 		}
 		if recovery {
 			e.NormalizedEventType += "_clear"

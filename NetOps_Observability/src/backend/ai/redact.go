@@ -94,6 +94,15 @@ var (
 	// session names a real account (owner D7: usernames stay).
 	reConfdSNMPAuthUser = regexp.MustCompile(`(?i)\b(audit user:\s*)[^\s/]+(/\d+\s+SNMP authentication failed)`)
 
+	// ConfD opens a session for every SNMP request it ACCEPTS too, and for v1/v2c
+	// the session's "user" is the community the request carried (found live
+	// 2026-11-11: three lines per poll on every vEdge). Only the opening line says
+	// "via snmp"; its group and close lines look exactly like a person's session
+	// and are masked by value instead (internal/credscrub). For SNMPv3 the slot
+	// holds a USM user name, which is not a secret, but ConfD's line cannot tell
+	// v2c from v3, so the slot is always masked on this one line.
+	reConfdSNMPSessionUser = regexp.MustCompile(`(?i)\b(audit user:\s*)[^\s/]+(/\d+\s+created new session via snmp\b)`)
+
 	// Inline credentials in a connection string / URL userinfo:
 	// postgres://user:pw@host, https://admin:pw@device/api.
 	reURLCreds = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`)
@@ -228,6 +237,7 @@ func RedactSecrets(s string) string {
 	s = reVendorKey.ReplaceAllString(s, Mask)
 	s = reCommunityName.ReplaceAllString(s, "${1}"+Mask)
 	s = reConfdSNMPAuthUser.ReplaceAllString(s, "${1}"+Mask+"${2}")
+	s = reConfdSNMPSessionUser.ReplaceAllString(s, "${1}"+Mask+"${2}")
 	s = reSecretKV.ReplaceAllString(s, "${1}${2}"+Mask)
 	s = reSecretCLI.ReplaceAllStringFunc(s, maskCLISecret)
 	s = reURLCreds.ReplaceAllString(s, "${1}"+Mask+":"+Mask+"@")

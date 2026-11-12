@@ -358,7 +358,7 @@ services:
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
         netops.wireless_sessions netops.wireless_events
-        netops.security netops.bgp netops.experience; do
+        netops.security netops.security.audit netops.bgp netops.experience; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions "$$p" --replication-factor 1 || exit 1;
@@ -1748,17 +1748,13 @@ services:
       NTFY_ALERT_SERVER: ${NTFY_ALERT_SERVER:-}
       NTFY_ALERT_TOKEN: ${NTFY_ALERT_TOKEN:-}
       WATCHDOG_NTFY_TOPIC: ${WATCHDOG_NTFY_TOPIC:-}
-      # PLATFORM self-health alerts (vmalert -> internal/alertwebhook) are pushed
-      # to the HOST-MONITORING channel — the same phone topic the external
-      # watchdog uses — because that route must work on an install where nobody
-      # has configured a product notification channel yet: it is how the stack
-      # reports on ITSELF. Empty topic ⇒ falls back to WATCHDOG_NTFY_TOPIC above;
-      # empty server/token ⇒ fall back to NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN,
-      # then to https://ntfy.sh. The watchdog-topic REFUSAL still stands for the
-      # PRODUCT ntfy channel (notify_config.go) — that is a tenant-facing surface.
-      PLATFORM_ALERTS_NTFY_TOPIC: ${PLATFORM_ALERTS_NTFY_TOPIC:-}
-      PLATFORM_ALERTS_NTFY_SERVER: ${PLATFORM_ALERTS_NTFY_SERVER:-}
-      PLATFORM_ALERTS_NTFY_TOKEN: ${PLATFORM_ALERTS_NTFY_TOKEN:-}
+      # PLATFORM self-health alerts (vmalert -> internal/alertwebhook) go to the
+      # destinations set in the GUI: Platform → Platform alerts (ntfy and/or
+      # Twilio SMS, by tier). Owner decision 2026-11-11: configured from the
+      # GUI, NOT via env — PLATFORM_ALERTS_NTFY_TOPIC/_SERVER/_TOKEN are
+      # retired and deliberately NOT passed through here (the api also warns at
+      # boot if one reaches it some other way). WATCHDOG_NTFY_TOPIC above stays
+      # only for the PRODUCT channel's refusal; it is no longer a fallback.
       # Alert-noise + rate-limit control (2026-09-03). ntfy.sh's free public
       # server rate-limits per topic/IP and answered 429 on this route while
       # chronic WARNINGS were pushing one message each; a real page can be

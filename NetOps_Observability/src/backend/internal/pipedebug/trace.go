@@ -315,7 +315,7 @@ func (a *API) follow(ctx context.Context, p Principal, marker string, kind Kind,
 func (a *API) stageCtx(ctx context.Context, p Principal, stage Stage, kind Kind, marker, tenant string) Entry {
 	switch stage {
 	case StageKafka:
-		return a.KafkaStage(ctx, kind, marker)
+		return a.KafkaStage(ctx, p, kind, marker)
 	case StageOpenSearch:
 		return a.OpenSearchStage(ctx, p, kind, marker, tenant)
 	case StageVictoria:

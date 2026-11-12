@@ -254,7 +254,7 @@ func TestFlowBusHopIsSeenBecauseTheProbeSrcNeedleIsSent(t *testing.T) {
 	srv := sidecarStandIn(t, record)
 
 	api := New(Deps{KafkaPeek: NewKafkaPeek(srv.Client(), srv.URL, "tok")})
-	e := api.KafkaStage(context.Background(), KindFlow, testMarker)
+	e := api.KafkaStage(context.Background(), Principal{Subject: "owner", Cross: true}, KindFlow, testMarker)
 	if e.Verdict != VerdictSeen {
 		t.Fatalf("the flow bus hop reported %s (%s) — the record IS on the bus", e.Verdict, e.Reason)
 	}
@@ -281,7 +281,7 @@ func TestSyslogBusHopSendsNoProbeSrc(t *testing.T) {
 	}))
 	defer srv.Close()
 	api := New(Deps{KafkaPeek: NewKafkaPeek(srv.Client(), srv.URL, "tok")})
-	if e := api.KafkaStage(context.Background(), KindSyslog, testMarker); e.Verdict != VerdictNotSeen {
+	if e := api.KafkaStage(context.Background(), Principal{Subject: "owner", Cross: true}, KindSyslog, testMarker); e.Verdict != VerdictNotSeen {
 		t.Fatalf("verdict = %s", e.Verdict)
 	}
 	if sent != "" {

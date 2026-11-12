@@ -100,14 +100,14 @@ grouped yet.
 | Question | Where |
 |---|---|
 | Which monitor rules are firing right now? | **Operations → Active Alerts** |
-| What did the network say, in order, unjudged? | **Explore → Events** |
+| What did the network say, in order, unjudged? | **Explore → Logs**, **Events** tab |
 | What deviated from its own baseline? | **Investigate → Findings** |
 | What exactly did one device log? | **Explore → Logs** |
 
 Each of these answers a narrower question than the queue, and none of them
-carries a verdict. **Explore → Events** in particular merges syslog, SNMP traps
-and firing alerts onto one timeline with Time, Type, Severity, Source and Event
-columns, and judges nothing. Use it when you know roughly when something
+carries a verdict. The **Events** tab on **Explore → Logs** in particular puts
+syslog, SNMP traps, flow records and firewall logs onto one timeline, and judges
+nothing. Use it when you know roughly when something
 happened and want everything around that moment in order.
 
 ### Step 4 — Follow the decision path

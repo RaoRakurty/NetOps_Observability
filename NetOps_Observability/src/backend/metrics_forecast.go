@@ -99,6 +99,11 @@ func (sc forecastScope) permits(lbl map[string]string) bool {
 		return false
 	}
 	if sc.scoped {
+		// A cloud-lane series (it carries a resource_id) is owned by the cloud
+		// inventory, never by a device id or name it happens to share (392).
+		if lbl["resource_id"] != "" {
+			return false
+		}
 		return sc.ids[lbl["device"]] || sc.names[lbl["hostname"]] || sc.names[lbl["source"]]
 	}
 	for _, k := range []string{"device", "hostname", "source"} {

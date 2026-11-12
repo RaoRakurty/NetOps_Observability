@@ -373,7 +373,7 @@ graph (SC:14-19, 266, 1018).
 ## 4. Scoring — [6] (SC): competing hypotheses, already built
 
 **Catalog.** Built-in templates only; PG/tenant overrides are not wired (M:1357,
-M:1420). 150 templates, 104 enabled. The version hash changes on any edit (C:382-397).
+M:1420). 151 templates, 105 enabled. The version hash changes on any edit (C:382-397).
 
 **Template** (C:257-303):
 - `requires` clauses: kind `a|b`, optional `entity_type` / `min_deviation` /
@@ -386,9 +386,12 @@ M:1420). 150 templates, 104 enabled. The version hash changes on any edit (C:382
 - Clause `anchor` (required clauses only): while no signal satisfies it, `rank` omits the
   template from that ranking altogether. Rows tie-break by id, so even a zero row would
   displace visible competitors and the nearest-template checklist.
-- `discriminators{absent, else_prefer}`.
+- `discriminators{absent, else_prefer, attested}`. `attested` (a structure class) narrows
+  one: it fires only when the evidence also attests that structure (SD-WAN controller
+  fan-in, 2026-11-11).
 - `required_modalities`.
-- `requires_structure` (device_tier / redundancy_group / overlay_encap / transit_path).
+- `requires_structure` (device_tier / redundancy_group / overlay_encap / transit_path /
+  controller_fan_in).
 - `allow_root_cause_confirmed`.
 - `context_story` (owner D2, 2026-11-11): co-occurrence on one node, not a cause.
   Today: `exposure-story`, `hardening-drift-story`. `threat-signal-story` stays causal:
@@ -626,6 +629,34 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   fan-in with contrast (many sites converging on one element while their other sessions
   stay up) can confirm. Two integrations of one controller stay ONE witness.
   Plan: docs/design/NMS_FIRST_PLAN_2026-10-24.md (T2).
+- **SD-WAN controller fan-in (2026-11-11, ENGINE_SEMVER 3.4.0).** Stage [6] structure
+  class `controller_fan_in`: >=2 DISTINCT edges, counted per lane (`source`: one box is
+  spelled three ways across syslog/trap/controller until `CORR_IDENTITY_CANON`), report
+  losing their control connection to the SAME controller (`signals.controller_peer`:
+  syslog/trap `peer`, else `correlation_hints.controller_peer_id`, else `peer_id`;
+  `CONTROL_LOSS_KINDS`). It admits `sig.ent.wan-edge.sdwan-controller-unreachable`
+  (anchored, capped at suspected: the fan-in says the sessions died, not that the
+  controller rather than a shared path to it failed), whose note names the controller,
+  and fires a structure-conditioned discriminator that rules out the edge-local
+  `sdwan-control-connection-loss` (now matchable: its mandatory kind was the
+  producer-less `sdwan_control_down`). Stage [1]: the syslog control-connection rows emit
+  the controller as a token (trap rows already did); vManage events read
+  `peer-system-ip` + `peer-type` (nms/vmanage_events.go). **Fleet-scale limit:** the
+  edges meet ONLY on that rank-7 token, and a token on more than `CORR_TOKEN_HUB_CAP` = 64
+  NODES never grounds — about 32 edges when each reports through two lanes (one node per
+  spelling while `CORR_IDENTITY_CANON` is off). Past it there is no controller verdict at
+  all: syslog/trap control-loss rows are `warn`, below the open floor, so control loss
+  alone opens NOTHING (measured: 64 nodes → one controller object, 65 → zero); an edge
+  whose own BFD loss grounds to it, or a vManage-relayed (`high`) row, opens its OWN
+  edge-local object instead — N symptoms again. Tracker: export controller↔edge
+  control-session rows into `topology_links` (rank 3). **Transport look-alike, fail
+  closed:** an edge id that lost controllers of ≥2 distinct peer types (vSmart AND
+  vManage/vBond — its own transport failed) is not counted toward any fan-in; when that is
+  every edge, nothing is attested and the edge-local reading is not demoted. A catalog
+  load refuses a discriminator whose `absent` clause overlaps the template's mandatory
+  clause unless it is narrowed (`attested`, `attrs`/`attrs_not`, `min_deviation`). The
+  rank-memo projection carries `(source, peer, peer_type)` for control-loss kinds only.
+  No exporter-silence signal exists: a fully silent exporter never reaches the CUSUM.
 - **Tunnel identity (T0, 2026-10-25).** A BFD transition carries `tunnel_id` =
   the sorted TLOC pair `<ipA>/<colA>|<ipB>/<colB>` (nms/sdwan_tunnel.go) plus `peer_id`;
   controller_events.py binds PATH kinds to `<tunnel_id>@<controller_instance>` when
@@ -669,8 +700,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
-  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since owner
-  D1–D3); byte-identical when no tunnel rows exist. The verdict tier still
+  ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
+  controller fan-in, 3.5.0 since owner D1–D3); byte-identical when no tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.

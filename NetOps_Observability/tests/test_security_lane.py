@@ -50,6 +50,11 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 VECTOR_IMAGE = "timberio/vector:0.40.0-alpine"  # pinned: docker-compose.yml + preflight-configs.sh
 
 TOPIC = "netops.security"
+# Owner D2 (2026-11-11): the router-only half of the findings lane. The security
+# lane sends the ENGINE only finding transitions on TOPIC; the verdicts a scan
+# merely re-confirmed ride AUDIT_TOPIC, which only the router reads, so the
+# findings store still receives every scan (internal/secbus/episode.go).
+AUDIT_TOPIC = "netops.security.audit"
 # The SECOND evidence-class lane (internal/bgpwatch → the `bgp` class in
 # signals.EVIDENCE_CLASSES, grounded 2026-09-02). It is asserted here, in the
 # suite that already owns the compose/ACL contract for an evidence topic, so
@@ -86,7 +91,13 @@ def secfindings_props() -> dict:
 def test_security_source_consumes_the_topic_like_every_other_lane():
     src = router()["sources"]["kafka_security"]
     assert src["type"] == "kafka"
-    assert src["topics"] == [TOPIC]
+    # Owner D2: transitions on TOPIC, re-confirmed verdicts on AUDIT_TOPIC —
+    # the store needs both to hold every scan.
+    assert src["topics"] == [TOPIC, AUDIT_TOPIC]
+    # The audit topic is new to an existing group: without `earliest`, audit
+    # records produced before the router restarts would be skipped. Safe for
+    # TOPIC, whose committed offsets win (docs/runbooks/upgrade-bootstraps.md).
+    assert src.get("auto_offset_reset") == "earliest"
     assert src["group_id"] == "netops-router-security", \
         "the consumer group must sit under the netops-router- prefix the ACL grants"
     assert src["decoding"] == {"codec": "json"}
@@ -148,7 +159,8 @@ def test_sink_routes_through_the_hook_and_the_store_route():
     # file), so the chain crosses the two files: identity here, hook there.
     assert gen["security_rules"]["inputs"] == ["security_rules_apply"]
     assert gen["security_rules_apply"]["inputs"] == ["security_identity"]
-    assert cfg["transforms"]["security_identity"]["inputs"] == ["security_tagged"]
+    assert cfg["transforms"]["security_identity"]["inputs"] == ["security_verdicts_only"]
+    assert cfg["transforms"]["security_verdicts_only"]["inputs"] == ["security_tagged"]
 
 
 def test_unidentifiable_findings_reach_the_quarantine_sink():
@@ -497,6 +509,68 @@ def test_the_topic_is_created_explicitly_on_both_compose_variants():
         assert m, f"{compose} no longer enumerates topics in a `for t in ...; do` loop"
         assert TOPIC in m.group(1).split(), \
             f"{compose} kafka-init does not create {TOPIC}"
+
+
+# ── owner D2: the router-only audit half of the findings lane ───────────────
+
+
+def test_the_audit_topic_is_created_everywhere_the_findings_topic_is():
+    """Auto-create is off: an audit topic missing from any bootstrap is a store
+    that silently stops receiving re-confirmed verdicts on that install path."""
+    for compose in ("docker-compose.yml", "compose.tls.yml"):
+        text = read("deployment", "docker", compose)
+        m = re.search(r"for t in (netops\..*?)\s*;\s*do", text, re.S)
+        assert m and AUDIT_TOPIC in m.group(1).split(), \
+            f"{compose} kafka-init does not create {AUDIT_TOPIC}"
+    helm = read("deployment", "helm", "correlix", "templates", "bootstrap-jobs.yaml")
+    assert re.search(r"\b%s\b" % re.escape(AUDIT_TOPIC), helm), \
+        f"the helm kafka-init job does not create {AUDIT_TOPIC}"
+    qualify = read("scripts", "deploy-qualify.sh")
+    canon = re.search(r"CANONICAL_TOPICS=\((.*?)\)", qualify, re.S)
+    assert canon and AUDIT_TOPIC in canon.group(1).split(), \
+        f"deploy-qualify does not check that {AUDIT_TOPIC} exists"
+
+
+def test_the_router_reads_the_audit_topic_and_the_engine_does_not():
+    """The router indexes it (Read grant); the correlation principal must NOT
+    be granted it and the engine must not subscribe — the engine hearing
+    unchanged findings again is exactly what D2 removed."""
+    acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    router_block = re.search(r'echo "acls: router.*?\ndone', acls, re.S).group(0)
+    assert AUDIT_TOPIC in router_block.split(), \
+        f"the router principal has no READ grant on {AUDIT_TOPIC}"
+    corr_topics = re.search(r'CORR_TOPICS="(.*?)"', acls, re.S).group(1).split()
+    assert AUDIT_TOPIC not in corr_topics, \
+        f"correlation must not be granted {AUDIT_TOPIC}"
+    assert not re.search(r'--producer\s*\\?\s*\n?\s*--topic %s\b' % re.escape(AUDIT_TOPIC), acls), \
+        "no principal may hold a literal producer grant on the audit topic"
+    main = _correlation_main()
+    assert AUDIT_TOPIC not in main.TOPICS, \
+        f"the engine subscribes to {AUDIT_TOPIC} — it would re-ground every unchanged finding"
+
+
+def test_clear_records_never_reach_the_findings_store():
+    """A `security_*_clear` is an engine recovery, not a verdict: indexed, it
+    would become the current-state row for its finding."""
+    cfg = router()["transforms"]["security_verdicts_only"]
+    assert cfg["type"] == "filter"
+    assert cfg["condition"] == '!ends_with(to_string(.kind) ?? "", "_clear")'
+
+
+def test_the_go_producer_names_the_same_audit_topic():
+    """One spelling: the producer constant and the deployment must agree."""
+    src = read("src", "backend", "internal", "secbus", "episode.go")
+    assert f'TopicSecurityAudit = "{AUDIT_TOPIC}"' in src
+
+
+def test_helm_carries_the_same_router_and_acl_files():
+    for docker, helm in (
+        (("deployment", "docker", "vector-router", "vector.yaml"),
+         ("deployment", "helm", "correlix", "files", "vector-router", "vector.yaml")),
+        (("deployment", "docker", "kafka", "apply-acls.sh"),
+         ("deployment", "helm", "correlix", "files", "kafka", "apply-acls.sh")),
+    ):
+        assert read(*docker) == read(*helm), f"{'/'.join(helm)} drifted from {'/'.join(docker)}"
 
 
 # The 12 lane topics the engine has always consumed. Pinned as a LIST (order

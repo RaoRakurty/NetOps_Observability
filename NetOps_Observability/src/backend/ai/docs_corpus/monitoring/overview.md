@@ -53,11 +53,11 @@ different path, described under
 
 | Tier | Rules | Delivery |
 |---|---|---|
-| `page` | 9 rules in the `engine-liveness` group | Pushed to the operator's phone immediately, at high priority. |
+| `page` | 11 rules in the `engine-liveness` group | Pushed to the operator's phone immediately, at high priority. |
 | `heartbeat` | `AlertingHeartbeat` only | Never routed to a person. It stamps a metric that proves the delivery path works. |
 | default (warning) | Everything else, including every rule in `rules.yaml` | Folded into a periodic digest on the platform self-health route. |
 
-The nine `tier: page` rules are:
+The eleven `tier: page` rules are:
 
 | Rule | The condition it pages for |
 |---|---|
@@ -68,12 +68,15 @@ The nine `tier: page` rules are:
 | `RouterConsumerDead` | A `netops-router-*` consumer group has no members. |
 | `RouterConsumerLagGrowing` | A router lane is in the group and falling behind. |
 | `IngestPipelineSilent` | Ingest produced nothing when it should not be silent. |
+| `NMSIngestSilent` | An NMS controller integration that delivered before has gone silent. |
 | `ClickHouseWritesRejected` | Storage is refusing writes. |
 | `AlertDeliveryBroken` | The alerting heartbeat stopped arriving. |
+| `PlatformAlertsReachNobody` | The alert receiver is fed, but no channel set up on Platform → Platform alerts receives pages, or its settings could not be read since the api started. |
 
-Those nine cover four page-worthy conditions: an engine consumer is not
+Those eleven cover four page-worthy conditions: an engine consumer is not
 consuming, ingest is silent when it should not be, storage is refusing writes,
-and the alerting heartbeat itself stopped. Everything else that proves an engine
+and the alerting path itself is broken (the heartbeat stopped, or pages reach
+nobody). Everything else that proves an engine
 is working is already covered by the warning and critical rules in
 `rules.yaml`, which is why nothing else is allowed to page.
 

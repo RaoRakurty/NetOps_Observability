@@ -38,11 +38,12 @@ type Metrics struct {
 	calls   map[callKey]*hist
 	dropped atomic.Int64
 	breaker *Breaker
+	tokens  *tokenCounters // netops_ai_provider_tokens_total (usage.go)
 }
 
 // NewMetrics builds the metrics; breaker may be nil.
 func NewMetrics(b *Breaker) *Metrics {
-	return &Metrics{calls: map[callKey]*hist{}, breaker: b}
+	return &Metrics{calls: map[callKey]*hist{}, breaker: b, tokens: &tokenCounters{n: map[tokenKey]int64{}}}
 }
 
 // ObserveCall records one provider call (or a skipped one: outcome
@@ -118,6 +119,9 @@ func (m *Metrics) Write(w io.Writer) error {
 	b.WriteString("# HELP netops_ai_provider_call_series_dropped_total Provider-call observations dropped because the label space was full.\n")
 	b.WriteString("# TYPE netops_ai_provider_call_series_dropped_total counter\n")
 	fmt.Fprintf(&b, "netops_ai_provider_call_series_dropped_total %d\n", m.dropped.Load())
+	if err := m.writeTokens(&b); err != nil {
+		return err
+	}
 
 	snap := m.breaker.Snapshot()
 	b.WriteString("# HELP netops_ai_provider_breaker_state Workspace×provider circuit breakers in each state (closed, open, half_open). Unlisted pairs are closed.\n")

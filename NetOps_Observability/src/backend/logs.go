@@ -5,6 +5,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,9 +148,10 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 		return "", nil, nil, false, true
 	}
 	tenant, cross := principalTenant(claims)
-	keys, _ := s.visibleDeviceKeys(claims)
-	addrs, _ := s.visibleDeviceAddrs(claims)
-	if f := oslog.TenantFilter(tenant, cross, keys, addrs); f != nil {
+	// Untagged documents are claimed only through identities no other owner
+	// holds (tracker 370).
+	claim, _ := s.untaggedClaimFor(claims)
+	if f := oslog.TenantFilter(tenant, cross, claim.Keys, claim.Addrs); f != nil {
 		filters = append(filters, f)
 	}
 	// App logs are the platform's OWN container/API logs — platform owner only
@@ -227,6 +229,32 @@ func logsForbiddenErr(signal string) error {
 		return errors.New("security findings are not part of log search — read them at /api/security/findings, which checks infrastructure:read and the license feature")
 	}
 	return errors.New("app logs are restricted to the platform owner")
+}
+
+// logValueMasker is the by-value credential mask a log read path hands to
+// internal/logsecrets for ONE caller (internal/credscrub): the caller's own
+// tenant's SNMP communities plus the platform's, or every tenant's for a
+// cross-tenant caller. Never another tenant's: that would tell a tenant whether
+// a string it logged is someone else's community (§3a). tenant and cross come
+// from principalTenant, or from a frozen export spec. A server without a
+// scrubber (a test, or a build that never wired the store) masks no value.
+func (s *server) logValueMasker(tenant string, cross bool) logsecrets.ValueMasker {
+	if s == nil || s.credScrub == nil {
+		return nil
+	}
+	return s.credScrub.For(tenant, cross)
+}
+
+// credScrubRefresh re-reads the configured communities after a credential
+// write, so a new community is masked from the next read on rather than after
+// the next periodic refresh. A failure keeps the previous set and is logged.
+func (s *server) credScrubRefresh(ctx context.Context) {
+	if s == nil || s.credScrub == nil {
+		return
+	}
+	if err := s.credScrub.Refresh(ctx); err != nil {
+		logError("credscrub", "configured SNMP communities could not be re-read after a credential change; the previous set stays in force", errf(err))
+	}
 }
 
 // logsSearchResponseCap bounds how much of one search answer is held in memory
@@ -407,7 +435,8 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, errors.New("log search response is too large: narrow the query, time range or page size"))
 		return
 	}
-	raw, err = logsecrets.StripSearchResponse(raw)
+	maskTenant, maskCross := principalTenant(claims)
+	raw, err = logsecrets.StripSearchResponse(raw, s.logValueMasker(maskTenant, maskCross))
 	if err != nil {
 		logError("logs", "search response refused by the credential strip", map[string]any{"err": err.Error()})
 		writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be checked"))

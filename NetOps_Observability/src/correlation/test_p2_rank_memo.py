@@ -174,7 +174,11 @@ def perturb_non_key(rng: random.Random, s: S.Signal) -> S.Signal:
     return dc_replace(
         s,
         ts=s.ts + timedelta(seconds=rng.randrange(-600, 600)),
-        source=rng.choice(list(S.Source)),
+        # `source` is a key input on a control-loss kind only: the SD-WAN
+        # controller fan-in counts distinct edges PER LANE (scoring
+        # .controller_fan_in), so there it may move rank and is keyed.
+        source=(s.source if s.kind in S.CONTROL_LOSS_KINDS
+                else rng.choice(list(S.Source))),
         severity=rng.choice(list(S.Severity)),
         native_id=f"perturbed|{rng.randrange(10**12)}",   # ⇒ a NEW signal_id
         site=f"site{rng.randrange(20)}",

@@ -172,7 +172,9 @@ export const SYSLOG_FAULT: LogHit = {
   },
 };
 
-/** A management audit line: who opened a session, from where. */
+/** A management audit line: an SNMP poll session, from where. ConfD names a v1/v2c SNMP
+ *  session by the community the request carried, so the parse reads no user from it
+ *  (audit_user unset); the message holds a placeholder account. */
 export const SYSLOG_AUDIT: LogHit = {
   _index: "netops-syslog-global-2026.11.10",
   _id: "sys-audit-1",
@@ -181,9 +183,9 @@ export const SYSLOG_AUDIT: LogHit = {
     hostname: "vedge-52-0a0b4db6", source_ip: "192.168.222.102", device_id: "vedge-52-0a0b4db6",
     vendor: "cisco", platform: "SD-WAN", model: "vEdge", tenant_id: "global", tenant_attribution: "platform_owned",
     appname: "confd", syslog_facility: "user", severity: "notice", normalized_severity: "notice",
-    message: "audit user: ciscosdwan/980840 created new session via snmp from 127.0.0.1:54511 with udp",
+    message: "audit user: svc-nms/980840 created new session via snmp from 127.0.0.1:54511 with udp",
     event_type: "sdwan_session_created", event_category: "management_audit",
-    audit_user: "ciscosdwan", audit_action: "created new session", audit_source: "127.0.0.1:54511", audit_via: "snmp (udp)", session_id: "980840",
+    audit_action: "created new session", audit_source: "127.0.0.1:54511", audit_via: "snmp (udp)", session_id: "980840",
     parser_status: "parsed", parser_id: "cisco-sdwan.audit",
   },
 };

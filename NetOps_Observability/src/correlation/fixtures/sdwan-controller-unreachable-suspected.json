@@ -1,0 +1,49 @@
+{
+  "name": "Three edges lose their control connection to the same vSmart, then their BFD tunnels: controller unreachable (2026-11-10 lab outage shape)",
+  "signals": [
+    {
+      "kind": "controller_control_connection_loss",
+      "entity_type": "device",
+      "entity_id": "vEdge-20",
+      "observer_id": "vEdge-20",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "attrs": {"peer": "10.255.255.2", "peer_type": "vsmart"}
+    },
+    {
+      "kind": "controller_control_connection_loss",
+      "entity_type": "device",
+      "entity_id": "vEdge-21",
+      "observer_id": "vEdge-21",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "attrs": {"peer": "10.255.255.2", "peer_type": "vsmart"}
+    },
+    {
+      "kind": "controller_control_connection_loss",
+      "entity_type": "device",
+      "entity_id": "vEdge-22",
+      "observer_id": "vEdge-22",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "attrs": {"peer": "10.255.255.2", "peer_type": "vsmart"}
+    },
+    {
+      "kind": "controller_bfd_down",
+      "entity_type": "device",
+      "entity_id": "vEdge-20",
+      "observer_id": "vEdge-20",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct"
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.sdwan-controller-unreachable",
+    "tier": "suspected",
+    "owner": "sdwan_vendor"
+  }
+}

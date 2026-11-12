@@ -35,7 +35,13 @@ func newCloudMonitorEvaluator(s *server, interval time.Duration) *cloud.MonitorE
 			}
 			return ids, nil
 		},
-		Query:   vmQuery,
+		Query: vmQuery,
+		// The dispatcher is the PLATFORM-GLOBAL channel list (a cross-tenant,
+		// platform-admin audience): a tenant's monitor firing reaches the
+		// platform operator, not the tenant — tenants have no alert channels
+		// yet (tracker 359; see the matching note in bgp_alerts.go). The
+		// alert has no platform `layer` label, so the global PagerDuty key's
+		// PlatformScopeFilter never pages for it.
 		Fire:    func(a models.Alert) { s.notifier.Dispatch(a) },
 		Resolve: func(a models.Alert) { s.notifier.DispatchResolve(a) },
 	}, interval)

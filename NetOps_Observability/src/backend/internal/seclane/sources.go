@@ -56,16 +56,51 @@ func jitter(base time.Duration, frac float64) time.Duration {
 // two-layer §3a chokepoint the security read API uses.
 func (l *Lane) LogSource(tenant string, devices []Device, since, until time.Time) threatlane.LogSource {
 	return &osLogSource{
-		search: l.deps.Search, tenant: tenant, devices: devices, since: since, until: until,
+		search: l.deps.Search, claims: l.deps.UntaggedClaims,
+		tenant: tenant, devices: devices, since: since, until: until,
 	}
 }
 
 type osLogSource struct {
-	search  func(method, path string, body any) (*http.Response, error)
+	search func(method, path string, body any) (*http.Response, error)
+	// claims is Deps.UntaggedClaims: the identities no other owner holds. nil
+	// claims nothing.
+	claims  func(tenant string) (keys, addrs []string)
 	tenant  string
 	devices []Device
 	since   time.Time
 	until   time.Time
+}
+
+// claimIdentities is the scanned devices' identities narrowed to the ones the
+// tenant may claim an untagged document with (tracker 370): an identity also
+// held by another owner — a shared hostname, an overlapping RFC 1918 address —
+// claims nothing, so the lane never assesses another owner's syslog as this
+// tenant's. Default-closed when no claim source is wired.
+func (s *osLogSource) claimIdentities() (keys, addrs []string) {
+	if s.claims == nil {
+		return nil, nil
+	}
+	okKeys, okAddrs := s.claims(s.tenant)
+	allowK, allowA := make(map[string]bool, len(okKeys)), make(map[string]bool, len(okAddrs))
+	for _, k := range okKeys {
+		allowK[k] = true
+	}
+	for _, a := range okAddrs {
+		allowA[a] = true
+	}
+	ks, as := deviceKeys(s.devices)
+	for _, k := range ks {
+		if allowK[k] {
+			keys = append(keys, k)
+		}
+	}
+	for _, a := range as {
+		if allowA[a] {
+			addrs = append(addrs, a)
+		}
+	}
+	return keys, addrs
 }
 
 // mnemonicRe extracts a Cisco-style facility-severity-mnemonic tag from a raw
@@ -76,7 +111,7 @@ var mnemonicRe = regexp.MustCompile(`%([A-Za-z0-9_]+-\d-[A-Za-z0-9_]+)`)
 
 // LogEvents implements threatlane.LogSource.
 func (s *osLogSource) LogEvents(_ context.Context) ([]threatlane.LogEvent, error) {
-	keys, addrs := deviceKeys(s.devices)
+	keys, addrs := s.claimIdentities()
 	index := oslog.TenantIndexPattern("syslog", s.tenant, false)
 	filters := []any{map[string]any{"range": map[string]any{"timestamp": map[string]any{
 		"gte": s.since.UTC().Format(time.RFC3339),

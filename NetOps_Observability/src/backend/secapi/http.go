@@ -102,7 +102,9 @@ type Principal struct {
 	Cross  bool
 	// Subject is the authenticated actor (audit + created_by stamping).
 	Subject string
-	// DeviceKeys/DeviceAddrs are the caller's visible device identifiers, fed
+	// DeviceKeys/DeviceAddrs are the identities the caller may claim an
+	// UNTAGGED document with — its own devices' identities that no other owner
+	// also holds (the composition root's untaggedClaimFor, tracker 370) — fed
 	// verbatim into oslog.TenantFilter's untagged-document matcher.
 	DeviceKeys  []string
 	DeviceAddrs []string

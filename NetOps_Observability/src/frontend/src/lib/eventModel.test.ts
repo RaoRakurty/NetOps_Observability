@@ -249,12 +249,26 @@ describe("syslog", () => {
     expect(v.device.inventory).toEqual({ label: "Not in inventory", tone: "warning" });
   });
 
-  it("a management audit line reads as an audit record: who, what, from where, session", () => {
+  it("an SNMP poll session reads as an audit record: what, from where, session, and no user", () => {
+    // ConfD names a v1/v2c SNMP session by its community, so the parse reads no user.
     const v = toEventView(SYSLOG_AUDIT);
     expect(v.primaryVisual.kind).toBe("audit");
     if (v.primaryVisual.kind !== "audit") throw new Error();
     expect(v.primaryVisual.data.rows.map((r) => [r.label, r.value])).toEqual([
-      ["Who", "ciscosdwan"], ["Action", "created new session"], ["From", "127.0.0.1:54511"], ["Via", "snmp (udp)"], ["Session", "980840"],
+      ["Action", "created new session"], ["From", "127.0.0.1:54511"], ["Via", "snmp (udp)"], ["Session", "980840"],
+    ]);
+  });
+
+  it("a person's session reads as an audit record: who, what, from where, session", () => {
+    const src = {
+      ...SYSLOG_AUDIT._source,
+      message: "audit user: fixture-person/7 created new session via cli from 192.0.2.7:51234 with ssh",
+      audit_user: "fixture-person", audit_source: "192.0.2.7:51234", audit_via: "cli (ssh)", session_id: "7",
+    };
+    const v = toEventView({ ...SYSLOG_AUDIT, _source: src });
+    if (v.primaryVisual.kind !== "audit") throw new Error();
+    expect(v.primaryVisual.data.rows.map((r) => [r.label, r.value])).toEqual([
+      ["Who", "fixture-person"], ["Action", "created new session"], ["From", "192.0.2.7:51234"], ["Via", "cli (ssh)"], ["Session", "7"],
     ]);
   });
 
@@ -264,7 +278,7 @@ describe("syslog", () => {
     const v = toEventView({ ...SYSLOG_AUDIT, _source: src });
     if (v.primaryVisual.kind !== "audit") throw new Error();
     expect(v.primaryVisual.data.unparsed).toBe(true);
-    expect(v.primaryVisual.data.message).toContain("audit user: ciscosdwan/980840");
+    expect(v.primaryVisual.data.message).toContain("audit user: svc-nms/980840");
   });
 });
 

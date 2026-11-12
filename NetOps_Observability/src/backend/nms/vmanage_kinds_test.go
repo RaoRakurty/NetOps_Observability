@@ -221,3 +221,60 @@ func TestNoMappedKindIsAnOrphan(t *testing.T) {
 		}
 	}
 }
+
+// TestControlConnectionEventNamesTheLostController: a control-connection
+// transition names its far end as `peer-system-ip` (BGP uses `peer`), and the
+// engine's controller fan-in needs it to tell WHICH controller several edges lost
+// together. CONSTRUCTED row in the recorded details grammar (`k=v;`), field names
+// from Cisco's control-connection-state-change notification.
+func TestControlConnectionEventNamesTheLostController(t *testing.T) {
+	raw := `{"data":[{"id":"cc1","eventname":"control-connection-state-change","component":"Control","severity_level":"major",
+	 "entry_time":1793500000000,"system_ip":"10.255.255.20","host_name":"vEdge-20",
+	 "details":"host-name=vEdge-20; system-ip=10.255.255.20; personality=vedge; peer-type=vsmart; peer-system-ip=10.255.255.2; public-ip=200.250.250.2; public-port=12346; new-state=down"}]}`
+	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Events) != 1 {
+		t.Fatalf("want one event, got %+v", b.Events)
+	}
+	e := b.Events[0]
+	if e.NormalizedEventType != "controller_control_connection_loss" || e.DeviceID != "10.255.255.20" {
+		t.Fatalf("kind/device: %+v", e)
+	}
+	if e.PeerID != "10.255.255.2" {
+		t.Errorf("PeerID = %q, want the lost controller 10.255.255.2", e.PeerID)
+	}
+	if e.CorrelationHints["peer_type"] != "vsmart" {
+		t.Errorf("peer_type hint = %q, want vsmart", e.CorrelationHints["peer_type"])
+	}
+}
+
+// TestBGPPeerStillWinsOverPeerSystemIP: the fallback is a fallback — a BGP
+// event's own `peer` keeps naming the session.
+func TestBGPPeerStillWinsOverPeerSystemIP(t *testing.T) {
+	raw := `{"data":[{"id":"x2","eventname":"bgp-peer-state-change","component":"VPN","severity_level":"major",
+	 "entry_time":1793500000000,"system_ip":"10.255.255.81","host_name":"cEDGE-81",
+	 "details":"peer=192.168.200.34; peer-system-ip=10.9.9.9; bgp-new-state=idle"}]}`
+	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Events[0].PeerID; got != "192.168.200.34" {
+		t.Errorf("PeerID = %q, want the BGP peer", got)
+	}
+	if _, ok := b.Events[0].CorrelationHints["peer_type"]; ok {
+		t.Errorf("no peer-type in the details must leave no hint")
+	}
+}
+
+func TestVmPeerTypeIsOneShortWord(t *testing.T) {
+	for in, want := range map[string]string{
+		"vsmart": "vsmart", " VBond ": "vbond", "vmanage": "vmanage", "": "",
+		"v smart": "", "<script>": "", strings.Repeat("a", 25): "", "3": "3",
+	} {
+		if got := vmPeerType(in); got != want {
+			t.Errorf("vmPeerType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

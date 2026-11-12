@@ -95,6 +95,8 @@ type laneFixture struct {
 	spooled  int
 	warns    []string
 	errs     []string
+	// index is the fake findings store the episode seed reads (episodes_test.go).
+	index *fakeFindingsIndex
 }
 
 var fixedNow = time.Date(2026, 9, 2, 3, 0, 0, 0, time.UTC)
@@ -106,6 +108,7 @@ func newFixture(t *testing.T, mut func(*Deps)) *laneFixture {
 		states:  map[string]map[string]bool{},
 		devices: map[string][]Device{},
 		logs:    map[string][]string{},
+		index:   newFakeFindingsIndex(),
 	}
 	d := Deps{
 		Now:      func() time.Time { return fixedNow },
@@ -116,8 +119,11 @@ func newFixture(t *testing.T, mut func(*Deps)) *laneFixture {
 			return fx.states[tenant], nil
 		},
 		Publish: fx.pub.publish,
-		Search: func(_, path string, _ any) (*http.Response, error) {
+		Search: func(_, path string, body any) (*http.Response, error) {
 			fx.searched = append(fx.searched, path)
+			if strings.Contains(path, "netops-secfindings-") {
+				return fx.index.search(path, body)
+			}
 			for tenant, docs := range fx.logs {
 				if strings.Contains(path, "netops-syslog-"+tenant+"-*") {
 					return osResponse(docs...), nil
@@ -469,7 +475,11 @@ func TestThreatLaneLogSourceFailureDoesNotSuppressOtherLanes(t *testing.T) {
 
 	fx.lane.ScanTenant(context.Background(), "acme", "manual")
 
-	if n := len(fx.pub.on(secbus.TopicSecurityEvidence)); n == 0 {
+	// An OpenSearch outage also makes the finding-episode seed fall back to a
+	// silent seed from this scan (episodes.go), so the verdicts land on the
+	// audit topic rather than as appears — what matters here is that they are
+	// published at all.
+	if n := len(fx.pub.on(secbus.TopicSecurityEvidence)) + len(fx.pub.on(secbus.TopicSecurityAudit)); n == 0 {
 		t.Fatal("a syslog outage silenced the hardening + advisory lanes too")
 	}
 	st := fx.lane.StatusFor(secapi.Principal{Tenant: "acme"})
@@ -748,6 +758,18 @@ func TestMetricsWriteEmitsEverySeriesTheRunbookNames(t *testing.T) {
 		"netops_security_dead_lettered_total",
 		"netops_security_lost_total",
 		"netops_security_ungroundable_total",
+		// findings-on-change (D2): the full closed label set, zeros included.
+		`netops_security_transitions_total{transition="appear",outcome="emitted"}`,
+		`netops_security_transitions_total{transition="change",outcome="dead_lettered"}`,
+		`netops_security_transitions_total{transition="clear",outcome="withheld"}`,
+		`netops_security_transitions_total{transition="clear",outcome="lost"}`,
+		"netops_security_unchanged_suppressed_total",
+		`netops_security_episodes_seeded_total{source="index"}`,
+		`netops_security_episodes_seeded_total{source="scan"}`,
+		"netops_security_episodes_pruned_total",
+		`netops_security_episode_state_errors_total{op="load"}`,
+		`netops_security_episode_state_errors_total{op="seed"}`,
+		`netops_security_episode_state_errors_total{op="commit"}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing series %q in:\n%s", want, out)

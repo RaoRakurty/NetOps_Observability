@@ -68,7 +68,6 @@ Routes with the most text below 14px:
 | `analytics/device-monitoring` | 409 |
 | `explore/logs` | 395 |
 | `investigate/tunnels` | 386 |
-| `explore/events` | 369 |
 | `analytics/demo` | 289 |
 | `operations/incidents` | 279 |
 | `admin/audit` | 267 |
@@ -76,6 +75,9 @@ Routes with the most text below 14px:
 | `investigate/findings` | 259 |
 | `admin/licence` | 259 |
 | `operations/queue` | 244 |
+
+The measured list also held `explore/events` (369). That page was removed on
+2026-11-11; its content is the Events tab on `explore/logs`, measured above.
 
 Source of the drift: `styles.css` declares 12.5px 237 times, 13px 78, 12px 77,
 11px 53 (and 10–11.5px a further 73), against a token scale (`--fs-*`) that
