@@ -2967,9 +2967,15 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 			name, key, model string
 		)
 		for attempt := 0; attempt < aiAgentModelAttempts; attempt++ {
-			name, key, model, _ = s.firstUsableProvider(ctx, claims)
+			var skipped error
+			name, key, model, skipped = s.firstUsableProvider(ctx, claims)
 			if key == "" || ctx.Err() != nil {
-				break // nothing left to try: err is the last model's failure
+				// Nothing left to try: err is the last model's failure, or —
+				// when no model ran at all — why none was usable.
+				if err == nil {
+					err = skipped
+				}
+				break
 			}
 			n, k, m := name, key, model
 			call := func(cctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
