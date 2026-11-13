@@ -85,6 +85,7 @@ const (
 	PlanRouteProblem      = "explain_problem"
 	PlanRouteHandoff      = "shift_handoff"
 	PlanRouteTimeRange    = "time_range"
+	PlanRouteSimilar      = "similar_incidents"
 	PlanRoutePlaybook     = "playbook"
 	PlanRouteModule       = "module"
 	PlanRouteProduct      = "product"
@@ -114,6 +115,7 @@ var plannerRoutes = []plannerRoute{
 	{PlanRouteBreakdown, "separate the suspected incidents from the undetermined watch items"},
 	{PlanRouteProblem, "explain one specific problem or incident the operator names by its id (a P-number or a UUID)"},
 	{PlanRouteHandoff, "a shift handoff or pass-down summary for the incoming shift"},
+	{PlanRouteSimilar, "whether an incident has happened before: a repeat or recurrence, earlier cases like it, how often it happens, what it looked like or what was done about it last time (the one they name or have open, else the top incident)"},
 	{PlanRouteTimeRange, "what happened in a PAST window (last night, yesterday, over the weekend, the last few hours)"},
 	{PlanRoutePlaybook, "general guidance on how to troubleshoot a technology or protocol, not about a live device of theirs"},
 	{PlanRouteModule, "a summary of one data module — name it on a MODULE line"},
@@ -511,6 +513,9 @@ func planForRoute(route string, ent map[string]string) (Plan, bool) {
 	case PlanRouteHandoff:
 		return Plan{Intent: "shift_handoff", Modules: []string{"event_management"}, Mode: ModeShiftHandoff,
 			Entities: ent, Freshness: FreshnessLive}, true
+	case PlanRouteSimilar:
+		return Plan{Intent: "similar_incidents", Modules: []string{"correlations_rca"}, Mode: ModeSimilarIncidents,
+			Entities: ent, Freshness: FreshnessHistorical, Tools: []string{"find_similar_incidents"}}, true
 	case PlanRouteTimeRange:
 		return Plan{Intent: "time_range_summary", Modules: []string{"event_management"}, Mode: ModeTimeRangeOutageSummary,
 			Entities: ent, Freshness: FreshnessHistorical}, true
