@@ -20,7 +20,10 @@
 //   · flow totals are shown as the API scaled them. Nothing here multiplies by
 //     a sampling rate (tracker 387: "do not multiply").
 
-import type { CorrObject, Device, FlowFilters, PromInstantSeries, PromSeries } from "../../services/api";
+import type {
+  CorrObject, Device, FlowCapacityRow, FlowExportBasis, FlowFilters, FlowLinkRow, FlowLinkSeriesResp, FlowMover,
+  FlowSampling, FlowWindowQ, PromInstantSeries, PromSeries,
+} from "../../services/api";
 import type { TopNRow } from "../flowNames";
 import { IANA_PROTO_NAMES } from "../../proto";
 import type { DeepLink } from "../../lib/flowsLink";
@@ -38,27 +41,44 @@ export const MAX_WINDOW_S = 30 * 86_400;
 export const PROBLEM_LEAD_S = 300;
 
 export type FlowsWindow = {
-  /** Seconds back from now that every flow query covers. */
+  /** Seconds back from now that the "last N seconds" flow queries cover. */
   since: number;
   /** The problem window from a deep link, marked on the timeline. */
   problem?: { from: number; to: number };
+  /**
+   * The exact window the link-level APIs (P2) answer for: the case window with
+   * context either side for a deep link, else "the last N seconds".
+   */
+  query?: FlowWindowQ;
 };
 
 /**
- * The flow APIs answer "the last N seconds", so a problem window from a deep
- * link is covered by reaching back to a little before its start; the window
- * itself is then marked, not cut out (exact from/to windows come with P2).
+ * A deep-linked problem gets an EXACT window (P2): its own span plus a quarter
+ * of it — at least PROBLEM_LEAD_S — either side, cut at now and kept within
+ * the API's 5 minutes – 30 days. The "last N seconds" APIs still reach back
+ * far enough to cover it (`since`), and the problem itself is marked.
  */
 export function flowsWindow(rangeSeconds: number, link: DeepLink, now: number = Date.now()): FlowsWindow {
   const clamp = (s: number) => Math.min(MAX_WINDOW_S, Math.max(MIN_WINDOW_S, Math.round(s)));
   if (link.from !== undefined && link.from < now) {
+    const pTo = Math.min(link.to ?? now, now);
+    const lead = Math.max(PROBLEM_LEAD_S * 1000, Math.round((pTo - link.from) / 4));
+    const to = Math.min(now, pTo + lead);
+    let from = link.from - lead;
+    if (to - from < MIN_WINDOW_S * 1000) from = to - MIN_WINDOW_S * 1000;
+    if (to - from > MAX_WINDOW_S * 1000) from = to - MAX_WINDOW_S * 1000;
     return {
       since: clamp(Math.ceil((now - link.from) / 1000) + PROBLEM_LEAD_S),
-      problem: { from: link.from, to: Math.min(link.to ?? now, now) },
+      problem: { from: link.from, to: pTo },
+      query: { from, to },
     };
   }
-  return { since: clamp(rangeSeconds) };
+  const since = clamp(rangeSeconds);
+  return { since, query: { since } };
 }
+
+/** The window the link-level APIs are asked for. */
+export const windowQuery = (win: FlowsWindow): FlowWindowQ => win.query ?? { since: win.since };
 
 // ── links ────────────────────────────────────────────────────────────────────
 
@@ -86,9 +106,142 @@ export type LinkRow = {
   outBps?: number;
   utilPct?: number;
   spark?: number[];
+  // ── from the link API (P2) ──
+  site?: string;
+  /** Set for an operator's All-tenants view: two tenants on one address stay two rows. */
+  tenantId?: string;
+  /** The router does not export the interface for this direction: no figure, not 0. */
+  inMissing?: boolean;
+  outMissing?: boolean;
+  inBasis?: FlowExportBasis;
+  outBasis?: FlowExportBasis;
+  /** Share of the router's flow bytes naming no interface for the direction. */
+  inUnnamedPct?: number;
+  outUnnamedPct?: number;
+  sampling?: FlowSampling;
 };
 
 export const linkKey = (exporter: string, ifIndex: string) => `${exporter}|${ifIndex}`;
+
+/** A row key unique even when two tenants share an exporter address. */
+export const linkRowKey = (l: Pick<LinkRow, "key" | "tenantId">) => (l.tenantId ? `${l.key}|${l.tenantId}` : l.key);
+
+/**
+ * Busiest links from GET /api/flows/links (P2): one call, exact window, the
+ * previous window from the same scan. A direction the router does not export
+ * is MISSING (shown "Not exported"), never 0; "change" is given only when every
+ * exported direction has a previous figure.
+ */
+export function linksFromApi(rows: readonly FlowLinkRow[] = []): LinkRow[] {
+  return rows
+    .filter((r) => r.exporter && r.ifindex > 0 && !IF_SENTINELS.has(String(r.ifindex)))
+    .map((r) => {
+      const ifIndex = String(r.ifindex);
+      const inB = r.in_bytes;
+      const outB = r.out_bytes;
+      const total = (inB ?? 0) + (outB ?? 0);
+      let prev: number | null = 0;
+      for (const [c, p] of [[inB, r.prev_in_bytes], [outB, r.prev_out_bytes]] as const) {
+        if (c === null) continue;
+        if (p === null || prev === null) {
+          prev = null;
+          break;
+        }
+        prev += p;
+      }
+      if (inB === null && outB === null) prev = null;
+      return {
+        key: linkKey(r.exporter, ifIndex),
+        exporter: r.exporter,
+        ifIndex,
+        ifName: r.if_name_basis === "resolved" ? (r.if_name ?? "").trim() : "",
+        inBytes: inB ?? 0,
+        outBytes: outB ?? 0,
+        totalBytes: total,
+        prevBytes: prev,
+        change: prev !== null && prev > 0 ? (total - prev) / prev : null,
+        deviceId: r.device_id || undefined,
+        deviceName: r.device_name || undefined,
+        site: r.site || undefined,
+        tenantId: r.tenant_id || undefined,
+        inMissing: inB === null,
+        outMissing: outB === null,
+        inBasis: r.in_basis,
+        outBasis: r.out_basis,
+        inUnnamedPct: r.in_unnamed_pct,
+        outUnnamedPct: r.out_unnamed_pct,
+        sampling: r.sampling,
+      };
+    });
+}
+
+/**
+ * What to say about one direction's figure, or null when it is measured:
+ * "Not exported by this router" or "Reads low: N % of this router's flow
+ * bytes name no input interface".
+ */
+export function directionNote(r: Pick<LinkRow, "inMissing" | "outMissing" | "inBasis" | "outBasis" | "inUnnamedPct" | "outUnnamedPct">, dir: "in" | "out"): string | null {
+  const missing = dir === "in" ? r.inMissing : r.outMissing;
+  const basis = dir === "in" ? r.inBasis : r.outBasis;
+  const pct = dir === "in" ? r.inUnnamedPct : r.outUnnamedPct;
+  if (missing || basis === "not_exported") return "Not exported by this router";
+  if (basis === "partly_exported") {
+    const share = pct !== undefined ? `${pct < 1 ? "<1" : Math.round(pct)} %` : "Some";
+    return `Reads low: ${share} of this router's flow bytes name no ${dir === "in" ? "input" : "output"} interface`;
+  }
+  return null;
+}
+
+/** The sampling sentence for a link or a response, or null when rates are reported. */
+export function samplingNote(s?: FlowSampling): string | null {
+  switch (s) {
+    case "not_reported":
+      return "This router does not report its sampling rate, so totals read as if every packet was counted.";
+    case "mixed":
+      return "Some of these records report a sampling rate and some do not; those that do not read as if every packet was counted.";
+    default:
+      return null;
+  }
+}
+
+/** One series point: [epoch ms, bits per second]. */
+export type RatePoint = [number, number];
+
+/**
+ * A link's in/out series (GET /api/flows/links/series) as bits per second. A
+ * final bucket that is still filling is left out, so it never reads as a drop;
+ * a direction the router does not export has no points.
+ */
+export function seriesRates(s?: FlowLinkSeriesResp | null): { in: RatePoint[]; out: RatePoint[]; inMissing: boolean; outMissing: boolean } {
+  if (!s) return { in: [], out: [], inMissing: false, outMissing: false };
+  const n = s.last_bucket_complete ? s.t.length : Math.max(0, s.t.length - 1);
+  const step = s.step_seconds || 60;
+  const pts = (vals: number[] | null): RatePoint[] =>
+    vals ? s.t.slice(0, n).map((t, i) => [t * 1000, ((vals[i] ?? 0) * 8) / step] as RatePoint) : [];
+  return { in: pts(s.in_bytes), out: pts(s.out_bytes), inMissing: s.in_bytes === null, outMissing: s.out_bytes === null };
+}
+
+/** A mover's change: "+300%", "−50%", "New", "Gone", "Same", or "—" (no previous window). */
+export function moverChange(m: Pick<FlowMover, "status" | "change">): string {
+  switch (m.status) {
+    case "new":
+      return "New";
+    case "gone":
+      return "Gone";
+    case "same":
+      return "Same";
+    case "no_previous":
+      return "—";
+  }
+  if (m.change === null || !Number.isFinite(m.change)) return "—";
+  const pct = Math.round(m.change * 100);
+  return pct > 0 ? `+${pct}%` : `−${Math.abs(pct)}%`;
+}
+
+/** Tone for a mover: grew → warn, new → warn, gone/shrank → none. */
+export function moverTone(m: Pick<FlowMover, "status">): "" | "warn" {
+  return m.status === "up" || m.status === "new" ? "warn" : "";
+}
 
 const num = (v: unknown): number => {
   const x = Number(v);
@@ -280,83 +433,66 @@ export function fmtPctOrDash(pct?: number): string {
   return pct < 1 && pct > 0 ? "<1%" : `${Math.round(pct)}%`;
 }
 
-// ── capacity ─────────────────────────────────────────────────────────────────
+// ── capacity (GET /api/flows/capacity, P2) ───────────────────────────────────
 
-export type CapacityRow = {
-  key: string;
-  deviceId: string;
-  deviceName: string;
-  site: string;
-  ifIndex: string;
-  ifName: string;
-  speedBps?: number;
-  avgIn?: number;
-  peakIn?: number;
-  avgOut?: number;
-  peakOut?: number;
-  /** The busier direction's peak / average. */
-  peak?: number;
-  avg?: number;
-};
+export type CapacityRow = FlowCapacityRow & { key: string };
 
-export type CapacityInput = {
-  avgIn: readonly PromInstantSeries[];
-  peakIn: readonly PromInstantSeries[];
-  avgOut: readonly PromInstantSeries[];
-  peakOut: readonly PromInstantSeries[];
-  speed: readonly PromInstantSeries[];
-};
-
-const maxDefined = (a?: number, b?: number): number | undefined =>
-  a === undefined ? b : b === undefined ? a : Math.max(a, b);
-
-/**
- * Per-link utilisation over the window (average and peak of the 5-minute
- * rate, in percent of the reported speed), busiest peak first. Only interfaces
- * with a known speed have a utilisation series at all.
- */
-export function capacityRows(q: CapacityInput, names: ReadonlyMap<string, string>, sites: ReadonlyMap<string, string>): CapacityRow[] {
-  const rows = new Map<string, CapacityRow>();
-  const put = (series: readonly PromInstantSeries[], field: "avgIn" | "peakIn" | "avgOut" | "peakOut" | "speedBps") => {
-    for (const s of series) {
-      const m = s.metric ?? {};
-      if (!m.device || !m.index) continue;
-      const v = instantValue(s);
-      if (v === undefined) continue;
-      const key = `${m.device}|${m.index}`;
-      const row = rows.get(key) ?? {
-        key, deviceId: m.device, deviceName: names.get(m.device) ?? m.device, site: sites.get(m.device) ?? "",
-        ifIndex: m.index, ifName: (m.ifName ?? "").trim(),
-      };
-      row.ifName = row.ifName || (m.ifName ?? "").trim();
-      row[field] = v;
-      rows.set(key, row);
-    }
-  };
-  put(q.avgIn, "avgIn");
-  put(q.peakIn, "peakIn");
-  put(q.avgOut, "avgOut");
-  put(q.peakOut, "peakOut");
-  const withUtil = new Set(rows.keys());
-  put(q.speed, "speedBps");
-  return [...rows.values()]
-    .filter((r) => withUtil.has(r.key))
-    .map((r) => ({ ...r, peak: maxDefined(r.peakIn, r.peakOut), avg: maxDefined(r.avgIn, r.avgOut) }))
-    .sort((a, b) => (b.peak ?? -1) - (a.peak ?? -1) || a.key.localeCompare(b.key));
+/** Keys each API row; interfaces without an index key by name (vManage). */
+export function capacityFromApi(rows: readonly FlowCapacityRow[] = []): CapacityRow[] {
+  return rows.map((r) => ({ ...r, key: `${r.device_id}|${r.ifindex || `name:${r.if_name}`}` }));
 }
 
 export const NO_SITE = "No site set";
 
-/** Groups capacity rows by site or by device, groups in their busiest-first order. */
-export function groupCapacity(rows: readonly CapacityRow[], by: "site" | "device"): { group: string; rows: CapacityRow[] }[] {
+/**
+ * Links that report a usable speed, grouped by site or by device (groups in
+ * busiest-first order), and apart from them the links whose speed is unknown
+ * or implausible — those have throughput but no percentage.
+ */
+export function groupCapacity(rows: readonly CapacityRow[], by: "site" | "device"): {
+  groups: { group: string; rows: CapacityRow[] }[];
+  noSpeed: CapacityRow[];
+} {
   const m = new Map<string, CapacityRow[]>();
+  const noSpeed: CapacityRow[] = [];
   for (const r of rows) {
-    const g = by === "site" ? r.site || NO_SITE : r.deviceName;
+    if (r.speed_basis !== "reported") {
+      noSpeed.push(r);
+      continue;
+    }
+    const g = by === "site" ? r.site || NO_SITE : r.device_name || r.device_id;
     const list = m.get(g) ?? [];
     list.push(r);
     m.set(g, list);
   }
-  return [...m.entries()].map(([group, rs]) => ({ group, rows: rs }));
+  return { groups: [...m.entries()].map(([group, rs]) => ({ group, rows: rs })), noSpeed };
+}
+
+/** "In about 23 days", "Not rising", "No steady trend", "Collecting history — 6 of 14 days", … */
+export function forecastText(f: FlowCapacityRow["forecast"]): string {
+  switch (f.status) {
+    case "rising": {
+      const d = f.days_to_90 ?? 0;
+      return d < 1 ? "Within a day" : `In about ${Math.round(d)} day${Math.round(d) === 1 ? "" : "s"}`;
+    }
+    case "at_or_over_90":
+      return "Already above 90 %";
+    case "flat_or_falling":
+      return "Not rising";
+    case "unsteady":
+      return "No steady trend";
+    case "not_enough_history":
+      return `Collecting history — ${f.history_days} of ${f.min_days} days`;
+    default:
+      return "Speed not reported";
+  }
+}
+
+/** Tone for the forecast: ≤ 30 days or already over → critical, ≤ 90 → warning. */
+export function forecastTone(f: FlowCapacityRow["forecast"]): "" | "warn" | "bad" {
+  if (f.status === "at_or_over_90") return "bad";
+  if (f.status !== "rising" || f.days_to_90 === null) return "";
+  return f.days_to_90 <= 30 ? "bad" : f.days_to_90 <= 90 ? "warn" : "";
 }
 
 // ── problems on the link ─────────────────────────────────────────────────────

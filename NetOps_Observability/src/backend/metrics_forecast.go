@@ -25,6 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/discovery"
+	"netops/backend/internal/flownames"
+	"netops/backend/internal/flowquery"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/nlquery/plan"
 )
@@ -427,4 +430,214 @@ func (s *server) vmRangeSeries(ctx context.Context, query string, start, end tim
 		series = append(series, plan.Series{Labels: r.Metric, Points: pts})
 	}
 	return series, truncated, nil
+}
+
+// ── GET /api/flows/capacity (tracker 400 (d), Flows page Capacity tab) ───────
+//
+// Per-link 95th percentile, peak, headroom and days-to-90 % over the chosen
+// window, from the INTERFACE COUNTERS (internal/flowquery/capacity.go says why
+// not flows). Gate: explore, like every flow read (owner decision 2026-11-13
+// (b)). Isolation is the forecast lane's, unchanged: the caller's boundary rides
+// on every VictoriaMetrics read as extra_filters[] (forecastScopeOf →
+// metricsScopeFiltersFor), and a second pass drops any series whose device the
+// caller cannot see before a row is built. A Prometheus upstream cannot honour
+// the filters, so a scoped read there is refused (501), as for the forecast.
+
+// capacitySamples runs one instant query at the caller's boundary and indexes
+// the permitted series by interface.
+func (s *server) capacitySamples(ctx context.Context, query string, scope forecastScope) (map[string]flowquery.IfKey, map[string]float64, error) {
+	samples, err := s.vmInstantScoped(ctx, query, scope.filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	keys := map[string]flowquery.IfKey{}
+	vals := map[string]float64{}
+	for _, sm := range samples {
+		if !scope.permits(sm.Labels) {
+			continue // second isolation pass (§3a)
+		}
+		k, ok := flowquery.KeyOf(sm.Labels)
+		if !ok {
+			continue
+		}
+		keys[k.String()], vals[k.String()] = k, sm.Value
+	}
+	return keys, vals, nil
+}
+
+func (s *server) handleFlowsCapacity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requireFlowsRead(w, r)
+	if !ok {
+		return
+	}
+	scope := s.forecastScopeOf(claims)
+	if len(scope.filters) > 0 && !metricsUpstreamIsVictoria(s.metricsBase()) {
+		writeError(w, http.StatusNotImplemented, errors.New("metrics scoping requires a VictoriaMetrics backend"))
+		return
+	}
+	now := time.Now()
+	win, err := flowquery.ParseWindow(r.URL.Query(), now, flowquery.DefaultLimits)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	limit, err := intQuery(r, "limit", 100, 1, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	days, err := intQuery(r, "days", 28, flowquery.ForecastMinDays, 30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	body := map[string]any{
+		"window":     win.Echo(now, 0),
+		"interfaces": []flowquery.CapacityRow{},
+		"count":      0,
+		"total":      0,
+		"forecast": map[string]any{
+			"days": days, "min_days": flowquery.ForecastMinDays, "min_r2": flowquery.ForecastMinR2, "threshold_pct": flowquery.ThresholdPct,
+		},
+	}
+	if scope.denyAll {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	ctx := r.Context()
+	span := int64(win.Span() / time.Second)
+	var end int64 // 0 = now: a "last N" window is evaluated live
+	if win.Explicit {
+		end = win.To.Unix()
+	}
+	figs := map[string]*flowquery.IfFigures{}
+	fig := func(k flowquery.IfKey) *flowquery.IfFigures {
+		f := figs[k.String()]
+		if f == nil {
+			f = &flowquery.IfFigures{Key: k}
+			figs[k.String()] = f
+		}
+		return f
+	}
+	type q struct {
+		expr string
+		put  func(f *flowquery.IfFigures, v float64)
+	}
+	queries := []q{
+		{flowquery.P95BpsQuery("in", span, end), func(f *flowquery.IfFigures, v float64) { f.P95In = &v }},
+		{flowquery.P95BpsQuery("out", span, end), func(f *flowquery.IfFigures, v float64) { f.P95Out = &v }},
+		{flowquery.PeakBpsQuery("in", span, end), func(f *flowquery.IfFigures, v float64) { f.PeakIn = &v }},
+		{flowquery.PeakBpsQuery("out", span, end), func(f *flowquery.IfFigures, v float64) { f.PeakOut = &v }},
+	}
+	for _, qq := range queries {
+		keys, vals, err := s.capacitySamples(ctx, qq.expr, scope)
+		if err != nil {
+			logError("flows", "capacity query failed", map[string]any{"error": err.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("metrics backend unavailable"))
+			return
+		}
+		for ks, k := range keys {
+			qq.put(fig(k), vals[ks])
+		}
+	}
+	// Speed only for interfaces that carried a rate: a speed alone is not a link
+	// in this window.
+	keys, vals, err := s.capacitySamples(ctx, flowquery.SpeedBpsQuery(end), scope)
+	if err != nil {
+		logError("flows", "capacity speed query failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("metrics backend unavailable"))
+		return
+	}
+	for ks := range keys {
+		if f := figs[ks]; f != nil {
+			v := vals[ks]
+			f.Speed = &v
+		}
+	}
+
+	type devInfo struct{ name, site, exporter string }
+	tenant, cross := principalTenant(claims)
+	assign := s.geoAssignments(tenant, cross)
+	devs := map[string]devInfo{}
+	for _, d := range s.visibleDevicesFor(claims) {
+		di := devInfo{name: d.Name, site: sotSiteFor(d, assign), exporter: flownames.NormAddr(d.Address)}
+		if di.name == "" {
+			di.name = d.ID
+		}
+		if di.site == "" && s.deviceLocations != nil {
+			if l, ok := s.deviceLocations.Lookup(discovery.DeviceIdentities(d)); ok {
+				di.site = l.Site
+			}
+		}
+		devs[d.ID] = di
+	}
+	rows := make([]flowquery.CapacityRow, 0, len(figs))
+	for _, f := range figs {
+		row := flowquery.BuildCapacityRow(*f)
+		row.DeviceName = row.DeviceID
+		if di, ok := devs[row.DeviceID]; ok {
+			row.DeviceName, row.Site, row.Exporter = di.name, di.site, di.exporter
+		}
+		rows = append(rows, row)
+	}
+	flowquery.SortCapacity(rows)
+	total := len(rows)
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	body["forecast"].(map[string]any)["unavailable"] = !s.attachCapacityForecasts(ctx, rows, days, now, scope)
+	body["interfaces"], body["count"], body["total"] = rows, len(rows), total
+	writeJSON(w, http.StatusOK, body)
+}
+
+// attachCapacityForecasts fits days-to-90 % for the displayed rows that report a
+// plausible speed: each complete UTC day's p95, busier direction, read by one
+// range query per direction bounded to those rows' devices (never fleet-wide).
+// It reports false when the daily read failed; the rows then keep "not enough
+// history" and the answer says the forecast was unavailable.
+func (s *server) attachCapacityForecasts(ctx context.Context, rows []flowquery.CapacityRow, days int, now time.Time, scope forecastScope) bool {
+	var ids []string
+	for _, r := range rows {
+		if r.SpeedBasis == flowquery.SpeedReported && r.IfIndex != "" {
+			ids = append(ids, r.DeviceID)
+		}
+	}
+	if len(ids) == 0 {
+		return true
+	}
+	// Evaluation points at the END of each complete UTC day.
+	lastEnd := now.UTC().Truncate(24 * time.Hour).Unix()
+	firstEnd := lastEnd - int64(days-1)*86400
+	daily := [2]map[string]map[int64]float64{}
+	for i, dir := range [2]string{"in", "out"} {
+		pts, labels, err := s.vmRange(ctx, flowquery.DailyP95Query(dir, ids), firstEnd, lastEnd, 86400, scope.filters)
+		if err != nil {
+			logWarn("flows", "capacity forecast read failed; rows keep no forecast", map[string]any{"error": err.Error(), "direction": dir})
+			return false
+		}
+		daily[i] = map[string]map[int64]float64{}
+		for key, series := range pts {
+			if !scope.permits(labels[key]) {
+				continue // second isolation pass (§3a)
+			}
+			m := map[int64]float64{}
+			for _, p := range series {
+				m[int64(p[0])] = p[1]
+			}
+			daily[i][key] = m
+		}
+	}
+	for i := range rows {
+		r := &rows[i]
+		if r.SpeedBasis != flowquery.SpeedReported || r.IfIndex == "" || r.SpeedBps == nil {
+			continue
+		}
+		key := r.DeviceID + "\x1f" + r.IfIndex
+		r.Forecast = flowquery.FitForecast(flowquery.DailyUtil(daily[0][key], daily[1][key], *r.SpeedBps))
+	}
+	return true
 }

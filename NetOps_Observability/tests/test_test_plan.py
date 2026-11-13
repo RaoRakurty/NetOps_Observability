@@ -157,6 +157,9 @@ ALL = set(tp.CI_GROUPS)
     ([P + "deployment/docker/Dockerfile.frontend"], {"frontend", "install-boot"}),
     ([P + "deployment/docker/docker-compose.yml"], {"install-boot"}),
     ([P + "deployment/docker/opensearch/index-templates.json"], {"backend", "frontend", "install-boot"}),
+    # the ClickHouse schema and settings are what ch-integration runs against
+    ([P + "deployment/docker/clickhouse/init.sql"], {"backend", "install-boot"}),
+    ([P + "deployment/docker/clickhouse/custom-settings.xml"], {"backend", "install-boot"}),
     # install / startup scripts
     ([P + "scripts/install.py"], {"install-boot"}),
     ([P + "scripts/install-correlix.sh"], {"install-boot"}),
