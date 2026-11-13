@@ -13,6 +13,7 @@ import (
 
 	"netops/backend/ai"
 
+	"netops/backend/internal/logroutine"
 	"netops/backend/internal/oslog"
 	"netops/backend/internal/srcauthority"
 	"netops/backend/models"
@@ -106,7 +107,8 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 		"filter": filters,
 	}
 	// Operator-visibility compliance — identical to the human search path.
-	if exclude, deny := d.srv.operatorTelemetryRestriction(d.claims, p.Tenant, p.Cross); deny {
+	exclude, deny := d.srv.operatorTelemetryRestriction(d.claims, p.Tenant, p.Cross)
+	if deny {
 		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
 	} else if len(exclude) > 0 {
 		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": exclude}}}
@@ -115,6 +117,22 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 		"size":  aiLogMaxLines,
 		"sort":  []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
 		"query": map[string]any{"bool": boolQuery},
+	}
+	// Routine management sessions (monitoring polls, SD-WAN controller
+	// sessions; internal/logroutine) are most of a managed estate's syslog —
+	// about 96 % on the lab (2026-11-13). Left in, the newest lines Iris reads
+	// are all polls and the question goes unanswered. They are left out the
+	// way the Logs page leaves them out (only ever ANDed out, so the class can
+	// never widen what the caller reads), counted, and said so;
+	// include_routine=true keeps them for a question about sessions.
+	includeRoutine := strings.EqualFold(strings.TrimSpace(args["include_routine"]), "true")
+	routine := !deny
+	if routine {
+		src := d.srv.routineSourcesCtx(d.ctx, d.claims)
+		body["aggs"] = map[string]any{logroutine.AggName: logroutine.Agg(src)}
+		if !includeRoutine {
+			body["post_filter"] = logroutine.Exclusion(src)
+		}
 	}
 
 	resp, err := openSearch("POST", "/"+oslog.TenantIndexPattern("syslog", p.Tenant, p.Cross)+"/_search", body)
@@ -134,6 +152,9 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 				Source map[string]any `json:"_source"`
 			} `json:"hits"`
 		} `json:"hits"`
+		Aggregations map[string]struct {
+			DocCount int `json:"doc_count"`
+		} `json:"aggregations"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
 		return ai.ToolResult{}, fmt.Errorf("log search unavailable")
@@ -156,6 +177,16 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 		tr.Truncated = true
 		tr.Notes = append(tr.Notes, fmt.Sprintf("showing the newest %d of %d matching lines", len(tr.Items), out.Hits.Total.Value))
 	}
+	routineCount := 0
+	if routine {
+		routineCount = out.Aggregations[logroutine.AggName].DocCount
+	}
+	switch {
+	case routineCount > 0 && includeRoutine:
+		tr.Notes = append(tr.Notes, fmt.Sprintf("includes %d routine management-session lines (monitoring polls and controller sessions)", routineCount))
+	case routineCount > 0:
+		tr.Notes = append(tr.Notes, fmt.Sprintf("left out %d routine management-session lines (monitoring polls and controller sessions); search again with include_routine=true to read them", routineCount))
+	}
 	if len(tr.Items) == 0 {
 		tr.Notes = append(tr.Notes, "no matching syslog lines in the window")
 	}
@@ -168,6 +199,7 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 			Detail: map[string]any{
 				"action": "ai.search_logs", "signal": "syslog", "query": auditQueryText(query),
 				"window": window.String(), "matched": out.Hits.Total.Value, "rows": len(tr.Items),
+				"routine_mgmt": routineCount, "include_routine_mgmt": includeRoutine,
 			},
 		})
 	}
