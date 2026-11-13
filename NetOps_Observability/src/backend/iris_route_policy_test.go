@@ -40,12 +40,19 @@ import (
 )
 
 // routeGemini is a Gemini endpoint that records each request body and answers
-// every call with one text reply.
+// every call with one text reply — except a model-first planning call, which
+// gets the route set with setRoute (an invalid reply when none is set).
 type routeGemini struct {
 	mu     sync.Mutex
 	bodies []string
 	reply  string
+	route  string
 }
+
+// plannerMarker is a phrase of the planner's server-owned system prompt.
+const plannerMarker = "You route one operator question for Iris"
+
+func (g *routeGemini) setRoute(r string) { g.mu.Lock(); g.route = r; g.mu.Unlock() }
 
 func (g *routeGemini) calls() []string {
 	g.mu.Lock()
@@ -63,6 +70,9 @@ func startRouteGemini(t *testing.T, reply string) *routeGemini {
 		g.mu.Lock()
 		g.bodies = append(g.bodies, string(b))
 		text := g.reply
+		if g.route != "" && strings.Contains(string(b), plannerMarker) {
+			text = g.route
+		}
 		g.mu.Unlock()
 		out, _ := json.Marshal(map[string]any{
 			"candidates":    []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": text}}}, "finishReason": "STOP"}},
@@ -165,11 +175,15 @@ const uncoveredQuestion = "how chatty is the frobnicator on edge-a"
 func TestAnUncoveredQuestionIsAnsweredByTheModel(t *testing.T) {
 	s, a, _ := routeFixture(t, true)
 	g := startRouteGemini(t, "You are in tenant t-a [scope:caller], and nothing in the data names a frobnicator [problem:00000000-0000-4000-8000-000000000000].")
+	// Model-first (ai/planner.go): with the add-on on and a model connected,
+	// the planner reads the question and routes it to the grounded model
+	// answer — no deterministic arm decides first.
+	g.setRoute("ROUTE: network")
 	out := askIris(t, s, a, uncoveredQuestion)
 	if out["mode"] != string(ai.ModeModelAnswer) {
 		t.Fatalf("an uncovered question must be answered by the model: %v", out)
 	}
-	if p, r := routingOf(out); p != ai.RoutePathModel || r != ai.RouteReasonMiss {
+	if p, r := routingOf(out); p != ai.RoutePathModel || r != ai.RouteReasonPlanner {
 		t.Fatalf("routing = %s/%s", p, r)
 	}
 	text, _ := out["text"].(string)
@@ -180,8 +194,8 @@ func TestAnUncoveredQuestionIsAnsweredByTheModel(t *testing.T) {
 		t.Fatalf("only the evidence the answer cites is a citation: %v", ids)
 	}
 	calls := g.calls()
-	if len(calls) == 0 || len(calls) > 2 {
-		t.Fatalf("one rephrase (fast) and one answer at most, got %d calls", len(calls))
+	if len(calls) != 2 || !strings.Contains(calls[0], plannerMarker) {
+		t.Fatalf("one planning call (fast) and one answer, got %d calls", len(calls))
 	}
 	for _, c := range calls {
 		if strings.Contains(c, "Translate the QUESTION") {
@@ -215,26 +229,52 @@ func TestWithoutAModelTheBuiltInAnswerSaysSo(t *testing.T) {
 	}
 }
 
-// The cost guard: a question the deterministic path covers never calls the
-// model — including the two lab utterances of 2026-11-12, which the grammar
-// now reads (verdict referents; "connected" no longer rewritten).
-func TestACoveredQuestionNeverCallsTheModel(t *testing.T) {
+// The cost guard under model-first (owner 2026-11-13): a question a
+// deterministic arm answers costs exactly ONE fast planning call — the model
+// picks the arm, the arm answers without a model — and the same question
+// asked again costs none (the exact-match cache). Includes the two lab
+// utterances of 2026-11-12 the grammar reads.
+func TestACoveredQuestionCostsOnePlanningCall(t *testing.T) {
 	s, a, _ := routeFixture(t, true)
+	s.aiPlanCache = ai.NewPlannerCache(64, time.Hour)
 	g := startRouteGemini(t, "unused")
+	g.setRoute("ROUTE: data")
 	for _, q := range []string{
 		"which devices are down right now?",
 		"Check RCA and identify the one which has confirmed",
 		"list critical issues",
-		"tell me which tenant are we in and how many devices are connected and how are they discovereD?",
 	} {
 		g.reset()
 		out := askIris(t, s, a, q)
-		if p, _ := routingOf(out); p != ai.RoutePathDeterministic {
-			t.Errorf("%q: routing %v, want deterministic: %v", q, out["routing"], out["text"])
+		if p, r := routingOf(out); p != ai.RoutePathDeterministic || r != ai.RouteReasonPlanner {
+			t.Errorf("%q: routing %v, want deterministic/planner: %v", q, out["routing"], out["text"])
 		}
+		calls := g.calls()
+		if len(calls) != 1 || !strings.Contains(calls[0], plannerMarker) {
+			t.Errorf("%q: a covered question must cost exactly the planning call, made %d calls", q, len(calls))
+		}
+		g.reset()
+		askIris(t, s, a, q)
 		if n := len(g.calls()); n != 0 {
-			t.Errorf("%q: a covered question called the model %d times", q, n)
+			t.Errorf("%q: a repeated question must be routed from the cache, made %d calls", q, n)
 		}
+	}
+}
+
+// With the add-on on but the planner's reply unusable, the deterministic
+// path still answers — and the answer says the model did not route it.
+func TestAnUnusablePlanningReplyFallsBackToTheRouter(t *testing.T) {
+	s, a, _ := routeFixture(t, true)
+	startRouteGemini(t, "I think this is about devices.") // not a ROUTE line
+	out := askIris(t, s, a, "which devices are down right now?")
+	if p, r := routingOf(out); p != ai.RoutePathModelUnavailable || r != ai.RouteReasonPlannerUnavailable {
+		t.Fatalf("routing %v: %v", out["routing"], out["text"])
+	}
+	if note, _ := out["provider_note"].(string); !strings.Contains(note, "could not place") {
+		t.Fatalf("the answer must say the model could not route it: %q", note)
+	}
+	if text, _ := out["text"].(string); !strings.Contains(text, "down") {
+		t.Fatalf("the deterministic answer must still come: %q", text)
 	}
 }
 
@@ -418,11 +458,20 @@ func TestRoutingVocabulariesAgree(t *testing.T) {
 	}
 }
 
-// Model-first is the AI add-on: licensed AND the models switch on. Neither
-// alone turns it on (owner 2026-11-13; ai/planner.go).
-func TestModelFirstNeedsTheLicensedAddOn(t *testing.T) {
-	s := &server{}
-	if s.aiModelFirst() {
-		t.Fatal("no licence and no switch: the deterministic router decides")
+// Model-first follows the add-on gate exactly: off with no model connected,
+// off with the models switch off, on when the add-on is on and a key is set
+// (owner 2026-11-13; ai/planner.go).
+func TestModelFirstFollowsTheAddOnGate(t *testing.T) {
+	s, a, _ := routeFixture(t, false)
+	if s.aiModelFirst(a) {
+		t.Fatal("no model connected: the deterministic router decides")
+	}
+	s, a, _ = routeFixture(t, true)
+	if !s.aiModelFirst(a) {
+		t.Fatal("add-on on and a platform key: the planner routes")
+	}
+	setAIModelsForTest(t, s, false, false)
+	if s.aiModelFirst(a) {
+		t.Fatal("models switch off: the deterministic router decides")
 	}
 }

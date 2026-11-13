@@ -415,7 +415,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// Model-first routing (ai/planner.go, owner 2026-11-13): with the AI
 		// add-on licensed and its models switch on, the model reads every
 		// question and picks the arm; otherwise the deterministic router does.
-		ModelFirst: s.aiModelFirst(),
+		ModelFirst: s.aiModelFirst(claims),
 		PlanCache:  s.aiPlanCache,
 	}
 	// The model-with-tools path for a question no deterministic arm covers:

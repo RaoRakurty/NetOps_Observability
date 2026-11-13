@@ -47,10 +47,15 @@ const (
 	aiPlanCacheTTL  = 6 * time.Hour
 )
 
-// aiModelFirst: Iris routes every question through the model planner — the
-// AI add-on is licensed and its "Iris AI models" switch is on. The provider
-// gate (providerCandidatesForTier) still refuses each call on its own terms.
-func (s *server) aiModelFirst() bool { return s.aiModelLicensed() && s.aiModelsSwitchOn() }
+// aiModelFirst: Iris routes the caller's questions through the model planner
+// — exactly when the add-on gate would let a fast-tier call out for this
+// caller: licensed, the "Iris AI models" switch on, the tenant's assistant on,
+// and a provider key (the platform's or the workspace's own) configured. Asked
+// of the one chokepoint, so model-first and the provider gate cannot disagree;
+// with no model connected the deterministic router decides, as before.
+func (s *server) aiModelFirst(claims jwtClaims) bool {
+	return len(s.providerCandidatesForTier(claims, ai.TierFast)) > 0
+}
 
 // aiInvestigationsPlatformOn is the platform half of the investigation gate
 // (what FEATURE_AI_TOOLS used to answer): licensed, models on, investigations on.
