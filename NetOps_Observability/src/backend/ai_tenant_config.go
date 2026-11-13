@@ -45,6 +45,10 @@ func (s *server) aiInvestigationsSwitchOn() bool {
 const (
 	aiPlanCacheSize = 4096
 	aiPlanCacheTTL  = 6 * time.Hour
+	// The per-scope Iris vocabulary cache: one entry per tenant scope, rebuilt
+	// on an inventory change or after the TTL (circuits, applications).
+	aiGlossaryCacheSize = 1024
+	aiGlossaryTTL       = 5 * time.Minute
 )
 
 // aiModelFirst: Iris routes the caller's questions through the model planner

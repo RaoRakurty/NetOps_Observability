@@ -1,0 +1,19 @@
+{
+  "current_state": 0,
+  "data": 0,
+  "explain_problem": 0,
+  "incident_breakdown": 0,
+  "incidents": 0,
+  "module": 10,
+  "navigation": 0,
+  "network": 0,
+  "noc_focus": 0,
+  "out_of_scope": 0,
+  "playbook": 0,
+  "product": 0,
+  "shift_handoff": 0,
+  "time_range": 0,
+  "top_incident": 0,
+  "topology": 0,
+  "troubleshoot": 0
+}

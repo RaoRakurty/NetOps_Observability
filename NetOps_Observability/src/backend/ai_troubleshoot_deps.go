@@ -54,6 +54,8 @@ import (
 	"netops/backend/internal/dem/experience"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/devreach"
+	"netops/backend/internal/entityalias"
+	"netops/backend/internal/irisglossary"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
@@ -3120,6 +3122,107 @@ func (s *server) aiInventoryFacts(claims jwtClaims) func(context.Context, ai.Pri
 	}
 }
 
+// aiGlossary binds the caller's generated vocabulary (internal/irisglossary,
+// model-first decision point 3) to the orchestrator. Everything it reads is
+// the principal's OWN scope — visibleDevicesFor, the tenant's sites and
+// aliases, the nlqLookups circuits and applications — so a name of another
+// tenant can never reach this caller's prompts (§3a). The rendered text is
+// cached per scope while the inventory fingerprint (devices, sites, aliases)
+// is unchanged and younger than aiGlossaryTTL; circuits and applications are
+// re-read at least every TTL.
+func (s *server) aiGlossary(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal) string {
+	return func(ctx context.Context, _ ai.Principal) string {
+		tenant, cross := principalTenant(claims)
+		scope := "t:" + tenant
+		if cross {
+			scope = "cross:" + tenant
+		}
+		devs := s.visibleDevicesFor(claims)
+		assign := s.geoAssignments(tenant, cross)
+		var fp []string
+		for _, d := range devs {
+			fp = append(fp, d.ID, d.Name, d.Vendor, d.Model, d.Type, d.Labels["role"], sotSiteFor(d, assign))
+		}
+		var sites []string
+		if s.sites != nil {
+			for _, st := range s.sites.All(tenant, cross) {
+				fp = append(fp, "site", st.Slug, st.Name)
+				sites = append(sites, st.Slug)
+			}
+		}
+		aliases := s.nlqAliasList(tenant, cross)
+		for _, a := range aliases {
+			fp = append(fp, "alias", a.EntityType, a.EntityID, a.Alias)
+		}
+		return s.aiGlossaryCache.Get(scope, irisglossary.Fingerprint(fp...), func() irisglossary.Input {
+			return s.aiGlossaryInput(ctx, r, claims, devs, assign, aliases)
+		})
+	}
+}
+
+// aiGlossaryInput gathers one scope's glossary input (aiGlossary's build step).
+func (s *server) aiGlossaryInput(ctx context.Context, r *http.Request, claims jwtClaims, devs []models.Device,
+	assign map[string]string, aliases []entityalias.Alias) irisglossary.Input {
+	tenant, cross := principalTenant(claims)
+	var in irisglossary.Input
+	nameOf := map[string]string{} // canonical "type:id" → display name, for alias targets
+	if s.sites != nil {
+		for _, st := range s.sites.All(tenant, cross) {
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: "site", Names: []string{st.Name, st.Slug}})
+			nameOf["site:"+st.Slug] = st.Name
+		}
+	}
+	for _, d := range devs {
+		role := strings.TrimSpace(d.Labels["role"])
+		if role == "" {
+			if role = d.Type; role == "" {
+				role = inferDeviceType(d)
+			}
+		}
+		if role == "generic" {
+			role = ""
+		}
+		in.Entities = append(in.Entities, irisglossary.Entity{Kind: "device", Names: []string{d.Name, d.ID},
+			Site: sotSiteFor(d, assign), Role: role, Vendor: d.Vendor, Model: d.Model})
+		nameOf["device:"+d.ID] = d.Name
+	}
+	// Circuits and applications through the same caller-bound lookups the NL
+	// query resolver uses. A source that cannot be read is left out (the
+	// glossary is an aid to understanding, never evidence).
+	l := newNLQLookups(s, r, claims)
+	if named, err := l.Inventory(ctx, []string{"circuit", "application"}); err == nil {
+		for _, n := range named {
+			kind := n.Type
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: kind, Names: n.Names})
+			if len(n.Names) > 0 {
+				nameOf[n.ID] = n.Names[0]
+			}
+		}
+	} else {
+		logWarn("ai", "iris glossary: circuits/applications unreadable; left out", map[string]any{"error": err.Error()})
+	}
+	for _, a := range aliases {
+		target := nameOf[a.EntityType+":"+strings.TrimPrefix(a.EntityID, a.EntityType+":")]
+		if target == "" {
+			target = nameOf[a.EntityID]
+		}
+		if target == "" && a.EntityType == "provider" {
+			target = strings.TrimPrefix(a.EntityID, "provider:")
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: "provider", Names: []string{target}})
+		}
+		if target == "" {
+			continue // an alias whose entity the caller cannot see is not shown
+		}
+		in.Aliases = append(in.Aliases, irisglossary.Alias{Kind: a.EntityType, Target: target, Alias: a.Alias})
+	}
+	if s.nlqCatalog != nil {
+		for _, m := range s.nlqCatalog.Metrics {
+			in.Metrics = append(in.Metrics, irisglossary.Metric{Name: m.Name, Aliases: m.Aliases, Description: m.Description, Unit: m.Unit})
+		}
+	}
+	return in
+}
+
 // integrationNames are the operator's names for NMS integrations a device can
 // be sourced from ("api:<system>").
 var integrationNames = map[string]string{
@@ -3204,7 +3307,16 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 				msgs = append(msgs, copilotMessage{Role: "user", Content: ai.RedactSecrets(q)})
 			}
 		}
-		msgs = append(msgs, copilotMessage{Role: "user", Content: ai.RedactSecrets(question)})
+		turn := ai.RedactSecrets(question)
+		if orch.Glossary != nil {
+			// The caller's generated vocabulary (names, never instructions),
+			// after the question: it helps the loop read "the Dallas box" or
+			// an alias without a phrase list (model-first decision point 3).
+			if g := strings.TrimSpace(orch.Glossary(ctx, p)); g != "" {
+				turn += "\n\n" + ai.RedactSecrets(g)
+			}
+		}
+		msgs = append(msgs, copilotMessage{Role: "user", Content: turn})
 		ctx, cancel := context.WithTimeout(ctx, aiAgentAnswerBudget)
 		defer cancel()
 		// The loop runs on one model; when that model fails in a way that

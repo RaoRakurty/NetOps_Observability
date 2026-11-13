@@ -113,6 +113,7 @@ import (
 	// DEBUG-ROUTES-END
 	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
+	"netops/backend/internal/irisglossary"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
@@ -416,6 +417,9 @@ type server struct {
 	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
 	// one per process, keyed by tenant and normalised question, route ids only.
 	aiPlanCache *ai.PlannerCache
+	// aiGlossaryCache keeps one rendered Iris vocabulary per caller scope
+	// (internal/irisglossary), reused while the scope's inventory is unchanged.
+	aiGlossaryCache *irisglossary.Cache
 	// irisStreamMetrics counts streamed Iris answers (tracker 337 N-E2).
 	irisStreamMetrics *irisstream.Metrics
 	// orgContext is the Network context store (tracker 337 N-F1); nil on a
@@ -1354,6 +1358,7 @@ func newServer() *server {
 		aiDecisionMetrics:   aidecision.NewMetrics(),
 		aiToolGateway:       ai.NewToolGateway(),
 		aiPlanCache:         ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
+		aiGlossaryCache:     irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
 		irisStreamMetrics:   &irisstream.Metrics{},
 		orgContext:          newOrgContextStore(),
 		orgContextMetrics:   &orgcontext.Metrics{},

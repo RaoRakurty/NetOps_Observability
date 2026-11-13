@@ -417,6 +417,10 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// question and picks the arm; otherwise the deterministic router does.
 		ModelFirst: s.aiModelFirst(claims),
 		PlanCache:  s.aiPlanCache,
+		// The caller's generated vocabulary for every model path (model-first
+		// decision point 3): their own names, sites, aliases and the
+		// catalogue's terms — built from the principal's scope only.
+		Glossary: s.aiGlossary(r, claims),
 	}
 	// The model-with-tools path for a question no deterministic arm covers:
 	// the agent loop on THIS orchestrator's registry and policy engine (one
