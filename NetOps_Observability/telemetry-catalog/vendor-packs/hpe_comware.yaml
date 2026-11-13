@@ -189,7 +189,7 @@ fixtures:
       severity_native_code: '3'
       title: 'IFNET/LINK_UPDOWN on sw-core1: Ethernet1/0/1 link status is DOWN.'
       correlation_key: 'IFNET:sw-core1:LINK_UPDOWN'
-    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: high, opens_alone: true, state: down, entity: 'sw-core1:Ethernet1/0/1'}
+    signal: {kind: link_state_change, severity: high, opens_alone: true, state: down, entity: 'sw-core1:Ethernet1/0/1'}
 
   - name: a Comware V7 physical state change names the interface
     fidelity: doc_claimed
@@ -215,7 +215,7 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: link_updown
-    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw-core1:Ethernet1/0/1'}
+    signal: {kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw-core1:Ethernet1/0/1'}
 
   - name: the line protocol after a link change is the untagged protocol line, warn
     fidelity: doc_claimed
@@ -228,7 +228,7 @@ fixtures:
       parser_status: parsed
       facility: IFNET
       event_type: lineproto_updown
-    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sw-core1:Vlan-interface1'}
+    signal: {kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sw-core1:Vlan-interface1'}
 
   - name: a Comware SSH login names the user and the source
     fidelity: doc_claimed
