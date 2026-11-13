@@ -41,6 +41,9 @@ var tenantSkillKeys = map[string]bool{
 	"name": true, "layer": true, "version": true, "kind": true,
 	"when_to_use": true, "symptom_kinds": true, "tools": true,
 	"gather": true, "look_for": true, "decisions": true, "steps": true,
+	// applies_when (NetClaw ingestion Batch 0): a runbook may say which
+	// discovered devices it fits, over the same closed fact vocabulary.
+	"applies_when": true,
 }
 
 // ParseSkillSource parses and validates one customer runbook from its two source

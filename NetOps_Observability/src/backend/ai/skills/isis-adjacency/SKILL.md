@@ -3,6 +3,7 @@ name: isis-adjacency
 layer: igp
 version: 1
 when_to_use: isis, is-is, isis adjacency, isis neighbor, level-1, level-2, isis down, isis init, isis flapping
+applies_when: fact:adjacency=isis
 symptom_kinds: igp, adjacency, routing
 tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs, get_recent_changes
 gather:
