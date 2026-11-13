@@ -112,6 +112,12 @@ type EvidenceItem struct {
 	// must carry the disagreement (EnsureDisagreementStated). Server-stamped,
 	// never serialized.
 	Contested []string `json:"-"`
+	// Class DOWNGRADES this one item's statement class to DERIVED when it is
+	// the server's own reading of observed evidence (an overlay shape, a
+	// role's likely function) inside an otherwise OBSERVED tool's result.
+	// Only ClassDerived is honoured: an item can never claim a STRONGER class
+	// than its tool. Server-stamped, never serialized.
+	Class string `json:"-"`
 }
 
 // ToolResult is a read-only tool's output. Truncated discloses a cap was hit.
