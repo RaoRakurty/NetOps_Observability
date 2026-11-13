@@ -164,7 +164,7 @@ func TestAskCallsAFailingProviderOnce(t *testing.T) {
 func TestAgentLoopMovesToTheFallbackModelWhenTheConfiguredOneIsOverloaded(t *testing.T) {
 	s := oneRegistryServer(t)
 	clearAIEnv(t)
-	t.Setenv("FEATURE_AI_TOOLS", "true")
+	setAIModelsForTest(t, s, true, true) // both console switches on: the loop runs
 	s.aiBreaker = aiprovider.NewBreaker(aiprovider.Config{Threshold: 1000, Cooldown: time.Hour})
 	s.aiProvCalls = aiprovider.NewMetrics(s.aiBreaker)
 	s.copilotCfg.Set(copilotConfig{Provider: "gemini", Key: platformKey, Model: "gemini-flash-latest"})

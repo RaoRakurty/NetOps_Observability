@@ -68,7 +68,7 @@ func TestTierMappingTable(t *testing.T) {
 }
 
 func TestVocabularyIsClosedAndBackingIsHonest(t *testing.T) {
-	want := []aientitlement.Entitlement{"ai.chat", "ai.investigate", "ai.nlquery", "ai.context.author", "ai.runbook.author", "ai.mcp"}
+	want := []aientitlement.Entitlement{"ai.chat", "ai.model", "ai.investigate", "ai.nlquery", "ai.context.author", "ai.runbook.author", "ai.mcp"}
 	if !reflect.DeepEqual(aientitlement.All(), want) {
 		t.Fatalf("vocabulary = %v, want %v", aientitlement.All(), want)
 	}
@@ -77,7 +77,7 @@ func TestVocabularyIsClosedAndBackingIsHonest(t *testing.T) {
 			t.Errorf("%q must not be valid", e)
 		}
 	}
-	backed := map[aientitlement.Entitlement]bool{aientitlement.Chat: true, aientitlement.Investigate: true, aientitlement.NLQuery: true, aientitlement.ContextAuthor: true}
+	backed := map[aientitlement.Entitlement]bool{aientitlement.Chat: true, aientitlement.Model: true, aientitlement.Investigate: true, aientitlement.NLQuery: true, aientitlement.ContextAuthor: true}
 	for _, e := range aientitlement.All() {
 		if aientitlement.Backed(e) != backed[e] {
 			t.Errorf("Backed(%s) = %v, want %v", e, aientitlement.Backed(e), backed[e])
@@ -119,27 +119,28 @@ func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+// TestDeploymentFlagsKeepTheirMeaning: the Iris switch keeps its meaning for
+// every capability, and FEATURE_AI_TOOLS is no longer a gate at all (owner
+// 2026-11-12/13: the console-only switch replaced it; the variable only seeds
+// that switch once on upgrade).
 func TestDeploymentFlagsKeepTheirMeaning(t *testing.T) {
 	cases := []struct {
-		name          string
-		env           map[string]string
-		iris, investi bool
+		name string
+		env  map[string]string
+		iris bool
 	}{
-		{"defaults: Iris on, investigations off", nil, true, false},
-		{"FEATURE_AI=false", map[string]string{"FEATURE_AI": "false", "FEATURE_AI_TOOLS": "true"}, false, false},
-		{"legacy FEATURE_COPILOT=false", map[string]string{"FEATURE_COPILOT": "false"}, false, false},
-		{"FEATURE_AI wins over FEATURE_COPILOT", map[string]string{"FEATURE_AI": "true", "FEATURE_COPILOT": "false"}, true, false},
-		{"tools on", map[string]string{"FEATURE_AI_TOOLS": "true"}, true, true},
+		{"defaults: Iris on", nil, true},
+		{"FEATURE_AI=false", map[string]string{"FEATURE_AI": "false", "FEATURE_AI_TOOLS": "true"}, false},
+		{"legacy FEATURE_COPILOT=false", map[string]string{"FEATURE_COPILOT": "false"}, false},
+		{"FEATURE_AI wins over FEATURE_COPILOT", map[string]string{"FEATURE_AI": "true", "FEATURE_COPILOT": "false"}, true},
+		{"FEATURE_AI_TOOLS changes nothing", map[string]string{"FEATURE_AI_TOOLS": "false"}, true},
 	}
 	for _, c := range cases {
 		e := env(c.env)
-		for _, ent := range []aientitlement.Entitlement{aientitlement.Chat, aientitlement.NLQuery, aientitlement.ContextAuthor, aientitlement.RunbookAuthor, aientitlement.MCP} {
+		for _, ent := range aientitlement.All() {
 			if got := aientitlement.DeploymentAllows(ent, e); got != c.iris {
 				t.Errorf("%s: %s = %v, want %v", c.name, ent, got, c.iris)
 			}
-		}
-		if got := aientitlement.DeploymentAllows(aientitlement.Investigate, e); got != c.investi {
-			t.Errorf("%s: investigate = %v, want %v", c.name, got, c.investi)
 		}
 	}
 	if aientitlement.IrisOn(nil) {
@@ -158,8 +159,9 @@ func TestDecideOrderAndTenantScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	sw := switches{assistant: map[string]bool{"t-a": true}, tools: map[string]bool{"t-a": true}}
-	on := env(map[string]string{"FEATURE_AI_TOOLS": "true"})
-	in := aientitlement.Inputs{Tier: "paid", Env: on, Tenant: "t-a", Switches: sw}
+	on := env(map[string]string{})
+	in := aientitlement.Inputs{Tier: "paid", Env: on, Tenant: "t-a", Switches: sw,
+		ModelLicensed: true, ModelsOn: true, InvestigationsOn: true}
 
 	if d := aientitlement.Decide(p, aientitlement.NLQuery, in); !d.Granted {
 		t.Fatalf("all three switches on must grant: %+v", d)
@@ -186,12 +188,18 @@ func TestDecideOrderAndTenantScope(t *testing.T) {
 		t.Fatalf("a cross-tenant principal is not tenant-gated: %+v", d)
 	}
 	allTn := other
-	allTn.Env = env(map[string]string{"FEATURE_AI_TOOLS": "true", "AI_TOOLS_ALL_TENANTS": "true"})
-	if !aientitlement.Decide(p, aientitlement.Investigate, allTn).Granted {
-		t.Fatal("AI_TOOLS_ALL_TENANTS widens investigations to every tenant")
-	}
+	allTn.Env = env(map[string]string{"AI_TOOLS_ALL_TENANTS": "true"})
 	if aientitlement.Decide(p, aientitlement.Chat, allTn).Granted {
 		t.Fatal("AI_TOOLS_ALL_TENANTS must not switch on the assistant for a tenant")
+	}
+	if aientitlement.Decide(p, aientitlement.Investigate, allTn).Granted {
+		t.Fatal("investigations are model calls: a tenant with the assistant off gets none, whatever AI_TOOLS_ALL_TENANTS says")
+	}
+	// Tenant B with the assistant on but no investigations opt-in: the
+	// all-tenants override widens investigations to it.
+	allTn.Switches = switches{assistant: map[string]bool{"t-a": true, "t-b": true}, tools: map[string]bool{"t-a": true}}
+	if !aientitlement.Decide(p, aientitlement.Investigate, allTn).Granted {
+		t.Fatal("AI_TOOLS_ALL_TENANTS widens investigations to every tenant whose assistant is on")
 	}
 	noSw := in
 	noSw.Switches = nil

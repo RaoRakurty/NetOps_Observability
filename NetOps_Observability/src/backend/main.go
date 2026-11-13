@@ -1961,7 +1961,58 @@ func newServer() *server {
 	// PBAC Phase A: ensure every existing user has its mirror role_binding so the
 	// auditable artifact is complete on boot. Idempotent; behaviour-preserving.
 	srv.backfillBindings()
+	// The AI add-on (owner 2026-11-12/13): the console-only AI switches need
+	// the licence, and an install that was already using a model keeps it on
+	// across this upgrade — once. Requirements first, so the seed sees them.
+	srv.wireAISwitches(time.Now())
 	return srv
+}
+
+// wireAISwitches injects the licence check behind every Requires flag and runs
+// the one-shot upgrade seed for the two AI switches.
+//
+// The seed (owner 2026-11-13: "installs already using a model start ON;
+// everyone else OFF") reads the PRE-UPGRADE posture exactly as the old gates
+// did: Iris on (FEATURE_AI / FEATURE_COPILOT) and a provider key present (an
+// env key, the stored platform key, or any workspace's own key) → models on;
+// and FEATURE_AI_TOOLS=true on top → investigations on. It writes once per
+// flag and never again (featureflags.Seed), so an operator's later choice is
+// never overwritten, and a key added after the upgrade does not flip anything.
+// Each seeded value is audited.
+func (s *server) wireAISwitches(now time.Time) {
+	s.features.SetRequirements(func(name string) (bool, string) {
+		err := entitlement.Require(s.entitlements, entitlement.Feature(name))
+		if err == nil {
+			return true, ""
+		}
+		return false, err.Error()
+	})
+	modelsInUse := aientitlement.IrisOn(os.Getenv) && (s.copilotKeyPresent() || s.aiTenantCfg.AnyBYOKey())
+	seeds := []struct {
+		flag string
+		on   bool
+	}{
+		{aientitlement.SwitchModels, modelsInUse},
+		{aientitlement.SwitchInvestigations, modelsInUse && os.Getenv(aientitlement.EnvAITools) == "true"},
+	}
+	for _, sd := range seeds {
+		by := "install default (off until a platform administrator turns it on)"
+		if sd.on {
+			by = "upgrade (this installation was already using an AI model)"
+		}
+		seeded, err := s.features.Seed(sd.flag, sd.on, by, now)
+		if err != nil {
+			logError("features", "the AI switch could not be seeded — it stays off until set on the Features page", map[string]any{"flag": sd.flag, "error": err.Error()})
+			continue
+		}
+		if !seeded {
+			continue // already decided, by the page or an earlier seed
+		}
+		st, _ := s.features.Get(sd.flag) // discard: a known flag — Seed just wrote it
+		logInfo("features", "AI switch seeded on upgrade", map[string]any{"flag": sd.flag, "desired": st.Desired, "running": st.Running})
+		s.audit.Record(AuditEvent{Actor: "system", Cross: true, Method: "SEED", Path: "/api/platform/features", Status: http.StatusOK, Decision: "allow",
+			Detail: map[string]any{"action": "feature_flag_seed", "flag": sd.flag, "to": st.Desired, "reason": by}})
+	}
 }
 
 // ── goroutine safety + shutdown drain ────────────────────────────────────────
@@ -4804,8 +4855,14 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		// cannot use. Cosmetic only — every AI route gates server-side. It
 		// reads nothing about any tenant but the caller's own.
 		"ai_entitlements": s.aiEntitlementsFor(claims),
-		"copilot":         os.Getenv("FEATURE_COPILOT") == "true",
-		"device_ssh":      os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		// The Iris panel is available whenever the Iris switch is on —
+		// evidence-only Iris needs no provider (owner 2026-11-12/13).
+		// FEATURE_COPILOT keeps only its legacy role inside that switch.
+		"copilot": aientitlement.IrisOn(os.Getenv),
+		// Model-backed Iris: the AI add-on and the console switch, platform-
+		// level, for the panel's banner (unlicensed | off | on).
+		"ai_models":  s.aiModelsView(),
+		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		// Configuration backup + drift (the inventory's Sync / Backup columns).
 		"config_backup":       os.Getenv("FEATURE_CONFIG_BACKUP") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
@@ -4843,7 +4900,7 @@ func (s *server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 		"clickhouse": os.Getenv("CLICKHOUSE_URL") != "",
 		// Feature availability only — the assistant UI renders whenever the feature
 		// is on, then prompts in-panel for an API key (env or UI-stored) if missing.
-		"copilot":    os.Getenv("FEATURE_COPILOT") == "true",
+		"copilot":    aientitlement.IrisOn(os.Getenv),
 		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		// Global gate only — the per-tenant opt-in rides GET /api/settings/verification.
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",

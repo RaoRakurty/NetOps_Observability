@@ -107,10 +107,10 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if os.Getenv("FEATURE_COPILOT") != "true" {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("copilot disabled — set FEATURE_COPILOT=true"))
-		return
-	}
+	// FEATURE_COPILOT no longer gates this route (owner 2026-11-12/13): the
+	// assistant is the ai.chat entitlement below (the Iris switch), and every
+	// provider call is the AI add-on gate in providerCandidatesForTier. With
+	// the add-on off this route still answers, evidence-only.
 
 	// SR-021: per-principal rate limit. Each chat turn is a paid provider call, so
 	// an authenticated user spamming /api/copilot/chat is a provider-cost DoS.
@@ -177,7 +177,26 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Agent loop (intelligence plan P2): when FEATURE_AI_TOOLS is on and this
+	// The AI add-on is off for this caller (not licensed, switched off, or the
+	// tenant's assistant has no model): the grounded engine answers —
+	// evidence-only, tenant-scoped, key-free — and the reply says why, so the
+	// panel can show the right banner instead of an error.
+	if d := s.aiDecide(claims, aientitlement.Model); !d.Granted {
+		if question != "" {
+			if ans, err := engine().Ask(r.Context(), s.aiPrincipal(claims), question, nil); err == nil {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
+					"fallback": "models_off", "models_reason": string(d.Reason),
+					"is_grounded": true,
+				})
+				return
+			}
+		}
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI models are not available here, and the question could not be answered from your data alone"))
+		return
+	}
+
+	// Agent loop (intelligence plan P2): when investigations are on and this
 	// caller is in the rollout, let the model investigate with governed read-only
 	// tools before answering. Falls back to plain chat when the loop can't start
 	// (no budget, provider refuses) — but a turn that already executed lookups

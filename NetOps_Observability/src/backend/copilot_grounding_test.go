@@ -36,13 +36,15 @@ func groundingTestServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &server{
+	s := &server{
 		roles:          rs,
 		copilotLimiter: ratelimit.New(),
 		aiToolBudget:   ai.NewDailyBudget(),
 		copilotCfg:     newCopilotConfigStore(dir+"/copilot_config.json", nil),
 		aiTenantCfg:    newAITenantConfigStore(dir+"/ai_tenant_config.json", nil),
 	}
+	setAIModelsLikeLegacyEnv(t, s) // a licensed install with "Iris AI models" on
+	return s
 }
 
 // cannedProvider answers every provider call with one OpenAI-shaped completion.
