@@ -97,6 +97,12 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	// licence_routes_test.go; internal/licence and internal/entitlement prove the
 	// mechanism and the semantics.
 	s.entitlements = licence.NewUnlimitedService()
+	// The AI add-on follows the same licence-neutral rule: licensed, "Iris AI
+	// models" ON, "AI investigations" OFF — the posture every AI test was
+	// written against (a key configured, FEATURE_AI_TOOLS unset). A test that
+	// needs another posture calls setAIModelsForTest; the gate itself is proved
+	// against the zero value (add-on off) in ai_addon_gate_test.go.
+	setAIModelsLikeLegacyEnv(t, s)
 	// LICENCE-END
 	identitySink.bind(s.onIdentityLegacyBind)
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))

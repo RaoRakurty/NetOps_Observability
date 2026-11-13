@@ -233,11 +233,16 @@ func TestPerTenantGuardrails(t *testing.T) {
 
 func TestAgentLoopEligibility(t *testing.T) {
 	s := agentTestServer()
-	t.Setenv("FEATURE_AI_TOOLS", "")
 	if s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
-		t.Fatal("off by default")
+		t.Fatal("off by default: no add-on, no switches")
 	}
-	t.Setenv("FEATURE_AI_TOOLS", "true")
+	setAIModelsForTest(t, s, true, false)
+	_, _ = s.aiTenantCfg.SetEntitlement("t-a", false, true, 0, 0)
+	if s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+		t.Fatal("the AI investigations switch is off: no loop even for an opted-in tenant")
+	}
+	_, _ = s.aiTenantCfg.SetEntitlement("t-a", false, false, 0, 0)
+	setAIModelsForTest(t, s, true, true) // both console switches on
 	if s.agentLoopEligible(jwtClaims{Tenant: "t-a", Sub: "user", Role: "admin"}) {
 		t.Fatal("tenant users are not entitled by default")
 	}

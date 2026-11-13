@@ -159,6 +159,9 @@ func (s *server) handleCopilotConfigTest(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !s.writeAIAddOnRefusal(w) {
+		return
+	}
 	cfg := s.copilotCfg.Get()
 	name := req.provider
 	if name == "" {

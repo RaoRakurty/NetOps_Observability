@@ -95,6 +95,13 @@ type Row struct {
 	InstallValue   *bool     `json:"install_value"`
 	UpdatedBy      string    `json:"updated_by,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at,omitempty"`
+	// ConsoleOnly: no install file can set it; the page is the only switch.
+	ConsoleOnly bool `json:"console_only"`
+	// Requires is the licence capability it needs ("" for none); Available
+	// is false while that capability is not licensed, with the reason.
+	Requires    string `json:"requires,omitempty"`
+	Available   bool   `json:"available"`
+	Unavailable string `json:"unavailable_reason,omitempty"`
 }
 
 // ToRow renders a State for the wire.
@@ -103,6 +110,7 @@ func ToRow(st State) Row {
 		Env: st.Env, Label: st.Label, Group: st.Group, Help: st.Help, Apply: string(st.Apply), Risky: st.Risky,
 		Running: st.Running, Desired: st.Desired, RestartPending: st.RestartPending, Source: string(st.Source),
 		InstallValue: st.InstallValue, UpdatedBy: st.UpdatedBy, UpdatedAt: st.UpdatedAt,
+		ConsoleOnly: st.ConsoleOnly, Requires: st.Requires, Available: st.Available, Unavailable: st.Unavailable,
 	}
 }
 
@@ -177,6 +185,11 @@ func (a *API) put(w http.ResponseWriter, r *http.Request, caller Caller) {
 		a.d.WriteErr(w, http.StatusBadRequest, ErrUnknownFlag)
 		return
 	}
+	if *body.Value && !before.Available {
+		// 402, as every licence refusal: the fix is the licence, not the request.
+		a.d.WriteErr(w, http.StatusPaymentRequired, errors.New(before.Label+" cannot be turned on: "+before.Unavailable))
+		return
+	}
 	if before.Risky && *body.Value && body.Acknowledge != before.Env {
 		a.d.WriteErr(w, http.StatusBadRequest, ErrAckRequired)
 		return
@@ -198,8 +211,12 @@ func (a *API) put(w http.ResponseWriter, r *http.Request, caller Caller) {
 		fail.Detail = map[string]any{"action": "feature_flag_set", "flag": before.Env, "error": err.Error()}
 		a.d.Audit(fail)
 		status := http.StatusInternalServerError
-		if errors.Is(err, ErrAckRequired) || errors.Is(err, ErrUnknownFlag) {
+		switch {
+		case errors.Is(err, ErrAckRequired) || errors.Is(err, ErrUnknownFlag):
 			status = http.StatusBadRequest
+		case errors.Is(err, ErrNotLicensed):
+			// The licence lapsed between the check above and the save.
+			status = http.StatusPaymentRequired
 		}
 		a.d.WriteErr(w, status, err)
 		return
