@@ -88,9 +88,40 @@ hash_of() {
 
 last="$(hash_of "$CSV" || true)"
 
+# Tracker 387 (a): further files a config-load secret backend reads (the
+# aggregator's community fingerprint set, served by cx-credfp-set.sh), so a
+# change to them reloads vector too — a reload re-runs every secret backend.
+# Space-separated absolute paths; unset on the router. Unlike the CSV, a file
+# that is ABSENT has a state of its own ("absent"), so its first appearance —
+# the api's first publish after the aggregator booted on an empty set — reloads.
+EXTRA="${CX_ENRICHMENT_EXTRA:-}"
+extra_state() {
+    out=''
+    for f in $EXTRA; do
+        h="$(hash_of "$f" || true)"
+        out="${out}${h:-absent};"
+    done
+    printf '%s' "$out"
+}
+last_extra="$(extra_state)"
+if [ -n "$EXTRA" ]; then
+    echo "cx-enrichment-reload: also reloading on changes to: ${EXTRA}" >&2
+fi
+
 (
     while kill -0 "$VECTOR_PID" 2>/dev/null; do
         sleep "$POLL"
+        if [ -n "$EXTRA" ]; then
+            now_extra="$(extra_state)"
+            if [ "$now_extra" != "$last_extra" ]; then
+                last_extra="$now_extra"
+                echo "cx-enrichment-reload: ${EXTRA} changed — reloading vector (SIGHUP)" >&2
+                if ! kill -HUP "$VECTOR_PID" 2>/dev/null; then
+                    echo "cx-enrichment-reload: vector process not running; exiting watcher" >&2
+                    break
+                fi
+            fi
+        fi
         now="$(hash_of "$CSV" || true)"
         # Skip when unreadable/absent; also skip the very first appearance vs
         # an empty baseline only if identical — any content change reloads.

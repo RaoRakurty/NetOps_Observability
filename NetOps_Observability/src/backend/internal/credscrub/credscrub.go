@@ -333,6 +333,48 @@ func (s *Scrubber) Union() View {
 	return s.For("", true)
 }
 
+// TenantFP is one held value's fingerprint under its owning tenant ("" for a
+// platform-global value; otherwise folded as normTenant folds it).
+type TenantFP struct {
+	Tenant string
+	FP     string
+}
+
+// Fingerprints returns fp(tenant, value) for every value the Scrubber holds —
+// configured and retired, under the same eligibility rule as masking — sorted
+// by tenant then fingerprint. It is the ONLY way a held value leaves this
+// package, and it leaves only through fp, which must be a keyed one-way
+// function (internal/credfp): the result carries fingerprints, never a value.
+// It feeds the at-rest drop of a community from ConfD's session lines
+// (tracker 387 (a)); a retired value stays published for as long as it stays
+// masked, because stored lines and a not-yet-rotated device may still carry it.
+// A nil Scrubber, a nil fp or an empty set returns nil.
+func (s *Scrubber) Fingerprints(fp func(tenant, value string) string) []TenantFP {
+	if s == nil || fp == nil {
+		return nil
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if len(s.configured)+len(s.retired) == 0 {
+		return nil
+	}
+	out := make([]TenantFP, 0, len(s.configured)+len(s.retired))
+	add := func(e entry) { out = append(out, TenantFP{Tenant: e.tenant, FP: fp(e.tenant, e.text)}) }
+	for e := range s.configured {
+		add(e)
+	}
+	for e := range s.retired {
+		add(e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tenant != out[j].Tenant {
+			return out[i].Tenant < out[j].Tenant
+		}
+		return out[i].FP < out[j].FP
+	})
+	return out
+}
+
 // View masks with one caller's set. The zero View masks nothing.
 type View struct {
 	m *matcher

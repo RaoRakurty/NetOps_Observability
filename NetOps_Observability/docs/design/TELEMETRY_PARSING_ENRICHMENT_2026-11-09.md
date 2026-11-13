@@ -328,7 +328,7 @@ Rotating before PR 1 is live would write the new value to OpenSearch in clear as
 | Syslog header diagnosis | **Adopted**, capture first | §3.3 |
 | Namespaced schema | **Adapted** to flat fields with a mapping | §5.2 |
 | Per-stage status | **Adapted** to `envelope`, `parser`, `enrichment`, `sampling`, tenant | Not all eight stages exist here |
-| HMAC community fingerprint | **Not built** | D1 |
+| HMAC community fingerprint | **Built 2026-11-13** (`internal/credfp`, the aggregator's D1 block) | D1 |
 | Sampling status `ambiguous` | **Replaced** | Semantics are settled, §4 |
 | Tenant by IP or exporter, with confidence | **Rejected** | Conflicts with the 2026-11-01 decision |
 | Immutable raw object store and replay | **Not in v1** | D5: original payloads kept where feasible, Kafka replay for 72 hours, storage interface left open |

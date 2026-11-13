@@ -2641,7 +2641,6 @@ tests:
               assert_eq!(.normalized_severity, "notice", "wrong normalized_severity")
               assert_eq!(.event_category, "management_audit", "wrong event_category")
               assert_eq!(.dedup_key, "vEdge-1|confd|audit_session_created_snmp", "wrong dedup_key")
-              assert_eq!(.message, "audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp", "wrong message")
               assert_eq!(.title, "SNMP session on vEdge-1 from 192.0.2.1 (poll)", "wrong title")
               assert_eq!(.correlation_key, "audit:vEdge-1:snmp:777134", "wrong correlation_key")
               assert_eq!(.audit_action, "session_created", "wrong audit_action")

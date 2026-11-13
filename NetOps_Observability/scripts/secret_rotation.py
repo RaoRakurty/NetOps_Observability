@@ -126,6 +126,19 @@ POLICY: dict[str, Policy] = {
     # loud, never a silent wrong answer, and it heals on the second recreate.
     "CORR_DEBUG_TOKEN": Policy(
         FREE, "", "", ""),
+    # Tracker 387 (a): the community fingerprint key. FREE: no store holds it.
+    # rotate_secrets() re-renders data/secrets/credscrub/{api,aggregator}; the
+    # api re-reads its file within a second and republishes the fingerprint set
+    # under the new key, and that file change reloads the aggregator, whose
+    # reload re-reads the key. Until that reload the aggregator holds the old
+    # key AND the old set, which still agree. One window remains: a reload for
+    # ANOTHER reason (a device_tenant.csv change) inside the api's next publish
+    # interval (<= 60 s) reads the new key against the old set, and a by-value
+    # line in that window is stored unmatched; the certain-by-shape lines are
+    # unaffected. Side effect: tokens stored before the rotation stop grouping
+    # with new ones (the fingerprint is keyed).
+    "CREDSCRUB_FP_KEY": Policy(
+        FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
     # SEC-010 vmauth per-service credentials. Tracker 367 layer 1: they reach
