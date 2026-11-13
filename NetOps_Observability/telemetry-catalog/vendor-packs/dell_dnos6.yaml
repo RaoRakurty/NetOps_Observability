@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# Dell EMC PowerSwitch N-series (DNOS 6), tracker 387 plan §6a, wave 2.
+# Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# FRAMING. `<PRI>Mmm dd hh:mm:ss host COMPONENT[task]: file.c(line) seq %% LEVEL text`.
+# The legacy parser reads it as written: the component is the program, the task the pid,
+# and the message starts at the source file (tests/test_syslog_edge_framing.py DNOS6*).
+#
+# EVIDENCE. No Dell switch on the lab: `doc_claimed`. The lines are SC4S's
+# (splunk/splunk-connect-for-syslog, Apache-2.0, tests/test_dell_emc_networking.py,
+# sourcetype dell:emc:powerswitch:n). DNOS 6 has no stable message id: the source file
+# names the subsystem, which is what the event type is built from, and the level word
+# is kept as written. The severity is the frame's PRI: the full level-word list was not
+# read, so no word is mapped.
+#
+# NOT HERE. Dell SmartFabric OS10: its log reference was unreachable (research §3), and
+# the shape it gives (`Node.1-Unit.1:PRI [event], Dell EMC (OS10) %IFM_ASTATE_DN: ...`)
+# is unverified, so OS10 stays unparsed until a document or a capture says otherwise.
+pack: dell_dnos6
+vendor: dell
+description: Dell EMC PowerSwitch N-series (DNOS 6) syslog.
+
+grammars:
+  # `CMDLOGGER[emWeb]: cmd_logger_api.c(83) 29333 %% NOTE CLI:10.1.3.211:administrator:User  logged in`
+  - id: dnos6_cli_session
+    parser_id: dell_dnos6.v1
+    literal: ' %% '
+    pattern: '^cmd_logger_api\.c\(\d{1,6}\) \d{1,10} %% (?P<lvl>[A-Z]{3,9}) CLI:(?P<src>\d{1,3}(?:\.\d{1,3}){3}):(?P<user>[^:\s]{1,64}):User {1,2}logged (?P<act>in|out)\b'
+    facility: CMDLOGGER
+    event_type: 'cli_logged_{act}'
+    summary: '{user} logged {act} from {src}'
+    native_text: lvl
+    category: management_audit
+    fields:
+      title: 'CLI session on {host}: {user} logged {act} from {src}'
+      correlation_key: 'cli:{device}:{user}:{src}'
+      audit_user: '{user}'
+      audit_action: 'session_{act|session_action}'
+      audit_source: '{src}'
+      audit_via: 'cli'
+    fidelity: doc_claimed
+    source: 'SC4S tests/test_dell_emc_networking.py (Apache-2.0), https://github.com/splunk/splunk-connect-for-syslog/blob/main/tests/test_dell_emc_networking.py'
+
+  # Every other DNOS 6 line: the subsystem (source file) is the event type.
+  - id: dnos6
+    parser_id: dell_dnos6.v1
+    literal: ' %% '
+    pattern: '^(?P<file>[a-z][a-z0-9_]{0,63})\.c\(\d{1,6}\) \d{1,10} %% (?P<lvl>[A-Z]{3,9}) (?P<text>.{0,4096})'
+    facility: '{file}'
+    event_type: '{file}'
+    summary: '{text}'
+    native_text: lvl
+    fields:
+      title: '{file} on {host}: {text}'
+      correlation_key: '{file}:{device}'
+    fidelity: doc_claimed
+    source: 'SC4S tests/test_dell_emc_networking.py (Apache-2.0), https://github.com/splunk/splunk-connect-for-syslog/blob/main/tests/test_dell_emc_networking.py'
+
+labels:
+  session_action:
+    in: created
+    out: terminated
+
+fixtures:
+  - name: a DNOS 6 CLI login names the user and the source
+    fidelity: doc_claimed
+    source: 'SC4S tests/test_dell_emc_networking.py (Apache-2.0)'
+    hostname: dn1
+    appname: CMDLOGGER
+    severity: notice
+    message: 'cmd_logger_api.c(83) 29333 %% NOTE CLI:10.1.3.211:administrator:User  logged in'
+    expect:
+      vendor: dell
+      vendor_source: format
+      parser_id: dell_dnos6.v1
+      parser_status: parsed
+      event_type: cli_logged_in
+      event_category: management_audit
+      audit_user: administrator
+      audit_source: 10.1.3.211
+      audit_action: session_created
+      summary: administrator logged in from 10.1.3.211
+    signal: null
+
+  - name: a DNOS 6 startup-config change parses with its subsystem
+    fidelity: doc_claimed
+    source: 'SC4S tests/test_dell_emc_networking.py (Apache-2.0)'
+    hostname: dn1
+    appname: TRAPMGR
+    severity: notice
+    message: "traputil.c(721) 29331 %% NOTE 'startup-config' has changed."
+    expect:
+      parser_id: dell_dnos6.v1
+      parser_status: parsed
+      facility: traputil
+      event_type: traputil
+      summary: "'startup-config' has changed."
+      severity_native_text: NOTE
+    signal: null
+
+  - name: a DNOS 6 unit manager line parses
+    fidelity: doc_claimed
+    source: 'SC4S tests/test_dell_emc_networking.py (Apache-2.0)'
+    hostname: dn1
+    appname: UNITMGR
+    severity: info
+    message: 'unitmgr.c(6905) 29330 %% INFO Configuration propagation successful for config type 0'
+    expect:
+      parser_status: parsed
+      event_type: unitmgr
+      summary: Configuration propagation successful for config type 0
+    signal: null

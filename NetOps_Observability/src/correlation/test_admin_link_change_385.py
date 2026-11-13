@@ -438,7 +438,7 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
 STEP0_DIGEST = "0dafd680d13d29fa"
-PINNED_RULE_COUNT = 102  # parser_rules.RULES since tracker 388 (SR Linux + SONiC link rows)
+PINNED_RULE_COUNT = 103  # parser_rules.RULES since tracker 387 wave 2 (Comware PHY_UPDOWN row)
 
 
 def test_control_digest_frozen_before_the_change():
@@ -483,10 +483,13 @@ def test_the_parser_is_untouched():
     Re-pinned for the ConfD SNMP session grammar that reads no user: no rule row.
     Re-pinned for the merge of those two; no link row moved.
     Re-pinned for tracker 388 (syslog link cause): two link rows, SR Linux and SONiC, behind
-    every older one; the trap link rows this file protects did not move."""
-    assert parser_rules.PARSER_REV == "2026-11-12-link-cause-srlinux-sonic"
+    every older one; the trap link rows this file protects did not move.
+    Re-pinned for tracker 387 vendor wave 2: a Comware PHY_UPDOWN row (warn) behind every
+    older one, and the neutral syslog link row names the port of a `link status is` line;
+    the trap link rows this file protects did not move."""
+    assert parser_rules.PARSER_REV == "2026-11-13-vendor-packs-wave2"
     assert parser_rules.BAKED_RULES_HASH == (
-        "246b7761c983b90677e247d8d5d83177a582708929f75e4e1dbdd277e26702af")
+        "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b459e4c4351eba6cba")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]
