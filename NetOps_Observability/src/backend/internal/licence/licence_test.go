@@ -505,6 +505,9 @@ func TestClosedVocabulary(t *testing.T) {
 			entitlement.FeatureSAML:             entitlement.TierEnterprise,
 			entitlement.FeatureSCIM:             entitlement.TierEnterprise,
 			entitlement.FeatureLDAP:             entitlement.TierEnterprise,
+			// Owner decision 2026-11-12, confirmed 2026-11-13: the AI add-on.
+			// Enterprise includes it; below Enterprise it is an add-on line.
+			entitlement.FeatureIrisModel: entitlement.TierEnterprise,
 		}
 		got := entitlement.Features()
 		if len(got) != len(want) {

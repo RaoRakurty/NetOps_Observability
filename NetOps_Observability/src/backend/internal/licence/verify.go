@@ -179,16 +179,21 @@ func evaluate(doc Document, now time.Time) State {
 		LicensedTier: doc.Tier,
 		Phase:        entitlement.PhaseValid,
 		Ceilings:     doc.Ceilings,
-		Features:     NormaliseFeatures(doc.Features),
-		Customer:     doc.Customer,
-		LicenceID:    doc.LicenceID,
-		IssuedAt:     doc.IssuedAt.UTC(),
-		ExpiresAt:    doc.ExpiresAt.UTC(),
-		GraceEndsAt:  graceEnd,
-		GraceDays:    doc.GraceDays,
-		Trial:        doc.Trial,
-		Support:      doc.Support,
-		KeyID:        doc.KeyID,
+		// The file's own list plus what its tier includes without listing it
+		// (entitlement.Included: Enterprise includes the AI add-on). Only the
+		// granted set changes; the file is not rewritten and its signature is
+		// untouched, so an Enterprise licence issued before the add-on existed
+		// gains it on this binary and still verifies on an older one.
+		Features:    NormaliseFeatures(append(append([]entitlement.Feature(nil), doc.Features...), entitlement.Included(doc.Tier)...)),
+		Customer:    doc.Customer,
+		LicenceID:   doc.LicenceID,
+		IssuedAt:    doc.IssuedAt.UTC(),
+		ExpiresAt:   doc.ExpiresAt.UTC(),
+		GraceEndsAt: graceEnd,
+		GraceDays:   doc.GraceDays,
+		Trial:       doc.Trial,
+		Support:     doc.Support,
+		KeyID:       doc.KeyID,
 	}
 	if !now.After(doc.ExpiresAt) {
 		return st
