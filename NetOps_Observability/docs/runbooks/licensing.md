@@ -54,7 +54,7 @@ the owner has not decided. `entitlement.Enforced(name)` is the machine-readable
 statement of which is which, and `TestOnlyDecidedCeilingsAreEnforced` fails if
 that ever drifts.
 
-**The LOCKED commercial feature set**, exactly seven names and nothing else:
+**The LOCKED commercial feature set**, exactly eight names and nothing else:
 
 | Feature | Lowest tier | Gate today |
 |---|---|---|
@@ -65,8 +65,18 @@ that ever drifts.
 | `ldap` | Enterprise | `/api/auth/ldap/config`, `/api/auth/ldap/test` |
 | `siem_export` | Enterprise | **no route yet — the capability does not exist.** The gate is ready; see `TestLicenceGatesReadyForAbsentFeatures` |
 | `scim` | Enterprise | **no route yet — same** |
+| `iris_model` | Enterprise **includes it**; an **add-on** line for Team and Community | model-backed Iris (provider answers, model chat, AI investigations). Evidence-only Iris is never gated. The gate lands in the follow-up add-on PRs (tracker 348) |
 
-Adding an eighth name gates a capability for every customer, so it is an owner
+`iris_model` (owner decision 2026-11-12, confirmed 2026-11-13) is the one
+feature a tier grants without the file listing it: `entitlement.Included`
+adds it to every Enterprise licence at evaluation time, so Enterprise licences
+issued before the name existed keep it **without re-issue**. Do not re-issue an
+existing licence just to add it — a binary older than the name refuses a licence
+that lists it, and falls back to Community. For a Team or Community customer
+who buys the add-on, issue with `--features ...,iris_model` and only once the
+customer runs a release that knows the name.
+
+Adding a ninth name gates a capability for every customer, so it is an owner
 decision, not a diff.
 
 ### Expiry, grace and overage — DECIDED 2026-09-05

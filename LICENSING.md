@@ -64,6 +64,7 @@ whatever a draft tiering document proposes.
 | `saml` | Enterprise | SAML single sign-on. |
 | `scim` | Enterprise | SCIM user/group provisioning. |
 | `ldap` | Enterprise | LDAP / Active Directory directory authentication. |
+| `iris_model` | Enterprise | Model-backed Iris: answers written by an AI provider, model chat and AI investigations. Included in Enterprise; Team and Community buy it as an add-on line. Evidence-only Iris (no provider call) is core and free. |
 
 **MSP and org-hierarchy MANAGEMENT is commercial; tenant isolation is not.** Managing a
 fleet of tenants as one account is a commercial capability. Being isolated from another
