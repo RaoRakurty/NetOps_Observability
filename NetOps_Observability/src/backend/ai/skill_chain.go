@@ -115,18 +115,29 @@ type chainFacts struct {
 	// `signatures` on purpose — it is not a signature that fired, it is the
 	// statement that there was nothing to fire against.
 	diagUncollected bool
+	// device holds the DISCOVERED facts of the turn's device (skill_facts.go),
+	// resolved once with the entities. deviceRead is false when no device was
+	// resolved or the facts could not be read: applies_when is then not
+	// evaluated and every `fact:` condition stays unknown (never fires).
+	device     DeviceFacts
+	deviceRead bool
+	deviceName string
+	// topo holds the `topo:` design facts get_network_topology declared,
+	// keyed "facet=value" and re-validated against the closed vocabulary.
+	topo map[string]bool
 }
 
 func newChainFacts() *chainFacts {
 	return &chainFacts{
 		signatures: map[string]bool{}, tiers: map[string]bool{}, phrases: map[string]bool{},
 		kinds: map[string]bool{}, noteTokens: map[string]bool{}, toolOutcome: map[string]string{},
-		states: map[string]bool{},
+		states: map[string]bool{}, topo: map[string]bool{},
 	}
 }
 
-// addSignals records the machine facts a tool declared. Only the four
-// TOOL-DECLARABLE keys are accepted, each re-validated against the same closed
+// addSignals records the machine facts a tool declared. Only the
+// TOOL-DECLARABLE keys (signature, verdict:tier, verdict:phrase, state:<facet>,
+// topo:<facet>) are accepted, each re-validated against the same closed
 // vocabulary the loader enforces; anything else is ignored rather than trusted.
 // (Evidence kinds, tool outcomes and note tokens are derived by the runner
 // itself and can never be asserted by a tool.)
@@ -169,6 +180,9 @@ func (f *chainFacts) addSignals(signals []string) {
 			// tool cannot invent either one.
 			if facet, isState := strings.CutPrefix(key, CondStatePrefix); isState && validStateFact(facet, value) {
 				f.states[facet+"="+value] = true
+			}
+			if facet, isTopo := strings.CutPrefix(key, CondTopoPrefix); isTopo && validTopoFact(facet, value) {
+				f.topo[facet+"="+value] = true
 			}
 		}
 	}
@@ -260,11 +274,25 @@ func (f *chainFacts) holds(c SkillCondition) bool {
 		return f.noteTokens[c.Value]
 	case strings.HasPrefix(c.Key, CondStatePrefix):
 		return f.states[strings.TrimPrefix(c.Key, CondStatePrefix)+"="+c.Value]
+	case strings.HasPrefix(c.Key, CondTopoPrefix):
+		return f.topo[strings.TrimPrefix(c.Key, CondTopoPrefix)+"="+c.Value]
+	case strings.HasPrefix(c.Key, CondFactPrefix):
+		// Only an ESTABLISHED fact fires a hop; an unknown one never does.
+		return f.deviceRead && f.device.eval(c) == factHolds
 	case strings.HasPrefix(c.Key, CondToolPrefix):
 		return f.toolOutcome[strings.TrimPrefix(c.Key, CondToolPrefix)] == c.Value
 	default:
 		return false // unknown key: the loader rejects it; here it simply never fires
 	}
+}
+
+// applicability is sk's applies_when for the turn's device. With no device
+// facts read there is nothing to apply a method to, and every method applies.
+func (f *chainFacts) applicability(sk *Skill) skillApplicability {
+	if !f.deviceRead || sk == nil {
+		return skillApplicability{Applies: true}
+	}
+	return sk.applicability(f.device)
 }
 
 // ---- chain state -----------------------------------------------------------
@@ -411,6 +439,9 @@ func (o *Orchestrator) chainCandidates(cur *Skill, st *chainState) []string {
 		if !ok || !hopAllowed(cur, nx) {
 			continue // the loader forbids both; defence in depth
 		}
+		if !st.facts.applicability(nx).Applies {
+			continue // a discovered fact rules it out: never offered, never taken
+		}
 		seen[name] = true
 		out = append(out, name)
 	}
@@ -426,7 +457,18 @@ func (o *Orchestrator) nextByRule(cur *Skill, st *chainState) (*Skill, string, b
 		allowed[n] = true
 	}
 	for _, d := range cur.Decisions {
-		if d.Kind != DecisionNext || d.Cond == nil || !allowed[d.Target] {
+		if d.Kind != DecisionNext || d.Cond == nil {
+			continue
+		}
+		if !allowed[d.Target] {
+			// A rule that FIRES toward a method a discovered fact rules out is
+			// said, not silently skipped: the operator learns why that check
+			// was not run (owner 2026-11-13: disclose and reroute).
+			if nx, ok := o.Skills.Get(d.Target); ok && !st.visited[d.Target] && st.facts.holds(*d.Cond) {
+				if a := st.facts.applicability(nx); !a.Applies {
+					st.addNote(notApplicableNote(nx, a, st.facts.deviceName, st.facts.device))
+				}
+			}
 			continue
 		}
 		if !st.facts.holds(*d.Cond) {

@@ -126,6 +126,12 @@ type skillEntitySet struct {
 	values map[string]string
 	device DeviceRef
 	notes  []string
+	// facts are the resolved device's DISCOVERED facts (skill_facts.go).
+	// factsRead is true once the seam answered for a resolved device: only
+	// then is a method's applies_when evaluated at all (no device, nothing to
+	// apply a method to).
+	facts     DeviceFacts
+	factsRead bool
 }
 
 func (e skillEntitySet) get(name string) (string, bool) {
@@ -185,6 +191,18 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 		out.values["device"] = firstNonEmpty(ref.Name, ref.ID)
 		break
 	}
+	// Discovered facts, resolved ONCE for the device the turn is about. A read
+	// that fails leaves every applies_when unknown — methods still run, and the
+	// gap is said rather than guessed around.
+	if id, ok := out.get("device_id"); ok && o.Troubleshoot.DeviceFacts != nil {
+		f, err := o.Troubleshoot.DeviceFacts(ctx, p, id)
+		if err != nil {
+			out.notes = append(out.notes, "what Correlix discovered about "+out.values["device"]+
+				" (role, protocols, collection) could not be read — whether each method applies to it is UNKNOWN")
+		} else {
+			out.facts, out.factsRead = f, true
+		}
+	}
 	if len(candidates) > 0 {
 		if _, ok := out.get("device_id"); !ok {
 			out.notes = append(out.notes, "no device in this tenant's inventory matches the name in the question — say so; do not assume the device exists")
@@ -220,12 +238,14 @@ func planGather(sk *Skill, ent skillEntitySet) []plannedStep {
 		for k, v := range g.Args {
 			args[k] = v
 		}
+		satisfied := true
 		for _, argName := range g.BindOrder() {
 			if v, has := ent.get(g.Bind[argName]); has {
 				args[argName] = v
+			} else if g.Strict[argName] {
+				satisfied = false // `arg=@entity`: the step means nothing without it
 			}
 		}
-		satisfied := true
 		for _, a := range meta.args {
 			if a.required && strings.TrimSpace(args[a.name]) == "" {
 				satisfied = false
@@ -268,8 +288,9 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	ent := o.resolveSkillEntities(ctx, p, question, uiContext)
 
 	st := newChainState()
+	st.facts.device, st.facts.deviceRead, st.facts.deviceName = ent.facts, ent.factsRead, ent.values["device"]
 	var last *Skill
-	cur, selected, reason := sk, ChainSelectedEntry, match.Reason
+	cur, selected, reason := o.applicableEntry(sk, match.Reason, st)
 	for round := 1; round <= MaxInvestigationRounds; round++ {
 		roundItems, ranNow := o.runSkillRound(ctx, p, cur, ent, st, round, selected)
 		st.visited[cur.Name] = true // visited even when it gathered nothing: never retried
@@ -417,6 +438,41 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	return ans, true
 }
 
+// applicableEntry checks the text-selected entry skill against what Correlix
+// DISCOVERED about the turn's device. A method a discovered fact rules out is
+// not run: the turn says why and starts from the entry method instead (owner
+// 2026-11-13: disclose and reroute). It returns the skill to start with, how it
+// was selected and the reason shown for that hop.
+func (o *Orchestrator) applicableEntry(sk *Skill, reason string, st *chainState) (*Skill, string, string) {
+	a := st.facts.applicability(sk)
+	if a.Applies {
+		return sk, ChainSelectedEntry, reason
+	}
+	st.addNote(notApplicableNote(sk, a, st.facts.deviceName, st.facts.device))
+	st.visited[sk.Name] = true // never re-entered by a later hop either
+	o.auditChainChoice(sk.Name, ChainSelectedEntry, "not_applicable", 1, false)
+	if method := o.entryMethod(); method != nil && method != sk && st.facts.applicability(method).Applies {
+		return method, ChainSelectedEntry, "the " + humanizeSkillName(sk.Name) +
+			" method does not apply to this device, so the investigation starts from the top-level method"
+	}
+	// No method fits: run nothing rather than a method the evidence rules out.
+	return sk, ChainSelectedEntry, reason
+}
+
+// entryMethod is the single method-layer entry skill (the loader guarantees
+// exactly one).
+func (o *Orchestrator) entryMethod() *Skill {
+	if o.Skills == nil {
+		return nil
+	}
+	for _, n := range o.Skills.Names() {
+		if s, ok := o.Skills.Get(n); ok && s.Layer == LayerMethod && !s.customerAuthored() {
+			return s
+		}
+	}
+	return nil
+}
+
 // observeInvestigation reports one finished skill-chain turn to the scorecard
 // seam. It reads state the chain already computed and adds nothing; a nil sink
 // makes it free.
@@ -487,6 +543,16 @@ func (o *Orchestrator) recordConcluded(ctx context.Context, p Principal, ans *An
 // evidence this round CONTRIBUTED (deduped and within the prompt budget) and how
 // many steps actually returned — a round that returns zero ends the chain.
 func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill, ent skillEntitySet, st *chainState, round int, selected string) ([]EvidenceItem, int) {
+	// The structural half of applies_when: a method a discovered fact rules out
+	// issues NO read, whichever path selected it. (Selection already keeps it
+	// out; this is the guarantee, not the routing.)
+	a := st.facts.applicability(sk)
+	if !a.Applies {
+		return nil, 0
+	}
+	if len(a.Unknown) > 0 {
+		st.addNote(unknownApplicabilityNote(sk, a, st.facts.deviceName, st.facts.device))
+	}
 	steps := planGather(sk, ent)
 	if len(steps) == 0 {
 		return nil, 0

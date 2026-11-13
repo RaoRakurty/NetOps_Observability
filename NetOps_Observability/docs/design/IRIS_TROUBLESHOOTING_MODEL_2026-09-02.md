@@ -295,6 +295,33 @@ loader (physical · l2 · igp · bgp · path_seam · application · security · 
 any new layer the documents justify (e.g. `wan_sdwan`, `dns`, `qos`, `mcast`,
 `vpn_tunnel`) — the layer set is data (`skillLayerOrder`), extend it deliberately.
 
+**Applied to the DISCOVERED network (owner, 2026-11-13; NetClaw ingestion
+Batch 0).** A method is no longer chosen from the question's words alone:
+
+- `applies_when: fact:<key>=<value>[|<value>…], …` says which discovered devices
+  a method fits, over a closed vocabulary (`ai/skill_facts.go`): `role`,
+  `wan_flavor`, `dialect`, `adjacency` (bgp, ospf, isis, bfd, lldp, overlay) and
+  `telemetry` (snmp, gnmi, api, syslog, trap, flow). The server derives the facts
+  once per turn for the resolved device (`aiDeviceFacts`); the model never
+  supplies one. A fact is three-state: holds / fails / unknown. A method whose
+  `applies_when` FAILS issues no read; the turn says why and starts from the
+  top-level method (disclose and reroute). UNKNOWN runs and is disclosed — an
+  unread table is never an absent protocol (tracker 415 lists the facts that
+  cannot yet be established absent).
+- `next=X when fact:<key>=<value>` fires only on an established fact;
+  `next=X when topo:<facet>=<value>` fires on a design fact
+  `get_network_topology` declared (`overlay_shape`, `spof`, `coverage`; the skill
+  must declare that tool).
+- `arg=@entity` binds a tool argument from a differently named server-resolved
+  entity (`get_device_state(device_id, area=routes, target=@prefix)`); the step
+  is skipped, not widened, when that entity does not resolve.
+- Layers `platform`, `wan_overlay` and `services` joined the bisection order.
+- `get_network_topology` now carries the DESIGN READING: per-site edges,
+  transports and single-homing, single points of failure of the discovered graph
+  (DERIVED, not computed without adjacency evidence), observed redundancy (dual
+  edge, dual transport; LAG/FHRP declared uncollected), protocols each device is
+  seen to run, and a coverage statement.
+
 ### 3.4 Proactive checks and intent cross-reference — Phase A4
 - Map NetClaw's heartbeat list onto the engine: non-FULL OSPF / non-UP IS-IS
   (igpmon), BGP IDLE/ACTIVE (bgp watch), CPU/memory thresholds, config change in
