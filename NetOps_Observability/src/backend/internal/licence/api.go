@@ -213,6 +213,9 @@ type FeatureView struct {
 	// IncludedIn is the lowest tier that grants the feature, so the page can say
 	// "Enterprise" beside a feature the customer does not have.
 	IncludedIn entitlement.Tier `json:"included_in"`
+	// AddOn marks a feature sold as a separate licence line below IncludedIn
+	// (the AI add-on), so the page can say "add-on" rather than "upgrade".
+	AddOn bool `json:"add_on"`
 }
 
 // KeyView is a trusted public key as the page displays it (and offers for
@@ -592,6 +595,7 @@ func (a *API) compose(st State, usage Usage, notes map[string]string, record boo
 			Label:      entitlement.FeatureLabel(f),
 			Entitled:   st.Has(f),
 			IncludedIn: entitlement.FeatureTier(f),
+			AddOn:      entitlement.AddOn(f),
 		})
 	}
 

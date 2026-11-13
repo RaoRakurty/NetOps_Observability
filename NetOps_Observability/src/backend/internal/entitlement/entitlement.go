@@ -294,6 +294,24 @@ const (
 	// accounts, OIDC) is never gated; LDAP is the commercial addition.
 	// TIER: Enterprise.
 	FeatureLDAP Feature = "ldap"
+
+	// FeatureIrisModel — model-backed Iris: answers written by a configured AI
+	// provider, model chat and AI investigations (the agent loop). Evidence-only
+	// Iris — deterministic answers built from the platform's own data, with no
+	// provider call — is core and never gated.
+	//
+	// Owner decision 2026-11-12, confirmed 2026-11-13: it is an ADD-ON. The
+	// Enterprise tier INCLUDES it (Included), so an Enterprise licence grants it
+	// whether or not the file lists it; Team and Community carry it only as a
+	// purchased line on the licence ("features": [..., "iris_model"]).
+	//
+	// This name is permanent: once a signed licence carries it, a binary that
+	// does not know it refuses that licence wholesale (ValidFeature). That is
+	// also why Enterprise inclusion is computed rather than written into issued
+	// files: an Enterprise licence issued before the name existed keeps
+	// verifying on old binaries and still gains the add-on on new ones.
+	// TIER: Enterprise (included); an add-on line below it.
+	FeatureIrisModel Feature = "iris_model"
 )
 
 // featureOrder is the closed vocabulary in display order (Team first, then
@@ -306,6 +324,7 @@ var featureOrder = []Feature{
 	FeatureSAML,
 	FeatureSCIM,
 	FeatureLDAP,
+	FeatureIrisModel,
 }
 
 // featureTier is the LOWEST tier that grants each feature. It answers the
@@ -319,7 +338,28 @@ var featureTier = map[Feature]Tier{
 	FeatureSAML:             TierEnterprise,
 	FeatureSCIM:             TierEnterprise,
 	FeatureLDAP:             TierEnterprise,
+	FeatureIrisModel:        TierEnterprise,
 }
+
+// addOnFeatures are sold as a separate licence line below the tier that
+// includes them. The refusal says so, and the licence page marks them.
+var addOnFeatures = map[Feature]bool{FeatureIrisModel: true}
+
+// includedFeatures are granted by the tier itself, listed or not. It is the ONE
+// exception to "the file decides", and it exists for one reason: the owner
+// decided that Enterprise includes the AI add-on, and an Enterprise licence
+// issued before the name existed must neither be re-issued (an old binary would
+// refuse the new name) nor lose model-backed Iris. Only the licence file
+// evaluator (internal/licence) applies it, at the tier the FILE names.
+var includedFeatures = map[Tier][]Feature{
+	TierEnterprise: {FeatureIrisModel},
+}
+
+// AddOn reports whether f is sold as an add-on line below its tier.
+func AddOn(f Feature) bool { return addOnFeatures[f] }
+
+// Included returns the features tier t grants without the file listing them.
+func Included(t Tier) []Feature { return append([]Feature(nil), includedFeatures[t]...) }
 
 // Features returns the closed feature vocabulary in display order.
 func Features() []Feature { return append([]Feature(nil), featureOrder...) }
@@ -353,6 +393,8 @@ func FeatureLabel(f Feature) string {
 		return "SCIM provisioning"
 	case FeatureLDAP:
 		return "LDAP authentication"
+	case FeatureIrisModel:
+		return "Iris AI (model answers and AI investigations)"
 	}
 	return string(f)
 }
@@ -761,9 +803,12 @@ func Require(svc Service, f Feature) error {
 			"install a renewed license to configure it again", FeatureLabel(f))
 	} else {
 		msg = fmt.Sprintf("%s is not included in your %s license", FeatureLabel(f), at.Label())
-		if lifted != "" {
+		switch {
+		case lifted != "" && AddOn(f):
+			msg += fmt.Sprintf(" — add it to your license as an add-on, or the %s tier includes it", lifted.Label())
+		case lifted != "":
 			msg += fmt.Sprintf(" — the %s tier includes it", lifted.Label())
-		} else {
+		default:
 			msg += " — contact Correlix to enable it"
 		}
 	}
