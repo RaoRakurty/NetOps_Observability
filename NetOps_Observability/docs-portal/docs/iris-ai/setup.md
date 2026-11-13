@@ -22,20 +22,28 @@ model-written narratives on top of the same governed evidence.
 
 ## Steps
 
-### Step 1 - Confirm the feature flags
+### Step 1 - Turn on Iris AI models
 
-`FEATURE_AI` is the master gate and wins over the legacy `FEATURE_COPILOT`. The
-compose file ships `FEATURE_AI` unset and `FEATURE_COPILOT=true`, so the
-assistant is **on by default**. To turn it off, set `FEATURE_AI=false` and
-restart the API. A disabled deployment answers `/api/ai/ask` with 503 and the
-message `Iris AI is disabled — set FEATURE_AI=true`.
+Iris answers from your own network data on every install, with no provider and
+no add-on. Written AI answers, model chat and AI investigations are
+**model-backed Iris**: the **Iris AI add-on** on your license (Enterprise
+includes it; Team and Community add it as a separate line).
 
-`FEATURE_AI_TOOLS` gates the bounded governed tool loop and defaults to `false`.
+On a licensed install, a platform administrator turns them on:
 
-```bash
-cd deployment/docker
-docker compose restart api
-```
+1. Open **Administration → Features**, section **Iris AI**.
+2. Turn on **Iris AI models**. Confirm that questions, and the evidence Iris
+   gathers, may go to your configured AI provider.
+3. To let the model run read-only lookups, also turn on **AI investigations**,
+   then tick the workspaces in Step 2.
+
+Both switches start **off** and are set on that page only; no `.env` line sets
+them. An installation that already used a model before this release keeps
+them on after the upgrade, once. Without the add-on the switches cannot be
+turned on, and Iris says so in its panel.
+
+`FEATURE_AI` still turns Iris off entirely (`FEATURE_AI=false`, then restart the
+API); it is unset by default, which leaves Iris on.
 
 ### Step 2 - Grant workspaces access
 
@@ -98,9 +106,9 @@ is never ambiguous.
 
 | Variable | Effect | Default |
 |---|---|---|
-| `FEATURE_AI` | Master gate. Wins over `FEATURE_COPILOT`. | unset, which leaves Iris on |
-| `FEATURE_COPILOT` | Legacy gate, still honoured. | `true` in compose |
-| `FEATURE_AI_TOOLS` | The bounded governed tool loop. | `false` |
+| `FEATURE_AI` | Turns Iris off entirely when `false`. Wins over `FEATURE_COPILOT`. | unset, which leaves Iris on |
+| `FEATURE_COPILOT` | Legacy form of `FEATURE_AI`, honoured when `FEATURE_AI` is unset. It no longer gates model chat. | `true` in compose |
+| `FEATURE_AI_TOOLS` | No longer a switch. Read once on upgrade to keep an install that ran AI investigations running them; then **Administration → Features → AI investigations** decides. | `false` |
 | `COPILOT_PROVIDER` / `COPILOT_MODEL` | Provider and model when nothing is stored. | `anthropic` / `claude-sonnet-4-6` |
 | `COPILOT_API_KEY` | Key for the configured provider. | unset |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Per-provider keys; each one with a key joins the fallback chain. | unset |
