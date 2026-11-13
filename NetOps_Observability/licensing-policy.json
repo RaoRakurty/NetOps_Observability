@@ -66,6 +66,10 @@
       {
         "id": "ldap",
         "what": "LDAP / Active Directory directory authentication."
+      },
+      {
+        "id": "iris_model",
+        "what": "Model-backed Iris: answers written by an AI provider, model chat and AI investigations. Included in Enterprise; Team and Community buy it as an add-on line. Evidence-only Iris (no provider call) is core and free."
       }
     ]
   },

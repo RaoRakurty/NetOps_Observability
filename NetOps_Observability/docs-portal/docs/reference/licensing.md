@@ -68,6 +68,7 @@ whatever a draft tiering document proposes.
 | `saml` | Enterprise | SAML single sign-on. |
 | `scim` | Enterprise | SCIM user and group provisioning. **Planned, not shipped:** the entitlement name exists, and no SCIM route is served behind it. See [Identity provisioning](/administration/identity-provisioning). |
 | `ldap` | Enterprise | LDAP and Active Directory authentication. |
+| `iris_model` | Enterprise, or an add-on | Model-backed Iris: answers written by your AI provider, model chat and AI investigations. Enterprise includes it. A Team or Community licence carries it only as a purchased add-on line. Evidence-only Iris, which answers from the platform's own data without calling a provider, is free in every edition. |
 
 `docs/design/TIERING_PLAN_2026-09-03.md` in the source tree records the ceilings
 each tier carries, and [Pricing](/reference/pricing) records what each tier
