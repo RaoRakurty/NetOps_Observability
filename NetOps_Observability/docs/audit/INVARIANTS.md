@@ -807,6 +807,36 @@ observed.
   ordered by id). If those fail, the second scope's credentials never reach that address. Workaround: do
   not overlap a tenant's scopes, or give the overlap one profile. Eventual fix: try the union.
 
+## 27. Link-level flow views (tracker 400, Flows page P2, 2026-11-13)
+
+`internal/flowquery` + `/api/flows/links`, `/links/series`, `/links/movers`, `/capacity`; apps and
+services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
+
+**PROVEN by tests:**
+- Two tenants behind one exporter address are never summed: grouped per row tenant, and under a
+  tenant's scope the row policy ALONE keeps the other tenant's bytes and interface name out, against a
+  real ClickHouse 24.8 (`TestIntegrationRowPolicyAloneNeverMergesTwoTenantsOnOneExporter`, CI job
+  `ch-integration`).
+- The numbers add up on a fixed corpus: step change +300 % exactly, a partly exported direction reads
+  low by exactly the missing share (20 %), an exporter that samples without reporting is labelled,
+  zero-filled series sum to the link total (`TestIntegration*` in `internal/flowquery`).
+- A scoped caller sees a link only on a router it owns (own stamped rows or its unambiguous exporter
+  address), on every statement, at its own tenant_scope; no devices → no query; `as_tenant` into
+  another org ignored; a foreign router's link answers exactly like a missing one
+  (`flows_links_isolation_test.go`, `flows_movers_isolation_test.go`).
+- Every malformed window, link, step, direction, `by`, `type` or `traffic` is a 400 before any query
+  (same files). The older flow routes still fail open: tracker 405.
+- Capacity reads VictoriaMetrics with the forecast lane's boundary (extra_filters[] on every read,
+  second-pass row filter, deny-all, 501 on Prometheus) over a hostile fake; the known-p95 case is exact
+  (`flows_capacity_isolation_test.go`); the fit is pinned (`TestFitForecast*`).
+
+**BUILT, not proven:**
+- Scan cost at fleet scale: links scans raw flows over twice the window; not measured on the rig
+  (tracker 407; rollups are tracker 401).
+- The vManage-sourced interface series carry no `index`, so their capacity rows key by name and get
+  no forecast (the daily read keys by index).
+- Lab sampling is unreported, so lab flow totals read as 1:1; capacity does not depend on it.
+
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
 **Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**
