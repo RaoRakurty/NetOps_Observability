@@ -207,7 +207,7 @@ func TestFlowsCapacityExplicitWindowEvaluatesAtItsEnd(t *testing.T) {
 	saw := 0
 	for _, raw := range rec.all() {
 		u, _ := url.Parse(raw) // recorded from a live request; parse cannot fail meaningfully here
-		if q := u.Query().Get("query"); strings.Contains(q, "_over_time(") && !strings.Contains(q, "[1d:5m]") {
+		if q := u.Query().Get("query"); (strings.HasPrefix(q, "quantile_over_time(") || strings.HasPrefix(q, "max_over_time(")) && !strings.Contains(q, "[1d:5m]") {
 			saw++
 			if !strings.Contains(q, "[3600s:5m] @ 1794549600") {
 				t.Errorf("a past window must be evaluated at its end: %s", q)
