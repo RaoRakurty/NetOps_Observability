@@ -3051,6 +3051,9 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 			err              error
 			name, key, model string
 		)
+		// N-E2: the operator sees the investigation start; its lookups follow
+		// as they run (executeAgentTool traces through ctx).
+		ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceInvestigating})
 		for attempt := 0; attempt < aiAgentModelAttempts; attempt++ {
 			var skipped error
 			name, key, model, skipped = s.firstUsableProvider(ctx, claims)
@@ -3061,6 +3064,9 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 					err = skipped
 				}
 				break
+			}
+			if attempt > 0 {
+				ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceModelFallback})
 			}
 			n, k, m := name, key, model
 			call := func(cctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {

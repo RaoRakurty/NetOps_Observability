@@ -55,7 +55,7 @@ export function toolLabel(tool: string | undefined): string | undefined {
   return TOOL_LABEL[tool];
 }
 
-const PHASES = new Set(["planning", "narrating", "grounding"]);
+const PHASES = new Set(["planning", "investigating", "narrating", "grounding"]);
 
 /** Apply one event; returns a new array. */
 export function applyEvent(steps: readonly ProgressStep[], ev: StreamEvent): ProgressStep[] {
@@ -66,6 +66,20 @@ export function applyEvent(steps: readonly ProgressStep[], ev: StreamEvent): Pro
   if (PHASES.has(ev.type)) {
     finishActivePhases();
     out.push({ event: ev.type, state: "active" });
+    return out;
+  }
+  // The routing decision is instant: understanding is over, and the question
+  // goes to the model. Only the one closed outcome is shown.
+  if (ev.type === "routing") {
+    if (ev.outcome !== "model") return out;
+    finishActivePhases();
+    out.push({ event: "routing_model", state: "done" });
+    return out;
+  }
+  // A switch to the fallback model is a notice inside the work, not a phase:
+  // the investigation or answer it interrupts stays in progress.
+  if (ev.type === "model_fallback") {
+    out.push({ event: "model_fallback", state: "done" });
     return out;
   }
   if (ev.type === "tool_started") {
