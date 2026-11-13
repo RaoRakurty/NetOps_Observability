@@ -29,7 +29,7 @@ func tsNetworkTopology(tenant string) NetworkTopology {
 			},
 			Overlay: &NetworkOverlay{
 				Members: 8, Pairs: 26, PossiblePairs: 26, SameSitePairs: 2, Shape: "full_mesh",
-				Transports: []NetworkTransport{{Name: "biz-internet", Members: 8, Sessions: 52, Up: 52, Health: "ok"}, {Name: "mpls", Members: 8, Sessions: 52, Up: 50, Health: "warning"}},
+				Transports:       []NetworkTransport{{Name: "biz-internet", Members: 8, Sessions: 52, Up: 52, Health: "ok"}, {Name: "mpls", Members: 8, Sessions: 52, Up: 50, Health: "warning"}},
 				SameSiteNoTunnel: []NetworkPair{{A: "cEdge-80", B: "cEdge-81", Site: "SD-WAN site 80"}, {A: "vEdge-51", B: "vEdge-52", Site: "SD-WAN site 50"}},
 				NotUp:            []NetworkPairStatus{{A: "cEdge-80", B: "vEdge-20", Status: "degraded", Sessions: 4, Up: 2, Colors: []string{"mpls"}}},
 				NotUpTotal:       1,
