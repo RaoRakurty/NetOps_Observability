@@ -491,6 +491,85 @@ jobs:
             ~/go/pkg/mod
           key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
 
+  ch-integration:
+    # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
+    # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.backend != 'false' }}
+    name: ClickHouse integration (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Tracker 400 (owner decision 2026-11-13, (e)). The httptest fakes prove the
+    # SQL's SHAPE; only a server proves it is ACCEPTED (alias shadowing, DateTime64
+    # bounds, ARRAY JOIN) and that the numbers ADD UP — and that two tenants behind
+    # one exporter address are never summed, by the row policy alone. The tests
+    # are build-tagged `integration` so `go test ./...` stays hermetic; this job
+    # is where they run, against the image digest docker-compose.yml deploys and
+    # the shipped custom-settings.xml (without it `tenant_scope` is an unknown
+    # setting, code 115). The schema is read from init.sql by the test itself.
+    # A step, not `services:`: a service container starts before checkout, so it
+    # cannot mount the repository's settings file.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: restore the Go build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+          restore-keys: |
+            gocache-${{ github.job }}-${{ runner.os }}-
+      - name: start a throwaway ClickHouse (pinned image, shipped settings)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          docker run -d --name ch-integration -p 127.0.0.1:18123:8123 \
+            -e CLICKHOUSE_USER=drill -e CLICKHOUSE_PASSWORD=drillpw \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            -v "$PWD/deployment/docker/clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro" \
+            --tmpfs /var/lib/clickhouse:rw,size=1g \
+            clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+          # Readiness probe: a refused connection while the server starts is the
+          # expected answer, so each try's output is discarded; the failure after
+          # the last try is loud and prints the server's own log.
+          for i in $(seq 1 90); do
+            if curl -fsS -m 2 http://127.0.0.1:18123/ping >/dev/null 2>&1; then
+              echo "clickhouse answered after ${i} tries"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "clickhouse never answered /ping" >&2
+          docker logs ch-integration >&2
+          exit 1
+      - name: go test -tags=integration (link-level flow statements, exact corpus)
+        env:
+          CH_TEST_URL: http://127.0.0.1:18123
+          CH_TEST_USER: drill
+          CH_TEST_PASSWORD: drillpw
+        # -count=1 so a cached PASS can never stand in for a real run. The test
+        # SKIPS without CH_TEST_URL, so the step also refuses a run that skipped.
+        run: |
+          set -euo pipefail
+          go test -tags=integration -count=1 -timeout 15m -v ./internal/flowquery/ | tee "$RUNNER_TEMP/ch-integration.log"
+          if grep -q -- '--- SKIP' "$RUNNER_TEMP/ch-integration.log"; then
+            echo "an integration test skipped: CH_TEST_URL did not reach it" >&2
+            exit 1
+          fi
+      - name: save the Go build cache (push to main only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: gocache-${{ github.job }}-${{ runner.os }}-${{ hashFiles('NetOps_Observability/src/backend/**/*.go', 'NetOps_Observability/src/backend/go.sum') }}
+
   vuln:
     # Skipped ONLY when a successful plan wrote exactly 'false' for backend: a failed,
     # empty or misspelt plan runs the job (fail-closed). ci-gate checks the outcome.
@@ -699,7 +778,7 @@ jobs:
   ci-gate:
     name: ci-gate (backend-ci)
     if: always()
-    needs: [plan, test-race-pkgs, test-race-root, test, test-plain, offline-build, pg-integration, vuln, security-lint, full-lint, iris-gates]
+    needs: [plan, test-race-pkgs, test-race-root, test, test-plain, offline-build, pg-integration, ch-integration, vuln, security-lint, full-lint, iris-gates]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -707,4 +786,4 @@ jobs:
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
-          jobs: test-race-pkgs=backend test-race-root=backend test=backend test-plain=backend offline-build=backend pg-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
+          jobs: test-race-pkgs=backend test-race-root=backend test=backend test-plain=backend offline-build=backend pg-integration=backend ch-integration=backend vuln=backend security-lint=backend full-lint=backend iris-gates=backend
