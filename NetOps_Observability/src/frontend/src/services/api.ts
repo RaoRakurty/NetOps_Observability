@@ -10891,6 +10891,8 @@ export type LicenceFeature = {
   entitled: boolean;
   /** The lowest tier that grants it. */
   included_in: LicenceTier;
+  /** Sold as an add-on line below included_in (the Iris AI add-on). */
+  add_on?: boolean;
 };
 
 /** One ceiling the current usage exceeds. Listed, never hidden, never pruned. */

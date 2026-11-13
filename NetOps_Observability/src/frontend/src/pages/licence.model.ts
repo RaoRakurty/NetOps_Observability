@@ -251,6 +251,7 @@ export function tierLabel(tier: LicenceTier | string | undefined | null): string
 export function featureStatus(f: LicenceFeature): { tone: Tone; text: string } {
   if (f.entitled) return { tone: "good", text: "Included" };
   const lifted = tierLabel(f.included_in);
+  if (f.add_on) return { tone: "muted", text: lifted ? `Add-on, or included in ${lifted}` : "Add-on" };
   return { tone: "muted", text: lifted ? `Included in ${lifted}` : "Not included" };
 }
 
