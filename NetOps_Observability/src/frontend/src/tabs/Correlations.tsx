@@ -10,6 +10,7 @@ import RcaWorkspace from "../components/rca/RcaWorkspace";
 import RcaVerifyPanel from "../components/rca/RcaVerifyPanel";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaSimilarIncidents from "../components/rca/RcaSimilarIncidents";
+import RcaResolutionForm from "../components/rca/RcaResolutionForm";
 import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
 import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
@@ -873,7 +874,12 @@ export function CorrelationDetail({ id }: { id: string }) {
       similarSlot={obj.correlation_id ? <RcaSimilarIncidents correlationId={obj.correlation_id} /> : null}
       ticketSlot={obj.correlation_id ? <RcaTicketCard correlationId={obj.correlation_id} /> : null}
       feedbackSlot={obj.correlation_id
-        ? <RcaVerdictFeedback correlationId={obj.correlation_id} correlationVersion={obj.version} />
+        ? (
+          <>
+            <RcaVerdictFeedback correlationId={obj.correlation_id} correlationVersion={obj.version} />
+            <RcaResolutionForm correlationId={obj.correlation_id} />
+          </>
+        )
         : null}
     />
   );

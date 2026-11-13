@@ -220,6 +220,7 @@
       "what evidence supports P-A1B2C3",
       "break down P-1F2E3D for me",
       "what should I do about P-ABCDEF",
+      "what do you recommend for P-ABCDEF",
       "P-424934 explain",
       "how confident is correlix about P-3E0400"
     ],
@@ -252,6 +253,9 @@
       "did this same thing happen last month",
       "any earlier incidents like this one?",
       "what fixed it last time this happened",
+      "how did we fix this the last time",
+      "what did the team do to resolve this before",
+      "was this resolved by a rollback last time",
       "how often does this incident come back",
       "is P-3E0400 a recurrence",
       "find past cases similar to the top incident",
