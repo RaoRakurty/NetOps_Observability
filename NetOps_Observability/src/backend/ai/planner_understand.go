@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/iristriage"
 )
 
 // The three honest "nothing matched" answers. Named so the dead-end check and
@@ -170,4 +171,52 @@ func (o *Orchestrator) answerFeature(question, terms string) (Answer, bool) {
 		return a, true
 	}
 	return Answer{}, false
+}
+
+// AccessDeniedText is the honest answer to a question the caller may not ask
+// (a module they lack permission for, or one not enabled for the tenant).
+const AccessDeniedText = "I can't answer that for your current access or enabled modules."
+
+// Disclosures the triage reads (named where the arms write them).
+const (
+	notBuiltModeText = "That question type isn't available in this build yet."
+	moduleIOFailNote = "Module read failed (transient); not a coverage gap."
+)
+
+// TriageSignals maps one shipped answer to the miss-triage signals
+// (internal/iristriage). The data arm records its own misses in the query log,
+// so a data answer carries no dead-end kind here.
+func TriageSignals(ans Answer, modelFirst bool) iristriage.Signals {
+	s := iristriage.Signals{ModelFirst: modelFirst}
+	if ans.Routing != nil && ans.Routing.Reason == RouteReasonPlannerUnavailable {
+		s.PlannerUnavailable = true
+	}
+	has := func(note string) bool {
+		for _, d := range ans.Disclaimers {
+			if d == note {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case ans.Mode == ModeDataQuery:
+	case ans.Text == AccessDeniedText:
+		s.DeadEndKind = iristriage.EndDenied
+	case ans.Mode == ModeUnavailable && ans.Intent == "capability":
+		s.DeadEndKind = iristriage.EndCapability
+	case has(ModuleNotBuiltNote), ans.Mode == ModeUnavailable && strings.HasPrefix(ans.Text, notBuiltModeText):
+		s.DeadEndKind = iristriage.EndNotBuilt
+	case has(moduleIOFailNote):
+		s.DeadEndKind = iristriage.EndUnavailableIO
+	case has(NoPlaybookNote):
+		s.DeadEndKind = iristriage.EndNoPlaybook
+	case has(NoDocsNote):
+		s.DeadEndKind = iristriage.EndNoDocs
+	case ans.Mode == ModeProductNavigationHelp && ans.Text == NoFeatureMatchText:
+		s.DeadEndKind = iristriage.EndNoFeature
+	case ans.Mode == ModeUnavailable:
+		s.DeadEndKind = iristriage.EndNotBuilt
+	}
+	return s
 }

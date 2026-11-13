@@ -4143,6 +4143,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
+	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)

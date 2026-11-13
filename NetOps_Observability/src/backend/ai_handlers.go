@@ -29,6 +29,7 @@ import (
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
+	"netops/backend/internal/iristriage"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
@@ -274,6 +275,7 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 		path, reason = ans.Routing.Path, ans.Routing.Reason
 	}
 	s.aiScore.ObserveRouting(path, reason)
+	s.irisRecordMiss(r, claims, question, ans, orch.ModelFirst)
 	logInfo("ai", "ask", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
 		"intent": ans.Intent, "mode": ans.Mode, "modules": ans.Modules,
@@ -3642,4 +3644,140 @@ func (s *server) irisAliasesChanged(tenant string, cross bool) {
 		return
 	}
 	s.irisAliasCache.InvalidateTenant(tenant)
+}
+
+// ---- Iris miss triage (model-first decision point 5, owner 2026-11-13) ------
+//
+// Every non-data answer that left the operator with nothing is stored in the
+// caller's own query log (source "ask", outcome "miss") with WHY it missed
+// (internal/iristriage); the data arm already records its own outcomes. The
+// admin-only triage view folds both into miss classes, so the fix for a family
+// of questions is a tool, data or a route — never a phrase regex.
+
+// irisTriageListLimit is how many of a tenant's newest query-log records the
+// triage view folds (the store's own list cap).
+const irisTriageListLimit = irisquerylog.MaxListLimit
+
+// irisRecordMiss stores one classified miss of a non-data arm. Best-effort: a
+// store failure is logged and never fails the answer that was already built.
+func (s *server) irisRecordMiss(r *http.Request, claims jwtClaims, question string, ans ai.Answer, modelFirst bool) {
+	if s.nlqQueryLog == nil || ans.Mode == ai.ModeDataQuery {
+		return
+	}
+	class, miss := iristriage.Classify(ai.TriageSignals(ans, modelFirst))
+	if !miss {
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	if strings.TrimSpace(tenant) == "" || strings.TrimSpace(claims.Sub) == "" {
+		return
+	}
+	rec := irisquerylog.Record{Source: irisquerylog.SourceAsk, Outcome: irisquerylog.OutcomeMiss, MissClass: class,
+		Principal: claims.Sub, Question: question, Intent: ans.Intent}
+	if _, err := s.nlqQueryLog.Record(r.Context(), tenant, rec); err != nil {
+		logWarn("iris.triage", "miss not recorded", map[string]any{"class": class, "error": err.Error()})
+	}
+}
+
+// irisTriageItems folds one tenant's newest records into triage items. A
+// colleague's typed text is withheld exactly as the query-log read path
+// withholds it (withholdColleagueText): counts are the workspace's, example
+// text only the caller's own.
+func (s *server) irisTriageItems(r *http.Request, claims jwtClaims, tenant string, cross bool) ([]iristriage.Item, []iristriage.Candidate, error) {
+	recs, err := s.nlqQueryLog.List(r.Context(), tenant, irisquerylog.ListFilter{Limit: irisTriageListLimit})
+	if err != nil {
+		return nil, nil, err
+	}
+	var items []iristriage.Item
+	var cands []iristriage.Candidate
+	for _, rec := range recs {
+		own := rec.Principal == claims.Sub && !cross
+		if !own {
+			withholdColleagueText(&rec)
+		}
+		var kinds []string
+		for _, c := range rec.Corrections {
+			kinds = append(kinds, c.Kind)
+			if own {
+				cands = append(cands, iristriage.Candidate{Question: rec.Question, Source: "correction", Kind: c.Kind,
+					Note: c.Note, Corrected: c.CorrectedHash, Route: rec.Intent})
+			}
+		}
+		class := rec.MissClass
+		if rec.Outcome != irisquerylog.OutcomeMiss {
+			var miss bool
+			class, miss = iristriage.Classify(iristriage.Signals{DataOutcome: rec.Outcome, DataAnswered: rec.Outcome == irisquerylog.OutcomeAnswered,
+				DataRows: rec.Rows + rec.Series, Corrections: kinds})
+			if !miss {
+				continue
+			}
+		}
+		items = append(items, iristriage.Item{Class: class, Question: rec.Question, Route: rec.Intent, Tenant: tenant})
+		if own && rec.Question != "" {
+			cands = append(cands, iristriage.Candidate{Question: rec.Question, Class: class, Route: rec.Intent, Source: "miss"})
+		}
+	}
+	return items, cands, nil
+}
+
+// handleAIIrisTriage serves GET /api/ai/triage (the per-class miss summary)
+// and GET /api/ai/triage/candidates (review-gated eval candidates — the
+// operator's own misses and corrections, never committed automatically).
+//
+// §3a: a workspace admin (administration:admin) reads their own tenant only;
+// a cross-tenant principal reads every tenant, with each example's tenant
+// named. as_tenant widens nothing (principalTenant decides). Another
+// operator's typed text is withheld from both.
+func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "administration", LevelAdmin)
+	if !ok {
+		return
+	}
+	sub := strings.TrimPrefix(r.URL.Path, "/api/ai/triage")
+	if sub != "" && sub != "/" && sub != "/candidates" {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if s.nlqQueryLog == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the Iris question log is not available on this deployment"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	tenants := []string{tenant}
+	if cross && s.tenants != nil {
+		tenants = tenants[:0]
+		for _, t := range s.tenants.List() {
+			tenants = append(tenants, t.ID)
+		}
+	}
+	var items []iristriage.Item
+	var cands []iristriage.Candidate
+	for _, tn := range tenants {
+		if strings.TrimSpace(tn) == "" {
+			continue
+		}
+		it, cs, err := s.irisTriageItems(r, claims, tn, cross)
+		if err != nil {
+			logError("iris.triage", "read failed", errf(err))
+			writeError(w, http.StatusInternalServerError, errors.New("the Iris question log could not be read"))
+			return
+		}
+		items = append(items, it...)
+		cands = append(cands, cs...)
+	}
+	if sub == "/candidates" {
+		writeJSON(w, http.StatusOK, iristriage.Candidates(cands, irisquerylog.MaxListLimit))
+		return
+	}
+	scope := "tenant"
+	if cross {
+		scope = "platform"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scope": scope, "classes": iristriage.Summarize(items, cross),
+		"class_order": iristriage.Classes, "window": "the newest records of each workspace's Iris question log (30 days)"})
 }

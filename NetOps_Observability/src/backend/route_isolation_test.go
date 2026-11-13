@@ -113,6 +113,12 @@ var routeIsolationLedger = map[string]string{
 	// tenant only — another tenant's decision id lists nothing, as_tenant is
 	// ignored) or the platform owner (all). ai_decision_ledger_isolation_test.go.
 	"/api/ai/decisions": "scoped",
+	// Iris miss triage (model-first point 5): misses recorded in the asker's
+	// tenant (iris_query_log, FORCE-RLS); read by a workspace admin (own tenant,
+	// colleague text withheld, as_tenant ignored) or the platform owner (counts,
+	// no text). iris_triage_isolation_test.go.
+	"/api/ai/triage":  "scoped",
+	"/api/ai/triage/": "scoped",
 	// Investigation hypotheses (N-B3): held under the decision id in the
 	// asker's tenant from the token (irishypo store keyed by tenant first);
 	// another tenant, an as_tenant walk and a malformed id all get 404; the

@@ -536,7 +536,7 @@ func (o *Orchestrator) answerSubject(ctx context.Context, p Principal, question 
 	if d := pe.EvaluateModule("correlations_rca", p); !d.Allow {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I can't answer that for your current access or enabled modules.",
+			Text:      AccessDeniedText,
 			Citations: []Citation{}, Disclaimers: []string{capitalize(d.Reason) + "."},
 			Routing: &Routing{Path: RoutePathDeterministic, Reason: RouteReasonProblemContext},
 		}, nil

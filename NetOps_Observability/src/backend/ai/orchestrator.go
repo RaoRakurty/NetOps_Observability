@@ -668,7 +668,7 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 	if len(allowed) == 0 {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I can't answer that for your current access or enabled modules.",
+			Text:      AccessDeniedText,
 			Citations: []Citation{}, Disclaimers: nonEmpty(disc, "No module is available to answer this question."),
 		}, nil
 	}
@@ -1348,7 +1348,7 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		note := ModuleNotBuiltNote
 		if found > 0 && errored > 0 {
 			text = "I couldn't read " + strings.ToLower(mh.DisplayName) + " right now — the data source didn't respond. Try again shortly."
-			note = "Module read failed (transient); not a coverage gap."
+			note = moduleIOFailNote
 		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
