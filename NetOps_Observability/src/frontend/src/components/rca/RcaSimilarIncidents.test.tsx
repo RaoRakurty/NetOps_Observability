@@ -27,13 +27,26 @@ describe("RcaSimilarIncidents", () => {
     expect(screen.getByRole("link").getAttribute("href")).toBe("#/investigate/rca?id=c-1");
   });
 
-  it("says No similar incident and shows no near miss", async () => {
+  it("says no earlier incident matches yet, with the count compared, and shows no near miss", async () => {
     correlationSimilar.mockResolvedValue({
       verdict: "no_similar_incident", examined: 7, incomplete: 2, window: "180d", matches: [], caveat,
       note: "Earlier incidents were compared, and none is similar enough to show.",
     });
     const { container } = render(<RcaSimilarIncidents correlationId="x" />);
-    expect(await screen.findByText("No similar incident.")).toBeTruthy();
+    expect(await screen.findByText("No earlier incident matches yet.")).toBeTruthy();
+    expect(screen.getByText(/7 closed incidents compared\./)).toBeTruthy();
+    expect(container.querySelectorAll("a, li").length).toBe(0);
+  });
+
+  it("a fresh install with no history yet still answers honestly", async () => {
+    correlationSimilar.mockResolvedValue({
+      verdict: "no_similar_incident", examined: 0, incomplete: 0, window: "180d", matches: [], caveat,
+      note: "",
+    });
+    const { container } = render(<RcaSimilarIncidents correlationId="x" />);
+    expect(await screen.findByText("No earlier incident matches yet.")).toBeTruthy();
+    expect(screen.queryByText(/compared/)).toBeNull();
+    expect(screen.getByText(caveat)).toBeTruthy();
     expect(container.querySelectorAll("a, li").length).toBe(0);
   });
 

@@ -336,6 +336,7 @@ module items. It is never regenerated in CI. Three tests read it:
 | Test | What it asserts |
 |---|---|
 | `TestParaphraseCorpusShape` | every route has ≥ 20 distinct phrasings; no phrasing sits under two routes; every module has phrasings |
+| `TestPlannerRoutesSimilarQuestionsToTheRecall` | the `similar_incidents` route (added 2026-11-13, 21 reviewed phrasings) reaches the similar-incident recall, permission-gated like every RCA route; the arm's own tests (`ai/similar_answer_test.go`) pin the subject choice, the HISTORICAL citations, the caveat and that no fix or cause is ever claimed |
 | `TestEveryParaphraseReachesItsRoutesArm` | with a stub model that returns each item's route, every phrasing reaches that route's arm with routing reason `planner` (340/340 at introduction) |
 | `TestParaphraseDeterministicBaseline` | reports the regex router's own accuracy on the same phrasings: the "before" number (227/340, 67 %, at introduction; `noc_focus` 4/20, `top_incident` 7/20, `incident_breakdown` 11/20, `shift_handoff` 12/20) |
 

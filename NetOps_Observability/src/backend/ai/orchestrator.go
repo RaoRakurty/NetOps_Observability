@@ -690,6 +690,8 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 		return o.answerShiftHandoff(ctx, p, plan, disc)
 	case ModeTimeRangeOutageSummary:
 		return o.answerTimeRange(ctx, p, question, plan, disc)
+	case ModeSimilarIncidents:
+		return o.answerSimilar(ctx, p, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:
