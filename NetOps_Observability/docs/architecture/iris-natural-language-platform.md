@@ -427,6 +427,46 @@ One ordered programme. **N-** ids are this plan's; design-of-record items are cr
 returns data, `pgintegration` when it touches PG, and the CI gate (§12). Effort in engineer-weeks
 (ew) for one engineer.
 
+### 5.0 Verified status (reconciled against `main` 2026-11-13, ef9c70aa)
+
+The per-phase tables below keep their original wording, so their notes lag what shipped. **This
+table wins where they disagree.** Each row was checked in code, not inferred from commit titles.
+
+| Item | State | Evidence on `main` | What is truly left |
+|---|---|---|---|
+| N-A5–A8 | SHIPPED | one registry (`046627ea`); decision ledger (`fc3fa123`); entitlements (`internal/aientitlement`); tool contract v2 + one gateway `ai/toolcontract.go`, `ai/toolgateway.go` (`e27692cc`, `b16a55c7`, `cb21e23a`) | — |
+| N-B3, N-B4 | SHIPPED | `internal/irishypo`; `ai/statement_class.go` (`31521977`) | N-B4 phase 2 (chain names the individual change) — see N-D3 |
+| N-B5 | SHIPPED (circuits) | circuit series carry their owner (`81396248`, `wan_circuits.go`) | `probe_*` / `synthetic_*` series still have no tenant owner |
+| N-C2, C5, C6, C7, C8 | SHIPPED | resolver rungs (`ffe73948`); `GET /api/ai/query/{id}` + `/explain`; multi-turn corpus + editable chips (`aa9b6cfa`, `fcf9260b`, `73f9eb35`) | — |
+| N-C4 | PARTIAL | metrics/changes/incidents/explain plans; `flow_top` and `log_search` are still refused by the validator (`internal/nlquery/testdata/golden/unsupported.json`) | `flow_top` over CH templates (needs Flows P2 links, now merged) and `log_search` over OS structured filters; tracker 406 (Iris flow-tool args) |
+| N-D2 | PARTIAL | trap/syslog/cloud-audit producers (`6749a9b1`); provider-owned devices (`e659ce22`) | `syslog.config.change` still shadow (`telemetry-catalog/events.yaml` rule `syslog.config.change`, `doc_claimed`); SONiC in neither rule; Versa event-type allowlist |
+| N-D3 | PARTIAL | change API + diff (`internal/changeapi`) | the `corroborating` label, blocked on N-B4 phase 2 |
+| N-E1, E2 | SHIPPED | server PresentationPlan (`7d31d889`); SSE progress `internal/irisstream`, `ai/trace.go`, nginx unbuffered (`f6889136`…`e9ec912e`), `e2e/irisProgress.spec.ts`. PR #238 extends E2 (routing decision, agent lookups, model switch) | — |
+| N-E3 | PARTIAL | chips + progress trace wired; cards (`src/frontend/src/iris/cards.test.tsx`) | cards used by the classic RCA answers |
+| N-E4 | PARTIAL | conversation id survives the drawer (`ai_handlers.go` `ConversationID`); page route reaches the ask (`ai/docs_pages.go` `PageRouteContextKey`, `iris/pageRoute`) | entity/incident bound into the ask and validated server-side; incident-detail entry; one RCA Iris ask instead of two |
+| N-E5 | PARTIAL | `irisDrawer`, `irisPanel`, `irisProgress`, `irisVocabulary`, `irisConnectModel` specs | one spec per flagship slice (S1–S3) |
+| N-S1 | SHIPPED | acceptance conversation (`be8fc3ea`) | — |
+| N-S2, N-S3 | PARTIAL | scripted in the multi-turn corpus (`internal/nlquery/golden_test.go`) | N-S3's correlated-vs-causal change query is not a query type (`testdata/iris_conversations/multiturn.json` gap note) |
+| N-F1 | SHIPPED | Org Context Store `internal/orgcontext`, `/api/ai/context` (`main.go`), prompt block `ai/org_context_prompt.go` (`f54fcf72`) | — |
+| N-F2 | PARTIAL | loader seams (`5779f267`), store + case gate + HTTP handler in `internal/tenantrunbook` (`eab4be5a`) | **not wired**: `/api/ai/runbooks` is not mounted in `main.go`, nothing outside the package imports it, so runbooks never reach an answer; no UI |
+| N-F3 | MISSING | BM25 exists for product docs only (`ai/docs_index.go`) | tenant-scoped retrieval over Network context, runbooks and incident history |
+| N-F4 | SHIPPED | `internal/incidentfp`, RCA card, `find_similar_incidents`, planner route `similar_incidents` (`ai/similar_answer.go`) | how a past case was resolved is not recorded (built next: resolution capture) |
+| N-F5 | MISSING | — | controlled learning loop (resolved incident → proposed context/runbook/alias → review → activate) |
+| N-F6 | SHIPPED | `internal/srcauthority` (`d9f7affd`) | — |
+| N-G1, G3, G4 | SHIPPED | help pages + golden per nav leaf; page-aware help (`5e516d62`); tie-break + scoreboard `ai/route_tiebreak.go` (`29929b6b`); model-first planner `ai/planner.go` (#239, #241) | — |
+| N-H1 | SHIPPED | golden incident corpus (`6d30127c`) | — |
+| N-H2 | PARTIAL | offline replay `internal/irisreplay` (`b745da9a`), scripted model leg only (`run.go`) | live model leg (separately gated) |
+| N-H3 | PARTIAL | split + leak guards `internal/evalsplit` (`930052db`); review-gated candidates export `GET /api/ai/triage/candidates` (#241) | where customer-derived fixtures may live; pooled (cross-colleague) candidates need opt-in consent |
+| N-H4, N-H5 | SHIPPED | `internal/iriscache` (`010e2a6c`); `internal/irisgate` release gates (`6c07f9ab`) | — |
+| N-H6 | MISSING | — | seasonal baselines + robust z (12–18 ew) |
+| N-I1 | MISSING | the agent loop + skill chain + hypotheses exist; no investigator that retrieves runbooks and repeats bounded | read-only investigator (needs F2 wired, F3) |
+| N-I2 | MISSING | — | alert-triggered / scheduled investigations |
+| N-I3 | PARTIAL | `CapProbe` capability + policy (`ai/tools.go`, `ai/policy.go`) | `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` over the collectors (never device-originated, owner 2026-11-13) |
+| N-I4 | MISSING | — | ApprovalGate + two write tools |
+| N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
+| N-I6 | MISSING | — | ChatOps |
+| N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | a card built from a similar incident's recorded resolution (built next) |
+
 ### Phase A — Land the in-flight work and harden the runtime (foundation)
 
 | # | Item | Depends | ew |
