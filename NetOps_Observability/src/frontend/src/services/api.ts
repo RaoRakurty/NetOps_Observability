@@ -718,6 +718,155 @@ function flowQS(filters?: FlowFilters, direction = ""): string {
   return p.length ? `&${p.join("&")}` : "";
 }
 
+// ---------- link-level flow APIs (tracker 400, Flows page P2) ----------
+
+/** A flow window: seconds back from now, or an exact range in epoch ms. */
+export type FlowWindowQ = { since?: number; from?: number; to?: number };
+
+/** The window query string (no leading "&"): from/to as unix seconds, else since. */
+export function flowWindowQS(win: number | FlowWindowQ): string {
+  const w = typeof win === "number" ? { since: win } : win;
+  if (w.from !== undefined && w.to !== undefined) {
+    return `from=${Math.floor(w.from / 1000)}&to=${Math.floor(w.to / 1000)}`;
+  }
+  return `since=${Math.max(1, Math.round(w.since ?? 3600))}s`;
+}
+
+/** One link: the exporter's address and the ifIndex; tenant only for an operator. */
+export type FlowLinkRef = { exporter: string; ifIndex: string | number; tenant?: string };
+
+function flowLinkQS(l: FlowLinkRef): string {
+  const t = l.tenant ? `&tenant=${encodeURIComponent(l.tenant)}` : "";
+  return `device=${encodeURIComponent(l.exporter)}&if=${encodeURIComponent(String(l.ifIndex))}${t}`;
+}
+
+/** What every link-level answer says about the window it covers. */
+export type FlowWindowEcho = {
+  from: string;
+  to: string;
+  seconds: number;
+  explicit: boolean;
+  prev_from: string;
+  retention_days: number;
+  /** Part of the window is older than the oldest kept record. */
+  starts_before_retention: boolean;
+  /** The previous window is partly older than retention: no "change" is given. */
+  prev_before_retention: boolean;
+};
+
+/** measured · partly_exported (reads low by the share given) · not_exported (null). */
+export type FlowExportBasis = "measured" | "partly_exported" | "not_exported";
+export type FlowSampling = "reported" | "not_reported" | "mixed" | "no_flows";
+export type FlowResponseBasis = { flows: number; flows_rate_reported: number; sampling: FlowSampling; bucket_time: string };
+
+export type FlowLinkRow = {
+  tenant_id?: string;
+  exporter: string;
+  ifindex: number;
+  if_name: string;
+  if_name_basis: string;
+  device_id?: string;
+  device_name?: string;
+  site?: string;
+  /** null = this router does not export the interface for that direction. */
+  in_bytes: number | null;
+  out_bytes: number | null;
+  /** null = the previous window is not known (retention, or no records then). */
+  prev_in_bytes: number | null;
+  prev_out_bytes: number | null;
+  in_packets: number;
+  out_packets: number;
+  flows: number;
+  in_basis: FlowExportBasis;
+  out_basis: FlowExportBasis;
+  in_unnamed_pct?: number;
+  out_unnamed_pct?: number;
+  sampling: FlowSampling;
+};
+export type FlowLinksResp = { window: FlowWindowEcho; links: FlowLinkRow[]; count: number; basis: FlowResponseBasis };
+
+export type FlowLinkSeriesResp = {
+  window: FlowWindowEcho;
+  served: { from: string; to: string };
+  step_seconds: number;
+  exporter: string;
+  ifindex: number;
+  t: number[];
+  in_bytes: number[] | null;
+  out_bytes: number[] | null;
+  in_packets: number[] | null;
+  out_packets: number[] | null;
+  last_bucket_complete: boolean;
+  in_basis: FlowExportBasis;
+  out_basis: FlowExportBasis;
+  in_unnamed_pct?: number;
+  out_unnamed_pct?: number;
+  basis: FlowResponseBasis;
+};
+
+export type FlowMoversBy = "talker" | "app" | "port";
+export type FlowMoverStatus = "new" | "gone" | "up" | "down" | "same" | "no_previous";
+export type FlowMover = {
+  key: string;
+  label?: string;
+  label_basis?: string;
+  bytes: number;
+  prev_bytes: number | null;
+  delta: number | null;
+  change: number | null;
+  status: FlowMoverStatus;
+};
+export type FlowMoversResp = {
+  window: FlowWindowEcho;
+  exporter: string;
+  ifindex: number;
+  by: FlowMoversBy;
+  dir: "both" | "in" | "out";
+  totals: { bytes: number; prev_bytes: number | null };
+  movers: FlowMover[];
+  coverage?: { top_pairs?: number };
+  basis: FlowResponseBasis;
+};
+
+export type FlowForecastStatus = "speed_unknown" | "not_enough_history" | "at_or_over_90" | "flat_or_falling" | "unsteady" | "rising";
+export type FlowCapacityRow = {
+  device_id: string;
+  device_name: string;
+  site?: string;
+  ifindex: string;
+  if_name: string;
+  exporter?: string;
+  speed_bps: number | null;
+  speed_basis: "reported" | "unknown" | "implausible";
+  p95_in_bps: number | null;
+  p95_out_bps: number | null;
+  p95_bps: number | null;
+  peak_bps: number | null;
+  p95_in_pct: number | null;
+  p95_out_pct: number | null;
+  p95_pct: number | null;
+  peak_pct: number | null;
+  headroom_bps: number | null;
+  headroom_pct: number | null;
+  forecast: {
+    status: FlowForecastStatus;
+    days_to_90: number | null;
+    slope_pct_per_day: number | null;
+    fitted_pct: number | null;
+    r2: number | null;
+    history_days: number;
+    min_days: number;
+  };
+};
+export type FlowCapacityResp = {
+  window: FlowWindowEcho;
+  interfaces: FlowCapacityRow[];
+  count: number;
+  total: number;
+  /** unavailable: the daily history could not be read, so no row carries a forecast. */
+  forecast: { days: number; min_days: number; min_r2: number; threshold_pct: number; unavailable?: boolean };
+};
+
 export type CorrObject = {
   correlation_id: string;
   version: number;
@@ -6391,9 +6540,29 @@ export const api = {
     ),
 
   // ---- app / service views of the flow plane (set B) ------------------------
-  flowsApps: (sinceSeconds = 3600) => request<FlowAppsResp>(`/api/flows/apps?since=${sinceSeconds}s`),
-  flowsServices: (sinceSeconds = 3600) =>
-    request<{ services: FlowServiceRow[]; count: number }>(`/api/flows/services?since=${sinceSeconds}s`),
+  // Both take the window (seconds back, or an exact from/to) and, since tracker
+  // 400, the filter bar's link keys (device + if/in_if/out_if), so the lists can
+  // answer for one link.
+  flowsApps: (win: number | FlowWindowQ = 3600, filters?: FlowFilters, type = "") =>
+    request<FlowAppsResp>(`/api/flows/apps?${flowWindowQS(win)}${type ? `&type=${type}` : ""}${flowQS(filters)}`),
+  flowsServices: (win: number | FlowWindowQ = 3600, filters?: FlowFilters, type = "") =>
+    request<{ services: FlowServiceRow[]; count: number; window?: FlowWindowEcho }>(
+      `/api/flows/services?${flowWindowQS(win)}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
+
+  // ---- link-level flow APIs (tracker 400, Flows page P2) --------------------
+  flowsLinks: (win: number | FlowWindowQ, limit = 50, type = "", filters?: FlowFilters) =>
+    request<FlowLinksResp>(`/api/flows/links?${flowWindowQS(win)}&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`),
+  flowsLinkSeries: (link: FlowLinkRef, win: number | FlowWindowQ, type = "", traffic = "") =>
+    request<FlowLinkSeriesResp>(
+      `/api/flows/links/series?${flowLinkQS(link)}&${flowWindowQS(win)}${type ? `&type=${type}` : ""}${traffic ? `&traffic=${traffic}` : ""}`,
+    ),
+  flowsLinkMovers: (link: FlowLinkRef, win: number | FlowWindowQ, by: FlowMoversBy = "talker", dir: "both" | "in" | "out" = "both", limit = 10, traffic = "") =>
+    request<FlowMoversResp>(
+      `/api/flows/links/movers?${flowLinkQS(link)}&${flowWindowQS(win)}&by=${by}&dir=${dir}&limit=${limit}${traffic ? `&traffic=${traffic}` : ""}`,
+    ),
+  flowsCapacity: (win: number | FlowWindowQ, limit = 100, days = 28) =>
+    request<FlowCapacityResp>(`/api/flows/capacity?${flowWindowQS(win)}&limit=${limit}&days=${days}`),
 
   // ---- active-verification settings (set B) ---------------------------------
   // Secrets are write-only: the GET never returns credential material.

@@ -34,9 +34,7 @@ import {
   serviceShare,
   coverageSentence,
   drillNote,
-  windowScopeCaveat,
-  windowScopeNote,
-  windowScopeFields,
+  filterScopeNote,
   exporterView,
 } from "../flowsAppViews";
 import { useAppNames, type ResolvedApp } from "../../services/appNames";
@@ -278,9 +276,9 @@ export function ConversationsSection({ q, limit = 25, title = "Conversations" }:
 // ── Applications ─────────────────────────────────────────────────────────────
 
 /**
- * The top source → destination application pairs by volume. The endpoint
- * takes only the window: the chip filters do not narrow it, and the screen
- * says so. The Application chip narrows the list by name.
+ * The top source → destination application pairs by volume, over the window
+ * and narrowed by the filter bar (a link, an address, a port, a protocol —
+ * tracker 400). The Application chip narrows the list by name.
  */
 export function ApplicationsSection({ q, filterKeys, appFilter = "", onDrill }: {
   q: FlowQuery;
@@ -288,7 +286,7 @@ export function ApplicationsSection({ q, filterKeys, appFilter = "", onDrill }: 
   appFilter?: string;
   onDrill: () => void;
 }) {
-  const r = useTicked<FlowAppsResp>(() => api.flowsApps(q.since), [q.since]);
+  const r = useTicked<FlowAppsResp>(() => api.flowsApps(q.since, q.filters, q.ftype), [q.since, q.ftype, q.fkey]);
   const resp = r.data ?? null;
   const err = errText(r.error, "Application traffic could not be read for this window.");
   const all = useMemo(() => sortAppRows(resp?.apps), [resp]);
@@ -299,7 +297,7 @@ export function ApplicationsSection({ q, filterKeys, appFilter = "", onDrill }: 
   const totals = useMemo(() => appTotals(all), [all]);
   const named = all.filter((x) => !isUnknownApp(x.app)).length;
   const exporterNamed = all.filter((x) => exporterView(x).named).length;
-  const caveat = windowScopeCaveat(filterKeys, "Applications") ?? windowScopeNote("Applications");
+  const caveat = filterScopeNote("Applications", q.direction);
 
   const cols = useMemo<Column<FlowAppRow>[]>(
     () => [
@@ -378,7 +376,7 @@ export function ApplicationsSection({ q, filterKeys, appFilter = "", onDrill }: 
       </StatStrip>
       <div className="panel" style={{ minWidth: 0 }}>
         <div className="panel-tools"><h3>Applications by volume</h3></div>
-        <p className="mini-meta tr-note" title={windowScopeFields(filterKeys)}>{caveat}</p>
+        <p className="mini-meta tr-note" title={filterKeys.length ? `Narrowed by: ${filterKeys.join(", ")}` : undefined}>{caveat}</p>
         {err ? (
           <div className="empty tr-error">{err}</div>
         ) : rows.length === 0 ? (
@@ -433,7 +431,7 @@ export function ServicesSection({ q, filterKeys, appFilter = "", onDrill }: {
   appFilter?: string;
   onDrill: () => void;
 }) {
-  const r = useTicked(() => api.flowsServices(q.since), [q.since]);
+  const r = useTicked(() => api.flowsServices(q.since, q.filters, q.ftype), [q.since, q.ftype, q.fkey]);
   const failure = r.error ? httpFailure(r.error) : null;
   const unavailable = failure?.status === 501 ? operatorError(r.error, "The service catalog is not available on this deployment.") : null;
   const err = r.error && !unavailable ? operatorError(r.error, "Service traffic could not be read for this window.") : null;
@@ -445,7 +443,7 @@ export function ServicesSection({ q, filterKeys, appFilter = "", onDrill }: {
   const grouped = useMemo(() => groupServiceRows(all), [all]);
   const ordered = useMemo(() => sortServiceRows(rows), [rows]);
   const measuredBytes = useMemo(() => serviceMeasuredBytes(all), [all]);
-  const caveat = windowScopeCaveat(filterKeys, "Services") ?? windowScopeNote("Services");
+  const caveat = filterScopeNote("Services", q.direction);
 
   const cols = useMemo<Column<FlowServiceRow>[]>(
     () => [
@@ -511,7 +509,7 @@ export function ServicesSection({ q, filterKeys, appFilter = "", onDrill }: {
       </StatStrip>
       <div className="panel" style={{ minWidth: 0 }}>
         <div className="panel-tools"><h3>Services by volume</h3></div>
-        <p className="mini-meta tr-note" title={windowScopeFields(filterKeys)}>{caveat}</p>
+        <p className="mini-meta tr-note" title={filterKeys.length ? `Narrowed by: ${filterKeys.join(", ")}` : undefined}>{caveat}</p>
         {err ? (
           <div className="empty tr-error">{err}</div>
         ) : ordered.length === 0 ? (

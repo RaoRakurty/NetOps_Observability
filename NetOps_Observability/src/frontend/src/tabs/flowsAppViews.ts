@@ -298,6 +298,18 @@ export function windowScopeNote(subject: string): string {
   return `${subject} answer over the selected time window only.`;
 }
 
+/**
+ * Since tracker 400 the application and service views follow the window and
+ * every filter-bar key (a link, an address, a port, a protocol, the source
+ * type). Only "both directions as one" — a way of folding conversations —
+ * does not apply to them, and the note says so when it is on.
+ */
+export function filterScopeNote(subject: string, direction: string): string {
+  return direction === "bi"
+    ? `${subject} follow the window and the filters above; "both directions as one" applies to conversations only.`
+    : `${subject} follow the window and the filters above.`;
+}
+
 /** The tooltip beside the caveat: exactly which set fields are being ignored. */
 export function windowScopeFields(keys: readonly string[]): string {
   return keys.length === 0 ? "" : `Not narrowed by: ${filterFieldPhrase(keys)}, or by the direction toggle.`;

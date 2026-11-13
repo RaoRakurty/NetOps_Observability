@@ -2,12 +2,13 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import type { CorrObject, Device } from "../../services/api";
+import type { CorrObject, Device, FlowCapacityRow, FlowLinkRow, FlowLinkSeriesResp } from "../../services/api";
 import type { TopNRow } from "../flowNames";
 import {
-  attachDevices, attachUtil, capacityRows, changeLabel, checkAddress, checkPort, deviceOptions, filterChips,
-  fmtPctOrDash, groupCapacity, interfaceOptions, linkLabel, mergeLinks, NO_SITE, parseCorrTs, problemsForLink,
-  protoName, protoNumber, serverFilterKeys, sumSeries, toFlowFilters, flowsWindow, utilBand, utilTone, withPrevious, withoutChip,
+  attachDevices, attachUtil, capacityFromApi, changeLabel, checkAddress, checkPort, deviceOptions, directionNote, filterChips,
+  fmtPctOrDash, forecastText, forecastTone, groupCapacity, interfaceOptions, linkLabel, linkRowKey, linksFromApi, mergeLinks,
+  moverChange, NO_SITE, parseCorrTs, problemsForLink, protoName, protoNumber, samplingNote, serverFilterKeys, seriesRates,
+  sumSeries, toFlowFilters, flowsWindow, utilBand, utilTone, windowQuery, withPrevious, withoutChip,
   MAX_WINDOW_S, MIN_WINDOW_S, PROBLEM_LEAD_S,
 } from "./flowsModel";
 
@@ -118,32 +119,131 @@ describe("devices and utilisation", () => {
   });
 });
 
-describe("capacityRows — per-link average and peak over the window", () => {
-  const v = (device: string, index: string, value: number, ifName = "") => ({ metric: { device, index, ifName }, value: [0, String(value)] as [number, string] });
-  const names = new Map([["d1", "edge-1"], ["d2", "edge-2"]]);
-  const sites = new Map([["d1", "Dallas"]]);
-  const rows = capacityRows({
-    avgIn: [v("d1", "1", 20, "Gi1"), v("d2", "7", 5)],
-    peakIn: [v("d1", "1", 95), v("d2", "7", 40)],
-    avgOut: [v("d1", "1", 30)],
-    peakOut: [v("d1", "1", 60), v("d2", "7", 85)],
-    speed: [v("d1", "1", 1e9), v("d2", "7", 1e8), v("d3", "2", 1e9)],
-  }, names, sites);
+const capRow = (over: Partial<FlowCapacityRow>): FlowCapacityRow => ({
+  device_id: "d1", device_name: "edge-1", site: "Dallas", ifindex: "1", if_name: "Gi1", speed_bps: 1e9, speed_basis: "reported",
+  p95_in_bps: 1e8, p95_out_bps: 2e8, p95_bps: 2e8, peak_bps: 3e8, p95_in_pct: 10, p95_out_pct: 20, p95_pct: 20, peak_pct: 30,
+  headroom_bps: 8e8, headroom_pct: 80,
+  forecast: { status: "rising", days_to_90: 23.4, slope_pct_per_day: 1, fitted_pct: 66, r2: 0.9, history_days: 28, min_days: 14 },
+  ...over,
+});
 
-  it("sorts by the busier direction's peak and keeps both directions", () => {
-    expect(rows.map((r) => [r.key, r.peak, r.avg, r.deviceName, r.site, r.ifName, r.speedBps])).toEqual([
-      ["d1|1", 95, 30, "edge-1", "Dallas", "Gi1", 1e9],
-      ["d2|7", 85, 5, "edge-2", "", "", 1e8],
+describe("capacity (P2) — rows from /api/flows/capacity", () => {
+  const rows = capacityFromApi([
+    capRow({}),
+    capRow({ device_id: "d2", device_name: "edge-2", site: "", ifindex: "7", if_name: "" }),
+    capRow({ device_id: "d3", device_name: "edge-3", ifindex: "", if_name: "ge0/1", speed_bps: null, speed_basis: "unknown", p95_pct: null }),
+    capRow({ device_id: "d4", device_name: "edge-4", ifindex: "2", speed_basis: "implausible", p95_pct: null }),
+  ]);
+
+  it("keys by device and ifIndex, or by name when the source carries no index", () => {
+    expect(rows.map((r) => r.key)).toEqual(["d1|1", "d2|7", "d3|name:ge0/1", "d4|2"]);
+  });
+
+  it("groups links with a usable speed by site or device, and keeps the rest apart", () => {
+    const bySite = groupCapacity(rows, "site");
+    expect(bySite.groups.map((g) => [g.group, g.rows.length])).toEqual([["Dallas", 1], [NO_SITE, 1]]);
+    expect(bySite.noSpeed.map((r) => r.device_id)).toEqual(["d3", "d4"]);
+    expect(groupCapacity(rows, "device").groups.map((g) => g.group)).toEqual(["edge-1", "edge-2"]);
+  });
+
+  it("says when a link reaches 90 % in plain words", () => {
+    const f = capRow({}).forecast;
+    expect(forecastText(f)).toBe("In about 23 days");
+    expect(forecastText({ ...f, days_to_90: 0.4 })).toBe("Within a day");
+    expect(forecastText({ ...f, days_to_90: 1 })).toBe("In about 1 day");
+    expect(forecastText({ ...f, status: "at_or_over_90" })).toBe("Already above 90 %");
+    expect(forecastText({ ...f, status: "flat_or_falling" })).toBe("Not rising");
+    expect(forecastText({ ...f, status: "unsteady" })).toBe("No steady trend");
+    expect(forecastText({ ...f, status: "not_enough_history", history_days: 6 })).toBe("Collecting history — 6 of 14 days");
+    expect(forecastText({ ...f, status: "speed_unknown" })).toBe("Speed not reported");
+    expect([forecastTone(f), forecastTone({ ...f, days_to_90: 60 }), forecastTone({ ...f, days_to_90: 120 }), forecastTone({ ...f, status: "at_or_over_90" })])
+      .toEqual(["bad", "warn", "", "bad"]);
+  });
+});
+
+const apiLink = (over: Partial<FlowLinkRow>): FlowLinkRow => ({
+  exporter: "10.0.0.1", ifindex: 3, if_name: "Gi0/3", if_name_basis: "resolved", in_bytes: 300, out_bytes: 100,
+  prev_in_bytes: 100, prev_out_bytes: 100, in_packets: 1, out_packets: 1, flows: 2, in_basis: "measured", out_basis: "measured",
+  sampling: "reported", ...over,
+});
+
+describe("links (P2) — rows from /api/flows/links", () => {
+  it("maps the API row; change is against the previous window from the same scan", () => {
+    const [r] = linksFromApi([apiLink({ device_id: "d1", device_name: "edge-1", site: "Dallas" })]);
+    expect(r).toMatchObject({ key: "10.0.0.1|3", ifName: "Gi0/3", inBytes: 300, outBytes: 100, totalBytes: 400, prevBytes: 200, deviceId: "d1", site: "Dallas" });
+    expect(changeLabel(r)).toBe("+100%");
+  });
+
+  it("a direction the router does not export is missing, not zero, and change still uses what it does export", () => {
+    const [r] = linksFromApi([apiLink({ out_bytes: null, prev_out_bytes: null, out_basis: "not_exported" })]);
+    expect(r.outMissing).toBe(true);
+    expect(r.outBytes).toBe(0);
+    expect(r.prevBytes).toBe(100);
+    expect(directionNote(r, "out")).toBe("Not exported by this router");
+  });
+
+  it("an unknown previous window gives no change figure", () => {
+    const [r] = linksFromApi([apiLink({ prev_in_bytes: null })]);
+    expect(r.prevBytes).toBeNull();
+    expect(changeLabel(r)).toBe("—");
+    expect(linksFromApi([apiLink({ in_bytes: null, out_bytes: null })])[0].prevBytes).toBeNull();
+  });
+
+  it("drops sentinels, names only resolved interfaces, keys two tenants apart", () => {
+    const rows = linksFromApi([
+      apiLink({ ifindex: 0 }), apiLink({ ifindex: 4294967295 }),
+      apiLink({ if_name: "x", if_name_basis: "absent", tenant_id: "t1" }), apiLink({ tenant_id: "t2" }),
     ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].ifName).toBe("");
+    expect(rows.map(linkRowKey)).toEqual(["10.0.0.1|3|t1", "10.0.0.1|3|t2"]);
   });
 
-  it("lists only links that have a utilisation series (a speed alone is not a measurement)", () => {
-    expect(rows.find((r) => r.deviceId === "d3")).toBeUndefined();
+  it("says by how much a partly exported direction reads low", () => {
+    const [r] = linksFromApi([apiLink({ in_basis: "partly_exported", in_unnamed_pct: 15.4 })]);
+    expect(directionNote(r, "in")).toBe("Reads low: 15 % of this router's flow bytes name no input interface");
+    expect(directionNote(linksFromApi([apiLink({ in_basis: "partly_exported", in_unnamed_pct: 0.2 })])[0], "in")).toMatch(/<1 %/);
+    expect(directionNote(r, "out")).toBeNull();
   });
 
-  it("groups by site (unbound devices say so) or by device", () => {
-    expect(groupCapacity(rows, "site").map((g) => [g.group, g.rows.length])).toEqual([["Dallas", 1], [NO_SITE, 1]]);
-    expect(groupCapacity(rows, "device").map((g) => g.group)).toEqual(["edge-1", "edge-2"]);
+  it("names the sampling situation only when it is not reported", () => {
+    expect(samplingNote("reported")).toBeNull();
+    expect(samplingNote("no_flows")).toBeNull();
+    expect(samplingNote("not_reported")).toMatch(/does not report its sampling rate/);
+    expect(samplingNote("mixed")).toMatch(/Some of these records/);
+  });
+});
+
+describe("series (P2) — /api/flows/links/series as bits per second", () => {
+  const resp = (over: Partial<FlowLinkSeriesResp>): FlowLinkSeriesResp => ({
+    window: { from: "", to: "", seconds: 180, explicit: false, prev_from: "", retention_days: 7, starts_before_retention: false, prev_before_retention: false },
+    served: { from: "", to: "" }, step_seconds: 60, exporter: "10.0.0.1", ifindex: 3, t: [0, 60, 120],
+    in_bytes: [750, 0, 1500], out_bytes: [75, 75, 75], in_packets: [1, 0, 1], out_packets: [1, 1, 1],
+    last_bucket_complete: true, in_basis: "measured", out_basis: "measured",
+    basis: { flows: 1, flows_rate_reported: 1, sampling: "reported", bucket_time: "received" }, ...over,
+  });
+  it("converts bytes per bucket to bits per second, in epoch ms", () => {
+    const r = seriesRates(resp({}));
+    expect(r.in).toEqual([[0, 100], [60_000, 0], [120_000, 200]]);
+    expect(r.out[0]).toEqual([0, 10]);
+  });
+  it("leaves out a bucket that is still filling, and a direction that is not exported", () => {
+    const r = seriesRates(resp({ last_bucket_complete: false, out_bytes: null }));
+    expect(r.in).toHaveLength(2);
+    expect(r.out).toEqual([]);
+    expect(r.outMissing).toBe(true);
+    expect(seriesRates(null)).toEqual({ in: [], out: [], inMissing: false, outMissing: false });
+  });
+});
+
+describe("movers (P2) — what changed", () => {
+  it("words each status", () => {
+    expect(moverChange({ status: "up", change: 3 })).toBe("+300%");
+    expect(moverChange({ status: "down", change: -0.5 })).toBe("−50%");
+    expect(moverChange({ status: "new", change: null })).toBe("New");
+    expect(moverChange({ status: "gone", change: -1 })).toBe("Gone");
+    expect(moverChange({ status: "same", change: 0.01 })).toBe("Same");
+    expect(moverChange({ status: "no_previous", change: null })).toBe("—");
   });
 });
 
@@ -175,22 +275,31 @@ describe("problemsForLink — problems that name this link's device in the windo
   });
 });
 
-describe("flowsWindow — the flow APIs answer 'the last N seconds'", () => {
+describe("flowsWindow — 'the last N seconds', or an exact window around a deep-linked problem", () => {
   const now = Date.parse("2026-11-12T05:00:00Z");
   it("uses the shell range, clamped", () => {
-    expect(flowsWindow(3600, {}, now)).toEqual({ since: 3600 });
+    expect(flowsWindow(3600, {}, now)).toEqual({ since: 3600, query: { since: 3600 } });
+    expect(windowQuery({ since: 900 })).toEqual({ since: 900 });
     expect(flowsWindow(10, {}, now).since).toBe(MIN_WINDOW_S);
     expect(flowsWindow(1e9, {}, now).since).toBe(MAX_WINDOW_S);
   });
   it("reaches back to just before a deep-linked problem and marks its window", () => {
     const from = Date.parse("2026-11-12T03:00:00Z");
     const to = Date.parse("2026-11-12T03:30:00Z");
-    expect(flowsWindow(3600, { from, to }, now)).toEqual({ since: 7200 + PROBLEM_LEAD_S, problem: { from, to } });
+    // The exact window: the 30-minute problem plus a quarter of it — at least 5 minutes — either side.
+    const lead = Math.max(PROBLEM_LEAD_S * 1000, (to - from) / 4);
+    expect(flowsWindow(3600, { from, to }, now)).toEqual({
+      since: 7200 + PROBLEM_LEAD_S, problem: { from, to }, query: { from: from - lead, to: to + lead },
+    });
+    // A short problem still gets at least five minutes, ending no later than now.
+    const w = flowsWindow(3600, { from: now - 30_000, to: now - 10_000 }, now);
+    expect(w.query?.to).toBe(now);
+    expect((w.query?.to ?? 0) - (w.query?.from ?? 0)).toBeGreaterThanOrEqual(MIN_WINDOW_S * 1000);
     // An open-ended problem runs to now; a future "to" is cut at now.
     expect(flowsWindow(3600, { from }, now).problem).toEqual({ from, to: now });
     expect(flowsWindow(3600, { from, to: now + 1e6 }, now).problem?.to).toBe(now);
     // A "from" in the future is ignored.
-    expect(flowsWindow(3600, { from: now + 1000 }, now)).toEqual({ since: 3600 });
+    expect(flowsWindow(3600, { from: now + 1000 }, now)).toEqual({ since: 3600, query: { since: 3600 } });
   });
 });
 

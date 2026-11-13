@@ -97,6 +97,16 @@ export default function AboutData({ open, onClose, since, includePlatform, onInc
             </section>
 
             <section>
+              <h3>How the numbers are made</h3>
+              <ul className="tr-facts" data-testid="about-method">
+                <li>Flow totals are scaled by the sampling rate a router reports, and by nothing else. A router that samples without saying so reads low.</li>
+                <li>A link's traffic comes from the router's own records: "in" entered the device on that interface, "out" left on it. A figure marked ≈ reads low because some records name no interface.</li>
+                <li>"Change" and "What changed" compare the window with the one just before it, of the same length. Flow records are kept for 7 days by default, so a longer look back has no comparison.</li>
+                <li>Capacity uses the interface counters, kept for 30 days: the 95th percentile and peak of five-minute rates, and a straight line through each day's 95th percentile for "reaches 90%" (14 days of history and a steady trend needed).</li>
+              </ul>
+            </section>
+
+            <section>
               <h3>Correlix's own traffic</h3>
               <PlatformTrafficToggle q={q} included={includePlatform} onChange={onIncludePlatform} />
             </section>
