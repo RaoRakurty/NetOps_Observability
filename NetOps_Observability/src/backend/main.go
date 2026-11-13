@@ -413,6 +413,9 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
+	// one per process, keyed by tenant and normalised question, route ids only.
+	aiPlanCache *ai.PlannerCache
 	// irisStreamMetrics counts streamed Iris answers (tracker 337 N-E2).
 	irisStreamMetrics *irisstream.Metrics
 	// orgContext is the Network context store (tracker 337 N-F1); nil on a
@@ -1350,6 +1353,7 @@ func newServer() *server {
 		aiDecisions:         newAIDecisionStore(),
 		aiDecisionMetrics:   aidecision.NewMetrics(),
 		aiToolGateway:       ai.NewToolGateway(),
+		aiPlanCache:         ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		irisStreamMetrics:   &irisstream.Metrics{},
 		orgContext:          newOrgContextStore(),
 		orgContextMetrics:   &orgcontext.Metrics{},
