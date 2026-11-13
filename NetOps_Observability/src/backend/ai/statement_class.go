@@ -140,6 +140,7 @@ var toolStatementClass = map[string]string{
 	"get_metric_anomalies":           ClassObserved,
 	"get_device_health":              ClassObserved,
 	"get_topology_context":           ClassObserved,
+	"get_network_topology":           ClassObserved,
 	"get_case_timeline":              ClassObserved,
 	"get_bgp_watchlist":              ClassObserved,
 	"get_bgp_rpki":                   ClassObserved,
@@ -320,8 +321,12 @@ func (sc *statementContext) stamp(ev EvidenceItem, tool string) {
 	if _, seen := sc.items[id]; seen {
 		return
 	}
+	class := toolStatementClass[tool]
+	if ev.Class == ClassDerived && class != "" {
+		class = ClassDerived // a per-item downgrade only, never an upgrade
+	}
 	sc.items[id] = stmtItem{
-		class: toolStatementClass[tool], role: ev.CauseRole,
+		class: class, role: ev.CauseRole,
 		change: ev.Change || changeTools[tool],
 		text:   ev.Text, orig: strings.TrimSpace(ev.CitationID),
 		verdict: strings.ToLower(strings.TrimSpace(ev.Verdict)),

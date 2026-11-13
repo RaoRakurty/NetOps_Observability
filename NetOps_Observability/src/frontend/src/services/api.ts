@@ -2113,9 +2113,12 @@ export type NormalizedChatResponse = {
   investigated?: number;
   citations?: ChatCitation[];
   truncated?: boolean;
-  // Provider-down fallback: the grounded engine answered (evidence-only) and
-  // the UI shows a slim disclosure banner.
-  fallback?: "provider_unavailable";
+  // The grounded engine answered (evidence-only): "provider_unavailable" — every
+  // provider failed this turn (slim, temporary banner); "models_off" — model
+  // answers are not available here at all (the AI add-on is not licensed, or
+  // the platform switch is off; models_reason says which).
+  fallback?: "provider_unavailable" | "models_off";
+  models_reason?: "not_licensed" | "switched_off" | "tenant_off" | string;
   grounded?: AiAnswer;
   // Whether the SERVER considers this answer grounded (tracker 330): true for an
   // agent-loop turn that actually ran lookups and for the grounded-engine
@@ -5426,6 +5429,13 @@ export interface PlatformFeature {
   install_value: boolean | null;
   updated_by?: string;
   updated_at?: string;
+  /** Set only on this page — no install file can set it (the AI switches). */
+  console_only?: boolean;
+  /** The licence capability it needs ("iris_model" for the AI switches). */
+  requires?: string;
+  /** False while the licence lacks `requires`: the switch reads off and cannot be turned on. */
+  available?: boolean;
+  unavailable_reason?: string;
 }
 
 export interface PlatformFeatures {
@@ -5802,6 +5812,20 @@ export interface FeatureFlags {
   active_verification?: boolean;
   processors?: boolean;
   ai_entitlements?: string[];
+  /** Model-backed Iris: the AI add-on and the platform switch (platform-level). */
+  ai_models?: AIModelsState;
+}
+
+/**
+ * Model-backed Iris on this installation (owner 2026-11-12/13): the
+ * `iris_model` licence add-on, then the platform administrator's console-only
+ * switches. "unlicensed" | "off" | "on".
+ */
+export interface AIModelsState {
+  state: "unlicensed" | "off" | "on";
+  licensed: boolean;
+  models_on: boolean;
+  investigations_on: boolean;
 }
 
 export const api = {
@@ -6986,7 +7010,7 @@ export const api = {
   setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
   setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
@@ -11036,6 +11060,8 @@ export type LicenceFeature = {
   entitled: boolean;
   /** The lowest tier that grants it. */
   included_in: LicenceTier;
+  /** Sold as an add-on line below included_in (the Iris AI add-on). */
+  add_on?: boolean;
 };
 
 /** One ceiling the current usage exceeds. Listed, never hidden, never pruned. */

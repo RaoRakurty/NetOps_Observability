@@ -19,6 +19,7 @@ import {
   CopilotConfig,
   AITenantConfig,
   AITenantRow,
+  AIModelsState,
   ProviderTestResult,
   AiAnswer,
   AiCitation,
@@ -38,6 +39,7 @@ import { withPageContext } from "../iris/pageRoute";
 import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
+import { investigationsHint, modelsBanner } from "../iris/aiModelsBanner";
 import { httpFailure, operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
@@ -259,6 +261,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   // Slim disclosure when the AI provider is unreachable and the grounded engine
   // answered instead (owner decision: degrade elegantly, never dead-end).
   const [fallbackNote, setFallbackNote] = useState(false);
+  // Model-backed Iris on this installation (the AI add-on + the platform
+  // switch); undefined until /api/features answers.
+  const [aiModels, setAiModels] = useState<AIModelsState | undefined>(undefined);
   const endRef = useRef<HTMLDivElement | null>(null);
   const convRef = useRef<string | null>(loadConversation());
   // Read inside the async ask, so it tracks the latest answer without a stale closure.
@@ -344,6 +349,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     api.features().then((c) => {
       setEnabled(Boolean(c?.copilot) && hasAIEntitlement(c, "ai.chat"));
       setNlqEntitled(hasAIEntitlement(c, "ai.nlquery"));
+      setAiModels(c?.ai_models);
     }).catch(() => { setEnabled(false); setNlqEntitled(false); });
     // Platform owner → platform settings + the per-workspace access list;
     // tenant admin → their own workspace settings. Whichever call the caller
@@ -496,7 +502,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       // card and disclose it with the slim banner (never a dead-end error).
       if (nr.fallback && nr.grounded) {
         setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
-        setFallbackNote(true);
+        // "models_off" is not an outage: the persistent models banner says
+        // why, so the temporary provider-down note stays away.
+        setFallbackNote(nr.fallback === "provider_unavailable");
       } else if (nr.provider && nr.provider !== "engine") {
         setFallbackNote(false); // provider is back — banner clears itself
       }
@@ -787,6 +795,11 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 Assistant answers are always scoped to each workspace&apos;s own data. Investigations
                 let the AI run governed, read-only lookups before answering.
               </p>
+              {investigationsHint(aiModels) && (
+                <p data-testid="iris-investigations-hint" style={{ color: "var(--warn)", fontSize: 14, margin: "0 0 8px" }}>
+                  {investigationsHint(aiModels)}
+                </p>
+              )}
               {tenantRows.map((row) => (
                 <div key={row.tenant_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12.5 }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.tenant_id}>
@@ -906,6 +919,22 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
           {tcfg.assistant_enabled && nlqEntitled && <IrisVocabulary />}
         </div>
       )}
+
+      {/* Model-backed answers unavailable here (no add-on, or switched off):
+          Iris still answers from the platform's data, and says what would
+          change that. Persistent, not an error. */}
+      {(() => {
+        const b = modelsBanner(aiModels, cfg !== null);
+        return b ? (
+          <div data-testid="iris-models-banner" style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
+            fontSize: 14, color: "var(--muted)", borderBottom: "1px solid var(--line)",
+          }}>
+            <span className="op-dot" />
+            <span style={{ flex: 1 }}>{b.text}</span>
+          </div>
+        ) : null;
+      })()}
 
       {/* Provider-down disclosure — slim, dismissible, honest. */}
       {fallbackNote && (

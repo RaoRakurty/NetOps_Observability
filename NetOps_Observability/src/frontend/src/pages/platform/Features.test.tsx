@@ -63,6 +63,43 @@ describe("Features page", () => {
     await waitFor(() => expect(apiMock.setPlatformFeature).toHaveBeenCalledWith("FEATURE_DEVICE_SSH", true, "FEATURE_DEVICE_SSH"));
   });
 
+  it("locks an AI switch the licence does not cover, and says which add-on it needs", async () => {
+    apiMock.platformFeatures.mockResolvedValue(data({}, [feat({
+      env: "IRIS_AI_MODELS", label: "Iris AI models", group: "Iris AI", risky: true, console_only: true,
+      requires: "iris_model", available: false, unavailable_reason: "not included",
+    })]));
+    render(<Features />);
+    const sw = await screen.findByRole("switch", { name: "Iris AI models" });
+    expect(sw).toBeDisabled();
+    expect(screen.getByTestId("feature-locked-IRIS_AI_MODELS").textContent).toMatch(/Iris AI add-on/);
+    expect(screen.getByText(/Set on this page only/)).toBeTruthy();
+  });
+
+  it("asks before sending data to the AI provider, in those words", async () => {
+    apiMock.platformFeatures.mockResolvedValue(data({}, [feat({
+      env: "IRIS_AI_MODELS", label: "Iris AI models", risky: true, console_only: true, requires: "iris_model", available: true,
+    })]));
+    apiMock.setPlatformFeature.mockResolvedValue({});
+    render(<Features />);
+    fireEvent.click(await screen.findByRole("switch", { name: "Iris AI models" }));
+    expect(await screen.findByText(/sent to the AI provider/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(apiMock.setPlatformFeature).toHaveBeenCalledWith("IRIS_AI_MODELS", true, "IRIS_AI_MODELS"));
+  });
+
+  it("lets a locked switch that was on be turned off", async () => {
+    apiMock.platformFeatures.mockResolvedValue(data({}, [feat({
+      env: "IRIS_AI_MODELS", label: "Iris AI models", risky: true, requires: "iris_model", available: false, desired: true,
+    })]));
+    apiMock.setPlatformFeature.mockResolvedValue({});
+    render(<Features />);
+    const sw = await screen.findByRole("switch", { name: "Iris AI models" });
+    expect(sw).not.toBeDisabled();
+    expect(screen.getByTestId("feature-locked-IRIS_AI_MODELS").textContent).toMatch(/come back on/);
+    fireEvent.click(sw);
+    await waitFor(() => expect(apiMock.setPlatformFeature).toHaveBeenCalledWith("IRIS_AI_MODELS", false, undefined));
+  });
+
   it("turns a feature off without asking", async () => {
     apiMock.platformFeatures.mockResolvedValue(data({}, [feat({ env: "FEATURE_DEVICE_SSH", label: "SSH to devices", risky: true, desired: true, running: true })]));
     apiMock.setPlatformFeature.mockResolvedValue({});

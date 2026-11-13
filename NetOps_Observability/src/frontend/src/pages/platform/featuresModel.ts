@@ -36,6 +36,7 @@ export function sourceLine(f: PlatformFeature, fmt: (iso: string) => string): st
     return `Changed here${who}${when}.`;
   }
   if (f.source === "install") return `Set at install (${f.install_value ? "on" : "off"}).`;
+  if (f.console_only) return "Set on this page only. Off until turned on here.";
   return "Not set at install; the built-in default applies.";
 }
 
@@ -51,4 +52,37 @@ export function pendingLine(f: PlatformFeature): string | null {
 /** The value the switch shows: the saved (desired) value. */
 export function switchValue(f: PlatformFeature): boolean {
   return f.desired;
+}
+
+/**
+ * A switch whose licence requirement is unmet (the AI switches without the
+ * Iris AI add-on): it reads off, cannot be turned on, and says why. Turning it
+ * OFF stays possible, so a choice saved while licensed can be withdrawn.
+ * An older server sends no `available` field: treat that as available.
+ */
+export function isLocked(f: PlatformFeature): boolean {
+  return f.available === false;
+}
+
+/** The licence line under a locked switch, or null. */
+export function lockedLine(f: PlatformFeature): string | null {
+  if (!isLocked(f)) return null;
+  if (f.requires === "iris_model") {
+    const saved = f.desired ? " It was on and will come back on when the add-on is licensed." : "";
+    return `Needs the Iris AI add-on on your license (Enterprise includes it).${saved}`;
+  }
+  return f.unavailable_reason ? `Not available: ${f.unavailable_reason}.` : "Not included in your license.";
+}
+
+/** Whether the switch control is usable in this direction. */
+export function toggleDisabled(f: PlatformFeature): boolean {
+  return isLocked(f) && !switchValue(f);
+}
+
+/** The confirmation text for a risky switch. AI switches send data out. */
+export function confirmText(f: PlatformFeature): string {
+  if (f.requires === "iris_model") {
+    return "Questions, and the network evidence Iris gathers to answer them, will be sent to the AI provider configured in Iris settings. Turn this on only if your data policy allows that provider.";
+  }
+  return "This feature reaches into your network or out of Correlix. Turn it on only if your security policy allows it.";
 }

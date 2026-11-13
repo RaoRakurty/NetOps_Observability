@@ -36,6 +36,7 @@ const TOOL_LABEL: Record<string, string> = {
   search_logs: "logs",
   get_device_health: "device health",
   get_topology_context: "topology",
+  get_network_topology: "the network topology",
   get_security_findings: "security findings",
   get_recent_changes: "recent changes",
   get_config_diff: "a configuration change",
