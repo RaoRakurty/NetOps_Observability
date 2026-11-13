@@ -213,6 +213,11 @@ describe("featureStatus", () => {
     expect(featureStatus(f())).toEqual({ tone: "muted", text: "Included in Enterprise" });
   });
 
+  it("an add-on says it can be bought on its own, as well as the tier that includes it", () => {
+    expect(featureStatus(f({ name: "iris_model", add_on: true }))).toEqual({ tone: "muted", text: "Add-on, or included in Enterprise" });
+    expect(featureStatus(f({ name: "iris_model", add_on: true, entitled: true }))).toEqual({ tone: "good", text: "Included" });
+  });
+
   it("with no tier stated it says so instead of implying one", () => {
     expect(featureStatus(f({ included_in: "" as LicenceFeature["included_in"] })))
       .toEqual({ tone: "muted", text: "Not included" });
