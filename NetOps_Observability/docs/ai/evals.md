@@ -322,6 +322,35 @@ question with no intent skips the strong compile in `/api/ai/ask`: the rephrase 
 runs, then the model answers it. The strong compile still serves `/api/ai/query/compile` and
 questions with a recognised intent.
 
+## Model-first routing eval (owner, 2026-11-13)
+
+With the AI add-on on (licence + the "Iris AI models" switch), one fast-tier model call
+picks the arm that answers every question (`src/backend/ai/planner.go`). The deterministic
+arms are unchanged; they are what the planner selects, plus an exact-match cache. Coverage
+work is now tools and data, never another phrase rule.
+
+The corpus is `docs/ai/golden-examples/planner-paraphrases.json`: about 20 model-written,
+reviewed phrasings for each planner route (typos, abbreviations, indirect wording), plus
+module items. It is never regenerated in CI. Three tests read it:
+
+| Test | What it asserts |
+|---|---|
+| `TestParaphraseCorpusShape` | every route has ≥ 20 distinct phrasings; no phrasing sits under two routes; every module has phrasings |
+| `TestEveryParaphraseReachesItsRoutesArm` | with a stub model that returns each item's route, every phrasing reaches that route's arm with routing reason `planner` (340/340 at introduction) |
+| `TestParaphraseDeterministicBaseline` | reports the regex router's own accuracy on the same phrasings: the "before" number (227/340, 67 %, at introduction; `noc_focus` 4/20, `top_incident` 7/20, `incident_breakdown` 11/20, `shift_handoff` 12/20) |
+
+A real provider's routing accuracy is the live eval, on the same tag and environment as the
+NL query model eval, so one command runs both. It fails below 90 %:
+
+```
+NLQ_EVAL_PROVIDER=gemini NLQ_EVAL_API_KEY=... NLQ_EVAL_MODEL=gemini-3.5-flash-lite \
+  go test -tags nlqmodeleval ./ai -run TestPlannerLiveProvider -v -timeout 60m
+```
+
+A miss found in production is triaged into one of four classes: no tool for it, no data, the
+wrong arm chosen, or wording. Only the third touches routing, and the fix is the route's
+description or a new phrasing in the corpus, never a regex.
+
 ## Replay (N-H2, offline leg)
 
 Replay runs one frozen incident through the real answer path and reports what came
