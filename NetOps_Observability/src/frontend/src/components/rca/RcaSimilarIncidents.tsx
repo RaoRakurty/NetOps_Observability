@@ -29,7 +29,11 @@ export default function RcaSimilarIncidents({ correlationId }: { correlationId: 
   return (
     <section className="rw-panel" aria-label="Similar past incidents">
       {matches.length === 0 ? (
-        <p className="disc-text"><strong>No similar incident.</strong> {res.note}</p>
+        <p className="disc-text">
+          <strong>No earlier incident matches yet.</strong>{" "}
+          {res.examined > 0 ? `${res.examined} closed incident${res.examined === 1 ? "" : "s"} compared. ` : ""}
+          {res.note}
+        </p>
       ) : (
         <ol className="op-actions">
           {matches.map((m) => (
