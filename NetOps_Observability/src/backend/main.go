@@ -4901,7 +4901,6 @@ func (s *server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 		// Feature availability only — the assistant UI renders whenever the feature
 		// is on, then prompts in-panel for an API key (env or UI-stored) if missing.
 		"copilot":    aientitlement.IrisOn(os.Getenv),
-		"ai_models":  s.aiModelsView(),
 		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		// Global gate only — the per-tenant opt-in rides GET /api/settings/verification.
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",

@@ -65,7 +65,6 @@ func (s *server) wireAISwitchesForTest(t *testing.T, models bool) {
 	}
 }
 
-
 func testAuditStore(t *testing.T) auditRepo {
 	t.Helper()
 	au, err := newAuditStore(t.TempDir() + "/audit.json")
