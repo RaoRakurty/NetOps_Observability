@@ -128,18 +128,20 @@ Most `confd` lines and 97% of flow rows appear to be caused by polling: ours ove
 
 ## 6. Delivery plan
 
+**Status, verified on the lab 2026-11-13.** PRs 1 to 14 and 16 have shipped. PR 15's operator docs are in `docs/INGESTION.md`, "What is kept of each syslog line". Measured over the last hour: syslog 100 % `parsed` (61,601 lines), traps 100 % `decoded`, and `vendor`, `model`, `site`, `role` and `device_id` on both lanes. Flows carry interface names (90 rows, no exporter uncovered), `as_basis` and `sampling_status`. Trap interface names are wired (`interface`, `interface_basis`); the lab sent no interface trap that day, so every lab trap reads `interface_basis: none`. Vendor wave 2 added `hpe_comware` and `dell_dnos6`. What is still open is in tracker 387.
+
 Each item is a separate PR. Rule changes re-pin `BAKED_RULES_HASH`, the admission VRL, `coverage_matrix` and `telemetry-catalog/test_bake_rules.py`, and land after P6-E (#149) or rebase onto it. `canon.py` is off limits here.
 
 ### Tranche 0: independent fixes
 
 | PR | Change | Stage | State |
 |---|---|---|---|
-| 1 | Stop storing community strings; hide stored values on every read path | ingest, API | **In progress** |
-| 2 | Logs page redesign (§7) | UI | **In progress** |
-| 3 | Keep `message_key`; declare trap fields in the template; strip pipeline metadata at the sink after `cx_event_id` is derived | router, storage | Queued |
-| 4 | Add `platform_owned` to `tenant_attribution`; update `TenantEnrichmentMissRateJumped` and its promtool test | router | Queued |
-| 5 | Label flow sampling honestly: `sampling_status` of `reported` or `not_reported_1to1`, no change to totals | router, UI | Queued |
-| 6 | Telemetry Coverage page: rename "Prefilter rejected" and drop its warning colour; warn on high-severity lines that were skipped once PR 8 can see them | UI, engine | Queued |
+| 1 | Stop storing community strings; hide stored values on every read path | ingest, API | Shipped (#154, #184, #189) |
+| 2 | Logs page redesign (§7) | UI | Shipped (#154, #185) |
+| 3 | Keep `message_key`; declare trap fields in the template; strip pipeline metadata at the sink after `cx_event_id` is derived | router, storage | Shipped |
+| 4 | Add `platform_owned` to `tenant_attribution`; update `TenantEnrichmentMissRateJumped` and its promtool test | router | Shipped |
+| 5 | Label flow sampling honestly: `sampling_status` of `reported` or `not_reported_1to1`, no change to totals | router, UI | Shipped |
+| 6 | Telemetry Coverage page: rename "Prefilter rejected" and drop its warning colour; warn on high-severity lines that were skipped once PR 8 can see them | UI, engine | Shipped |
 
 ### Tranche 1: RCA
 

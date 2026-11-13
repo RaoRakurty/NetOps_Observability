@@ -153,7 +153,8 @@ def test_the_rule_count_is_what_the_lanes_add_up_to():
     #   known_benign: fp-um default MAC, kernel hrtimer, OSPF DD in 2-Way).
     # · 102 with tracker 388's syslog link cause (SR Linux port/subinterface state, the
     #   SONiC portmgrd shutdown).
-    assert len(P.RULES) == 102
+    # · 103 with 387 vendor wave 2 (the Comware V7 PHY_UPDOWN link row).
+    assert len(P.RULES) == 103
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -419,6 +420,10 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
         "trap.sdwan.bfd", "trap.sdwan.bfd.clear", "trap.sdwan.interface", "trap.sdwan.bgp_peer",
         "trap.bfd.session", "trap.bfd.session.clear",
         "trap.resource.cpu_threshold", "trap.resource.cpu_threshold.clear",
+        # tracker 387 vendor wave 2: the Comware V5 LINK_UPDOWN / LINEPROTO_UPDOWN pack
+        # fixtures are answered by the vendor-neutral link row, which now also names the
+        # port of a `<if> link status is DOWN.` line; the frozen code read it as `unknown`.
+        "syslog.link.state_change",
         # tracker 387: vendor-pack rows. Read from the pack files, so adding a vendor
         # does not touch this list.
         *(r["rule_id"] for p in bake.load_packs() for r in p.get("rules") or []

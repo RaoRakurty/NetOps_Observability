@@ -134,6 +134,17 @@ SROS = (b"<188>Jan  2 18:43:23 10.221.38.108 TMNX: 17 Base "
         b"SYSTEM-WARNING-tmnxStateChange-2009 [subject]: Status of Card 1 changed")
 SONIC = (b"<30>2026-11-09T09:00:00.123456+00:00 sonic-1 INFO bgp#bgpd[123]: neighbor 10.0.0.1 Down")
 SONIC_ERR = (b"<27>2026-11-09T09:00:00.123456+00:00 sonic-1 ERR syncd#syncd: SAI_API_PORT failed")
+# Tracker 387 wave 2. Comware: H3C SOHO System Log Messages (Comware V5) LINK_UPDOWN text
+# in the log-host framing of H3C "Information center configuration" Table 7; the second is
+# that table's own example, location field and year after the time included.
+COMWARE = (b"<187>May 30 06:44:22 sw-core1 %%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is DOWN.")
+COMWARE_LOC = (b"<190>Nov 24 16:22:21 2016 Sysname %%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; "
+               b"VTY logged in from 192.168.1.26")
+# The same table's CMCC example: one percent sign, and an unpadded day before the year.
+COMWARE_CMCC = (b"<189>Oct 9 14:59:04 2016 Sysname %10SHELL/5/SHELL_LOGIN: VTY logged in from 192.168.1.21")
+# Dell PowerSwitch N (DNOS 6): SC4S tests/test_dell_emc_networking.py (Apache-2.0).
+DNOS6 = (b"<189>Nov 13 10:00:00 dn1 CMDLOGGER[emWeb]: cmd_logger_api.c(83) 29333 %% NOTE "
+         b"CLI:10.1.3.211:administrator:User  logged in")
 # The IOS XE boot banner (tracker 387, live on the lab's Catalyst 8000v 17.3.2, 2026-11-11):
 # a sequence number and no time, so the legacy parser took the first word for the program
 # (`Cisco`, `Technical`, `Copyright`, `Compiled`) and cut it off the message. Edge shape
@@ -242,6 +253,30 @@ FRAMES = [
     ("SONiC err, no pid", SONIC_ERR, {
         "frame_format": "rfc3164", "hostname": "sonic-1", "appname": "syncd#syncd",
         "severity": "err", "message": "SAI_API_PORT failed"}),
+    # The module/level/mnemonic tag is not a program: core.conf puts it back in the message.
+    ("Comware, the tag is not the program", COMWARE, {
+        "frame_format": "rfc3164", "hostname": "sw-core1", "appname": "unknown",
+        "severity": "err", "syslog_facility": "local7",
+        "message": "%%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is DOWN.",
+        "parser_id": "hpe_comware.v1", "parser_status": "parsed", "vendor": "hp",
+        "facility": "IFNET", "event_type": "link_updown", "severity_native_code": "3"}),
+    ("Comware with the location field and a year", COMWARE_LOC, {
+        "frame_format": "rfc3164", "hostname": "Sysname", "appname": "unknown",
+        "severity": "info",
+        "message": "%%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; VTY logged in from 192.168.1.26",
+        "parser_id": "hpe_comware.v1", "parser_status": "parsed", "event_type": "shell_login",
+        "audit_user": "VTY", "audit_source": "192.168.1.26", "event_category": "management_audit"}),
+    ("Comware CMCC, an unpadded day and a year keep the hostname", COMWARE_CMCC, {
+        "frame_format": "rfc3164", "hostname": "Sysname", "appname": "unknown",
+        "severity": "notice",
+        "message": "%10SHELL/5/SHELL_LOGIN: VTY logged in from 192.168.1.21",
+        "parser_id": "hpe_comware.v1", "parser_status": "parsed", "event_type": "shell_login"}),
+    ("DNOS 6, the component is the program", DNOS6, {
+        "frame_format": "rfc3164", "hostname": "dn1", "appname": "CMDLOGGER", "procid": "emWeb",
+        "severity": "notice",
+        "message": "cmd_logger_api.c(83) 29333 %% NOTE CLI:10.1.3.211:administrator:User  logged in",
+        "parser_id": "dell_dnos6.v1", "parser_status": "parsed", "vendor": "dell",
+        "event_type": "cli_logged_in", "audit_user": "administrator"}),
     # Our own senders. internal/pipedebug's probe must keep its marker in the message, and
     # the cloud lane's filter (`cloud=<provider> {`) reads the same field.
     ("the pipeline debugger's probe",
@@ -299,6 +334,10 @@ ENGINE_CASES = [
     ("SONiC err is kept below the floor", SONIC_ERR, "device_alarm", "warn"),
     ("SONiC info is a log", SONIC, None, None),
     ("SR OS warning is kept below the floor", SROS, "device_alarm", "warn"),
+    # Tracker 387 wave 2: Comware's IFNET fields read like IOS, so the IOS link row types it.
+    ("Comware V5 link down opens as the IOS one does", COMWARE, "link_state_change", "high"),
+    ("a Comware login is not an alarm", COMWARE_LOC, None, None),
+    ("a DNOS 6 login is not an alarm", DNOS6, None, None),
     ("ASA info is a log", ASA, None, None),
     ("FortiGate notice is a log", FORTI, None, None),
     ("the IOS XE boot banner is a log", IOSXE_BANNER[0][0], None, None),

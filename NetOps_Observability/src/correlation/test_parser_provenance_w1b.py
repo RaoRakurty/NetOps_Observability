@@ -663,7 +663,13 @@ RULES_HASH_CONTROLLER_PEER_CONFD_MERGE = "ecd6ccfb94a2ea72bfa9887e6321bf4d6d9941
 #: subinterface events, cause from oper-down-reason) and the SONiC portmgrd admin-status
 #: grammar and row; orchagent also reads `swss#orchagent`. Two rule rows, both warn.
 RULES_HASH_LINK_CAUSE_SRLINUX_SONIC = "246b7761c983b90677e247d8d5d83177a582708929f75e4e1dbdd277e26702af"
-RULES_HASH_A3 = RULES_HASH_LINK_CAUSE_SRLINUX_SONIC
+#:
+#: Tracker 387 vendor wave 2 (2026-11-13): packs hpe_comware (four grammars, one row for
+#: V7 PHY_UPDOWN at warn) and dell_dnos6 (two grammars, no row); the vendor-neutral link
+#: row also names the port of `<if> link status is DOWN.`; the ConfD NETCONF session
+#: grammar reads a quoted user without its quotes.
+RULES_HASH_VENDOR_PACKS_WAVE2 = "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b459e4c4351eba6cba"
+RULES_HASH_A3 = RULES_HASH_VENDOR_PACKS_WAVE2
 
 
 def _guard_patterns(node) -> list[str]:

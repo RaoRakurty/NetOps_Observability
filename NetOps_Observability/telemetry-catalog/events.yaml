@@ -35,6 +35,15 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-11-13-vendor-packs-wave2 — tracker 387 §6a wave 2, on top of
+# 2026-11-12-link-cause-srlinux-sonic. New packs hpe_comware (grammars hpe_comware.v1:
+# SSH and CLI session audit, failed login, and module/level/mnemonic for the rest; row
+# syslog.comware.link.state_change for V7 PHY_UPDOWN, warn) and dell_dnos6 (grammar
+# dell_dnos6.v1, CLI session audit and the subsystem line; no row). The vendor-neutral
+# syslog.link.state_change also names the port of a `<if> link status is DOWN.` line
+# (Comware V5 LINK_UPDOWN), which it read before as `unknown`. The ConfD NETCONF
+# transport-session grammar reads a quoted user without its quotes (lab, 2026-11-13).
+#
 # 2026-11-12-link-cause-srlinux-sonic — tracker 388 (a), the syslog link cause for the
 # vendors still without one, on top of 2026-11-11-sdwan-controller-token-confd. New pack
 # nokia_srlinux (grammar nokia_srlinux.v1 for the
@@ -200,7 +209,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-12-link-cause-srlinux-sonic
+parser_rev: 2026-11-13-vendor-packs-wave2
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -780,7 +789,10 @@ rules:
             - {contains: [ctoken, 'LINEPROTO']}
         - {contains: [ctoken, 'UPDOWN']}
     extract:
-      ifname: {alt: [{re: [[msg, *ifword, 1, '']]}, {const: unknown}]}
+      # The second form is `<ifname> link status is DOWN.`, a module/level/mnemonic
+      # sender's LINK_UPDOWN (vendor-packs/hpe_comware.yaml), which names the port with
+      # no `interface` word; without it the row welded every such port into `unknown`.
+      ifname: {alt: [{re: [[msg, *ifword, 1, '']]}, {re: [[msg, ': ([A-Za-z][\w/.\-]*):? link status is ', 1, '']]}, {const: unknown}]}
       state: {scan: {order: *updown, field: msg, default: unknown}}
     emit:
       kind: link_state_change

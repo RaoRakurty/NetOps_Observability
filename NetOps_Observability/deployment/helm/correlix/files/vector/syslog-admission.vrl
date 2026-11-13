@@ -7,10 +7,10 @@
 # the engine COULD promote, and leaves the field unset otherwise. It
 # never drops, rewrites or reorders anything: the stamp is additive.
 #
-#   rules_hash : ed440fddf3efca3b99f5e40cddc046ab44096c65191f1b5ba2d2fba4fcf055c5
-#   v          : ed440fddf3ef
+#   rules_hash : ce973109b9606f7870eb8be2b27294aa7a7c921db85919fa2a041d144a1c4ffb
+#   v          : ce973109b960
 #   floor      : ALARM_SEVERITY_FLOOR = 4
-#   screen     : 122 literals
+#   screen     : 123 literals
 #
 # Field parity: this runs immediately after `syslog_normalized`, so it
 # reads exactly the document `kafka_syslog` serializes onto
@@ -127,6 +127,17 @@ if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "cisco") && contains(cx_pk_
     }
   }
 }
+if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "hp") && contains(cx_pk_msg, "/") {
+  cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'^%%?\d{2}(?P<mod>[A-Z][A-Z0-9_]{0,31})/(?P<lvl>[0-7])/(?P<mnem>[A-Z][A-Z0-9_]{0,63})(?:\([a-z]\))?: (?P<text>.{0,4096})')
+  if cx_pk_err == null {
+    cx_pk_v = 99
+    cx_pk_v = to_int(cx_pk_m.lvl) ?? 99
+    if cx_pk_v < 99 {
+      cx_pk_n = cx_pk_v
+      cx_pk_floor = 2
+    }
+  }
+}
 if cx_pk_n == 99 && (cx_pk_inv == "" || cx_pk_inv == "nokia") && contains(cx_pk_msg, "|EV|") {
   cx_pk_m, cx_pk_err = parse_regex(cx_pk_msg, r'^(?P<app>[a-z][a-z0-9_]{0,31})\|\d{1,10}\|\d{1,10}\|\d{1,12}\|EV\|(?P<obj>port|subinterface)(?:Down|Up)\|(?P<sev>[CEWNID]): (?:The subinterface|Interface) (?P<ifname>[A-Za-z][\w/.:-]{0,63}) is now (?P<state>down|up)(?: for reason: (?P<reason>[a-z0-9-]{1,64}))?')
   if cx_pk_err == null {
@@ -184,22 +195,22 @@ if cx_pk_n < 99 && cx_sev > cx_pk_floor {
 
 # ── gate 1: the device called it warning-or-worse ───────────────────
 if cx_sev <= 4 {
-  .cx_admission = { "v": "ed440fddf3ef", "by": "severity" }
+  .cx_admission = { "v": "ce973109b960", "by": "severity" }
 }
 
 # ── gate 2: a known typed symptom marker, at any severity ───────────
 # The haystack is `message + " " + upcase(appname) + " " + facility +
 # " " + event_type`, lower-cased — byte-for-byte the join
 # `syslog_promotable` builds. The alternation below is the screen's
-# 122 literals (longest first, as in the Python tuple); Rust's
+# 123 literals (longest first, as in the Python tuple); Rust's
 # regex compiles an alternation of plain literals into a literal-set
 # matcher, so this is one pass, not 61 substring searches.
 if !exists(.cx_admission) {
   cx_hay = downcase(
     (string(.message) ?? "") + " " + cx_tag + " " +
     (string(.facility) ?? "") + " " + (string(.event_type) ?? ""))
-  if match(cx_hay, r'sethostintfsoperstatus: set operation status |ssisavebackgroundconfigsucceeded-2112|system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |error: kex_exchange_identification: |ssisaveincrementconfigsucceeded-2110|: cannot remove default mac address|tmnxeqphyschasspowersupoutfail-2146|tmnxeqphyschasspowersupinfail-2144| state is 2-way, packet discarded|-session_state_down: bfd session |bgpbackwardtransnotification-2039|tmnxeqphyschassisfanfailure-2148|tmnxeqportetherloopdetected-2025|-tmnxospfngnbrstatechange-2042 |bgpestablishednotification-2038|control-connection-state-change|confd_snmpa_instr,table_func,|tbgpngbackwardtransition-2020|: system cpu usage is above |: system cpu usage is below |ssisaveconfigsucceeded-2002|tmnxmodulemallocfailed-2010|tmnxeqportetheralarm-2017|hrtimer: interrupt took |receivenotification-2006|tmnxenvtemptoohigh-2005|unsupported_transceiver|tbgpngestablished-2019|tmnxeqcardfailure-2001| admin status to down|sendnotification-2005|tmnxconfigcreate-2007|tmnxconfigdelete-2008|tmnxconfigmodify-2006|monitor attached to |tmnxeqporterror-2009| is now unreachable|changed state from |error-status=generr|is flapping between|isisadjacencychange|state changed from |ui_commit_completed|cli_config_io-2011|has moved between|administratively|bfd-state-change|subinterfacedown|between nve and| adjacency to |duplicate host|ifadminstatus |interfacetable|subinterfaceup|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%ethport-|%viptela-|adjchange|bias_high|corrected|down-2004|nbr_reset|qualified|temp_high|threshold|critical|dup_host|mac_move|portdown|spantree|macflap|standby|up-2005|warning|adjchg|deskew|maxpfx|portup|remote|signal|updown|alarm|align|error|light|local|major|minor|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep| : |ber|hmm|los|nve|pre') {
-    .cx_admission = { "v": "ed440fddf3ef", "by": "marker" }
+  if match(cx_hay, r'sethostintfsoperstatus: set operation status |ssisavebackgroundconfigsucceeded-2112|system cpu usage back to normal level|-ftmd-3-erro-1000003: user ifname = |error: kex_exchange_identification: |ssisaveincrementconfigsucceeded-2110|: cannot remove default mac address|tmnxeqphyschasspowersupoutfail-2146|tmnxeqphyschasspowersupinfail-2144| state is 2-way, packet discarded|-session_state_down: bfd session |bgpbackwardtransnotification-2039|tmnxeqphyschassisfanfailure-2148|tmnxeqportetherloopdetected-2025|-tmnxospfngnbrstatechange-2042 |bgpestablishednotification-2038|control-connection-state-change|confd_snmpa_instr,table_func,|tbgpngbackwardtransition-2020|: system cpu usage is above |: system cpu usage is below |ssisaveconfigsucceeded-2002|tmnxmodulemallocfailed-2010|tmnxeqportetheralarm-2017|hrtimer: interrupt took |receivenotification-2006|tmnxenvtemptoohigh-2005|unsupported_transceiver|tbgpngestablished-2019|tmnxeqcardfailure-2001| admin status to down|sendnotification-2005|tmnxconfigcreate-2007|tmnxconfigdelete-2008|tmnxconfigmodify-2006|monitor attached to |tmnxeqporterror-2009| is now unreachable|changed state from |error-status=generr|is flapping between|isisadjacencychange|state changed from |ui_commit_completed|cli_config_io-2011|has moved between|administratively|bfd-state-change|subinterfacedown|between nve and| adjacency to |duplicate host|ifadminstatus |interfacetable|subinterfaceup|vxlan_mac_move|%cisco-sdwan-|corrected_fec|uncorrectable|/phy_updown:|notification|prefix-limit|remote_fault|rx_power_low| failed for|blacklisted|local_fault|signal_loss|temperature|transceiver|unqualified|unsupported|remotepeer|%ethport-|%viptela-|adjchange|bias_high|corrected|down-2004|nbr_reset|qualified|temp_high|threshold|critical|dup_host|mac_move|portdown|spantree|macflap|standby|up-2005|warning|adjchg|deskew|maxpfx|portup|remote|signal|updown|alarm|align|error|light|local|major|minor|optic|power|clns|evpn|flap|hsrp|lldp|move|post|vrrp|vtep| : |ber|hmm|los|nve|pre') {
+    .cx_admission = { "v": "ce973109b960", "by": "marker" }
   }
 }
 

@@ -8,9 +8,9 @@
 # whose two sides disagree. So a green run here means the VRL and the
 # Python screen admit exactly the same lines.
 #
-#   rules_hash : ed440fddf3efca3b99f5e40cddc046ab44096c65191f1b5ba2d2fba4fcf055c5
-#   cases      : 200 (194 fixture corpus and vendor packs + 6 hand)
-#   admitted   : 131 / 200 (69 correctly rejected)
+#   rules_hash : ce973109b9606f7870eb8be2b27294aa7a7c921db85919fa2a041d144a1c4ffb
+#   cases      : 212 (206 fixture corpus and vendor packs + 6 hand)
+#   admitted   : 135 / 212 (77 correctly rejected)
 #
 # Run (from the repo root). Keep every dollar sign out of this file:
 # Vector interpolates environment variables in the raw config TEXT,
@@ -44,7 +44,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 02: %BGP-5-ADJCHANGE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -59,7 +59,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 03: %BGP-5-ADJCHANGE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -74,7 +74,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 04: %OSPF-5-ADJCHG"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -89,7 +89,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 05: %LINK-3-UPDOWN"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -104,7 +104,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 06: %LINEPROTO-5-UPDOWN"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -119,7 +119,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 07: %SYS-5-CONFIG_I"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -148,7 +148,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 09: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -163,7 +163,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 10: %SPANTREE-6-INTERFACE_DEL"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -178,7 +178,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 11: %SPANTREE-6-INTERFACE_STATE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -193,7 +193,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 12: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -208,7 +208,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 13: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -223,7 +223,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 14: traffic/forward"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -266,7 +266,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 17: -"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -309,7 +309,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 20: %BGP-5-NBR_RESET"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -324,7 +324,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 21: %BGP-4-MAXPFX"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -339,7 +339,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 22: %BGP-4-MAXPFXEXCEED"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -354,7 +354,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 23: rpd"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -369,7 +369,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 24: %BGP-3-NOTIFICATION"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -384,7 +384,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 25: rpd"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -399,7 +399,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 26: %SPANTREE-5-TOPOTRAP"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -414,7 +414,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 27: %SPANTREE-5-TOPOTRAP"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -429,7 +429,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 28: %SW_MATM-4-MACFLAP_NOTIF"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -444,7 +444,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "fixture 29: %L2FM-4-L2FM_MAC_MOVE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -459,7 +459,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "severity-floor line with no marker admits by severity"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -475,7 +475,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "notice line with a typed marker admits by marker"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -491,7 +491,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "notice line with no marker is not admitted"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -521,7 +521,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "no severity anywhere and no marker is not admitted"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -553,7 +553,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an XR link fault parses and is typed as IOS would type it"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -569,7 +569,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an XR prefix-limit warning is BGP churn, not a session down"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -585,7 +585,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an XR error no row types reaches the engine below the floor"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -601,7 +601,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an IOS shutdown line carries the admin cause and cannot open"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -617,7 +617,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an IOS XR shutdown line carries the admin cause and cannot open"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -633,7 +633,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an IOS XR CHANGED line that is not a shutdown gets no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -649,7 +649,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS administrative down carries the admin cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -665,7 +665,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS link failure carries the fault cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -681,7 +681,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS port-channel with no members is down with an unknown cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -697,7 +697,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS interface up"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -713,7 +713,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS speed change stays a log"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -729,7 +729,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: an NX-OS BFD session down is a below-floor BFD flap"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -745,7 +745,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_ios: the three-part IOS form is not the XR grammar"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -776,7 +776,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a warning line with a hyphenated host"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -792,7 +792,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a notice line does not lift above the wire level"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -808,7 +808,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a critical line lifts to critical"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -824,7 +824,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a critical line with no typed row still alarms"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -840,7 +840,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a notification takes its identity from the event name"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -856,7 +856,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a controller notification, documented shape"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -872,7 +872,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the IOS-XE shape parses under the same mechanism"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -888,7 +888,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a critical crossing and its notification twin make one signal, not two"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -904,7 +904,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: cpu above 75 percent stays below the floor"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -920,7 +920,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: cpu back to normal is a clear"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -936,7 +936,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a vBond lookup failure is a below-floor alarm, not a DNS symptom"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -952,7 +952,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the same failure from the other daemon"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -968,7 +968,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the resolver reports the same failure in its own words"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -984,7 +984,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a vBond lookup success emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1090,7 +1090,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the default gateway reachable again shares the monitor's key, and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1121,7 +1121,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the default gateway unreachable is the same below-floor alarm"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1137,7 +1137,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the gateway words from a daemon outside the resolver are not classified"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1153,7 +1153,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the configuration manager unable to reach a routing daemon keeps its err, below the floor"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1169,7 +1169,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the forwarding plane keeping a port's default MAC is filed, and emits nothing at err"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1185,7 +1185,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the forwarding plane updating a port names the interface and keeps the status numbers"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1246,7 +1246,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: another forwarding-plane error still reaches the net"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1262,7 +1262,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the IOS XE banner version line names the release, and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1323,7 +1323,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a classic IOS banner with no release train is not called IOS XE"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1354,7 +1354,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a control connection going down, documented shape"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1370,7 +1370,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a control connection coming up is the clear"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1386,7 +1386,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a BFD session going down, documented shape"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1402,7 +1402,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a BFD session coming up is the clear"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1418,7 +1418,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the same FTMD id with different text is not the benign line"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1434,7 +1434,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the SNMP agent failing our interfaceTable walk is a poll record, not an alarm"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1449,7 +1449,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the SNMP agent instrumentation trace of the same walk is a poll record"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1464,7 +1464,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a genErr answer to our poll is a poll record, digits masked"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1479,7 +1479,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: the same agent failing another table is still a poll record, and keeps its alarm"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1494,7 +1494,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack cisco_sdwan: a process-table header is the snapshot's representative row"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1705,6 +1705,175 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack dell_dnos6: a DNOS 6 CLI login names the user and the source"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "cmd_logger_api.c(83) 29333 %% NOTE CLI:10.1.3.211:administrator:User  logged in"
+          appname: "CMDLOGGER"
+          severity: "notice"
+          hostname: "dn1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack dell_dnos6: a DNOS 6 startup-config change parses with its subsystem"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "traputil.c(721) 29331 %% NOTE 'startup-config' has changed."
+          appname: "TRAPMGR"
+          severity: "notice"
+          hostname: "dn1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack dell_dnos6: a DNOS 6 unit manager line parses"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "unitmgr.c(6905) 29330 %% INFO Configuration propagation successful for config type 0"
+          appname: "UNITMGR"
+          severity: "info"
+          hostname: "dn1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack hpe_comware: a Comware V5 link down is answered as IOS LINK-3-UPDOWN, port named"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is DOWN."
+          appname: "unknown"
+          severity: "err"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
+  - name: "pack hpe_comware: a Comware V7 physical state change names the interface"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10IFNET/3/PHY_UPDOWN: Physical state on the interface GigabitEthernet1/0/1 changed to down."
+          appname: "unknown"
+          severity: "err"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
+  - name: "pack hpe_comware: a Comware link up is the same row with state up, at warn"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is UP."
+          appname: "unknown"
+          severity: "err"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
+  - name: "pack hpe_comware: the line protocol after a link change is the untagged protocol line, warn"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10IFNET/5/LINEPROTO_UPDOWN: Line protocol on the interface Vlan-interface1 is DOWN."
+          appname: "unknown"
+          severity: "notice"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
+  - name: "pack hpe_comware: a Comware SSH login names the user and the source"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10SSH/6/SSH_LOGIN: STEL user user1 (IP: 192.0.2.10) logged in successfully."
+          appname: "unknown"
+          severity: "info"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack hpe_comware: a Comware VTY login carrying the log-host location field"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; VTY logged in from 192.168.1.26"
+          appname: "unknown"
+          severity: "info"
+          hostname: "Sysname"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack hpe_comware: a Comware login refusal is a security audit record"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10SHELL/5/SHELL_LOGINFAIL: TELNET user failed to log in from 12.130.2.19(000f-e239-1f97) on VTY0."
+          appname: "unknown"
+          severity: "notice"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack hpe_comware: an OSPF neighbour change parses through the generic row"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "%%10OSPF/5/OSPF_NBR_CHG: OSPF 1 Neighbor 2.2.2.2 (Vlan-interface100) from Full to Down."
+          appname: "unknown"
+          severity: "notice"
+          hostname: "sw-core1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
   - name: "pack juniper_junos: a structured-data frame takes its tag from MSGID"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1735,7 +1904,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a BGP session that never came up states no transition"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1751,7 +1920,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: an OSPF neighbour down names the neighbour and the logical interface"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1767,7 +1936,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: an OSPF neighbour on its way up states no adjacency yet"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1783,7 +1952,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: an IS-IS adjacency lost names the neighbour system"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1799,7 +1968,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: an IS-IS adjacency formed is the up side"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1815,7 +1984,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a link down with the port administratively down is an admin change"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1831,7 +2000,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a link down with the port administratively up names no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1847,7 +2016,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a link up"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1863,7 +2032,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a completed commit is a change, at info"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1879,7 +2048,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack juniper_junos: a tag-shaped line from a program that is not a Junos daemon is not claimed"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1910,7 +2079,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux port whose transceiver went down carries the fault cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1926,7 +2095,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux port down for a lower layer names no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1942,7 +2111,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux subinterface shut by the operator carries the admin cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1958,7 +2127,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux subinterface down because its port is down names no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1974,7 +2143,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux port up states no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -1990,7 +2159,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_srlinux: an SR Linux event of another application is not this grammar"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2006,7 +2175,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: the documented SYSTEM line parses and reads its severity word"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2022,7 +2191,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a BGP session moving down is a below-floor adjacency change"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2038,7 +2207,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: the BGP4-MIB twin of the same transition, set to major by the operator, is critical"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2054,7 +2223,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a BGP session established is up, not a notification teardown"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2070,7 +2239,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a received NOTIFICATION closes the session"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2086,7 +2255,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an OSPF neighbour dropping to down names the neighbour router id"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2102,7 +2271,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an OSPF neighbour in an intermediate state is info"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2118,7 +2287,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an IS-IS adjacency change goes to the IS-IS row, and down opens as it does for every vendor"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2134,7 +2303,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an interface that is not operational is a below-floor link change with no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2150,7 +2319,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an interface operational again is the up side"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2166,7 +2335,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a power supply input failure is critical and names the supply"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2182,7 +2351,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a fan failure is critical"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2198,7 +2367,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: the fan clear is cleared and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2229,7 +2398,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a memory allocation failure is major"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2245,7 +2414,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a port error is a below-floor alarm that keeps the port as an attribute"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2261,7 +2430,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: an Ethernet alarm clear at minor is not a new alarm"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2277,7 +2446,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a configuration modification is a change, at info"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2293,7 +2462,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a CLI configuration line is a change from a named source"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2309,7 +2478,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a successful configuration save is counted and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2325,7 +2494,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: a configuration save that could not write is major, so it may alarm on its own"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2341,7 +2510,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack nokia_sros: the same words with no Nokia frame are not this pack's"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2357,7 +2526,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack sonic: an orchagent port down is a below-floor link change with no cause"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2373,7 +2542,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack sonic: an orchagent port up"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2389,7 +2558,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack sonic: the same words from another program are not this pack's"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2405,7 +2574,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack sonic: a portmgrd shutdown carries the admin cause and cannot open"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2421,7 +2590,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack sonic: a portmgrd startup parses and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2452,7 +2621,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: a line that looks like the old RFC 5424 remnant is left alone"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2663,7 +2832,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: a NETCONF transport session"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2673,6 +2842,21 @@ tests:
           appname: "confd"
           severity: "notice"
           hostname: "vEdge-1"
+    outputs:
+      - extract_from: syslog_admission_stamp
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.cx_admission, null, "expected NO admission stamp")
+  - name: "pack standard: a NETCONF transport session with the user in quotes (ConfD 20.x) names the user without them"
+    inputs:
+      - insert_at: syslog_admission_stamp
+        type: log
+        log_fields:
+          message: "netconf id=225633 new tcp session for user \"vmanage-admin\" from 10.255.255.1"
+          appname: "confd"
+          severity: "notice"
+          hostname: "vEdge-52"
     outputs:
       - extract_from: syslog_admission_stamp
         conditions:
@@ -2709,7 +2893,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: an SSH login accepted"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2755,7 +2939,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: a rejected password is not audit noise"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2816,7 +3000,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: another sshd error is not the banner probe"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2832,7 +3016,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: a tagged line whose mnemonic is the only severity it states"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2848,7 +3032,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: a mnemonic later in the line sets no severity"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2879,7 +3063,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: an error line with no pack stays below the open floor"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2895,7 +3079,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: the syslog daemon starting is a lifecycle record, and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -2926,7 +3110,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: an NTP clock step carries the step as a typed metric, and emits nothing"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3047,7 +3231,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: the timer words from another app are not the benign kernel line"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3063,7 +3247,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: another kernel warning still reaches the net"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3079,7 +3263,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: an OSPF DD packet ignored in 2-Way names the neighbour, and emits nothing at warning"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3095,7 +3279,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: an OSPF DD packet discarded in Init is not the benign line and still reaches the net"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3111,7 +3295,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "severity", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
   - name: "pack standard: the OSPF words from another app are not classified"
     inputs:
       - insert_at: syslog_admission_stamp
@@ -3127,4 +3311,4 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
-              assert_eq!(.cx_admission.v, "ed440fddf3ef", "wrong rules_hash stamp")
+              assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")

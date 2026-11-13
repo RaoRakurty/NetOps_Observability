@@ -521,7 +521,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-11-sdwan-controller-token-confd: the merge of the two above; the V1 pool has neither line.
     # 2026-11-12-link-cause-srlinux-sonic: tracker 388 SR Linux and SONiC link rows; the V1 pool
     # has neither format.
-    assert parser_rules.PARSER_REV == "2026-11-12-link-cause-srlinux-sonic", (
+    # 2026-11-13-vendor-packs-wave2: tracker 387 Comware and DNOS 6 packs; the V1 pool has
+    # neither format, and its IOS link lines keep their port.
+    assert parser_rules.PARSER_REV == "2026-11-13-vendor-packs-wave2", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 
