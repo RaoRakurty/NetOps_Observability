@@ -460,6 +460,7 @@ func TestEveryParaphraseReachesItsRoutesArm(t *testing.T) {
 		items = append(items, item{it.Q, PlanRouteModule, it.Module})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].q < items[j].q })
+	kb := LoadKB()
 	misses := map[string]int{}
 	for _, it := range items {
 		reply := "ROUTE: " + it.route
@@ -468,6 +469,7 @@ func TestEveryParaphraseReachesItsRoutesArm(t *testing.T) {
 		}
 		llm := &plannerLLM{route: func(string) string { return reply }}
 		o := plannerOrch(llm)
+		o.KB = kb
 		o.NLQuery = func(context.Context, Principal, string, DataOpts) (DataAnswer, error) {
 			return DataAnswer{Status: DataAnswered, Intent: "data_query", Text: "rows"}, nil
 		}
@@ -485,6 +487,9 @@ func TestEveryParaphraseReachesItsRoutesArm(t *testing.T) {
 			want = ArmClassic
 			if it.route == PlanRouteProduct && arm == ArmExplain {
 				want = ArmExplain // an authored explanation answers first
+			}
+			if it.route == PlanRoutePlaybook && !o.playbookFor(it.q) {
+				want = ArmModel // no curated guidance: the model answers, never a dead end
 			}
 		}
 		if arm != want || ans.Routing == nil || ans.Routing.Reason != RouteReasonPlanner {

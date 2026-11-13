@@ -146,6 +146,10 @@ type PlannerChoice struct {
 	Route  string
 	Skill  string // PlanRouteTroubleshoot: a compiled method's name ("" = let the matcher pick)
 	Module string // PlanRouteModule: one of the module routes
+	// Terms is the model's optional restatement of the question in Correlix's
+	// own words (validated by parsePlannerTerms). The arms search with it
+	// only after the operator's own words missed.
+	Terms string
 }
 
 const plannerSystem = `You route one operator question for Iris, the assistant of the Correlix network operations platform. Read what the operator MEANS, however it is phrased, misspelt or abbreviated, and choose exactly one route from the ROUTES list in the message.
@@ -156,6 +160,8 @@ When the route is troubleshoot, add one line naming the best method from METHODS
 SKILL: <method name>
 When the route is module, add one line naming the module from MODULES:
 MODULE: <module id>
+Optionally, end with one line restating what the operator means in Correlix's own words — product terms, metric names or names from VOCABULARY — at most 10 words, no addresses:
+TERMS: <words>
 Write nothing else.`
 
 var (
@@ -173,7 +179,20 @@ func (o *Orchestrator) parsePlannerReply(reply string, pageKnown bool) (PlannerC
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) == 0 || len(lines) > 2 {
+	if len(lines) == 0 || len(lines) > 3 {
+		return PlannerChoice{}, false
+	}
+	// An optional last TERMS line (the restatement); anything else on a third
+	// line, or a malformed TERMS line, makes the reply invalid.
+	terms := ""
+	if n := len(lines); n > 1 && strings.HasPrefix(lines[n-1], "TERMS:") {
+		t, ok := parsePlannerTerms(lines[n-1])
+		if !ok {
+			return PlannerChoice{}, false
+		}
+		terms, lines = t, lines[:n-1]
+	}
+	if len(lines) > 2 {
 		return PlannerChoice{}, false
 	}
 	m := rePlannerRoute.FindStringSubmatch(lines[0])
@@ -208,6 +227,7 @@ func (o *Orchestrator) parsePlannerReply(reply string, pageKnown bool) (PlannerC
 	if ch.Route == PlanRouteModule && ch.Module == "" {
 		return PlannerChoice{}, false
 	}
+	ch.Terms = terms
 	return ch, true
 }
 
@@ -311,10 +331,14 @@ func (o *Orchestrator) plannerGlossary(ctx context.Context, p Principal) string 
 			lines = append(lines, "- "+promptLine(discoveryAnswer(inv)))
 		}
 	}
-	if len(lines) == 0 {
-		return ""
+	out := ""
+	if len(lines) > 0 {
+		out = strings.Join(lines, "\n") + "\n"
 	}
-	return strings.Join(lines, "\n") + "\n"
+	if g := o.glossaryText(ctx, p); g != "" {
+		out += g + "\n"
+	}
+	return out
 }
 
 // planRoute asks the planner which arm answers the question. ok=false means no
@@ -537,12 +561,21 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 			o.routed(ArmData, ans.Mode)
 			return stampPlanned(ans), true, nil
 		}
+		if ch.Terms != "" { // the grammar may read the restatement where it could not read the words
+			if ans, handled := o.answerData(ctx, p, ch.Terms, dp, []string{readAsNote(ch.Terms)}); handled {
+				o.routed(ArmData, ans.Mode)
+				return stampPlanned(ans), true, nil
+			}
+		}
 		// The grammar and the model compile could not express it: the model
 		// answers it over the caller's data instead.
 		return o.answerPlanned(ctx, p, question, uiContext, PlannerChoice{Route: PlanRouteNetwork})
 	case PlanRouteTroubleshoot:
 		if o.Skills != nil {
 			match, ok := SelectSkill(o.Skills, question, plan)
+			if !ok && ch.Terms != "" {
+				match, ok = SelectSkill(o.Skills, ch.Terms, plan)
+			}
 			if sk, found := o.Skills.Get(ch.Skill); found && plannerOffers(sk) {
 				match, ok = SkillMatch{Skill: sk, Score: 1, Reason: "chosen by the AI model planner"}, true
 			}
@@ -561,6 +594,11 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 		}
 		mp := Plan{Intent: mr.intent, Modules: []string{mr.module}, Mode: mr.mode, Entities: ent, Freshness: mr.fresh, Tools: mr.tools}
 		ans, err := o.answerClassic(ctx, p, question, mp, uiContext)
+		if err == nil && moduleNotBuilt(ans) {
+			// No module tools in this deployment: the model answers over the
+			// caller's data and tools instead of a "not in this build" decline.
+			return o.answerPlanned(ctx, p, question, uiContext, PlannerChoice{Route: PlanRouteNetwork})
+		}
 		return stampPlanned(ans), true, err
 	case PlanRoutePageHelp:
 		if ans, handled := o.pageHelp(uiContext); handled {
@@ -572,6 +610,33 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 		if ans, handled := o.answerExplain(question, uiContext); handled {
 			o.routed(ArmExplain, ans.Mode)
 			return stampPlanned(ans), true, nil
+		}
+		if ans, handled := o.answerProductPlanned(question, ch.Terms, uiContext); handled {
+			o.routed(ArmClassic, ans.Mode)
+			return stampPlanned(ans), true, nil
+		}
+		// Not in the docs: a "how do I…" question may still name a feature
+		// whose page the finder knows.
+		if ans, handled := o.answerFeature(question, ch.Terms); handled {
+			o.routed(ArmClassic, ans.Mode)
+			return stampPlanned(ans), true, nil
+		}
+	case PlanRouteNavigation:
+		if ans, handled := o.answerNavigationPlanned(question, ch.Terms, uiContext); handled {
+			o.routed(ArmClassic, ans.Mode)
+			return stampPlanned(ans), true, nil
+		}
+	case PlanRoutePlaybook:
+		if !o.playbookFor(question) && !o.playbookFor(ch.Terms) {
+			// No curated guidance for it: the model answers (the agent loop
+			// can search the playbooks and vendor knowledge itself).
+			return o.answerPlanned(ctx, p, question, uiContext, PlannerChoice{Route: PlanRouteNetwork})
+		}
+		if !o.playbookFor(question) {
+			cp, _ := planForRoute(PlanRoutePlaybook, ent)
+			ans, err := o.answerClassic(ctx, p, ch.Terms, cp, uiContext)
+			ans.Disclaimers = append(ans.Disclaimers, readAsNote(ch.Terms))
+			return stampPlanned(ans), true, err
 		}
 	case PlanRouteOutOfScope:
 		o.routed(ArmCapability, ModeUnavailable)

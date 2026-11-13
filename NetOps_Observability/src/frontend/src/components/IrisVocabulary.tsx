@@ -23,6 +23,7 @@ import { httpFailure, operatorError } from "../lib/errors";
 import QueryCorrection from "../iris/QueryCorrection";
 import FilterChipBar, { type FilterChipChange } from "../iris/FilterChipBar";
 import RecentQuestions from "../iris/RecentQuestions";
+import IrisMissTriage from "../iris/IrisMissTriage";
 import DecisionLedger from "../iris/DecisionLedger";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
@@ -515,6 +516,10 @@ export default function IrisVocabulary() {
       <div style={stepHead}>5. How Iris decided</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Every Iris answer, step by step: the plan, each policy check and tool run, and the model that answered. Workspace admins only.</p>
       <DecisionLedger refreshKey={asked} />
+
+      <div style={stepHead}>6. What Iris could not answer</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>Questions Iris left unanswered, grouped by why — a missing tool, missing data, the wrong route or reading, wording, or the AI model not answering. Workspace admins only.</p>
+      <IrisMissTriage refreshKey={asked} />
     </div>
   );
 }

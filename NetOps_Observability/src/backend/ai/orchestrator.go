@@ -115,6 +115,13 @@ type Orchestrator struct {
 	// those decisions (nil = no cache: every question is planned).
 	ModelFirst bool
 	PlanCache  *PlannerCache
+	// Glossary returns the caller's generated vocabulary (internal/irisglossary:
+	// the names of their own sites, devices, circuits, applications, aliases,
+	// vendors and roles, plus the catalogue's metric terms), rendered and
+	// capped, built ONLY from the principal's own scope. The planner, the
+	// grounded model answer and the agent loop read it as fenced data so a
+	// nickname or alias resolves without phrase lists. nil = no vocabulary.
+	Glossary func(ctx context.Context, p Principal) string
 	// forceTopology: the planner routed a question about how the network is
 	// built, so the grounded model answer carries the topology evidence.
 	forceTopology bool
@@ -661,7 +668,7 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 	if len(allowed) == 0 {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I can't answer that for your current access or enabled modules.",
+			Text:      AccessDeniedText,
 			Citations: []Citation{}, Disclaimers: nonEmpty(disc, "No module is available to answer this question."),
 		}, nil
 	}
@@ -1338,10 +1345,10 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		// Distinguish a real error (tool exists, query failed) from a not-yet-built
 		// module — conflating them would mislead (the operator's flagged exactly this).
 		text := mh.DisplayName + " questions aren't answerable in this build yet. I can summarize what's going on right now or explain a specific problem."
-		note := "This module's AI tools land in a later increment."
+		note := ModuleNotBuiltNote
 		if found > 0 && errored > 0 {
 			text = "I couldn't read " + strings.ToLower(mh.DisplayName) + " right now — the data source didn't respond. Try again shortly."
-			note = "Module read failed (transient); not a coverage gap."
+			note = moduleIOFailNote
 		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
@@ -1507,7 +1514,7 @@ func (o *Orchestrator) answerNavigation(question string, plan Plan, disc []strin
 	if len(hits) == 0 {
 		return Answer{
 			Mode: ModeProductNavigationHelp, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I couldn't match that to a Correlix feature. Try naming the area (correlations, topology, reports, integrations, flows, logs, devices).",
+			Text:      NoFeatureMatchText,
 			Citations: []Citation{}, Disclaimers: disc,
 		}
 	}
@@ -1546,7 +1553,7 @@ func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answe
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
 			Text:      "I don't have a curated playbook matching that yet. Name the protocol or symptom — e.g. 'BGP flap', 'packet loss', 'ISP latency', 'MTU', 'asymmetric routing'.",
-			Citations: []Citation{}, Disclaimers: append(disc, "No matching playbook."),
+			Citations: []Citation{}, Disclaimers: append(disc, NoPlaybookNote),
 		}
 	}
 	top := hits[0].Playbook
@@ -1839,7 +1846,7 @@ func (o *Orchestrator) answerProductOnPage(question string, plan Plan, disc []st
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
 		Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
 		Citations: []Citation{}, ModeBadges: []string{"Product help"},
-		Disclaimers: append(disc, "No matching documentation — nothing was invented."),
+		Disclaimers: append(disc, NoDocsNote),
 	}
 }
 
