@@ -73,7 +73,8 @@ const (
 // RoutePaths and RouteReasons are the closed vocabularies (metrics, tests).
 var (
 	RoutePaths   = []string{RoutePathDeterministic, RoutePathModel, RoutePathModelUnavailable}
-	RouteReasons = []string{RouteReasonCovered, RouteReasonCompoundCovered, RouteReasonMiss, RouteReasonCompound, RouteReasonProblemContext}
+	RouteReasons = []string{RouteReasonCovered, RouteReasonCompoundCovered, RouteReasonMiss, RouteReasonCompound, RouteReasonProblemContext,
+		RouteReasonPlanner, RouteReasonPlannerUnavailable}
 )
 
 // ScopeFacts is the caller's own scope, stamped by the server from the
@@ -334,7 +335,7 @@ func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal, question 
 			ev = append(ev, EvidenceItem{CitationID: "inventory:devices", Kind: "inventory", Text: discoveryAnswer(inv)})
 		}
 	}
-	if reTopologyQuestion.MatchString(question) {
+	if o.forceTopology || reTopologyQuestion.MatchString(question) {
 		ev = append(ev, o.topologyEvidence(ctx, p, sc)...)
 	}
 	if o.DS != nil {
