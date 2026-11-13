@@ -2,41 +2,41 @@
 // Copyright 2026 Correlix
 
 // RightNow — the default tab of Explore → Flows: what the network is
-// carrying now, link by link, and — for the link the operator picks — what
-// that traffic was, who sent it, and which problems overlapped it.
+// carrying, link by link, and — for the link the operator picks — what that
+// traffic was, what changed against the window before, who sent it, and which
+// problems overlapped it.
 //
-// Sources (all existing APIs, nothing new):
-//   · busiest links   — /api/flows/topn?by=in_if and ?by=out_if (interface
-//                       names from the device's own IF-MIB via iface_names),
-//                       the same pair over twice the window for "change";
+// Sources (P2, tracker 400 — exact windows, one call per view):
+//   · busiest links   — /api/flows/links: in/out bytes, the previous window
+//                       from the same scan, interface name, router, site and
+//                       whether the router exports each direction;
 //   · utilisation     — the interface counters, through lib/ifUtilisation
 //                       (the queries Device Monitoring and Interface
 //                       Performance use);
-//   · link in / out   — /api/flows/timeseries with device + in_if (entering)
-//                       and device + out_if (leaving);
+//   · link in / out   — /api/flows/links/series, zero-filled buckets;
+//   · what changed    — /api/flows/links/movers (talkers, apps, ports);
 //   · talkers         — /api/flows/top with device + if;
 //   · problems        — /api/correlations, matched on the devices each
 //                       problem itself lists.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import ReactECharts from "../../components/EChart";
-import { api, type Device } from "../../services/api";
+import { api, type Device, type FlowMover, type FlowMoversBy } from "../../services/api";
 import { operatorError } from "../../lib/errors";
 import { buildDeviceNames } from "../../lib/deviceNames";
 import { fmtTime } from "../../lib/time";
 import DataTable, { type Column } from "../../components/DataTable";
 import AskIris from "../../components/AskIris";
-import { StatStrip, Stat } from "../../components/ui";
+import { Segmented, StatStrip, Stat } from "../../components/ui";
 import { fmtBps, fmtBytes, escapeHtml } from "../../components/board/panels";
 import { chartBase, axisStyle, timeAxisTicks } from "../../theme/charts";
 import { chartAnimation, flowColor } from "../../theme/flowTokens";
 import { friendlyProblemId, signatureNocTitle } from "../../components/rca/labels";
 import { ifRateBps, ifSpeedBps, deviceAnySelector } from "../../lib/ifUtilisation";
 import { FlowEmpty, FlowSamplingNote } from "../flowEmpty";
-import type { TopNRow } from "../flowNames";
 import {
-  attachDevices, attachUtil, changeLabel, fmtPctOrDash, linkLabel, mergeLinks, parseCorrTs,
-  problemsForLink, utilTone, withPrevious, type LinkRow, type FlowsWindow,
+  attachUtil, changeLabel, directionNote, fmtPctOrDash, linkLabel, linkRowKey, linksFromApi, moverChange, moverTone,
+  problemsForLink, samplingNote, seriesRates, utilTone, windowQuery, type LinkRow, type FlowsWindow,
 } from "./flowsModel";
 import { ConversationsSection, TopNPanel, servicePortLabel, type FlowQuery } from "./talkingSections";
 import { useTicked } from "./useTicked";
@@ -54,55 +54,63 @@ type Props = {
   onTalkers: (l: { exporter: string; ifIndex: string }) => void;
 };
 
+/** The end of the window, and its length, for the interface-counter reads. */
+function counterSpan(win: FlowsWindow): { end: number; span: number; past: boolean } {
+  const q = windowQuery(win);
+  if (q.from !== undefined && q.to !== undefined) {
+    const end = Math.floor(q.to / 1000);
+    return { end, span: Math.max(300, Math.round((q.to - q.from) / 1000)), past: Date.now() - q.to > 120_000 };
+  }
+  return { end: Math.floor(Date.now() / 1000), span: win.since, past: false };
+}
+
+/** One direction's cell: "Not exported", or the bytes with a "reads low" marker. */
+function DirCell({ row, dir }: { row: LinkRow; dir: "in" | "out" }) {
+  const missing = dir === "in" ? row.inMissing : row.outMissing;
+  const note = directionNote(row, dir);
+  if (missing) return <span className="tr-quiet" title={note ?? undefined}>Not exported</span>;
+  const v = dir === "in" ? row.inBytes : row.outBytes;
+  return (
+    <span title={note ?? undefined}>
+      {fmtBytes(v)}
+      {note && <span className="tr-reads-low" aria-label={note}> ≈</span>}
+    </span>
+  );
+}
+
 export default function RightNow({ win, ftype, includePlatform, selected, onSelect, onTalkers }: Props) {
   const since = win.since;
+  const wq = windowQuery(win);
+  const wkey = JSON.stringify(wq);
   const base = includePlatform ? { traffic: "all" } : {};
   const fkey = JSON.stringify(base);
 
   const devices = useTicked<Device[]>(() => api.devices(), []);
   const names = useMemo(() => buildDeviceNames(devices.data ?? []), [devices.data]);
 
-  const cur = useTicked(
-    () => Promise.all([
-      api.flowsTopN("in_if", since, LINKS_LIMIT, ftype, base),
-      api.flowsTopN("out_if", since, LINKS_LIMIT, ftype, base),
-    ]),
-    [since, ftype, fkey],
-  );
-  const prev = useTicked(
-    () => Promise.all([
-      api.flowsTopN("in_if", since * 2, LINKS_LIMIT * 2, ftype, base),
-      api.flowsTopN("out_if", since * 2, LINKS_LIMIT * 2, ftype, base),
-    ]),
-    [since, ftype, fkey],
-  );
+  const cur = useTicked(() => api.flowsLinks(wq, LINKS_LIMIT, ftype, base), [wkey, ftype, fkey]);
 
-  const flowLinks = useMemo(() => {
-    const [i, o] = cur.data ?? [];
-    const now = mergeLinks((i?.data as TopNRow[]) ?? [], (o?.data as TopNRow[]) ?? []);
-    if (!prev.data) return now;
-    const [pi, po] = prev.data;
-    return withPrevious(now, mergeLinks((pi?.data as TopNRow[]) ?? [], (po?.data as TopNRow[]) ?? []));
-  }, [cur.data, prev.data]);
-
-  const withDevices = useMemo(() => attachDevices(flowLinks, devices.data ?? [], names), [flowLinks, devices.data, names]);
+  const withDevices = useMemo(
+    () => linksFromApi(cur.data?.links).map((l) => (l.deviceId && names.get(l.deviceId) ? { ...l, deviceName: names.get(l.deviceId) } : l)),
+    [cur.data, names],
+  );
   const deviceIds = useMemo(() => [...new Set(withDevices.map((l) => l.deviceId).filter((x): x is string => !!x))].sort(), [withDevices]);
   const sel = deviceAnySelector(deviceIds);
+  const cs = counterSpan(win);
 
   // Interface counters for the devices in the table: one range query per
-  // direction (sparklines + now) and one for the speeds.
+  // direction (sparklines + the value at the end of the window) and the speeds.
   const counters = useTicked(
     async () => {
-      const end = Math.floor(Date.now() / 1000);
-      const step = Math.max(60, Math.round(since / 30));
+      const step = Math.max(60, Math.round(cs.span / 30));
       const [i, o, sp] = await Promise.all([
-        api.metricsQueryRange(ifRateBps(sel, "in"), end - since, end, step),
-        api.metricsQueryRange(ifRateBps(sel, "out"), end - since, end, step),
+        api.metricsQueryRange(ifRateBps(sel, "in"), cs.end - cs.span, cs.end, step),
+        api.metricsQueryRange(ifRateBps(sel, "out"), cs.end - cs.span, cs.end, step),
         api.metricsQuery(ifSpeedBps(sel)),
       ]);
       return { i: i.data?.result ?? [], o: o.data?.result ?? [], sp: sp.data?.result ?? [] };
     },
-    [sel, since],
+    [sel, cs.span, cs.past ? cs.end : 0],
     sel !== "",
   );
   const links = useMemo(
@@ -125,31 +133,38 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
   const selRow = links.find((l) => l.key === selected);
   const q = { since, ftype, filters: base, fkey };
   const err = cur.error ? operatorError(cur.error, "Busiest links could not be read for this window.") : null;
+  const winEcho = cur.data?.window;
+  const respSampling = samplingNote(cur.data?.basis.sampling);
+  const utilWord = cs.past ? "at the end of this window" : "now";
 
   const cols = useMemo<Column<LinkRow>[]>(
     () => [
       {
         key: "link", header: "Link", width: "30%", sortable: true, text: (l) => linkLabel(l),
         render: (l) => (
-          <span title={`${l.exporter} · interface index ${l.ifIndex}`}>
+          <span title={`${l.exporter} · interface index ${l.ifIndex}${l.tenantId ? ` · tenant ${l.tenantId}` : ""}`}>
             {linkLabel(l)}
-            {l.speedBps ? <span className="tr-subline">{fmtBps(l.speedBps)} link</span> : null}
+            {(l.speedBps || l.site) && (
+              <span className="tr-subline">{[l.site, l.speedBps ? `${fmtBps(l.speedBps)} link` : ""].filter(Boolean).join(" · ")}</span>
+            )}
           </span>
         ),
       },
-      { key: "in", header: <span className="tr-dir in">In</span>, align: "right", sortable: true, sortValue: (l) => l.inBytes, render: (l) => fmtBytes(l.inBytes) },
-      { key: "out", header: <span className="tr-dir out">Out</span>, align: "right", sortable: true, sortValue: (l) => l.outBytes, render: (l) => fmtBytes(l.outBytes) },
+      { key: "in", header: <span className="tr-dir in">In</span>, align: "right", sortable: true, sortValue: (l) => (l.inMissing ? -1 : l.inBytes), render: (l) => <DirCell row={l} dir="in" /> },
+      { key: "out", header: <span className="tr-dir out">Out</span>, align: "right", sortable: true, sortValue: (l) => (l.outMissing ? -1 : l.outBytes), render: (l) => <DirCell row={l} dir="out" /> },
       {
         key: "util", header: "Utilisation", align: "right", sortable: true, sortValue: (l) => l.utilPct ?? -1,
-        render: (l) => <UtilMeter pct={l.utilPct} title={l.utilPct === undefined ? "Speed not reported" : "Busier direction, now"} />,
+        render: (l) => <UtilMeter pct={l.utilPct} title={l.utilPct === undefined ? "Speed not reported" : `Busier direction, ${utilWord}`} />,
       },
       {
         key: "change", header: "Change", align: "right", sortable: true, sortValue: (l) => l.change ?? -Infinity,
-        render: (l) => <span title="Against the previous window of the same length">{changeLabel(l)}</span>,
+        render: (l) => (
+          <span title={l.prevBytes === null ? "The window before is not known" : "Against the previous window of the same length"}>{changeLabel(l)}</span>
+        ),
       },
       { key: "trend", header: "Trend", width: 128, render: (l) => <Sparkline values={l.spark} label={`Trend for ${linkLabel(l)}`} /> },
     ],
-    [],
+    [utilWord],
   );
 
   return (
@@ -178,7 +193,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
           <DataTable<LinkRow>
             rows={links}
             columns={cols}
-            rowKey={(l) => l.key}
+            rowKey={linkRowKey}
             rowHeight={48}
             height={Math.min(520, 40 + links.length * 48)}
             ariaLabel="Busiest links"
@@ -188,6 +203,17 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
           />
         )}
         <p className="mini-meta tr-note"><FlowSamplingNote q={q} /></p>
+        {respSampling && <p className="mini-meta tr-note" data-testid="links-sampling">{respSampling}</p>}
+        {winEcho?.starts_before_retention && (
+          <p className="mini-meta tr-note" data-testid="links-retention">
+            Part of this window is older than the {winEcho.retention_days} days flow records are kept, so its totals read low.
+          </p>
+        )}
+        {links.some((l) => directionNote(l, "in") || directionNote(l, "out")) && (
+          <p className="mini-meta tr-note" data-testid="links-reads-low">
+            ≈ marks a figure that reads low: some of that router's flow records name no interface for that direction. Hover a figure for the share.
+          </p>
+        )}
       </div>
 
       {selected && (
@@ -200,6 +226,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
           win={win}
           ftype={ftype}
           base={base}
+          utilWord={utilWord}
           onClose={() => onSelect(null)}
           onTalkers={onTalkers}
         />
@@ -210,9 +237,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
 
 // ── one link ─────────────────────────────────────────────────────────────────
 
-type TsRow = { bucket: string; bytes_total: number };
-
-function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, onTalkers }: {
+function LinkDetail({ linkKey, row, devices, names, win, ftype, base, utilWord, onClose, onTalkers }: {
   linkKey: string;
   row?: LinkRow;
   devices: Device[];
@@ -220,40 +245,41 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
   win: FlowsWindow;
   ftype: string;
   base: { traffic?: string };
+  utilWord: string;
   onClose: () => void;
   onTalkers: (l: { exporter: string; ifIndex: string }) => void;
 }) {
   const [exporter, ifIndex] = linkKey.split("|");
   const since = win.since;
-  const step = Math.max(60, Math.round(since / 120));
+  const wq = windowQuery(win);
+  const wkey = JSON.stringify(wq);
   const device = devices.find((d) => d.address === exporter);
-  const ident = { exporter, ifIndex, ifName: row?.ifName ?? "", deviceName: device ? names.get(device.id) ?? device.name : undefined };
+  const ident = {
+    exporter, ifIndex, ifName: row?.ifName ?? "",
+    deviceName: row?.deviceName ?? (device ? names.get(device.id) ?? device.name : undefined),
+  };
   const label = linkLabel(ident);
   const fkey = JSON.stringify(base);
+  const link = { exporter, ifIndex, tenant: row?.tenantId };
 
-  const ts = useTicked(
-    () => Promise.all([
-      api.flowsTimeseries(since, step, ftype, { ...base, device: exporter, in_if: ifIndex }),
-      api.flowsTimeseries(since, step, ftype, { ...base, device: exporter, out_if: ifIndex }),
-    ]),
-    [exporter, ifIndex, since, step, ftype, fkey],
-  );
+  const ts = useTicked(() => api.flowsLinkSeries(link, wq, ftype, base.traffic ?? ""), [exporter, ifIndex, row?.tenantId, wkey, ftype, fkey]);
   const problems = useTicked(() => api.correlations(200, since), [since]);
 
-  const now = Date.now();
-  const from = now - since * 1000;
+  const from = wq.from ?? Date.now() - since * 1000;
+  const to = wq.to ?? Date.now();
   const marks = useMemo(
-    () => problemsForLink(problems.data?.data ?? [], from, now, { exporter, deviceId: device?.id, deviceName: ident.deviceName }),
+    () => problemsForLink(problems.data?.data ?? [], from, to, { exporter, deviceId: device?.id ?? row?.deviceId, deviceName: ident.deviceName }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [problems.data, exporter, device?.id, ident.deviceName, since],
+    [problems.data, exporter, device?.id, ident.deviceName, wkey],
   );
 
-  const toPoints = (rows: TsRow[] | undefined) =>
-    (rows ?? []).map((r) => [parseCorrTs(r.bucket) ?? 0, (Number(r.bytes_total) * 8) / step] as [number, number]).filter((p) => p[0] > 0);
-  const inPts = toPoints(ts.data?.[0]?.data as TsRow[] | undefined);
-  const outPts = toPoints(ts.data?.[1]?.data as TsRow[] | undefined);
+  const rates = seriesRates(ts.data);
+  const step = ts.data?.step_seconds ?? 60;
   const tsErr = ts.error ? operatorError(ts.error, "Flows on this link could not be read.") : null;
   const q: FlowQuery = { since, ftype, filters: { ...base, device: exporter, if: ifIndex }, fkey: `${linkKey}|${fkey}`, direction: "" };
+  const inNote = ts.data ? directionNote({ inMissing: rates.inMissing, inBasis: ts.data.in_basis, inUnnamedPct: ts.data.in_unnamed_pct }, "in") : null;
+  const outNote = ts.data ? directionNote({ outMissing: rates.outMissing, outBasis: ts.data.out_basis, outUnnamedPct: ts.data.out_unnamed_pct }, "out") : null;
+  const empty = rates.in.every((p) => p[1] === 0) && rates.out.every((p) => p[1] === 0);
 
   const markArea = [
     ...(win.problem ? [[{ name: "Problem window", xAxis: win.problem.from }, { xAxis: win.problem.to }]] : []),
@@ -274,17 +300,20 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
         </div>
       </div>
       <StatStrip>
-        <Stat label="Utilisation now" value={fmtPctOrDash(row?.utilPct)} tone={utilTone(row?.utilPct)} />
+        <Stat label={`Utilisation ${utilWord}`} value={fmtPctOrDash(row?.utilPct)} tone={utilTone(row?.utilPct)} />
         <Stat label="Link speed" value={row?.speedBps ? fmtBps(row.speedBps) : "—"} />
         <Stat label="In this window" value={row ? fmtBytes(row.totalBytes) : "—"} />
+        <Stat label="Change" value={row ? changeLabel(row) : "—"} />
         <Stat label="Problems here" value={problems.error ? "—" : String(marks.length)} tone={marks.length ? "warn" : ""} />
       </StatStrip>
 
       <div className="panel-tools"><h3>In and out</h3></div>
       {tsErr ? (
         <div className="empty tr-error">{tsErr}</div>
-      ) : inPts.length === 0 && outPts.length === 0 ? (
-        ts.loading ? <div className="empty board-empty" aria-busy="true" /> : <FlowEmpty q={q} />
+      ) : !ts.data ? (
+        <div className="empty board-empty" aria-busy="true" />
+      ) : empty ? (
+        <FlowEmpty q={q} />
       ) : (
         <ReactECharts
           style={{ height: 300 }}
@@ -298,7 +327,7 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
             yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 14, formatter: (v: number) => fmtBps(v) } },
             series: [
               {
-                name: "In", type: "line", showSymbol: false, smooth: true, data: inPts,
+                name: "In", type: "line", showSymbol: false, data: rates.in,
                 lineStyle: { color: inColor, width: 2 }, itemStyle: { color: inColor },
                 areaStyle: { color: inColor, opacity: 0.08 },
                 markArea: markArea.length
@@ -313,7 +342,7 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
                   : undefined,
               },
               {
-                name: "Out", type: "line", showSymbol: false, smooth: true, data: outPts,
+                name: "Out", type: "line", showSymbol: false, data: rates.out,
                 lineStyle: { color: outColor, width: 2 }, itemStyle: { color: outColor },
                 areaStyle: { color: outColor, opacity: 0.08 },
               },
@@ -321,11 +350,19 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
           }}
         />
       )}
+      {(inNote || outNote) && (
+        <p className="mini-meta tr-note" data-testid="series-basis">{[inNote && `In: ${inNote}.`, outNote && `Out: ${outNote}.`].filter(Boolean).join(" ")}</p>
+      )}
+      {ts.data && !ts.data.last_bucket_complete && (
+        <p className="mini-meta tr-note">The latest {Math.round(step / 60)}-minute bucket is still filling and is not drawn.</p>
+      )}
       {win.problem && (
         <p className="mini-meta tr-note" data-testid="problem-window">
           Problem window {fmtTime(new Date(win.problem.from).toISOString())} – {fmtTime(new Date(win.problem.to).toISOString())} is shaded.
         </p>
       )}
+
+      <WhatChanged link={link} win={win} traffic={base.traffic ?? ""} />
 
       <div className="flows-grid">
         <ConversationsSection q={q} limit={10} title="Top talkers" />
@@ -351,3 +388,70 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, onClose, o
   );
 }
 
+// ── what changed ─────────────────────────────────────────────────────────────
+
+const MOVER_TABS: { value: FlowMoversBy; label: string }[] = [
+  { value: "talker", label: "Talkers" },
+  { value: "app", label: "Applications" },
+  { value: "port", label: "Ports" },
+];
+
+/**
+ * The keys whose traffic on this link moved most against the previous window
+ * of the same length. A talker's bytes count toward both ends of a
+ * conversation, so talker rows do not add up to the link total.
+ */
+function WhatChanged({ link, win, traffic }: { link: { exporter: string; ifIndex: string; tenant?: string }; win: FlowsWindow; traffic: string }) {
+  const [by, setBy] = useState<FlowMoversBy>("talker");
+  const wq = windowQuery(win);
+  const r = useTicked(() => api.flowsLinkMovers(link, wq, by, "both", 10, traffic), [link.exporter, link.ifIndex, link.tenant, JSON.stringify(wq), by, traffic]);
+  const err = r.error ? operatorError(r.error, "What changed on this link could not be read.") : null;
+  const movers = r.data?.movers ?? [];
+  const noPrev = r.data?.totals.prev_bytes === null;
+
+  const cols = useMemo<Column<FlowMover>[]>(
+    () => [
+      {
+        key: "key", header: by === "talker" ? "Host" : by === "app" ? "Application" : "Port", width: "40%", sortable: true,
+        text: (m) => (by === "port" ? servicePortLabel(m.key) : m.key),
+        render: (m) => <span className="mono">{by === "port" ? servicePortLabel(m.key) : m.key}</span>,
+      },
+      { key: "now", header: "This window", align: "right", sortable: true, sortValue: (m) => m.bytes, render: (m) => fmtBytes(m.bytes) },
+      { key: "before", header: "Window before", align: "right", sortable: true, sortValue: (m) => m.prev_bytes ?? -1, render: (m) => (m.prev_bytes === null ? "—" : fmtBytes(m.prev_bytes)) },
+      { key: "change", header: "Change", align: "right", sortable: true, sortValue: (m) => m.delta ?? 0, render: (m) => <span className={moverTone(m) ? "tr-warn" : undefined}>{moverChange(m)}</span> },
+    ],
+    [by],
+  );
+
+  return (
+    <div className="panel tr-movers" data-testid="what-changed">
+      <div className="panel-tools">
+        <h3>What changed</h3>
+        <Segmented<FlowMoversBy> value={by} ariaLabel="What changed by" options={MOVER_TABS} onChange={setBy} />
+      </div>
+      {err ? (
+        <div className="empty tr-error">{err}</div>
+      ) : movers.length === 0 ? (
+        <div className="empty board-empty">
+          <div className="board-empty-msg">{r.loading ? "Reading what changed…" : "Nothing moved on this link against the window before."}</div>
+        </div>
+      ) : (
+        <DataTable<FlowMover>
+          rows={movers}
+          columns={cols}
+          rowKey={(m) => m.key}
+          rowHeight={44}
+          height={Math.min(480, 40 + movers.length * 44)}
+          ariaLabel="What changed on this link"
+        />
+      )}
+      <p className="mini-meta tr-note">
+        {noPrev
+          ? "The window before is older than the flow records kept, so there is nothing to compare with."
+          : r.data
+            ? `This window ${fmtBytes(r.data.totals.bytes)} · window before ${fmtBytes(r.data.totals.prev_bytes ?? 0)}.${by === "talker" ? " A conversation counts toward both of its hosts." : ""}`
+            : ""}
+      </p>
+    </div>
+  );
+}

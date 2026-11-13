@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Flows.test.tsx — Explore → Flows at the screen (P1, 2026-11-12): the
-// default "Right now" view built from the existing APIs, a link's drill-down,
-// the RCA deep link, the chip filters, the Capacity tab's honesty about what
-// it does not compute yet, and that only the visible tab re-reads.
+// Flows.test.tsx — Explore → Flows at the screen (P1 2026-11-12, P2 tracker
+// 400): "Right now" on the link-level APIs (one links call, the series, what
+// changed), a link's drill-down, the RCA deep link with its exact window, the
+// chip filters, the Capacity tab's 95th percentile, headroom and forecast, and
+// that only the visible tab re-reads.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, within, fireEvent, act } from "@testing-library/react";
@@ -27,6 +28,10 @@ const m = {
   flowsServices: vi.fn(),
   flowsByProto: vi.fn(),
   appIdResolveBatch: vi.fn(),
+  flowsLinks: vi.fn(),
+  flowsLinkSeries: vi.fn(),
+  flowsLinkMovers: vi.fn(),
+  flowsCapacity: vi.fn(),
 };
 vi.mock("../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (...a: unknown[]) => (m as Record<string, (...x: unknown[]) => unknown>)[k](...a) }),
@@ -45,6 +50,50 @@ const IN_ROWS = [
   { k: "9", exporter: "10.0.0.2", in_if_name: "", in_if_name_basis: "absent", bytes_total: "1000", packets_total: 1, flows: 1 },
 ];
 const OUT_ROWS = [{ k: "3", exporter: "10.0.0.1", out_if_name: "Gi0/3", out_if_name_basis: "resolved", bytes_total: "2000000", packets_total: 1, flows: 1 }];
+const WINDOW = { from: "", to: "", seconds: 3600, explicit: false, prev_from: "", retention_days: 7, starts_before_retention: false, prev_before_retention: false };
+const BASIS = { flows: 3, flows_rate_reported: 0, sampling: "not_reported", bucket_time: "received" };
+const LINKS = {
+  window: WINDOW, count: 2, basis: BASIS,
+  links: [
+    {
+      exporter: "10.0.0.1", ifindex: 3, if_name: "Gi0/3", if_name_basis: "resolved", device_id: "edge-1-ab", device_name: "edge-1", site: "Dallas",
+      in_bytes: 5000000, out_bytes: 2000000, prev_in_bytes: 2000000, prev_out_bytes: 1500000, in_packets: 1, out_packets: 1, flows: 2,
+      in_basis: "measured", out_basis: "measured", sampling: "not_reported",
+    },
+    {
+      exporter: "10.0.0.2", ifindex: 9, if_name: "", if_name_basis: "absent", device_id: "core-1-cd", device_name: "core-1",
+      in_bytes: 1000, out_bytes: null, prev_in_bytes: null, prev_out_bytes: null, in_packets: 1, out_packets: 0, flows: 1,
+      in_basis: "partly_exported", in_unnamed_pct: 15, out_basis: "not_exported", sampling: "not_reported",
+    },
+  ],
+};
+const SERIES = {
+  window: WINDOW, served: { from: "", to: "" }, step_seconds: 60, exporter: "10.0.0.1", ifindex: 3,
+  t: [1000, 1060], in_bytes: [600, 900], out_bytes: [100, 200], in_packets: [1, 1], out_packets: [1, 1],
+  last_bucket_complete: true, in_basis: "measured", out_basis: "measured", basis: BASIS,
+};
+const MOVERS = {
+  window: WINDOW, exporter: "10.0.0.1", ifindex: 3, by: "talker", dir: "both", basis: BASIS,
+  totals: { bytes: 7000000, prev_bytes: 3500000 },
+  movers: [{ key: "198.51.100.7", bytes: 400, prev_bytes: 100, delta: 300, change: 3, status: "up" }],
+};
+const CAPACITY = {
+  window: WINDOW, count: 2, total: 2, forecast: { days: 28, min_days: 14, min_r2: 0.5, threshold_pct: 90 },
+  interfaces: [
+    {
+      device_id: "edge-1-ab", device_name: "edge-1", site: "Dallas", ifindex: "3", if_name: "Gi0/3", exporter: "10.0.0.1",
+      speed_bps: 100e6, speed_basis: "reported", p95_in_bps: 25e6, p95_out_bps: 40e6, p95_bps: 40e6, peak_bps: 95e6,
+      p95_in_pct: 25, p95_out_pct: 40, p95_pct: 40, peak_pct: 95, headroom_bps: 60e6, headroom_pct: 60,
+      forecast: { status: "rising", days_to_90: 27, slope_pct_per_day: 1, fitted_pct: 63, r2: 1, history_days: 14, min_days: 14 },
+    },
+    {
+      device_id: "core-1-cd", device_name: "core-1", ifindex: "", if_name: "ge0/1", speed_bps: null, speed_basis: "unknown",
+      p95_in_bps: 5e6, p95_out_bps: null, p95_bps: 5e6, peak_bps: 9e6, p95_in_pct: null, p95_out_pct: null, p95_pct: null, peak_pct: null,
+      headroom_bps: null, headroom_pct: null,
+      forecast: { status: "speed_unknown", days_to_90: null, slope_pct_per_day: null, fitted_pct: null, r2: null, history_days: 0, min_days: 14 },
+    },
+  ],
+};
 const series = (device: string, index: string, vals: number[]) => ({ metric: { device, index, ifName: "Gi0/3" }, values: vals.map((v, i) => [1000 + i * 60, String(v)]) });
 
 function setVisibility(state: "visible" | "hidden") {
@@ -96,6 +145,10 @@ beforeEach(() => {
   m.flowsServices.mockResolvedValue({ services: [], count: 0 });
   m.flowsByProto.mockResolvedValue({ data: [] });
   m.appIdResolveBatch.mockResolvedValue({});
+  m.flowsLinks.mockResolvedValue(LINKS);
+  m.flowsLinkSeries.mockResolvedValue(SERIES);
+  m.flowsLinkMovers.mockResolvedValue(MOVERS);
+  m.flowsCapacity.mockResolvedValue(CAPACITY);
 });
 
 describe("Flows — Right now", () => {
@@ -108,11 +161,17 @@ describe("Flows — Right now", () => {
     expect(within(table).getByText("4.8 MB")).toBeInTheDocument();
     expect(within(table).getByText("1.9 MB")).toBeInTheDocument();
     await waitFor(() => expect(within(table).getByText("80%")).toBeInTheDocument());
-    // A link whose device has no counters or speed reads a dash, never 0 %.
+    // Change against the previous window, from the same scan: 7 MB against 3.5 MB.
+    expect(within(table).getByText("+100%")).toBeInTheDocument();
+    // A link whose device has no counters or speed reads a dash, never 0 %; a
+    // direction the router does not export says so instead of reading 0.
     expect(within(table).getByText("core-1 · interface 9")).toBeInTheDocument();
-    // Built from the existing interface top-Ns, now and over twice the window.
-    expect(m.flowsTopN).toHaveBeenCalledWith("in_if", 3600, 50, "", {});
-    expect(m.flowsTopN).toHaveBeenCalledWith("out_if", 7200, 100, "", {});
+    expect(within(table).getByText("Not exported")).toBeInTheDocument();
+    expect(screen.getByTestId("links-reads-low")).toBeInTheDocument();
+    expect(screen.getByTestId("links-sampling")).toHaveTextContent(/does not report its sampling rate/);
+    // ONE links call over the window — no interface top-Ns, no double-window query.
+    expect(m.flowsLinks).toHaveBeenCalledWith({ since: 3600 }, 50, "", {});
+    expect(m.flowsTopN.mock.calls.filter(([by]) => by === "in_if" || by === "out_if")).toEqual([]);
     // The utilisation query reads only the devices in the table, by exact id.
     expect(m.metricsQueryRange.mock.calls.some(([q]) => String(q).includes('device=~"core-1-cd|edge-1-ab"'))).toBe(true);
     // The sampling sentence travels with the table.
@@ -125,8 +184,15 @@ describe("Flows — Right now", () => {
     fireEvent.click(await within(table).findByText("edge-1 · Gi0/3"));
     const detail = await screen.findByTestId("link-detail");
     expect(within(detail).getByRole("heading", { name: "edge-1 · Gi0/3" })).toBeInTheDocument();
-    await waitFor(() => expect(m.flowsTimeseries).toHaveBeenCalledWith(3600, 60, "", { device: "10.0.0.1", in_if: "3" }));
-    expect(m.flowsTimeseries).toHaveBeenCalledWith(3600, 60, "", { device: "10.0.0.1", out_if: "3" });
+    await waitFor(() => expect(m.flowsLinkSeries).toHaveBeenCalledWith({ exporter: "10.0.0.1", ifIndex: "3", tenant: undefined }, { since: 3600 }, "", ""));
+    expect(m.flowsTimeseries).not.toHaveBeenCalled();
+    // What changed on the link, against the window before; Ports asks again.
+    const changed = await within(detail).findByTestId("what-changed");
+    expect(await within(changed).findByText("198.51.100.7")).toBeInTheDocument();
+    expect(within(changed).getByText("+300%")).toBeInTheDocument();
+    expect(m.flowsLinkMovers).toHaveBeenCalledWith({ exporter: "10.0.0.1", ifIndex: "3", tenant: undefined }, { since: 3600 }, "talker", "both", 10, "");
+    fireEvent.click(within(changed).getByRole("button", { name: "Ports" }));
+    await waitFor(() => expect(m.flowsLinkMovers.mock.calls.some((c) => c[2] === "port")).toBe(true));
     await waitFor(() => expect(m.topTalkers).toHaveBeenCalledWith(3600, 10, "", { device: "10.0.0.1", if: "3" }, ""));
     expect(await within(detail).findByText("10.1.1.1")).toBeInTheDocument();
     const problem = await within(detail).findByRole("link", { name: /undetermined|possible|cause/i });
@@ -143,8 +209,12 @@ describe("Flows — Right now", () => {
     expect(await screen.findByTestId("problem-banner")).toBeInTheDocument();
     const detail = await screen.findByTestId("link-detail");
     expect(within(detail).getByTestId("problem-window")).toBeInTheDocument();
-    // The window reaches back past the problem start (2 h + the 5 min lead-in), not the shell's 15 min.
-    await waitFor(() => expect(m.flowsTimeseries.mock.calls.some(([since]) => Number(since) >= 7500)).toBe(true));
+    // The link APIs get an EXACT window around the problem (its hour plus 15 minutes either side), not the shell's 15 min.
+    await waitFor(() => expect(m.flowsLinkSeries).toHaveBeenCalled());
+    const win = m.flowsLinkSeries.mock.calls[0][1] as { from: number; to: number };
+    expect(win.from).toBeLessThanOrEqual(Date.parse(from) - 15 * 60_000);
+    expect(win.to).toBeGreaterThanOrEqual(Date.parse(to) + 15 * 60_000 - 1000);
+    expect(m.flowsLinks.mock.calls[0][0]).toEqual(win);
   });
 });
 
@@ -153,26 +223,37 @@ describe("Flows — refresh", () => {
     render(<Flows rangeMinutes={60} />);
     await screen.findByLabelText("Busiest links");
     fireEvent.click(screen.getByRole("button", { name: "Capacity" }));
-    await screen.findByLabelText("Link utilisation");
+    await screen.findByLabelText("Link capacity");
     for (const f of Object.values(m)) f.mockClear();
     // A tick (here: the tab coming back into view) re-reads Capacity only.
     act(() => { setVisibility("hidden"); });
     act(() => { setVisibility("visible"); });
-    await waitFor(() => expect(m.metricsQuery.mock.calls.some(([q]) => String(q).startsWith("max_over_time"))).toBe(true));
-    expect(m.flowsTopN.mock.calls.filter(([by]) => by === "in_if" || by === "out_if")).toEqual([]);
-    expect(m.flowsTimeseries).not.toHaveBeenCalled();
+    await waitFor(() => expect(m.flowsCapacity).toHaveBeenCalled());
+    expect(m.flowsLinks).not.toHaveBeenCalled();
+    expect(m.flowsLinkSeries).not.toHaveBeenCalled();
   });
 });
 
 describe("Flows — Capacity", () => {
-  it("lists per-link average and peak, grouped by site, and labels what is not computed yet", async () => {
+  it("lists each link's 95th percentile, peak, headroom and when it reaches 90 %, grouped by site", async () => {
     window.location.hash = "#/explore/flows/capacity";
     render(<Flows rangeMinutes={60} />);
-    const table = await screen.findByLabelText("Link utilisation");
+    const table = await screen.findByLabelText("Link capacity");
     await waitFor(() => expect(within(table).getByText("Dallas")).toBeInTheDocument());
     expect(within(table).getByText("edge-1 · Gi0/3")).toBeInTheDocument();
-    expect(within(table).getAllByText("95%")).toHaveLength(2); // peak, and the inbound peak it came from
-    expect(screen.getByTestId("capacity-next")).toHaveTextContent("Coming next: 95th percentile · headroom · days until 90%.");
+    expect(within(table).getByText("40%")).toBeInTheDocument(); // the 95th percentile
+    expect(within(table).getByText("95%")).toBeInTheDocument(); // the peak
+    expect(within(table).getByText("60 Mbps free")).toBeInTheDocument();
+    expect(within(table).getByText("In about 27 days")).toBeInTheDocument();
+    expect(m.flowsCapacity).toHaveBeenCalledWith({ since: 3600 }, 100);
+    // Nothing is "coming next" any more, and a link with no speed is set apart.
+    expect(screen.queryByTestId("capacity-next")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Links with no reported speed (1)" }));
+    expect(await screen.findByLabelText("Links with no reported speed")).toHaveTextContent(/Speed not reported/);
+    expect(screen.getByTestId("capacity-method")).toHaveTextContent(/14 days/);
+    // A row opens that link in Right now.
+    fireEvent.click(within(table).getByText("edge-1 · Gi0/3"));
+    await waitFor(() => expect(window.location.hash).toBe("#/explore/flows?device=10.0.0.1&if=3"));
   });
 });
 
@@ -230,6 +311,7 @@ describe("Flows — About this data", () => {
     expect(within(drawer).getByTestId("about-sampling")).toHaveTextContent(/shown as received/);
     expect(within(drawer).getByTestId("platform-traffic")).toBeInTheDocument();
     expect(within(drawer).getByTestId("dataset-geo")).toHaveTextContent(/not loaded/);
+    expect(within(drawer).getByTestId("about-method")).toHaveTextContent(/95th percentile/);
     expect(within(drawer).getByRole("link", { name: /Device Monitoring/ })).toHaveAttribute("href", "#/analytics/device-monitoring");
     expect(within(drawer).getByRole("link", { name: /Security/ })).toHaveAttribute("href", "#/security/threat/behavior");
     fireEvent.keyDown(window, { key: "Escape" });

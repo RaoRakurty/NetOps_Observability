@@ -81,7 +81,7 @@ Every destination below is HTTPS on TCP 443 unless stated. All of them are optio
 | AWS SNS | SNS notifications | `FEATURE_SNS_NOTIFICATIONS` |
 | Your SMTP relay | Email notifications | `FEATURE_EMAIL_NOTIFICATIONS`. The port is part of `SMTP_HOST`, for example `smtp.example.com:587`. There is no separate port variable. |
 | Your ServiceNow, Jira or Teams endpoint | Ticketing and chat | `SERVICENOW_INSTANCE_URL`, `JIRA_BASE_URL`, `TEAMS_WEBHOOK_URL` |
-| `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` | The Iris assistant's model provider | `FEATURE_AI`, `FEATURE_COPILOT` |
+| `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` | The Iris assistant's model provider | Only with the Iris AI add-on licensed and **Iris AI models** turned on under Administration → Features |
 | AWS, Azure and Google identity and resource endpoints | Cloud connectors | The `cloud-ingest` compose profile plus per-tenant connector configuration |
 | DNS, UDP 53 | Every name the platform resolves | Always. Resolvers are set in [System settings](/administration/system-settings) |
 | NTP, UDP 123 | Clock-offset measurement | The NTP card in [System settings](/administration/system-settings#ntp-time-sources) |

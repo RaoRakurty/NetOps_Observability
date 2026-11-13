@@ -34,15 +34,15 @@ Two rules hold for all of them:
 | `ENABLE_VRF_COLLECTION` | `true` | Read routing instances (VRF, VPN, routing-instance, VPRN) and their interfaces over SNMP. |
 | `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes. |
 | `FEATURE_ACTIVE_VERIFICATION` | `false` | Verify a recovery before closing a case. |
-| `FEATURE_AI` | `(empty)` | Master switch for the Iris assistant. |
-| `FEATURE_AI_TOOLS` | `false` | Let Iris call read-only platform tools. |
+| `FEATURE_AI` | `(empty)` | Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Administration → Features. |
+| `FEATURE_AI_TOOLS` | `false` | No longer a switch: read once on upgrade to keep AI investigations on. Administration → Features decides. |
 | `FEATURE_BGP_ALERTS` | `false` | Evaluate the BGP watchlist and raise routing alerts. |
 | `FEATURE_BGP_BOGON_FEED` | `false` | Add the Team Cymru full-bogons feed to the embedded IANA special-purpose blocks. |
 | `FEATURE_BGP_LIVE_FEED` | `false` | Keep a bounded per-tenant ring of live BGP updates. |
 | `FEATURE_BMP` | `false` | Accept BMP sessions from routers that push their Adj-RIB-In. |
 | `FEATURE_CLOUD_SIGNAL_NOTIFICATIONS` | `false` | Notify on cloud-provider events. |
 | `FEATURE_CONFIG_BACKUP` | `false` | Capture, store and diff device configurations. |
-| `FEATURE_COPILOT` | `true` | Expose the assistant chat endpoint. |
+| `FEATURE_COPILOT` | `true` | Legacy form of FEATURE_AI, honoured when FEATURE_AI is unset. |
 | `FEATURE_DEM` | `false` |  |
 | `FEATURE_DEM_AI_INVESTIGATOR` | `false` |  |
 | `FEATURE_DEVICE_SSH` | `false` | Proxy an interactive SSH session to a device. |

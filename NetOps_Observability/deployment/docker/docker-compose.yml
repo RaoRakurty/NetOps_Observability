@@ -2298,9 +2298,13 @@ services:
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-gemini}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-}
-      # AI agent loop ("Investigations"): the model may run governed read-only
-      # lookups before answering. DORMANT unless FEATURE_AI_TOOLS=true; per-tenant
-      # entitlement decides which workspaces get it (assistant settings →
+      # Model-backed Iris (answers, chat, AI investigations) is the Iris AI
+      # licence add-on plus two console-only switches under Administration →
+      # Features ("Iris AI models", "AI investigations"); nothing in this file
+      # turns them on. FEATURE_AI_TOOLS is no longer a switch: the api reads it
+      # ONCE, on the first start of the release that added the switches, so an
+      # install that already ran AI investigations keeps running them. Per-tenant
+      # entitlement still decides which workspaces get it (assistant settings →
       # Workspace access). AI_TOOLS_ALL_TENANTS=true is the global override.
       FEATURE_AI_TOOLS: ${FEATURE_AI_TOOLS:-false}
       AI_TOOLS_ALL_TENANTS: ${AI_TOOLS_ALL_TENANTS:-false}

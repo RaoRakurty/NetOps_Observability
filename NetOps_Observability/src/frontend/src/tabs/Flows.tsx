@@ -9,12 +9,13 @@
 //
 //   #/explore/flows           Right now   — busiest links, one link in detail
 //   #/explore/flows/talking   Who is talking — conversations, apps, ports…
-//   #/explore/flows/capacity  Capacity    — per-link utilisation over the window
+//   #/explore/flows/capacity  Capacity    — per-link 95th percentile, headroom, reaches 90 %
 //   "About this data"           sources, sampling, coverage, datasets
 //
 // Deep link (from an RCA case's traffic lane):
 //   #/explore/flows?device=<exporter>&if=<ifIndex>&from=<iso>&to=<iso>
-// opens Right now with that link selected and the problem window marked.
+// opens Right now with that link selected, an exact window around the problem
+// (P2: the link APIs take from/to), and the problem window marked.
 //
 // Refresh: ONE clock for the page (lib/refreshTick). Only the visible tab is
 // mounted, so only it re-reads, and nothing re-reads while the browser tab is
@@ -112,7 +113,7 @@ export default function Flows({ rangeMinutes = 60 }: { rangeMinutes?: number } =
         {tab === "talking" && (
           <WhoIsTalking since={win.since} filters={filters} onFilters={setFilters} includePlatform={includePlatform} />
         )}
-        {tab === "capacity" && <Capacity since={win.since} />}
+        {tab === "capacity" && <Capacity win={win} onOpenLink={select} />}
 
         <AboutData
           open={aboutOpen}

@@ -154,6 +154,10 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # must run both suites. Found 2026-11-11: #180 mapped transition_id and
     # correlation_key, the frontend group was skipped, and main went red.
     ("deployment/docker/opensearch/index-templates.json", ("backend", "frontend")),
+    # The ClickHouse schema and server settings: backend-ci's ch-integration job
+    # loads init.sql and mounts custom-settings.xml (tracker 400), so a change here
+    # must run it on the PR, not first on main.
+    ("deployment/docker/clickhouse/*", ("backend",)),
     ("deployment/docker/Dockerfile.backend", ("backend",)),
     ("deployment/docker/Dockerfile.correlation", ("correlation",)),
     ("deployment/docker/Dockerfile.frontend", ("frontend",)),

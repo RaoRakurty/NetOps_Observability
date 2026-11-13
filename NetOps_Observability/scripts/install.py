@@ -1881,11 +1881,13 @@ REFRESH_TOKEN_TTL=168h
 # app-level limit. Over-cap calls return 429 + Retry-After.
 APIKEY_RATE_LIMIT_PER_MIN=600
 
-# Correlix AI assistant. ON by default in key-free GROUNDED mode (deterministic,
-# in-process, no external calls). Set FEATURE_COPILOT=false to disable. Add a
-# provider key in the assistant settings UI (or COPILOT_API_KEY here) to enable
-# LLM answers + investigations. Provider: 'gemini' (default, free tier),
-# 'anthropic' or 'openai'.
+# Correlix AI assistant (Iris). ON by default in key-free GROUNDED mode
+# (deterministic, in-process, no external calls). Set FEATURE_COPILOT=false to
+# turn Iris off entirely. Model answers and AI investigations are the Iris AI
+# add-on (Enterprise includes it): with it licensed, add a provider key in the
+# assistant settings UI, then turn on "Iris AI models" under Administration ->
+# Features. That switch is set on the page only, never in this file.
+# Provider: 'gemini' (default, free tier), 'anthropic' or 'openai'.
 FEATURE_COPILOT=true
 COPILOT_PROVIDER=gemini
 COPILOT_API_KEY=

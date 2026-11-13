@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Explore → Flows E2E (P1, 2026-11-12). The backend is mocked at the network
-// boundary with the shapes the flow and metrics APIs return. It proves in a real
+// Explore → Flows E2E (P1 2026-11-12, P2 tracker 400). The backend is mocked at
+// the network boundary with the shapes the flow and metrics APIs return — the
+// link-level APIs (links, series, movers, capacity) included. It proves in a real
 // browser what jsdom cannot: the default view's layout and type floor (every
 // text ≥ 14 px, owner's NOC-admin standard), a link's drill-down, the empty
 // state, the RCA deep link with its parameters, and that the legacy #/flows
@@ -32,6 +33,44 @@ const OUT_ROWS = [
   { k: "3", exporter: "10.20.0.1", out_if_name: "GigabitEthernet0/0/3", out_if_name_basis: "resolved", bytes_total: "3100000000", packets_total: "3000000", flows: "20000" },
 ];
 
+const WINDOW = { from: "", to: "", seconds: 3600, explicit: false, prev_from: "", retention_days: 7, starts_before_retention: false, prev_before_retention: false };
+const BASIS = { flows: 51000, flows_rate_reported: 0, sampling: "not_reported", bucket_time: "received" };
+const LINKS = [
+  {
+    exporter: "10.20.0.1", ifindex: 3, if_name: "GigabitEthernet0/0/3", if_name_basis: "resolved", device_id: "edge-1-ab12", device_name: "dallas-edge-1", site: "Dallas",
+    in_bytes: 8800000000, out_bytes: 3100000000, prev_in_bytes: 6000000000, prev_out_bytes: 3000000000, in_packets: 9000000, out_packets: 3000000, flows: 61000,
+    in_basis: "measured", out_basis: "measured", sampling: "not_reported",
+  },
+  {
+    exporter: "10.20.0.2", ifindex: 1, if_name: "Ethernet1", if_name_basis: "resolved", device_id: "core-1-cd34", device_name: "dc-core-1",
+    in_bytes: 2100000000, out_bytes: null, prev_in_bytes: 2000000000, prev_out_bytes: null, in_packets: 2000000, out_packets: 0, flows: 9000,
+    in_basis: "partly_exported", in_unnamed_pct: 15, out_basis: "not_exported", sampling: "not_reported",
+  },
+];
+const CAPACITY = {
+  window: WINDOW, count: 3, total: 3, forecast: { days: 28, min_days: 14, min_r2: 0.5, threshold_pct: 90 },
+  interfaces: [
+    {
+      device_id: "edge-1-ab12", device_name: "dallas-edge-1", site: "Dallas", ifindex: "3", if_name: "GigabitEthernet0/0/3", exporter: "10.20.0.1",
+      speed_bps: 1e9, speed_basis: "reported", p95_in_bps: 610e6, p95_out_bps: 250e6, p95_bps: 610e6, peak_bps: 930e6,
+      p95_in_pct: 61, p95_out_pct: 25, p95_pct: 61, peak_pct: 93, headroom_bps: 390e6, headroom_pct: 39,
+      forecast: { status: "rising", days_to_90: 23, slope_pct_per_day: 1.2, fitted_pct: 62, r2: 0.82, history_days: 28, min_days: 14 },
+    },
+    {
+      device_id: "core-1-cd34", device_name: "dc-core-1", ifindex: "1", if_name: "Ethernet1", exporter: "10.20.0.2",
+      speed_bps: 10e9, speed_basis: "reported", p95_in_bps: 1.2e9, p95_out_bps: 0.4e9, p95_bps: 1.2e9, peak_bps: 3.8e9,
+      p95_in_pct: 12, p95_out_pct: 4, p95_pct: 12, peak_pct: 38, headroom_bps: 8.8e9, headroom_pct: 88,
+      forecast: { status: "not_enough_history", days_to_90: null, slope_pct_per_day: null, fitted_pct: null, r2: null, history_days: 6, min_days: 14 },
+    },
+    {
+      device_id: "core-1-cd34", device_name: "dc-core-1", ifindex: "", if_name: "ge0/1", speed_bps: null, speed_basis: "unknown",
+      p95_in_bps: 5e6, p95_out_bps: null, p95_bps: 5e6, peak_bps: 9e6, p95_in_pct: null, p95_out_pct: null, p95_pct: null, peak_pct: null,
+      headroom_bps: null, headroom_pct: null,
+      forecast: { status: "speed_unknown", days_to_90: null, slope_pct_per_day: null, fitted_pct: null, r2: null, history_days: 0, min_days: 14 },
+    },
+  ],
+};
+
 type Opts = { empty?: boolean };
 
 function series(device: string, index: string, ifName: string, base: number) {
@@ -50,6 +89,29 @@ async function boot(page: Page, hash: string, opts: Opts = {}) {
     if (p === "/api/scopes") return json({ scopes: [{ tenant_id: TENANT, tenant_name: "Acme", region: "us" }], all_tenants: false });
     if (p === "/api/devices/locations") return json({ devices: [{ id: "edge-1-ab12", name: "dallas-edge-1", site: "Dallas", source: "manual" }] });
     if (p === "/api/devices") return json(DEVICES);
+    if (p === "/api/flows/links") {
+      return json({ window: WINDOW, links: opts.empty ? [] : LINKS, count: opts.empty ? 0 : LINKS.length, basis: BASIS });
+    }
+    if (p === "/api/flows/links/series") {
+      const t0 = Math.floor(NOW / 1000 / 60) * 60 - 40 * 60;
+      const t = Array.from({ length: 40 }, (_, i) => t0 + i * 60);
+      const inb = t.map((_, i) => (opts.empty ? 0 : Math.round(50_000_000 + i * 900_000 + Math.sin(i / 3) * 9_000_000)));
+      return json({
+        window: WINDOW, served: { from: "", to: "" }, step_seconds: 60, exporter: url.searchParams.get("device"), ifindex: Number(url.searchParams.get("if")),
+        t, in_bytes: inb, out_bytes: inb.map((v) => Math.round(v * 0.4)), in_packets: inb.map(() => 1), out_packets: inb.map(() => 1),
+        last_bucket_complete: false, in_basis: "measured", out_basis: "measured", basis: BASIS,
+      });
+    }
+    if (p === "/api/flows/links/movers") {
+      const by = url.searchParams.get("by");
+      const key = by === "port" ? "6/443" : by === "app" ? "AWS S3" : "52.94.236.248";
+      return json({
+        window: WINDOW, exporter: url.searchParams.get("device"), ifindex: Number(url.searchParams.get("if")), by, dir: "both", basis: BASIS,
+        totals: { bytes: 11900000000, prev_bytes: 9000000000 },
+        movers: opts.empty ? [] : [{ key, bytes: 1900000000, prev_bytes: 400000000, delta: 1500000000, change: 3.75, status: "up" }],
+      });
+    }
+    if (p === "/api/flows/capacity") return json(opts.empty ? { ...CAPACITY, interfaces: [], count: 0, total: 0 } : CAPACITY);
     if (p === "/api/flows/topn") {
       if (opts.empty) return json({ data: [], rows: 0 });
       const by = url.searchParams.get("by");
@@ -154,7 +216,12 @@ test("Right now: busiest links by name, utilisation, change and trend — with t
   await expect(table.locator(".tr-spark").first()).toBeVisible();
   await expect(table.locator(".tr-util.warn, .tr-util.bad").first()).toBeVisible();
   await expect(page.getByTestId("flow-sampling-note")).toContainText("shown as received");
-  expect(seen.some((s) => s.startsWith("/api/flows/topn?by=in_if"))).toBe(true);
+  // One links call over the window (P2), the change from the same scan, and a
+  // direction the router does not export said in words.
+  expect(seen.some((s) => s.startsWith("/api/flows/links?since=3600s"))).toBe(true);
+  expect(seen.some((s) => s.startsWith("/api/flows/topn?by=in_if"))).toBe(false);
+  await expect(table.getByText("+32%")).toBeVisible();
+  await expect(table.getByText("Not exported")).toBeVisible();
   // The old page's Device Health and Flags sections are gone from the page itself.
   await expect(page.getByText("TCP flag combinations")).toHaveCount(0);
   await expect(page.getByText("Avg CPU (%)")).toHaveCount(0);
@@ -174,8 +241,13 @@ test("a link drills down to in/out over time, its talkers, services and the prob
   await expect(detail.getByText("10.30.1.15")).toBeVisible();
   await expect(detail.getByRole("link", { name: /Possible|undetermined|cause/i })).toHaveAttribute("href", "#/investigate/rca?id=7b0e8c4e-1111-4222-8333-444455556666");
   await expect(page).toHaveURL(/#\/explore\/flows\?device=10\.20\.0\.1&if=3$/);
-  expect(seen.some((s) => s.startsWith("/api/flows/timeseries") && s.includes("device=10.20.0.1") && s.includes("in_if=3"))).toBe(true);
-  expect(seen.some((s) => s.startsWith("/api/flows/timeseries") && s.includes("out_if=3"))).toBe(true);
+  expect(seen.some((s) => s.startsWith("/api/flows/links/series") && s.includes("device=10.20.0.1") && s.includes("if=3"))).toBe(true);
+  // What changed on the link against the window before.
+  const changed = detail.getByTestId("what-changed");
+  await expect(changed.getByText("52.94.236.248")).toBeVisible();
+  await expect(changed.getByText("+375%")).toBeVisible();
+  await changed.getByRole("button", { name: "Ports" }).click();
+  await expect(changed.getByText(/443/)).toBeVisible();
   const audit = await typeAudit(page);
   expect(audit.tooSmall, audit.tooSmall.join("\n")).toEqual([]);
   await shot(page, "flows-link-detail");
@@ -196,9 +268,12 @@ test("the RCA deep link opens the link with the problem window marked", async ({
   await expect(page.getByTestId("problem-banner")).toBeVisible();
   await expect(page.getByTestId("link-detail")).toBeVisible();
   await expect(page.getByTestId("problem-window")).toBeVisible();
-  // The flow window reaches back past the problem start, whatever the shell range.
-  const since = seen.filter((s) => s.startsWith("/api/flows/timeseries")).map((s) => Number(new URLSearchParams(s.split("?")[1]).get("since")?.replace("s", "")));
-  expect(Math.max(...since)).toBeGreaterThanOrEqual(50 * 60 + 300);
+  // The link APIs get an EXACT window around the problem, whatever the shell range.
+  const series = seen.find((s) => s.startsWith("/api/flows/links/series"));
+  expect(series).toBeTruthy();
+  const sq = new URLSearchParams((series ?? "").split("?")[1]);
+  expect(Number(sq.get("from")) * 1000).toBeLessThanOrEqual(Date.parse(from) - 300_000);
+  expect(Number(sq.get("to")) * 1000).toBeGreaterThanOrEqual(Date.parse(to));
   await page.getByRole("button", { name: "Show the usual window" }).click();
   await expect(page.getByTestId("problem-banner")).toHaveCount(0);
   await expect(page.getByTestId("link-detail")).toBeVisible();
@@ -230,9 +305,14 @@ test("Who is talking and Capacity read the same way, and About this data holds t
 
   await page.getByRole("button", { name: "Capacity" }).click();
   await expect(page).toHaveURL(/#\/explore\/flows\/capacity/);
-  const cap = page.getByRole("table", { name: "Link utilisation" });
+  const cap = page.getByRole("table", { name: "Link capacity" });
   await expect(cap.getByRole("rowheader", { name: "Dallas" })).toBeVisible();
-  await expect(page.getByTestId("capacity-next")).toContainText("Coming next");
+  await expect(cap.getByText("390 Mbps free")).toBeVisible();
+  await expect(cap.getByText("In about 23 days")).toBeVisible();
+  await expect(cap.getByText("Collecting history — 6 of 14 days")).toBeVisible();
+  await expect(page.getByTestId("capacity-next")).toHaveCount(0);
+  await page.getByRole("button", { name: "Links with no reported speed (1)" }).click();
+  await expect(page.getByRole("table", { name: "Links with no reported speed" })).toBeVisible();
   audit = await typeAudit(page);
   expect(audit.tooSmall, audit.tooSmall.join("\n")).toEqual([]);
   await shot(page, "flows-capacity");
@@ -276,7 +356,7 @@ for (const theme of ["light", "dark"] as const) {
     expect(inColor).toMatch(/^#[0-9a-f]{6}$/i);
     await shot(page, `flows-right-now-${theme}`);
     await page.getByRole("button", { name: "Capacity" }).click();
-    await expect(page.getByRole("table", { name: "Link utilisation" }).getByRole("rowheader", { name: "Dallas" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Link capacity" }).getByRole("rowheader", { name: "Dallas" })).toBeVisible();
     const audit = await typeAudit(page);
     expect(audit.tooSmall, audit.tooSmall.join("\n")).toEqual([]);
     await shot(page, `flows-capacity-${theme}`);

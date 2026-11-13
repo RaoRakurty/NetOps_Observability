@@ -1,76 +1,78 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Capacity — per-link utilisation over the chosen window (average and peak of
-// the 5-minute rate, in percent of the reported speed), busiest peak first,
-// grouped by site or by device. Read from the interface counters through
-// lib/ifUtilisation — the same queries Device Monitoring and Interface
-// Performance draw — and the site binding from /api/devices/locations.
+// Capacity — per-link headroom over the chosen window and when each link is
+// on course to reach 90 %, from GET /api/flows/capacity (P2, tracker 400).
 //
-// What P1 does NOT compute is said on screen, not faked: the 95th percentile,
-// the headroom left and the days until a link reaches 90 % need the per-link
-// series the P2 traffic APIs will serve (tracker).
+// Read from the INTERFACE COUNTERS, not from flows: counters are exact and
+// kept 30 days, while flow records are kept 7 days and a sampling router that
+// reports no rate reads low. For each link:
+//   · 95th percentile — the busiest 5 % of five-minute samples set aside, so
+//     one burst does not read as a full link (the busier direction);
+//   · peak — the highest five-minute rate;
+//   · headroom — the speed minus the 95th percentile;
+//   · reaches 90 % — a straight line through each complete day's 95th
+//     percentile; given only with 14 days of history and a steady trend.
+// A link whose router reports no speed (or an implausible one) keeps its
+// throughput and gets no percentage, headroom or forecast — said on screen.
+// A row opens that link in Right now.
 
 import { useMemo, useState } from "react";
-import { api, type Device, type DeviceLocationRow } from "../../services/api";
+import { api } from "../../services/api";
 import { operatorError } from "../../lib/errors";
-import { buildDeviceNames } from "../../lib/deviceNames";
 import AskIris from "../../components/AskIris";
 import { Segmented, StatStrip, Stat } from "../../components/ui";
 import { fmtBps } from "../../components/board/panels";
-import { ifSpeedBps, ifUtilPct, overWindow } from "../../lib/ifUtilisation";
-import { capacityRows, fmtPctOrDash, groupCapacity, utilTone, UTIL_CRIT, UTIL_WARN, type CapacityRow } from "./flowsModel";
+import {
+  capacityFromApi, forecastText, forecastTone, groupCapacity, utilTone, windowQuery, UTIL_CRIT,
+  type CapacityRow, type FlowsWindow,
+} from "./flowsModel";
 import { useTicked } from "./useTicked";
 import { UtilMeter } from "./viz";
 
 const SHOWN = 100;
 
-const Pct = ({ v }: { v?: number }) => <UtilMeter pct={v} />;
+const pct = (v: number | null): number | undefined => (v === null ? undefined : v);
 
-export default function Capacity({ since }: { since: number }) {
+export default function Capacity({ win, onOpenLink }: { win: FlowsWindow; onOpenLink: (l: { exporter: string; ifIndex: string }) => void }) {
   const [by, setBy] = useState<"site" | "device">("site");
+  const [showNoSpeed, setShowNoSpeed] = useState(false);
+  const wq = windowQuery(win);
 
-  const devices = useTicked<Device[]>(() => api.devices(), []);
-  const locations = useTicked<{ devices: DeviceLocationRow[] }>(() => api.deviceLocations(), []);
-  const names = useMemo(() => buildDeviceNames(devices.data ?? []), [devices.data]);
-  const sites = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const d of locations.data?.devices ?? []) if (d.site) m.set(d.id, d.site);
-    return m;
-  }, [locations.data]);
+  const cap = useTicked(() => api.flowsCapacity(wq, SHOWN), [JSON.stringify(wq)]);
+  const rows = useMemo(() => capacityFromApi(cap.data?.interfaces), [cap.data]);
+  const { groups, noSpeed } = useMemo(() => groupCapacity(rows, by), [rows, by]);
+  const withSpeed = rows.filter((r) => r.speed_basis === "reported");
+  const overCrit = withSpeed.filter((r) => (r.p95_pct ?? 0) >= UTIL_CRIT).length;
+  const soon = withSpeed.filter((r) => r.forecast.status === "rising" && (r.forecast.days_to_90 ?? Infinity) <= 30).length;
+  const tightest = withSpeed[0];
+  const err = cap.error ? operatorError(cap.error, "Link capacity could not be read for this window.") : null;
+  const total = cap.data?.total ?? rows.length;
 
-  const util = useTicked(async () => {
-    const q = (expr: string) => api.metricsQuery(expr).then((r) => r.data?.result ?? []);
-    const [avgIn, peakIn, avgOut, peakOut, speed] = await Promise.all([
-      q(overWindow("avg", ifUtilPct("", "in"), since)),
-      q(overWindow("max", ifUtilPct("", "in"), since)),
-      q(overWindow("avg", ifUtilPct("", "out"), since)),
-      q(overWindow("max", ifUtilPct("", "out"), since)),
-      q(ifSpeedBps("")),
-    ]);
-    return { avgIn, peakIn, avgOut, peakOut, speed };
-  }, [since]);
-
-  const rows = useMemo(() => (util.data ? capacityRows(util.data, names, sites) : []), [util.data, names, sites]);
-  const groups = useMemo(() => groupCapacity(rows.slice(0, SHOWN), by), [rows, by]);
-  const overCrit = rows.filter((r) => (r.peak ?? 0) >= UTIL_CRIT).length;
-  const overWarn = rows.filter((r) => (r.peak ?? 0) >= UTIL_WARN).length;
-  const err = util.error ? operatorError(util.error, "Link utilisation could not be read for this window.") : null;
+  const open = (r: CapacityRow) => {
+    if (r.exporter && r.ifindex) onOpenLink({ exporter: r.exporter, ifIndex: r.ifindex });
+  };
+  const linkName = (r: CapacityRow, withDevice: boolean) =>
+    `${withDevice ? `${r.device_name || r.device_id} · ` : ""}${r.if_name || `interface ${r.ifindex}`}`;
 
   return (
     <>
       <StatStrip>
-        <Stat label="Links measured" value={util.data ? String(rows.length) : "—"} />
-        <Stat label={`Peaked above ${UTIL_CRIT}%`} value={util.data ? String(overCrit) : "—"} tone={overCrit ? "bad" : ""} />
-        <Stat label={`Peaked above ${UTIL_WARN}%`} value={util.data ? String(overWarn) : "—"} tone={overWarn ? "warn" : ""} />
-        <Stat label="Busiest peak" value={rows[0] ? fmtPctOrDash(rows[0].peak) : "—"} tone={utilTone(rows[0]?.peak)} />
+        <Stat label="Links measured" value={cap.data ? String(total) : "—"} />
+        <Stat label={`95th percentile above ${UTIL_CRIT}%`} value={cap.data ? String(overCrit) : "—"} tone={overCrit ? "bad" : ""} />
+        <Stat label="Reach 90% within 30 days" value={cap.data ? String(soon) : "—"} tone={soon ? "warn" : ""} />
+        <Stat
+          label={tightest ? `Least headroom · ${linkName(tightest, true)}` : "Least headroom"}
+          value={tightest?.headroom_bps !== null && tightest?.headroom_bps !== undefined ? `${fmtBps(tightest.headroom_bps)} free` : "—"}
+          tone={utilTone(pct(tightest?.p95_pct ?? null))}
+        />
       </StatStrip>
 
       <div className="panel" style={{ minWidth: 0 }}>
         <div className="panel-tools">
           <span className="tr-title">
-            <h3>Link utilisation</h3>
-            <AskIris topic="flows.capacity" label="Link utilisation" />
+            <h3>Link capacity</h3>
+            <AskIris topic="flows.capacity" label="Link capacity" />
           </span>
           <Segmented<"site" | "device">
             value={by}
@@ -79,45 +81,92 @@ export default function Capacity({ since }: { since: number }) {
             onChange={setBy}
           />
         </div>
-        <p className="mini-meta tr-note" data-testid="capacity-next">Coming next: 95th percentile · headroom · days until 90%.</p>
         {err ? (
           <div className="empty tr-error">{err}</div>
         ) : rows.length === 0 ? (
           <div className="empty board-empty">
-            <div className="board-empty-msg">{util.loading ? "Reading link utilisation…" : "No link reports its speed yet."}</div>
+            <div className="board-empty-msg">{cap.loading ? "Reading link capacity…" : "No interface counters for this window yet."}</div>
           </div>
         ) : (
-          <table className="ds-table tr-cap" aria-label="Link utilisation">
+          <table className="ds-table tr-cap" aria-label="Link capacity">
             <thead>
               <tr>
                 <th scope="col">Link</th>
                 <th scope="col" className="num">Speed</th>
-                <th scope="col" className="num">Average</th>
+                <th scope="col" className="num">95th percentile</th>
                 <th scope="col" className="num">Peak</th>
-                <th scope="col" className="num">Peak in</th>
-                <th scope="col" className="num">Peak out</th>
+                <th scope="col" className="num">Headroom</th>
+                <th scope="col">Reaches 90%</th>
               </tr>
             </thead>
             {groups.map((g) => (
               <tbody key={g.group}>
                 <tr className="tr-cap-group"><th scope="rowgroup" colSpan={6}>{g.group}</th></tr>
-                {g.rows.map((r: CapacityRow) => (
-                  <tr key={r.key}>
-                    <td title={`interface index ${r.ifIndex}`}>
-                      {by === "site" ? `${r.deviceName} · ` : ""}{r.ifName || `interface ${r.ifIndex}`}
+                {g.rows.map((r) => (
+                  <tr
+                    key={r.key}
+                    className={r.exporter ? "tr-cap-row" : undefined}
+                    onClick={() => open(r)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") open(r);
+                    }}
+                    tabIndex={r.exporter ? 0 : undefined}
+                    title={r.exporter ? "Open this link in Right now" : `interface index ${r.ifindex}`}
+                  >
+                    <td>{linkName(r, by === "site")}</td>
+                    <td className="num">{r.speed_bps ? fmtBps(r.speed_bps) : "—"}</td>
+                    <td className="num"><UtilMeter pct={pct(r.p95_pct)} title={r.p95_bps !== null ? fmtBps(r.p95_bps) : undefined} /></td>
+                    <td className="num"><UtilMeter pct={pct(r.peak_pct)} title={r.peak_bps !== null ? fmtBps(r.peak_bps) : undefined} /></td>
+                    <td className="num">{r.headroom_bps !== null ? `${fmtBps(r.headroom_bps)} free` : "—"}</td>
+                    <td className={`tr-forecast ${forecastTone(r.forecast)}`} title={r.forecast.r2 !== null ? `Trend fit R² ${r.forecast.r2}` : undefined}>
+                      {forecastText(r.forecast)}
                     </td>
-                    <td className="num">{r.speedBps ? fmtBps(r.speedBps) : "—"}</td>
-                    <td className="num"><Pct v={r.avg} /></td>
-                    <td className="num"><Pct v={r.peak} /></td>
-                    <td className="num"><Pct v={r.peakIn} /></td>
-                    <td className="num"><Pct v={r.peakOut} /></td>
                   </tr>
                 ))}
               </tbody>
             ))}
           </table>
         )}
-        {rows.length > SHOWN && <p className="fact-line tr-fact">The {SHOWN} busiest of {rows.length} links are shown.</p>}
+        {noSpeed.length > 0 && (
+          <div className="tr-nospeed">
+            <button className="btn-ghost" aria-expanded={showNoSpeed} onClick={() => setShowNoSpeed((v) => !v)}>
+              Links with no reported speed ({noSpeed.length})
+            </button>
+            {showNoSpeed && (
+              <>
+                <p className="mini-meta tr-note">
+                  These routers do not report a usable interface speed, so there is no percentage, headroom or forecast — only the throughput.
+                </p>
+                <table className="ds-table tr-cap" aria-label="Links with no reported speed">
+                  <thead>
+                    <tr>
+                      <th scope="col">Link</th>
+                      <th scope="col" className="num">95th percentile</th>
+                      <th scope="col" className="num">Peak</th>
+                      <th scope="col">Why</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {noSpeed.map((r) => (
+                      <tr key={r.key} onClick={() => open(r)} className={r.exporter ? "tr-cap-row" : undefined}>
+                        <td>{linkName(r, true)}</td>
+                        <td className="num">{r.p95_bps !== null ? fmtBps(r.p95_bps) : "—"}</td>
+                        <td className="num">{r.peak_bps !== null ? fmtBps(r.peak_bps) : "—"}</td>
+                        <td>{r.speed_basis === "implausible" ? "Reported speed is lower than the traffic it carries" : "Speed not reported"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
+        <p className="mini-meta tr-note" data-testid="capacity-method">
+          95th percentile and peak use five-minute rates over this window (busier direction). "Reaches 90%" fits a straight line through each complete day's
+          95th percentile over the last {cap.data?.forecast.days ?? 28} days; it needs {cap.data?.forecast.min_days ?? 14} days and a steady trend.
+          {cap.data?.forecast.unavailable ? " The daily history could not be read just now, so no forecast is shown." : ""}
+        </p>
+        {total > rows.length && <p className="fact-line tr-fact">The {rows.length} busiest of {total} links are shown.</p>}
       </div>
     </>
   );

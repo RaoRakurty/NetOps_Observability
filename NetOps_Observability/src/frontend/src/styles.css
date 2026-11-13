@@ -4796,6 +4796,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .flows-page .tr-cap tbody tr:not(.tr-cap-group):hover { background: var(--hover); }
 .flows-page .tr-cap .num { text-align: right; }
 .flows-page .tr-cap-group th { background: var(--surface-2, var(--hover)); font-weight: 600; color: var(--fg); }
+/* P2 (tracker 400): a capacity row opens its link; forecast and mover tones; "reads low" marker */
+.flows-page .tr-cap-row { cursor: pointer; }
+.flows-page .tr-cap-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.flows-page .tr-forecast.warn { color: var(--flow-util-warn-fg); font-weight: 600; }
+.flows-page .tr-forecast.bad { color: var(--flow-util-crit-fg); font-weight: 600; }
+.flows-page .tr-warn { color: var(--flow-util-warn-fg); font-weight: 600; }
+.flows-page .tr-reads-low { color: var(--flow-util-warn-fg); cursor: help; }
+.flows-page .tr-nospeed { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
+.flows-page .tr-nospeed > .btn-ghost { align-self: flex-start; }
 
 .help-panel.tr-about { width: min(560px, calc(100vw - var(--sidebar-w, 64px) - 8px)); }
 .tr-about .tr-about-body { overflow: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: 20px; }
