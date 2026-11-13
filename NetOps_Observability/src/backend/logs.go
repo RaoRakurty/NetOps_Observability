@@ -261,6 +261,9 @@ func (s *server) credScrubRefresh(ctx context.Context) {
 	if err := s.credScrub.Refresh(ctx); err != nil {
 		logError("credscrub", "configured SNMP communities could not be re-read after a credential change; the previous set stays in force", errf(err))
 	}
+	// The at-rest set follows the same change (tracker 387 (a)), so a new
+	// community is dropped from ConfD's session lines from the next reload on.
+	s.publishCommunityFingerprints()
 }
 
 // logsSearchResponseCap bounds how much of one search answer is held in memory

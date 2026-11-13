@@ -583,3 +583,40 @@ func TestConcurrentMaskAndRefresh(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestFingerprintsCoverConfiguredAndRetiredUnderTheirTenant: the at-rest drop
+// (tracker 387 (a)) needs every value the read path masks, retired ones
+// included, each under its OWN tenant; and nothing but the fingerprint leaves.
+func TestFingerprintsCoverConfiguredAndRetiredUnderTheirTenant(t *testing.T) {
+	w := &swappable{}
+	w.set([]Value{{Tenant: "T_A", Text: comm}, {Tenant: "", Text: comm2}, {Tenant: "t_b", Text: "ab"}})
+	s := New(w.source)
+	if err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.set([]Value{{Tenant: "", Text: comm2}}) // comm retires from t_a
+	if err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	got := s.Fingerprints(func(tenant, value string) string {
+		seen = append(seen, tenant+"|"+value)
+		return "fp(" + tenant + ")" + fmt.Sprint(len(value))
+	})
+	want := []TenantFP{{Tenant: "", FP: "fp()" + fmt.Sprint(len(comm2))}, {Tenant: "t_a", FP: "fp(t_a)" + fmt.Sprint(len(comm))}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("Fingerprints = %v, want %v (the 2-character value is ineligible, as for masking)", got, want)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("fp called %d times, want 2: %v", len(seen), seen)
+	}
+	for _, f := range got {
+		if strings.Contains(f.FP, comm) || strings.Contains(f.FP, comm2) {
+			t.Fatal("a value reached the result")
+		}
+	}
+	var nilS *Scrubber
+	if nilS.Fingerprints(func(string, string) string { return "x" }) != nil || s.Fingerprints(nil) != nil {
+		t.Fatal("nil scrubber or nil fp must return nil")
+	}
+}

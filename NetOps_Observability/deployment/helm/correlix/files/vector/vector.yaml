@@ -77,6 +77,20 @@ secret:
   opensearch:
     type: exec
     command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/opensearch"]
+  # Tracker 387 (a), owner D1: the community-fingerprint key (rendered by
+  # scripts/install.py from .env's CREDSCRUB_FP_KEY into
+  # data/secrets/credscrub/aggregator) and the api's published fingerprint set
+  # (data/api/enrichment/community_fp.txt, read by cx-credfp-set.sh: a missing
+  # file is an empty set, never a refused config). The syslog lane's "D1 AT
+  # REST" block reads both through the CX_CREDFP_KEY / CX_CREDFP_SET env vars,
+  # which compose and helm set to the two references; unset, they expand to
+  # nothing and these backends never run (preflight, `vector test`).
+  credscrub:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/conf/cx-secret-exec.sh", "/run/secrets/credscrub"]
+  credfpset:
+    type: exec
+    command: ["/bin/sh", "/etc/vector/conf/cx-credfp-set.sh", "/etc/vector/enrichment/community_fp.txt"]
 
 # ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
@@ -1891,6 +1905,145 @@ transforms:
       ots = to_unix_timestamp(parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? now())
       skew_s = ots - to_unix_timestamp(parse_timestamp(to_string(.ingested_at) ?? "", "%+") ?? now())
       if abs(skew_s) > 300 { .clock_skew_s = skew_s }
+
+      # ── D1 AT REST: an SNMP community never leaves this tier (tracker 387 (a)) ──
+      #
+      # Owner decision D1: drop the community, store only that one was present.
+      # The lines below can carry one, and this is the last stage before Kafka,
+      # so a value replaced here never reaches netops.syslog, the correlation
+      # engine, OpenSearch, an export or a model (the read-path masks stay as
+      # defence in depth):
+      #
+      #   * CERTAIN by shape, always replaced: ConfD opening a session `via snmp`
+      #     (it names the session by the community the request carried), ConfD
+      #     refusing a request (`SNMP authentication failed`, the community twice),
+      #     net-snmp's `bad community name: X`, Junos's `unknown community name
+      #     (X)`, and a logged configuration command `snmp-server community X`
+      #     (IOS, IOS-XE, NX-OS, EOS, AOS-CX) or `set snmp community X` (Junos).
+      #   * KNOWN by value: ConfD's `assigned to groups` and `terminated session`
+      #     lines look exactly like a person's session (D7 keeps those users), so
+      #     the user slot is replaced only when it IS one of the platform's own
+      #     communities. The api publishes their keyed fingerprints
+      #     (internal/credfp: base64url(HMAC-SHA256(key, scope + ":" + value)),
+      #     scope = this line's tenant or "*" for a platform value) through the
+      #     cx-credfp-set.sh backend; the key arrives through cx-secret-exec.sh.
+      #     Both resolve once per config load and live in memory only; the reload
+      #     wrapper reloads when the published set changes. A tenant's set is
+      #     matched only against that tenant's lines (then the platform's "*"),
+      #     so one tenant's communities can never edit another tenant's lines (§3a).
+      #
+      # The replacement is a token, `snmp-community:<12 chars of the tenant-scoped
+      # fingerprint>`: stable per (tenant, community) under one key, so repeated
+      # sessions still group, and meaningless without the key. The line also
+      # gains `snmp_community_present: true`, the trap lane's flag.
+      #
+      # With no key configured (a deployment that does not set CX_CREDFP_KEY) the
+      # certain shapes are still replaced, with the bare token `snmp-community`,
+      # and the by-value lines cannot be matched: that is said, rate-limited, on
+      # the aggregator's log rather than passing silently.
+      cx_cfp_msg = string(.message) ?? ""
+      cx_cfp_u = ""
+      cx_cfp_certain = false
+      if contains(cx_cfp_msg, "audit user: ") {
+        cx_cfp_m = parse_regex(cx_cfp_msg, r'^audit user: (?P<u>[^/\s]{1,64})/\d{1,12} (?P<v>created new session via snmp|assigned to groups|terminated session)') ?? {}
+        cx_cfp_u = string(cx_cfp_m.u) ?? ""
+        cx_cfp_certain = (string(cx_cfp_m.v) ?? "") == "created new session via snmp"
+        if cx_cfp_u == "" {
+          cx_cfp_m = parse_regex(cx_cfp_msg, r'^audit user: (?P<u>.{1,256}?)/\d{1,12} SNMP authentication failed') ?? {}
+          cx_cfp_u = string(cx_cfp_m.u) ?? ""
+          cx_cfp_certain = cx_cfp_u != ""
+        }
+      } else if contains(downcase(cx_cfp_msg), "community") {
+        # A configuration command as logged (IOS/IOS-XE/NX-OS/EOS/AOS-CX
+        # `snmp-server community X`, Junos `set snmp community X`), then a refused
+        # request as net-snmp (`bad community name: X`) and Junos SNMPD_AUTH_FAILURE
+        # (`unknown community name (X)`) print it. Prose such as "unauthorized
+        # SNMP community from 192.0.2.1" matches none of them.
+        cx_cfp_m = parse_regex(cx_cfp_msg, r'(?i)(?:^|[\s:\x27"])(?:no\s+)?(?:snmp-server\s+community|set\s+snmp\s+community)\s+"?(?P<u>[^"\s\x27]{1,256})') ?? {}
+        cx_cfp_u = string(cx_cfp_m.u) ?? ""
+        if cx_cfp_u == "" {
+          cx_cfp_m = parse_regex(cx_cfp_msg, r'(?i)\bbad community name:?\s+(?P<u>\S{1,256})') ?? {}
+          cx_cfp_u = string(cx_cfp_m.u) ?? ""
+        }
+        if cx_cfp_u == "" {
+          cx_cfp_m = parse_regex(cx_cfp_msg, r'(?i)\bcommunity name \((?P<u>[^)]{1,256})\)') ?? {}
+          cx_cfp_u = string(cx_cfp_m.u) ?? ""
+        }
+        cx_cfp_certain = cx_cfp_u != ""
+      }
+      if cx_cfp_u != "" {
+        cx_cfp_key = "${CX_CREDFP_KEY:-}"
+        cx_cfp_scope = downcase(strip_whitespace(tenant_resolved))
+        if cx_cfp_scope == "" || cx_cfp_scope == "global" { cx_cfp_scope = "*" }
+        cx_cfp_hit = cx_cfp_certain
+        cx_cfp_token = "snmp-community"
+        if cx_cfp_key != "" {
+          cx_cfp_fp = encode_base64(hmac(cx_cfp_scope + ":" + cx_cfp_u, cx_cfp_key, algorithm: "SHA-256"), padding: false, charset: "url_safe")
+          cx_cfp_token = "snmp-community:" + slice!(cx_cfp_fp, 0, 12)
+          if !cx_cfp_hit {
+            cx_cfp_set = "${CX_CREDFP_SET:-}"
+            cx_cfp_hit = contains(cx_cfp_set, "," + cx_cfp_scope + "/" + cx_cfp_fp + ",")
+            if !cx_cfp_hit && cx_cfp_scope != "*" {
+              cx_cfp_gfp = encode_base64(hmac("*:" + cx_cfp_u, cx_cfp_key, algorithm: "SHA-256"), padding: false, charset: "url_safe")
+              cx_cfp_hit = contains(cx_cfp_set, ",*/" + cx_cfp_gfp + ",")
+            }
+          }
+        } else if !cx_cfp_certain {
+          log("credscrub: no community fingerprint key (CX_CREDFP_KEY unset), so ConfD session lines that may carry an SNMP community are stored unmatched (owner D1); render it with scripts/install.py", level: "warn", rate_limit_secs: 300)
+        }
+        if cx_cfp_hit {
+          # A value of four characters or more is replaced wherever it stands in
+          # these fields (the read path's eligibility rule); a shorter one only
+          # where the line's shape puts it, so a two-letter community cannot
+          # eat the letters of every other word.
+          cx_cfp_pairs = [[cx_cfp_u, cx_cfp_token]]
+          if strlen(cx_cfp_u) < 4 {
+            cx_cfp_pairs = [
+              ["audit user: " + cx_cfp_u + "/", "audit user: " + cx_cfp_token + "/"],
+              ["community name: " + cx_cfp_u, "community name: " + cx_cfp_token],
+              ["community name (" + cx_cfp_u, "community name (" + cx_cfp_token],
+              ["community " + cx_cfp_u, "community " + cx_cfp_token],
+              ["community \"" + cx_cfp_u, "community \"" + cx_cfp_token],
+              [" for " + cx_cfp_u, " for " + cx_cfp_token],
+              [" of " + cx_cfp_u, " of " + cx_cfp_token],
+              [" to " + cx_cfp_u, " to " + cx_cfp_token],
+              [" by " + cx_cfp_u, " by " + cx_cfp_token]
+            ]
+          }
+          if exists(.message) {
+            cx_cfp_s = cx_cfp_msg
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .message = cx_cfp_s
+          }
+          if exists(.message_original) {
+            cx_cfp_s = string(.message_original) ?? ""
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .message_original = cx_cfp_s
+          }
+          if exists(.title) {
+            cx_cfp_s = string(.title) ?? ""
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .title = cx_cfp_s
+          }
+          if exists(.summary) {
+            cx_cfp_s = string(.summary) ?? ""
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .summary = cx_cfp_s
+          }
+          if exists(.dedup_key) {
+            cx_cfp_s = string(.dedup_key) ?? ""
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .dedup_key = cx_cfp_s
+          }
+          if exists(.correlation_key) {
+            cx_cfp_s = string(.correlation_key) ?? ""
+            for_each(cx_cfp_pairs) -> |_i, p| { cx_cfp_s = replace(cx_cfp_s, string(p[0]) ?? "", string(p[1]) ?? "") }
+            .correlation_key = cx_cfp_s
+          }
+          if (string(.audit_user) ?? "") == cx_cfp_u { .audit_user = cx_cfp_token }
+          .snmp_community_present = true
+        }
+      }
 
       # ── Scale P0: tenant partition key ──────────────────────────────────
       # Kafka message key = the tenant this event was attributed to ("global"

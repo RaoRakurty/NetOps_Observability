@@ -360,6 +360,7 @@ before anything restarts.
 | `clickhouse/grafana/password` | grafana | `$__file{}` in its provisioning, at start |
 | `grafana/admin/password` | grafana | `GF_SECURITY_ADMIN_PASSWORD__FILE`, at start |
 | `postgres/api/pgpass` | api | §10 |
+| `credscrub/api/password`, `credscrub/aggregator/password` | api, vector-aggregator | api: re-read on change, then republishes the community fingerprint set; aggregator: Vector exec backend, at the reload that set change triggers (tracker 387 (a)) |
 
 **Still in a container's environment, and why.** These were not part of this move:
 each needs its own check of what the image supports.
