@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for tunnel-vpn. Dialect + contract: skill_cases.go.
+
+case: every tunnel down on the device sends the investigation to whether it can reach the far ends
+question: vpn down on edge-1
+ui:
+  - correlation_id=case-tun-alldown
+  - device=edge-1
+signals:
+  - state:tunnel=down
+  - state:tunnel_type=ipsec
+  - state:if_oper=up
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - tunnel-vpn entry
+  - l3-reachability rule
+expect_selected: rule
+expect_reason: every tunnel on the device is down
+expect_verdict:
+  - route
+  - next hop
+expect_never:
+  - sdwan-overlay
+  - interface-down
+expect_select: tunnel-vpn
+
+---
+
+case: a down interface beneath the tunnels makes the transport the fault
+question: ipsec tunnel down on edge-1
+ui:
+  - correlation_id=case-tun-ifdown
+  - device=edge-1
+signals:
+  - state:tunnel=down
+  - state:tunnel_type=gre
+  - state:if_oper=down
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - tunnel-vpn entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: beneath the tunnels is operationally down
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - l3-reachability
+  - sdwan-overlay
+
+---
+
+case: an SD-WAN edge's tunnels are read through the overlay method
+question: is the tunnel up on edge-1
+ui:
+  - correlation_id=case-tun-sdwan
+  - device=edge-1
+signals:
+  - state:tunnel=partial
+  - state:tunnel_type=sdwan
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - tunnel-vpn entry
+  - sdwan-overlay rule
+expect_selected: rule
+expect_reason: SD-WAN tunnels
+expect_verdict:
+  - control plane
+  - transport
+expect_never:
+  - l3-reachability
+
+---
+
+case: some tunnels down leaves the device's own negotiation messages to name the failed peer
+question: tunnel flapping on edge-1
+ui:
+  - correlation_id=case-tun-partial
+  - device=edge-1
+signals:
+  - state:tunnel=partial
+  - state:tunnel_type=ipsec
+  - state:if_oper=up
+notes:
+  - the inventory reports each tunnel up or down; IKE (phase 1) and IPsec (phase 2) are not read separately here
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - tunnel-vpn entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: some tunnels are down while others are up
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - IKE (phase 1) and IPsec (phase 2) are not read separately
+expect_never:
+  - sdwan-overlay
+  - l3-reachability

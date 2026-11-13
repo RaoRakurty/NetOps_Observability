@@ -4,8 +4,10 @@
 # Behavioural cases for path-seam-handoff. Dialect + contract: skill_cases.go.
 #
 # Ownership is the whole point of this method, and ownership is not a machine
-# fact the tools declare: it is read off the seam. So every handoff here is a
-# human-authored reason offered as a CLOSED choice — never a deterministic hop.
+# fact the tools declare: it is read off the seam. So every OWNERSHIP handoff
+# here is a human-authored reason offered as a CLOSED choice. Since v2 (NetClaw
+# Batch 2) the measured path is a machine fact (get_path_evidence: state:path),
+# so "every hop is clean" and "the hop sequence changed" are deterministic hops.
 
 case: a seam question with no ownership fact takes no hop
 question: packet loss across the isp handoff
@@ -77,3 +79,96 @@ expect_verdict:
   - service-side
 expect_never:
   - optics-degraded
+
+---
+
+case: every measured path clean hop by hop exonerates the network and hands off to the application side
+question: is it the network on edge-1
+ui:
+  - correlation_id=case-seam-clean
+  - device=edge-1
+signals:
+  - state:path=clean
+evidence:
+  - topology
+  - finding
+expect_chain:
+  - path-seam-handoff entry
+  - app-edge-5xx rule
+expect_selected: rule
+expect_reason: clean hop by hop
+expect_verdict:
+  - baseline
+  - service-side
+expect_never:
+  - log-confirmation
+  - optics-degraded
+
+---
+
+case: a measured path whose hop sequence changed pins the route change before blaming latency
+question: latency on the wan from edge-1
+ui:
+  - correlation_id=case-seam-changed
+  - device=edge-1
+signals:
+  - state:path=changed
+evidence:
+  - topology
+  - finding
+expect_chain:
+  - path-seam-handoff entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: hop sequence changed
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - app-edge-5xx
+
+---
+
+case: loss that persists to the destination takes no hop and is named with its seam
+question: packet loss across the isp handoff from edge-1
+ui:
+  - correlation_id=case-seam-persist
+  - device=edge-1
+signals:
+  - state:path=loss_persistent
+evidence:
+  - topology
+  - finding
+expect_chain:
+  - path-seam-handoff entry
+expect_selected: none
+expect_verdict:
+  - seam
+  - owner
+expect_never:
+  - app-edge-5xx
+  - log-confirmation
+
+---
+
+case: a device no prober measures through has an unmeasured path, which is never called clean
+question: hop loss on the wan on edge-1
+ui:
+  - correlation_id=case-seam-unmeasured
+  - device=edge-1
+signals:
+  - state:path=not_measured
+notes:
+  - no measured path starts at edge-1 — Correlix's probers do not measure from or through it, so path loss and latency are UNMEASURED here, not clean
+evidence:
+  - topology
+expect_chain:
+  - path-seam-handoff entry
+expect_selected: none
+expect_verdict:
+  - hop
+  - baseline
+expect_notes:
+  - UNMEASURED here, not clean
+expect_never:
+  - app-edge-5xx

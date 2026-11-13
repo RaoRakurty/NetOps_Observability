@@ -69,6 +69,18 @@ NetClaw skill procedures at a newer pin:
 The command tables, thresholds as applied, parsers (built from output captured
 on real devices) and the skills' routing are this project's own.
 
+NetClaw ingestion Batch 2 (2026-11-13), same pin, same terms:
+
+  Skills  : pyats-troubleshoot    -> l3-reachability
+            gtrace-path-analysis  -> path-seam-handoff
+            fortigate-ops         -> tunnel-vpn
+            sdwan-ops             -> sdwan-overlay
+
+Only the methods are re-expressed. The reads they rest on (the SD-WAN overlay,
+the tunnel inventory and the measured paths) are this project's own collectors;
+nothing is pinged or traced from a customer device. "NetClaw" is named for
+attribution only.
+
 --------------------------------------------------------------------------------
 elkjs — Eclipse Public License 2.0
 --------------------------------------------------------------------------------

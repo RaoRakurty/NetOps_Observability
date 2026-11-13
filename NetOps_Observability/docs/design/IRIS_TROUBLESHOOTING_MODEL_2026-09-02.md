@@ -351,6 +351,53 @@ lists them):
   capture) and a `show policy-map interface` class/queue parser (no lab edge has
   a QoS policy, so no real output exists).
 
+**NetClaw ingestion Batch 2 (2026-11-13).** Three new methods and one rewrite,
+same pin, plus three read-only tools over data Correlix ALREADY collects —
+nothing is sent to or originated from a customer device (owner: no ping or
+traceroute from customer devices):
+
+- Tools: `get_overlay_state` (the edge's OMP sessions to its controllers and its
+  BFD sessions folded per transport colour, from the reconciler's overlay
+  snapshot — SNMP and controller facts merged), `get_tunnel_state` (the device's
+  rows in `netops.tunnels` under the Tunnels view's own two-ended scope, plus its
+  SD-WAN pairs; a second app-side filter keeps only rows naming the device) and
+  `get_path_evidence` (the path graph's LIVE observations for paths the device
+  is the vantage of: where loss first appears, whether it persists to the last
+  responding hop, the seam at the lossy hop, and a hop-count change against the
+  previous observation). Each is tenant-scoped (§3a test:
+  `iris_wan_reads_isolation_test.go`), renders no address (peers, endpoints and
+  hops are names, ordinals or positions) and says UNKNOWN / UNMEASURED when its
+  source is unread rather than describing absence.
+- New `state:` facets declared by those tools (not the battery):
+  `overlay_ctl`, `overlay_bfd` (up | partial | down | none), `tunnel`
+  (up | partial | down | none), `tunnel_type` (sdwan | ipsec | gre | other) and
+  `path` (clean | loss_transient | loss_persistent | changed | not_measured).
+  The loader now asks for the facet's OWN tool (`skillStateFacetTool`): a
+  `state:path=` rule needs `get_path_evidence` in the skill, not
+  `get_device_state`.
+- `l3-reachability` (layer igp): the destination looked up live in the routing
+  table (`target=@prefix`, skipped honestly with no prefix in scope); no route →
+  `bgp-prefix-missing`, an unresolved next hop → `interface-down`, a route that
+  is present → the measured path (`path-seam-handoff`).
+- `tunnel-vpn` (layer wan_overlay): the tunnels and the interface beneath them;
+  an SD-WAN edge → `sdwan-overlay`, a down interface → `interface-down`, every
+  tunnel down → `l3-reachability` (can it reach the far ends?), some down → the
+  device's negotiation messages. It discloses that IKE and IPsec are not read
+  separately.
+- `sdwan-overlay` (layer wan_overlay, `applies_when: fact:adjacency=overlay`):
+  control plane first, then BFD per transport, underlay before overlay; lost
+  controllers or one transport down → `interface-down`; every BFD session down
+  with the controllers up → the edge's own log.
+- `path-seam-handoff` v2 gathers `get_path_evidence`: every measured path clean
+  → `app-edge-5xx` (the network is exonerated); a changed hop sequence → the
+  log, to pin the route change. Ownership hand-offs stay human-authored choices.
+- No new parsers: the reads come from collectors, and `l3-reachability` uses the
+  existing route / ARP parsers. Not built, recorded in tracker 420: an IKE /
+  IPsec SA battery area (no lab device terminates classic IPsec — SD-WAN edges
+  key through OMP), ARP parsers for IOS-XR / Junos / VRP, and DTLS control
+  connections to vManage / vBond (stored per controller entity in
+  `controller_state_current`, not yet mapped to inventory devices).
+
 ### 3.4 Proactive checks and intent cross-reference — Phase A4
 - Map NetClaw's heartbeat list onto the engine: non-FULL OSPF / non-UP IS-IS
   (igpmon), BGP IDLE/ACTIVE (bgp watch), CPU/memory thresholds, config change in
