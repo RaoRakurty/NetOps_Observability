@@ -261,3 +261,67 @@ func TestUpgradeSeedKeepsAModelInstallOnOnce(t *testing.T) {
 		t.Fatal("an install with no model in use starts with both switches off")
 	}
 }
+
+// TestFeaturesAPIOnTheAISwitch: over HTTP, on a Team licence without the
+// add-on the platform admin's PUT is 402 and nothing changes; licensed, it
+// needs the acknowledgement, then saves and audits. A tenant admin is refused
+// either way (platform-global, §3a.3).
+func TestFeaturesAPIOnTheAISwitch(t *testing.T) {
+	f := newFeatureFixture(t)
+	k := newLicTestKey(t)
+	f.s.entitlements = k.service(t, k.issue(t, entitlement.TierTeam, nil, nil))
+	f.s.wireAISwitchesForTest(t, false)
+	on := map[string]any{"env": aientitlement.SwitchModels, "value": true, "acknowledge": aientitlement.SwitchModels}
+	if st, b := f.call("PUT", "/api/platform/features", f.admin, on); st != http.StatusPaymentRequired || !strings.Contains(string(b), "add-on") {
+		t.Fatalf("unlicensed PUT = %d %s, want 402 naming the add-on", st, b)
+	}
+	if r := f.row(aientitlement.SwitchModels); r["available"] != false || r["running"] != false || r["console_only"] != true {
+		t.Fatalf("unlicensed row: %v", r)
+	}
+	if f.s.aiModelsSwitchOn() {
+		t.Fatal("a refused PUT changed the switch")
+	}
+
+	f.s.entitlements = licence.NewUnlimitedService()
+	if st, _ := f.call("PUT", "/api/platform/features", f.admin, map[string]any{"env": aientitlement.SwitchModels, "value": true}); st != http.StatusBadRequest {
+		t.Fatalf("licensed PUT without the acknowledgement = %d, want 400", st)
+	}
+	if st, b := f.call("PUT", "/api/platform/features", f.admin, on); st != http.StatusOK {
+		t.Fatalf("licensed, acknowledged PUT = %d %s", st, b)
+	}
+	if !f.s.aiModelsSwitchOn() {
+		t.Fatal("the switch must run once saved")
+	}
+	if v, ok := f.env.Lookup(aientitlement.SwitchModels); ok {
+		t.Fatalf("a console-only switch must never be written to the environment (got %q)", v)
+	}
+	evs, err := f.s.audit.List("", true, auditQuery{Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audited := 0
+	for _, e := range evs {
+		if e.Detail["action"] == "feature_flag_set" && e.Detail["flag"] == aientitlement.SwitchModels && e.Status == http.StatusOK {
+			audited++
+		}
+	}
+	if audited != 1 {
+		t.Fatalf("audit rows for the AI switch = %d, want 1", audited)
+	}
+
+	// A tenant admin cannot reach the switch.
+	if st, _ := f.call("POST", "/api/tenants", f.admin, map[string]any{"name": "Acme Prod"}); st != http.StatusCreated {
+		t.Fatal("create tenant")
+	}
+	if st, _ := f.call("POST", "/api/users", f.admin, map[string]any{"username": "tadmin", "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": "acme-prod"}); st != http.StatusCreated {
+		t.Fatal("create user")
+	}
+	tok := login(t, f.ts, "tadmin", "Passw0rd!2345").Token
+	off := map[string]any{"env": aientitlement.SwitchModels, "value": false}
+	if st, _ := f.call("PUT", "/api/platform/features", tok, off); st != http.StatusForbidden {
+		t.Fatalf("tenant admin PUT = %d, want 403", st)
+	}
+	if !f.s.aiModelsSwitchOn() {
+		t.Fatal("a refused tenant admin changed the platform switch")
+	}
+}

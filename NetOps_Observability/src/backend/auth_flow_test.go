@@ -98,9 +98,9 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	// mechanism and the semantics.
 	s.entitlements = licence.NewUnlimitedService()
 	// The AI add-on follows the same licence-neutral rule: licensed, "Iris AI
-	// models" ON, "AI investigations" OFF — the posture every AI test was
-	// written against (a key configured, FEATURE_AI_TOOLS unset). A test that
-	// needs another posture calls setAIModelsForTest; the gate itself is proved
+	// models" ON, "AI investigations" ON only when the test set FEATURE_AI_TOOLS
+	// before building the server — the posture every AI test was written against.
+	// A test that needs another posture calls setAIModelsForTest; the gate itself is proved
 	// against the zero value (add-on off) in ai_addon_gate_test.go.
 	setAIModelsLikeLegacyEnv(t, s)
 	// LICENCE-END
