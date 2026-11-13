@@ -195,8 +195,13 @@ func SafeProbeDestination(kind, host string, port int) string {
 	}
 	if kind == "http" {
 		u, err := url.Parse(host)
-		if err != nil || u.Host == "" {
+		if err != nil {
+			// An unparseable destination is withheld, not guessed at: the line
+			// then reads "checks an address", which is honest about not saying.
 			return ""
+		}
+		if u.Host == "" {
+			return "" // a URL with no host names nothing safe to show
 		}
 		h := u.Hostname()
 		if h == "" || isAddressText(h) {
