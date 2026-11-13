@@ -1739,32 +1739,40 @@ FEATURE_PAGERDUTY_NOTIFICATIONS=false
 PAGERDUTY_KEY=
 
 FEATURE_EMAIL_NOTIFICATIONS=false
-SMTP_HOST=                     # e.g. smtp.example.com:587
-SMTP_FROM=                     # e.g. monitoring@example.com
+# e.g. smtp.example.com:587
+SMTP_HOST=
+# e.g. monitoring@example.com
+SMTP_FROM=
 SMTP_USER=
 SMTP_PASS=
-SMTP_TO=                       # comma-separated list of recipient addresses
+# comma-separated list of recipient addresses
+SMTP_TO=
 
 # SMS via Twilio (requires a Twilio account)
 FEATURE_TWILIO_NOTIFICATIONS=false
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
-TWILIO_FROM_NUMBER=            # E.164 format, e.g. +15551234567
-TWILIO_TO_NUMBERS=             # comma-separated E.164 numbers
+# E.164 format, e.g. +15551234567
+TWILIO_FROM_NUMBER=
+# comma-separated E.164 numbers
+TWILIO_TO_NUMBERS=
 
 # SMS via AWS SNS (cheaper than Twilio; SMS only, no voice)
 FEATURE_SNS_NOTIFICATIONS=false
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
-AWS_REGION=                    # e.g. us-east-1
-SNS_PHONE_NUMBERS=             # comma-separated E.164 numbers, OR set SNS_TOPIC_ARN
+# e.g. us-east-1
+AWS_REGION=
+# comma-separated E.164 numbers, OR set SNS_TOPIC_ARN
+SNS_PHONE_NUMBERS=
 SNS_TOPIC_ARN=
 
 # ITSM — ServiceNow auto-ticketing. Opens a deduped incident when an alert at
 # or above SERVICENOW_MIN_SEVERITY fires and auto-resolves it when the alert
 # clears. See docs/ITSM_INTEGRATION.md.
 FEATURE_SERVICENOW_NOTIFICATIONS=false
-SERVICENOW_INSTANCE_URL=       # e.g. https://dev12345.service-now.com
+# e.g. https://dev12345.service-now.com
+SERVICENOW_INSTANCE_URL=
 SERVICENOW_USER=
 SERVICENOW_PASSWORD=
 SERVICENOW_MIN_SEVERITY=critical   # critical|error|warning|notice|info
@@ -1774,13 +1782,16 @@ SERVICENOW_ASSIGNMENT_GROUP=
 # deduped issue at/above JIRA_MIN_SEVERITY and transitions it to Done when the
 # alert clears. Auth is an Atlassian email + API token. See docs/ITSM_INTEGRATION.md.
 FEATURE_JIRA_NOTIFICATIONS=false
-JIRA_BASE_URL=                 # e.g. https://yourorg.atlassian.net
+# e.g. https://yourorg.atlassian.net
+JIRA_BASE_URL=
 JIRA_EMAIL=
 JIRA_API_TOKEN=
-JIRA_PROJECT_KEY=              # e.g. NETOPS
+# e.g. NETOPS
+JIRA_PROJECT_KEY=
 JIRA_ISSUE_TYPE=Task
 JIRA_MIN_SEVERITY=critical     # critical|error|warning|notice|info
-JIRA_RESOLVE_TRANSITION=       # transition name/id to close; blank = auto-detect
+# transition name/id to close; blank = auto-detect
+JIRA_RESOLVE_TRANSITION=
 
 # SSO — OIDC/SAML/LDAP brokered by Keycloak (DEFAULT-ON: "sso" is in the
 # default COMPOSE_PROFILES; drop it there for footprint-constrained installs).
@@ -1795,12 +1806,15 @@ JIRA_RESOLVE_TRANSITION=       # transition name/id to close; blank = auto-detec
 # WINS over this file (see docs/runbooks/okta-sso-setup.md §2b). Editing them
 # here does nothing once a real config has been saved.
 OIDC_ENABLED=false
-OIDC_ISSUER=                   # e.g. http://localhost:{port}/auth/realms/netops
+# e.g. http://localhost:{port}/auth/realms/netops
+OIDC_ISSUER=
 OIDC_CLIENT_ID=netops
 OIDC_CLIENT_SECRET=
-OIDC_REDIRECT_URL=             # e.g. http://localhost:{port}/api/auth/sso/callback
+# e.g. http://localhost:{port}/api/auth/sso/callback
+OIDC_REDIRECT_URL=
 OIDC_POST_LOGIN_URL=/
-OIDC_PROVIDERS=                # extra IdP buttons: id:Label:kind,comma-separated
+# extra IdP buttons: id:Label:kind,comma-separated
+OIDC_PROVIDERS=
 OIDC_ADMIN_ROLES=super-admin,admin,netops-admin
 OIDC_OPERATOR_ROLES=operator,netops-operator
 OIDC_DEFAULT_ROLE=read-only
