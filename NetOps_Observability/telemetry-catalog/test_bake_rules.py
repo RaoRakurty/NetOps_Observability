@@ -58,7 +58,8 @@ def test_the_lanes_are_the_declared_ones(rows):
     #   shape) and three known_benign rows (fp-um default MAC, kernel hrtimer, OSPF DD 2-Way).
     # · 102 with tracker 388's syslog link cause: SR Linux port/subinterface state and the
     #   SONiC portmgrd shutdown.
-    assert len(runtime) == 102, (
+    # · 103 with 387 vendor wave 2: the Comware V7 PHY_UPDOWN link row.
+    assert len(runtime) == 103, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 

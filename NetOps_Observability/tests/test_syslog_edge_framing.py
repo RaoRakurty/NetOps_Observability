@@ -140,6 +140,8 @@ SONIC_ERR = (b"<27>2026-11-09T09:00:00.123456+00:00 sonic-1 ERR syncd#syncd: SAI
 COMWARE = (b"<187>May 30 06:44:22 sw-core1 %%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is DOWN.")
 COMWARE_LOC = (b"<190>Nov 24 16:22:21 2016 Sysname %%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; "
                b"VTY logged in from 192.168.1.26")
+# The same table's CMCC example: one percent sign, and an unpadded day before the year.
+COMWARE_CMCC = (b"<189>Oct 9 14:59:04 2016 Sysname %10SHELL/5/SHELL_LOGIN: VTY logged in from 192.168.1.21")
 # Dell PowerSwitch N (DNOS 6): SC4S tests/test_dell_emc_networking.py (Apache-2.0).
 DNOS6 = (b"<189>Nov 13 10:00:00 dn1 CMDLOGGER[emWeb]: cmd_logger_api.c(83) 29333 %% NOTE "
          b"CLI:10.1.3.211:administrator:User  logged in")
@@ -264,6 +266,11 @@ FRAMES = [
         "message": "%%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; VTY logged in from 192.168.1.26",
         "parser_id": "hpe_comware.v1", "parser_status": "parsed", "event_type": "shell_login",
         "audit_user": "VTY", "audit_source": "192.168.1.26", "event_category": "management_audit"}),
+    ("Comware CMCC, an unpadded day and a year keep the hostname", COMWARE_CMCC, {
+        "frame_format": "rfc3164", "hostname": "Sysname", "appname": "unknown",
+        "severity": "notice",
+        "message": "%10SHELL/5/SHELL_LOGIN: VTY logged in from 192.168.1.21",
+        "parser_id": "hpe_comware.v1", "parser_status": "parsed", "event_type": "shell_login"}),
     ("DNOS 6, the component is the program", DNOS6, {
         "frame_format": "rfc3164", "hostname": "dn1", "appname": "CMDLOGGER", "procid": "emWeb",
         "severity": "notice",
