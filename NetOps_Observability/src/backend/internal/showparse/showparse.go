@@ -138,6 +138,17 @@ const (
 	// CmdPlatformClock is the NTP synchronization read (NetClaw ingestion
 	// Batch 1): whether the clock is synchronized, to what, and how far off.
 	CmdPlatformClock = "platform-clock"
+	// CmdEVPNPeers is the VXLAN tunnel-endpoint (VTEP) peer read and CmdEVPNVNI
+	// the VNI read of an EVPN-VXLAN fabric (NetClaw ingestion Batch 3). No
+	// parser is registered: no fabric output has been captured here, so the
+	// battery returns their output as raw evidence only.
+	CmdEVPNPeers = "evpn-vtep-peers"
+	CmdEVPNVNI   = "evpn-vni"
+	// CmdFHRPBrief is the first-hop redundancy (HSRP / VRRP) summary and
+	// CmdLACPMembers the link-aggregation member read (NetClaw ingestion
+	// Batch 3). Raw evidence only until real output is captured.
+	CmdFHRPBrief   = "fhrp-brief"
+	CmdLACPMembers = "lacp-members"
 	// CmdLogs is the bounded device log-buffer read.
 	CmdLogs = "logs"
 )
@@ -150,6 +161,7 @@ func Commands() []string {
 		CmdARP, CmdMAC,
 		CmdPlatformCPU, CmdPlatformMemory, CmdPlatformEnv, CmdPlatformUptime,
 		CmdPlatformClock,
+		CmdEVPNPeers, CmdEVPNVNI, CmdFHRPBrief, CmdLACPMembers,
 		CmdLogs,
 	}
 }

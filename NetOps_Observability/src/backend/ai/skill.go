@@ -97,6 +97,12 @@ const (
 	LayerApplication SkillLayer = "application"
 	LayerSecurity    SkillLayer = "security"
 	LayerLogs        SkillLayer = "logs"
+	// LayerAnalysis holds reasoning methods that are not a fault layer and not
+	// the entry method (NetClaw ingestion Batch 3): reading the network's
+	// design, and contrasting what IS affected with what is NOT. There is
+	// still exactly one entry method (LayerMethod); these rank LAST, so any
+	// fault-layer skill that matches a question equally well wins the tie.
+	LayerAnalysis SkillLayer = "analysis"
 )
 
 // skillLayerOrder is the bisection order the method skill follows. Index 0 is
@@ -104,6 +110,7 @@ const (
 var skillLayerOrder = []SkillLayer{
 	LayerMethod, LayerPhysical, LayerPlatform, LayerL2, LayerIGP, LayerBGP,
 	LayerWANOverlay, LayerPathSeam, LayerServices, LayerApplication, LayerSecurity, LayerLogs,
+	LayerAnalysis,
 }
 
 func validSkillLayer(l SkillLayer) bool {
@@ -229,6 +236,9 @@ var skillToolAllowlist = map[string]bool{
 	"get_overlay_state": true,
 	"get_tunnel_state":  true,
 	"get_path_evidence": true,
+	// NetClaw ingestion Batch 3 (2026-11-13): the workspace's own synthetic
+	// probes — recorded runs only; it never starts a probe.
+	"get_probe_results": true,
 }
 
 // SkillOrigin says who wrote a skill, which decides where its text may go.
@@ -432,6 +442,17 @@ var skillStateFacets = map[string]map[string]bool{
 		"clean": true, "loss_transient": true, "loss_persistent": true,
 		"changed": true, "not_measured": true,
 	},
+	// NetClaw ingestion Batch 3 (2026-11-13), declared by get_probe_results over
+	// the workspace's synthetic probes — the run OUTCOMES the prober recorded:
+	//   probe  over every matched probe that has run: passing | partial | failing,
+	//          or none when no probe matching the question is declared at all
+	//   dns    over the DNS probes: resolving, or the worst failure class —
+	//          timeout (the resolver did not answer), nxdomain (the resolver
+	//          says the name does not exist), failing (another resolver error)
+	//          — or none when no DNS probe is declared
+	// A probe that has not run yet declares nothing: unmeasured is never passing.
+	"probe": {"passing": true, "partial": true, "failing": true, "none": true},
+	"dns":   {"resolving": true, "timeout": true, "nxdomain": true, "failing": true, "none": true},
 }
 
 // skillStateFacetTool names the tool that declares a facet, for the facets the
@@ -444,6 +465,8 @@ var skillStateFacetTool = map[string]string{
 	"tunnel":      "get_tunnel_state",
 	"tunnel_type": "get_tunnel_state",
 	"path":        "get_path_evidence",
+	"probe":       "get_probe_results",
+	"dns":         "get_probe_results",
 }
 
 // StateFacetTool returns the tool that declares a `state:` facet.
@@ -658,6 +681,30 @@ func stateConditionHuman(facet, value string) string {
 			return "a measured path's hop count changed since the previous measurement"
 		default:
 			return "no path through the device is measured"
+		}
+	case "probe":
+		switch value {
+		case "passing":
+			return "every synthetic probe that ran succeeded"
+		case "partial":
+			return "some synthetic probes are failing while others succeed"
+		case "failing":
+			return "every synthetic probe that ran is failing"
+		default:
+			return "no synthetic probe matching the question is configured"
+		}
+	case "dns":
+		switch value {
+		case "resolving":
+			return "the DNS probes resolve their names"
+		case "timeout":
+			return "a DNS probe's resolver is not answering in time"
+		case "nxdomain":
+			return "a DNS probe's resolver answers that the name does not exist"
+		case "failing":
+			return "a DNS probe's resolver returns an error"
+		default:
+			return "no DNS probe is configured"
 		}
 	case "platform":
 		switch value {

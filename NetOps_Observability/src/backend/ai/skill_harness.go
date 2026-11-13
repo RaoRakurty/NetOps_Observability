@@ -224,6 +224,10 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("PathEvidence")
 			return PathEvidence{}, nil
 		},
+		ProbeResults: func(context.Context, Principal, ProbeQuery) (ProbeResults, error) {
+			env.touch("ProbeResults")
+			return ProbeResults{Scoped: true}, nil
+		},
 		// The N-B2 engine projections (get_blast_radius, get_affected_entities
 		// are on the skill allowlist): the case's scripted outcome is what a
 		// step returns, so this seam only has to exist.

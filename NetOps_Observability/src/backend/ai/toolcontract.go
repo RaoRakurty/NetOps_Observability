@@ -243,6 +243,9 @@ var toolContracts = map[string]ToolContract{
 	"get_overlay_state": {1, CapRead, 10 * time.Second, 60, out(31, defaultMaxTextChars)},
 	"get_tunnel_state":  {1, CapRead, 10 * time.Second, 60, out(21, defaultMaxTextChars)},
 	"get_path_evidence": {1, CapRead, 10 * time.Second, 60, out(10, defaultMaxTextChars)},
+	// NetClaw ingestion Batch 3: the caller's synthetic probes — up to 20
+	// probes, or one "none configured" line.
+	"get_probe_results": {1, CapRead, 10 * time.Second, 60, out(20, defaultMaxTextChars)},
 	// PROBES: open a read-only SSH session to a device. The collector's own
 	// 60 s per-device timeout fires first; the contract is the backstop.
 	"run_protocol_diagnostic": {1, CapProbe, 75 * time.Second, 6, out(60, defaultMaxTextChars)},
