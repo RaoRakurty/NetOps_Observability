@@ -450,7 +450,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-F1 | SHIPPED | Org Context Store `internal/orgcontext`, `/api/ai/context` (`main.go`), prompt block `ai/org_context_prompt.go` (`f54fcf72`) | — |
 | N-F2 | PARTIAL | loader seams (`5779f267`), store + case gate + HTTP handler in `internal/tenantrunbook` (`eab4be5a`) | **not wired**: `/api/ai/runbooks` is not mounted in `main.go`, nothing outside the package imports it, so runbooks never reach an answer; no UI |
 | N-F3 | MISSING | BM25 exists for product docs only (`ai/docs_index.go`) | tenant-scoped retrieval over Network context, runbooks and incident history |
-| N-F4 | SHIPPED | `internal/incidentfp`, RCA card, `find_similar_incidents`, planner route `similar_incidents` (`ai/similar_answer.go`) | how a past case was resolved is not recorded (built next: resolution capture) |
+| N-F4 | SHIPPED | `internal/incidentfp`, RCA card, `find_similar_incidents`, planner route `similar_incidents` (`ai/similar_answer.go`) | — (recorded fixes shipped 2026-11-13: `internal/rcaresolution`, migration 0071; recall says them as history) |
 | N-F5 | MISSING | — | controlled learning loop (resolved incident → proposed context/runbook/alias → review → activate) |
 | N-F6 | SHIPPED | `internal/srcauthority` (`d9f7affd`) | — |
 | N-G1, G3, G4 | SHIPPED | help pages + golden per nav leaf; page-aware help (`5e516d62`); tie-break + scoreboard `ai/route_tiebreak.go` (`29929b6b`); model-first planner `ai/planner.go` (#239, #241) | — |
@@ -465,7 +465,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-I4 | MISSING | — | ApprovalGate + two write tools |
 | N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
 | N-I6 | MISSING | — | ChatOps |
-| N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | a card built from a similar incident's recorded resolution (built next) |
+| N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | — (origin `similar_resolution` shipped 2026-11-13: a card grounded in a recorded fix) |
 
 ### Phase A — Land the in-flight work and harden the runtime (foundation)
 

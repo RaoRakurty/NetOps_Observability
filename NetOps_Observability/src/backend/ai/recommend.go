@@ -29,6 +29,10 @@ const (
 	RecFromSkill     = "skill_decision"
 	RecFromLiveState = "live_state"
 	RecFromPlaybook  = "kb_playbook"
+	// RecFromResolution: a fix an operator RECORDED for a similar past case
+	// (internal/rcaresolution). Its basis is that resolution's citation only —
+	// a similarity alone never makes a recommendation.
+	RecFromResolution = "similar_resolution"
 )
 
 // Card bounds.
@@ -63,6 +67,8 @@ func recOrigin(m AnswerMode) string {
 		return RecFromLiveState
 	case ModeInvestigationPlan:
 		return RecFromPlaybook
+	case ModeSimilarIncidents:
+		return RecFromResolution
 	}
 	return ""
 }
@@ -83,6 +89,11 @@ func recBasis(origin string, cites []Citation) []string {
 			strings.HasPrefix(id, "doc:") || strings.HasPrefix(id, "playbook:") || strings.HasPrefix(id, "tac:")
 		if (origin == RecFromPlaybook) != isDoc {
 			continue // a playbook rests on its document; every other card on evidence
+		}
+		// A recorded-fix card rests on the recorded resolutions and nothing
+		// else; a resolution is never the basis of any other card.
+		if (origin == RecFromResolution) != (c.Kind == "resolution") {
+			continue
 		}
 		out = append(out, id)
 		if len(out) == maxRecBasis {
@@ -141,6 +152,21 @@ func RecommendationsFor(a Answer) []Recommendation {
 	case RecFromPlaybook:
 		title = "Suggested checks"
 		why = "From the playbook cited."
+	case RecFromResolution:
+		title = "Fixes that worked before"
+		why = "From how operators recorded fixing similar earlier incidents. Similar is not the same cause — confirm it applies here first."
+		// Only the recorded-fix steps belong on this card; the generic "open a
+		// past case" step stays in the plain list.
+		var fixSteps []string
+		for _, s := range steps {
+			if strings.HasPrefix(s, "Consider ") {
+				fixSteps = append(fixSteps, s)
+			}
+		}
+		if len(fixSteps) == 0 {
+			return nil
+		}
+		steps = fixSteps
 	}
 	return []Recommendation{{
 		ID: "rec-1", Title: clipRec(title, maxRecTitle), Steps: steps, Why: why, Basis: basis,
