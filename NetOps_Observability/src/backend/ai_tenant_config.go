@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
@@ -38,6 +39,18 @@ func (s *server) aiModelsSwitchOn() bool { return s.features.Enabled(aientitleme
 func (s *server) aiInvestigationsSwitchOn() bool {
 	return s.features.Enabled(aientitlement.SwitchInvestigations)
 }
+
+// The model planner's exact-match cache bounds (ai/planner.go): route ids
+// only, so a few thousand entries cost well under a megabyte.
+const (
+	aiPlanCacheSize = 4096
+	aiPlanCacheTTL  = 6 * time.Hour
+)
+
+// aiModelFirst: Iris routes every question through the model planner — the
+// AI add-on is licensed and its "Iris AI models" switch is on. The provider
+// gate (providerCandidatesForTier) still refuses each call on its own terms.
+func (s *server) aiModelFirst() bool { return s.aiModelLicensed() && s.aiModelsSwitchOn() }
 
 // aiInvestigationsPlatformOn is the platform half of the investigation gate
 // (what FEATURE_AI_TOOLS used to answer): licensed, models on, investigations on.

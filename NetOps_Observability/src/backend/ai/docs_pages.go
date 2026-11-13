@@ -242,7 +242,16 @@ const maxPageHelpBody = 1200
 // no valid route came with it, or when the docs index is not wired — the
 // classic path then runs unchanged.
 func (o *Orchestrator) answerPageHelp(question string, uiContext map[string]string) (Answer, bool) {
-	if o.Docs == nil || !isPageQuestion(question) {
+	if !isPageQuestion(question) {
+		return Answer{}, false
+	}
+	return o.pageHelp(uiContext)
+}
+
+// pageHelp is the page's own documentation, for a question already known to
+// be about the page (the phrase match above, or the model planner's choice).
+func (o *Orchestrator) pageHelp(uiContext map[string]string) (Answer, bool) {
+	if o.Docs == nil {
 		return Answer{}, false
 	}
 	_, page, ok := pageForContext(uiContext)

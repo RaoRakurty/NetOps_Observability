@@ -412,6 +412,11 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// caller's visible devices.
 		Scope:     s.aiScopeFacts(claims),
 		Inventory: s.aiInventoryFacts(claims),
+		// Model-first routing (ai/planner.go, owner 2026-11-13): with the AI
+		// add-on licensed and its models switch on, the model reads every
+		// question and picks the arm; otherwise the deterministic router does.
+		ModelFirst: s.aiModelFirst(),
+		PlanCache:  s.aiPlanCache,
 	}
 	// The model-with-tools path for a question no deterministic arm covers:
 	// the agent loop on THIS orchestrator's registry and policy engine (one

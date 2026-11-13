@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aiprovider"
 	"netops/backend/internal/aiscore"
 	"netops/backend/models"
@@ -409,5 +410,19 @@ func TestRoutingVocabulariesAgree(t *testing.T) {
 	if strings.Join(ai.RoutePaths, ",") != strings.Join(aiscore.RoutingPaths, ",") ||
 		strings.Join(ai.RouteReasons, ",") != strings.Join(aiscore.RoutingReasons, ",") {
 		t.Fatalf("ai %v %v ≠ aiscore %v %v", ai.RoutePaths, ai.RouteReasons, aiscore.RoutingPaths, aiscore.RoutingReasons)
+	}
+	// The planner's decision is ledgered as a plan step, not a tool run: the
+	// ledger's mirror of its name must be the same string.
+	if ai.PlannerTool != aidecision.RoutePlannerTool || ai.RouteTieBreakTool != aidecision.RouteTieBreakTool {
+		t.Fatalf("router step names drifted: %q/%q vs %q/%q", ai.PlannerTool, ai.RouteTieBreakTool, aidecision.RoutePlannerTool, aidecision.RouteTieBreakTool)
+	}
+}
+
+// Model-first is the AI add-on: licensed AND the models switch on. Neither
+// alone turns it on (owner 2026-11-13; ai/planner.go).
+func TestModelFirstNeedsTheLicensedAddOn(t *testing.T) {
+	s := &server{}
+	if s.aiModelFirst() {
+		t.Fatal("no licence and no switch: the deterministic router decides")
 	}
 }

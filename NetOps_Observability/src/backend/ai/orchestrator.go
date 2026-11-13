@@ -107,6 +107,17 @@ type Orchestrator struct {
 	Scope          *ScopeFacts
 	Inventory      func(ctx context.Context, p Principal) (InventoryFacts, error)
 	PriorQuestions []string
+	// Model-first routing (planner.go, owner 2026-11-13). ModelFirst is set by
+	// the server when the AI add-on is licensed and the "Iris AI models" switch
+	// is on: one fast-tier model call then picks the arm that answers, however
+	// the question is phrased. false = the deterministic router decides, exactly
+	// as before. PlanCache is the server's process-lived exact-match cache of
+	// those decisions (nil = no cache: every question is planned).
+	ModelFirst bool
+	PlanCache  *PlannerCache
+	// forceTopology: the planner routed a question about how the network is
+	// built, so the grounded model answer carries the topology evidence.
+	forceTopology bool
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -485,6 +496,28 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		classifyCtx = withoutSubject(uiContext)
 	}
 	_, named := explainTopicFromAsk(question, uiContext)
+	// Model-first routing (planner.go): with the AI add-on on, the model reads
+	// the question and picks the arm. A problem in view keeps its subject
+	// binding below, and a named (i) topic is a lookup, not a question to read.
+	if o.ModelFirst && subject == "" && !named {
+		_, _, pageKnown := pageForContext(classifyCtx)
+		ch, ok, perr := o.planRoute(ctx, p, question, pageKnown)
+		if ok {
+			pans, handled, aerr := o.answerPlanned(ctx, p, question, classifyCtx, ch)
+			if handled {
+				return pans, aerr
+			}
+			perr = aerr
+		}
+		// The planner could not route it (no model answered, an invalid reply,
+		// or the chosen arm could not answer): the deterministic path below
+		// answers, and says the model did not.
+		defer func() {
+			if err == nil {
+				discloseNoPlanner(&ans, perr)
+			}
+		}()
+	}
 	if !named && subject == "" {
 		if ans, handled := o.answerPageHelp(question, uiContext); handled {
 			o.routed(ArmPageHelp, ans.Mode)
@@ -550,7 +583,14 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		o.routed(ArmData, ans.Mode)
 		return ans, nil
 	}
+	return o.answerClassic(ctx, p, question, plan, uiContext)
+}
 
+// answerClassic is the governed classic path for one plan: module governance,
+// the skills layer, the capability fallback, and the answer-mode switch. The
+// deterministic router reaches it with the plan it classified; the model
+// planner (planner.go) with the plan of the arm it chose.
+func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question string, plan Plan, uiContext map[string]string) (Answer, error) {
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
 	// A "capability" plan carries no modules, so this loop is a no-op for it.
