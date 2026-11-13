@@ -3806,6 +3806,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/links", s.handleFlowsLinks)
 	mux.HandleFunc("/api/flows/links/series", s.handleFlowsLinkSeries)
 	mux.HandleFunc("/api/flows/links/movers", s.handleFlowsLinkMovers)
+	mux.HandleFunc("/api/flows/capacity", s.handleFlowsCapacity)
 	mux.HandleFunc("/api/topology/links", s.handleTopologyLinks) // LLDP-discovered adjacencies
 	mux.HandleFunc("/api/topology/view", s.handleTopologyView)   // resolved renderer-agnostic TopologyView
 	mux.HandleFunc("/api/topology/graph", s.handleTopologyGraph) // persistent reconciled graph (stable ids + stale)
