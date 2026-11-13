@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/flownames"
+	"netops/backend/internal/flowquery"
 	"netops/backend/internal/iana"
 	"netops/backend/models"
 )
@@ -886,6 +888,33 @@ func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (c
 // visible when every one of its addresses is ambiguous; the row policy already
 // limits a scoped read to {own, untagged}, so it widens nothing.
 func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporterCol string) (clause string, empty bool) {
+	cols := []string{srcCol, dstCol}
+	if exporterCol != "" {
+		cols = append(cols, exporterCol)
+	}
+	return s.addrClaimClause(claims, cols, cols)
+}
+
+// flowLinkTenantClauseFor is the STRICTER rule the link-level flow APIs use
+// (tracker 400, owner decision 2026-11-13): a link is an interface on a router,
+// so a scoped principal sees a link only on a router it owns — its own stamped
+// rows, or untagged rows whose EXPORTER is one of its unambiguous addresses. An
+// untagged record in which the caller's device is merely an endpoint (traffic
+// to it, seen by someone else's router) does not put that router's interface on
+// the caller's page. The cross-tenant exclusion is unchanged: a restricted
+// tenant's address at either end, or as the exporter, hides the row.
+func (s *server) flowLinkTenantClauseFor(claims jwtClaims) (clause string, empty bool) {
+	return s.addrClaimClause(claims, []string{"sampler_address"}, []string{"src_addr", "dst_addr", "sampler_address"})
+}
+
+// addrClaimClause is the one shape behind every address-keyed ClickHouse
+// clause. A scoped principal reads its own stamped rows plus the untagged rows
+// in which any of claimCols names one of its UNAMBIGUOUS addresses; with no
+// visible device it reads nothing (empty=true). A cross-tenant principal is
+// unrestricted, except that in the Global view a row naming a restricted
+// tenant's address in any of excludeCols is left out, and scoped INTO a
+// restricted tenant it reads nothing.
+func (s *server) addrClaimClause(claims jwtClaims, claimCols, excludeCols []string) (clause string, empty bool) {
 	claim, cross := s.untaggedClaimFor(claims)
 	// Compliance (operator-visibility): deny if the operator scoped into a
 	// restricted tenant; in the Global view exclude restricted tenants' devices
@@ -895,9 +924,9 @@ func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporter
 	} else if cross {
 		if len(rt.addrs) > 0 {
 			in := sqlInList(rt.addrs)
-			c := " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")"
-			if exporterCol != "" {
-				c += " AND " + exporterCol + " NOT IN (" + in + ")"
+			c := ""
+			for _, col := range excludeCols {
+				c += " AND " + col + " NOT IN (" + in + ")"
 			}
 			return c, false
 		}
@@ -909,9 +938,8 @@ func (s *server) addrTenantClauseCols(claims jwtClaims, srcCol, dstCol, exporter
 	parts := []string{ownTenantCond(claims)}
 	if len(claim.Addrs) > 0 {
 		in := sqlInList(claim.Addrs)
-		parts = append(parts, srcCol+" IN ("+in+")", dstCol+" IN ("+in+")")
-		if exporterCol != "" {
-			parts = append(parts, exporterCol+" IN ("+in+")")
+		for _, col := range claimCols {
+			parts = append(parts, col+" IN ("+in+")")
 		}
 	}
 	return " AND (" + strings.Join(parts, " OR ") + ")", false
@@ -1361,4 +1389,251 @@ func intToString(n int) string {
 // the fmt package twice (main.go already imports it).
 var fmtSscanf = func(s, format string, a ...any) (int, error) {
 	return fmtSscanfImpl(s, format, a...)
+}
+
+// ── Link-level flow APIs (tracker 400, Flows page P2; internal/flowquery) ────
+//
+// GET /api/flows/links         busiest links with the previous window, per-direction basis
+// GET /api/flows/links/series  one link's in/out per bucket over an exact window
+//
+// Same gate as every flow read (requireFlowsRead = explore), then the STRICTER
+// link ownership rule (flowLinkTenantClauseFor), and every statement runs at the
+// caller's tenant_scope through chRows, so the row policy holds even if a
+// clause were ever missing. Parameters are parsed fail-closed by flowquery: a
+// bad window, link, step or filter is a 400 and nothing is queried.
+
+// flowLinkDevice is what the page shows for a link's router.
+type flowLinkDevice struct{ id, name, site string }
+
+// flowLinkDevices indexes the caller's VISIBLE devices by (tenant, exporter
+// address) so a link names its router and site. Only a unique match names a
+// device: two visible devices on one address name neither. An untagged row
+// (tenant "") takes the device that alone holds its exporter address among the
+// visible ones — which for a scoped caller are only its own.
+func (s *server) flowLinkDevices(claims jwtClaims) func(tenant, exporter string) (flowLinkDevice, bool) {
+	tenant, cross := principalTenant(claims)
+	assign := s.geoAssignments(tenant, cross)
+	byKey := map[flowquery.CovKey][]flowLinkDevice{}
+	byAddr := map[string][]flowLinkDevice{}
+	for _, d := range s.visibleDevicesFor(claims) {
+		addr := flownames.NormAddr(d.Address)
+		if addr == "" {
+			continue
+		}
+		dev := flowLinkDevice{id: d.ID, name: d.Name, site: sotSiteFor(d, assign)}
+		if dev.name == "" {
+			dev.name = d.ID
+		}
+		if dev.site == "" && s.deviceLocations != nil {
+			if l, ok := s.deviceLocations.Lookup(discovery.DeviceIdentities(d)); ok {
+				dev.site = l.Site
+			}
+		}
+		k := flowquery.CovKey{Tenant: deviceTenant(d), Exporter: addr}
+		byKey[k] = append(byKey[k], dev)
+		byAddr[addr] = append(byAddr[addr], dev)
+	}
+	return func(tenant, exporter string) (flowLinkDevice, bool) {
+		if ds := byKey[flowquery.CovKey{Tenant: normTenant(tenant), Exporter: exporter}]; len(ds) == 1 {
+			return ds[0], true
+		}
+		if strings.TrimSpace(tenant) == "" {
+			if ds := byAddr[exporter]; len(ds) == 1 {
+				return ds[0], true
+			}
+		}
+		return flowLinkDevice{}, false
+	}
+}
+
+// flowStrictParams rejects the enum parameters the older routes silently
+// ignore: type must be netflow|ipfix|sflow and traffic must be "all".
+func flowStrictParams(r *http.Request) error {
+	q := r.URL.Query()
+	switch strings.ToLower(strings.TrimSpace(q.Get("type"))) {
+	case "", "netflow", "ipfix", "sflow":
+	default:
+		return errors.New("type must be netflow, ipfix or sflow")
+	}
+	if v := strings.TrimSpace(q.Get("traffic")); v != "" && !strings.EqualFold(v, "all") {
+		return errors.New(`traffic must be "all" or absent`)
+	}
+	return nil
+}
+
+// flowLinkTenantNarrow lets a CROSS-tenant caller read one tenant's records on a
+// shared exporter address (the links answer carries tenant_id for them). It only
+// ever narrows; a scoped caller's own clause already decides, so the parameter
+// is ignored for them.
+func flowLinkTenantNarrow(r *http.Request, claims jwtClaims) string {
+	if _, cross := principalTenant(claims); !cross {
+		return ""
+	}
+	v := strings.TrimSpace(r.URL.Query().Get("tenant"))
+	if v == "" {
+		return ""
+	}
+	return " AND tenant_id = " + chStringLiteral(normTenant(v))
+}
+
+type flowLinksBody struct {
+	Window flowquery.WindowEcho    `json:"window"`
+	Links  []flowquery.LinkRow     `json:"links"`
+	Count  int                     `json:"count"`
+	Basis  flowquery.ResponseBasis `json:"basis"`
+}
+
+func (s *server) handleFlowsLinks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requireFlowsRead(w, r)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	win, err := flowquery.ParseWindow(r.URL.Query(), now, flowquery.DefaultLimits)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	limit, err := intQuery(r, "limit", 50, 1, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := flowStrictParams(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	echo := win.Echo(now, chschema.RetentionConfig().Flows)
+	body := flowLinksBody{Window: echo, Links: []flowquery.LinkRow{}, Basis: flowquery.NewResponseBasis(0, 0)}
+	clause, empty := s.flowLinkTenantClauseFor(claims)
+	if empty {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	scope := clause + flowLinkTenantNarrow(r, claims) + flowTypeClause(r) + filter
+	rows, err := s.chRows(r, flowquery.LinksSQL(win, scope, limit))
+	if err != nil {
+		logError("flows", "links query failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	cov := map[flowquery.CovKey]flowquery.Coverage{}
+	if len(rows) > 0 {
+		covRows, err := s.chRows(r, flowquery.CoverageSQL(win, scope, flowquery.Exporters(rows)))
+		if err != nil {
+			logError("flows", "links coverage query failed", map[string]any{"error": err.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+			return
+		}
+		cov = flowquery.ParseCoverage(covRows)
+	}
+	links := flowquery.BuildLinks(rows, cov, !echo.PrevBeforeRetention)
+	device := s.flowLinkDevices(claims)
+	_, cross := principalTenant(claims)
+	for i := range links {
+		if d, ok := device(links[i].TenantID, links[i].Exporter); ok {
+			links[i].DeviceID, links[i].DeviceName, links[i].Site = d.id, d.name, d.site
+		}
+		if !cross {
+			links[i].TenantID = "" // a scoped caller's rows are all its own; never echo a tenant id
+		}
+	}
+	body.Links, body.Count, body.Basis = links, len(links), flowquery.Totals(cov)
+	writeJSON(w, http.StatusOK, body)
+}
+
+type flowLinkSeriesBody struct {
+	flowquery.SeriesBody
+	Exporter string `json:"exporter"`
+	IfIndex  uint32 `json:"ifindex"`
+}
+
+// sumCoverage folds one exporter's coverage across the tenants a cross-tenant
+// caller sees on it.
+func sumCoverage(cov map[flowquery.CovKey]flowquery.Coverage, exporter string) flowquery.Coverage {
+	var c flowquery.Coverage
+	for k, v := range cov {
+		if k.Exporter != exporter {
+			continue
+		}
+		c.Flows += v.Flows
+		c.PrevFlows += v.PrevFlows
+		c.RateReported += v.RateReported
+		c.NoIn += v.NoIn
+		c.NoOut += v.NoOut
+		c.Bytes += v.Bytes
+		c.BytesNoIn += v.BytesNoIn
+		c.BytesNoOut += v.BytesNoOut
+	}
+	return c
+}
+
+func (s *server) handleFlowsLinkSeries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requireFlowsRead(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	link, err := flowquery.ParseLink(q)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	now := time.Now()
+	win, err := flowquery.ParseWindow(q, now, flowquery.DefaultLimits)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	step, err := flowquery.PickStep(win.Span(), q.Get("step"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := flowStrictParams(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	from, to := flowquery.Snap(win.From, win.To, step)
+	echo := win.Echo(now, chschema.RetentionConfig().Flows)
+	clause, empty := s.flowLinkTenantClauseFor(claims)
+	var rows []map[string]any
+	var c flowquery.Coverage
+	if !empty {
+		// The link itself is the filter: the filter bar's device/interface keys
+		// are not applied a second time, only the platform-traffic exclusion.
+		scope := clause + flowLinkTenantNarrow(r, claims) + flowTypeClause(r) + flowTrafficClassClause(r)
+		rows, err = s.chRows(r, flowquery.SeriesSQL(link, from, to, step, scope))
+		if err != nil {
+			logError("flows", "link series query failed", map[string]any{"error": err.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+			return
+		}
+		covRows, err := s.chRows(r, flowquery.CoverageSQL(win, scope, []string{link.Exporter}))
+		if err != nil {
+			logError("flows", "link series coverage query failed", map[string]any{"error": err.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+			return
+		}
+		c = sumCoverage(flowquery.ParseCoverage(covRows), link.Exporter)
+	}
+	// A link the caller cannot see answers exactly like a link with no traffic:
+	// zero-filled buckets and no_flows — never a 403/404 that would confirm the
+	// router exists.
+	b := flowquery.BuildSeries(rows, from, to, step, now, c)
+	b.Window = echo
+	writeJSON(w, http.StatusOK, flowLinkSeriesBody{SeriesBody: b, Exporter: link.Exporter, IfIndex: link.IfIndex})
 }
