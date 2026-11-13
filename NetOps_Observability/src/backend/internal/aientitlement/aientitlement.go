@@ -7,28 +7,29 @@
 //
 // # Why a separate vocabulary from internal/entitlement
 //
-// internal/entitlement's Feature set is CLOSED and LOCKED by the owner (seven
-// commercial features; adding an eighth "gates a capability for every
-// customer, so it is an owner decision, not a diff"). Where the AI
-// capabilities sit commercially is still an OPEN owner decision (plan
-// docs/architecture/iris-natural-language-platform.md, owner decision 1:
-// "Tier placement of the AI capabilities — N-A7 makes it an entitlement
-// mapping, not code"). So the AI capabilities get their own atomic vocabulary,
-// and their tier placement is DATA (tiers.json, embedded beside this file),
-// never code. No tier or plan NAME appears in this package's Go source: a tier
-// is an opaque key the caller hands in, looked up in the data.
+// internal/entitlement's Feature set is CLOSED and LOCKED by the owner. The
+// commercial decision for AI (owner 2026-11-12, confirmed 2026-11-13) is ONE
+// entry there: `iris_model`, model-backed Iris, an add-on that the top tier
+// includes. Evidence-only Iris is core and free. This package keeps the finer
+// atomic vocabulary the routes gate on; the add-on reaches it as one input
+// (Inputs.ModelLicensed) and gates exactly the capabilities that call a
+// provider: Model and Investigate. The tier mapping (tiers.json, DATA) still
+// exists and grants every capability to every tier; no tier or plan NAME
+// appears in this package's Go source.
 //
-// # The three inputs, ANDed (default-closed)
+// # The inputs, ANDed (default-closed)
 //
-// A capability is granted only when ALL of these say yes:
+// A capability is granted only when ALL that apply to it say yes:
 //
-//  1. TIER     — the licence tier in force grants it (tiers.json). An unknown
+//  1. DEPLOYMENT — the Iris switch (FEATURE_AI, else the legacy
+//     FEATURE_COPILOT; on when both are unset).
+//  2. TIER     — the licence tier in force grants it (tiers.json). An unknown
 //     tier, an unparseable mapping or a nil Policy grants nothing.
-//  2. DEPLOYMENT — the existing feature flags allow it (FEATURE_AI /
-//     FEATURE_COPILOT for Iris as a whole, FEATURE_AI_TOOLS for the bounded
-//     investigation loop). These are the operator's on/off switches and keep
-//     their exact pre-N-A7 meaning.
-//  3. TENANT   — the caller's tenant is enabled for it (the platform owner's
+//  3. LICENCE  — Model and Investigate only: the `iris_model` add-on.
+//  4. SWITCH   — Model and Investigate only: the platform administrator's
+//     console-only "Iris AI models" switch, and for Investigate also "AI
+//     investigations" (SwitchModels / SwitchInvestigations). They start off.
+//  5. TENANT   — the caller's tenant is enabled for it (the platform owner's
 //     per-tenant AI switches, ai.TenantConfigStore). Cross-tenant principals
 //     (the platform owner) are not tenant-gated, exactly as before.
 //
@@ -87,14 +88,25 @@ const (
 	RunbookAuthor Entitlement = "ai.runbook.author"
 	// MCP — the MCP adapter over the tool gateway (N-I5). Unbacked.
 	MCP Entitlement = "ai.mcp"
+
+	// Model — MODEL-BACKED Iris (owner decisions 2026-11-12/13): any call to
+	// an AI provider made for this principal, whether the platform's key or
+	// the tenant's own (BYO) key — written answers, model chat, phrasing,
+	// model-assisted understanding, and the investigation loop's turns. It is
+	// the `iris_model` licence add-on AND the platform "Iris AI models"
+	// switch, on top of the tier mapping, the Iris switch and the tenant's
+	// assistant switch. Without it Iris is evidence-only: every route still
+	// answers from the platform's own data, with no provider call.
+	Model Entitlement = "ai.model"
 )
 
 // order is the closed vocabulary in display order.
-var order = []Entitlement{Chat, Investigate, NLQuery, ContextAuthor, RunbookAuthor, MCP}
+var order = []Entitlement{Chat, Model, Investigate, NLQuery, ContextAuthor, RunbookAuthor, MCP}
 
 // backed records which entitlements a shipped route or feature gates on.
 var backed = map[Entitlement]bool{
 	Chat:          true,
+	Model:         true,
 	Investigate:   true,
 	NLQuery:       true,
 	ContextAuthor: true,
@@ -122,6 +134,8 @@ func Label(e Entitlement) string {
 	switch e {
 	case Chat:
 		return "Iris assistant"
+	case Model:
+		return "Iris AI models"
 	case Investigate:
 		return "AI investigations"
 	case NLQuery:
@@ -225,10 +239,21 @@ func (p *Policy) Tiers() []string {
 // Flag names. These are the pre-existing operator switches; N-A7 maps them,
 // it does not rename or reinterpret them.
 const (
-	EnvAI           = "FEATURE_AI"           // Iris as a whole; wins when set
-	EnvCopilot      = "FEATURE_COPILOT"      // legacy Iris switch, honoured when FEATURE_AI is unset
-	EnvAITools      = "FEATURE_AI_TOOLS"     // the bounded investigation loop
+	EnvAI      = "FEATURE_AI"      // Iris as a whole (evidence-only included); wins when set
+	EnvCopilot = "FEATURE_COPILOT" // legacy Iris switch, honoured when FEATURE_AI is unset
+	// EnvAITools is NO LONGER A GATE (owner 2026-11-12/13). The investigation
+	// loop runs on the console-only SwitchInvestigations; this variable is read
+	// once, by the upgrade seed, to keep an install that already ran the loop
+	// running it.
+	EnvAITools      = "FEATURE_AI_TOOLS"
 	EnvAIToolsAllTn = "AI_TOOLS_ALL_TENANTS" // investigation loop for every tenant at once
+)
+
+// The platform administrator's console-only AI switches (Features page,
+// internal/featureflags). No environment variable sets them.
+const (
+	SwitchModels         = "IRIS_AI_MODELS"
+	SwitchInvestigations = "IRIS_AI_INVESTIGATIONS"
 )
 
 // IrisOn is the platform Iris switch with its historical semantics: ON by
@@ -247,16 +272,16 @@ func IrisOn(env func(string) string) bool {
 	return true
 }
 
-// DeploymentAllows reports whether the deployment's flags allow e.
+// DeploymentAllows reports whether the deployment's Iris switch allows e.
+// The model and investigation switches are console-only and arrive through
+// Inputs, not the environment.
 func DeploymentAllows(e Entitlement, env func(string) string) bool {
-	if !Valid(e) || !IrisOn(env) {
-		return false
-	}
-	if e == Investigate {
-		return env(EnvAITools) == "true"
-	}
-	return true
+	return Valid(e) && IrisOn(env)
 }
+
+// needsModel reports whether e calls an AI provider: the model capability
+// itself and the investigation loop, whose every turn is a model call.
+func needsModel(e Entitlement) bool { return e == Model || e == Investigate }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tenant switches
@@ -303,6 +328,13 @@ type Inputs struct {
 	Tenant   string
 	Cross    bool
 	Switches TenantSwitches
+	// ModelLicensed: the licence grants the `iris_model` add-on (the top tier
+	// includes it). Zero value: not licensed.
+	ModelLicensed bool
+	// ModelsOn / InvestigationsOn: the platform administrator's console-only
+	// switches (SwitchModels, SwitchInvestigations). Zero value: off.
+	ModelsOn         bool
+	InvestigationsOn bool
 }
 
 // Reason is why a capability was refused, as a stable machine token.
@@ -313,7 +345,12 @@ const (
 	ReasonUnknown   Reason = "unknown_entitlement"
 	ReasonDisabled  Reason = "disabled"    // a deployment flag is off
 	ReasonNotInTier Reason = "not_in_tier" // the licence tier's mapping does not grant it
-	ReasonTenantOff Reason = "tenant_off"  // the caller's tenant is not switched on
+	// ReasonNotLicensed: the licence does not carry the `iris_model` add-on.
+	ReasonNotLicensed Reason = "not_licensed"
+	// ReasonSwitchedOff: licensed, but the platform administrator has not
+	// turned the AI switch on (Features page).
+	ReasonSwitchedOff Reason = "switched_off"
+	ReasonTenantOff   Reason = "tenant_off" // the caller's tenant is not switched on
 )
 
 // Decision is the answer for one entitlement.
@@ -324,8 +361,10 @@ type Decision struct {
 }
 
 // Decide answers one entitlement. The checks run in a fixed order —
-// deployment, tier, tenant — so a refusal names the outermost switch that is
-// off (an operator who disabled Iris is told that, not that the tier lacks it).
+// deployment, tier, licence add-on, platform switch, tenant — so a refusal
+// names the outermost switch that is off (an operator who disabled Iris is told
+// that, not that the tier lacks it; an unlicensed install is told to license
+// the add-on, not to flip a switch it cannot turn on).
 func Decide(p *Policy, e Entitlement, in Inputs) Decision {
 	d := Decision{Entitlement: e}
 	switch {
@@ -335,6 +374,15 @@ func Decide(p *Policy, e Entitlement, in Inputs) Decision {
 		d.Reason = ReasonDisabled
 	case !p.TierGrants(in.Tier, e):
 		d.Reason = ReasonNotInTier
+	case needsModel(e) && !in.ModelLicensed:
+		d.Reason = ReasonNotLicensed
+	case needsModel(e) && !in.ModelsOn,
+		e == Investigate && !in.InvestigationsOn:
+		d.Reason = ReasonSwitchedOff
+	case e == Investigate && !TenantAllows(Model, in.Tenant, in.Cross, in.Switches, in.Env):
+		// The loop's turns are model calls: a tenant with the assistant off
+		// has no investigations either.
+		d.Reason = ReasonTenantOff
 	case !TenantAllows(e, in.Tenant, in.Cross, in.Switches, in.Env):
 		d.Reason = ReasonTenantOff
 	default:

@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -33,14 +32,13 @@ const (
 	aiToolsMaxCitations = 12              // citations returned to the UI
 )
 
-// featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
-func featureAIToolsEnabled() bool { return os.Getenv("FEATURE_AI_TOOLS") == "true" }
-
-// agentLoopEligible is the ai.investigate entitlement (N-A7): FEATURE_AI_TOOLS
-// on, the licence tier's mapping grants it, and — for a tenant user — their
-// tenant's "AI Investigations" switch (ai_tenant_config.go) or the global
-// AI_TOOLS_ALL_TENANTS override. Cross-tenant principals are not tenant-gated.
-// A chat turn without it degrades to plain chat; it never refuses the turn.
+// agentLoopEligible is the ai.investigate entitlement: the Iris AI add-on on the
+// licence, the platform's "Iris AI models" and "AI investigations" switches
+// (Features page; FEATURE_AI_TOOLS is no longer read here), the tier mapping,
+// and — for a tenant user — their tenant's assistant and "AI Investigations"
+// switches (ai_tenant_config.go) or the global AI_TOOLS_ALL_TENANTS override.
+// Cross-tenant principals are not tenant-gated. A chat turn without it
+// degrades to plain chat; it never refuses the turn.
 func (s *server) agentLoopEligible(claims jwtClaims) bool {
 	return s.aiEntitled(claims, aientitlement.Investigate)
 }
