@@ -1,0 +1,294 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# HPE / H3C Comware (FlexNetwork, FlexFabric, H3C S/SR/MSR), tracker 387 plan §6a, wave 2.
+# Format: telemetry-catalog/README.md, "Vendor packs".
+#
+# FRAMING. To a log host Comware writes `<PRI>Timestamp Sysname %%vvModule/Level/Mnemonic:
+# location; Content` (vendor: H3C "Information center configuration", Table 7 "Log
+# formats", https://www.h3c.com/en/d_202309/1921112_294551_0.htm). The legacy parser takes
+# the `%%10MOD/L/MNEMONIC` tag for a program name; core.conf r_mnemonic_is_not_a_program
+# puts it back at the start of the message, as it does for an untagged Cisco line, so
+# this grammar reads one shape (tests/test_syslog_edge_framing.py COMWARE*). The CMCC
+# variant has one percent sign and is read the same way; the Unicom variant
+# (`vvModule/Level/Serial_number`, no mnemonic) carries no stable id and is not read.
+#
+# EVIDENCE. No Comware device on the lab: `doc_claimed`. Message texts and severity
+# levels are H3C's, from "H3C SOHO Switch System Log Messages (Comware V5)"
+# (https://www.h3c.com/cn/d_201708/1022108_30005_0.htm, English text): IFNET
+# LINK_UPDOWN (3) `[STRING]: link status is [STRING].`, LINEPROTO_UPDOWN (5) `Line
+# protocol on the interface [STRING] is [STRING].`, SHELL_LOGIN (5) `[STRING] logged in
+# from [STRING].`, SHELL_LOGOUT (5), SHELL_LOGINFAIL (5) `[STRING] failed to log in
+# [STRING].`, SSH_LOGIN (6) `[STRING] user [STRING] (IP: [STRING]) logged in
+# successfully.`. Comware V7's PHY_UPDOWN `Physical state on the interface [STRING]
+# changed to [STRING].` is from H3C's own support site (zhiliao.h3c.com question 196902)
+# and the S12500 quick guide; the V7 message reference was not read.
+pack: hpe_comware
+vendor: hp
+description: HPE and H3C Comware switches and routers (module/level/mnemonic syslog).
+
+grammars:
+  # Specific lines first: they name the user and the source, which the generic row cannot.
+  - id: comware_ssh_login
+    parser_id: hpe_comware.v1
+    literal: 'SSH_LOGIN: '
+    pattern: '^%%?\d{2}SSH/(?P<lvl>[0-7])/SSH_LOGIN(?:\([a-z]\))?: (?P<svc>[A-Z]{1,16}) user (?P<user>[^\s()]{1,64}) \(IP: (?P<src>[0-9A-Fa-f.:]{2,45})\) logged in successfully'
+    facility: SSH
+    event_type: ssh_login
+    summary: 'SSH login by {user} from {src} ({svc})'
+    native_code: lvl
+    category: management_audit
+    fields:
+      title: 'SSH login on {host} by {user} from {src}'
+      correlation_key: 'ssh:{device}:{user}:{src}'
+      audit_user: '{user}'
+      audit_action: 'session_created'
+      audit_source: '{src}'
+      audit_via: 'ssh'
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), SSH_LOGIN, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+
+  - id: comware_shell_session
+    parser_id: hpe_comware.v1
+    literal: 'SHELL/'
+    pattern: '^%%?\d{2}SHELL/(?P<lvl>[0-7])/SHELL_LOG(?P<act>IN|OUT)(?:\([a-z]\))?: (?:-[^;]{0,256}; )?(?P<user>\S{1,64}) logged (?:in|out) from (?P<src>[^\s.]{1,64}(?:\.\d{1,3}){0,3})'
+    facility: SHELL
+    event_type: 'shell_log{act|session_act}'
+    summary: '{user} logged {act|session_act} from {src}'
+    native_code: lvl
+    category: management_audit
+    fields:
+      title: 'CLI session on {host}: {user} logged {act|session_act} from {src}'
+      correlation_key: 'shell:{device}:{user}:{src}'
+      audit_user: '{user}'
+      audit_action: 'session_{act|session_action}'
+      audit_source: '{src}'
+      audit_via: 'cli'
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), SHELL_LOGIN / SHELL_LOGOUT, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm; log-host framing with location, H3C Information center configuration Table 7'
+
+  - id: comware_shell_loginfail
+    parser_id: hpe_comware.v1
+    literal: 'SHELL_LOGINFAIL'
+    pattern: '^%%?\d{2}SHELL/(?P<lvl>[0-7])/SHELL_LOGINFAIL(?:\([a-z]\))?: (?:-[^;]{0,256}; )?(?P<user>\S{1,64}(?: user)?) failed to log in from (?P<src>\S{1,64})'
+    facility: SHELL
+    event_type: shell_loginfail
+    summary: 'Login failed for {user} from {src}'
+    native_code: lvl
+    category: security_audit
+    fields:
+      title: 'Failed login on {host} for {user} from {src}'
+      correlation_key: 'shell:{device}:{src}:failed'
+      audit_user: '{user}'
+      audit_action: 'login_failed'
+      audit_source: '{src}'
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), SHELL_LOGINFAIL, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+
+  # Every other Comware line: the module is the facility, the mnemonic the event type and
+  # the level the RFC 5424 severity, which is how Comware defines it (levels 0-7).
+  - id: comware
+    parser_id: hpe_comware.v1
+    literal: '/'
+    pattern: '^%%?\d{2}(?P<mod>[A-Z][A-Z0-9_]{0,31})/(?P<lvl>[0-7])/(?P<mnem>[A-Z][A-Z0-9_]{0,63})(?:\([a-z]\))?: (?P<text>.{0,4096})'
+    facility: '{mod}'
+    event_type: '{mnem}'
+    summary: '{text}'
+    severity: {digit: lvl}
+    native_code: lvl
+    # D3: only a critical line may alarm on severity alone; LINK_UPDOWN is level 3 and
+    # reaches the engine through its typed row, at warn.
+    alarm_floor: 2
+    fields:
+      title: '{mod}/{mnem} on {host}: {text}'
+      correlation_key: '{mod}:{device}:{mnem}'
+    fidelity: doc_claimed
+    source: 'H3C Information center configuration, Table 7 "Log formats", https://www.h3c.com/en/d_202309/1921112_294551_0.htm'
+
+labels:
+  session_act:
+    IN: in
+    OUT: out
+  session_action:
+    IN: created
+    OUT: terminated
+
+rules:
+  # IFNET link state. V5 writes `<if> link status is DOWN.` (LINK_UPDOWN, level 3) and the
+  # line protocol after it (LINEPROTO_UPDOWN, level 5): the grammar files them as facility
+  # IFNET and event types LINK_UPDOWN / LINEPROTO_UPDOWN, so the vendor-neutral row
+  # `syslog.link.state_change` answers them exactly as it answers IOS `%LINK-3-UPDOWN`
+  # then `%LINEPROTO-5-UPDOWN` (the physical line opens on down, the protocol line of an
+  # untagged sender is warn). V7 writes `Physical state on the interface <if> changed to
+  # down.` (PHY_UPDOWN, level 3), which no neutral row reads: this row types it. None of
+  # them says why, so no link_cause: a Comware shutdown is told apart by its link trap's
+  # ifAdminStatus or not at all. `warn`: a pack row never opens alone (D3).
+  - rule_id: syslog.comware.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: null
+    vendors: [hp]
+    fidelity_status: doc_claimed
+    pattern_src: 'IFNET/[0-7]/PHY_UPDOWN:\sPhysical\sstate\son\sthe\sinterface\s\S{1,128}\schanged\sto\s(?:up|down)'
+    guard:
+      all:
+        - {contains: [msg, 'PHY_UPDOWN']}
+        - {re: [msg, 'IFNET/[0-7]/PHY_UPDOWN:\sPhysical\sstate\son\sthe\sinterface\s\S{1,128}\schanged\sto\s(?:up|down)', 'i']}
+    extract:
+      ifname: {re: [[msg, 'Physical state on the interface (\S{1,128}) changed to ', 1, 'i']]}
+      state:
+        case:
+          - {when: {re: [msg, 'changed to down', 'i']}, value: down}
+          - {when: {always: true}, value: up}
+    emit:
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: warn
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {var: tag}
+
+guidance:
+  - event_types: [link_updown, phy_updown]
+    impact:
+      - A port's physical link changed state; traffic and adjacencies over it stop or move.
+    next_checks:
+      - Run display interface for the port and read its current state and last-change time.
+      - Check the transceiver and cable, and the far end of the link; repeated flaps point at optics or cabling.
+
+wanted:
+  - symptom: BGP peer state change (Comware V7 BGP_STATE_CHANGED)
+    kind: bgp_adjacency_change
+    why_absent: the Comware V7 system log message reference was not read; the V5 SOHO reference has no BGP messages
+  - symptom: Unicom-format lines (`vvModule/Level/Serial_number`)
+    kind: null
+    why_absent: the format carries a serial number where the mnemonic belongs, so there is no stable message id to read
+
+fixtures:
+  - name: a Comware V5 link down is answered as IOS LINK-3-UPDOWN, port named
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), IFNET LINK_UPDOWN example, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: err
+    message: '%%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is DOWN.'
+    expect:
+      vendor: hp
+      vendor_source: format
+      parser_id: hpe_comware.v1
+      parser_status: parsed
+      facility: IFNET
+      event_type: link_updown
+      summary: Ethernet1/0/1 link status is DOWN.
+      severity_native_code: '3'
+      title: 'IFNET/LINK_UPDOWN on sw-core1: Ethernet1/0/1 link status is DOWN.'
+      correlation_key: 'IFNET:sw-core1:LINK_UPDOWN'
+    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: high, opens_alone: true, state: down, entity: 'sw-core1:Ethernet1/0/1'}
+
+  - name: a Comware V7 physical state change names the interface
+    fidelity: doc_claimed
+    source: 'H3C support (zhiliao.h3c.com question 196902) and S12500 quick guide, IFNET PHY_UPDOWN'
+    hostname: sw-core1
+    appname: unknown
+    severity: err
+    message: '%%10IFNET/3/PHY_UPDOWN: Physical state on the interface GigabitEthernet1/0/1 changed to down.'
+    expect:
+      parser_id: hpe_comware.v1
+      parser_status: parsed
+      facility: IFNET
+      event_type: phy_updown
+    signal: {rule_id: syslog.comware.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sw-core1:GigabitEthernet1/0/1'}
+
+  - name: a Comware link up is the same row with state up, at warn
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), IFNET LINK_UPDOWN, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: err
+    message: '%%10IFNET/3/LINK_UPDOWN: Ethernet1/0/1 link status is UP.'
+    expect:
+      parser_status: parsed
+      event_type: link_updown
+    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw-core1:Ethernet1/0/1'}
+
+  - name: the line protocol after a link change is the untagged protocol line, warn
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), IFNET LINEPROTO_UPDOWN, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: notice
+    message: '%%10IFNET/5/LINEPROTO_UPDOWN: Line protocol on the interface Vlan-interface1 is DOWN.'
+    expect:
+      parser_status: parsed
+      facility: IFNET
+      event_type: lineproto_updown
+    signal: {rule_id: syslog.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sw-core1:Vlan-interface1'}
+
+  - name: a Comware SSH login names the user and the source
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), SSH_LOGIN example, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: info
+    message: '%%10SSH/6/SSH_LOGIN: STEL user user1 (IP: 192.0.2.10) logged in successfully.'
+    expect:
+      parser_id: hpe_comware.v1
+      parser_status: parsed
+      event_type: ssh_login
+      event_category: management_audit
+      audit_user: user1
+      audit_source: 192.0.2.10
+      audit_via: ssh
+      summary: SSH login by user1 from 192.0.2.10 (STEL)
+    signal: null
+
+  - name: a Comware VTY login carrying the log-host location field
+    fidelity: doc_claimed
+    source: 'H3C Information center configuration, Table 7 non-customized log-host example, https://www.h3c.com/en/d_202309/1921112_294551_0.htm'
+    hostname: Sysname
+    appname: unknown
+    severity: info
+    message: '%%10SHELL/5/SHELL_LOGIN: -DevIP=1.1.1.1; VTY logged in from 192.168.1.26'
+    expect:
+      parser_status: parsed
+      event_type: shell_login
+      event_category: management_audit
+      audit_user: VTY
+      audit_source: 192.168.1.26
+      audit_via: cli
+    signal: null
+
+  - name: a Comware failed login is a security audit record
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), SHELL_LOGINFAIL example, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: notice
+    message: '%%10SHELL/5/SHELL_LOGINFAIL: TELNET user failed to log in from 12.130.2.19(000f-e239-1f97) on VTY0.'
+    expect:
+      parser_status: parsed
+      event_type: shell_loginfail
+      event_category: security_audit
+      audit_action: login_failed
+    signal: null
+
+  - name: an OSPF neighbour change parses through the generic row
+    fidelity: doc_claimed
+    source: 'H3C SOHO Switch System Log Messages (Comware V5), OSPF_NBR_CHG example, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
+    hostname: sw-core1
+    appname: unknown
+    severity: notice
+    message: '%%10OSPF/5/OSPF_NBR_CHG: OSPF 1 Neighbor 2.2.2.2 (Vlan-interface100) from Full to Down.'
+    expect:
+      parser_id: hpe_comware.v1
+      parser_status: parsed
+      facility: OSPF
+      event_type: ospf_nbr_chg
+      summary: OSPF 1 Neighbor 2.2.2.2 (Vlan-interface100) from Full to Down.
+    signal: null

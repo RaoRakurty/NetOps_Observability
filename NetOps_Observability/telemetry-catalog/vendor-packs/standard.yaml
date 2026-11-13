@@ -271,7 +271,10 @@ grammars:
     parser_id: standard_mgmt_audit.v1
     literal: 'netconf id='
     apps: [confd]
-    pattern: '^netconf id=(?P<sid>\d+) new tcp session(?: for user (?P<user>\S{1,64}))?(?: from (?P<src>\S{1,64}))?'
+    # ConfD 20.x quotes the user (`for user "vmanage-admin"`, captured on the lab
+    # 2026-11-13, about 11k a day); older releases do not. The quotes are framing,
+    # never part of the name, so `audit_user` is the same value either way.
+    pattern: '^netconf id=(?P<sid>\d+) new tcp session(?: for user "?(?P<user>[^\s"]{1,64})"?)?(?: from (?P<src>\S{1,64}))?'
     event_type: netconf_session
     summary: 'NETCONF transport session opened[ for {user}][ from {src}]'
     category: management_audit
@@ -771,6 +774,21 @@ fixtures:
       audit_via: netconf
       session_id: '987344'
       summary: 'NETCONF transport session opened for svc-user from 192.0.2.1'
+      parser_status: parsed
+      event_type: netconf_session
+    signal: null
+
+  - name: a NETCONF transport session with the user in quotes (ConfD 20.x) names the user without them
+    fidelity: lab_validated
+    hostname: vEdge-52
+    appname: confd
+    message: 'netconf id=225633 new tcp session for user "vmanage-admin" from 10.255.255.1'
+    expect:
+      audit_user: vmanage-admin
+      audit_source: 10.255.255.1
+      audit_via: netconf
+      session_id: '225633'
+      summary: 'NETCONF transport session opened for vmanage-admin from 10.255.255.1'
       parser_status: parsed
       event_type: netconf_session
     signal: null
