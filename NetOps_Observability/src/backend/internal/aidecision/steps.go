@@ -52,6 +52,10 @@ const NextSkillTool = "next_skill"
 // mirrors ai.RouteTieBreakTool.
 const RouteTieBreakTool = "route_tiebreak"
 
+// RoutePlannerTool is the model-first router's choice of arm (ai/planner.go);
+// it mirrors ai.PlannerTool.
+const RoutePlannerTool = "route_planner"
+
 // AddToolStep records one tool step. A step inside a method first opens the
 // investigation (once per decision). Then:
 //
@@ -72,9 +76,10 @@ func (r *Recorder) AddToolStep(s ToolStep, toolVersion string) {
 	case s.Tool == NextSkillTool:
 		r.Add(Entry{EventType: PlanCreated, Skill: s.Skill, Outcome: s.Reason})
 		return
-	case s.Tool == RouteTieBreakTool:
-		// The router asked the model "data or investigate?" (N-G4): a plan
-		// decision, not a tool run; Outcome is the closed reason.
+	case s.Tool == RouteTieBreakTool, s.Tool == RoutePlannerTool:
+		// The router asked the model "data or investigate?" (N-G4), or the
+		// model-first planner chose the arm: a plan decision, not a tool run;
+		// Outcome is the closed reason.
 		r.Add(Entry{EventType: PlanCreated, Tool: s.Tool, Outcome: s.Reason})
 		return
 	case s.Reason == "not_registered":

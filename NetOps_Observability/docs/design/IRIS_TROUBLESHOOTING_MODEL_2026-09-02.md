@@ -295,6 +295,62 @@ loader (physical · l2 · igp · bgp · path_seam · application · security · 
 any new layer the documents justify (e.g. `wan_sdwan`, `dns`, `qos`, `mcast`,
 `vpn_tunnel`) — the layer set is data (`skillLayerOrder`), extend it deliberately.
 
+**Applied to the DISCOVERED network (owner, 2026-11-13; NetClaw ingestion
+Batch 0).** A method is no longer chosen from the question's words alone:
+
+- `applies_when: fact:<key>=<value>[|<value>…], …` says which discovered devices
+  a method fits, over a closed vocabulary (`ai/skill_facts.go`): `role`,
+  `wan_flavor`, `dialect`, `adjacency` (bgp, ospf, isis, bfd, lldp, overlay) and
+  `telemetry` (snmp, gnmi, api, syslog, trap, flow). The server derives the facts
+  once per turn for the resolved device (`aiDeviceFacts`); the model never
+  supplies one. A fact is three-state: holds / fails / unknown. A method whose
+  `applies_when` FAILS issues no read; the turn says why and starts from the
+  top-level method (disclose and reroute). UNKNOWN runs and is disclosed — an
+  unread table is never an absent protocol (tracker 415 lists the facts that
+  cannot yet be established absent).
+- `next=X when fact:<key>=<value>` fires only on an established fact;
+  `next=X when topo:<facet>=<value>` fires on a design fact
+  `get_network_topology` declared (`overlay_shape`, `spof`, `coverage`; the skill
+  must declare that tool).
+- `arg=@entity` binds a tool argument from a differently named server-resolved
+  entity (`get_device_state(device_id, area=routes, target=@prefix)`); the step
+  is skipped, not widened, when that entity does not resolve.
+- Layers `platform`, `wan_overlay` and `services` joined the bisection order.
+- `get_network_topology` now carries the DESIGN READING: per-site edges,
+  transports and single-homing, single points of failure of the discovered graph
+  (DERIVED, not computed without adjacency evidence), observed redundancy (dual
+  edge, dual transport; LAG/FHRP declared uncollected), protocols each device is
+  seen to run, and a coverage statement.
+
+**NetClaw ingestion Batch 1 (2026-11-13).** Three methods re-expressed from
+NetClaw at `cfafa46c` (each SKILL.md carries a validated `source:` line; NOTICE
+lists them):
+
+- `platform-health` (layer platform): CPU, processor memory, uptime / reload
+  reason and clock, read live; hands a pinned CPU, memory exhaustion or a reload
+  within the last day to the device's own log, and an unsynchronized clock to
+  `ntp-clock`. `osi-bisection` now hands the same platform facts to it instead
+  of straight to the log, so "is X healthy" still enters through the top-level
+  method and reaches the platform method when the read shows trouble.
+- `ntp-clock` (layer services): synchronization, stratum, reference and offset;
+  an unsynchronized clock goes to the device's log for the moment sync was lost.
+- `qos-congestion` (layer physical): drops with clean error counters stay here
+  as queueing; errors beside them go to `optics-degraded`, a down port to
+  `interface-down`. Live counters need a named interface — the new `interface`
+  entity (UI context or a strict interface-name shape in the question; a
+  hostname that merely starts like one is not taken).
+- New `state:` facets, derived server-side from TYPED fields only:
+  `if_faults` / `if_drops` (the two halves of `if_errors`, which keeps its old
+  meaning), `reload` (recent | earlier, from the device's own uptime text) and
+  `clock` (synced | unsynced | offset_high > 100 ms).
+- Parsers built ONLY from captured output: IOS-XE `show processes memory sorted`
+  (processor pool) and `show ntp status` (Cisco IOS XE 17.3.2, lab edge). The
+  battery's new `platform-clock` read carries doc_claimed command rows for IOS,
+  IOS-XR, NX-OS, EOS, Junos, SR OS and VRP; their output is honest raw evidence
+  until captured. Not built: IOS-XE environment (the virtual edge has none to
+  capture) and a `show policy-map interface` class/queue parser (no lab edge has
+  a QoS policy, so no real output exists).
+
 ### 3.4 Proactive checks and intent cross-reference — Phase A4
 - Map NetClaw's heartbeat list onto the engine: non-FULL OSPF / non-UP IS-IS
   (igpmon), BGP IDLE/ACTIVE (bgp watch), CPU/memory thresholds, config change in

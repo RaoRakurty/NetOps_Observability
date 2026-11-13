@@ -2419,6 +2419,28 @@ export interface AiDecisionList {
   scope: "tenant" | "platform";
   event_types: AiDecisionEventType[];
 }
+// Iris miss triage (model-first point 5): why Iris left questions unanswered.
+export type IrisMissClass = "no_tool" | "no_data" | "wrong_route" | "wrong_tool" | "wording" | "provider_error";
+export interface IrisMissExample {
+  question: string;
+  route?: string;
+  tenant?: string;
+}
+export interface IrisMissClassSummary {
+  class: IrisMissClass;
+  count: number;
+  examples: IrisMissExample[];
+}
+export interface IrisTriage {
+  scope: "tenant" | "platform";
+  classes: IrisMissClassSummary[] | null;
+  class_order: IrisMissClass[];
+  window: string;
+}
+export interface IrisTriageCandidates {
+  review: string;
+  candidates: { question: string; class?: string; route?: string; source: string; correction_kind?: string; note?: string }[];
+}
 export interface IrisTurn {
   at: string;
   question: string;
@@ -7069,6 +7091,13 @@ export const api = {
   // investigation by id (its decision id) — the caller's own workspace only;
   // another workspace's id is a 404.
   aiHypotheses: (id: string) => request<AiHypothesisSet>(`/api/ai/hypotheses/${encodeURIComponent(id)}`),
+  // Iris miss triage (model-first point 5): the workspace's unanswered
+  // questions by why they missed — workspace admins (own workspace, a
+  // colleague's wording withheld) or the platform owner (counts only).
+  irisTriage: () => request<IrisTriage>("/api/ai/triage"),
+  // Review-gated evaluation candidates from the caller's own misses and
+  // corrections; never committed anywhere automatically.
+  irisTriageCandidates: () => request<IrisTriageCandidates>("/api/ai/triage/candidates"),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

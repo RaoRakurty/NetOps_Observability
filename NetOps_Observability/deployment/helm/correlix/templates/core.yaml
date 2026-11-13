@@ -132,6 +132,8 @@ spec:
             - {name: STATIC_DEVICES_PATH, value: "/config/devices.yaml"}
             - {name: USERS_FILE, value: "/data/users.json"}
             - {name: TENANT_ENRICHMENT_DIR, value: "/data/enrichment"}
+            # Tracker 387 (a): the key the community fingerprints are made with.
+            - {name: CREDSCRUB_FP_KEY_FILE, value: "/run/secrets/credscrub/api/password"}
             - {name: PROCESSORS_DIR, value: "/data/processors"}
             - {name: CONFIG_BACKUP_DIR, value: "/data/config-backups"}
             - {name: PCAP_DIR, value: "/data/pcap"}
@@ -163,6 +165,7 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /config, readOnly: true}
             - {name: data, mountPath: /data}
+            - {name: credscrub-key, mountPath: /run/secrets/credscrub/api, readOnly: true}
             {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}
             - {name: postgres-dsn, mountPath: /run/secrets/postgres/api, readOnly: true}
             {{- end }}
@@ -175,6 +178,7 @@ spec:
       volumes:
         - {name: config, configMap: {name: correlix-config}}
         - {name: data, persistentVolumeClaim: {claimName: api-data}}
+{{ include "correlix.credscrubKeyVolume" $ | indent 8 }}
         {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}
         - name: postgres-dsn
           secret:

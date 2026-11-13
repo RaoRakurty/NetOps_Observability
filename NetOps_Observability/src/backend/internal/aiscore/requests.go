@@ -31,7 +31,8 @@ var RequestBuckets = []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30,
 // pins them equal).
 var (
 	RoutingPaths   = []string{"deterministic", "model", "model_unavailable"}
-	RoutingReasons = []string{"covered", "compound_covered", "deterministic_miss", "compound_uncovered", "problem_context"}
+	RoutingReasons = []string{"covered", "compound_covered", "deterministic_miss", "compound_uncovered", "problem_context",
+		"planner", "planner_unavailable"}
 )
 
 type requestMetrics struct {

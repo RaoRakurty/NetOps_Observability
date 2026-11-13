@@ -3,6 +3,7 @@ name: ospf-adjacency
 layer: igp
 version: 1
 when_to_use: ospf, ospf neighbor, adjacency stuck, exstart, exchange, ospf not full, ospf flapping, ospf down, igp adjacency
+applies_when: fact:adjacency=ospf
 symptom_kinds: igp, adjacency, routing
 tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs, get_recent_changes
 gather:

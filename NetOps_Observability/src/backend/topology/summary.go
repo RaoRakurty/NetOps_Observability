@@ -168,6 +168,10 @@ type SummaryDevice struct {
 	Health         string
 	Adjacencies    int // physical / routed adjacencies in the view
 	OverlayPeers   int // overlay members it holds sessions with
+	// Protocols are the protocols the device is SEEN to run, from adjacency
+	// evidence (lldp, cdp, isis, ospf from a BGP-LS link's origin, overlay,
+	// bfd) — never inferred from its role (summary_design.go).
+	Protocols []string
 }
 
 // SummaryLink is one physical or routed adjacency.
@@ -218,6 +222,8 @@ type OverlaySummary struct {
 	SameSiteNoTunnel []PairName // same-site pairs with no tunnel (expected)
 	NotUp            []PairStatus
 	NotUpTotal       int
+	// SitesOnOneTransport are the sites whose edges ride a single transport.
+	SitesOnOneTransport []string
 }
 
 // RoleNote is a role's members and its likely network function. Likely is an
@@ -244,6 +250,18 @@ type NetworkSummary struct {
 	Overlay       *OverlaySummary
 	RoleNotes     []RoleNote
 	Notes         []string
+
+	// ── design reading (summary_design.go) ──
+	SiteDetails      []SiteSummary
+	SitesTotal       int
+	RedundancyGroups []RedundancyGroup
+	RedundancyTotal  int
+	RedundancyNote   string
+	SPOF             []SPOFItem // DERIVED: over discovered adjacencies only
+	SPOFTotal        int
+	SPOFState        string // present | none | unknown
+	Coverage         SummaryCoverage
+	CoverageState    string // full | partial
 }
 
 // Summarize reads a projected view (and the overlay pairs) in network terms.
@@ -293,6 +311,7 @@ func Summarize(in SummaryInput) NetworkSummary {
 	protos := map[string]int{}
 	ext := map[string]bool{}
 	var links []SummaryLink
+	var designEdges []Edge
 	for _, e := range v.Edges {
 		if e.Relationship != RelConnectedTo && e.Relationship != RelRoutedAdjacency {
 			continue
@@ -312,6 +331,7 @@ func Summarize(in SummaryInput) NetworkSummary {
 		if !external {
 			adj[b]++
 		}
+		designEdges = append(designEdges, e)
 		proto := firstNonEmptyStr(e.Protocol, "observed")
 		protos[proto]++
 		links = append(links, SummaryLink{
@@ -342,8 +362,8 @@ func Summarize(in SummaryInput) NetworkSummary {
 		site[n.ID] = n.Site
 	}
 	peers := map[string]int{}
+	var visPairs []OverlayPair
 	if in.OverlayRead || len(in.Pairs) > 0 {
-		var visPairs []OverlayPair
 		for _, p := range in.Pairs {
 			if managed[p.A] && managed[p.B] {
 				visPairs = append(visPairs, p)
@@ -430,6 +450,12 @@ func Summarize(in SummaryInput) NetworkSummary {
 	}
 
 	out.Notes = append(out.Notes, v.Degraded...)
+	if out.Collected {
+		summarizeDesign(designInput{
+			devNodes: devNodes, names: names, managed: managed, site: site,
+			edges: designEdges, pairs: visPairs, overlay: in.OverlayRead,
+		}, &out)
+	}
 	return out
 }
 

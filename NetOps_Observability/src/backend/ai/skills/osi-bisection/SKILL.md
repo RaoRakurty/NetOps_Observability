@@ -32,7 +32,10 @@ decisions:
   - next=path-seam-handoff when the loss or latency sits on a hop we do not own
   - next=app-edge-5xx when the transport is clean and only one application is failing
   - next=security-exposure-context when the operator asks about exposure, posture, or a security finding
-  - next=log-confirmation when state:platform=cpu_high the control plane is saturated, which explains adjacency and session loss that looks like a link fault
+  - next=platform-health when state:platform=cpu_high the control plane is saturated, which explains adjacency and session loss that looks like a link fault
+  - next=platform-health when state:platform=mem_high the control plane is short of memory, which explains processes and sessions failing one after another
+  - next=platform-health when state:reload=recent the device came up within the last day, which reframes every symptom above it
+  - next=ntp-clock when state:clock=unsynced the device's clock is not synchronized, so its timestamps cannot be lined up with the rest of the network
   - next=log-confirmation when a layer hypothesis needs a device's own words to confirm it
   - verdict=state the layer that explains the symptom, the scope it affects, and which evidence classes agree
   - escalate=say plainly which evidence is missing and which check would close the gap

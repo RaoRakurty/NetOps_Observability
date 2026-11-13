@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
@@ -37,6 +38,27 @@ func (s *server) aiModelLicensed() bool {
 func (s *server) aiModelsSwitchOn() bool { return s.features.Enabled(aientitlement.SwitchModels) }
 func (s *server) aiInvestigationsSwitchOn() bool {
 	return s.features.Enabled(aientitlement.SwitchInvestigations)
+}
+
+// The model planner's exact-match cache bounds (ai/planner.go): route ids
+// only, so a few thousand entries cost well under a megabyte.
+const (
+	aiPlanCacheSize = 4096
+	aiPlanCacheTTL  = 6 * time.Hour
+	// The per-scope Iris vocabulary cache: one entry per tenant scope, rebuilt
+	// on an inventory change or after the TTL (circuits, applications).
+	aiGlossaryCacheSize = 1024
+	aiGlossaryTTL       = 5 * time.Minute
+)
+
+// aiModelFirst: Iris routes the caller's questions through the model planner
+// — exactly when the add-on gate would let a fast-tier call out for this
+// caller: licensed, the "Iris AI models" switch on, the tenant's assistant on,
+// and a provider key (the platform's or the workspace's own) configured. Asked
+// of the one chokepoint, so model-first and the provider gate cannot disagree;
+// with no model connected the deterministic router decides, as before.
+func (s *server) aiModelFirst(claims jwtClaims) bool {
+	return len(s.providerCandidatesForTier(claims, ai.TierFast)) > 0
 }
 
 // aiInvestigationsPlatformOn is the platform half of the investigation gate

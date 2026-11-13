@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"netops/backend/internal/changeapi"
 	"regexp"
@@ -46,12 +47,16 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/collectors"
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/devmon"
 	"netops/backend/internal/devreach"
+	"netops/backend/internal/entityalias"
+	"netops/backend/internal/irisglossary"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
@@ -159,6 +164,7 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	}
 	if s.discovery != nil {
 		deps.ResolveDevice = s.aiResolveDevice(claims)
+		deps.DeviceFacts = s.aiDeviceFacts(claims)
 		deps.ProtocolDiagnostic = s.aiProtocolDiagnostic(r, claims)
 		deps.TopologyContext = s.aiTopologyContext(claims)
 		deps.NetworkTopology = s.aiNetworkTopology(claims)
@@ -280,6 +286,147 @@ func (s *server) aiResolveDevice(claims jwtClaims) func(context.Context, ai.Prin
 			Platform: pdPlatformString(dev), Vendor: dev.Vendor,
 		}, nil
 	}
+}
+
+// aiDeviceFactsTimeout bounds the discovered-facts read (inventory, links, the
+// WAN-flavor inputs) — one read per turn, inside the 45 s skill-turn budget.
+const aiDeviceFactsTimeout = 5 * time.Second
+
+// aiDeviceFacts derives what Correlix has DISCOVERED about one of the caller's
+// devices, for skill applicability (ai/skill_facts.go): the role and WAN
+// flavor from the SAME classifier and inputs the topology surfaces use, the
+// show-command dialect from the platform, the protocols it is SEEN to run from
+// the discovered adjacencies, the BGP peer read and the SD-WAN overlay, and the
+// configured collection methods.
+//
+// §3a: the device is resolved through the caller's own inventory (another
+// tenant's device is ErrNotFound) and every input is the caller-scoped read the
+// topology view takes (visibleDevicesFor, gatherTopoLinksFor,
+// metricsScopeFiltersFor). An unread source leaves its facts UNKNOWN — it never
+// becomes an absence.
+func (s *server) aiDeviceFacts(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.DeviceFacts, error) {
+	return func(ctx context.Context, _ ai.Principal, deviceID string) (ai.DeviceFacts, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok {
+			return ai.DeviceFacts{}, ai.ErrNotFound
+		}
+		tctx, cancel := context.WithTimeout(ctx, aiDeviceFactsTimeout)
+		defer cancel()
+		devs := s.visibleDevicesFor(claims)
+		links, lerr := s.gatherTopoLinksFor(tctx, claims, devs)
+		if lerr != nil {
+			logWarn("ai", "adjacency evidence unread for device facts — protocol facts stay unknown",
+				map[string]any{"device_id": dev.ID, "error": lerr.Error()})
+			links = nil
+		}
+		wan := s.gatherWANFacts(tctx, devs, s.metricsScopeFiltersFor(claims))
+		role := topology.RoleResult{Role: topology.DevRoleUnknown}
+		for _, f := range toDeviceFacts(devs, nil, nil, links, wan) {
+			if f.ID == dev.ID {
+				role = topology.ClassifyDeviceRole(f)
+				break
+			}
+		}
+		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID]}
+		if snap := s.sdwanOverlay.Load(); snap != nil {
+			in.overlayRead = true
+			if f, ok := snap.devFacts[dev.ID]; ok {
+				in.overlay = &f
+			}
+		}
+		return deriveDeviceFacts(in), nil
+	}
+}
+
+// deviceFactInputs are the caller-scoped reads deriveDeviceFacts folds.
+type deviceFactInputs struct {
+	dev         models.Device
+	role        topology.RoleResult
+	links       []topoLink
+	linksRead   bool
+	externalBGP int
+	overlayRead bool
+	overlay     *collectors.OverlayDeviceFacts // nil: the device published no overlay facts
+}
+
+// deriveDeviceFacts is the pure fold behind aiDeviceFacts. Every fact it sets
+// is an OBSERVATION; an absence is recorded only where the source that would
+// show the fact was read for this device (the overlay snapshot, the configured
+// collection methods). Everything else stays unknown.
+func deriveDeviceFacts(in deviceFactInputs) ai.DeviceFacts {
+	var f ai.DeviceFacts
+	// Role: only a classification the classifier itself rates strong or medium
+	// — a weak guess must not rule a method out.
+	if in.role.Role != topology.DevRoleUnknown && (in.role.Confidence == topology.RoleConfStrong || in.role.Confidence == topology.RoleConfMedium) {
+		f.SetValue(ai.FactRole, in.role.Role)
+		if in.role.WANFlavor != "" {
+			f.SetValue(ai.FactWANFlavor, in.role.WANFlavor)
+		}
+	}
+	// Dialect: an empty platform is unknown; a platform that resolves to no
+	// supported dialect is "none" (the state battery has no commands for it).
+	if platform := pdPlatformString(in.dev); platform != "" {
+		if d, ok := showparse.DialectFromPlatform(platform); ok {
+			f.SetValue(ai.FactDialect, string(d))
+		} else {
+			f.SetValue(ai.FactDialect, ai.DialectNone)
+		}
+	}
+	// Adjacency evidence from the discovered links: LLDP/CDP neighbours, and the
+	// IGP a BGP-LS link was learned from.
+	if in.linksRead {
+		for _, l := range in.links {
+			if l.Source != in.dev.ID && l.Target != in.dev.ID {
+				continue
+			}
+			proto := strings.ToLower(l.SourceProto)
+			if strings.Contains(proto, "lldp") || strings.Contains(proto, "cdp") {
+				f.Observe(ai.FactAdjacency, "lldp", true)
+			}
+			igp := strings.ToLower(l.IGP)
+			switch {
+			case strings.HasPrefix(igp, "isis"):
+				f.Observe(ai.FactAdjacency, "isis", true)
+			case strings.HasPrefix(igp, "ospf"):
+				f.Observe(ai.FactAdjacency, "ospf", true)
+			}
+		}
+	}
+	if in.externalBGP > 0 {
+		f.Observe(ai.FactAdjacency, "bgp", true)
+	}
+	// The SD-WAN overlay: when the snapshot was read, a device with no overlay
+	// peers is established NOT to be an overlay member; BFD is observed when its
+	// tunnels carry sessions (an absence of BFD elsewhere is not knowable here).
+	if in.overlayRead {
+		member, bfd := false, false
+		if in.overlay != nil {
+			for _, p := range in.overlay.Peers {
+				member = true
+				for _, cp := range p.ColorPairs {
+					if cp.Sessions > 0 {
+						bfd = true
+					}
+				}
+			}
+		}
+		f.Observe(ai.FactAdjacency, "overlay", member)
+		if bfd {
+			f.Observe(ai.FactAdjacency, "bfd", true)
+		}
+	}
+	// Collection: the CONFIGURED methods are a complete statement for the three
+	// collector methods (an unaddressed device has none and stays unknown).
+	if methods := devmon.Methods(in.dev); len(methods) > 0 {
+		have := map[string]bool{}
+		for _, m := range methods {
+			have[m] = true
+		}
+		for _, m := range []string{devmon.MethodSNMP, devmon.MethodGNMI, devmon.MethodController} {
+			f.Observe(ai.FactTelemetry, m, have[m])
+		}
+	}
+	return f
 }
 
 // aiLookupDevice is the shared, tenant-scoped inventory lookup. The tenant and
@@ -632,12 +779,18 @@ func (s *server) aiNetworkTopology(claims jwtClaims) func(context.Context, ai.Pr
 			}
 			in.Pairs = topology.OverlayPairs(snap.devFacts, snap.res.SystemIPs, devTenant)
 		}
-		return toAINetworkTopology(topology.Summarize(in), in.OverlayRead), nil
+		methods := make(map[string][]string, len(pin.devs))
+		for _, d := range pin.devs {
+			methods[d.ID] = devmon.Methods(d)
+		}
+		return toAINetworkTopology(topology.Summarize(in), in.OverlayRead, methods), nil
 	}
 }
 
 // toAINetworkTopology carries the summary across the package seam.
-func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.NetworkTopology {
+// methods maps a device id to its configured collection methods (devmon);
+// the id itself never crosses the seam.
+func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool, methods map[string][]string) ai.NetworkTopology {
 	counts := func(cs []topology.SummaryCount) []ai.NamedCount {
 		out := make([]ai.NamedCount, 0, len(cs))
 		for _, c := range cs {
@@ -655,8 +808,25 @@ func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.Networ
 		out.Devices = append(out.Devices, ai.NetworkDevice{
 			Name: d.Name, Role: d.Role, RoleConfidence: d.RoleConfidence, Vendor: d.Vendor, Model: d.Model,
 			Site: d.Site, Health: d.Health, Adjacencies: d.Adjacencies, OverlayPeers: d.OverlayPeers,
+			Protocols: d.Protocols, Telemetry: methods[d.ID],
 		})
 	}
+	for _, st := range sm.SiteDetails {
+		out.SiteDetails = append(out.SiteDetails, ai.NetworkSite{Name: st.Name, Devices: st.Devices, WANEdges: st.WANEdges,
+			Uplinks: st.Uplinks, Transports: st.Transports, SingleEdge: st.SingleEdge, SingleTransport: st.SingleTransport})
+	}
+	out.SitesTotal = sm.SitesTotal
+	for _, r := range sm.RedundancyGroups {
+		out.Redundancy = append(out.Redundancy, ai.NetworkRedundancy{Kind: r.Kind, Site: r.Site, Members: r.Members})
+	}
+	out.RedundancyTotal, out.RedundancyNote = sm.RedundancyTotal, sm.RedundancyNote
+	for _, x := range sm.SPOF {
+		out.SPOF = append(out.SPOF, ai.NetworkSPOF{Kind: x.Kind, Name: x.Name, Isolates: x.Isolates})
+	}
+	out.SPOFTotal, out.SPOFState = sm.SPOFTotal, sm.SPOFState
+	out.Coverage = ai.NetworkCoverage{LinkDiscovery: sm.Coverage.LinkDiscovery, RoutedLinks: sm.Coverage.RoutedLinks,
+		OverlayRead: sm.Coverage.OverlayRead, SitesKnown: sm.Coverage.SitesKnown, SPOFComputed: sm.Coverage.SPOFComputed}
+	out.CoverageState = sm.CoverageState
 	for _, l := range sm.Links {
 		out.Links = append(out.Links, ai.NetworkLink{A: l.A, APort: l.APort, B: l.B, BPort: l.BPort,
 			Protocol: l.Protocol, Status: l.Status, External: l.External})
@@ -668,7 +838,7 @@ func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.Networ
 	if ov := sm.Overlay; ov != nil {
 		o := &ai.NetworkOverlay{Members: ov.Members, Pairs: ov.Pairs, PossiblePairs: ov.PossiblePairs,
 			SameSitePairs: ov.SameSitePairs, Shape: ov.Shape, Hubs: ov.Hubs,
-			MissingTotal: ov.MissingTotal, NotUpTotal: ov.NotUpTotal}
+			MissingTotal: ov.MissingTotal, NotUpTotal: ov.NotUpTotal, SitesOnOneTransport: ov.SitesOnOneTransport}
 		for _, t := range ov.Transports {
 			o.Transports = append(o.Transports, ai.NetworkTransport{Name: t.Name, Members: t.Members,
 				Sessions: t.Sessions, Up: t.Up, Health: t.Health})
@@ -1158,6 +1328,16 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 			} else if aiIfaceReportsCounters(x) {
 				add("if_errors", "none", 1)
 			}
+			// The two halves of if_errors, apart (NetClaw Batch 1): a
+			// congestion method needs drops-with-clean-errors told from a
+			// faulty link. Each is asserted only from counters the device
+			// actually reported.
+			if v, rank := aiCounterFact(x.InErrors, x.CRC, x.OutErrors); v != "" {
+				add("if_faults", v, rank)
+			}
+			if v, rank := aiCounterFact(x.InDrops, x.OutDrops); v != "" {
+				add("if_drops", v, rank)
+			}
 		}
 	case len(res.IGPNeighbors) > 0:
 		matched := 0
@@ -1215,6 +1395,12 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 		case "":
 		default:
 			add("platform", v, rank)
+		}
+		if v, rank := aiPlatformReload(*res.Platform); v != "" {
+			add("reload", v, rank)
+		}
+		if v, rank := aiPlatformClock(*res.Platform); v != "" {
+			add("clock", v, rank)
 		}
 	case len(res.Logs) > 0:
 		// Log lines are the device's own words: quoted, never mined for a
@@ -1413,6 +1599,28 @@ func aiIfaceOper(x showparse.InterfaceState) (string, int) {
 // so "no errors" is only asserted when the device actually said so.
 func aiIfaceReportsCounters(x showparse.InterfaceState) bool {
 	return x.InErrors != nil || x.CRC != nil || x.InDrops != nil || x.OutErrors != nil || x.OutDrops != nil
+}
+
+// aiCounterFact folds a group of counters into "present" (any reported counter
+// is above zero, rank 2), "none" (at least one counter was reported and all
+// reported ones are zero, rank 1), or "" when the device reported none of them —
+// an unread counter is not a clean one.
+func aiCounterFact(counters ...*int64) (string, int) {
+	reported := false
+	for _, c := range counters {
+		v, ok := aiInt64(c)
+		if !ok {
+			continue
+		}
+		if v > 0 {
+			return "present", 2
+		}
+		reported = true
+	}
+	if reported {
+		return "none", 1
+	}
+	return "", 0
 }
 
 func aiIfaceHasErrors(x showparse.InterfaceState) bool {
@@ -1616,10 +1824,83 @@ func aiPlatformLine(h showparse.PlatformHealth) string {
 			parts = append(parts, line)
 		}
 	}
+	if h.ClockSynced != nil {
+		if *h.ClockSynced {
+			parts = append(parts, "clock synchronized")
+		} else {
+			parts = append(parts, "clock NOT synchronized")
+		}
+	}
+	if h.ClockStratum != nil {
+		parts = append(parts, fmt.Sprintf("stratum %d", *h.ClockStratum))
+	}
+	if v := aiStr(h.ClockReference); v != "" {
+		parts = append(parts, "reference "+aiClampLine(v, 60))
+	}
+	if v, ok := aiFloat(h.ClockOffsetMs); ok {
+		parts = append(parts, fmt.Sprintf("clock offset %.1f ms", v))
+	}
 	if len(parts) == 0 {
-		return "platform health: the device reported no CPU, memory, environment or uptime field"
+		return "platform health: the device reported no CPU, memory, environment, uptime or clock field"
 	}
 	return aiJoinParts("platform health", parts)
+}
+
+// aiStateClockOffsetHighMs is the offset past which a SYNCHRONIZED clock is
+// still reported as a problem (`state:clock=offset_high`): log and event
+// timestamps more than 100 ms apart stop lining up across devices.
+const aiStateClockOffsetHighMs = 100.0
+
+// aiPlatformClock derives `state:clock` from the typed NTP fields. A device
+// that did not say whether it is synchronized yields no fact.
+func aiPlatformClock(h showparse.PlatformHealth) (string, int) {
+	if h.ClockSynced == nil {
+		return "", 0
+	}
+	if !*h.ClockSynced {
+		return "unsynced", 3
+	}
+	if v, ok := aiFloat(h.ClockOffsetMs); ok && math.Abs(v) > aiStateClockOffsetHighMs {
+		return "offset_high", 2
+	}
+	return "synced", 1
+}
+
+// aiPlatformReload derives `state:reload` from the device's own uptime text.
+// The Cisco/Arista spelling is a comma list of "<n> <unit>" clauses ("3 days,
+// 25 minutes"); any year, week or day clause with n ≥ 1 is a day or more. Text
+// in any other shape (the Junos "10 days, 2:31" clause is handled as days) that
+// carries no recognizable unit yields NO fact — an unread uptime is not recent.
+func aiPlatformReload(h showparse.PlatformHealth) (string, int) {
+	text := strings.ToLower(aiStr(h.Uptime))
+	if text == "" {
+		return "", 0
+	}
+	sawUnit := false
+	for _, clause := range strings.Split(text, ",") {
+		fs := strings.Fields(clause)
+		if len(fs) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(fs[0])
+		if err != nil || n < 0 {
+			continue
+		}
+		unit := strings.TrimSuffix(fs[1], "s")
+		switch unit {
+		case "year", "week", "day":
+			sawUnit = true
+			if n >= 1 {
+				return "earlier", 1
+			}
+		case "hour", "minute", "second":
+			sawUnit = true
+		}
+	}
+	if !sawUnit {
+		return "", 0
+	}
+	return "recent", 2
 }
 
 // aiPlatformCPU picks the most headline CPU figure the capture carried.
@@ -2953,6 +3234,105 @@ func (s *server) aiInventoryFacts(claims jwtClaims) func(context.Context, ai.Pri
 	}
 }
 
+// aiGlossary binds the caller's generated vocabulary (internal/irisglossary,
+// model-first decision point 3) to the orchestrator. Everything it reads is
+// the principal's OWN scope — visibleDevicesFor, the tenant's sites and
+// aliases, the nlqLookups circuits and applications — so a name of another
+// tenant can never reach this caller's prompts (§3a). The rendered text is
+// cached per scope while the inventory fingerprint (devices, sites, aliases)
+// is unchanged and younger than aiGlossaryTTL; circuits and applications are
+// re-read at least every TTL.
+func (s *server) aiGlossary(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal) string {
+	return func(ctx context.Context, _ ai.Principal) string {
+		tenant, cross := principalTenant(claims)
+		scope := "t:" + tenant
+		if cross {
+			scope = "cross:" + tenant
+		}
+		devs := s.visibleDevicesFor(claims)
+		assign := s.geoAssignments(tenant, cross)
+		var fp []string
+		for _, d := range devs {
+			fp = append(fp, d.ID, d.Name, d.Vendor, d.Model, d.Type, d.Labels["role"], sotSiteFor(d, assign))
+		}
+		if s.sites != nil {
+			for _, st := range s.sites.All(tenant, cross) {
+				fp = append(fp, "site", st.Slug, st.Name)
+			}
+		}
+		aliases := s.nlqAliasList(tenant, cross)
+		for _, a := range aliases {
+			fp = append(fp, "alias", a.EntityType, a.EntityID, a.Alias)
+		}
+		return s.aiGlossaryCache.Get(scope, irisglossary.Fingerprint(fp...), func() irisglossary.Input {
+			return s.aiGlossaryInput(ctx, r, claims, devs, assign, aliases)
+		})
+	}
+}
+
+// aiGlossaryInput gathers one scope's glossary input (aiGlossary's build step).
+func (s *server) aiGlossaryInput(ctx context.Context, r *http.Request, claims jwtClaims, devs []models.Device,
+	assign map[string]string, aliases []entityalias.Alias) irisglossary.Input {
+	tenant, cross := principalTenant(claims)
+	var in irisglossary.Input
+	nameOf := map[string]string{} // canonical "type:id" → display name, for alias targets
+	if s.sites != nil {
+		for _, st := range s.sites.All(tenant, cross) {
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: "site", Names: []string{st.Name, st.Slug}})
+			nameOf["site:"+st.Slug] = st.Name
+		}
+	}
+	for _, d := range devs {
+		role := strings.TrimSpace(d.Labels["role"])
+		if role == "" {
+			if role = d.Type; role == "" {
+				role = inferDeviceType(d)
+			}
+		}
+		if role == "generic" {
+			role = ""
+		}
+		in.Entities = append(in.Entities, irisglossary.Entity{Kind: "device", Names: []string{d.Name, d.ID},
+			Site: sotSiteFor(d, assign), Role: role, Vendor: d.Vendor, Model: d.Model})
+		nameOf["device:"+d.ID] = d.Name
+	}
+	// Circuits and applications through the same caller-bound lookups the NL
+	// query resolver uses. A source that cannot be read is left out (the
+	// glossary is an aid to understanding, never evidence).
+	l := newNLQLookups(s, r, claims)
+	if named, err := l.Inventory(ctx, []string{"circuit", "application"}); err == nil {
+		for _, n := range named {
+			kind := n.Type
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: kind, Names: n.Names})
+			if len(n.Names) > 0 {
+				nameOf[n.ID] = n.Names[0]
+			}
+		}
+	} else {
+		logWarn("ai", "iris glossary: circuits/applications unreadable; left out", map[string]any{"error": err.Error()})
+	}
+	for _, a := range aliases {
+		target := nameOf[a.EntityType+":"+strings.TrimPrefix(a.EntityID, a.EntityType+":")]
+		if target == "" {
+			target = nameOf[a.EntityID]
+		}
+		if target == "" && a.EntityType == "provider" {
+			target = strings.TrimPrefix(a.EntityID, "provider:")
+			in.Entities = append(in.Entities, irisglossary.Entity{Kind: "provider", Names: []string{target}})
+		}
+		if target == "" {
+			continue // an alias whose entity the caller cannot see is not shown
+		}
+		in.Aliases = append(in.Aliases, irisglossary.Alias{Kind: a.EntityType, Target: target, Alias: a.Alias})
+	}
+	if s.nlqCatalog != nil {
+		for _, m := range s.nlqCatalog.Metrics {
+			in.Metrics = append(in.Metrics, irisglossary.Metric{Name: m.Name, Aliases: m.Aliases, Description: m.Description, Unit: m.Unit})
+		}
+	}
+	return in
+}
+
 // integrationNames are the operator's names for NMS integrations a device can
 // be sourced from ("api:<system>").
 var integrationNames = map[string]string{
@@ -3037,7 +3417,16 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 				msgs = append(msgs, copilotMessage{Role: "user", Content: ai.RedactSecrets(q)})
 			}
 		}
-		msgs = append(msgs, copilotMessage{Role: "user", Content: ai.RedactSecrets(question)})
+		turn := ai.RedactSecrets(question)
+		if orch.Glossary != nil {
+			// The caller's generated vocabulary (names, never instructions),
+			// after the question: it helps the loop read "the Dallas box" or
+			// an alias without a phrase list (model-first decision point 3).
+			if g := strings.TrimSpace(orch.Glossary(ctx, p)); g != "" {
+				turn += "\n\n" + ai.RedactSecrets(g)
+			}
+		}
+		msgs = append(msgs, copilotMessage{Role: "user", Content: turn})
 		ctx, cancel := context.WithTimeout(ctx, aiAgentAnswerBudget)
 		defer cancel()
 		// The loop runs on one model; when that model fails in a way that

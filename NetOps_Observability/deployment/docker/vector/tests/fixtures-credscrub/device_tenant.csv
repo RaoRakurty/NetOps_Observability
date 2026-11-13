@@ -1,0 +1,3 @@
+identity,tenant_id,device_id,vendor,model,site,role
+lab-edge,t_lab,,,,,
+other-edge,t_other,,,,,

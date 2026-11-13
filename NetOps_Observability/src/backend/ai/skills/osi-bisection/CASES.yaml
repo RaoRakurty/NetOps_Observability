@@ -168,9 +168,10 @@ evidence:
   - device
 expect_chain:
   - osi-bisection entry
+  - platform-health rule
   - log-confirmation rule
 expect_selected: rule
-expect_reason: control plane is saturated
+expect_reason: CPU is pinned
 expect_verdict:
   - quote
   - rate
@@ -180,6 +181,81 @@ expect_never:
   - ospf-adjacency
 expect_hypotheses:
   - control-plane-pressure=SUPPORTED
+
+---
+
+case: control-plane memory near exhaustion goes to the platform method
+question: sessions keep dropping on edge-1
+ui:
+  - correlation_id=case-osi-mem
+  - device=edge-1
+signals:
+  - state:platform=mem_high
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - platform-health rule
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: memory is near exhaustion
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+  - ntp-clock
+
+---
+
+case: a device that came up within the last day goes to the platform method first
+question: everything went wrong at once on edge-1
+ui:
+  - correlation_id=case-osi-reload
+  - device=edge-1
+signals:
+  - state:reload=recent
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - platform-health rule
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: came up within the last day
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+  - ntp-clock
+
+---
+
+case: an unsynchronized clock read during bisection goes to the clock method
+question: the timeline on edge-1 looks wrong
+ui:
+  - correlation_id=case-osi-clock
+  - device=edge-1
+signals:
+  - state:clock=unsynced
+evidence:
+  - finding
+  - device
+expect_chain:
+  - osi-bisection entry
+  - ntp-clock rule
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: lost its time source
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - platform-health
+  - interface-down
 
 ---
 

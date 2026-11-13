@@ -322,6 +322,70 @@ question with no intent skips the strong compile in `/api/ai/ask`: the rephrase 
 runs, then the model answers it. The strong compile still serves `/api/ai/query/compile` and
 questions with a recognised intent.
 
+## Model-first routing eval (owner, 2026-11-13)
+
+With the AI add-on on (licence + the "Iris AI models" switch), one fast-tier model call
+picks the arm that answers every question (`src/backend/ai/planner.go`). The deterministic
+arms are unchanged; they are what the planner selects, plus an exact-match cache. Coverage
+work is now tools and data, never another phrase rule.
+
+The corpus is `docs/ai/golden-examples/planner-paraphrases.json`: about 20 model-written,
+reviewed phrasings for each planner route (typos, abbreviations, indirect wording), plus
+module items. It is never regenerated in CI. Three tests read it:
+
+| Test | What it asserts |
+|---|---|
+| `TestParaphraseCorpusShape` | every route has ≥ 20 distinct phrasings; no phrasing sits under two routes; every module has phrasings |
+| `TestEveryParaphraseReachesItsRoutesArm` | with a stub model that returns each item's route, every phrasing reaches that route's arm with routing reason `planner` (340/340 at introduction) |
+| `TestParaphraseDeterministicBaseline` | reports the regex router's own accuracy on the same phrasings: the "before" number (227/340, 67 %, at introduction; `noc_focus` 4/20, `top_incident` 7/20, `incident_breakdown` 11/20, `shift_handoff` 12/20) |
+
+A real provider's routing accuracy is the live eval, on the same tag and environment as the
+NL query model eval, so one command runs both. It fails below 90 %:
+
+```
+NLQ_EVAL_PROVIDER=gemini NLQ_EVAL_API_KEY=... NLQ_EVAL_MODEL=gemini-3.5-flash-lite \
+  go test -tags nlqmodeleval ./ai -run TestPlannerLiveProvider -v -timeout 60m
+```
+
+### Phase 2: understanding inside the arm, the vocabulary and the miss triage
+
+**Generated vocabulary.** Every model path (the planner, the grounded model answer, the
+agent loop) reads the caller's own vocabulary as fenced data
+(`src/backend/internal/irisglossary`): their sites, devices (role, site, vendor, model),
+circuits, applications, operator aliases, the vendors and roles present, and the catalogue's
+metric terms. Built only from the principal's scope, capped at 4 KB, never an address, cached
+per scope while the inventory is unchanged. So "the Dallas box" or a site alias resolves
+without a phrase list. Isolation: `iris_glossary_isolation_test.go`.
+
+**Restatement (`TERMS:`).** The planner may add one validated line restating the question in
+Correlix's own words. An arm whose lexical lookup missed the operator's words (docs, feature
+finder, playbooks, data grammar, method matcher) retries once with it, at no extra model cost,
+and the answer discloses the restatement.
+
+**No dead ends.** `IsDeadEnd` (`ai/planner_understand.go`) is the single definition of "the
+operator got nothing". A planned docs miss tries the feature finder; a playbook miss and a
+module with no tools in this deployment go to the model; a permission or enablement denial is
+never handed on. `TestPlannedRoutesDoNotDeadEnd` routes every corpus phrasing through its own
+route with a stub model that gives no restatement (the hardest case) over the real docs,
+playbook library and feature finder, and ratchets the per-route counts in
+`src/backend/ai/testdata/planner_deadend_floor.json`: 17 of 340 before phase 2, 10 after —
+the ten are honest outcomes of the harness data (a module source that cannot be read, a module
+not enabled), not routing.
+
+**Miss triage.** Every non-data answer that left the operator with nothing is recorded in the
+asker's query log (source `ask`, outcome `miss`, migration 0070) with one class from a closed
+set (`internal/iristriage`): `no_tool`, `no_data`, `wrong_route`, `wrong_tool`, `wording`,
+`provider_error`. The data arm's own records are classified the same way when read. Workspace
+admins see the counts and their own example questions under Iris settings → 6. What Iris could
+not answer (`GET /api/ai/triage`); a colleague's wording is withheld, as on every query-log
+read. Only `wrong_route` touches routing, and its fix is the route's description or a corpus
+phrasing, never a regex.
+
+**Field candidates (review-gated).** `GET /api/ai/triage/candidates` exports the caller's own
+misses and "That's not what I meant" corrections as candidate eval cases, with a header saying
+they must be reviewed (remove anything customer-identifying, check the route) before anything
+is added to `docs/ai/golden-examples/`. Nothing is committed automatically.
+
 ## Replay (N-H2, offline leg)
 
 Replay runs one frozen incident through the real answer path and reports what came

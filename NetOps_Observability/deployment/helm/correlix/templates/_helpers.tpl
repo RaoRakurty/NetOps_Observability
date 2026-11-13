@@ -133,6 +133,22 @@ Args: root, key (the Secret key), id (the identity).
 {{- end -}}
 
 {{/*
+Tracker 387 (a), owner D1: the SNMP-community fingerprint key as a mounted file
+(`password`), from the operator Secret's CREDSCRUB_FP_KEY. The api reads it
+through CREDSCRUB_FP_KEY_FILE, the aggregator through its `credscrub` exec
+backend. Required: a Secret without the key fails the pod at mount, which is
+louder than an aggregator storing communities unmatched.
+*/}}
+{{- define "correlix.credscrubKeyVolume" -}}
+- name: credscrub-key
+  secret:
+    secretName: {{ include "correlix.secretName" . }}
+    defaultMode: 0440
+    items:
+      - {key: CREDSCRUB_FP_KEY, path: password}
+{{- end -}}
+
+{{/*
 The mesh CA for a client of https://vmauth:8427. Only with tls.enabled.
 */}}
 {{- define "correlix.meshCAVolume" -}}

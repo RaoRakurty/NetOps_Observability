@@ -107,6 +107,24 @@ type Orchestrator struct {
 	Scope          *ScopeFacts
 	Inventory      func(ctx context.Context, p Principal) (InventoryFacts, error)
 	PriorQuestions []string
+	// Model-first routing (planner.go, owner 2026-11-13). ModelFirst is set by
+	// the server when the AI add-on is licensed and the "Iris AI models" switch
+	// is on: one fast-tier model call then picks the arm that answers, however
+	// the question is phrased. false = the deterministic router decides, exactly
+	// as before. PlanCache is the server's process-lived exact-match cache of
+	// those decisions (nil = no cache: every question is planned).
+	ModelFirst bool
+	PlanCache  *PlannerCache
+	// Glossary returns the caller's generated vocabulary (internal/irisglossary:
+	// the names of their own sites, devices, circuits, applications, aliases,
+	// vendors and roles, plus the catalogue's metric terms), rendered and
+	// capped, built ONLY from the principal's own scope. The planner, the
+	// grounded model answer and the agent loop read it as fenced data so a
+	// nickname or alias resolves without phrase lists. nil = no vocabulary.
+	Glossary func(ctx context.Context, p Principal) string
+	// forceTopology: the planner routed a question about how the network is
+	// built, so the grounded model answer carries the topology evidence.
+	forceTopology bool
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -485,6 +503,28 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		classifyCtx = withoutSubject(uiContext)
 	}
 	_, named := explainTopicFromAsk(question, uiContext)
+	// Model-first routing (planner.go): with the AI add-on on, the model reads
+	// the question and picks the arm. A problem in view keeps its subject
+	// binding below, and a named (i) topic is a lookup, not a question to read.
+	if o.ModelFirst && subject == "" && !named {
+		_, _, pageKnown := pageForContext(classifyCtx)
+		ch, ok, perr := o.planRoute(ctx, p, question, pageKnown)
+		if ok {
+			pans, handled, aerr := o.answerPlanned(ctx, p, question, classifyCtx, ch)
+			if handled {
+				return pans, aerr
+			}
+			perr = aerr
+		}
+		// The planner could not route it (no model answered, an invalid reply,
+		// or the chosen arm could not answer): the deterministic path below
+		// answers, and says the model did not.
+		defer func() {
+			if err == nil {
+				discloseNoPlanner(&ans, perr)
+			}
+		}()
+	}
 	if !named && subject == "" {
 		if ans, handled := o.answerPageHelp(question, uiContext); handled {
 			o.routed(ArmPageHelp, ans.Mode)
@@ -550,7 +590,14 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 		o.routed(ArmData, ans.Mode)
 		return ans, nil
 	}
+	return o.answerClassic(ctx, p, question, plan, uiContext)
+}
 
+// answerClassic is the governed classic path for one plan: module governance,
+// the skills layer, the capability fallback, and the answer-mode switch. The
+// deterministic router reaches it with the plan it classified; the model
+// planner (planner.go) with the plan of the arm it chose.
+func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question string, plan Plan, uiContext map[string]string) (Answer, error) {
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
 	// A "capability" plan carries no modules, so this loop is a no-op for it.
@@ -621,7 +668,7 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 	if len(allowed) == 0 {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I can't answer that for your current access or enabled modules.",
+			Text:      AccessDeniedText,
 			Citations: []Citation{}, Disclaimers: nonEmpty(disc, "No module is available to answer this question."),
 		}, nil
 	}
@@ -1298,10 +1345,10 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		// Distinguish a real error (tool exists, query failed) from a not-yet-built
 		// module — conflating them would mislead (the operator's flagged exactly this).
 		text := mh.DisplayName + " questions aren't answerable in this build yet. I can summarize what's going on right now or explain a specific problem."
-		note := "This module's AI tools land in a later increment."
+		note := ModuleNotBuiltNote
 		if found > 0 && errored > 0 {
 			text = "I couldn't read " + strings.ToLower(mh.DisplayName) + " right now — the data source didn't respond. Try again shortly."
-			note = "Module read failed (transient); not a coverage gap."
+			note = moduleIOFailNote
 		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
@@ -1467,7 +1514,7 @@ func (o *Orchestrator) answerNavigation(question string, plan Plan, disc []strin
 	if len(hits) == 0 {
 		return Answer{
 			Mode: ModeProductNavigationHelp, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I couldn't match that to a Correlix feature. Try naming the area (correlations, topology, reports, integrations, flows, logs, devices).",
+			Text:      NoFeatureMatchText,
 			Citations: []Citation{}, Disclaimers: disc,
 		}
 	}
@@ -1506,7 +1553,7 @@ func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answe
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
 			Text:      "I don't have a curated playbook matching that yet. Name the protocol or symptom — e.g. 'BGP flap', 'packet loss', 'ISP latency', 'MTU', 'asymmetric routing'.",
-			Citations: []Citation{}, Disclaimers: append(disc, "No matching playbook."),
+			Citations: []Citation{}, Disclaimers: append(disc, NoPlaybookNote),
 		}
 	}
 	top := hits[0].Playbook
@@ -1799,7 +1846,7 @@ func (o *Orchestrator) answerProductOnPage(question string, plan Plan, disc []st
 		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
 		Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
 		Citations: []Citation{}, ModeBadges: []string{"Product help"},
-		Disclaimers: append(disc, "No matching documentation — nothing was invented."),
+		Disclaimers: append(disc, NoDocsNote),
 	}
 }
 

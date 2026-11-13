@@ -656,6 +656,17 @@ services:
       INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:?INGEST_TOKEN_PROBES required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
       INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
       INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:?INGEST_TOKEN_BUS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      # Tracker 387 (a), owner D1: the SNMP community never leaves this tier.
+      # vector.yaml's syslog lane reads the fingerprint key and the api's
+      # published fingerprint set through these two Vector secret references
+      # (NOT values: Vector resolves them at config load, in memory only). The
+      # key's backend is fail-closed — a missing data/secrets/credscrub file
+      # refuses the config, rendered by scripts/install.py; the set's backend
+      # serves an empty set until the api first publishes.
+      CX_CREDFP_KEY: "SECRET[credscrub.aggregator]"
+      CX_CREDFP_SET: "SECRET[credfpset.current]"
+      # Reload when the published set changes (a reload re-runs both backends).
+      CX_ENRICHMENT_EXTRA: /etc/vector/enrichment/community_fp.txt
     volumes:
       - ./vector:/etc/vector/conf:ro
       # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
@@ -665,7 +676,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # #20: device→tenant enrichment CSV exported by the api (read-only). Loaded
       # by the device_tenant enrichment table to stamp tenant_id onto telemetry.
+      # Also carries community_fp.txt, the api's published fingerprint set.
       - ../../data/api/enrichment:/etc/vector/enrichment:ro
+      # Tracker 387 (a): the fingerprint key, a DIRECTORY mount (F-51) so a
+      # rotation's atomic rename is visible at the next reload.
+      - ../../data/secrets/credscrub/aggregator:/run/secrets/credscrub/aggregator:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8686/health || exit 1"]
       interval: 30s
@@ -1800,6 +1815,12 @@ services:
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.
       TENANT_ENRICHMENT_DIR: /data/enrichment
+      # Tracker 387 (a), owner D1: the key the api fingerprints SNMP
+      # communities with for the aggregator's at-rest drop (published to
+      # TENANT_ENRICHMENT_DIR/community_fp.txt). Rendered from .env's
+      # CREDSCRUB_FP_KEY by scripts/install.py, re-read within a second of a
+      # rotation (internal/credfile).
+      CREDSCRUB_FP_KEY_FILE: /run/secrets/credscrub/api/password
       # Item 121: per-tenant processor rules → generated router config. The
       # writer emits $PROCESSORS_DIR/router/processors.yaml; vector-router
       # mounts that subdir read-only and hot-reloads it (--watch-config).
@@ -2397,6 +2418,8 @@ services:
       # DIRECTORY mount (F-51), so a rotation's atomic rename is a new inode the
       # running api sees. Empty on a file-backend install, where nothing reads it.
       - ../../data/secrets/postgres/api:/run/secrets/postgres/api:ro
+      # Tracker 387 (a): the community fingerprint key (see CREDSCRUB_FP_KEY_FILE).
+      - ../../data/secrets/credscrub/api:/run/secrets/credscrub/api:ro
       # Mint target for the internal CA (SEC-003 pattern): when TLS_INTERNAL_CA
       # is on, the api writes the mesh trust bundle + per-service SVIDs here
       # and the TLS variant (compose.tls.yml) mounts them into each service.

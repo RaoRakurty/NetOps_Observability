@@ -199,6 +199,16 @@ type PlatformHealth struct {
 	LastReload *string
 	// Version is the software version string.
 	Version *string
+	// ClockSynced is whether the device reports its clock synchronized to a
+	// time source (NTP). nil when the read did not say either way.
+	ClockSynced *bool
+	// ClockStratum is the device's own stratum as it printed it.
+	ClockStratum *int
+	// ClockReference is the reference the device names, verbatim.
+	ClockReference *string
+	// ClockOffsetMs is the clock offset in milliseconds, as the device printed
+	// it (sign preserved).
+	ClockOffsetMs *float64
 }
 
 // LogLine is one parsed device log-buffer line.

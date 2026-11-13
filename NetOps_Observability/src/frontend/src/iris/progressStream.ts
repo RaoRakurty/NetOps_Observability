@@ -17,6 +17,7 @@ export interface StreamEvent {
 /** Plain-language names for the tools Iris runs (closed; unknown → none). */
 const TOOL_LABEL: Record<string, string> = {
   nl_query: "your data",
+  route_planner: "your question",
   get_problem: "the incident",
   get_problem_evidence: "the evidence",
   get_active_major_incidents: "active incidents",

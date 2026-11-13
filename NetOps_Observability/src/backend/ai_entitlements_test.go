@@ -53,6 +53,11 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// handleAIDecisions. It must stay readable after an AI entitlement lapses —
 	// losing ai.chat must not erase the trail of answers already given.
 	"/api/ai/decisions": adminPlane,
+	// Iris miss triage (model-first point 5): an administration:admin read of
+	// the workspace's own question log, like the ledger — it must stay readable
+	// after an AI entitlement lapses (it shows why answers were missed).
+	"/api/ai/triage":  adminPlane,
+	"/api/ai/triage/": adminPlane,
 	// N-H2 replay export: administration:read, like the ledger it compares with.
 	// It is a support and audit read of one incident, not a use of the assistant.
 	"/api/ai/replay/export/":       adminPlane,
@@ -338,6 +343,8 @@ var adminPlaneProbes = []aiProbe{
 	{"/api/ai/tenant-config/test", http.MethodPost, "/api/ai/tenant-config/test", `{}`, adminPlane},
 	{"/api/copilot/config/test", http.MethodPost, "/api/copilot/config/test", `{"provider":"gemini","key":"x"}`, adminPlane},
 	{"/api/ai/decisions", http.MethodGet, "/api/ai/decisions", "", adminPlane},
+	{"/api/ai/triage", http.MethodGet, "/api/ai/triage", "", adminPlane},
+	{"/api/ai/triage/", http.MethodGet, "/api/ai/triage/candidates", "", adminPlane},
 	{"/api/ai/source-authority", http.MethodPut, "/api/ai/source-authority", `{"order":["manual","controller","discovered","declared"]}`, adminPlane},
 	{"/api/ai/replay/export/", http.MethodGet, "/api/ai/replay/export/" + probeID, "", adminPlane},
 }
@@ -365,7 +372,7 @@ func TestAIAdminPlaneRoutesRefuseNonAdmins(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as a tenant operator: %d — want 403", p.method, p.path, w.Code)
 		}
-		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/tenant-config/test" || p.route == "/api/ai/decisions" || p.route == "/api/ai/source-authority" || p.route == "/api/ai/replay/export/" {
+		if p.route == "/api/ai/tenant-config" || p.route == "/api/ai/tenant-config/test" || p.route == "/api/ai/decisions" || p.route == "/api/ai/triage" || p.route == "/api/ai/triage/" || p.route == "/api/ai/source-authority" || p.route == "/api/ai/replay/export/" {
 			// A tenant admin legitimately configures their OWN tenant's key, sets
 			// their OWN source order (source_authority_isolation_test.go), and
 			// reads their OWN workspace's decision ledger and incidents

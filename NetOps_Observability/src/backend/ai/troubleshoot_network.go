@@ -57,6 +57,50 @@ type NetworkTopology struct {
 	// server started: no overlay then means UNKNOWN, not "no SD-WAN".
 	OverlayRead bool
 	Notes       []string
+
+	// ── design reading (NetClaw ingestion Batch 0) ──
+	// Sites are the per-site redundancy reads; SitesTotal the true count.
+	SiteDetails []NetworkSite
+	SitesTotal  int
+	// Redundancy is what the observed evidence establishes (two edges, two
+	// transports); RedundancyNote says what kinds are not collected at all.
+	Redundancy      []NetworkRedundancy
+	RedundancyTotal int
+	RedundancyNote  string
+	// SPOF are the single points of failure of the DISCOVERED graph — an
+	// inference, stamped DERIVED. SPOFState is present | none | unknown.
+	SPOF      []NetworkSPOF
+	SPOFTotal int
+	SPOFState string
+	// Coverage says which evidence the reading rests on; CoverageState is
+	// full | partial.
+	Coverage      NetworkCoverage
+	CoverageState string
+}
+
+// NetworkSite is one site read for redundancy.
+type NetworkSite struct {
+	Name                        string
+	Devices, WANEdges, Uplinks  int
+	Transports                  []string
+	SingleEdge, SingleTransport bool
+}
+
+// NetworkRedundancy is one observed redundancy (dual_edge | dual_transport).
+type NetworkRedundancy struct {
+	Kind, Site string
+	Members    []string
+}
+
+// NetworkSPOF is one single point of failure (device | link).
+type NetworkSPOF struct {
+	Kind, Name string
+	Isolates   int
+}
+
+// NetworkCoverage says which evidence classes a topology read rests on.
+type NetworkCoverage struct {
+	LinkDiscovery, RoutedLinks, OverlayRead, SitesKnown, SPOFComputed bool
 }
 
 // NamedCount is one name with its count.
@@ -69,6 +113,9 @@ type NamedCount struct {
 type NetworkDevice struct {
 	Name, Role, RoleConfidence, Vendor, Model, Site, Health string
 	Adjacencies, OverlayPeers                               int
+	// Protocols are the protocols the device is SEEN to run (adjacency
+	// evidence); Telemetry how Correlix is configured to collect from it.
+	Protocols, Telemetry []string
 }
 
 // NetworkLink is one physical or routed adjacency.
@@ -88,6 +135,7 @@ type NetworkOverlay struct {
 	SameSiteNoTunnel                             []NetworkPair
 	NotUp                                        []NetworkPairStatus
 	NotUpTotal                                   int
+	SitesOnOneTransport                          []string
 }
 
 // NetworkTransport is one overlay transport (an SD-WAN colour).
@@ -221,6 +269,10 @@ func RenderNetworkTopology(nt NetworkTopology) ToolResult {
 		tr.Notes = append(tr.Notes, "the SD-WAN overlay has not been read since the server started — overlay tunnels are UNKNOWN here, not absent")
 	}
 
+	// 2b. design reading: single-homed sites, single points of failure
+	// (DERIVED), observed redundancy, and what the reading rests on.
+	renderNetworkDesign(nt, item, &tr)
+
 	// 3. role functions (DERIVED)
 	for _, rn := range nt.RoleNotes {
 		members := strings.Join(rn.Members, ", ")
@@ -250,6 +302,12 @@ func RenderNetworkTopology(nt NetworkTopology) ToolResult {
 		line += fmt.Sprintf("; %s", plural(d.Adjacencies, "adjacency"))
 		if d.OverlayPeers > 0 {
 			line += fmt.Sprintf(", tunnels to %s", plural(d.OverlayPeers, "overlay peer"))
+		}
+		if len(d.Protocols) > 0 {
+			line += "; seen running " + strings.Join(d.Protocols, ", ")
+		}
+		if len(d.Telemetry) > 0 {
+			line += "; collected via " + strings.Join(d.Telemetry, ", ")
 		}
 		item(fmt.Sprintf("dev:%d", i+1), line, "")
 	}
@@ -289,7 +347,105 @@ func RenderNetworkTopology(nt NetworkTopology) ToolResult {
 		"overlay shape and likely functions are Iris's reading of the evidence — say \"likely\" or \"appears\" for them",
 		"describe the topology; do not use cause wording (\"caused\", \"resulting in\", \"due to\") — this is a map, not a diagnosis")
 	tr.Notes = append(tr.Notes, nt.Notes...)
+	tr.Signals = networkSignals(nt)
 	return tr
+}
+
+// Topology signal facets (skill.go CondTopoPrefix): machine facts a method's
+// next= line may branch on after it gathered get_network_topology.
+const (
+	TopoFacetOverlayShape = "overlay_shape"
+	TopoFacetSPOF         = "spof"
+	TopoFacetCoverage     = "coverage"
+)
+
+// networkSignals are the design facts the tool declares for the chain.
+func networkSignals(nt NetworkTopology) []string {
+	shape := "unknown"
+	switch {
+	case nt.Overlay != nil && nt.Overlay.Shape != "":
+		shape = nt.Overlay.Shape
+	case nt.OverlayRead:
+		shape = "none"
+	}
+	spof := firstNonEmpty(nt.SPOFState, "unknown")
+	cov := firstNonEmpty(nt.CoverageState, "partial")
+	return []string{
+		CondTopoPrefix + TopoFacetOverlayShape + "=" + shape,
+		CondTopoPrefix + TopoFacetSPOF + "=" + spof,
+		CondTopoPrefix + TopoFacetCoverage + "=" + cov,
+	}
+}
+
+// renderNetworkDesign adds the design-reading items: which sites hang on one
+// edge or one transport, the single points of failure of what was discovered
+// (DERIVED), the redundancy the evidence shows, and the coverage note.
+func renderNetworkDesign(nt NetworkTopology, item func(id, text, class string), tr *ToolResult) {
+	var single []string
+	for _, st := range nt.SiteDetails {
+		var why []string
+		if st.SingleEdge {
+			why = append(why, "one WAN edge")
+		}
+		if st.SingleTransport {
+			why = append(why, "one transport ("+strings.Join(st.Transports, "")+")")
+		}
+		if len(why) > 0 {
+			single = append(single, "site "+st.Name+" ("+strings.Join(why, ", ")+")")
+		}
+	}
+	if len(single) > 0 {
+		item("design:single-homed", "Sites that depend on a single WAN edge or a single transport: "+strings.Join(single, "; "), "")
+	}
+	switch nt.SPOFState {
+	case "present":
+		var ps []string
+		for _, x := range nt.SPOF {
+			ps = append(ps, fmt.Sprintf("%s %s (cuts off %s)", x.Kind, x.Name, plural(x.Isolates, "device")))
+		}
+		line := "Single points of failure in the discovered adjacencies (a link Correlix has not discovered could make one of these redundant): " + strings.Join(ps, "; ")
+		if nt.SPOFTotal > len(nt.SPOF) {
+			line += fmt.Sprintf(" (showing %d of %d)", len(nt.SPOF), nt.SPOFTotal)
+		}
+		item("design:spof", line, ClassDerived)
+	case "none":
+		item("design:spof", "No single device or link in the discovered adjacencies would cut a managed device off from the rest (computed over discovered adjacencies only).", ClassDerived)
+	}
+	if len(nt.Redundancy) > 0 {
+		var rs []string
+		for _, r := range nt.Redundancy {
+			switch r.Kind {
+			case "dual_edge":
+				rs = append(rs, "site "+r.Site+" has two or more WAN edges ("+strings.Join(r.Members, ", ")+")")
+			case "dual_transport":
+				rs = append(rs, "site "+r.Site+" rides more than one transport ("+strings.Join(r.Members, ", ")+")")
+			}
+		}
+		line := "Redundancy observed: " + strings.Join(rs, "; ")
+		if nt.RedundancyTotal > len(nt.Redundancy) {
+			line += fmt.Sprintf(" (showing %d of %d)", len(nt.Redundancy), nt.RedundancyTotal)
+		}
+		item("design:redundancy", line, "")
+	}
+	var missing []string
+	if !nt.Coverage.LinkDiscovery {
+		missing = append(missing, "no LLDP/CDP neighbours are discovered (cabling is unknown)")
+	}
+	if !nt.Coverage.OverlayRead {
+		missing = append(missing, "the overlay (tunnel) state has not been read since the server started")
+	}
+	if !nt.Coverage.SitesKnown {
+		missing = append(missing, "some devices carry no site")
+	}
+	if len(missing) > 0 {
+		item("design:coverage", "What this reading cannot see: "+strings.Join(missing, "; ")+".", "")
+	}
+	if nt.RedundancyNote != "" {
+		tr.Notes = append(tr.Notes, nt.RedundancyNote)
+	}
+	if nt.SPOFState == "present" || nt.SPOFState == "none" {
+		tr.Notes = append(tr.Notes, "single points of failure are Iris's reading of the discovered adjacencies — say \"appears\" and name the coverage gap")
+	}
 }
 
 func overlayShapeLine(ov *NetworkOverlay) string {

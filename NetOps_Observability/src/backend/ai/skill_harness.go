@@ -212,6 +212,13 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("NetworkTopology")
 			return NetworkTopology{}, nil
 		},
+		// The N-B2 engine projections (get_blast_radius, get_affected_entities
+		// are on the skill allowlist): the case's scripted outcome is what a
+		// step returns, so this seam only has to exist.
+		RCAResult: func(context.Context, Principal, string) (RCAResult, error) {
+			env.touch("RCAResult")
+			return RCAResult{}, ErrNotFound
+		},
 		CaseTimeline: func(context.Context, Principal, string) ([]TimelineEvent, error) {
 			env.touch("CaseTimeline")
 			return nil, nil

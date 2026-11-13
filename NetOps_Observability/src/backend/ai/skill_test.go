@@ -338,6 +338,81 @@ func TestParseSkillRejects(t *testing.T) {
 			raw:  strings.Replace(goodSkill, "  - get_rca_verdict(correlation_id)", "  - get_rca_verdict(correlation_id, correlation_id)", 1),
 			want: "given twice",
 		},
+		// ── NetClaw ingestion Batch 0: discovered-device facts ──
+		{
+			name: "applies_when with an unknown fact key",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when: fact:vendor=cisco\nsymptom_kinds: bgp", 1),
+			want: "fact key",
+		},
+		{
+			name: "applies_when with an unknown fact value",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when: fact:adjacency=eigrp\nsymptom_kinds: bgp", 1),
+			want: "fact value",
+		},
+		{
+			name: "applies_when with a non-fact condition",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when: verdict:tier=confirmed\nsymptom_kinds: bgp", 1),
+			want: "only fact:",
+		},
+		{
+			name: "applies_when names a key twice",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when: fact:adjacency=bgp, fact:adjacency=ospf\nsymptom_kinds: bgp", 1),
+			want: "twice",
+		},
+		{
+			name: "applies_when as a block",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when:\n  - fact:adjacency=bgp\nsymptom_kinds: bgp", 1),
+			want: "not a block",
+		},
+		{
+			name: "applies_when on a MOP",
+			dir:  "unit-probe",
+			raw: strings.Replace(strings.Replace(goodSkill, "version: 1", "version: 1\nkind: mop\nsteps:\n  - check the peer", 1),
+				"symptom_kinds: bgp", "applies_when: fact:adjacency=bgp\nsymptom_kinds: bgp", 1),
+			want: "nothing selects",
+		},
+		{
+			name: "fact next= with an unknown value",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "  - verdict=name the peer and its state", "  - next=unit-probe when fact:role=router\n  - verdict=name the peer and its state", 1),
+			want: "fact value",
+		},
+		{
+			name: "fact alternatives beyond the bound",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "symptom_kinds: bgp", "applies_when: fact:telemetry=snmp|gnmi|api|syslog|trap|flow|snmp\nsymptom_kinds: bgp", 1),
+			want: "alternatives",
+		},
+		{
+			name: "topo condition without get_network_topology",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "  - verdict=name the peer and its state", "  - next=unit-probe when topo:spof=present\n  - verdict=name the peer and its state", 1),
+			want: "needs get_network_topology",
+		},
+		{
+			name: "topo condition with an unknown value",
+			dir:  "unit-probe",
+			raw: strings.Replace(strings.Replace(goodSkill, "tools: get_rca_verdict, run_protocol_diagnostic", "tools: get_rca_verdict, run_protocol_diagnostic, get_network_topology", 1),
+				"  - verdict=name the peer and its state", "  - next=unit-probe when topo:spof=maybe\n  - verdict=name the peer and its state", 1),
+			want: "topo value",
+		},
+		{
+			name: "cross-name binding to an unknown entity",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "  - run_protocol_diagnostic(device_id, protocol=bgp)", "  - run_protocol_diagnostic(device_id=@hostname, protocol=bgp)", 1),
+			want: "not a resolvable entity",
+		},
+		{
+			name: "unknown layer",
+			dir:  "unit-probe",
+			raw:  strings.Replace(goodSkill, "layer: bgp", "layer: overlay", 1),
+			want: "layer",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

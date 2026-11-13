@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for platform-health. Dialect + contract: skill_cases.go.
+
+case: a pinned CPU sends the investigation to the device's own log for the process behind it
+question: high cpu on edge-1
+ui:
+  - correlation_id=case-plat-cpu
+  - device=edge-1
+signals:
+  - state:platform=cpu_high
+evidence:
+  - finding
+  - device
+expect_chain:
+  - platform-health entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: CPU is pinned
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - ntp-clock
+expect_select: platform-health
+
+---
+
+case: memory near exhaustion is confirmed from allocation failures in the device's log
+question: memory high on edge-1
+ui:
+  - correlation_id=case-plat-mem
+  - device=edge-1
+signals:
+  - state:platform=mem_high
+evidence:
+  - finding
+  - device
+expect_chain:
+  - platform-health entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: memory is near exhaustion
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - ntp-clock
+
+---
+
+case: a device that came up within the last day is asked why it reloaded
+question: did edge-1 reload
+ui:
+  - correlation_id=case-plat-reload
+  - device=edge-1
+signals:
+  - state:reload=recent
+evidence:
+  - finding
+  - device
+expect_chain:
+  - platform-health entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: came up within the last day
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - ntp-clock
+
+---
+
+case: an unsynchronized clock hands off to the clock method, which pins the loss from the log
+question: is edge-1 healthy
+ui:
+  - correlation_id=case-plat-clock
+  - device=edge-1
+signals:
+  - state:clock=unsynced
+evidence:
+  - finding
+  - device
+expect_chain:
+  - platform-health entry
+  - ntp-clock rule
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: lost its time source
+expect_verdict:
+  - quote
+  - rate
+
+---
+
+case: health that cannot be read live leaves the device's own log as the only evidence
+question: is edge-1 healthy right now
+ui:
+  - correlation_id=case-plat-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - platform-health entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - ntp-clock
+
+---
+
+case: readings within bounds take no hop and say so
+question: cpu utilization on edge-1
+ui:
+  - correlation_id=case-plat-calm
+  - device=edge-1
+signals:
+  - state:platform=ok
+  - state:reload=earlier
+  - state:clock=synced
+evidence:
+  - finding
+  - device
+expect_chain:
+  - platform-health entry
+expect_selected: none
+expect_verdict:
+  - out of bounds
+  - within bounds
+expect_never:
+  - log-confirmation
+  - ntp-clock
+expect_select: platform-health

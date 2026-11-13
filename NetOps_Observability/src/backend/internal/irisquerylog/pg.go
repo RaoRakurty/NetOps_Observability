@@ -86,12 +86,13 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO iris_query_log (tenant_id, id, principal_sub, conversation_id, source,
 		        created_at, question, intent, outcome, query_type, ast_hash, catalog_version,
-		        validation_codes, entities, row_count, series_count, duration_ms, corrections, query, compiled_by, readings)
+		        validation_codes, entities, row_count, series_count, duration_ms, corrections, query, compiled_by, readings,
+		        miss_class)
 		    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, '[]'::jsonb,
-		            $18::jsonb, $19, $20::jsonb)`,
+		            $18::jsonb, $19, $20::jsonb, $21)`,
 			tenant, r.ID, r.Principal, conv, r.Source, r.At, r.Question, r.Intent, r.Outcome, r.QueryType,
 			r.ASTHash, r.CatalogVersion, string(codes), string(ents), r.Rows, r.Series, r.DurationMs, query, r.CompiledBy,
-			string(readings))
+			string(readings), r.MissClass)
 		return err
 	})
 	if err != nil {
@@ -102,7 +103,7 @@ func (p *PGStore) Record(ctx context.Context, tenant string, r Record) (Record, 
 
 const pgColumns = `id::text, principal_sub, COALESCE(conversation_id::text, ''), source, created_at, question, intent,
         outcome, query_type, ast_hash, catalog_version, validation_codes, entities, row_count, series_count,
-        duration_ms, corrections, query, compiled_by, readings`
+        duration_ms, corrections, query, compiled_by, readings, miss_class`
 
 // List returns the tenant's live records, newest first.
 func (p *PGStore) List(ctx context.Context, tenant string, f ListFilter) ([]Record, error) {
@@ -223,7 +224,7 @@ func scanRecord(row pgx.Row, tenant string) (Record, error) {
 	var codes, ents, corr, query, readings []byte
 	if err := row.Scan(&r.ID, &r.Principal, &r.ConversationID, &r.Source, &r.At, &r.Question, &r.Intent,
 		&r.Outcome, &r.QueryType, &r.ASTHash, &r.CatalogVersion, &codes, &ents, &r.Rows, &r.Series,
-		&r.DurationMs, &corr, &query, &r.CompiledBy, &readings); err != nil {
+		&r.DurationMs, &corr, &query, &r.CompiledBy, &readings, &r.MissClass); err != nil {
 		return Record{}, err
 	}
 	// The stored query is decoded STRICTLY (bounded, no unknown fields) and

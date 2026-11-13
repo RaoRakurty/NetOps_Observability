@@ -121,11 +121,79 @@ func resolveAddrEntity(out *skillEntitySet, name, fromUI string, shape *regexp.R
 	}
 }
 
+// reIfaceToken is the strict interface-name shape behind the `interface`
+// entity (NetClaw Batch 1): a known vendor interface prefix followed by its
+// numbering — Cisco (GigabitEthernet0/0/1, Gi1, TenGigE0/0/0/1, Port-channel1,
+// Tunnel1), NX-OS/EOS (Ethernet1/1, Eth1/1), Junos (ge-0/0/0, xe-1/0/2.0, ae0)
+// and IOS-XR (Bundle-Ether1, HundredGigE0/0/0/0). Free text never matches: the
+// prefix list is closed and a digit must follow it.
+var reIfaceToken = regexp.MustCompile(`(?i)\b(?:(?:Hundred|Forty|TwentyFive|Ten)?Gig(?:abit)?E(?:thernet)?|FastEthernet|Ethernet|Eth|Gi|Te|Fa|Hu|Port-channel|Po|Bundle-Ether|Tunnel|Tu|Loopback|Lo|Vlan)[0-9]{1,4}(?:/[0-9]{1,4}){0,3}(?:\.[0-9]{1,5})?\b|\b(?:ge|xe|et|fe)-[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,3}(?:\.[0-9]{1,5})?\b|\bae[0-9]{1,3}(?:\.[0-9]{1,5})?\b`)
+
+// ifaceTokenSpans returns the interface-name spans in s. A match immediately
+// followed by '-' or '_' is the head of a longer name ("Eth1-core" is a
+// hostname), so it is not an interface.
+func ifaceTokenSpans(s string) [][]int {
+	var out [][]int
+	for _, loc := range reIfaceToken.FindAllStringIndex(s, -1) {
+		if loc[1] < len(s) && (s[loc[1]] == '-' || s[loc[1]] == '_') {
+			continue
+		}
+		out = append(out, loc)
+	}
+	return out
+}
+
+// firstIfaceToken is the first interface-name token in s, or "".
+func firstIfaceToken(s string) string {
+	if spans := ifaceTokenSpans(s); len(spans) > 0 {
+		return s[spans[0][0]:spans[0][1]]
+	}
+	return ""
+}
+
+// blankIfaceTokens replaces every interface-name token in s with a space.
+func blankIfaceTokens(s string) string {
+	spans := ifaceTokenSpans(s)
+	if len(spans) == 0 {
+		return s
+	}
+	var b strings.Builder
+	prev := 0
+	for _, loc := range spans {
+		b.WriteString(s[prev:loc[0]])
+		b.WriteByte(' ')
+		prev = loc[1]
+	}
+	b.WriteString(s[prev:])
+	return b.String()
+}
+
+// resolveIfaceEntity binds the `interface` entity: the UI's value when it is a
+// well-formed interface name, else the FIRST interface-shaped token in the
+// question. Anything else is dropped, never passed through.
+func resolveIfaceEntity(out *skillEntitySet, fromUI, question string) {
+	for _, cand := range []string{strings.TrimSpace(fromUI), firstIfaceToken(question)} {
+		if cand == "" || firstIfaceToken(cand) != cand {
+			continue
+		}
+		if v, err := validIDArg("interface", cand, 64); err == nil {
+			out.values["interface"] = v
+			return
+		}
+	}
+}
+
 // skillEntitySet is the resolved, server-owned entity binding for one turn.
 type skillEntitySet struct {
 	values map[string]string
 	device DeviceRef
 	notes  []string
+	// facts are the resolved device's DISCOVERED facts (skill_facts.go).
+	// factsRead is true once the seam answered for a resolved device: only
+	// then is a method's applies_when evaluated at all (no device, nothing to
+	// apply a method to).
+	facts     DeviceFacts
+	factsRead bool
 }
 
 func (e skillEntitySet) get(name string) (string, bool) {
@@ -154,6 +222,7 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 	// turn recall what was concluded about the same peer or prefix before.
 	resolveAddrEntity(&out, "prefix", uiContext["prefix"], rePrefixToken, question)
 	resolveAddrEntity(&out, "peer", uiContext["peer"], reIPv4Token, rePrefixToken.ReplaceAllString(question, " "))
+	resolveIfaceEntity(&out, uiContext["interface"], question)
 	if o.Troubleshoot.ResolveDevice == nil {
 		return out
 	}
@@ -167,6 +236,10 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 	// question that never named a device. Blank the uuids out first: they are
 	// already bound as correlation_id above.
 	deviceScan := reUUID.ReplaceAllString(question, " ")
+	// An interface name ("GigabitEthernet1") is device-name SHAPED too; it is
+	// bound as the interface entity above and must not be offered to the
+	// inventory as a hostname.
+	deviceScan = blankIfaceTokens(deviceScan)
 	for _, m := range reDeviceCandidate.FindAllString(deviceScan, -1) {
 		if len(candidates) >= maxDeviceCandidates {
 			break
@@ -184,6 +257,18 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 		out.values["device_id"] = ref.ID
 		out.values["device"] = firstNonEmpty(ref.Name, ref.ID)
 		break
+	}
+	// Discovered facts, resolved ONCE for the device the turn is about. A read
+	// that fails leaves every applies_when unknown — methods still run, and the
+	// gap is said rather than guessed around.
+	if id, ok := out.get("device_id"); ok && o.Troubleshoot.DeviceFacts != nil {
+		f, err := o.Troubleshoot.DeviceFacts(ctx, p, id)
+		if err != nil {
+			out.notes = append(out.notes, "what Correlix discovered about "+out.values["device"]+
+				" (role, protocols, collection) could not be read — whether each method applies to it is UNKNOWN")
+		} else {
+			out.facts, out.factsRead = f, true
+		}
 	}
 	if len(candidates) > 0 {
 		if _, ok := out.get("device_id"); !ok {
@@ -220,12 +305,14 @@ func planGather(sk *Skill, ent skillEntitySet) []plannedStep {
 		for k, v := range g.Args {
 			args[k] = v
 		}
+		satisfied := true
 		for _, argName := range g.BindOrder() {
 			if v, has := ent.get(g.Bind[argName]); has {
 				args[argName] = v
+			} else if g.Strict[argName] {
+				satisfied = false // `arg=@entity`: the step means nothing without it
 			}
 		}
-		satisfied := true
 		for _, a := range meta.args {
 			if a.required && strings.TrimSpace(args[a.name]) == "" {
 				satisfied = false
@@ -268,8 +355,9 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	ent := o.resolveSkillEntities(ctx, p, question, uiContext)
 
 	st := newChainState()
+	st.facts.device, st.facts.deviceRead, st.facts.deviceName = ent.facts, ent.factsRead, ent.values["device"]
 	var last *Skill
-	cur, selected, reason := sk, ChainSelectedEntry, match.Reason
+	cur, selected, reason := o.applicableEntry(sk, match.Reason, st)
 	for round := 1; round <= MaxInvestigationRounds; round++ {
 		roundItems, ranNow := o.runSkillRound(ctx, p, cur, ent, st, round, selected)
 		st.visited[cur.Name] = true // visited even when it gathered nothing: never retried
@@ -417,6 +505,41 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	return ans, true
 }
 
+// applicableEntry checks the text-selected entry skill against what Correlix
+// DISCOVERED about the turn's device. A method a discovered fact rules out is
+// not run: the turn says why and starts from the entry method instead (owner
+// 2026-11-13: disclose and reroute). It returns the skill to start with, how it
+// was selected and the reason shown for that hop.
+func (o *Orchestrator) applicableEntry(sk *Skill, reason string, st *chainState) (*Skill, string, string) {
+	a := st.facts.applicability(sk)
+	if a.Applies {
+		return sk, ChainSelectedEntry, reason
+	}
+	st.addNote(notApplicableNote(sk, a, st.facts.deviceName, st.facts.device))
+	st.visited[sk.Name] = true // never re-entered by a later hop either
+	o.auditChainChoice(sk.Name, ChainSelectedEntry, "not_applicable", 1, false)
+	if method := o.entryMethod(); method != nil && method != sk && st.facts.applicability(method).Applies {
+		return method, ChainSelectedEntry, "the " + humanizeSkillName(sk.Name) +
+			" method does not apply to this device, so the investigation starts from the top-level method"
+	}
+	// No method fits: run nothing rather than a method the evidence rules out.
+	return sk, ChainSelectedEntry, reason
+}
+
+// entryMethod is the single method-layer entry skill (the loader guarantees
+// exactly one).
+func (o *Orchestrator) entryMethod() *Skill {
+	if o.Skills == nil {
+		return nil
+	}
+	for _, n := range o.Skills.Names() {
+		if s, ok := o.Skills.Get(n); ok && s.Layer == LayerMethod && !s.customerAuthored() {
+			return s
+		}
+	}
+	return nil
+}
+
 // observeInvestigation reports one finished skill-chain turn to the scorecard
 // seam. It reads state the chain already computed and adds nothing; a nil sink
 // makes it free.
@@ -487,6 +610,16 @@ func (o *Orchestrator) recordConcluded(ctx context.Context, p Principal, ans *An
 // evidence this round CONTRIBUTED (deduped and within the prompt budget) and how
 // many steps actually returned — a round that returns zero ends the chain.
 func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill, ent skillEntitySet, st *chainState, round int, selected string) ([]EvidenceItem, int) {
+	// The structural half of applies_when: a method a discovered fact rules out
+	// issues NO read, whichever path selected it. (Selection already keeps it
+	// out; this is the guarantee, not the routing.)
+	a := st.facts.applicability(sk)
+	if !a.Applies {
+		return nil, 0
+	}
+	if len(a.Unknown) > 0 {
+		st.addNote(unknownApplicabilityNote(sk, a, st.facts.deviceName, st.facts.device))
+	}
 	steps := planGather(sk, ent)
 	if len(steps) == 0 {
 		return nil, 0

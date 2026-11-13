@@ -507,3 +507,22 @@ func TestNotDataAndNotFoundAreRecordable(t *testing.T) {
 		t.Error("an outcome outside the closed set must be refused")
 	}
 }
+
+func TestNormalizeMissRecords(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	ok := Record{Principal: "p", Source: SourceAsk, Outcome: OutcomeMiss, MissClass: "wording", Question: "gimme stuff"}
+	if _, err := Normalize("t", ok, now); err != nil {
+		t.Fatalf("a classified miss must normalize: %v", err)
+	}
+	for name, r := range map[string]Record{
+		"miss without class":     {Principal: "p", Source: SourceAsk, Outcome: OutcomeMiss},
+		"unknown class":          {Principal: "p", Source: SourceAsk, Outcome: OutcomeMiss, MissClass: "nope"},
+		"class on a non-miss":    {Principal: "p", Source: SourceRouter, Outcome: OutcomeAnswered, MissClass: "wording"},
+		"miss from the data arm": {Principal: "p", Source: SourceRouter, Outcome: OutcomeMiss, MissClass: "wording"},
+		"ask source, not a miss": {Principal: "p", Source: SourceAsk, Outcome: OutcomeAnswered},
+	} {
+		if _, err := Normalize("t", r, now); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want ErrInvalid, got %v", name, err)
+		}
+	}
+}
