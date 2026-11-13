@@ -21,6 +21,12 @@
 # Seeded 2026-09-05 from docs/audit/FEATURE_UI_COVERAGE_2026-09-05.md.
 
 headless:
+  - route: /api/flows/links
+    reason: >-
+      TRANSITIONAL (tracker 400): the link-level flow APIs land backend-first in
+      a stacked series; the Flows page moves onto them in the frontend PR of the
+      same stack, which drops this entry.
+
   - route: /api/auth/osd-gate
     reason: >-
       nginx auth_request target for the embedded /search and /netbox consoles
