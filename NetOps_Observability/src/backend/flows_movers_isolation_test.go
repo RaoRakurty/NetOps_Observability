@@ -178,6 +178,9 @@ func TestFlowsLinkMoversAsTenantIgnored(t *testing.T) {
 	}
 	s.discovery.Upsert(models.Device{ID: "a-core", Name: "a-core", Address: "10.1.0.1", TenantID: ids["A"]})
 	s.discovery.Upsert(models.Device{ID: "b-core", Name: "b-core", Address: "10.2.0.1", TenantID: ids["B"]})
+	// newServer builds these; the test server state does not.
+	s.appCatalog = newAppCatalogHolder()
+	s.ngfw = newNgfwAppResolver()
 	tok := login(t, srv, "user-a", "Passw0rd!2345").Token
 	for _, path := range []string{
 		"/api/flows/links/movers?device=10.2.0.1&if=3&as_tenant=" + ids["B"],
