@@ -1,0 +1,270 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# credscrub.yaml — `vector test` proof of the syslog lane's "D1 AT REST" block
+# (tracker 387 (a), owner decision D1: an SNMP community is never stored).
+#
+# tests/test_credfp_edge.py runs it against the shipped vector.yaml with:
+#   CX_CREDFP_KEY = the internal/credfp test key (credfp_test.go testKey)
+#   CX_CREDFP_SET = three published fingerprints, computed independently
+#                   (Python hmac/hashlib/base64):
+#       t_lab / fixture-lab-community
+#       *     / fixture-global-community
+#       t_lab / ro
+# and tests/fixtures-credscrub/device_tenant.csv (lab-edge -> t_lab,
+# other-edge -> t_other). Every community below is fabricated. Each token is
+# `snmp-community:` + the first 12 characters of the TENANT-scoped fingerprint
+# of that community, so the expected tokens are pinned bytes, not re-derived.
+#
+# Keep every dollar sign out of this file: Vector interpolates environment
+# variables in the raw config text, comments included.
+
+tests:
+  - name: "a tenant's configured community is dropped from its group line"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: fixture-lab-community/1231 assigned to groups: basic"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "t_lab")
+              assert_eq!(.event_type, "audit_session_groups")
+              assert_eq!(.message, "audit user: snmp-community:XuKA6yJbdut-/1231 assigned to groups: basic")
+              assert_eq!(.audit_user, "snmp-community:XuKA6yJbdut-")
+              assert_eq!(.summary, "Session of snmp-community:XuKA6yJbdut- given groups basic")
+              assert_eq!(.snmp_community_present, true)
+              assert!(!contains(encode_json(.), "fixture-lab-community"), "the community must be nowhere in the event")
+
+  - name: "the same community on ANOTHER tenant's line is not that tenant's, so it stays (no cross-tenant edit)"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "other-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: fixture-lab-community/1232 terminated session (reason: normal)"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "t_other")
+              assert_eq!(.message, "audit user: fixture-lab-community/1232 terminated session (reason: normal)")
+              assert_eq!(.audit_user, "fixture-lab-community")
+              assert!(!exists(.snmp_community_present))
+
+  - name: "a platform community is dropped on every tenant's line, with that tenant's token"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "other-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: fixture-global-community/88 terminated session (reason: normal)"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "audit user: snmp-community:1_c5guQ9kIjA/88 terminated session (reason: normal)")
+              assert_eq!(.audit_user, "snmp-community:1_c5guQ9kIjA")
+              assert_eq!(.title, "Session closed on other-edge for snmp-community:1_c5guQ9kIjA (normal)")
+              assert!(!contains(encode_json(.), "fixture-global-community"))
+
+  - name: "the same platform community on the lab tenant gets the lab tenant's token"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: fixture-global-community/89 assigned to groups: basic"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.audit_user, "snmp-community:YA87wnhsaakM")
+
+  - name: "a session opened via snmp names a community by its shape, configured or not"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: unlisted-poll-community/777134 created new session via snmp from 192.0.2.1:59169 with udp"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "audit_session_created_snmp")
+              assert_eq!(.message, "audit user: snmp-community:dfWHXmZlCG-y/777134 created new session via snmp from 192.0.2.1:59169 with udp")
+              assert_eq!(.snmp_community_present, true)
+              assert!(!exists(.audit_user), "the pack still reads no user from this line")
+              assert!(!contains(encode_json(.), "unlisted-poll-community"))
+
+  - name: "a person's session is untouched (owner D7 keeps audit usernames)"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: svc-user/777134 assigned to groups: basic"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "audit user: svc-user/777134 assigned to groups: basic")
+              assert_eq!(.audit_user, "svc-user")
+              assert!(!exists(.snmp_community_present))
+
+  - name: "a refused request drops the community from both places, spaces and all"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: wrong community 7f3a/0 SNMP authentication failed: PDU discarded: bad community name: wrong community 7f3a 127.0.0.1.198.53"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.event_type, "snmp_auth_failed_community")
+              assert_eq!(.message, "audit user: snmp-community:FaS8pOhtZmMi/0 SNMP authentication failed: PDU discarded: bad community name: snmp-community:FaS8pOhtZmMi 127.0.0.1.198.53")
+              assert!(!contains(encode_json(.), "wrong community 7f3a"))
+
+  - name: "a logged IOS configuration command drops the community"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "%PARSER-5-CFGLOG_LOGGEDCMD"
+          severity: "notice"
+          message: "%PARSER-5-CFGLOG_LOGGEDCMD: User:admin  logged command:snmp-server community s3cr3t-comm RO"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "%PARSER-5-CFGLOG_LOGGEDCMD: User:admin  logged command:snmp-server community snmp-community:N_KQ8MMYfHFi RO")
+              assert_eq!(.snmp_community_present, true)
+              assert!(!contains(encode_json(.), "s3cr3t-comm"))
+
+  - name: "a logged Junos command drops the community"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "mgd"
+          severity: "info"
+          message: "UI_CMDLINE_READ_LINE: User 'admin', command 'set snmp community s3cr3t-comm authorization read-only '"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "UI_CMDLINE_READ_LINE: User 'admin', command 'set snmp community snmp-community:N_KQ8MMYfHFi authorization read-only '")
+              assert!(!contains(encode_json(.), "s3cr3t-comm"))
+
+  - name: "Junos's refused community is dropped and the prose around it is not mistaken for one"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "snmpd"
+          severity: "notice"
+          message: "SNMPD_AUTH_FAILURE: nsa_log_community: unauthorized SNMP community from 192.0.2.9 to unknown community name (pubic-guess)"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "SNMPD_AUTH_FAILURE: nsa_log_community: unauthorized SNMP community from 192.0.2.9 to unknown community name (snmp-community:yw-gVSVYdMpG)")
+              assert!(!contains(encode_json(.), "pubic-guess"))
+
+  - name: "net-snmp's refused community is dropped"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "snmpd"
+          severity: "warning"
+          message: "Connection from UDP: [192.0.2.9]:41000->[192.0.2.1]:161 bad community name: guess-comm"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "Connection from UDP: [192.0.2.9]:41000->[192.0.2.1]:161 bad community name: snmp-community:HyLRVLKfgN_z")
+
+  - name: "a two-letter community is replaced only where the line puts it"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "confd"
+          severity: "info"
+          message: "audit user: ro/12 assigned to groups: ro-groups"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "audit user: snmp-community:NiajE6YlZfxm/12 assigned to groups: ro-groups")
+              assert_eq!(.audit_user, "snmp-community:NiajE6YlZfxm")
+              assert_eq!(.summary, "Session of snmp-community:NiajE6YlZfxm given groups ro-groups")
+              assert_eq!(.title, "Session groups assigned on lab-edge to snmp-community:NiajE6YlZfxm")
+
+  - name: "a BGP community is not an SNMP community"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "lab-edge"
+          appname: "mgd"
+          severity: "info"
+          message: "UI_CMDLINE_READ_LINE: User 'admin', command 'set policy-options community no-export members 65000:1 '"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "UI_CMDLINE_READ_LINE: User 'admin', command 'set policy-options community no-export members 65000:1 '")
+              assert!(!exists(.snmp_community_present))

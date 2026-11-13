@@ -75,11 +75,21 @@ check_vector(){
     # Tracker 384: the OpenSearch stats password resolves the same way.
     mkdir -p "$stub/os/aggregator"
     printf 'preflight-stub-credential\n' > "$stub/os/aggregator/password"
+    # Tracker 387 (a): the community fingerprint key and the published set
+    # resolve through the REAL cx-secret-exec.sh / cx-credfp-set.sh backends,
+    # exactly as compose wires them, so a broken backend or a key that breaks
+    # the VRL string it lands in fails here. Fabricated stub values.
+    mkdir -p "$stub/credscrub/aggregator"
+    printf 'preflight-stub-key-0123456789abcdefghijklmno\n' > "$stub/credscrub/aggregator/password"
+    printf '*/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$stub/community_fp.txt"
     secret_args=(-e 'VMAUTH_VECTOR_PASSWORD_REF=SECRET[vmauth.vector]'
                  -e 'OPENSEARCH_STATS_PASSWORD=SECRET[opensearch.aggregator]'
+                 -e 'CX_CREDFP_KEY=SECRET[credscrub.aggregator]'
+                 -e 'CX_CREDFP_SET=SECRET[credfpset.current]'
                  -v "$ROOT/$(dirname "$rel"):/etc/vector/conf:ro"
                  -v "$stub/secrets:/run/secrets/vmauth:ro"
-                 -v "$stub/os:/run/secrets/opensearch:ro")
+                 -v "$stub/os:/run/secrets/opensearch:ro"
+                 -v "$stub/credscrub:/run/secrets/credscrub:ro")
   elif [ "$mode" = "opensearch-secret" ]; then
     # Tracker 384: the router's OpenSearch password, through the aggregator's
     # script, which compose mounts at /etc/vector/shared.

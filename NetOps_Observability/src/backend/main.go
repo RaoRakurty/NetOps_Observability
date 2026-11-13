@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/ifbridge"
@@ -385,6 +386,7 @@ type server struct {
 	refresh                    *session.RefreshStore
 	snmpCreds                  *snmpcred.Store
 	credScrub                  *credscrub.Scrubber // the configured SNMP communities, masked by value on every log read path
+	credFP                     *credfp.Publisher   // their keyed fingerprints for the aggregator's at-rest drop (tracker 387 (a)); nil when unconfigured
 	credOverrides              *credOverrideStore  // learned SNMP credential bindings (credential sentinel)
 	credSentinel               *credSentinel       // self-healing credential resolution loop
 	sshHosts                   *sshHostStore       // #20/device-ssh: TOFU host-key store for the SSH gateway
@@ -1214,6 +1216,9 @@ func newServer() *server {
 	// pass returns nothing to any caller). Read at call time, so it follows
 	// refreshes.
 	ai.SetDefaultEgressScrub(func(body []byte) []byte { return credScrub.Union().MaskJSON(body) })
+	// D1 at rest (tracker 387 (a)): the same values, as keyed fingerprints the
+	// Vector aggregator matches ConfD's session lines against before storage.
+	credFP := newCommunityFingerprintPublisher(credScrub, os.Getenv)
 	credOverrides, err := newCredOverrideStore(envOr("CRED_OVERRIDES_FILE", "/data/credential_overrides.json"))
 	if err != nil {
 		log.Fatalf("credential overrides store: %v", err)
@@ -1326,6 +1331,7 @@ func newServer() *server {
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,
 		credScrub:        credScrub,
+		credFP:           credFP,
 		credOverrides:    credOverrides,
 		// MONITORING-BEGIN — the credential sentinel probes devices over SNMP to
 		// learn which profile answers, so it must see only MONITORED devices:

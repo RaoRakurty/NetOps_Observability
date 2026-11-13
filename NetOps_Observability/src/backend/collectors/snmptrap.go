@@ -437,6 +437,16 @@ func vendorTitle(v string) string {
 // .1..6; the snmpTrapOID.0 varbind that names a v2/v3 trap is 1.3.6.1.6.3.1.1.4.1.0.
 var snmpTrapOIDDot = "1.3.6.1.6.3.1.1.4.1.0"
 
+// snmpTrapCommunityDot is SNMP-COMMUNITY-MIB snmpTrapCommunity.0 (RFC 3584
+// §3.1): a proxy translating a v1 trap to v2 MAY append it, and its value is
+// the community the v1 trap carried. Tracker 387 (a), owner D1: the receiver
+// never stores a community, so this binding's value is withheld at decode,
+// before the trap reaches the bus, Kafka, OpenSearch or a model.
+const snmpTrapCommunityDot = "1.3.6.1.6.3.18.1.4.0"
+
+// withheldCommunity replaces snmpTrapCommunity.0's value.
+const withheldCommunity = "(withheld: SNMP community)"
+
 // trapMeta resolves a trap OID (dotted) to a friendly name + severity via the
 // MIB-backed OID index (oidindex.go — generated from a vendored MIB tree). Unknown
 // OIDs read as enterpriseSpecific/notice; add the vendor MIB + `make mib-index` to
@@ -582,6 +592,12 @@ func parseVarbinds(vbList []byte) (out []TrapVarbind, dropped int) {
 			continue
 		}
 		oid := oidString(decodeOID(oidRaw))
+		if oid == snmpTrapCommunityDot {
+			// The value is the community itself (owner D1): keep the fact that
+			// the binding was sent, never the credential.
+			out = append(out, TrapVarbind{OID: oid, Name: "snmpTrapCommunity", Value: withheldCommunity, Type: berTypeNames[valTag]})
+			continue
+		}
 		out = append(out, decodeVarbindTag(oid, valStr(valTag, valRaw), valTag))
 	}
 	return out, dropped
