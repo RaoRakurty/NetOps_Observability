@@ -1703,7 +1703,7 @@ tests:
               assert_eq!(.audit_user, "VTY", "wrong audit_user")
               assert_eq!(.audit_source, "192.168.1.26", "wrong audit_source")
               assert_eq!(.audit_via, "cli", "wrong audit_via")
-  - name: "hpe_comware: a Comware failed login is a security audit record"
+  - name: "hpe_comware: a Comware login refusal is a security audit record"
     inputs:
       - insert_at: syslog_normalized
         type: log

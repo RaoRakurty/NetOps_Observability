@@ -1530,9 +1530,9 @@ transforms:
   # records for as long as 100 % of them read `unparsed`, and nothing noticed.
   # Rules: the parse-coverage group in rules-scale-slo.yaml (warning tier).
   #
-  # SERIES. vendor is at most 22 values today and parser_id 17, each from the generated
-  # lists below or `other`, so the label product is bounded at 22 x 17 x 6 statuses =
-  # 2244, and the pipeline can reach about 480 of those: a line has one parser and one
+  # SERIES. vendor is at most 22 values today and parser_id 19, each from the generated
+  # lists below or `other`, so the label product is bounded at 22 x 19 x 6 statuses =
+  # 2508, and the pipeline can reach about 480 of those: a line has one parser and one
   # status, and a trap has no parser id. A single-vendor deployment holds about ten.
   # netops_trap_varbinds adds at most 44 and netops_flow_enrichment_events at most 36.
   # No device, tenant or free text can reach a label, so nothing here is
@@ -1562,7 +1562,7 @@ transforms:
       cx_parser = string(.parser_id) ?? ""
       if cx_parser == "" {
         cx_parser = "none"
-      } else if !includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "fortios_kv.v1", "ios_style.v1", "junos.v1", "nokia_srlinux.v1", "nokia_sros.v1", "sonic.v1", "srlinux.v1", "standard_mgmt_audit.v1", "standard_system.v1"], cx_parser) {
+      } else if !includes(["cisco_iosxe.v1", "cisco_iosxr.v1", "cisco_mgmt_audit.v1", "cisco_sdwan.v1", "cisco_sdwan_diag.v1", "cisco_sdwan_mgmt_poll.v1", "dell_dnos6.v1", "fortios_kv.v1", "hpe_comware.v1", "ios_style.v1", "junos.v1", "nokia_srlinux.v1", "nokia_sros.v1", "sonic.v1", "srlinux.v1", "standard_mgmt_audit.v1", "standard_system.v1"], cx_parser) {
         cx_parser = "other"
       }
       cx_status = string(.parser_status) ?? ""

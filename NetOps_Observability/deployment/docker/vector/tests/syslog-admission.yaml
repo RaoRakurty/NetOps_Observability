@@ -1844,7 +1844,7 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.cx_admission, null, "expected NO admission stamp")
-  - name: "pack hpe_comware: a Comware failed login is a security audit record"
+  - name: "pack hpe_comware: a Comware login refusal is a security audit record"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log

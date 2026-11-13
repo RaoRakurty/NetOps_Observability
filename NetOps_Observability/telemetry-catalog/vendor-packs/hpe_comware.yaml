@@ -264,7 +264,7 @@ fixtures:
       audit_via: cli
     signal: null
 
-  - name: a Comware failed login is a security audit record
+  - name: a Comware login refusal is a security audit record
     fidelity: doc_claimed
     source: 'H3C SOHO Switch System Log Messages (Comware V5), SHELL_LOGINFAIL example, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
     hostname: sw-core1
