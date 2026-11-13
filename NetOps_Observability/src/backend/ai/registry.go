@@ -110,7 +110,7 @@ var modules = []Module{
 		Description:        "Network/service topology: paths, neighbors, dependency maps, and blast radius for an incident.",
 		Entities:           []string{"node", "link", "path", "service_dependency", "blast_radius"},
 		QuestionCategories: []string{"topology_path", "blast_radius", "neighbors", "dependency"},
-		Tools:              []string{"get_topology_path", "get_entity_neighbors", "get_service_dependency_map", "get_blast_radius", "explain_topology_path", "get_topology_context"},
+		Tools:              []string{"get_topology_path", "get_entity_neighbors", "get_service_dependency_map", "get_blast_radius", "explain_topology_path", "get_topology_context", "get_network_topology"},
 		Permissions:        []string{"infrastructure:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"correlations_rca", "flow_analytics"},

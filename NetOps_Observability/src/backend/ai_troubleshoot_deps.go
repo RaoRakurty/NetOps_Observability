@@ -64,6 +64,7 @@ import (
 	"netops/backend/models"
 	"netops/backend/pathgraph"
 	"netops/backend/secapi"
+	"netops/backend/topology"
 )
 
 // Bounds for the assistant's reads. Each is deliberately tighter than the HTTP
@@ -160,6 +161,7 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.ResolveDevice = s.aiResolveDevice(claims)
 		deps.ProtocolDiagnostic = s.aiProtocolDiagnostic(r, claims)
 		deps.TopologyContext = s.aiTopologyContext(claims)
+		deps.NetworkTopology = s.aiNetworkTopology(claims)
 		// The state seam is ALWAYS wired when there is an inventory: with no
 		// capture transport it answers with the read-only command list and an
 		// honest NotWired, which is the useful answer — not silence.
@@ -601,6 +603,89 @@ func (s *server) aiTopologyContext(claims jwtClaims) func(context.Context, ai.Pr
 		}
 		return out, nil
 	}
+}
+
+// aiNetTopoTimeout bounds the whole-network read (inventory, links, alerts,
+// live metrics and the overlay), inside the tool contract's 15 s.
+const aiNetTopoTimeout = 10 * time.Second
+
+// aiNetworkTopology answers "explain the network topology" from the SAME view
+// the Topology canvas draws for this principal (gatherPhysicalInputs +
+// projectPhysicalView in explore mode), read in network terms by
+// topology.Summarize. The overlay pairs are rebuilt from the same snapshot the
+// view used, restricted to the caller's visible devices: a device this
+// principal cannot see never appears as a node, an adjacency end, an overlay
+// member or a count (§3a). Management addresses never leave the summary.
+func (s *server) aiNetworkTopology(claims jwtClaims) func(context.Context, ai.Principal) (ai.NetworkTopology, error) {
+	return func(ctx context.Context, _ ai.Principal) (ai.NetworkTopology, error) {
+		tctx, cancel := context.WithTimeout(ctx, aiNetTopoTimeout)
+		defer cancel()
+		pin := s.gatherPhysicalInputs(tctx, claims, topology.ModeExplore)
+		snap := s.sdwanOverlay.Load()
+		view := s.projectPhysicalView(tctx, claims, pin, topology.ModeExplore, "", "", nil, snap)
+		in := topology.SummaryInput{View: view}
+		if snap != nil {
+			in.OverlayRead = true
+			devTenant := make(map[string]string, len(pin.devs))
+			for _, d := range pin.devs {
+				devTenant[d.ID] = normTenant(d.TenantID)
+			}
+			in.Pairs = topology.OverlayPairs(snap.devFacts, snap.res.SystemIPs, devTenant)
+		}
+		return toAINetworkTopology(topology.Summarize(in), in.OverlayRead), nil
+	}
+}
+
+// toAINetworkTopology carries the summary across the package seam.
+func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.NetworkTopology {
+	counts := func(cs []topology.SummaryCount) []ai.NamedCount {
+		out := make([]ai.NamedCount, 0, len(cs))
+		for _, c := range cs {
+			out = append(out, ai.NamedCount{Name: c.Name, Count: c.Count})
+		}
+		return out
+	}
+	out := ai.NetworkTopology{
+		Collected: sm.Collected, DevicesTotal: sm.DevicesTotal, LinksTotal: sm.LinksTotal,
+		Roles: counts(sm.Roles), Sites: counts(sm.Sites), Vendors: counts(sm.Vendors),
+		LinkProtocols: counts(sm.LinkProtocols), External: sm.External,
+		OverlayRead: overlayRead, Notes: sm.Notes,
+	}
+	for _, d := range sm.Devices {
+		out.Devices = append(out.Devices, ai.NetworkDevice{
+			Name: d.Name, Role: d.Role, RoleConfidence: d.RoleConfidence, Vendor: d.Vendor, Model: d.Model,
+			Site: d.Site, Health: d.Health, Adjacencies: d.Adjacencies, OverlayPeers: d.OverlayPeers,
+		})
+	}
+	for _, l := range sm.Links {
+		out.Links = append(out.Links, ai.NetworkLink{A: l.A, APort: l.APort, B: l.B, BPort: l.BPort,
+			Protocol: l.Protocol, Status: l.Status, External: l.External})
+	}
+	for _, rn := range sm.RoleNotes {
+		out.RoleNotes = append(out.RoleNotes, ai.NetworkRoleNote{Role: rn.Role, Members: rn.Members,
+			MembersTotal: rn.MembersTotal, Likely: rn.Likely})
+	}
+	if ov := sm.Overlay; ov != nil {
+		o := &ai.NetworkOverlay{Members: ov.Members, Pairs: ov.Pairs, PossiblePairs: ov.PossiblePairs,
+			SameSitePairs: ov.SameSitePairs, Shape: ov.Shape, Hubs: ov.Hubs,
+			MissingTotal: ov.MissingTotal, NotUpTotal: ov.NotUpTotal}
+		for _, t := range ov.Transports {
+			o.Transports = append(o.Transports, ai.NetworkTransport{Name: t.Name, Members: t.Members,
+				Sessions: t.Sessions, Up: t.Up, Health: t.Health})
+		}
+		for _, m := range ov.Missing {
+			o.Missing = append(o.Missing, ai.NetworkPair{A: m.A, B: m.B, Site: m.Site})
+		}
+		for _, m := range ov.SameSiteNoTunnel {
+			o.SameSiteNoTunnel = append(o.SameSiteNoTunnel, ai.NetworkPair{A: m.A, B: m.B, Site: m.Site})
+		}
+		for _, p := range ov.NotUp {
+			o.NotUp = append(o.NotUp, ai.NetworkPairStatus{A: p.A, B: p.B, Status: p.Status,
+				Sessions: p.Sessions, Up: p.Up, Colors: p.Colors})
+		}
+		out.Overlay = o
+	}
+	return out
 }
 
 // aiNeighborCapNote is what the answer says when the SUBJECT device has more

@@ -240,6 +240,11 @@ type TroubleshootDeps struct {
 	SecurityFindings func(ctx context.Context, p Principal, q FindingsQuery) ([]SecurityFinding, error)
 	// TopologyContext returns neighbours, seams and measured paths for a device.
 	TopologyContext func(ctx context.Context, p Principal, deviceID string) (TopologyContext, error)
+	// NetworkTopology returns the caller's WHOLE-NETWORK topology read in
+	// network terms (roles, sites, adjacencies, the overlay's shape and
+	// transports). It takes no device argument, so it registers without the
+	// inventory-resolution seam; it reads only the caller's own devices.
+	NetworkTopology func(ctx context.Context, p Principal) (NetworkTopology, error)
 	// CaseTimeline returns one correlation case's ordered timeline.
 	CaseTimeline func(ctx context.Context, p Principal, correlationID string) ([]TimelineEvent, error)
 
@@ -871,6 +876,10 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.SimilarIncidents != nil {
 		r.add(similarIncidentsTool{deps: d})
 	}
+	// The whole-network read is estate-scoped, not device-scoped.
+	if d.NetworkTopology != nil {
+		r.add(networkTopologyTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -935,6 +944,8 @@ func TroubleshootToolNames() []string {
 		"recall_investigations",
 		// N-F4.
 		"find_similar_incidents",
+		// Whole-network topology.
+		"get_network_topology",
 	}
 	sort.Strings(out)
 	return out

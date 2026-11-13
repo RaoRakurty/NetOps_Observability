@@ -154,6 +154,13 @@ func bindSeams(c *Case, allowed map[string]bool) ai.TroubleshootDeps {
 			return tc, nil
 		}
 	}
+	if allowed["get_network_topology"] {
+		// No frozen whole-network read exists in a case yet: a case that allows
+		// the tool answers from its scripted fixture (frozenTool), never live.
+		d.NetworkTopology = func(context.Context, ai.Principal) (ai.NetworkTopology, error) {
+			return ai.NetworkTopology{}, ai.ErrNotImplemented
+		}
+	}
 	if allowed["get_recent_changes"] {
 		d.RecentChanges = func(_ context.Context, p ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
 			return frozenChanges(c, p, q)

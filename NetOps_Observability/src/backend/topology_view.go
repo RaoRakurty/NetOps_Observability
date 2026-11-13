@@ -269,45 +269,15 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	mode := topologyModeOrDefault(strings.TrimSpace(r.URL.Query().Get("mode")))
 	tenant, cross := principalTenant(claims) // "" for a platform-owner all-tenants view
 
-	// ── inventory + deduped, evidence-bearing links (same normalizer as /links) ──
-	// visibleDevicesFor, not visibleDevices: the canvas draws a NODE per device,
-	// so a restricted tenant's fabric must leave the operator's Global view (and
-	// an as_tenant into it draws nothing). gatherTopoLinksFor closes the edge half.
-	devs := s.visibleDevicesFor(claims)
-	// RENDERABLE-WITH-A-BANNER, not a refusal (tracker 290). This is the
-	// operator's primary situational display: the nodes, the alert overlay and
-	// the health overlay in this same payload are real, and refusing the whole
-	// canvas because the adjacency read failed would take away the evidence that
-	// DID arrive at the moment it is most needed. What must not happen is the
-	// canvas presenting the gap as a fact, so the view carries the degradation
-	// and the SPA renders it as a persistent alert beside the map — the pattern
-	// the cloud domain already uses.
-	links, linksErr := s.gatherTopoLinksFor(r.Context(), claims, devs)
-	var degraded []string
-	if linksErr != nil {
-		logWarn("topology", "adjacency evidence unread for the topology view", map[string]any{
-			"mode": mode, "tenant": tenant, "error": linksErr.Error(),
-		})
-		degraded = append(degraded, topoLinksUnreadNote)
-	}
-
-	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
-	// alertVisibilityFor, not the bare alertVisibleTenantOnly: the nodes already drop a
-	// restricted tenant's devices (visibleDevicesFor above), but the ALERT overlay
-	// carries its own disclosure — the rule that fired and a summary naming the
-	// device — and tenancy alone lets all of it through on the cross-tenant path.
-	alerts := s.alertVisibilityFor(claims).filter(s.alerts.Active())
-
-	// ── live device + link metrics (best-effort; same source /graph enrichment uses) ──
-	lm := s.gatherTopoMetrics(r.Context(), claims)
-	linkFacts := toLinkFacts(links, lm.operStatus, lm.inUtil, lm.outUtil)
+	pin := s.gatherPhysicalInputs(r.Context(), claims, mode)
+	devs := pin.devs
 
 	// Executive geo is a SITE-level projection: it aggregates the same evidence-
 	// bearing device links into WAN circuits between SoT-placed sites. It needs
 	// the links + site placement, not the device-level node facts.
 	if mode == topology.ModeExecutiveGeo {
-		geo := s.projectGeoView(r.Context(), claims, tenant, linkFacts)
-		geo.Degraded = append(geo.Degraded, degraded...)
+		geo := s.projectGeoView(r.Context(), claims, tenant, pin.linkFacts)
+		geo.Degraded = append(geo.Degraded, pin.degraded...)
 		writeJSON(w, http.StatusOK, geo)
 		return
 	}
@@ -329,44 +299,19 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	in := topology.Input{
-		Mode:     mode,
-		TenantID: tenant,
-		Now:      time.Now(),
-		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
-		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
-		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links, s.gatherWANFacts(r.Context(), devs, s.metricsScopeFiltersFor(claims))),
-		Links:    linkFacts,
-		Alerts:   toAlertFacts(alerts),
-		// Item 121: devices inside an active window render the calm
-		// maintenance state (alerts still win inside the projection).
-		MaintenanceDevices: s.maintenanceCoveredDevices(devs),
-	}
-
 	// Path Trace crosses the SEAM (#130a). The cloud slice's nodes become
 	// vertices in the SPF graph, joined by their route edges, the lateral seam
 	// links and the DISCOVERED on-prem↔cloud adjacency — behind the cloud
 	// slice's own default-closed gate, which is not the fabric's. Only this mode
 	// carries them, so no other view's payload changes.
+	var withCloud func(*topology.Input)
 	if mode == topology.ModePathTrace {
-		in.CloudNodes, in.CloudEdges, in.CloudGroups = s.cloudPathGraph(r, tenant, cross, devs)
+		withCloud = func(in *topology.Input) {
+			in.CloudNodes, in.CloudEdges, in.CloudGroups = s.cloudPathGraph(r, tenant, cross, devs)
+		}
 	}
-
-	// SD-WAN branch segmentation: an edge with no site of record is grouped by
-	// the SD-WAN site its peers report (owner, 2026-10-10) — before projection,
-	// so the existing site grouping draws the branches.
-	switch mode {
-	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
-		applySDWANSites(in.Devices, s.sdwanOverlay.Load())
-	}
-	view := topology.Project(in)
-	view.Degraded = append(view.Degraded, degraded...)
-	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
-	// (the SPF graph does not cross the WAN yet), dependency or geo.
-	switch mode {
-	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
-		attachSDWANOverlay(&view, s.sdwanOverlay.Load(), in.Devices, devs, time.Now())
-	}
+	view := s.projectPhysicalView(r.Context(), claims, pin, mode,
+		strings.TrimSpace(r.URL.Query().Get("src")), strings.TrimSpace(r.URL.Query().Get("dst")), withCloud, s.sdwanOverlay.Load())
 	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {
@@ -383,6 +328,98 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		enrichPathIfMetrics(&view, s.pathIfaceMetrics(r.Context(), pf))
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// physicalInputs are the tenant-scoped inputs every physical projection of the
+// fabric starts from. One gather serves the canvas and Iris's whole-network
+// read (get_network_topology), so the two can never describe different
+// networks.
+type physicalInputs struct {
+	devs      []models.Device
+	links     []topoLink
+	linkFacts []topology.LinkFact
+	alerts    []models.Alert
+	lm        topoMetrics
+	degraded  []string
+}
+
+// gatherPhysicalInputs reads the caller's inventory, deduped links, active
+// alerts and live metrics.
+func (s *server) gatherPhysicalInputs(ctx context.Context, claims jwtClaims, mode string) physicalInputs {
+	tenant, _ := principalTenant(claims)
+	// ── inventory + deduped, evidence-bearing links (same normalizer as /links) ──
+	// visibleDevicesFor, not visibleDevices: the canvas draws a NODE per device,
+	// so a restricted tenant's fabric must leave the operator's Global view (and
+	// an as_tenant into it draws nothing). gatherTopoLinksFor closes the edge half.
+	devs := s.visibleDevicesFor(claims)
+	// RENDERABLE-WITH-A-BANNER, not a refusal (tracker 290). This is the
+	// operator's primary situational display: the nodes, the alert overlay and
+	// the health overlay in this same payload are real, and refusing the whole
+	// canvas because the adjacency read failed would take away the evidence that
+	// DID arrive at the moment it is most needed. What must not happen is the
+	// canvas presenting the gap as a fact, so the view carries the degradation
+	// and the SPA renders it as a persistent alert beside the map — the pattern
+	// the cloud domain already uses.
+	links, linksErr := s.gatherTopoLinksFor(ctx, claims, devs)
+	var degraded []string
+	if linksErr != nil {
+		logWarn("topology", "adjacency evidence unread for the topology view", map[string]any{
+			"mode": mode, "tenant": tenant, "error": linksErr.Error(),
+		})
+		degraded = append(degraded, topoLinksUnreadNote)
+	}
+	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
+	// alertVisibilityFor, not the bare alertVisibleTenantOnly: the nodes already drop a
+	// restricted tenant's devices (visibleDevicesFor above), but the ALERT overlay
+	// carries its own disclosure — the rule that fired and a summary naming the
+	// device — and tenancy alone lets all of it through on the cross-tenant path.
+	alerts := s.alertVisibilityFor(claims).filter(s.alerts.Active())
+	// ── live device + link metrics (best-effort; same source /graph enrichment uses) ──
+	lm := s.gatherTopoMetrics(ctx, claims)
+	return physicalInputs{
+		devs: devs, links: links, alerts: alerts, lm: lm, degraded: degraded,
+		linkFacts: toLinkFacts(links, lm.operStatus, lm.inUtil, lm.outUtil),
+	}
+}
+
+// projectPhysicalView projects the device-level fabric views (explore,
+// investigate, capacity, path_trace) from the gathered inputs, with the SD-WAN
+// sites and overlay applied from snap. withCloud (path_trace only) adds the
+// cloud slice before projection.
+func (s *server) projectPhysicalView(ctx context.Context, claims jwtClaims, pin physicalInputs, mode, src, dst string, withCloud func(*topology.Input), snap *sdwanOverlaySnapshot) topology.View {
+	tenant, _ := principalTenant(claims)
+	in := topology.Input{
+		Mode:     mode,
+		TenantID: tenant,
+		Now:      time.Now(),
+		SrcID:    src,
+		DstID:    dst,
+		Devices:  toDeviceFacts(pin.devs, pin.lm.cpu, pin.lm.mem, pin.links, s.gatherWANFacts(ctx, pin.devs, s.metricsScopeFiltersFor(claims))),
+		Links:    pin.linkFacts,
+		Alerts:   toAlertFacts(pin.alerts),
+		// Item 121: devices inside an active window render the calm
+		// maintenance state (alerts still win inside the projection).
+		MaintenanceDevices: s.maintenanceCoveredDevices(pin.devs),
+	}
+	if withCloud != nil {
+		withCloud(&in)
+	}
+	// SD-WAN branch segmentation: an edge with no site of record is grouped by
+	// the SD-WAN site its peers report (owner, 2026-10-10) — before projection,
+	// so the existing site grouping draws the branches.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		applySDWANSites(in.Devices, snap)
+	}
+	view := topology.Project(in)
+	view.Degraded = append(view.Degraded, pin.degraded...)
+	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
+	// (the SPF graph does not cross the WAN yet), dependency or geo.
+	switch mode {
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
+		attachSDWANOverlay(&view, snap, in.Devices, pin.devs, time.Now())
+	}
+	return view
 }
 
 // projectGeoView builds the executive_geo View from SoT site placement + the

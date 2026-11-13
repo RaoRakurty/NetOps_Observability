@@ -208,6 +208,10 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("TopologyContext")
 			return TopologyContext{}, nil
 		},
+		NetworkTopology: func(context.Context, Principal) (NetworkTopology, error) {
+			env.touch("NetworkTopology")
+			return NetworkTopology{}, nil
+		},
 		CaseTimeline: func(context.Context, Principal, string) ([]TimelineEvent, error) {
 			env.touch("CaseTimeline")
 			return nil, nil
