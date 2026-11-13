@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for sdwan-overlay. Dialect + contract: skill_cases.go.
+
+case: an edge that lost its controllers is checked at the transport interfaces beneath the overlay
+question: branch-7 lost its overlay
+ui:
+  - correlation_id=case-ovl-ctl-down
+  - device=branch-7
+signals:
+  - state:overlay_ctl=down
+  - state:overlay_bfd=down
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - sdwan-overlay entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: lost every OMP session to its controllers
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - log-confirmation
+expect_select: sdwan-overlay
+
+---
+
+case: one transport down with the others up points at that transport's interface
+question: bfd sessions down on branch-7
+ui:
+  - correlation_id=case-ovl-bfd-partial
+  - device=branch-7
+signals:
+  - state:overlay_ctl=up
+  - state:overlay_bfd=partial
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - sdwan-overlay entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: lost their sessions while others are up
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - log-confirmation
+
+---
+
+case: every BFD session down while the controllers are up leaves the edge's own data-plane messages
+question: sd-wan tunnels down on branch-7
+ui:
+  - correlation_id=case-ovl-bfd-down
+  - device=branch-7
+signals:
+  - state:overlay_ctl=up
+  - state:overlay_bfd=down
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - sdwan-overlay entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: while the controllers are still reachable
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - interface-down
+
+---
+
+case: an edge with no control-plane session leaves its own words as the only evidence
+question: control connections down on branch-7
+ui:
+  - correlation_id=case-ovl-ctl-none
+  - device=branch-7
+signals:
+  - state:overlay_ctl=none
+notes:
+  - the BFD session table has not been read for branch-7 yet — its tunnels are UNKNOWN, not down
+evidence:
+  - finding
+expect_chain:
+  - sdwan-overlay entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: holds no control-plane session at all
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - its tunnels are UNKNOWN, not down
+expect_never:
+  - interface-down
+
+---
+
+case: a healthy overlay takes no hop and reports the planes it read
+question: overlay down on branch-7
+ui:
+  - correlation_id=case-ovl-healthy
+  - device=branch-7
+signals:
+  - state:overlay_ctl=up
+  - state:overlay_bfd=up
+evidence:
+  - finding
+  - topology
+expect_chain:
+  - sdwan-overlay entry
+expect_selected: none
+expect_verdict:
+  - control plane
+  - transport
+expect_never:
+  - interface-down
+  - log-confirmation

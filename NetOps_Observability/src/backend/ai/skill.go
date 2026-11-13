@@ -222,6 +222,13 @@ var skillToolAllowlist = map[string]bool{
 	"get_flow_summary":      true,
 	"get_blast_radius":      true,
 	"get_affected_entities": true,
+	// NetClaw ingestion Batch 2 (2026-11-13): the WAN reads of one device, from
+	// what Correlix already collected (the overlay facts, the tunnel inventory,
+	// the path graph's own probes). Nothing is sent to or originated from the
+	// device.
+	"get_overlay_state": true,
+	"get_tunnel_state":  true,
+	"get_path_evidence": true,
 }
 
 // SkillOrigin says who wrote a skill, which decides where its text may go.
@@ -409,6 +416,42 @@ var skillStateFacets = map[string]map[string]bool{
 	// clock: NTP synchronization as the device reports it; offset_high is a
 	// synchronized clock more than 100 ms off its reference.
 	"clock": {"synced": true, "unsynced": true, "offset_high": true},
+	// NetClaw ingestion Batch 2 (2026-11-13). These facets are declared by the
+	// WAN reads, not by the state battery (skillStateFacetTool says which):
+	//   overlay_ctl  the edge's OMP sessions to its controllers (control plane)
+	//   overlay_bfd  the edge's BFD sessions across every transport (data plane)
+	//   tunnel       the device's tunnels in the tunnel inventory
+	//   tunnel_type  which kinds of tunnel it terminates (one fact per kind)
+	//   path         the WORST measured path the device takes part in
+	// Every value is a count the server read; an unread plane declares nothing.
+	"overlay_ctl": {"up": true, "partial": true, "down": true, "none": true},
+	"overlay_bfd": {"up": true, "partial": true, "down": true, "none": true},
+	"tunnel":      {"up": true, "partial": true, "down": true, "none": true},
+	"tunnel_type": {"sdwan": true, "ipsec": true, "gre": true, "other": true},
+	"path": {
+		"clean": true, "loss_transient": true, "loss_persistent": true,
+		"changed": true, "not_measured": true,
+	},
+}
+
+// skillStateFacetTool names the tool that declares a facet, for the facets the
+// state battery does NOT read. A `state:` rule must be authored by a skill that
+// gathers the declaring tool — otherwise it could only fire on another skill's
+// evidence. Facets absent here are the battery's (get_device_state).
+var skillStateFacetTool = map[string]string{
+	"overlay_ctl": "get_overlay_state",
+	"overlay_bfd": "get_overlay_state",
+	"tunnel":      "get_tunnel_state",
+	"tunnel_type": "get_tunnel_state",
+	"path":        "get_path_evidence",
+}
+
+// StateFacetTool returns the tool that declares a `state:` facet.
+func StateFacetTool(facet string) string {
+	if t, ok := skillStateFacetTool[facet]; ok {
+		return t
+	}
+	return "get_device_state"
 }
 
 // skillTopoFacets is the closed `topo:` vocabulary: FACET → its value set. The
@@ -559,6 +602,63 @@ func stateConditionHuman(facet, value string) string {
 		default:
 			return "the device's clock is synchronized"
 		}
+	case "overlay_ctl":
+		switch value {
+		case "up":
+			return "every OMP session to the controllers is up"
+		case "partial":
+			return "some of the edge's OMP sessions to the controllers are down"
+		case "down":
+			return "the edge has lost every OMP session to its controllers"
+		default:
+			return "the edge holds no OMP session to any controller"
+		}
+	case "overlay_bfd":
+		switch value {
+		case "up":
+			return "every BFD session on every transport is up"
+		case "partial":
+			return "some BFD sessions are down while others on the edge are up"
+		case "down":
+			return "every BFD session on the edge is down"
+		default:
+			return "the edge holds no BFD session on any transport"
+		}
+	case "tunnel":
+		switch value {
+		case "up":
+			return "every tunnel on the device is up"
+		case "partial":
+			return "some of the device's tunnels are down"
+		case "down":
+			return "every tunnel on the device is down"
+		default:
+			return "the device terminates no tunnel in the tunnel inventory"
+		}
+	case "tunnel_type":
+		switch value {
+		case "sdwan":
+			return "the device terminates SD-WAN tunnels"
+		case "ipsec":
+			return "the device terminates IPsec tunnels"
+		case "gre":
+			return "the device terminates GRE tunnels"
+		default:
+			return "the device terminates tunnels of another kind"
+		}
+	case "path":
+		switch value {
+		case "clean":
+			return "every measured path is clean hop by hop"
+		case "loss_transient":
+			return "a hop reports loss that does not continue to the destination"
+		case "loss_persistent":
+			return "loss appears at a hop and persists to the destination"
+		case "changed":
+			return "a measured path's hop count changed since the previous measurement"
+		default:
+			return "no path through the device is measured"
+		}
 	case "platform":
 		switch value {
 		case "cpu_high":
@@ -666,12 +766,12 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 			return SkillCondition{}, fmt.Errorf("state value %q is not one of %v for facet %q",
 				value, sortedKeys(skillStateFacets[facet]), facet)
 		}
-		// A state rule may only be authored by a skill that actually reads state
-		// — otherwise the condition could only ever fire on another skill's
-		// evidence, which is exactly the silent-never-fires trap this loader
-		// exists to prevent.
-		if !declared["get_device_state"] {
-			return SkillCondition{}, fmt.Errorf("a %s condition needs get_device_state in this skill's tools: list", CondStatePrefix)
+		// A state rule may only be authored by a skill that actually reads the
+		// facet — otherwise the condition could only ever fire on another
+		// skill's evidence, which is exactly the silent-never-fires trap this
+		// loader exists to prevent.
+		if tool := StateFacetTool(facet); !declared[tool] {
+			return SkillCondition{}, fmt.Errorf("a %s%s condition needs %s in this skill's tools: list", CondStatePrefix, facet, tool)
 		}
 	case strings.HasPrefix(key, CondFactPrefix):
 		// A discovered-device fact (skill_facts.go). Resolved once per turn by

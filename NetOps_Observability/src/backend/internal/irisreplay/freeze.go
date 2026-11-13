@@ -161,6 +161,23 @@ func bindSeams(c *Case, allowed map[string]bool) ai.TroubleshootDeps {
 			return ai.NetworkTopology{}, ai.ErrNotImplemented
 		}
 	}
+	// The WAN reads (NetClaw ingestion Batch 2) have no frozen slice in a case
+	// yet: a case that allows one answers from its scripted fixture, never live.
+	if allowed["get_overlay_state"] {
+		d.OverlayState = func(context.Context, ai.Principal, string) (ai.OverlayState, error) {
+			return ai.OverlayState{}, ai.ErrNotImplemented
+		}
+	}
+	if allowed["get_tunnel_state"] {
+		d.TunnelState = func(context.Context, ai.Principal, string) (ai.TunnelState, error) {
+			return ai.TunnelState{}, ai.ErrNotImplemented
+		}
+	}
+	if allowed["get_path_evidence"] {
+		d.PathEvidence = func(context.Context, ai.Principal, string) (ai.PathEvidence, error) {
+			return ai.PathEvidence{}, ai.ErrNotImplemented
+		}
+	}
 	if allowed["get_recent_changes"] {
 		d.RecentChanges = func(_ context.Context, p ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
 			return frozenChanges(c, p, q)

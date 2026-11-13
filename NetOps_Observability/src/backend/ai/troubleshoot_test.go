@@ -67,6 +67,15 @@ func tsDeps() TroubleshootDeps {
 		NetworkTopology: func(_ context.Context, p Principal) (NetworkTopology, error) {
 			return tsNetworkTopology(p.Tenant), nil
 		},
+		OverlayState: func(_ context.Context, _ Principal, deviceID string) (OverlayState, error) {
+			return tsOverlayState(deviceID), nil
+		},
+		TunnelState: func(_ context.Context, _ Principal, deviceID string) (TunnelState, error) {
+			return tsTunnelState(deviceID), nil
+		},
+		PathEvidence: func(_ context.Context, _ Principal, deviceID string) (PathEvidence, error) {
+			return tsPathEvidence(deviceID), nil
+		},
 		CaseTimeline: func(_ context.Context, _ Principal, correlationID string) ([]TimelineEvent, error) {
 			if correlationID != "pa" {
 				return nil, ErrNotFound
@@ -155,8 +164,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 12 {
-		t.Fatalf("expected 12 Phase-A/A4/B/F4/network tools, got %v", names)
+	if len(names) != 15 {
+		t.Fatalf("expected 15 Phase-A/A4/B/F4/network/WAN tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {
