@@ -46,11 +46,13 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/collectors"
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/devmon"
 	"netops/backend/internal/devreach"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
@@ -159,6 +161,7 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	}
 	if s.discovery != nil {
 		deps.ResolveDevice = s.aiResolveDevice(claims)
+		deps.DeviceFacts = s.aiDeviceFacts(claims)
 		deps.ProtocolDiagnostic = s.aiProtocolDiagnostic(r, claims)
 		deps.TopologyContext = s.aiTopologyContext(claims)
 		deps.NetworkTopology = s.aiNetworkTopology(claims)
@@ -280,6 +283,147 @@ func (s *server) aiResolveDevice(claims jwtClaims) func(context.Context, ai.Prin
 			Platform: pdPlatformString(dev), Vendor: dev.Vendor,
 		}, nil
 	}
+}
+
+// aiDeviceFactsTimeout bounds the discovered-facts read (inventory, links, the
+// WAN-flavor inputs) — one read per turn, inside the 45 s skill-turn budget.
+const aiDeviceFactsTimeout = 5 * time.Second
+
+// aiDeviceFacts derives what Correlix has DISCOVERED about one of the caller's
+// devices, for skill applicability (ai/skill_facts.go): the role and WAN
+// flavor from the SAME classifier and inputs the topology surfaces use, the
+// show-command dialect from the platform, the protocols it is SEEN to run from
+// the discovered adjacencies, the BGP peer read and the SD-WAN overlay, and the
+// configured collection methods.
+//
+// §3a: the device is resolved through the caller's own inventory (another
+// tenant's device is ErrNotFound) and every input is the caller-scoped read the
+// topology view takes (visibleDevicesFor, gatherTopoLinksFor,
+// metricsScopeFiltersFor). An unread source leaves its facts UNKNOWN — it never
+// becomes an absence.
+func (s *server) aiDeviceFacts(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.DeviceFacts, error) {
+	return func(ctx context.Context, _ ai.Principal, deviceID string) (ai.DeviceFacts, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok {
+			return ai.DeviceFacts{}, ai.ErrNotFound
+		}
+		tctx, cancel := context.WithTimeout(ctx, aiDeviceFactsTimeout)
+		defer cancel()
+		devs := s.visibleDevicesFor(claims)
+		links, lerr := s.gatherTopoLinksFor(tctx, claims, devs)
+		if lerr != nil {
+			logWarn("ai", "adjacency evidence unread for device facts — protocol facts stay unknown",
+				map[string]any{"device_id": dev.ID, "error": lerr.Error()})
+			links = nil
+		}
+		wan := s.gatherWANFacts(tctx, devs, s.metricsScopeFiltersFor(claims))
+		role := topology.RoleResult{Role: topology.DevRoleUnknown}
+		for _, f := range toDeviceFacts(devs, nil, nil, links, wan) {
+			if f.ID == dev.ID {
+				role = topology.ClassifyDeviceRole(f)
+				break
+			}
+		}
+		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID]}
+		if snap := s.sdwanOverlay.Load(); snap != nil {
+			in.overlayRead = true
+			if f, ok := snap.devFacts[dev.ID]; ok {
+				in.overlay = &f
+			}
+		}
+		return deriveDeviceFacts(in), nil
+	}
+}
+
+// deviceFactInputs are the caller-scoped reads deriveDeviceFacts folds.
+type deviceFactInputs struct {
+	dev         models.Device
+	role        topology.RoleResult
+	links       []topoLink
+	linksRead   bool
+	externalBGP int
+	overlayRead bool
+	overlay     *collectors.OverlayDeviceFacts // nil: the device published no overlay facts
+}
+
+// deriveDeviceFacts is the pure fold behind aiDeviceFacts. Every fact it sets
+// is an OBSERVATION; an absence is recorded only where the source that would
+// show the fact was read for this device (the overlay snapshot, the configured
+// collection methods). Everything else stays unknown.
+func deriveDeviceFacts(in deviceFactInputs) ai.DeviceFacts {
+	var f ai.DeviceFacts
+	// Role: only a classification the classifier itself rates strong or medium
+	// — a weak guess must not rule a method out.
+	if in.role.Role != topology.DevRoleUnknown && (in.role.Confidence == topology.RoleConfStrong || in.role.Confidence == topology.RoleConfMedium) {
+		f.SetValue(ai.FactRole, in.role.Role)
+		if in.role.WANFlavor != "" {
+			f.SetValue(ai.FactWANFlavor, in.role.WANFlavor)
+		}
+	}
+	// Dialect: an empty platform is unknown; a platform that resolves to no
+	// supported dialect is "none" (the state battery has no commands for it).
+	if platform := pdPlatformString(in.dev); platform != "" {
+		if d, ok := showparse.DialectFromPlatform(platform); ok {
+			f.SetValue(ai.FactDialect, string(d))
+		} else {
+			f.SetValue(ai.FactDialect, ai.DialectNone)
+		}
+	}
+	// Adjacency evidence from the discovered links: LLDP/CDP neighbours, and the
+	// IGP a BGP-LS link was learned from.
+	if in.linksRead {
+		for _, l := range in.links {
+			if l.Source != in.dev.ID && l.Target != in.dev.ID {
+				continue
+			}
+			proto := strings.ToLower(l.SourceProto)
+			if strings.Contains(proto, "lldp") || strings.Contains(proto, "cdp") {
+				f.Observe(ai.FactAdjacency, "lldp", true)
+			}
+			igp := strings.ToLower(l.IGP)
+			switch {
+			case strings.HasPrefix(igp, "isis"):
+				f.Observe(ai.FactAdjacency, "isis", true)
+			case strings.HasPrefix(igp, "ospf"):
+				f.Observe(ai.FactAdjacency, "ospf", true)
+			}
+		}
+	}
+	if in.externalBGP > 0 {
+		f.Observe(ai.FactAdjacency, "bgp", true)
+	}
+	// The SD-WAN overlay: when the snapshot was read, a device with no overlay
+	// peers is established NOT to be an overlay member; BFD is observed when its
+	// tunnels carry sessions (an absence of BFD elsewhere is not knowable here).
+	if in.overlayRead {
+		member, bfd := false, false
+		if in.overlay != nil {
+			for _, p := range in.overlay.Peers {
+				member = true
+				for _, cp := range p.ColorPairs {
+					if cp.Sessions > 0 {
+						bfd = true
+					}
+				}
+			}
+		}
+		f.Observe(ai.FactAdjacency, "overlay", member)
+		if bfd {
+			f.Observe(ai.FactAdjacency, "bfd", true)
+		}
+	}
+	// Collection: the CONFIGURED methods are a complete statement for the three
+	// collector methods (an unaddressed device has none and stays unknown).
+	if methods := devmon.Methods(in.dev); len(methods) > 0 {
+		have := map[string]bool{}
+		for _, m := range methods {
+			have[m] = true
+		}
+		for _, m := range []string{devmon.MethodSNMP, devmon.MethodGNMI, devmon.MethodController} {
+			f.Observe(ai.FactTelemetry, m, have[m])
+		}
+	}
+	return f
 }
 
 // aiLookupDevice is the shared, tenant-scoped inventory lookup. The tenant and
@@ -632,12 +776,18 @@ func (s *server) aiNetworkTopology(claims jwtClaims) func(context.Context, ai.Pr
 			}
 			in.Pairs = topology.OverlayPairs(snap.devFacts, snap.res.SystemIPs, devTenant)
 		}
-		return toAINetworkTopology(topology.Summarize(in), in.OverlayRead), nil
+		methods := make(map[string][]string, len(pin.devs))
+		for _, d := range pin.devs {
+			methods[d.ID] = devmon.Methods(d)
+		}
+		return toAINetworkTopology(topology.Summarize(in), in.OverlayRead, methods), nil
 	}
 }
 
 // toAINetworkTopology carries the summary across the package seam.
-func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.NetworkTopology {
+// methods maps a device id to its configured collection methods (devmon);
+// the id itself never crosses the seam.
+func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool, methods map[string][]string) ai.NetworkTopology {
 	counts := func(cs []topology.SummaryCount) []ai.NamedCount {
 		out := make([]ai.NamedCount, 0, len(cs))
 		for _, c := range cs {
@@ -655,8 +805,25 @@ func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.Networ
 		out.Devices = append(out.Devices, ai.NetworkDevice{
 			Name: d.Name, Role: d.Role, RoleConfidence: d.RoleConfidence, Vendor: d.Vendor, Model: d.Model,
 			Site: d.Site, Health: d.Health, Adjacencies: d.Adjacencies, OverlayPeers: d.OverlayPeers,
+			Protocols: d.Protocols, Telemetry: methods[d.ID],
 		})
 	}
+	for _, st := range sm.SiteDetails {
+		out.SiteDetails = append(out.SiteDetails, ai.NetworkSite{Name: st.Name, Devices: st.Devices, WANEdges: st.WANEdges,
+			Uplinks: st.Uplinks, Transports: st.Transports, SingleEdge: st.SingleEdge, SingleTransport: st.SingleTransport})
+	}
+	out.SitesTotal = sm.SitesTotal
+	for _, r := range sm.RedundancyGroups {
+		out.Redundancy = append(out.Redundancy, ai.NetworkRedundancy{Kind: r.Kind, Site: r.Site, Members: r.Members})
+	}
+	out.RedundancyTotal, out.RedundancyNote = sm.RedundancyTotal, sm.RedundancyNote
+	for _, x := range sm.SPOF {
+		out.SPOF = append(out.SPOF, ai.NetworkSPOF{Kind: x.Kind, Name: x.Name, Isolates: x.Isolates})
+	}
+	out.SPOFTotal, out.SPOFState = sm.SPOFTotal, sm.SPOFState
+	out.Coverage = ai.NetworkCoverage{LinkDiscovery: sm.Coverage.LinkDiscovery, RoutedLinks: sm.Coverage.RoutedLinks,
+		OverlayRead: sm.Coverage.OverlayRead, SitesKnown: sm.Coverage.SitesKnown, SPOFComputed: sm.Coverage.SPOFComputed}
+	out.CoverageState = sm.CoverageState
 	for _, l := range sm.Links {
 		out.Links = append(out.Links, ai.NetworkLink{A: l.A, APort: l.APort, B: l.B, BPort: l.BPort,
 			Protocol: l.Protocol, Status: l.Status, External: l.External})
@@ -668,7 +835,7 @@ func toAINetworkTopology(sm topology.NetworkSummary, overlayRead bool) ai.Networ
 	if ov := sm.Overlay; ov != nil {
 		o := &ai.NetworkOverlay{Members: ov.Members, Pairs: ov.Pairs, PossiblePairs: ov.PossiblePairs,
 			SameSitePairs: ov.SameSitePairs, Shape: ov.Shape, Hubs: ov.Hubs,
-			MissingTotal: ov.MissingTotal, NotUpTotal: ov.NotUpTotal}
+			MissingTotal: ov.MissingTotal, NotUpTotal: ov.NotUpTotal, SitesOnOneTransport: ov.SitesOnOneTransport}
 		for _, t := range ov.Transports {
 			o.Transports = append(o.Transports, ai.NetworkTransport{Name: t.Name, Members: t.Members,
 				Sessions: t.Sessions, Up: t.Up, Health: t.Health})

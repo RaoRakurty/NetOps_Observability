@@ -232,6 +232,14 @@ type TroubleshootDeps struct {
 	// of the CALLER'S OWN devices. ErrNotFound covers both "no such device" and
 	// "another tenant's device" — the two must be indistinguishable (§3a rule 1).
 	ResolveDevice func(ctx context.Context, p Principal, ref string) (DeviceRef, error)
+	// DeviceFacts derives what Correlix has DISCOVERED about one of the
+	// caller's devices — role, WAN flavor, show-command dialect, the protocols
+	// it is seen to run and how it is collected (skill_facts.go) — so a method
+	// is applied only where it fits. Resolved ONCE per turn, after
+	// ResolveDevice. ErrNotFound for another tenant's device. nil = facts are
+	// not wired, and every applies_when is then unknown (methods run, nothing
+	// is rerouted).
+	DeviceFacts func(ctx context.Context, p Principal, deviceID string) (DeviceFacts, error)
 	// ProtocolDiagnostic runs the protocoldiag catalog+analyze contract for one
 	// device. It collects only when a CommandRunner is wired AND the caller holds
 	// infrastructure:write; otherwise it returns the bundle with NotWired set.

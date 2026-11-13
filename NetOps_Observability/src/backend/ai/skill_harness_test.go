@@ -356,6 +356,7 @@ func TestHarnessFingerprintCoversEveryInput(t *testing.T) {
 		"tool metas":        func(h *harnessInputs) { h.toolMetas += "x" },
 		"tool allowlist":    func(h *harnessInputs) { h.toolAllowlist += "x" },
 		"state facets":      func(h *harnessInputs) { h.stateFacets += "x" },
+		"fact values":       func(h *harnessInputs) { h.factValues += "x" },
 		"contract versions": func(h *harnessInputs) { h.contractVersions += "x" },
 		"hypothesis ids":    func(h *harnessInputs) { h.hypothesisIDs += "x" },
 		"compiled skills":   func(h *harnessInputs) { h.compiledSkills += "x" },

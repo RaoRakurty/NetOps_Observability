@@ -87,10 +87,13 @@ type SkillLayer string
 const (
 	LayerMethod      SkillLayer = "method"
 	LayerPhysical    SkillLayer = "physical"
+	LayerPlatform    SkillLayer = "platform" // device health: CPU, memory, environment, clock
 	LayerL2          SkillLayer = "l2"
 	LayerIGP         SkillLayer = "igp"
 	LayerBGP         SkillLayer = "bgp"
+	LayerWANOverlay  SkillLayer = "wan_overlay" // SD-WAN / VPN overlay over the transports
 	LayerPathSeam    SkillLayer = "path_seam"
+	LayerServices    SkillLayer = "services" // network services the path depends on: DNS, NTP, DHCP
 	LayerApplication SkillLayer = "application"
 	LayerSecurity    SkillLayer = "security"
 	LayerLogs        SkillLayer = "logs"
@@ -99,8 +102,8 @@ const (
 // skillLayerOrder is the bisection order the method skill follows. Index 0 is
 // the entry method; the rest are checked bottom-up.
 var skillLayerOrder = []SkillLayer{
-	LayerMethod, LayerPhysical, LayerL2, LayerIGP, LayerBGP,
-	LayerPathSeam, LayerApplication, LayerSecurity, LayerLogs,
+	LayerMethod, LayerPhysical, LayerPlatform, LayerL2, LayerIGP, LayerBGP,
+	LayerWANOverlay, LayerPathSeam, LayerServices, LayerApplication, LayerSecurity, LayerLogs,
 }
 
 func validSkillLayer(l SkillLayer) bool {
@@ -207,6 +210,15 @@ var skillToolAllowlist = map[string]bool{
 	"get_metric_anomalies":       true,
 	"get_problem_evidence":       true,
 	"get_active_major_incidents": true,
+	// NetClaw ingestion Batch 0 (2026-11-13): governed reads that already carry a
+	// tool contract, so a method can ground on the whole network (design
+	// reading), on traffic (congestion), and on the engine's own scope (who is
+	// and who is NOT affected).
+	"get_network_topology":  true,
+	"get_top_talkers":       true,
+	"get_flow_summary":      true,
+	"get_blast_radius":      true,
+	"get_affected_entities": true,
 }
 
 // SkillOrigin says who wrote a skill, which decides where its text may go.
@@ -241,12 +253,17 @@ const maxMOPSteps = 30
 // resolved entities, and which are literals the skill author fixed.
 type GatherStep struct {
 	Tool string
-	// Bind maps a TOOL ARGUMENT NAME to the entity name it binds from. Today the
-	// two are always equal (a bare identifier), but keeping them distinct means a
-	// rename on either side is a data edit, not a code edit.
+	// Bind maps a TOOL ARGUMENT NAME to the entity name it binds from. A bare
+	// identifier binds the entity of the same name; `arg=@entity` binds a
+	// differently named one (see Strict).
 	Bind map[string]string
 	// Args are literal argument values chosen by the skill author.
 	Args map[string]string
+	// Strict names the bound arguments authored as `arg=@entity`: the author
+	// bound a DIFFERENT entity on purpose (target=@prefix), so the step is only
+	// meaningful with it and is skipped — honestly — when it does not resolve,
+	// instead of running at a wider scope the author never asked for.
+	Strict map[string]bool
 }
 
 // BindOrder is the deterministic (sorted) list of bound argument names, so a
@@ -301,6 +318,13 @@ const (
 	// declares get_device_state, so a rule can never depend on state the skill
 	// does not gather.
 	CondStatePrefix = "state:"
+	// CondTopoPrefix + a FACET fires on a design fact get_network_topology
+	// declared about the caller's whole network (`topo:spof=present`): the
+	// overlay's shape, whether the discovered adjacencies hold a single point
+	// of failure, and whether the reading's coverage is full or partial. Like
+	// state:, a topo: rule may only be authored by a skill that declares the
+	// tool, so it can never depend on a read the skill does not make.
+	CondTopoPrefix = "topo:"
 	// CondSignatureNone is the reserved CondSignature value: a protocol
 	// diagnostic RAN this turn, CAPTURED OUTPUT, and no known signature matched
 	// it. "Captured output" is load-bearing — see CondSignatureUncollected.
@@ -369,6 +393,48 @@ var skillStateFacets = map[string]map[string]bool{
 	"route":    {"present": true, "absent": true},
 	"l2_entry": {"present": true, "absent": true},
 	"platform": {"ok": true, "cpu_high": true, "mem_high": true},
+}
+
+// skillTopoFacets is the closed `topo:` vocabulary: FACET → its value set. The
+// values are exactly what get_network_topology declares (networkSignals).
+var skillTopoFacets = map[string]map[string]bool{
+	"overlay_shape": {"full_mesh": true, "hub_and_spoke": true, "partial_mesh": true, "unknown": true, "none": true},
+	"spof":          {"present": true, "none": true, "unknown": true},
+	"coverage":      {"full": true, "partial": true},
+}
+
+// validTopoFact reports whether facet=value is inside the closed topo: set.
+func validTopoFact(facet, value string) bool {
+	vals, ok := skillTopoFacets[facet]
+	return ok && vals[value]
+}
+
+// topoConditionHuman renders a topo: condition as the reason a hop was taken.
+func topoConditionHuman(facet, value string) string {
+	switch facet {
+	case "overlay_shape":
+		switch value {
+		case "none":
+			return "the network has no SD-WAN overlay"
+		case "unknown":
+			return "the overlay's shape could not be read"
+		}
+		return "the overlay appears to be " + strings.ReplaceAll(value, "_", " ")
+	case "spof":
+		switch value {
+		case "present":
+			return "the discovered adjacencies hold a single point of failure"
+		case "none":
+			return "no single point of failure is in the discovered adjacencies"
+		}
+		return "single points of failure could not be computed"
+	case "coverage":
+		if value == "full" {
+			return "the topology reading rests on adjacency and site evidence for every device"
+		}
+		return "the topology reading is partial — some evidence is not collected"
+	}
+	return CondTopoPrefix + facet + "=" + value
 }
 
 // StateFacets returns every `state:` facet name in sorted order (loader error
@@ -500,6 +566,10 @@ func (c SkillCondition) Human() string {
 		return "a collection note mentions \"" + c.Value + "\""
 	case strings.HasPrefix(c.Key, CondStatePrefix):
 		return stateConditionHuman(strings.TrimPrefix(c.Key, CondStatePrefix), c.Value)
+	case strings.HasPrefix(c.Key, CondFactPrefix):
+		return factHuman(c, factHolds, "", DeviceFacts{})
+	case strings.HasPrefix(c.Key, CondTopoPrefix):
+		return topoConditionHuman(strings.TrimPrefix(c.Key, CondTopoPrefix), c.Value)
 	case strings.HasPrefix(c.Key, CondToolPrefix):
 		tool := ToolLabel(strings.TrimPrefix(c.Key, CondToolPrefix))
 		switch c.Value {
@@ -563,6 +633,21 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 		if !declared["get_device_state"] {
 			return SkillCondition{}, fmt.Errorf("a %s condition needs get_device_state in this skill's tools: list", CondStatePrefix)
 		}
+	case strings.HasPrefix(key, CondFactPrefix):
+		// A discovered-device fact (skill_facts.go). Resolved once per turn by
+		// the server for the device in scope; no tool needs to be declared.
+		return parseFactCondition(key, value)
+	case strings.HasPrefix(key, CondTopoPrefix):
+		facet := strings.TrimPrefix(key, CondTopoPrefix)
+		if _, known := skillTopoFacets[facet]; !known {
+			return SkillCondition{}, fmt.Errorf("topo facet %q is not one of %v", facet, sortedKeysOfMaps(skillTopoFacets))
+		}
+		if !validTopoFact(facet, value) {
+			return SkillCondition{}, fmt.Errorf("topo value %q is not one of %v for facet %q", value, sortedKeys(skillTopoFacets[facet]), facet)
+		}
+		if !declared["get_network_topology"] {
+			return SkillCondition{}, fmt.Errorf("a %s condition needs get_network_topology in this skill's tools: list", CondTopoPrefix)
+		}
 	case strings.HasPrefix(key, CondToolPrefix):
 		tool := strings.TrimPrefix(key, CondToolPrefix)
 		if !skillToolAllowlist[tool] {
@@ -575,9 +660,9 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 			return SkillCondition{}, fmt.Errorf("tool outcome %q is not one of %v", value, sortedKeys(skillToolOutcomes))
 		}
 	default:
-		return SkillCondition{}, fmt.Errorf("condition key %q is not one of %s, %s, %s, %s, %s, %s<facet>, %s<tool>",
+		return SkillCondition{}, fmt.Errorf("condition key %q is not one of %s, %s, %s, %s, %s, %s<facet>, %s<key>, %s<tool>",
 			key, CondSignature, CondEvidenceKind, CondVerdictTier, CondVerdictPhrase, CondNote,
-			CondStatePrefix, CondToolPrefix)
+			CondStatePrefix, CondFactPrefix, CondToolPrefix)
 	}
 	return SkillCondition{Key: key, Value: value}, nil
 }
@@ -600,10 +685,14 @@ type Skill struct {
 	WhenToUse    []string // lowercased match phrases
 	SymptomKinds []string // lowercased symptom classes
 	Tools        []string // this skill's tool allowlist (subset of skillToolAllowlist)
-	Gather       []GatherStep
-	LookFor      []string
-	Decisions    []SkillDecision
-	Body         string
+	// AppliesWhen are the DISCOVERED-device conditions under which this method
+	// applies (`applies_when: fact:adjacency=ospf`). Every one must hold or be
+	// unknown; one established false and the method is not run (skill_facts.go).
+	AppliesWhen []SkillCondition
+	Gather      []GatherStep
+	LookFor     []string
+	Decisions   []SkillDecision
+	Body        string
 	// Cases are the skill's authored BEHAVIOURAL cases (skill_cases.go), loaded
 	// from `skills/<name>/CASES.yaml` by the same loader on the same terms: a
 	// method that ships with none does not load at all.
@@ -863,6 +952,10 @@ func parseSkill(dir, raw string) (*Skill, error) {
 		declared[t] = true
 	}
 
+	if err := parseAppliesWhen(sk, fields, blocks); err != nil {
+		return nil, err
+	}
+
 	sk.LookFor = blocks["look_for"]
 	if len(sk.LookFor) == 0 {
 		return nil, fmt.Errorf("look_for is required")
@@ -908,6 +1001,43 @@ func parseSkill(dir, raw string) (*Skill, error) {
 		return nil, fmt.Errorf("a %s hands off to nothing: nothing runs one, so a next= line could never be taken", SkillKindMOP)
 	}
 	return sk, nil
+}
+
+// parseAppliesWhen reads the comma-separated `applies_when:` scalar. Only
+// `fact:` conditions are allowed (it is a statement about the DEVICE, decided
+// before anything is gathered), and a MOP may not carry one: nothing selects a
+// MOP, so the line could never be evaluated.
+func parseAppliesWhen(sk *Skill, fields map[string]string, blocks map[string][]string) error {
+	if _, block := blocks["applies_when"]; block {
+		return fmt.Errorf("applies_when: takes a comma-separated list of %s conditions, not a block", CondFactPrefix)
+	}
+	raw, ok := fields["applies_when"]
+	if !ok {
+		return nil
+	}
+	if sk.isMOP() {
+		return fmt.Errorf("applies_when: belongs to an %s method — nothing selects a %s", SkillKindInvestigative, SkillKindMOP)
+	}
+	seen := map[string]bool{}
+	for _, part := range splitCommaList(raw) {
+		key, _, _ := strings.Cut(part, "=")
+		if !strings.HasPrefix(strings.TrimSpace(key), CondFactPrefix) {
+			return fmt.Errorf("applies_when %q: only %s<key>=<value> conditions are allowed", part, CondFactPrefix)
+		}
+		c, err := parseSkillCondition(part, nil)
+		if err != nil {
+			return fmt.Errorf("applies_when: %w", err)
+		}
+		if seen[c.Key] {
+			return fmt.Errorf("applies_when names %s twice — join the values with %q", c.Key, factValueAlt)
+		}
+		seen[c.Key] = true
+		sk.AppliesWhen = append(sk.AppliesWhen, c)
+	}
+	if len(sk.AppliesWhen) == 0 {
+		return fmt.Errorf("applies_when: is empty — omit the line for a method that applies everywhere")
+	}
+	return nil
 }
 
 // parseSkillSteps reads the steps: block, which only a MOP has and every MOP must.
@@ -1007,7 +1137,7 @@ func parseGatherStep(line string, declared map[string]bool) (GatherStep, error) 
 	if m == nil {
 		return GatherStep{}, fmt.Errorf("expected tool(arg, key=value)")
 	}
-	step := GatherStep{Tool: m[1], Bind: map[string]string{}, Args: map[string]string{}}
+	step := GatherStep{Tool: m[1], Bind: map[string]string{}, Args: map[string]string{}, Strict: map[string]bool{}}
 	if !declared[step.Tool] {
 		return GatherStep{}, fmt.Errorf("tool %q is not in this skill's tools: list", step.Tool)
 	}
@@ -1036,6 +1166,17 @@ func parseGatherStep(line string, declared map[string]bool) (GatherStep, error) 
 			v := strings.TrimSpace(value)
 			if v == "" {
 				return GatherStep{}, fmt.Errorf("literal %q has an empty value", name)
+			}
+			// `arg=@entity` binds the argument from a DIFFERENTLY NAMED
+			// server-resolved entity (target=@prefix). It is still a bind — the
+			// value comes from the server, never from the skill text or the model.
+			if ent, isBind := strings.CutPrefix(v, "@"); isBind {
+				if !skillEntities[ent] {
+					return GatherStep{}, fmt.Errorf("%q binds @%s, which is not a resolvable entity (%v)", name, ent, sortedKeys(skillEntities))
+				}
+				step.Bind[name] = ent
+				step.Strict[name] = true
+				continue
 			}
 			step.Args[name] = v
 			continue
@@ -1120,6 +1261,16 @@ func lowerList(in []string) []string {
 	for _, s := range in {
 		out = append(out, strings.ToLower(s))
 	}
+	return out
+}
+
+// sortedKeysOfMaps lists a facet map's keys in sorted order.
+func sortedKeysOfMaps(m map[string]map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 

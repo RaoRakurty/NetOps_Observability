@@ -34,6 +34,7 @@ type harnessInputs struct {
 	toolMetas        string
 	toolAllowlist    string
 	stateFacets      string
+	factValues       string
 	contractVersions string
 	hypothesisIDs    string
 	compiledSkills   string
@@ -51,6 +52,7 @@ func (h harnessInputs) fingerprint() string {
 		{"tool_metas", h.toolMetas},
 		{"tool_allowlist", h.toolAllowlist},
 		{"state_facets", h.stateFacets},
+		{"fact_values", h.factValues},
 		{"contract_versions", h.contractVersions},
 		{"hypothesis_ids", h.hypothesisIDs},
 		{"compiled_skills", h.compiledSkills},
@@ -80,6 +82,7 @@ func liveHarnessInputs(tiers TierModels) harnessInputs {
 		toolMetas:        canonicalToolMetas(),
 		toolAllowlist:    canonicalJSON(sortedKeys(skillToolAllowlist)),
 		stateFacets:      canonicalJSON(skillStateFacets),
+		factValues:       canonicalJSON(map[string]any{"fact": skillFactValues, "topo": skillTopoFacets}),
 		contractVersions: canonicalContractVersions(),
 		hypothesisIDs:    canonicalHypothesisIDs(),
 		compiledSkills:   canonicalCompiledSkills(),
