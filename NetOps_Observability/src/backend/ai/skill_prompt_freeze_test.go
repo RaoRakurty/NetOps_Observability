@@ -86,10 +86,17 @@ func compiledPromptParts(t *testing.T, set *SkillSet, sk *Skill) []string {
 
 // frozenCompiledPrompts was recorded on main at fb28c64a, before tenant origin.
 var frozenCompiledPrompts = map[string]string{
-	"app-edge-5xx":       "dad76c767ff309011b8e6ef0f64ef70add1755262a991d1c61b12a64cf81bdb6",
-	"bgp-prefix-missing": "fcad1a05aec2fb5c42f0e50ee969554d0ecf75cc32dfecdd52f72a15ccd5fcc4",
-	"bgp-session-down":   "5ce91d5409dc3a6df70ad1a59574b9e4cf4f052b409f3f3e5c4ec8c493ee1520",
+	// NetClaw Batch 2 (2026-11-13): path-seam-handoff v2 gathers the measured
+	// path and its hop menu moved; app-edge-5xx, bgp-prefix-missing and
+	// bgp-session-down hand off to it, so their prompts moved with it, and the
+	// security skill's moved because it routes to bgp-session-down's chain.
+	"app-edge-5xx":       "21c962cf49a5e995592e0f1849a70db16a5e45b5452b4e9bab7a4289ec3d8902",
+	"bgp-prefix-missing": "41cf7f12aa6548912d10773fc25260f4ec6a2e35169d698c3dc37a83a3dcacee",
+	"bgp-session-down":   "e301cf1502b02841f5114dbbefffbc18e5fda2ec24292c6b6609f7ffa9530ea5",
 	"interface-down":     "96436f11aba529fb5d8a0868f2af84ae47c56c4cc2dc919b1abb74fe8f5a179c",
+	"l3-reachability":    "1e55a52c8d846420bbc1dd49a42c08765d99cb434d33a3c31521136c89dce96b",
+	"sdwan-overlay":      "74bb99497a7bc0d54ec34b9a0ba9467ce5498028581b173a197da4882b5b1984",
+	"tunnel-vpn":         "5cf6f764a3e920b963f8ca8be12f91291d4be97af719be185a3d6b4820784a51",
 	"isis-adjacency":     "5e02ba9d2675f8db9b14eecaa06b8836726707fd3192e7c10bf2310bd28d88ac",
 	"log-confirmation":   "81e1b3fdaef74db289ffb7704b324c6be4f796d4b5f5bf48288799db50311cc3",
 	"mac-flap":           "d024d3d407bdf4cbffe7fd0358aea232290a65fb777c962dddd47b5b5d7b61e7",
@@ -100,10 +107,10 @@ var frozenCompiledPrompts = map[string]string{
 	// security skill's prompt moved with it because it routes to osi-bisection.
 	"osi-bisection":             "a35431a6b8e27e7ac87bbfab9c4012d0a865207952c8407c1dec8dd080dea29c",
 	"ospf-adjacency":            "d09047fb22d26232dfbc5c293b4337525f0bce7d0731340e8c040869ac57b261",
-	"path-seam-handoff":         "33a92aad5dfe1bab09d2cd1092c2be5d3ea185f9fd8b2ad3c73eafdf3996ba93",
+	"path-seam-handoff":         "643602fd8afb97dbf4c53b95c524bacb15207c899da449e5e58a876e2079aa6f",
 	"platform-health":           "ba73b12b5f5ddb6f872c4a3b606f6c11e93304caba3f79da700e180fcf47b39a",
 	"qos-congestion":            "54c4919165eaf15f57992eb8edc6f4db36e9a6cdccda7f86a9c810d3553fabe3",
-	"security-exposure-context": "84d1d5628263dabecf676a8cabb24cde1e6f2fb78b0b1b945cbda3ccebf227a5",
+	"security-exposure-context": "9a0e22225a33e1a0be8c9939433e31db2ad81f2f62a7b677c8c65a3a6066c6cb",
 	"stp-topology":              "d9a17b77b338c54b8664365feee1481e8537d227592c33e8f9045b02e6030c75",
 }
 

@@ -189,6 +189,27 @@ var toolMetas = map[string]toolMeta{
 		description: "The WHOLE network's topology in network terms: device roles, sites and vendors, the physical and routed adjacencies (LLDP/CDP/BGP-LS/IGP), and, when present, the SD-WAN overlay's shape (full mesh, hub and spoke, partial mesh), its transports and which edge pairs hold no tunnel, plus each role's likely function. USE THIS FIRST for \"explain / describe / show the network topology\", \"how is the network connected\" or \"what kind of network is this\"; then get_topology_context for one device.",
 		label:       "Network topology",
 	},
+	"get_overlay_state": {
+		description: "One SD-WAN edge's overlay as Correlix collected it: the CONTROL plane (its OMP sessions to the controllers, up or not) and the DATA plane (its BFD sessions folded per transport colour, and which remote edges have every session down). Use it for any SD-WAN tunnel, BFD, OMP or overlay question about one edge. It reads what was already collected and sends nothing to the device.",
+		label:       "SD-WAN overlay state",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+		},
+	},
+	"get_tunnel_state": {
+		description: "One device's tunnels (IPsec, GRE, SD-WAN) from Correlix's tunnel inventory: each tunnel's far end, transport and up/down state, with path quality where it was measured. Use it for \"is the tunnel up\" or VPN questions about one device. IKE and IPsec phases are not read separately.",
+		label:       "Tunnel state",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+		},
+	},
+	"get_path_evidence": {
+		description: "The measured paths one device takes part in, from Correlix's own probers: hop by hop, where loss first appears and whether it PERSISTS to the destination (real loss) or stops at one hop (a router de-prioritising probes), which seam the lossy hop sits on, and whether the hop count changed. Use it for loss, latency or \"is it the network\" questions. Nothing is originated from the device.",
+		label:       "Path evidence",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+		},
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",

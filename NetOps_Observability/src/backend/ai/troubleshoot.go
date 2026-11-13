@@ -253,6 +253,14 @@ type TroubleshootDeps struct {
 	// transports). It takes no device argument, so it registers without the
 	// inventory-resolution seam; it reads only the caller's own devices.
 	NetworkTopology func(ctx context.Context, p Principal) (NetworkTopology, error)
+	// OverlayState, TunnelState and PathEvidence are the WAN reads of one
+	// device (NetClaw ingestion Batch 2): its SD-WAN overlay (control and data
+	// plane), its tunnels, and the measured paths it takes part in. Each reads
+	// only what Correlix already collected for a device the caller can see;
+	// another tenant's device is ErrNotFound. nil = the read is not wired here.
+	OverlayState func(ctx context.Context, p Principal, deviceID string) (OverlayState, error)
+	TunnelState  func(ctx context.Context, p Principal, deviceID string) (TunnelState, error)
+	PathEvidence func(ctx context.Context, p Principal, deviceID string) (PathEvidence, error)
 	// CaseTimeline returns one correlation case's ordered timeline.
 	CaseTimeline func(ctx context.Context, p Principal, correlationID string) ([]TimelineEvent, error)
 
@@ -903,6 +911,17 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.DeviceState != nil {
 		r.add(deviceStateTool{deps: d})
 	}
+	// The WAN reads of one device (NetClaw ingestion Batch 2). Device-scoped,
+	// so they sit below the ResolveDevice guard.
+	if d.OverlayState != nil {
+		r.add(overlayStateTool{deps: d})
+	}
+	if d.TunnelState != nil {
+		r.add(tunnelStateTool{deps: d})
+	}
+	if d.PathEvidence != nil {
+		r.add(pathEvidenceTool{deps: d})
+	}
 	// Configuration change (review item 10). Both resolve a device through the
 	// caller's own inventory, so they sit below the ResolveDevice guard even
 	// though get_recent_changes can also answer estate-wide: without an
@@ -954,6 +973,8 @@ func TroubleshootToolNames() []string {
 		"find_similar_incidents",
 		// Whole-network topology.
 		"get_network_topology",
+		// NetClaw ingestion Batch 2: the WAN reads of one device.
+		"get_overlay_state", "get_tunnel_state", "get_path_evidence",
 	}
 	sort.Strings(out)
 	return out

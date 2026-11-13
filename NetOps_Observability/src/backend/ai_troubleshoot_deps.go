@@ -168,6 +168,11 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.ProtocolDiagnostic = s.aiProtocolDiagnostic(r, claims)
 		deps.TopologyContext = s.aiTopologyContext(claims)
 		deps.NetworkTopology = s.aiNetworkTopology(claims)
+		// The WAN reads of one device (NetClaw ingestion Batch 2): each answers
+		// from what was already collected and says so when a source is unread.
+		deps.OverlayState = s.aiOverlayState(claims)
+		deps.TunnelState = s.aiTunnelState(claims)
+		deps.PathEvidence = s.aiPathEvidence(claims)
 		// The state seam is ALWAYS wired when there is an inventory: with no
 		// capture transport it answers with the read-only command list and an
 		// honest NotWired, which is the useful answer — not silence.
@@ -996,6 +1001,342 @@ func aiPathLabel(d pathgraph.PathDefinition, dev models.Device) string {
 		label += " (" + d.Protocol + ")"
 	}
 	return label
+}
+
+// ---- WAN reads of one device (NetClaw ingestion Batch 2) --------------------
+//
+// get_overlay_state, get_tunnel_state and get_path_evidence answer from what
+// Correlix already collected — the overlay snapshot the reconciler keeps, the
+// tunnel inventory, the path graph — never from a command sent to the device.
+// §3a: each resolves the device through the caller's own inventory first
+// (aiLookupDevice: another tenant's device is ErrNotFound) and reads only that
+// device's rows, through the same scoped reads the Tunnels and Paths views use.
+
+// aiTunnelRowCap bounds one device's tunnel read (inventory + SD-WAN pairs).
+const aiTunnelRowCap = 400
+
+// aiOverlayState projects one device's SD-WAN overlay from the reconciler's
+// snapshot (SNMP and controller facts, already merged per device).
+func (s *server) aiOverlayState(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.OverlayState, error) {
+	return func(_ context.Context, _ ai.Principal, deviceID string) (ai.OverlayState, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok {
+			return ai.OverlayState{}, ai.ErrNotFound
+		}
+		out := ai.OverlayState{DeviceName: aiFirst(dev.Name, dev.ID)}
+		snap := s.sdwanOverlay.Load()
+		if snap == nil {
+			return out, nil // not read since start: UNKNOWN
+		}
+		out.Read = true
+		f, member := snap.devFacts[dev.ID]
+		if !member {
+			return out, nil
+		}
+		return aiProjectOverlay(out, f, aiOverlayNames(snap, dev, s.visibleDevicesFor(claims))), nil
+	}
+}
+
+// aiOverlayNames maps a remote system-ip to the name of the device that owns
+// it — only a device of the SAME tenant that the caller can see. Anything else
+// stays unnamed (a system-ip is an address and is never shown).
+func aiOverlayNames(snap *sdwanOverlaySnapshot, dev models.Device, visible []models.Device) map[string]string {
+	nameOf := make(map[string]string, len(visible))
+	for _, d := range visible {
+		nameOf[d.ID] = aiFirst(d.Name, d.ID)
+	}
+	out := map[string]string{}
+	if snap == nil {
+		return out
+	}
+	for sysIP, owner := range snap.res.SystemIPs[normTenant(dev.TenantID)] {
+		if n, ok := nameOf[owner]; ok {
+			out[sysIP] = n
+		}
+	}
+	return out
+}
+
+// aiProjectOverlay folds one device's overlay facts into the tool's shape.
+// Pure: names maps a remote system-ip to a visible device name.
+func aiProjectOverlay(out ai.OverlayState, f collectors.OverlayDeviceFacts, names map[string]string) ai.OverlayState {
+	out.Member = true
+	out.Source = "snmp"
+	if f.Source == collectors.OverlaySourceController {
+		out.Source = "controller"
+	}
+	out.ReadAt = f.WalkedAt
+	if f.DetailAt.After(out.ReadAt) {
+		out.ReadAt = f.DetailAt
+	}
+	out.Site = f.SiteID
+	out.DataRead = f.DetailRead
+	out.ControlRead = f.OMPRead
+	out.OMPUp, out.OMPNotUp = f.OMPUp, f.OMPNotUp
+	out.Truncated = f.Truncated
+	byColor := map[string]*ai.OverlayTransportState{}
+	var colors []string
+	for _, p := range f.Peers {
+		sessions, up := 0, 0
+		for _, cp := range p.ColorPairs {
+			t := byColor[cp.LocalColor]
+			if t == nil {
+				t = &ai.OverlayTransportState{Color: cp.LocalColor}
+				byColor[cp.LocalColor] = t
+				colors = append(colors, cp.LocalColor)
+			}
+			t.Sessions += cp.Sessions
+			t.Up += cp.Up
+			sessions += cp.Sessions
+			up += cp.Up
+		}
+		out.Peers++
+		if sessions > 0 && up == 0 {
+			out.PeersDownTotal++
+			out.PeersDown = append(out.PeersDown, names[p.SystemIP]) // "" → rendered as an unnamed edge
+		}
+	}
+	sort.Strings(colors)
+	for _, c := range colors {
+		out.Transports = append(out.Transports, *byColor[c])
+	}
+	out.TransportsTotal = len(colors)
+	sort.SliceStable(out.PeersDown, func(i, j int) bool { return out.PeersDown[i] > out.PeersDown[j] }) // named first
+	return out
+}
+
+// aiTunnelState reads one device's tunnels: its rows in netops.tunnels (IPsec
+// / GRE over IF-MIB and TUNNEL-MIB), scoped by the SAME two-ended chokepoint the
+// Tunnels view uses, plus its SD-WAN sessions from the overlay snapshot.
+func (s *server) aiTunnelState(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.TunnelState, error) {
+	return func(ctx context.Context, _ ai.Principal, deviceID string) (ai.TunnelState, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok {
+			return ai.TunnelState{}, ai.ErrNotFound
+		}
+		out := ai.TunnelState{DeviceName: aiFirst(dev.Name, dev.ID)}
+		inventoryRead := false
+		cond, empty := s.deviceTenantPairCondFor(claims, "local_device", "remote_device")
+		if !empty {
+			ids := sqlInList([]string{dev.ID, aiFirst(dev.Name, dev.ID)})
+			where := "(local_device IN (" + ids + ") OR remote_device IN (" + ids + "))"
+			if cond != "" {
+				where = cond + " AND " + where
+			}
+			sql := `
+SELECT id, type, local_device, remote_device, status, latency_ms, loss_pct, qoe
+  FROM netops.tunnels AS t
+ WHERE ` + where + `
+ ORDER BY t.ts DESC
+ LIMIT 1 BY id
+ LIMIT ` + intToString(aiTunnelRowCap) + `
+ FORMAT JSON`
+			tctx, cancel := context.WithTimeout(ctx, aiTunnelTimeout)
+			rows, err := s.chRowsScope(tctx, s.chTenantScopeFor(claims), sql, "iris:tunnel-state")
+			cancel()
+			if err != nil {
+				logWarn("ai", "tunnel inventory unread for get_tunnel_state", map[string]any{"device_id": dev.ID, "error": err.Error()})
+				out.Notes = append(out.Notes, "the IPsec/GRE tunnel inventory could not be read — those tunnels are UNKNOWN, not absent")
+			} else {
+				inventoryRead = true
+				out.Tunnels = append(out.Tunnels, aiTunnelRows(rows, dev)...)
+			}
+		} else {
+			inventoryRead = true // the caller sees no device rows: nothing to read, honestly
+		}
+		snapRead := false
+		if snap := s.sdwanOverlay.Load(); snap != nil {
+			snapRead = true
+			if f, member := snap.devFacts[dev.ID]; member {
+				out.Tunnels = append(out.Tunnels, aiSDWANTunnels(f, aiOverlayNames(snap, dev, s.visibleDevicesFor(claims)), aiTunnelRowCap)...)
+			}
+		} else {
+			out.Notes = append(out.Notes, "the SD-WAN overlay has not been read since the server started — SD-WAN tunnels are UNKNOWN, not absent")
+		}
+		out.Read = inventoryRead || snapRead
+		if len(out.Tunnels) > aiTunnelRowCap {
+			out.Tunnels = out.Tunnels[:aiTunnelRowCap]
+			out.Notes = append(out.Notes, fmt.Sprintf("the tunnel read stopped at %d tunnels — counts cover those only", aiTunnelRowCap))
+		}
+		for _, t := range out.Tunnels {
+			out.Total++
+			if t.Status == "up" {
+				out.Up++
+			} else {
+				out.Down++
+			}
+		}
+		return out, nil
+	}
+}
+
+// aiTunnelTimeout bounds the tunnel inventory read.
+const aiTunnelTimeout = 8 * time.Second
+
+// aiTunnelRows projects netops.tunnels rows for one device. The far end of an
+// IF-MIB tunnel is an address, never a name, so it is left unnamed; the tunnel
+// interface (the part of the row id after the device) is what identifies it.
+func aiTunnelRows(rows []map[string]any, dev models.Device) []ai.TunnelEntry {
+	out := make([]ai.TunnelEntry, 0, len(rows))
+	for _, r := range rows {
+		str := func(k string) string { v, _ := r[k].(string); return v } // a non-string column reads as ""
+		num := func(k string) float64 {
+			switch v := r[k].(type) {
+			case float64:
+				return v
+			case string:
+				f, err := strconv.ParseFloat(v, 64)
+				if err != nil {
+					return 0 // unparseable reads as unmeasured, never as a value
+				}
+				return f
+			}
+			return 0
+		}
+		e := ai.TunnelEntry{Type: str("type"), Status: str("status")}
+		local, remote := str("local_device"), str("remote_device")
+		isDev := func(v string) bool {
+			return v != "" && (strings.EqualFold(v, dev.ID) || strings.EqualFold(v, dev.Name))
+		}
+		switch {
+		case isDev(local):
+			e.Remote = remote
+		case isDev(remote):
+			e.Remote = local // the device is the FAR end of this row
+		default:
+			// Second layer (§3a): the SQL already asked for this device's rows
+			// under the caller's tenant_scope; a row that names it at neither end
+			// is not this device's, whatever the store returned.
+			continue
+		}
+		if _, ifname, ok := strings.Cut(str("id"), "/"); ok {
+			e.Interface = ifname
+		}
+		lat, loss, qoe := num("latency_ms"), num("loss_pct"), num("qoe")
+		if lat > 0 || loss > 0 || qoe > 0 {
+			e.Measured, e.LatencyMs, e.LossPct = true, lat, loss
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// aiSDWANTunnels lists one device's SD-WAN sessions as tunnels: one per
+// (remote edge, local colour, remote colour), up when any session of the pair
+// is up. Path quality is not read over SNMP for an SD-WAN session.
+func aiSDWANTunnels(f collectors.OverlayDeviceFacts, names map[string]string, limit int) []ai.TunnelEntry {
+	var out []ai.TunnelEntry
+	for _, p := range f.Peers {
+		for _, cp := range p.ColorPairs {
+			st := "down"
+			if cp.Up > 0 {
+				st = "up"
+			}
+			out = append(out, ai.TunnelEntry{
+				Type: "sdwan", Remote: names[p.SystemIP], Transport: cp.LocalColor + " to " + cp.RemoteColor, Status: st,
+			})
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// aiPathEvidence reads the measured paths one device takes part in, from the
+// path graph's own tenant+cross scoped reads — LIVE observations only.
+func (s *server) aiPathEvidence(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.PathEvidence, error) {
+	tenant, cross := principalTenant(claims)
+	return func(ctx context.Context, _ ai.Principal, deviceID string) (ai.PathEvidence, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok {
+			return ai.PathEvidence{}, ai.ErrNotFound
+		}
+		out := ai.PathEvidence{DeviceName: aiFirst(dev.Name, dev.ID)}
+		if s.pathGraph == nil {
+			return out, nil // not enabled here
+		}
+		out.Enabled = true
+		tctx, cancel := context.WithTimeout(ctx, aiPathTimeout)
+		defer cancel()
+		defs, err := s.pathGraph.ListPathDefinitions(tctx, tenant, cross)
+		if err != nil {
+			return ai.PathEvidence{}, fmt.Errorf("path definitions unread: %w", err)
+		}
+		var mine []pathgraph.PathDefinition
+		for _, d := range defs {
+			if aiPathTouchesDevice(d, dev) {
+				mine = append(mine, d)
+			}
+		}
+		out.Total = len(mine)
+		if len(mine) > ai.MaxTopologyPaths {
+			mine = mine[:ai.MaxTopologyPaths]
+		}
+		for _, d := range mine {
+			pe := ai.PathEvidencePath{Label: aiPathLabel(d, dev)}
+			obs, hops, _, found, oerr := s.pathGraph.LatestObservation(tctx, tenant, cross, pathgraph.ObservationFilter{
+				PathID: d.PathID, DataClasses: pathgraph.LiveOnly(), Limit: 1,
+			})
+			switch {
+			case oerr != nil:
+				logWarn("ai", "path observation read failed", map[string]any{"path_id": d.PathID, "error": oerr.Error()})
+				out.Notes = append(out.Notes, "one path's latest measurement could not be read — it is listed as unmeasured")
+			case found:
+				pe.Status, pe.At, pe.Hops = obs.Status, obs.ObservedAt, obs.HopCount
+				aiFoldPathHops(&pe, hops)
+				if prev, perr := s.pathGraph.ListObservations(tctx, tenant, cross, pathgraph.ObservationFilter{
+					PathID: d.PathID, DataClasses: pathgraph.LiveOnly(), Limit: 2,
+				}); perr == nil && len(prev) == 2 && prev[1].HopCount > 0 && obs.HopCount > 0 && prev[1].HopCount != obs.HopCount {
+					pe.Changed, pe.PrevHops = true, prev[1].HopCount
+				}
+			}
+			out.Paths = append(out.Paths, pe)
+		}
+		return out, nil
+	}
+}
+
+// aiPathTimeout bounds one device's path read (definitions + observations).
+const aiPathTimeout = 8 * time.Second
+
+// aiFoldPathHops reads one observation's hops: where loss FIRST appears,
+// whether it persists through the last responding hop (real loss) or stops
+// (a router rate-limiting its control plane), the seam at the lossy hop, and
+// the worst RTT. Only responding hops carry a loss figure.
+func aiFoldPathHops(pe *ai.PathEvidencePath, hops []pathgraph.PathHop) {
+	hs := append([]pathgraph.PathHop(nil), hops...)
+	sort.SliceStable(hs, func(i, j int) bool { return hs[i].HopIndex < hs[j].HopIndex })
+	var resp []pathgraph.PathHop
+	pos := map[int]int{} // index in resp → 1-based hop position on the path
+	for i, h := range hs {
+		if h.RTTms > pe.MaxRTTms {
+			pe.MaxRTTms = h.RTTms
+		}
+		if h.State != pathgraph.HopResponding {
+			continue
+		}
+		pos[len(resp)] = i + 1
+		resp = append(resp, h)
+	}
+	if len(resp) == 0 {
+		return
+	}
+	pe.FinalLossPct = resp[len(resp)-1].LossPct
+	for i, h := range resp {
+		if h.LossPct <= 0 {
+			continue
+		}
+		pe.FirstLossHop, pe.LossAtFirst, pe.SeamAtLoss = pos[i], h.LossPct, h.SeamID
+		pe.LossPersists = true
+		for _, later := range resp[i+1:] {
+			if later.LossPct <= 0 {
+				pe.LossPersists = false
+				break
+			}
+		}
+		return
+	}
 }
 
 // ---- case timeline ----------------------------------------------------------

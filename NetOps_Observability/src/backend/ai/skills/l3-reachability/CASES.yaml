@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for l3-reachability. Dialect + contract: skill_cases.go.
+
+case: no route for the destination sends the investigation to why the prefix was never learned
+question: edge-1 cannot reach 10.4.0.0/24
+ui:
+  - correlation_id=case-l3-noroute
+  - device=edge-1
+  - prefix=10.4.0.0/24
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - state:route=absent
+evidence:
+  - finding
+  - device
+expect_chain:
+  - l3-reachability entry
+  - bgp-prefix-missing rule
+expect_selected: rule
+expect_reason: has no route for the destination
+expect_verdict:
+  - filtered
+  - policy
+expect_never:
+  - path-seam-handoff
+  - interface-down
+expect_select: l3-reachability
+
+---
+
+case: a next hop that never resolves sends the investigation to the link toward it
+question: no route to 10.4.0.0/24 from edge-1
+ui:
+  - correlation_id=case-l3-noarp
+  - device=edge-1
+  - prefix=10.4.0.0/24
+signals:
+  - state:route=present
+  - state:l2_entry=absent
+evidence:
+  - finding
+  - device
+expect_chain:
+  - l3-reachability entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: does not resolve
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - bgp-prefix-missing
+
+---
+
+case: a route that is present hands off to the measured path beyond the device
+question: edge-1 cannot reach 10.4.0.0/24
+ui:
+  - correlation_id=case-l3-route-ok
+  - device=edge-1
+  - prefix=10.4.0.0/24
+signals:
+  - state:route=present
+evidence:
+  - finding
+  - device
+expect_chain:
+  - l3-reachability entry
+  - path-seam-handoff rule
+expect_selected: rule
+expect_reason: does hold a route
+expect_verdict:
+  - hop
+  - seam
+expect_never:
+  - bgp-prefix-missing
+  - interface-down
+
+---
+
+case: a routing table that cannot be read live leaves the device's own log as the only evidence
+question: destination unreachable from edge-1
+ui:
+  - correlation_id=case-l3-notwired
+  - device=edge-1
+  - prefix=10.4.0.0/24
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - l3-reachability entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - bgp-prefix-missing
+  - path-seam-handoff

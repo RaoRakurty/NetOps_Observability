@@ -15,9 +15,40 @@ import (
 	"testing"
 )
 
-// stateDeclared is a tools: list that DOES read device state.
+// stateDeclared is a tools: list that DOES read device state — the battery and
+// every tool that declares a state facet of its own (skillStateFacetTool).
 func stateDeclared() map[string]bool {
-	return map[string]bool{"get_device_state": true, "get_rca_verdict": true}
+	out := map[string]bool{"get_device_state": true, "get_rca_verdict": true}
+	for _, tool := range skillStateFacetTool {
+		out[tool] = true
+	}
+	return out
+}
+
+// TestStateFacetOwnership: a facet the battery does not read may only be
+// authored by a skill that gathers the tool declaring it, and the battery's own
+// facets still need get_device_state.
+func TestStateFacetOwnership(t *testing.T) {
+	battery := map[string]bool{"get_device_state": true}
+	for facet, tool := range skillStateFacetTool {
+		if !skillToolAllowlist[tool] {
+			t.Errorf("facet %s is owned by %s, which is not on the skill tool allowlist", facet, tool)
+		}
+		if _, known := skillStateFacets[facet]; !known {
+			t.Errorf("facet %s has an owning tool but is not in the state vocabulary", facet)
+		}
+		for v := range skillStateFacets[facet] {
+			if _, err := parseSkillCondition(CondStatePrefix+facet+"="+v, battery); err == nil || !strings.Contains(err.Error(), "needs "+tool) {
+				t.Errorf("state:%s=%s must need %s, got %v", facet, v, tool, err)
+			}
+			if _, err := parseSkillCondition(CondStatePrefix+facet+"="+v, map[string]bool{tool: true}); err != nil {
+				t.Errorf("state:%s=%s with %s declared: %v", facet, v, tool, err)
+			}
+		}
+	}
+	if StateFacetTool("if_oper") != "get_device_state" {
+		t.Fatal("a battery facet must stay owned by get_device_state")
+	}
 }
 
 func TestParseStateConditionAccepts(t *testing.T) {
@@ -128,19 +159,17 @@ func TestEmbeddedSkillsStateRulesAreGatherable(t *testing.T) {
 	found := 0
 	for _, name := range set.Names() {
 		sk, _ := set.Get(name)
-		gathersState := false
+		gathered := map[string]bool{}
 		for _, g := range sk.Gather {
-			if g.Tool == "get_device_state" {
-				gathersState = true
-			}
+			gathered[g.Tool] = true
 		}
 		for _, d := range sk.Decisions {
 			if d.Cond == nil || !strings.HasPrefix(d.Cond.Key, CondStatePrefix) {
 				continue
 			}
 			found++
-			if !gathersState {
-				t.Errorf("%s: authors %s but never gathers get_device_state — the rule could never fire", name, d.Cond)
+			if tool := StateFacetTool(strings.TrimPrefix(d.Cond.Key, CondStatePrefix)); !gathered[tool] {
+				t.Errorf("%s: authors %s but never gathers %s — the rule could never fire", name, d.Cond, tool)
 			}
 		}
 	}

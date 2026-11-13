@@ -236,6 +236,13 @@ var toolContracts = map[string]ToolContract{
 	"get_topology_context":  {1, CapRead, 10 * time.Second, 60, out(46, defaultMaxTextChars)},
 	// Estate-scoped: the canvas's own view plus its metric overlay, read once.
 	"get_network_topology": {1, CapRead, 15 * time.Second, 30, out(110, defaultMaxTextChars)},
+	// NetClaw ingestion Batch 2: the WAN reads of one device, from what was
+	// already collected. Items: a scope line, the control plane, up to 12
+	// transports, a peer line and up to 15 down peers (overlay); a scope line
+	// and up to 20 tunnels (tunnel); up to 10 paths (path).
+	"get_overlay_state": {1, CapRead, 10 * time.Second, 60, out(31, defaultMaxTextChars)},
+	"get_tunnel_state":  {1, CapRead, 10 * time.Second, 60, out(21, defaultMaxTextChars)},
+	"get_path_evidence": {1, CapRead, 10 * time.Second, 60, out(10, defaultMaxTextChars)},
 	// PROBES: open a read-only SSH session to a device. The collector's own
 	// 60 s per-device timeout fires first; the contract is the backstop.
 	"run_protocol_diagnostic": {1, CapProbe, 75 * time.Second, 6, out(60, defaultMaxTextChars)},

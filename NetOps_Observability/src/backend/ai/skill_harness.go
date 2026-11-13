@@ -212,6 +212,18 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("NetworkTopology")
 			return NetworkTopology{}, nil
 		},
+		OverlayState: func(context.Context, Principal, string) (OverlayState, error) {
+			env.touch("OverlayState")
+			return OverlayState{}, nil
+		},
+		TunnelState: func(context.Context, Principal, string) (TunnelState, error) {
+			env.touch("TunnelState")
+			return TunnelState{}, nil
+		},
+		PathEvidence: func(context.Context, Principal, string) (PathEvidence, error) {
+			env.touch("PathEvidence")
+			return PathEvidence{}, nil
+		},
 		// The N-B2 engine projections (get_blast_radius, get_affected_entities
 		// are on the skill allowlist): the case's scripted outcome is what a
 		// step returns, so this seam only has to exist.
