@@ -163,7 +163,7 @@ KNOBS = {
     "ADMIN_USERNAME":            "admin",
     "CLICKHOUSE_USER":           "netops",
     # copilot (new in the AI Copilot landing)
-    "FEATURE_COPILOT":           "false",
+    "FEATURE_COPILOT":           "true",   # Iris on (evidence-only); model answers are the add-on + Features switch
     "COPILOT_PROVIDER":          "anthropic",
     "COPILOT_API_KEY":           "",
     "COPILOT_MODEL":             "claude-sonnet-4-5",
