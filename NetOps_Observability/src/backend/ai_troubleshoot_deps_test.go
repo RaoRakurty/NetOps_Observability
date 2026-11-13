@@ -806,7 +806,9 @@ func TestAIProjectDeviceStateWorstSignalWins(t *testing.T) {
 			signals[sig]++
 		}
 	}
-	want := map[string]int{"state:if_oper=down": 1, "state:if_errors=present": 1}
+	// if_faults is the error half of if_errors (NetClaw Batch 1): Gi0/0/2's 94
+	// CRCs assert it. No port reported a DROP counter, so no if_drops fact.
+	want := map[string]int{"state:if_oper=down": 1, "state:if_errors=present": 1, "state:if_faults=present": 1}
 	if len(signals) != len(want) {
 		t.Fatalf("signals = %v, want exactly %v (one per facet, worst reading)", signals, want)
 	}

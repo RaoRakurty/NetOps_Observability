@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for ntp-clock. Dialect + contract: skill_cases.go.
+
+case: an unsynchronized clock pins the moment it lost its time source from the device's log
+question: is ntp synchronized on edge-1
+ui:
+  - correlation_id=case-ntp-unsynced
+  - device=edge-1
+signals:
+  - state:clock=unsynced
+evidence:
+  - finding
+  - device
+expect_chain:
+  - ntp-clock entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: lost its time source
+expect_verdict:
+  - quote
+  - rate
+expect_select: ntp-clock
+
+---
+
+case: a clock that cannot be read live leaves the device's NTP log lines as the only evidence
+question: clock wrong on edge-1
+ui:
+  - correlation_id=case-ntp-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - ntp-clock entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+
+---
+
+case: a synchronized clock takes no hop and reports stratum, reference and offset
+question: are the clocks right on edge-1
+ui:
+  - correlation_id=case-ntp-synced
+  - device=edge-1
+signals:
+  - state:clock=synced
+evidence:
+  - finding
+  - device
+expect_chain:
+  - ntp-clock entry
+expect_selected: none
+expect_verdict:
+  - stratum
+  - offset
+expect_never:
+  - log-confirmation
+expect_select: ntp-clock
+
+---
+
+case: a synchronized clock far off its reference is reported, not chased into the log
+question: clock offset on edge-1
+ui:
+  - correlation_id=case-ntp-offset
+  - device=edge-1
+signals:
+  - state:clock=offset_high
+evidence:
+  - finding
+  - device
+expect_chain:
+  - ntp-clock entry
+expect_selected: none
+expect_verdict:
+  - offset
+  - timestamps
+expect_never:
+  - log-confirmation
