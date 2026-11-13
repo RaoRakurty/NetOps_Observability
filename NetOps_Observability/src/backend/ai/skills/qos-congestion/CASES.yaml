@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for qos-congestion. Dialect + contract: skill_cases.go.
+
+case: errors beside the drops clear the link before congestion is blamed
+question: output drops on GigabitEthernet1 at edge-1
+ui:
+  - correlation_id=case-qos-faults
+  - device=edge-1
+signals:
+  - state:if_faults=present
+  - state:if_drops=present
+evidence:
+  - finding
+  - device
+expect_chain:
+  - qos-congestion entry
+  - optics-degraded rule
+expect_selected: rule
+expect_reason: counting errors or CRCs
+expect_verdict:
+  - error type
+  - direction
+expect_never:
+  - interface-down
+expect_select: qos-congestion
+
+---
+
+case: an interface that is down is a link failure, not congestion
+question: wan slow on GigabitEthernet2 at edge-1
+ui:
+  - correlation_id=case-qos-down
+  - device=edge-1
+signals:
+  - state:if_oper=down
+evidence:
+  - finding
+  - device
+expect_chain:
+  - qos-congestion entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: operationally down
+expect_verdict:
+  - interface
+  - transition
+expect_never:
+  - optics-degraded
+
+---
+
+case: counters that cannot be read live leave the device's own log as the only evidence
+question: packet drops on GigabitEthernet1 at edge-1
+ui:
+  - correlation_id=case-qos-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - qos-congestion entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - optics-degraded
+
+---
+
+case: drops with clean error counters are queueing and stay here
+question: voice choppy, output drops on GigabitEthernet1 at edge-1
+ui:
+  - correlation_id=case-qos-queueing
+  - device=edge-1
+signals:
+  - state:if_drops=present
+  - state:if_faults=none
+  - state:if_oper=up
+evidence:
+  - finding
+  - device
+expect_chain:
+  - qos-congestion entry
+expect_selected: none
+expect_verdict:
+  - drop counters
+  - direction
+expect_never:
+  - optics-degraded
+  - interface-down
+  - log-confirmation
+expect_select: qos-congestion
+
+---
+
+case: without a named interface the live counters are not read, and nothing is guessed
+question: the wan is congested at edge-1
+ui:
+  - correlation_id=case-qos-noiface
+  - device=edge-1
+evidence:
+  - finding
+expect_chain:
+  - qos-congestion entry
+expect_selected: none
+expect_verdict:
+  - drop counters
+  - heaviest conversations
+expect_never:
+  - optics-degraded
+  - interface-down
+expect_never_tools:
+  - get_device_state

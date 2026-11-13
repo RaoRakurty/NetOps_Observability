@@ -137,6 +137,9 @@ var skillEntities = map[string]bool{
 	"seam":           true, // seam id/type in scope
 	"peer":           true, // peer/neighbour address in scope (IRIS Phase B)
 	"prefix":         true, // prefix in scope (IRIS Phase B)
+	// interface: an interface name in scope (NetClaw Batch 1), from the UI or a
+	// strict interface-name shape in the question — never from the model.
+	"interface": true,
 }
 
 // liveStateTools are the gather steps that read what is TRUE NOW on a device.
@@ -393,6 +396,19 @@ var skillStateFacets = map[string]map[string]bool{
 	"route":    {"present": true, "absent": true},
 	"l2_entry": {"present": true, "absent": true},
 	"platform": {"ok": true, "cpu_high": true, "mem_high": true},
+	// NetClaw ingestion Batch 1 (2026-11-13). if_faults is the error counters
+	// ALONE (input/output errors, CRC); if_drops is the drop counters alone. The
+	// older if_errors facet folds both together and is kept unchanged for the
+	// skills already written against it — a congestion method needs the two
+	// apart, because drops with clean error counters is queueing, not a bad link.
+	"if_faults": {"none": true, "present": true},
+	"if_drops":  {"none": true, "present": true},
+	// reload: the device's own uptime text says it came up within the last day
+	// (recent) or earlier. A device that printed no uptime yields no fact.
+	"reload": {"recent": true, "earlier": true},
+	// clock: NTP synchronization as the device reports it; offset_high is a
+	// synchronized clock more than 100 ms off its reference.
+	"clock": {"synced": true, "unsynced": true, "offset_high": true},
 }
 
 // skillTopoFacets is the closed `topo:` vocabulary: FACET → its value set. The
@@ -519,6 +535,30 @@ func stateConditionHuman(facet, value string) string {
 			return "the address is in the ARP / MAC table"
 		}
 		return "the device says the address is not in the ARP / MAC table"
+	case "if_faults":
+		if value == "present" {
+			return "the interface is counting input/output errors or CRCs"
+		}
+		return "the interface reports no error counters"
+	case "if_drops":
+		if value == "present" {
+			return "the interface is dropping packets"
+		}
+		return "the interface reports no drops"
+	case "reload":
+		if value == "recent" {
+			return "the device came up within the last day"
+		}
+		return "the device has been up for more than a day"
+	case "clock":
+		switch value {
+		case "unsynced":
+			return "the device's clock is not synchronized to a time source"
+		case "offset_high":
+			return "the device's clock is synchronized but more than 100 ms off its reference"
+		default:
+			return "the device's clock is synchronized"
+		}
 	case "platform":
 		switch value {
 		case "cpu_high":
@@ -679,9 +719,14 @@ type SkillDecision struct {
 
 // Skill is one parsed, validated troubleshooting method.
 type Skill struct {
-	Name         string
-	Layer        SkillLayer
-	Version      int
+	Name    string
+	Layer   SkillLayer
+	Version int
+	// Source is where the METHOD came from when it was re-expressed from an
+	// outside body of knowledge (`source:` — a pinned https URL, e.g. a NetClaw
+	// skill at a commit). Attribution only: it changes nothing at run time and
+	// is never sent to a model. Empty for methods authored here.
+	Source       string
 	WhenToUse    []string // lowercased match phrases
 	SymptomKinds []string // lowercased symptom classes
 	Tools        []string // this skill's tool allowlist (subset of skillToolAllowlist)
@@ -927,6 +972,13 @@ func parseSkill(dir, raw string) (*Skill, error) {
 		return nil, fmt.Errorf("version must be an integer >= 1 (got %q)", fields["version"])
 	}
 	sk.Version = v
+
+	if src := strings.TrimSpace(fields["source"]); src != "" {
+		if err := validSkillSource(src); err != nil {
+			return nil, err
+		}
+		sk.Source = src
+	}
 
 	sk.WhenToUse = lowerList(splitCommaList(fields["when_to_use"]))
 	if len(sk.WhenToUse) == 0 {
@@ -1244,6 +1296,24 @@ func parseDecision(line string, declared map[string]bool) (SkillDecision, error)
 	default:
 		return SkillDecision{}, fmt.Errorf("kind %q must be next, verdict or escalate", kind)
 	}
+}
+
+// maxSkillSourceLen bounds the `source:` attribution URL.
+const maxSkillSourceLen = 300
+
+// validSkillSource checks a `source:` attribution: one https URL, bounded, no
+// whitespace. It is attribution, so a malformed one is a build error rather
+// than a silently dropped credit.
+func validSkillSource(src string) error {
+	switch {
+	case len(src) > maxSkillSourceLen:
+		return fmt.Errorf("source is %d characters; at most %d", len(src), maxSkillSourceLen)
+	case !strings.HasPrefix(src, "https://"):
+		return fmt.Errorf("source %q must be an https URL", src)
+	case strings.ContainsAny(src, " \t\r\n"):
+		return fmt.Errorf("source %q must not contain whitespace", src)
+	}
+	return nil
 }
 
 func splitCommaList(s string) []string {

@@ -121,6 +121,68 @@ func resolveAddrEntity(out *skillEntitySet, name, fromUI string, shape *regexp.R
 	}
 }
 
+// reIfaceToken is the strict interface-name shape behind the `interface`
+// entity (NetClaw Batch 1): a known vendor interface prefix followed by its
+// numbering — Cisco (GigabitEthernet0/0/1, Gi1, TenGigE0/0/0/1, Port-channel1,
+// Tunnel1), NX-OS/EOS (Ethernet1/1, Eth1/1), Junos (ge-0/0/0, xe-1/0/2.0, ae0)
+// and IOS-XR (Bundle-Ether1, HundredGigE0/0/0/0). Free text never matches: the
+// prefix list is closed and a digit must follow it.
+var reIfaceToken = regexp.MustCompile(`(?i)\b(?:(?:Hundred|Forty|TwentyFive|Ten)?Gig(?:abit)?E(?:thernet)?|FastEthernet|Ethernet|Eth|Gi|Te|Fa|Hu|Port-channel|Po|Bundle-Ether|Tunnel|Tu|Loopback|Lo|Vlan)[0-9]{1,4}(?:/[0-9]{1,4}){0,3}(?:\.[0-9]{1,5})?\b|\b(?:ge|xe|et|fe)-[0-9]{1,2}/[0-9]{1,2}/[0-9]{1,3}(?:\.[0-9]{1,5})?\b|\bae[0-9]{1,3}(?:\.[0-9]{1,5})?\b`)
+
+// ifaceTokenSpans returns the interface-name spans in s. A match immediately
+// followed by '-' or '_' is the head of a longer name ("Eth1-core" is a
+// hostname), so it is not an interface.
+func ifaceTokenSpans(s string) [][]int {
+	var out [][]int
+	for _, loc := range reIfaceToken.FindAllStringIndex(s, -1) {
+		if loc[1] < len(s) && (s[loc[1]] == '-' || s[loc[1]] == '_') {
+			continue
+		}
+		out = append(out, loc)
+	}
+	return out
+}
+
+// firstIfaceToken is the first interface-name token in s, or "".
+func firstIfaceToken(s string) string {
+	if spans := ifaceTokenSpans(s); len(spans) > 0 {
+		return s[spans[0][0]:spans[0][1]]
+	}
+	return ""
+}
+
+// blankIfaceTokens replaces every interface-name token in s with a space.
+func blankIfaceTokens(s string) string {
+	spans := ifaceTokenSpans(s)
+	if len(spans) == 0 {
+		return s
+	}
+	var b strings.Builder
+	prev := 0
+	for _, loc := range spans {
+		b.WriteString(s[prev:loc[0]])
+		b.WriteByte(' ')
+		prev = loc[1]
+	}
+	b.WriteString(s[prev:])
+	return b.String()
+}
+
+// resolveIfaceEntity binds the `interface` entity: the UI's value when it is a
+// well-formed interface name, else the FIRST interface-shaped token in the
+// question. Anything else is dropped, never passed through.
+func resolveIfaceEntity(out *skillEntitySet, fromUI, question string) {
+	for _, cand := range []string{strings.TrimSpace(fromUI), firstIfaceToken(question)} {
+		if cand == "" || firstIfaceToken(cand) != cand {
+			continue
+		}
+		if v, err := validIDArg("interface", cand, 64); err == nil {
+			out.values["interface"] = v
+			return
+		}
+	}
+}
+
 // skillEntitySet is the resolved, server-owned entity binding for one turn.
 type skillEntitySet struct {
 	values map[string]string
@@ -160,6 +222,7 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 	// turn recall what was concluded about the same peer or prefix before.
 	resolveAddrEntity(&out, "prefix", uiContext["prefix"], rePrefixToken, question)
 	resolveAddrEntity(&out, "peer", uiContext["peer"], reIPv4Token, rePrefixToken.ReplaceAllString(question, " "))
+	resolveIfaceEntity(&out, uiContext["interface"], question)
 	if o.Troubleshoot.ResolveDevice == nil {
 		return out
 	}
@@ -173,6 +236,10 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 	// question that never named a device. Blank the uuids out first: they are
 	// already bound as correlation_id above.
 	deviceScan := reUUID.ReplaceAllString(question, " ")
+	// An interface name ("GigabitEthernet1") is device-name SHAPED too; it is
+	// bound as the interface entity above and must not be offered to the
+	// inventory as a hostname.
+	deviceScan = blankIfaceTokens(deviceScan)
 	for _, m := range reDeviceCandidate.FindAllString(deviceScan, -1) {
 		if len(candidates) >= maxDeviceCandidates {
 			break

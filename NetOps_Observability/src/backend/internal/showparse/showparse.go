@@ -135,6 +135,9 @@ const (
 	CmdPlatformEnv = "platform-env"
 	// CmdPlatformUptime is the version/uptime/last-reload read.
 	CmdPlatformUptime = "platform-uptime"
+	// CmdPlatformClock is the NTP synchronization read (NetClaw ingestion
+	// Batch 1): whether the clock is synchronized, to what, and how far off.
+	CmdPlatformClock = "platform-clock"
 	// CmdLogs is the bounded device log-buffer read.
 	CmdLogs = "logs"
 )
@@ -146,6 +149,7 @@ func Commands() []string {
 		CmdOSPFNeighbor, CmdISISNeighbor, CmdBGPSummary, CmdRoutePrefix,
 		CmdARP, CmdMAC,
 		CmdPlatformCPU, CmdPlatformMemory, CmdPlatformEnv, CmdPlatformUptime,
+		CmdPlatformClock,
 		CmdLogs,
 	}
 }
@@ -257,6 +261,7 @@ func NewLibrary() *Library {
 	registerRouteParsers(l)
 	registerL2Parsers(l)
 	registerPlatformParsers(l)
+	registerClockParsers(l)
 	registerLogParsers(l)
 	return l
 }
