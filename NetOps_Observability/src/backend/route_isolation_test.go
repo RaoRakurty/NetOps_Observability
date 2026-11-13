@@ -574,6 +574,7 @@ var routeIsolationLedger = map[string]string{
 	// proven by flows_links_isolation_test.go and the flowquery integration test.
 	"/api/flows/links":        "scoped",
 	"/api/flows/links/series": "scoped",
+	"/api/flows/links/movers": "scoped",
 	"/api/flows/services":     "scoped",
 	"/api/flows/timeseries":   "scoped",
 	"/api/flows/top":          "scoped",

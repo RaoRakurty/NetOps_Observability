@@ -329,3 +329,52 @@ func TestIntegrationSeriesZeroFilledAndExact(t *testing.T) {
 		t.Errorf("1m series: %d buckets, in total %v, want 60 and 24000", len(b.T), sum)
 	}
 }
+
+// What changed on acme's 10.0.0.1|12: the talker 192.0.2.10 went from 6000 B
+// (60 × 100) to 24000 B (60 × 400) — exactly +300 % — and the DNS server that
+// only appears in the current window (6 × 1000 B leaving on 12) is new. The
+// port view names 6/443 and 17/53. Totals are counted once per record.
+func TestIntegrationMoversStepChangeExact(t *testing.T) {
+	c := chFromEnv(t)
+	t0 := testT0()
+	loadCorpus(t, c, t0)
+	w := Window{From: t0, To: t0.Add(time.Hour), Explicit: true}
+	l := Link{Exporter: "10.0.0.1", IfIndex: 12}
+	scope := " AND (tenant_id = 'acme')"
+
+	tot := c.rows(t, "acme", MoverTotalsSQL(l, DirBoth, w, scope))
+	if len(tot) != 1 || Num(tot[0]["cur_b"]) != 30000 || Num(tot[0]["prev_b"]) != 6000 || Num(tot[0]["fl"]) != 66 {
+		t.Fatalf("totals = %v, want cur 30000, prev 6000, 66 records", tot)
+	}
+	talkers := BuildMovers(ParseKeyBytes(c.rows(t, "acme", MoversSQL(l, DirIn, w, ByTalker, scope, 10))), true, 10)
+	byKey := map[string]Mover{}
+	for _, m := range talkers {
+		byKey[m.Key] = m
+	}
+	step := byKey["192.0.2.10"]
+	if step.Status != MoverUp || step.Change == nil || *step.Change != 3 || step.Bytes != 24000 || *step.PrevBytes != 6000 {
+		t.Fatalf("talker step change = %+v (all %+v)", step, talkers)
+	}
+	if _, leaked := byKey["10.9.9.9"]; leaked {
+		t.Fatal("TENANT LEAK: globex's host is a mover on acme's link")
+	}
+	ports := BuildMovers(ParseKeyBytes(c.rows(t, "acme", MoversSQL(l, DirBoth, w, ByPort, scope, 10))), true, 10)
+	pk := map[string]Mover{}
+	for _, m := range ports {
+		pk[m.Key] = m
+	}
+	if p := pk["6/443"]; p.Status != MoverUp || p.Bytes != 24000 || *p.PrevBytes != 6000 {
+		t.Errorf("6/443 = %+v", p)
+	}
+	if p := pk["17/53"]; p.Status != MoverNew || p.Bytes != 6000 || *p.PrevBytes != 0 {
+		t.Errorf("17/53 = %+v", p)
+	}
+	if ports[0].Key != "6/443" {
+		t.Errorf("largest change first: %+v", ports)
+	}
+	// App movers return address pairs for Go-side resolution.
+	pairs := c.rows(t, "acme", MoversSQL(l, DirBoth, w, ByApp, scope, 10))
+	if len(pairs) != 2 {
+		t.Fatalf("app pairs = %v", pairs)
+	}
+}
