@@ -13,6 +13,9 @@ import (
 	"sort"
 	"time"
 
+	"netops/backend/internal/credfile"
+	"netops/backend/internal/credfp"
+	"netops/backend/internal/credscrub"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/invfacts"
 	"netops/backend/internal/vendorprofile"
@@ -365,7 +368,13 @@ func (s *server) startTenantEnrichment(ctx context.Context) {
 			interval = d
 		}
 	}
-	write := func() { s.writeTenantEnrichmentOnce(dir) }
+	write := func() {
+		// Not behind the inventory's not-ready hold below: the fingerprints
+		// depend only on the configured communities, and a missing set means
+		// ConfD's session lines are stored with the community in them.
+		s.publishCommunityFingerprints()
+		s.writeTenantEnrichmentOnce(dir)
+	}
 	go func() {
 		write()
 		t := time.NewTicker(interval)
@@ -379,4 +388,74 @@ func (s *server) startTenantEnrichment(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// communityFPKeyEnv names the file holding the per-install fingerprint key
+// (install.py renders data/secrets/credscrub/api/password from .env's
+// CREDSCRUB_FP_KEY; helm mounts the same key from the operator's Secret).
+const communityFPKeyEnv = "CREDSCRUB_FP_KEY_FILE"
+
+// newCommunityFingerprintPublisher builds the D1 at-rest publisher (tracker 387
+// (a), internal/credfp): the keyed fingerprints of every community credscrub
+// holds, written beside device_tenant.csv for the Vector aggregator, which drops
+// a matching community from ConfD's session lines before they are stored. It
+// returns nil, and says why, when the shared directory or the key file is not
+// configured — then the aggregator's set stays empty and only the lines whose
+// shape alone proves a community (a session opened via snmp, a refused request,
+// an snmp community command) are scrubbed.
+func newCommunityFingerprintPublisher(scrub *credscrub.Scrubber, getenv func(string) string) *credfp.Publisher {
+	dir := getenv("TENANT_ENRICHMENT_DIR")
+	keyPath := getenv(communityFPKeyEnv)
+	switch {
+	case scrub == nil:
+		return nil
+	case dir == "":
+		// No shared volume (file backend / dev build): nothing reads a set.
+		return nil
+	case keyPath == "":
+		logError("credscrub", "no community fingerprint key configured, so ConfD's poll-session lines are stored with the SNMP community in them (owner D1); render it with scripts/install.py",
+			map[string]any{"env": communityFPKeyEnv})
+		return nil
+	}
+	key, err := credfile.New(keyPath, credfile.Options{OnStateChange: func(err error) {
+		if err != nil {
+			logError("credscrub", "community fingerprint key unreadable; the published set stays as it stands", map[string]any{"path": keyPath, "error": err.Error()})
+		}
+	}})
+	if err != nil {
+		logError("credscrub", "community fingerprint key path refused", errf(err))
+		return nil
+	}
+	return &credfp.Publisher{
+		Dir: dir,
+		Key: key.Value,
+		Pairs: func(fp func(tenant, value string) string) []credfp.Pair {
+			held := scrub.Fingerprints(fp)
+			out := make([]credfp.Pair, 0, len(held))
+			for _, h := range held {
+				out = append(out, credfp.Pair{Scope: h.Tenant, FP: h.FP})
+			}
+			return out
+		},
+		Report: func(err error, wrote bool, n int) {
+			switch {
+			case err != nil:
+				logError("credscrub", "community fingerprints not published; the previous set stays in force", errf(err))
+			case wrote:
+				logInfo("credscrub", "community fingerprints published (the aggregator reloads on the change)",
+					map[string]any{"file": filepath.Join(dir, credfp.FileName), "fingerprints": n})
+			default:
+				logInfo("credscrub", "community fingerprints publishing again", map[string]any{"fingerprints": n})
+			}
+		},
+	}
+}
+
+// publishCommunityFingerprints is one publish; a nil publisher is a no-op.
+// Errors are reported by the publisher itself, once per state change.
+func (s *server) publishCommunityFingerprints() {
+	if s == nil || s.credFP == nil {
+		return
+	}
+	_, _ = s.credFP.Publish() // discard: Publisher.Report already logged any error, once per change
 }

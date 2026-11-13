@@ -125,8 +125,9 @@ def test_ownership_is_requested_for_the_consumer_uid_batched(tree, monkeypatch):
     # chown at all. Root-run consumers and curl_user get exactly one batch each.
     assert set(owners) == {(0, 0), (100, 101), (4000, 4000)}, rec.calls
     root_dirs = sorted(Path(r).parent.as_posix() for r in owners[(0, 0)])
-    assert root_dirs == ["opensearch/aggregator", "opensearch/router", "vmauth/gnmic", "vmauth/prober",
-                         "vmauth/vector", "vmauth/vmalert", "vmauth/vmauth"]
+    assert root_dirs == ["credscrub/aggregator", "opensearch/aggregator", "opensearch/router",
+                         "vmauth/gnmic", "vmauth/prober", "vmauth/vector", "vmauth/vmalert",
+                         "vmauth/vmauth"]
     assert [Path(r).parent.as_posix() for r in owners[(100, 101)]] == ["opensearch/bootstrap"]
 
 
@@ -135,8 +136,9 @@ def test_api_and_grafana_follow_correlix_uid(tree):
     render(tree, make_env(CORRELIX_UID="4242", CORRELIX_GID="4343"), rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
     # opensearch/security-init: the security job runs as CORRELIX_UID (2026-11-09).
-    assert sorted(owners[(4242, 4343)]) == sorted(["clickhouse/grafana", "grafana/admin", "opensearch/api",
-                                                   "vmauth/api", "vmauth/grafana", *["opensearch/security-init"] * 6])
+    assert sorted(owners[(4242, 4343)]) == sorted(["clickhouse/grafana", "credscrub/api", "grafana/admin",
+                                                   "opensearch/api", "vmauth/api", "vmauth/grafana",
+                                                   *["opensearch/security-init"] * 6])
 
 
 def test_compose_defaults_when_correlix_uid_unset(tree):
@@ -145,7 +147,8 @@ def test_compose_defaults_when_correlix_uid_unset(tree):
     rec = ChownRecorder()
     render(tree, env, rec)
     owners = {(uid, gid): [Path(r).parent.as_posix() for r in rels] for uid, gid, rels in rec.calls}
-    assert sorted(owners[(65532, 65532)]) == sorted(["opensearch/api", "vmauth/api", *["opensearch/security-init"] * 6])
+    assert sorted(owners[(65532, 65532)]) == sorted(["credscrub/api", "opensearch/api", "vmauth/api",
+                                                     *["opensearch/security-init"] * 6])
     assert sorted(owners[(472, 472)]) == ["clickhouse/grafana", "grafana/admin", "vmauth/grafana"]
 
 

@@ -55,6 +55,12 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_METRICS}}
             - name: INGEST_TOKEN_BUS
               valueFrom: {secretKeyRef: {name: {{ include "correlix.secretName" $ }}, key: INGEST_TOKEN_BUS}}
+            # Tracker 387 (a), owner D1: Vector secret REFERENCES (resolved at
+            # config load, in memory only) for the community fingerprint key and
+            # the api's published set; the set's file change reloads vector.
+            - {name: CX_CREDFP_KEY, value: "SECRET[credscrub.aggregator]"}
+            - {name: CX_CREDFP_SET, value: "SECRET[credfpset.current]"}
+            - {name: CX_ENRICHMENT_EXTRA, value: "/etc/vector/enrichment/community_fp.txt"}
             {{- if .Values.vmauth.enabled }}
             # Tracker 384: the svc-vector identity. A reference that Vector's exec
             # backend (cx-secret-exec.sh) resolves from the mounted file at every
@@ -90,6 +96,7 @@ spec:
           volumeMounts:
             - {name: conf, mountPath: /etc/vector/conf, readOnly: true}
             - {name: data, mountPath: /var/lib/vector}
+            - {name: credscrub-key, mountPath: /run/secrets/credscrub/aggregator, readOnly: true}
             {{- if .Values.sharedData.enabled }}
             - {name: shared, mountPath: /etc/vector/enrichment, subPath: enrichment, readOnly: true}
             {{- end }}
@@ -101,6 +108,7 @@ spec:
             {{- end }}
       volumes:
         - {name: conf, configMap: {name: correlix-vector-aggregator, defaultMode: 0555}}
+{{ include "correlix.credscrubKeyVolume" $ | indent 8 }}
         {{- if .Values.sharedData.enabled }}
         - {name: shared, persistentVolumeClaim: {claimName: api-data, readOnly: true}}
         {{- end }}

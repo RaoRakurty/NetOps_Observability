@@ -562,3 +562,35 @@ func TestTrapSemantics_FirstBindingWins(t *testing.T) {
 		t.Fatalf("state=%q native=%q", ev.EventState, ev.NativeSeverityText)
 	}
 }
+
+// TestSnmpTrapCommunityVarbindIsWithheld (tracker 387 (a), owner D1): a proxy
+// may forward a v1 trap as v2 with snmpTrapCommunity.0 holding the community.
+// The binding's presence is kept; its value never leaves the decoder, so no
+// stored field, the message or the JSON on the bus carries it.
+func TestSnmpTrapCommunityVarbindIsWithheld(t *testing.T) {
+	secret := "fixture-forwarded-" + strings.Repeat("c", 6)
+	pkt := buildTrapV2c(t, "1.3.6.1.6.3.1.1.5.3",
+		tvb{oid: "1.3.6.1.2.1.2.2.1.1.7", ber: berInt(7)},
+		tvb{oid: snmpTrapCommunityDot, ber: berOctets(secret)},
+	)
+	ev := decodeForTest(t, pkt)
+	var found bool
+	for _, vb := range ev.Varbinds {
+		if vb.OID == snmpTrapCommunityDot {
+			found = true
+			if vb.Value != withheldCommunity || vb.Raw != "" || vb.Decoded != "" {
+				t.Fatalf("snmpTrapCommunity.0 not withheld: %+v", vb)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the snmpTrapCommunity.0 binding disappeared: its presence is evidence")
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), secret) || strings.Contains(ev.Message, secret) {
+		t.Fatalf("the forwarded community reached the event: %s", raw)
+	}
+}

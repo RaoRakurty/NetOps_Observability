@@ -605,7 +605,10 @@ fixtures:
       event_category: management_audit
       dedup_key: 'vEdge-1|confd|audit_session_created_snmp'
       normalized_severity: notice
-      message: 'audit user: fabricated-community-7f3a/777134 created new session via snmp from 192.0.2.1:59169 with udp'
+      # No `message` expectation: the Vector aggregator replaces this line's
+      # community before storage (tracker 387 (a), owner D1), which the pack
+      # executors know nothing about. deployment/docker/vector/tests/credscrub.yaml
+      # asserts the stored message instead.
     signal: null
 
   - name: a NETCONF session opening keeps its own key
