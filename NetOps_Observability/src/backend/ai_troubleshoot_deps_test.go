@@ -86,7 +86,9 @@ func aiTSServer(t *testing.T) *server {
 			t.Fatalf("seed %s: %v", dev.ID, err)
 		}
 	}
-	return &server{roles: roles, discovery: d}
+	s := &server{roles: roles, discovery: d}
+	setAIModelsLikeLegacyEnv(t, s)
+	return s
 }
 
 // ---- ResolveDevice ----------------------------------------------------------

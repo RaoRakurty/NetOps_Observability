@@ -43,7 +43,7 @@ func aiCfgTestServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &server{
+	s := &server{
 		roles:          rs,
 		tenants:        ts,
 		audit:          au,
@@ -52,6 +52,8 @@ func aiCfgTestServer(t *testing.T) *server {
 		copilotCfg:     newCopilotConfigStore(dir+"/copilot_config.json", nil),
 		aiTenantCfg:    newAITenantConfigStore(dir+"/ai_tenant_config.json", nil),
 	}
+	setAIModelsLikeLegacyEnv(t, s) // a licensed install with "Iris AI models" on
+	return s
 }
 
 func claimsCtx(r *http.Request, c jwtClaims) *http.Request {

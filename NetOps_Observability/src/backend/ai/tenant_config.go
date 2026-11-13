@@ -256,6 +256,24 @@ func (s *TenantConfigStore) NoPlatformKey(tenant string) bool {
 	return s.Get(tenant).NoPlatformKey
 }
 
+// AnyBYOKey reports whether ANY workspace has stored its own provider key. It
+// answers one platform-level yes/no for the AI-switch upgrade seed ("was this
+// installation already using a model?") and reveals nothing per tenant: no id,
+// no count, no key. Nil-safe.
+func (s *TenantConfigStore) AnyBYOKey() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, c := range s.cfgs {
+		if c.Key != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // TenantSettings is the input to SetTenantSettings: the fields a TENANT ADMIN
 // may change. It is a struct rather than a positional list because the §10
 // model router added two more model fields and a nine-argument call is where a

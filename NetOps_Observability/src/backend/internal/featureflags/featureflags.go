@@ -73,7 +73,24 @@ type Spec struct {
 	// explicit acknowledgement to turn on, and they are forced OFF when the
 	// saved values cannot be read at boot.
 	Risky bool
+	// ConsoleOnly flags take their value from the Features page ALONE (owner
+	// 2026-11-12: "it shouldn't be env settings, gui on/off"). The process
+	// environment is neither read nor written for them, so no .env line can
+	// turn one on: unset reads off, and the only ways to a value are the page
+	// and the one-shot upgrade Seed. Must be Live and TrueOnly (New panics
+	// otherwise); readers ask Registry.Enabled, never the environment.
+	ConsoleOnly bool
+	// Requires names a licence capability the flag cannot run without (for
+	// example "iris_model"). While the requirement is unmet the flag reads
+	// OFF whatever was saved, and turning it on is refused (ErrNotLicensed).
+	// The check is injected (SetRequirements) so this package never imports
+	// the licence code; until it is injected a Requires flag reads off.
+	Requires string
 }
+
+// Requirement answers whether a named licence capability is in force, with
+// the operator-facing reason when it is not.
+type Requirement func(name string) (ok bool, why string)
 
 // Source names where the running value came from.
 type Source string
@@ -97,6 +114,10 @@ type State struct {
 	InstallValue   *bool // what the install set, nil when it set nothing
 	UpdatedBy      string
 	UpdatedAt      time.Time
+	// Available is false when the flag's licence requirement is unmet; then
+	// Running is false and Unavailable says why.
+	Available   bool
+	Unavailable string
 }
 
 // Env is the process environment, injected.
@@ -130,6 +151,10 @@ var (
 	ErrUnknownFlag  = errors.New("featureflags: no such switchable feature")
 	ErrAckRequired  = errors.New("featureflags: turning this feature on needs an explicit acknowledgement")
 	ErrStoreFailure = errors.New("featureflags: the saved feature settings could not be written")
+	ErrNotLicensed  = errors.New("featureflags: this feature is not included in the installed license")
+	// ErrStoreUnread refuses a Seed while the saved settings could not be read:
+	// writing then would overwrite whatever the operator saved.
+	ErrStoreUnread = errors.New("featureflags: the saved feature settings were not readable at start")
 )
 
 // Registry is the set of switchable flags and their state.
@@ -140,6 +165,7 @@ type Registry struct {
 	store Store
 
 	mu       sync.RWMutex
+	require  Requirement
 	saved    map[string]record
 	boot     map[string]bool  // running value at boot (after Load)
 	install  map[string]*bool // what the environment said before Load applied anything
@@ -159,9 +185,39 @@ func New(specs []Spec, env Env, store Store) *Registry {
 		if _, dup := r.by[s.Env]; dup {
 			panic("featureflags: duplicate Env in spec table: " + s.Env)
 		}
+		if s.ConsoleOnly && (s.Apply != ApplyLive || s.Semantics != TrueOnly) {
+			panic("featureflags: a console-only flag must be Live and TrueOnly: " + s.Env)
+		}
+		if s.Requires != "" && !s.ConsoleOnly {
+			// A requirement is enforced by Enabled; an environment-read flag has
+			// readers that would never see it.
+			panic("featureflags: a licence requirement needs a console-only flag: " + s.Env)
+		}
 		r.by[s.Env] = i
 	}
 	return r
+}
+
+// SetRequirements injects the licence check for Requires flags. Until it is
+// called every Requires flag reads off (fail closed).
+func (r *Registry) SetRequirements(fn Requirement) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.require = fn
+}
+
+// requirementLocked reports whether s's licence requirement is met.
+func (r *Registry) requirementLocked(s Spec) (bool, string) {
+	if s.Requires == "" {
+		return true, ""
+	}
+	if r.require == nil {
+		return false, "the license check is not available yet"
+	}
+	return r.require(s.Requires)
 }
 
 func parse(s Spec, v string, set bool) bool {
@@ -194,6 +250,9 @@ func (r *Registry) Load() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.specs {
+		if s.ConsoleOnly {
+			continue // the environment has no say: no install value exists
+		}
 		if v, ok := r.env.Lookup(s.Env); ok {
 			b := parse(s, v, true)
 			r.install[s.Env] = &b
@@ -216,6 +275,15 @@ func (r *Registry) Load() error {
 	r.loadErr = err
 	r.loadedAt = time.Now().UTC()
 	for _, s := range r.specs {
+		if s.ConsoleOnly {
+			// Kept in the registry only; the environment is never written, so
+			// nothing outside Enabled can read it as on. An unreadable store
+			// leaves it off (no record), which is the fail-closed answer.
+			if rec, ok := saved[s.Env]; ok {
+				r.saved[s.Env] = rec
+			}
+			continue
+		}
 		if rec, ok := saved[s.Env]; ok {
 			r.saved[s.Env] = rec
 			if serr := r.env.Set(s.Env, render(rec.Value)); serr != nil && err == nil {
@@ -240,12 +308,17 @@ func (r *Registry) LoadError() error {
 }
 
 func (r *Registry) stateLocked(s Spec) State {
-	v, ok := r.env.Lookup(s.Env)
-	running := parse(s, v, ok)
-	if s.Apply == ApplyRestart {
+	var running bool
+	switch {
+	case s.ConsoleOnly:
+		running = r.saved[s.Env].Value // no record reads off
+	case s.Apply == ApplyRestart:
 		running = r.boot[s.Env]
+	default:
+		v, ok := r.env.Lookup(s.Env)
+		running = parse(s, v, ok)
 	}
-	st := State{Spec: s, Running: running, Desired: running, Source: SourceDefault, InstallValue: r.install[s.Env]}
+	st := State{Spec: s, Running: running, Desired: running, Source: SourceDefault, InstallValue: r.install[s.Env], Available: true}
 	if st.InstallValue != nil {
 		st.Source = SourceInstall
 	}
@@ -253,6 +326,11 @@ func (r *Registry) stateLocked(s Spec) State {
 		st.Source, st.UpdatedBy, st.UpdatedAt, st.Desired = SourceConsole, rec.UpdatedBy, rec.UpdatedAt, rec.Value
 	}
 	st.RestartPending = s.Apply == ApplyRestart && st.Desired != st.Running
+	if ok, why := r.requirementLocked(s); !ok {
+		// The saved choice is kept (Desired) and comes back when the licence
+		// does; what runs is off.
+		st.Available, st.Unavailable, st.Running = false, why, false
+	}
 	return st
 }
 
@@ -269,6 +347,9 @@ func (r *Registry) List() []State {
 
 // Get returns one flag.
 func (r *Registry) Get(env string) (State, bool) {
+	if r == nil {
+		return State{}, false // no registry wired: every flag reads off
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	i, ok := r.by[env]
@@ -297,6 +378,9 @@ func (r *Registry) Set(env string, value bool, ack, by string, now time.Time) (b
 	}
 	s := r.specs[i]
 	before = r.stateLocked(s)
+	if value && !before.Available {
+		return before, before, ErrNotLicensed
+	}
 	if s.Risky && value && ack != s.Env {
 		return before, before, ErrAckRequired
 	}
@@ -313,10 +397,65 @@ func (r *Registry) Set(env string, value bool, ack, by string, now time.Time) (b
 		return before, before, fmt.Errorf("%w: %w", ErrStoreFailure, serr)
 	}
 	r.saved = next
-	if s.Apply == ApplyLive {
+	if s.Apply == ApplyLive && !s.ConsoleOnly {
 		if serr := r.env.Set(env, render(value)); serr != nil {
 			return before, r.stateLocked(s), fmt.Errorf("featureflags: apply %s: %w", env, serr)
 		}
 	}
 	return before, r.stateLocked(s), nil
+}
+
+// Seed records a first value for a flag that has NEVER been saved: the
+// one-shot upgrade step that keeps an install's existing behaviour when a
+// capability moves behind a console-only switch (owner 2026-11-13: an install
+// already using an AI model starts with the switch on; every other install
+// starts off). It is idempotent by construction — once any value is saved,
+// from the page or from an earlier Seed, Seed changes nothing and returns
+// false — and it refuses while the saved settings were unreadable at start
+// (ErrStoreUnread), because writing then would overwrite them.
+//
+// It bypasses the acknowledgement on purpose: it only ever preserves what the
+// install was already doing. The caller audits a seeded change. A value of
+// true is still refused when the licence requirement is unmet.
+func (r *Registry) Seed(env string, value bool, by string, now time.Time) (seeded bool, err error) {
+	if r == nil {
+		return false, ErrUnknownFlag
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	i, ok := r.by[env]
+	if !ok {
+		return false, ErrUnknownFlag
+	}
+	if r.loadErr != nil {
+		return false, ErrStoreUnread
+	}
+	if _, saved := r.saved[env]; saved {
+		return false, nil
+	}
+	s := r.specs[i]
+	if value {
+		if met, _ := r.requirementLocked(s); !met {
+			value = false // record the decision as off rather than leave it to re-run
+		}
+	}
+	next := make(map[string]record, len(r.saved)+1)
+	for k, v := range r.saved {
+		next[k] = v
+	}
+	next[env] = record{Value: value, UpdatedBy: by, UpdatedAt: now.UTC()}
+	b, jerr := json.MarshalIndent(next, "", "  ")
+	if jerr != nil {
+		return false, fmt.Errorf("%w: %w", ErrStoreFailure, jerr)
+	}
+	if serr := r.store.Save(b); serr != nil {
+		return false, fmt.Errorf("%w: %w", ErrStoreFailure, serr)
+	}
+	r.saved = next
+	if s.Apply == ApplyLive && !s.ConsoleOnly {
+		if serr := r.env.Set(env, render(value)); serr != nil {
+			return true, fmt.Errorf("featureflags: apply %s: %w", env, serr)
+		}
+	}
+	return true, nil
 }
