@@ -248,10 +248,12 @@ env:
   FEATURE_EMAIL_NOTIFICATIONS: "false"
   FEATURE_SERVICENOW_NOTIFICATIONS: "false"
   FEATURE_JIRA_NOTIFICATIONS: "false"
-  # LLM copilot: off unless FEATURE_COPILOT=true AND COPILOT_API_KEY is in the
-  # integration Secret (CLAUDE.md §15 / OWASP LLM04 — an authenticated,
-  # bounded, audited endpoint or nothing).
-  FEATURE_COPILOT: "false"
+  # Iris: evidence-only answers are on (no external call). Model answers need the
+  # Iris AI add-on on the licence AND "Iris AI models" turned on under
+  # Administration → Features (console-only; no value here sets it). Empty =
+  # unset, which leaves Iris on; "false" would turn Iris off entirely. Model
+  # calls stay authenticated, bounded and audited (CLAUDE.md §15 / OWASP LLM04).
+  FEATURE_COPILOT: ""
   # Correlation retention
   CORR_RETENTION_PROFILE: "production"
   # Bus
