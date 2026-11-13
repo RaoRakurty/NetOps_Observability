@@ -22,7 +22,7 @@ import { useMemo, useState } from "react";
 import { type PlatformFeature } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import { Modal } from "../../components/ui";
-import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue } from "./featuresModel";
+import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue, lockedLine, toggleDisabled, confirmText } from "./featuresModel";
 import { useFeatureSwitches } from "./useFeatureSwitches";
 import ConnectModelStep from "../../iris/ConnectModelStep";
 import { PlatformAlertsNotice } from "../../components/PlatformAlertsNotice";
@@ -97,6 +97,7 @@ export default function Features() {
           <div role="list">
             {g.features.map((f) => {
               const pending = pendingLine(f);
+              const locked = lockedLine(f);
               return (
                 <div
                   key={f.env}
@@ -114,6 +115,7 @@ export default function Features() {
                       {applyLabel(f)} · {sourceLine(f, fmtDateTime)}
                     </div>
                     {pending && <div style={{ marginTop: 2, color: "var(--warn)" }}>{pending}</div>}
+                    {locked && <div data-testid={`feature-locked-${f.env}`} style={{ marginTop: 2, color: "var(--warn)" }}>{locked}</div>}
                     {rowError?.env === f.env && <div role="alert" style={{ marginTop: 2, color: "var(--bad)" }}>{rowError.message}</div>}
                   </div>
                   <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: busy ? "wait" : "pointer" }}>
@@ -123,7 +125,7 @@ export default function Features() {
                       role="switch"
                       aria-label={f.label}
                       checked={switchValue(f)}
-                      disabled={busy !== null || restart.kind === "restarting"}
+                      disabled={busy !== null || restart.kind === "restarting" || toggleDisabled(f)}
                       onChange={() => onToggle(f)}
                       style={{ width: 20, height: 20 }}
                     />
@@ -138,9 +140,7 @@ export default function Features() {
       {confirm && (
         <Modal title={`Turn on ${confirm.label}?`} onClose={() => setConfirm(null)}>
           <p style={{ fontSize: 14 }}>{confirm.help}</p>
-          <p style={{ fontSize: 14 }}>
-            This feature reaches into your network or out of Correlix. Turn it on only if your security policy allows it.
-          </p>
+          <p style={{ fontSize: 14 }}>{confirmText(confirm)}</p>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button className="btn-ghost" onClick={() => setConfirm(null)}>Cancel</button>
             <button
