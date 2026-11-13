@@ -503,3 +503,42 @@ func TestUnlimitedNeverRefuses(t *testing.T) {
 		t.Fatalf("unlimited must never refuse: %v", err)
 	}
 }
+
+// TestTheAIAddOnIsIncludedOnlyInEnterprise pins the owner's 2026-11-12 decision:
+// `iris_model` is an add-on below Enterprise and included in Enterprise, and it
+// is the ONLY tier-included feature, so inclusion can never quietly spread to
+// another commercial capability.
+func TestTheAIAddOnIsIncludedOnlyInEnterprise(t *testing.T) {
+	if !entitlement.ValidFeature(entitlement.FeatureIrisModel) || string(entitlement.FeatureIrisModel) != "iris_model" {
+		t.Fatal("the add-on's licence name is permanent: iris_model")
+	}
+	if !entitlement.AddOn(entitlement.FeatureIrisModel) {
+		t.Fatal("iris_model is sold as an add-on line")
+	}
+	for _, f := range entitlement.Features() {
+		if f != entitlement.FeatureIrisModel && entitlement.AddOn(f) {
+			t.Fatalf("%q is not an add-on", f)
+		}
+	}
+	if got := entitlement.Included(entitlement.TierEnterprise); len(got) != 1 || got[0] != entitlement.FeatureIrisModel {
+		t.Fatalf("Enterprise includes exactly the AI add-on, got %v", got)
+	}
+	for _, tier := range []entitlement.Tier{entitlement.TierCommunity, entitlement.TierTeam, "", "platinum"} {
+		if got := entitlement.Included(tier); len(got) != 0 {
+			t.Fatalf("%q includes nothing unlisted, got %v", tier, got)
+		}
+	}
+	// Included hands out a copy: a caller writing to it cannot widen the table.
+	got := entitlement.Included(entitlement.TierEnterprise)
+	got[0] = entitlement.FeatureSAML
+	if entitlement.Included(entitlement.TierEnterprise)[0] != entitlement.FeatureIrisModel {
+		t.Fatal("Included must return a copy")
+	}
+	// The refusal below Enterprise offers the add-on, not only an upgrade.
+	for _, svc := range []stub{community(), team()} {
+		e, ok := entitlement.As(entitlement.Require(svc, entitlement.FeatureIrisModel))
+		if !ok || e.LiftedBy != entitlement.TierEnterprise || !strings.Contains(e.Message, "add-on") {
+			t.Fatalf("%s: refusal = %+v", svc.tier, e)
+		}
+	}
+}

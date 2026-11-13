@@ -84,10 +84,16 @@ type logSearchReq struct {
 // read that fails is logged and leaves those sessions visible: the page then
 // hides fewer records, never more.
 func (s *server) routineSources(r *http.Request, claims jwtClaims) logroutine.Sources {
+	return s.routineSourcesCtx(r.Context(), claims)
+}
+
+// routineSourcesCtx is routineSources for a caller with no request (Iris's
+// search_logs runs under the tool gateway's context).
+func (s *server) routineSourcesCtx(ctx context.Context, claims jwtClaims) logroutine.Sources {
 	tenant, cross := principalTenant(claims)
-	ctl, err := s.routineCtl.Addrs(r.Context(), tenant, cross)
+	ctl, err := s.routineCtl.Addrs(ctx, tenant, cross)
 	if err != nil {
-		logWarn("logs", "controller addresses could not be read; the controller's own sessions stay visible on the Logs page", map[string]any{"err": err.Error()})
+		logWarn("logs", "controller addresses could not be read; the controller's own sessions stay visible", map[string]any{"err": err.Error()})
 	}
 	return logroutine.Sources{Platform: platformAddrsFromEnv().IPs(), Controllers: ctl}
 }

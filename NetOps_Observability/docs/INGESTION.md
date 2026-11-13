@@ -430,6 +430,25 @@ these constraints first:
   syslog packets at the UDP socket level. Watch `vector_buffer_*` and
   `vector_events_received_total` in VictoriaMetrics (self-scrape).
 
+## What is kept of each syslog line, and the forensic limit
+
+Correlix keeps each syslog line twice in the same record: once parsed and once as received.
+
+| What | Where | How long |
+|---|---|---|
+| The parsed record: vendor, event type, summary, device, site, user, source and the rest | Logs, searchable | `OPENSEARCH_LOG_RETENTION_DAYS`, 14 days by default. Older indices are deleted |
+| The frame as syslog-ng received it, before any parsing (`message_original`) | The same record. You can read it in the record panel and in exports, but you can't search on it, because it is stored without an index | The same as the record |
+| The raw event on the bus, for replay | Kafka | `BUS_RETENTION_MS` (72 hours by default) or `BUS_RETENTION_BYTES` per partition (512 MiB by default), whichever runs out first. At a high log rate the bytes limit wins, and replay covers less than 72 hours |
+
+**This is not a forensic archive** (owner decision D5, 2026-11-09):
+
+- `message_original` is the frame as it reached this platform. If a relay or a load balancer rewrote the line on the way, it is the rewritten line. Frames longer than 32 KiB are cut at syslog-ng's `log-msg-size`.
+- Nothing is write-once, signed or hash-chained. A platform administrator who can reach OpenSearch can delete records, so for evidence you must preserve, export it, or forward the devices' syslog to an archive you control as well.
+- Configured SNMP community strings are masked whenever a line is read: in Logs, exports, the pipeline debugger and Iris. The parser already leaves the community out of the session-open line of an SNMP poll, but a device that writes a community string anywhere else in a line still has it stored. Masking on read covers that case.
+- Usernames in audit lines are kept, because security attribution needs them (D7). Reading them needs the explore read permission, every search and export is written to the audit trail, and an exported file says it is outside the platform's access control and retention. A queued export file is deleted after `EXPORT_ARTIFACT_RETENTION`, 24 hours by default.
+
+Storing `message_original` adds about 11.5 % to the average record (808 to 901 bytes, measured on the lab on 2026-11-09). A durable raw store can be added later behind the storage interface without changing parsing; v1 doesn't have one.
+
 ## Where this is going — HISTORICAL (all three items shipped)
 
 Kept as a record of the original plan. Item 1 shipped as Apache Kafka (#97),

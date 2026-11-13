@@ -18,9 +18,17 @@ package featureflags
 //     containers is a follow-up, not a switch that pretends.
 //   - settings already managed on their own pages (notification channels,
 //     ITSM, SNMP discovery): one place per setting.
-//   - the AI switches: what an install that already holds a provider key
-//     should default to is an owner decision (tracker 348).
 //   - ENABLE_REPORT_SCHEDULER: a flag-gated log.Fatalf path at start.
+//   - FEATURE_AI / FEATURE_COPILOT / FEATURE_AI_TOOLS: no longer gates. The two
+//     console-only AI switches below replace them (owner 2026-11-12/13); the
+//     old variables are read once, by the upgrade seed, and nowhere else.
+//
+// THE AI SWITCHES (owner decisions 2026-11-12 and 2026-11-13): model-backed
+// Iris is the `iris_model` licence add-on, and on a licensed install it still
+// starts OFF until a platform administrator turns it on and acknowledges that
+// questions and evidence go to the configured AI provider. Both are
+// console-only (no .env line can set them), risky (acknowledgement) and Live.
+// Evidence-only Iris needs neither.
 
 // PlatformSpecs is the switchable set. Apply class and semantics follow how
 // each flag is ACTUALLY read (verified 2026-10-11): per request/poll → Live;
@@ -35,6 +43,7 @@ func PlatformSpecs() []Spec {
 		access    = "Configuration and device access"
 		integrate = "Integrations and automation"
 		analytics = "Analytics"
+		iris      = "Iris AI"
 	)
 	live, restart := ApplyLive, ApplyRestart
 	return []Spec{
@@ -75,5 +84,10 @@ func PlatformSpecs() []Spec {
 		{Env: "FEATURE_SECURITY_LANE", Label: "Security findings", Group: analytics, Apply: restart, Help: "Correlate security events with network faults."},
 		{Env: "FEATURE_ACTIVE_VERIFICATION", Label: "Active verification", Group: analytics, Apply: restart, Help: "Test a suspected cause with safe, read-only checks."},
 		{Env: "FEATURE_SVC_FLOW_ROLLUP", Label: "Service traffic totals", Group: analytics, Apply: restart, Help: "Roll flow traffic up per service every minute."},
+
+		{Env: "IRIS_AI_MODELS", Label: "Iris AI models", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
+			Help: "Let Iris send questions and the evidence it gathered to your configured AI provider for written answers and chat. Off, Iris answers from Correlix data alone."},
+		{Env: "IRIS_AI_INVESTIGATIONS", Label: "AI investigations", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
+			Help: "Let the AI model run read-only lookups across your network data to investigate a question. Needs Iris AI models on; each workspace still opts in."},
 	}
 }

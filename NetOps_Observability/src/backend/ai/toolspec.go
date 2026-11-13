@@ -148,6 +148,7 @@ var toolMetas = map[string]toolMeta{
 			{name: "query", desc: "Search text or Lucene query (e.g. \"BGP\" or \"severity:err\"). Empty matches everything in the window.", required: false},
 			{name: "device", desc: "Restrict to one device by name.", required: false},
 			{name: "window", desc: "Lookback window: 15m, 1h, 6h, 24h or 7d (default 1h). For longer ranges use 7d and say what you covered.", required: false},
+			{name: "include_routine", desc: "\"true\" to include routine management sessions (monitoring polls, SD-WAN controller sessions). Left out by default; set it only for a question about logins or sessions.", required: false},
 		},
 	},
 	"get_device_health": {

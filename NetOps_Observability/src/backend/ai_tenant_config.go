@@ -13,7 +13,67 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/entitlement"
 )
+
+// ---- the AI add-on gate (owner 2026-11-12/13) ----------------------------------
+//
+// Model-backed Iris is the `iris_model` licence add-on (Enterprise includes it)
+// AND the platform administrator's console-only "Iris AI models" switch
+// (Features page). Both are platform-level; the tenant's own assistant switch
+// is the third input (aientitlement.Model). The gate sits at the ONE place a
+// provider candidate is produced — providerCandidatesForTier — so every model
+// call, platform key or tenant BYO key, request or background, passes it.
+
+// aiModelLicensed: the licence in force grants the AI add-on. Nil-safe: no
+// licence service reads as Community, which does not include it.
+func (s *server) aiModelLicensed() bool {
+	return entitlement.Entitled(s.entitlements, entitlement.FeatureIrisModel)
+}
+
+// aiModelsSwitchOn / aiInvestigationsSwitchOn: the console-only switches. A
+// nil registry reads off, and the registry itself reads off while the licence
+// requirement is unmet.
+func (s *server) aiModelsSwitchOn() bool { return s.features.Enabled(aientitlement.SwitchModels) }
+func (s *server) aiInvestigationsSwitchOn() bool {
+	return s.features.Enabled(aientitlement.SwitchInvestigations)
+}
+
+// aiInvestigationsPlatformOn is the platform half of the investigation gate
+// (what FEATURE_AI_TOOLS used to answer): licensed, models on, investigations on.
+func (s *server) aiInvestigationsPlatformOn() bool {
+	return s.aiModelLicensed() && s.aiModelsSwitchOn() && s.aiInvestigationsSwitchOn()
+}
+
+// writeAIAddOnRefusal answers a connection test on an install without the AI
+// add-on: 402 with the licence refusal body, and false. A test is licensed
+// alone — not switched — so an administrator can prove the key works before
+// turning the switch on (a test sends a fixed prompt and no customer data).
+func (s *server) writeAIAddOnRefusal(w http.ResponseWriter) bool {
+	if err := entitlement.Require(s.entitlements, entitlement.FeatureIrisModel); err != nil {
+		entitlement.WriteRefusal(w, err)
+		return false
+	}
+	return true
+}
+
+// aiModelsView is the platform's model state for the SPA's banners: one
+// state token (unlicensed | off | on) plus the three facts behind it. It is
+// platform-level, identical for every caller, and carries no tenant data.
+func (s *server) aiModelsView() map[string]any {
+	licensed, models, investigations := s.aiModelLicensed(), s.aiModelsSwitchOn(), s.aiInvestigationsSwitchOn()
+	state := "on"
+	switch {
+	case !licensed:
+		state = "unlicensed"
+	case !models:
+		state = "off"
+	}
+	return map[string]any{
+		"state": state, "licensed": licensed,
+		"models_on": licensed && models, "investigations_on": licensed && models && investigations,
+	}
+}
 
 // ai_tenant_config.go — per-tenant Iris AI configuration (intelligence plan
 // P4a: "AI is per-tenant", CLAUDE.md §3a).
@@ -132,6 +192,13 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 // recommended model for that tier (ai.TierModels.ForProvider, owner decision
 // 2026-11-12), never to the single default again.
 func (s *server) providerCandidatesForTier(claims jwtClaims, tier ai.ModelTier) []providerCandidate {
+	// THE AI ADD-ON GATE. No candidate — so no provider call, BYO or platform
+	// — unless the licence carries the add-on, the platform switch is on and
+	// the caller's tenant has the assistant on. An empty chain is what every
+	// caller already handles as "no model": the grounded, evidence-only path.
+	if !s.aiEntitled(claims, aientitlement.Model) {
+		return nil
+	}
 	tenant, cross := principalTenant(claims)
 	if !cross {
 		if name, key, model, ok := s.aiTenantCfg.BYOProvider(tenant, tier, providerModel); ok {
@@ -257,7 +324,7 @@ func (s *server) aiTenantConfigView(tenant string) map[string]any {
 		"key_present":            c.Key != "",
 		"no_platform_key":        c.NoPlatformKey,
 		"assistant_enabled":      !c.AssistantOff,
-		"investigations_enabled": c.AgentTools && featureAIToolsEnabled(),
+		"investigations_enabled": c.AgentTools && s.aiInvestigationsPlatformOn(),
 		"platform_key_available": s.copilotKeyPresent(),
 		"providers":              []string{"gemini", "anthropic", "openai"},
 		"model_suggestions":      ai.ModelSuggestions(),
@@ -291,6 +358,10 @@ func (s *server) handleAITenantConfigTest(w http.ResponseWriter, r *http.Request
 	req, err := decodeProviderTest(w, r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// A workspace's own key is model-backed Iris too (owner 2026-11-13).
+	if !s.writeAIAddOnRefusal(w) {
 		return
 	}
 	tc := s.aiTenantCfg.Get(tenant)
@@ -352,8 +423,11 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"tenants":       rows,
-			"tools_feature": featureAIToolsEnabled(), // investigations need FEATURE_AI_TOOLS too
+			"tenants": rows,
+			// Investigations also need the platform half: the AI add-on and both
+			// console switches (Features page). Kept under its historical key.
+			"tools_feature": s.aiInvestigationsPlatformOn(),
+			"models":        s.aiModelsView(),
 			"defaults": map[string]int{ // platform defaults, for UI placeholders
 				"max_calls":    envInt("AI_TOOLS_MAX_CALLS", 4),
 				"daily_tokens": aiToolsDailyTokens(),
@@ -459,6 +533,11 @@ func (s *server) aiEntitlementInputs(claims jwtClaims) aientitlement.Inputs {
 		// rollout policy, unchanged by N-A7). Its methods are nil-safe and
 		// answer those same defaults, exactly as the pre-N-A7 gates did.
 		Switches: s.aiTenantCfg,
+		// The AI add-on (owner 2026-11-12/13): the licence and the console
+		// switches. All three read false when unwired — fail closed.
+		ModelLicensed:    s.aiModelLicensed(),
+		ModelsOn:         s.aiModelsSwitchOn(),
+		InvestigationsOn: s.aiInvestigationsSwitchOn(),
 	}
 }
 
@@ -498,9 +577,13 @@ func (s *server) requireAIEntitlement(w http.ResponseWriter, claims jwtClaims, e
 	case aientitlement.ReasonDisabled:
 		status = http.StatusServiceUnavailable
 		msg = "Iris AI is disabled — set FEATURE_AI=true"
-		if e == aientitlement.Investigate {
-			msg = "AI investigations are disabled — set FEATURE_AI_TOOLS=true"
-		}
+	case aientitlement.ReasonNotLicensed:
+		// 402, as every licence refusal: the fix is the licence.
+		status = http.StatusPaymentRequired
+		msg = aientitlement.Label(e) + " need the Iris AI add-on on this installation's license (Enterprise includes it)"
+	case aientitlement.ReasonSwitchedOff:
+		status = http.StatusServiceUnavailable
+		msg = aientitlement.Label(e) + " are turned off — a platform administrator can turn them on under Administration → Features"
 	case aientitlement.ReasonTenantOff:
 		msg = errAITenantDisabled.Error()
 	case aientitlement.ReasonUnknown:
