@@ -13,6 +13,8 @@ import (
 
 	"netops/backend/ai"
 
+	"netops/backend/internal/flownames"
+	"netops/backend/internal/flowquery"
 	"netops/backend/internal/logroutine"
 	"netops/backend/internal/oslog"
 	"netops/backend/internal/srcauthority"
@@ -348,4 +350,227 @@ func deviceDisagreementText(f deviceFacts) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+// ── Iris flow tools with link and window arguments (tracker 406) ─────────────
+//
+// get_top_talkers, get_flow_summary and get_service_flow_summary read the same
+// ClickHouse statements the NL flow_top query does (internal/flowquery
+// tool_sql.go). Their optional arguments are model-supplied data, so each is
+// validated before anything reaches SQL:
+//
+//   - device: a name, id or address of a device the caller can SEE; anything
+//     else is ai.ErrNotFound (a foreign device and a missing one look alike,
+//     §3a) and no query runs. Only the inventory's own address reaches SQL.
+//   - interface: an index, or a name the interface-name export knows for that
+//     device; it needs its device.
+//   - window (15m/1h/6h/24h/7d) or from+to (≤ 7 days); neither is the last
+//     24 hours, as before the tools took arguments.
+//
+// With a device the scope is the Flows page's stricter link rule (tracker 400
+// decision (a): own rows, or rows whose exporter is the caller's unambiguous
+// address). Correlix's own monitoring traffic is left out, as on the page
+// (decision (c)), and each answer says so; the Href opens the page on the same
+// device, interface and window.
+
+// aiFlowScope is one flow tool call's validated scope.
+type aiFlowScope struct {
+	win      flowquery.Window
+	clause   string // " AND …": tenant/link scope, device and interface, platform exclusion
+	where    string // " on cEdge-80" / " on cEdge-80 interface Gi1", or ""
+	exporter string // the device's flow address, "" for the whole view
+	ifIndex  uint32
+	notes    []string
+}
+
+// aiFlowDevice finds the one visible device a model-supplied device argument
+// names (name, id or address, case-insensitive). ambiguous: more than one
+// visible device carries it.
+func (d aiDataSource) aiFlowDevice(arg string) (dev models.Device, found, ambiguous bool) {
+	arg = strings.TrimSpace(arg)
+	addr := flownames.NormAddr(arg)
+	n := 0
+	for _, c := range d.srv.visibleDevicesFor(d.claims) {
+		if strings.EqualFold(c.Name, arg) || strings.EqualFold(c.ID, arg) ||
+			(addr != "" && flownames.NormAddr(c.Address) == addr) {
+			if n == 0 {
+				dev = c
+			}
+			n++
+		}
+	}
+	return dev, n == 1, n > 1
+}
+
+// aiFlowScopeFor validates a flow tool's arguments into a scope. empty=true
+// means the caller can see no flow rows for it (no visible device, or the
+// device has no flow address); notes still say why.
+func (d aiDataSource) aiFlowScopeFor(args ai.ToolArgs) (sc aiFlowScope, empty bool, err error) {
+	win, err := flowquery.ParseToolWindow(args["window"], args["from"], args["to"], time.Now())
+	if err != nil {
+		return sc, false, fmt.Errorf("%w: %v", ai.ErrBadArgs, err)
+	}
+	sc.win = win
+	devArg, ifArg := strings.TrimSpace(args["device"]), strings.TrimSpace(args["interface"])
+	if ifArg != "" && devArg == "" {
+		return sc, false, fmt.Errorf("%w: interface needs its device", ai.ErrBadArgs)
+	}
+	if devArg == "" {
+		clause, none := d.srv.flowTenantClauseFor(d.claims)
+		if none {
+			return sc, true, nil
+		}
+		sc.clause = clause
+	} else {
+		dev, found, ambiguous := d.aiFlowDevice(devArg)
+		if ambiguous {
+			return sc, false, fmt.Errorf("%w: %q names more than one device; use the device id", ai.ErrBadArgs, devArg)
+		}
+		if !found {
+			return sc, false, ai.ErrNotFound // never reveal another tenant's device (§3a)
+		}
+		label := aiFirst(dev.Name, dev.ID)
+		exporter := flownames.NormAddr(dev.Address)
+		if exporter == "" {
+			sc.notes = append(sc.notes, label+" has no IP address in inventory, so no flow record can be matched to it")
+			return sc, true, nil
+		}
+		clause, none := d.srv.flowLinkTenantClauseFor(d.claims)
+		if none {
+			return sc, true, nil
+		}
+		sc.clause = clause + " AND sampler_address = " + flowquery.Quote(exporter)
+		sc.where, sc.exporter = " on "+label, exporter
+		if ifArg != "" {
+			ix, ok := d.aiFlowIfIndex(dev, exporter, ifArg)
+			if !ok {
+				return sc, false, fmt.Errorf("%w: %q is not an interface Correlix knows on %s; use its index", ai.ErrBadArgs, ifArg, label)
+			}
+			sc.clause += " AND " + flowquery.Link{Exporter: exporter, IfIndex: ix}.IfCond(flowquery.DirBoth)
+			sc.ifIndex = ix
+			name, named := d.srv.ifaceNames.Lookup(deviceTenant(dev), exporter, ix)
+			if !named {
+				name, named = d.srv.ifaceNames.Lookup("", exporter, ix)
+			}
+			if named {
+				sc.where += " interface " + name
+			} else {
+				sc.where += fmt.Sprintf(" interface index %d", ix)
+			}
+		}
+	}
+	if c := platformAddrsFromEnv().SQLCond(); c != "" {
+		sc.clause += " AND NOT " + c
+		sc.notes = append(sc.notes, "Correlix's own monitoring traffic is left out, as on the Flows page")
+	}
+	return sc, false, nil
+}
+
+// aiFlowIfIndex reads an interface argument: an index, or a name the
+// interface-name export holds for this device (its own tenant first, then the
+// untagged rows). An ambiguous name is refused, never guessed.
+func (d aiDataSource) aiFlowIfIndex(dev models.Device, exporter, arg string) (uint32, bool) {
+	if ix, err := flowquery.ParseIfIndex(arg); err == nil {
+		return ix, true
+	}
+	if ix, ok := d.srv.ifaceNames.IndexOf(deviceTenant(dev), exporter, arg); ok {
+		return ix, true
+	}
+	return d.srv.ifaceNames.IndexOf("", exporter, arg)
+}
+
+// href is the Flows page deep link for the scope's device, interface and window.
+func (sc aiFlowScope) href(tab string) string {
+	return flowquery.DeepLink(tab, sc.exporter, sc.ifIndex, sc.win)
+}
+
+// finish attaches the scope's notes and the sampling basis to a result.
+func (sc aiFlowScope) finish(tr ai.ToolResult, flows, rateReported float64) ai.ToolResult {
+	tr.Notes = append(tr.Notes, sc.notes...)
+	if n := flowquery.SamplingNote(flowquery.SamplingOf(flows, rateReported)); n != "" {
+		tr.Notes = append(tr.Notes, n)
+	}
+	return tr
+}
+
+// moduleTopTalkers — the heaviest conversations (unordered address pairs).
+func (d aiDataSource) moduleTopTalkers(args ai.ToolArgs) (ai.ToolResult, error) {
+	sc, empty, err := d.aiFlowScopeFor(args)
+	if err != nil || empty {
+		return ai.ToolResult{Notes: sc.notes}, err
+	}
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, flowquery.TalkersSQL(sc.win, sc.clause, 8))
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	var flows, rated float64
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for i, r := range rows {
+		flows += asFloat(r["flows"])
+		rated += asFloat(r["rate_reported"])
+		items = append(items, ai.EvidenceItem{
+			CitationID: fmt.Sprintf("flow:talker:%d", i), Kind: "flow",
+			Text: fmt.Sprintf("%s ↔ %s — %s over %s%s", asStr(r["a"]), asStr(r["b"]),
+				humanBytes(asFloat(r["bytes_total"])), sc.win.Phrase(), sc.where),
+			Href: sc.href(flowquery.TabTalking),
+		})
+	}
+	tr := ai.ToolResult{Items: items}
+	if len(items) == 0 {
+		tr.Notes = append(tr.Notes, "no flow records"+sc.where+" in "+sc.win.Phrase())
+	}
+	return sc.finish(tr, flows, rated), nil
+}
+
+// moduleFlowSummary — one line of traffic totals.
+func (d aiDataSource) moduleFlowSummary(args ai.ToolArgs) (ai.ToolResult, error) {
+	sc, empty, err := d.aiFlowScopeFor(args)
+	if err != nil || empty {
+		return ai.ToolResult{Notes: sc.notes}, err
+	}
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, flowquery.TotalsSQL(sc.win, sc.clause))
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	if len(rows) == 0 || asFloat(rows[0]["flows"]) == 0 {
+		return sc.finish(ai.ToolResult{Notes: []string{"no flow records" + sc.where + " in " + sc.win.Phrase()}}, 0, 0), nil
+	}
+	r := rows[0]
+	tr := ai.ToolResult{Items: []ai.EvidenceItem{{
+		CitationID: "flow:summary", Kind: "flow",
+		Text: fmt.Sprintf("Flow volume%s over %s: %s across %s flows from %d sources",
+			sc.where, sc.win.Phrase(), humanBytes(asFloat(r["bytes_total"])), humanCount(asFloat(r["flows"])), int(asFloat(r["sources"]))),
+		Href: sc.href(flowquery.TabNow),
+	}}}
+	return sc.finish(tr, asFloat(r["flows"]), asFloat(r["rate_reported"])), nil
+}
+
+// moduleServiceFlows — the busiest destination services (by well-known port).
+func (d aiDataSource) moduleServiceFlows(args ai.ToolArgs) (ai.ToolResult, error) {
+	sc, empty, err := d.aiFlowScopeFor(args)
+	if err != nil || empty {
+		return ai.ToolResult{Notes: sc.notes}, err
+	}
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, flowquery.ServicesSQL(sc.win, sc.clause, 8))
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	var flows, rated float64
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for i, r := range rows {
+		port := int(asFloat(r["port"]))
+		flows += asFloat(r["flows"])
+		rated += asFloat(r["rate_reported"])
+		items = append(items, ai.EvidenceItem{
+			CitationID: fmt.Sprintf("flow:svc:%d", i), Kind: "flow",
+			Text: fmt.Sprintf("%s (port %d) — %s over %s%s, %s flows",
+				servicePortLabel(port), port, humanBytes(asFloat(r["bytes_total"])), sc.win.Phrase(), sc.where, humanCount(asFloat(r["flows"]))),
+			Href: sc.href(flowquery.TabTalking),
+		})
+	}
+	tr := ai.ToolResult{Items: items}
+	if len(items) == 0 {
+		tr.Notes = append(tr.Notes, "no flow records"+sc.where+" in "+sc.win.Phrase())
+	}
+	return sc.finish(tr, flows, rated), nil
 }
