@@ -593,6 +593,23 @@ func defaultBatterySpecs() []BatterySpec {
 				showparse.DialectNokiaSROS:  "show system information",
 				showparse.DialectHuaweiVRP:  "display version",
 			}),
+		// NetClaw ingestion Batch 1 (2026-11-13). Fidelity per template: the
+		// IOS-XE form is CAPTURED (a real 17.3.2 edge; its parser is built from
+		// that output). Every other row is doc_claimed — the vendor's own
+		// command reference names it, no output has been captured here, so its
+		// result reaches the operator as honest raw evidence, never parsed.
+		bs(showparse.CmdPlatformClock, AreaPlatform,
+			"clock synchronization: whether NTP is synchronized, to what reference, and the offset (log timestamps across devices only line up when it is)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show ntp status", // captured
+				showparse.DialectCiscoIOS:   "show ntp status", // doc_claimed
+				showparse.DialectCiscoIOSXR: "show ntp status", // doc_claimed
+				showparse.DialectCiscoNXOS:  "show ntp peer-status",
+				showparse.DialectAristaEOS:  "show ntp status",
+				showparse.DialectJunos:      "show ntp status",
+				showparse.DialectNokiaSROS:  "show system ntp",
+				showparse.DialectHuaweiVRP:  "display ntp status",
+			}),
 
 		// ── logs ────────────────────────────────────────────────────────────
 		bs(showparse.CmdLogs, AreaLogs,

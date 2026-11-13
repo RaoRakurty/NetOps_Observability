@@ -57,6 +57,18 @@ closed command tables and deterministic parsers. The Arista EOS, Nokia SR OS
 and Huawei VRP command profiles are original to this project (NetClaw does not
 cover those CLIs).
 
+Iris troubleshooting methods (2026-11-13, NetClaw ingestion Batch 1). The
+METHODS of these Iris skills (src/backend/ai/skills/<name>/SKILL.md, each naming
+its source in a `source:` line) are re-expressed in this project's own words from
+NetClaw skill procedures at a newer pin:
+
+  Pinned  : commit cfafa46c3227356ca6ef38261fa9c1f4ba4711cb
+  Skills  : pyats-health-check  -> platform-health, ntp-clock
+            pyats-troubleshoot  -> qos-congestion
+
+The command tables, thresholds as applied, parsers (built from output captured
+on real devices) and the skills' routing are this project's own.
+
 --------------------------------------------------------------------------------
 elkjs — Eclipse Public License 2.0
 --------------------------------------------------------------------------------

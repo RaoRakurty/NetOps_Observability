@@ -86,18 +86,24 @@ func compiledPromptParts(t *testing.T, set *SkillSet, sk *Skill) []string {
 
 // frozenCompiledPrompts was recorded on main at fb28c64a, before tenant origin.
 var frozenCompiledPrompts = map[string]string{
-	"app-edge-5xx":              "dad76c767ff309011b8e6ef0f64ef70add1755262a991d1c61b12a64cf81bdb6",
-	"bgp-prefix-missing":        "fcad1a05aec2fb5c42f0e50ee969554d0ecf75cc32dfecdd52f72a15ccd5fcc4",
-	"bgp-session-down":          "5ce91d5409dc3a6df70ad1a59574b9e4cf4f052b409f3f3e5c4ec8c493ee1520",
-	"interface-down":            "96436f11aba529fb5d8a0868f2af84ae47c56c4cc2dc919b1abb74fe8f5a179c",
-	"isis-adjacency":            "5e02ba9d2675f8db9b14eecaa06b8836726707fd3192e7c10bf2310bd28d88ac",
-	"log-confirmation":          "81e1b3fdaef74db289ffb7704b324c6be4f796d4b5f5bf48288799db50311cc3",
-	"mac-flap":                  "d024d3d407bdf4cbffe7fd0358aea232290a65fb777c962dddd47b5b5d7b61e7",
-	"optics-degraded":           "d69eb375043bed649af164aecf497ce72a767aae23534ae05526a9eff47a3cd8",
-	"osi-bisection":             "99cb57bee318a1f381e9ca2c3d15924975a3234e83982ab1fda9ce5f5ab6f131",
+	"app-edge-5xx":       "dad76c767ff309011b8e6ef0f64ef70add1755262a991d1c61b12a64cf81bdb6",
+	"bgp-prefix-missing": "fcad1a05aec2fb5c42f0e50ee969554d0ecf75cc32dfecdd52f72a15ccd5fcc4",
+	"bgp-session-down":   "5ce91d5409dc3a6df70ad1a59574b9e4cf4f052b409f3f3e5c4ec8c493ee1520",
+	"interface-down":     "96436f11aba529fb5d8a0868f2af84ae47c56c4cc2dc919b1abb74fe8f5a179c",
+	"isis-adjacency":     "5e02ba9d2675f8db9b14eecaa06b8836726707fd3192e7c10bf2310bd28d88ac",
+	"log-confirmation":   "81e1b3fdaef74db289ffb7704b324c6be4f796d4b5f5bf48288799db50311cc3",
+	"mac-flap":           "d024d3d407bdf4cbffe7fd0358aea232290a65fb777c962dddd47b5b5d7b61e7",
+	"ntp-clock":          "4e58a57987fef01f2f74d65489b85be7774da5512ec3717ea82613e175c87b32",
+	"optics-degraded":    "d69eb375043bed649af164aecf497ce72a767aae23534ae05526a9eff47a3cd8",
+	// NetClaw Batch 1 (2026-11-13): osi-bisection hands platform pressure, a
+	// recent reload and an unsynchronized clock to the new methods; the
+	// security skill's prompt moved with it because it routes to osi-bisection.
+	"osi-bisection":             "a35431a6b8e27e7ac87bbfab9c4012d0a865207952c8407c1dec8dd080dea29c",
 	"ospf-adjacency":            "d09047fb22d26232dfbc5c293b4337525f0bce7d0731340e8c040869ac57b261",
 	"path-seam-handoff":         "33a92aad5dfe1bab09d2cd1092c2be5d3ea185f9fd8b2ad3c73eafdf3996ba93",
-	"security-exposure-context": "62b387932bd3904df9b42cb03b0104ff8f3206e2066adbdf8259401352e925d4",
+	"platform-health":           "ba73b12b5f5ddb6f872c4a3b606f6c11e93304caba3f79da700e180fcf47b39a",
+	"qos-congestion":            "54c4919165eaf15f57992eb8edc6f4db36e9a6cdccda7f86a9c810d3553fabe3",
+	"security-exposure-context": "84d1d5628263dabecf676a8cabb24cde1e6f2fb78b0b1b945cbda3ccebf227a5",
 	"stp-topology":              "d9a17b77b338c54b8664365feee1481e8537d227592c33e8f9045b02e6030c75",
 }
 

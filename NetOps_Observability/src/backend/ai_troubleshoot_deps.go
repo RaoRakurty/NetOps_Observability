@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"netops/backend/internal/changeapi"
 	"regexp"
@@ -1327,6 +1328,16 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 			} else if aiIfaceReportsCounters(x) {
 				add("if_errors", "none", 1)
 			}
+			// The two halves of if_errors, apart (NetClaw Batch 1): a
+			// congestion method needs drops-with-clean-errors told from a
+			// faulty link. Each is asserted only from counters the device
+			// actually reported.
+			if v, rank := aiCounterFact(x.InErrors, x.CRC, x.OutErrors); v != "" {
+				add("if_faults", v, rank)
+			}
+			if v, rank := aiCounterFact(x.InDrops, x.OutDrops); v != "" {
+				add("if_drops", v, rank)
+			}
 		}
 	case len(res.IGPNeighbors) > 0:
 		matched := 0
@@ -1384,6 +1395,12 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 		case "":
 		default:
 			add("platform", v, rank)
+		}
+		if v, rank := aiPlatformReload(*res.Platform); v != "" {
+			add("reload", v, rank)
+		}
+		if v, rank := aiPlatformClock(*res.Platform); v != "" {
+			add("clock", v, rank)
 		}
 	case len(res.Logs) > 0:
 		// Log lines are the device's own words: quoted, never mined for a
@@ -1582,6 +1599,28 @@ func aiIfaceOper(x showparse.InterfaceState) (string, int) {
 // so "no errors" is only asserted when the device actually said so.
 func aiIfaceReportsCounters(x showparse.InterfaceState) bool {
 	return x.InErrors != nil || x.CRC != nil || x.InDrops != nil || x.OutErrors != nil || x.OutDrops != nil
+}
+
+// aiCounterFact folds a group of counters into "present" (any reported counter
+// is above zero, rank 2), "none" (at least one counter was reported and all
+// reported ones are zero, rank 1), or "" when the device reported none of them —
+// an unread counter is not a clean one.
+func aiCounterFact(counters ...*int64) (string, int) {
+	reported := false
+	for _, c := range counters {
+		v, ok := aiInt64(c)
+		if !ok {
+			continue
+		}
+		if v > 0 {
+			return "present", 2
+		}
+		reported = true
+	}
+	if reported {
+		return "none", 1
+	}
+	return "", 0
 }
 
 func aiIfaceHasErrors(x showparse.InterfaceState) bool {
@@ -1785,10 +1824,83 @@ func aiPlatformLine(h showparse.PlatformHealth) string {
 			parts = append(parts, line)
 		}
 	}
+	if h.ClockSynced != nil {
+		if *h.ClockSynced {
+			parts = append(parts, "clock synchronized")
+		} else {
+			parts = append(parts, "clock NOT synchronized")
+		}
+	}
+	if h.ClockStratum != nil {
+		parts = append(parts, fmt.Sprintf("stratum %d", *h.ClockStratum))
+	}
+	if v := aiStr(h.ClockReference); v != "" {
+		parts = append(parts, "reference "+aiClampLine(v, 60))
+	}
+	if v, ok := aiFloat(h.ClockOffsetMs); ok {
+		parts = append(parts, fmt.Sprintf("clock offset %.1f ms", v))
+	}
 	if len(parts) == 0 {
-		return "platform health: the device reported no CPU, memory, environment or uptime field"
+		return "platform health: the device reported no CPU, memory, environment, uptime or clock field"
 	}
 	return aiJoinParts("platform health", parts)
+}
+
+// aiStateClockOffsetHighMs is the offset past which a SYNCHRONIZED clock is
+// still reported as a problem (`state:clock=offset_high`): log and event
+// timestamps more than 100 ms apart stop lining up across devices.
+const aiStateClockOffsetHighMs = 100.0
+
+// aiPlatformClock derives `state:clock` from the typed NTP fields. A device
+// that did not say whether it is synchronized yields no fact.
+func aiPlatformClock(h showparse.PlatformHealth) (string, int) {
+	if h.ClockSynced == nil {
+		return "", 0
+	}
+	if !*h.ClockSynced {
+		return "unsynced", 3
+	}
+	if v, ok := aiFloat(h.ClockOffsetMs); ok && math.Abs(v) > aiStateClockOffsetHighMs {
+		return "offset_high", 2
+	}
+	return "synced", 1
+}
+
+// aiPlatformReload derives `state:reload` from the device's own uptime text.
+// The Cisco/Arista spelling is a comma list of "<n> <unit>" clauses ("3 days,
+// 25 minutes"); any year, week or day clause with n ≥ 1 is a day or more. Text
+// in any other shape (the Junos "10 days, 2:31" clause is handled as days) that
+// carries no recognizable unit yields NO fact — an unread uptime is not recent.
+func aiPlatformReload(h showparse.PlatformHealth) (string, int) {
+	text := strings.ToLower(aiStr(h.Uptime))
+	if text == "" {
+		return "", 0
+	}
+	sawUnit := false
+	for _, clause := range strings.Split(text, ",") {
+		fs := strings.Fields(clause)
+		if len(fs) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(fs[0])
+		if err != nil || n < 0 {
+			continue
+		}
+		unit := strings.TrimSuffix(fs[1], "s")
+		switch unit {
+		case "year", "week", "day":
+			sawUnit = true
+			if n >= 1 {
+				return "earlier", 1
+			}
+		case "hour", "minute", "second":
+			sawUnit = true
+		}
+	}
+	if !sawUnit {
+		return "", 0
+	}
+	return "recent", 2
 }
 
 // aiPlatformCPU picks the most headline CPU figure the capture carried.
