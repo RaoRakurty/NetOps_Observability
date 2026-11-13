@@ -64,6 +64,9 @@ func tsDeps() TroubleshootDeps {
 				Paths:     []TopologyPathRef{{ID: "p-1", Label: "edge-1 → 8.8.8.8", Health: "degraded", Hops: 7}},
 			}, nil
 		},
+		NetworkTopology: func(_ context.Context, p Principal) (NetworkTopology, error) {
+			return tsNetworkTopology(p.Tenant), nil
+		},
 		CaseTimeline: func(_ context.Context, _ Principal, correlationID string) ([]TimelineEvent, error) {
 			if correlationID != "pa" {
 				return nil, ErrNotFound
@@ -152,8 +155,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 11 {
-		t.Fatalf("expected 11 Phase-A/A4/B/F4 tools, got %v", names)
+	if len(names) != 12 {
+		t.Fatalf("expected 12 Phase-A/A4/B/F4/network tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {

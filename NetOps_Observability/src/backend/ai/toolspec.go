@@ -185,6 +185,10 @@ var toolMetas = map[string]toolMeta{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
 		},
 	},
+	"get_network_topology": {
+		description: "The WHOLE network's topology in network terms: device roles, sites and vendors, the physical and routed adjacencies (LLDP/CDP/BGP-LS/IGP), and, when present, the SD-WAN overlay's shape (full mesh, hub and spoke, partial mesh), its transports and which edge pairs hold no tunnel, plus each role's likely function. USE THIS FIRST for \"explain / describe / show the network topology\", \"how is the network connected\" or \"what kind of network is this\"; then get_topology_context for one device.",
+		label:       "Network topology",
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",

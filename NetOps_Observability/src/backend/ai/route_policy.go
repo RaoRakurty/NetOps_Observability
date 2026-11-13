@@ -264,7 +264,7 @@ func (o *Orchestrator) answerByModel(ctx context.Context, p Principal, question,
 	if o.LLM == nil {
 		return Answer{}, false, ErrNoProvider
 	}
-	ev, sc := o.modelEvidence(ctx, p)
+	ev, sc := o.modelEvidence(ctx, p, question)
 	o.trace(TraceNarrating)
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModelAnswer).Tier, o.systemPrompt(),
 		[]LLMMessage{{Role: "user", Content: o.modelAnswerPrompt(question, ev)}}, false)
@@ -307,10 +307,23 @@ func (o *Orchestrator) answerByModel(ctx context.Context, p Principal, question,
 	}, true, nil
 }
 
+// maxTopologyEvidence bounds the whole-network topology items one grounded
+// model answer carries, so the active problems keep at least
+// maxModelEvidence - 2 - maxTopologyEvidence (13) slots.
+const maxTopologyEvidence = 10
+
+// reTopologyQuestion recognises a question about how the caller's network is
+// built — the one family the scope/inventory/problems block cannot answer
+// ("you are just listing the devices", owner, 2026-11-12). CLOSED and tested.
+var reTopologyQuestion = regexp.MustCompile(`(?i)\btopolog(?:y|ies)\b|\bhow\s+(?:is|are)\s+(?:my|our|the|this|these)?\s*(?:network|devices|routers|switches|sites|edges)\s+(?:connected|wired|laid\s+out|built|designed|interconnected)\b|\bnetwork\s+(?:design|layout|architecture|diagram|map)\b|\b(?:overlay|underlay|full[- ]mesh|hub[- ]and[- ]spoke|partial[- ]mesh)\b|\bwhat\s+(?:connects|is\s+connected)\s+to\s+what\b|\bconnected\s+to\s+each\s+other\b`)
+
 // modelEvidence gathers the bounded evidence block of a grounded model
-// answer: the caller's scope, inventory and active problems. Every read is
-// the caller's own (the tenant-scoped DataSource and the server's seams).
-func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal) ([]EvidenceItem, *statementContext) {
+// answer: the caller's scope, inventory and active problems — and, for a
+// question about how the network is built, the whole-network topology read
+// through the governed tool path (the same gateway gate as every tool). Every
+// read is the caller's own (the tenant-scoped DataSource and the server's
+// seams).
+func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal, question string) ([]EvidenceItem, *statementContext) {
 	sc := &statementContext{perIncident: true}
 	var ev []EvidenceItem
 	if o.Scope != nil {
@@ -320,6 +333,9 @@ func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal) ([]Eviden
 		if inv, err := o.Inventory(ctx, p); err == nil {
 			ev = append(ev, EvidenceItem{CitationID: "inventory:devices", Kind: "inventory", Text: discoveryAnswer(inv)})
 		}
+	}
+	if reTopologyQuestion.MatchString(question) {
+		ev = append(ev, o.topologyEvidence(ctx, p, sc)...)
 	}
 	if o.DS != nil {
 		probs, err := o.DS.ListActiveProblems(ctx, p, 100)
@@ -350,6 +366,46 @@ func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal) ([]Eviden
 	return ev, sc
 }
 
+// topologyEvidence runs get_network_topology through the Toolbox (policy +
+// contract gateway, exactly as a platform-chosen tool step) and returns its
+// first maxTopologyEvidence items, stamped into the statement context under
+// the tool's class (with the per-item DERIVED downgrades the tool set). A
+// tool that is not wired or not permitted contributes nothing; a failed read
+// is said, never hidden.
+func (o *Orchestrator) topologyEvidence(ctx context.Context, p Principal, sc *statementContext) []EvidenceItem {
+	const tool = "get_network_topology"
+	iv := o.Toolbox().Invoke(ctx, p, tool, ToolArgs{})
+	switch {
+	case !iv.Registered || iv.Outcome == OutcomePolicyDenied:
+		return nil
+	case !iv.OK():
+		it := EvidenceItem{CitationID: NetworkTopologyCitationPrefix + "unread", Kind: "topology",
+			Text: "The network topology could not be read right now, so how the devices connect is UNKNOWN for this answer."}
+		sc.stamp(it, tool)
+		return []EvidenceItem{it}
+	}
+	items := iv.Result.Items
+	if len(items) > maxTopologyEvidence {
+		items = items[:maxTopologyEvidence]
+	}
+	out := make([]EvidenceItem, 0, len(items))
+	for _, it := range items {
+		sc.stamp(it, tool)
+		out = append(out, it)
+	}
+	return out
+}
+
+// hasTopologyEvidence: the block carries whole-network topology items.
+func hasTopologyEvidence(ev []EvidenceItem) bool {
+	for _, e := range ev {
+		if strings.HasPrefix(e.CitationID, NetworkTopologyCitationPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func firstN(xs []string, n int) []string {
 	if len(xs) > n {
 		return xs[:n]
@@ -376,6 +432,12 @@ func (o *Orchestrator) modelAnswerPrompt(question string, ev []EvidenceItem) str
 	b.WriteString("\nAnswer the operator's question using ONLY the evidence above, citing the ids you use in square brackets. " +
 		"A problem's verdict (confirmed, suspected, undetermined) is Correlix's own; never upgrade it. " +
 		"If the evidence does not answer the question, say plainly which Correlix data would answer it. Be concise.")
+	if hasTopologyEvidence(ev) {
+		b.WriteString(" For the topology: explain how the network is built in network terms — the overlay and its transports, " +
+			"what is adjacent to what, the roles and sites, and what each role likely runs. Items that say \"appears\", \"inferred\" or " +
+			"\"likely\" are Iris's reading of the evidence: keep that wording when you use them. Describe; do not use cause wording " +
+			"(caused, due to, resulting in, led to) — a topology is a map, not a diagnosis.")
+	}
 	return o.redact(b.String())
 }
 

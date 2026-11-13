@@ -234,6 +234,8 @@ var toolContracts = map[string]ToolContract{
 	// Device-scoped.
 	"get_security_findings": {1, CapRead, 10 * time.Second, 60, out(50, defaultMaxTextChars)},
 	"get_topology_context":  {1, CapRead, 10 * time.Second, 60, out(46, defaultMaxTextChars)},
+	// Estate-scoped: the canvas's own view plus its metric overlay, read once.
+	"get_network_topology": {1, CapRead, 15 * time.Second, 30, out(110, defaultMaxTextChars)},
 	// PROBES: open a read-only SSH session to a device. The collector's own
 	// 60 s per-device timeout fires first; the contract is the backstop.
 	"run_protocol_diagnostic": {1, CapProbe, 75 * time.Second, 6, out(60, defaultMaxTextChars)},
