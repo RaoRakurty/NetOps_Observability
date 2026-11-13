@@ -51,6 +51,20 @@ type Match struct {
 	OccurredAt    time.Time `json:"occurred_at"`
 	Signature     string    `json:"signature,omitempty"`
 	Partial       bool      `json:"partial,omitempty"`
+	// Resolution is how an operator recorded this past case was fixed, when
+	// one was recorded (internal/rcaresolution). Filled by the server after
+	// ranking — it never affects the score: a fix says nothing about whether
+	// two incidents look alike. HISTORICAL, never the present cause.
+	Resolution *PastResolution `json:"resolution,omitempty"`
+}
+
+// PastResolution is a past case's recorded fix as recall reports it.
+type PastResolution struct {
+	Kind       string    `json:"kind"`
+	Label      string    `json:"label"`
+	Note       string    `json:"note,omitempty"`
+	ChangeID   string    `json:"change_id,omitempty"`
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 func jaccard(a, b []string) float64 {

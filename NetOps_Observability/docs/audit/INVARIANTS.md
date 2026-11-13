@@ -669,6 +669,19 @@ and the "Similar past incidents" card share ONE recall (`similarIncidentsFor`,
 | The threshold and weights suit real history | ❌ **not calibrated** | Documented engineering defaults (incidentfp/score.go); calibrate on the golden incident corpus / real history before GA (owner decision). |
 | Past incidents are fingerprinted ahead of time | ❌ **not built** | On-demand only (write-through); a background enricher for closed incidents is a follow-up (owner decision). |
 
+**Recorded fixes (2026-11-13).** An operator may record how a case was resolved
+(`/api/correlations/{id}/resolution`, `internal/rcaresolution`, migration 0071);
+recall attaches each match's newest fix and Iris says "last time this was fixed by
+…" and may suggest it on a "Fixes that worked before" card.
+
+| Invariant | Status | Proof |
+|---|---|---|
+| A resolution is owned by the case's tenant and its author is the token's subject; a body tenant, author or id is refused; a foreign case is 404 for GET and POST and writes nothing; `as_tenant` is ignored | ✅ | **BUILD** — `TestRcaResolutionCreateStampsServerOwnedFields`, `TestRcaResolutionCrossTenantIs404`, `TestRcaResolutionListIsOwnTenantOnlyAndAsTenantIgnored`, `TestRcaResolutionPlatformAdminKeysByCaseTenant`; **PG** — `TestRcaResolutionRLSIsolationPG` (own-only list and Latest, WITH CHECK 42501, kind/note CHECKs 23514) |
+| Recall attaches a fix from the subject's own tenant only | ✅ | **BUILD** — `TestRecallAttachesFixesFromTheSubjectsTenantOnly`; **PG** — `TestRcaResolutionRLSIsolationPG` (Latest) |
+| The operator's note never reaches a model path or the audit trail; only the closed kind, its label, the change id and the date do | ✅ | **BUILD** — `TestAIFixNeverCarriesTheOperatorNote` (the AI type has no note field), `TestRcaResolutionWriteIsAuditedWithoutTheNote`, `TestSimilarToolMentionsTheFixButNoProse` |
+| A past fix is history, never the present cause; a fix card rests on the recorded resolution only, says "No action has been executed", and is never built from a similarity alone | ✅ | **BUILD** — `TestSimilarAnswerSaysTheRecordedFix`, `TestRecordedFixBecomesAGroundedInertCard`, `TestNoRecordedFixMeansNoCard`, `TestResolutionCitationIsNeverAnotherCardsBasis` |
+| A recorded fix changes how two incidents score | — **by design, no** | The fix is attached after ranking; similarity is about what the incidents looked like. |
+
 ## 22. Usernames in device logs (owner decision D7, tracker 387, 2026-11-09)
 
 Device syslog carries usernames, retained on purpose for security attribution. There is no field-level redaction in the store or on an authorised read; the controls are around the read.

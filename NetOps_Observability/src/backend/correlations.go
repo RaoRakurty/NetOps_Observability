@@ -35,6 +35,7 @@ import (
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/rcaresolution"
 	"netops/backend/rcafeedback"
 	"netops/backend/secapi"
 	"netops/backend/timeintel"
@@ -519,6 +520,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleCorrelationFeedback(w, r, id)
 		return
 	}
+	// How the case was resolved (tracker 337 N-F4 residue) — GET list / POST
+	// record; own auth (read vs incident-action write) + audit in the handler.
+	if sub == "resolution" {
+		s.handleCorrelationResolution(w, r, id)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
@@ -971,6 +978,124 @@ SELECT toString(o.correlation_id) AS correlation_id
 // newRcaFeedbackStore selects the Postgres register under the Postgres backend
 // (migration 0036, RLS), else the tenant-keyed file store so the default build
 // works unchanged.
+func newRcaResolutionStore() rcaresolution.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return rcaresolution.NewPGStore(ps.DB())
+	}
+	return rcaresolution.NewFileStore(envOr("RCA_RESOLUTION_FILE", "/data/rca_resolutions.json"))
+}
+
+// handleCorrelationResolution serves /api/correlations/{id}/resolution
+// (tracker 337 N-F4 residue): how an operator recorded the case was fixed.
+//
+//	GET  — the case's recorded resolutions, newest first (infrastructure:read)
+//	POST — record one {kind, note?, change_id?} (alerts:write, like a verdict)
+//
+// §3a: the case is read under the caller's scope first (loadCorrFeedbackObject:
+// a foreign or restricted case is the same 404 as a missing one), the row is
+// stamped with the case's OWNING tenant and the caller's subject — never a
+// request field. The note is operator prose: it is not copied into the audit
+// detail and never reaches an AI provider.
+func (s *server) handleCorrelationResolution(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or POST"))
+		return
+	}
+	module, level := "infrastructure", LevelRead
+	if r.Method == http.MethodPost {
+		module, level = "alerts", LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, module, level)
+	if !ok {
+		return
+	}
+	if s.rcaResolutions == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("incident resolution store unavailable"))
+		return
+	}
+	if err := httppage.RejectUnknownQuery(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	obj, visible, err := s.loadCorrFeedbackObject(r, id)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if !visible {
+		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
+		return
+	}
+	if r.Method == http.MethodGet {
+		items, listErr := s.rcaResolutions.List(r.Context(), obj.tenant, false, id)
+		if listErr != nil {
+			writeError(w, http.StatusInternalServerError, listErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"correlation_id": id, "resolutions": items, "count": len(items)})
+		return
+	}
+	var in rcaresolution.Request
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	dec.DisallowUnknownFields() // a smuggled tenant_id or created_by is refused, not ignored
+	if decErr := dec.Decode(&in); decErr != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body: expected {kind, note, change_id}"))
+		return
+	}
+	res, valErr := rcaresolution.FromRequest(in)
+	if valErr != nil {
+		writeError(w, http.StatusBadRequest, valErr)
+		return
+	}
+	res.TenantID, res.CorrelationID = obj.tenant, id
+	res.CreatedBy = claims.Sub
+	res.CreatedAt = time.Now().UTC()
+	saved, addErr := s.rcaResolutions.Add(r.Context(), obj.tenant, res)
+	if errors.Is(addErr, rcaresolution.ErrLimit) {
+		writeError(w, http.StatusBadRequest, addErr)
+		return
+	}
+	if addErr != nil {
+		writeError(w, http.StatusInternalServerError, addErr)
+		return
+	}
+	s.auditManualEdit(r, claims, obj.tenant, "rca_resolution_create", id, map[string]any{
+		"resolution_id": saved.ID,
+		"kind":          string(saved.Kind),
+		"change_id":     saved.ChangeID,
+		"has_note":      saved.Note != "",
+	})
+	writeJSON(w, http.StatusCreated, saved)
+}
+
+// attachRecordedFixes adds each match's newest recorded resolution, read in
+// the subject's OWN tenant (recall never compares across tenants). A store
+// failure is logged and the answer goes out without fixes — absence is said
+// honestly downstream ("no fix was recorded"), never invented.
+func (s *server) attachRecordedFixes(ctx context.Context, tenant string, res *incidentfp.Result) {
+	if s.rcaResolutions == nil || len(res.Matches) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(res.Matches))
+	for _, m := range res.Matches {
+		ids = append(ids, m.CorrelationID)
+	}
+	latest, err := s.rcaResolutions.Latest(ctx, tenant, ids)
+	if err != nil {
+		logWarn("rcaresolution", "recorded fixes could not be read for similar incidents; answering without them", errf(err))
+		return
+	}
+	for i := range res.Matches {
+		rr, ok := latest[res.Matches[i].CorrelationID]
+		if !ok {
+			continue
+		}
+		res.Matches[i].Resolution = &incidentfp.PastResolution{Kind: string(rr.Kind), Label: rcaresolution.Label(rr.Kind),
+			Note: rr.Note, ChangeID: rr.ChangeID, RecordedAt: rr.CreatedAt}
+	}
+}
+
 func newRcaFeedbackStore() rcafeedback.Store {
 	if ps, ok := platformdb.ActivePG(); ok {
 		return rcafeedback.NewPGStore(ps.DB())
@@ -1398,6 +1523,7 @@ func (s *server) similarIncidentsFor(ctx context.Context, claims jwtClaims, id, 
 		logError("incidentfp", "similar-incident recall failed", errf(err))
 		return incidentfp.Result{}, http.StatusInternalServerError, errors.New("similar incidents could not be read")
 	}
+	s.attachRecordedFixes(ctx, tenant, &res)
 	return res, http.StatusOK, nil
 }
 
@@ -1426,8 +1552,14 @@ func (s *server) aiSimilarIncidents(claims jwtClaims) func(context.Context, ai.P
 		}
 		out := ai.SimilarIncidents{Verdict: res.Verdict, Note: res.Note, Caveat: res.Caveat, Examined: res.Examined}
 		for _, m := range res.Matches {
-			out.Matches = append(out.Matches, ai.SimilarMatch{CorrelationID: m.CorrelationID, Strength: m.Strength,
-				MatchedOn: m.MatchedOn, OccurredAt: m.OccurredAt})
+			sm := ai.SimilarMatch{CorrelationID: m.CorrelationID, Strength: m.Strength,
+				MatchedOn: m.MatchedOn, OccurredAt: m.OccurredAt}
+			if fx := m.Resolution; fx != nil {
+				// Kind, label, change id and date only — the operator's note
+				// never enters a model path.
+				sm.Fix = &ai.PastFix{Kind: fx.Kind, Label: fx.Label, ChangeID: fx.ChangeID, RecordedAt: fx.RecordedAt}
+			}
+			out.Matches = append(out.Matches, sm)
 		}
 		return out, nil
 	}

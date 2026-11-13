@@ -5615,7 +5615,32 @@ export interface SimilarIncidentMatch {
   differences?: string[];
   occurred_at: string;
   partial?: boolean;
+  /** How an operator recorded this past case was fixed (N-F4 residue). History, never the present cause. */
+  resolution?: PastResolution;
 }
+/** A past case's recorded fix as similar-incident recall reports it. */
+export interface PastResolution {
+  kind: RcaResolutionKind;
+  label: string;
+  note?: string;
+  change_id?: string;
+  recorded_at: string;
+}
+/** How an RCA case was resolved — closed vocabulary (server: internal/rcaresolution). */
+export type RcaResolutionKind =
+  | "config_rollback" | "hardware_replace" | "provider_ticket" | "reboot"
+  | "routing_change" | "capacity_add" | "no_action_transient" | "other";
+export type RcaResolution = {
+  id: string;
+  correlation_id: string;
+  kind: RcaResolutionKind;
+  note?: string;
+  change_id?: string;
+  created_by: string;
+  created_at: string;
+};
+export type RcaResolutionList = { correlation_id: string; resolutions: RcaResolution[]; count: number };
+export type RcaResolutionCreate = { kind: RcaResolutionKind; note?: string; change_id?: string };
 export interface SimilarIncidents {
   verdict: "similar_incidents" | "no_similar_incident";
   matches: SimilarIncidentMatch[];
@@ -6891,6 +6916,13 @@ export const api = {
     request<RcaFeedbackList>(`/api/correlations/${encodeURIComponent(id)}/feedback`),
   correlationFeedbackCreate: (id: string, body: RcaFeedbackCreate) =>
     request<RcaFeedback>(`/api/correlations/${encodeURIComponent(id)}/feedback`,
+      { method: "POST", body: JSON.stringify(body) }),
+  // How the case was resolved (tracker 337 N-F4 residue): newest first; a
+  // create appends and returns 201 with the stored record.
+  correlationResolutions: (id: string) =>
+    request<RcaResolutionList>(`/api/correlations/${encodeURIComponent(id)}/resolution`),
+  correlationResolutionCreate: (id: string, body: RcaResolutionCreate) =>
+    request<RcaResolution>(`/api/correlations/${encodeURIComponent(id)}/resolution`,
       { method: "POST", body: JSON.stringify(body) }),
   rcaFeedbackSummary: (days = 30) =>
     request<RcaFeedbackSummary>(`/api/correlations/feedback/summary?days=${encodeURIComponent(String(days))}`),
