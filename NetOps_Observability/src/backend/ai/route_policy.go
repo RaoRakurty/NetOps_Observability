@@ -268,7 +268,7 @@ func (o *Orchestrator) answerByModel(ctx context.Context, p Principal, question,
 	ev, sc := o.modelEvidence(ctx, p, question)
 	o.trace(TraceNarrating)
 	text, provider, lerr := o.completeTier(ctx, RouteFor(ModeModelAnswer).Tier, o.systemPrompt(),
-		[]LLMMessage{{Role: "user", Content: o.modelAnswerPrompt(question, ev)}}, false)
+		[]LLMMessage{{Role: "user", Content: o.modelAnswerPrompt(question, ev, o.glossaryText(ctx, p))}}, false)
 	if lerr != nil || strings.TrimSpace(text) == "" {
 		if lerr == nil {
 			lerr = &ProviderEmptyError{Provider: provider}
@@ -417,7 +417,7 @@ func firstN(xs []string, n int) []string {
 // modelAnswerPrompt is the grounded user message of a model answer. Every
 // interpolated value passes promptLine (prompt_fence.go); the whole message is
 // redacted before egress (LLM06).
-func (o *Orchestrator) modelAnswerPrompt(question string, ev []EvidenceItem) string {
+func (o *Orchestrator) modelAnswerPrompt(question string, ev []EvidenceItem, glossary string) string {
 	var b strings.Builder
 	if len(o.PriorQuestions) > 0 {
 		b.WriteString("EARLIER QUESTIONS IN THIS CONVERSATION (context only, oldest first):\n")
@@ -433,6 +433,11 @@ func (o *Orchestrator) modelAnswerPrompt(question string, ev []EvidenceItem) str
 	b.WriteString("\nAnswer the operator's question using ONLY the evidence above, citing the ids you use in square brackets. " +
 		"A problem's verdict (confirmed, suspected, undetermined) is Correlix's own; never upgrade it. " +
 		"If the evidence does not answer the question, say plainly which Correlix data would answer it. Be concise.")
+	if glossary != "" {
+		// The caller's generated vocabulary, after the instructions and fenced
+		// as data: it helps read the question, it is never evidence to cite.
+		b.WriteString("\n\n" + glossary + "\n(The vocabulary is for understanding the question only — it is not evidence; cite only the ids above.)")
+	}
 	if hasTopologyEvidence(ev) {
 		b.WriteString(" For the topology: explain how the network is built in network terms — the overlay and its transports, " +
 			"what is adjacent to what, the roles and sites, and what each role likely runs. Items that say \"appears\", \"inferred\" or " +
@@ -531,7 +536,7 @@ func (o *Orchestrator) answerSubject(ctx context.Context, p Principal, question 
 	if d := pe.EvaluateModule("correlations_rca", p); !d.Allow {
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
-			Text:      "I can't answer that for your current access or enabled modules.",
+			Text:      AccessDeniedText,
 			Citations: []Citation{}, Disclaimers: []string{capitalize(d.Reason) + "."},
 			Routing: &Routing{Path: RoutePathDeterministic, Reason: RouteReasonProblemContext},
 		}, nil

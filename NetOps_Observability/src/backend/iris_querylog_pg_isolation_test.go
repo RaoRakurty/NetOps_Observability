@@ -276,3 +276,41 @@ func TestIrisQueryLogReadingsRoundTripPG(t *testing.T) {
 		t.Fatalf("RLS LEAK: globex's session sees %d acme readings (%v)", n, err)
 	}
 }
+
+// The miss triage (migration 0070): a classified miss round-trips with its
+// class and stays inside its tenant under FORCE-RLS.
+func TestIrisQueryLogMissClassRoundTripPG(t *testing.T) {
+	ps, st := qlogPGStore(t)
+	ctx := context.Background()
+	in := irisquerylog.Record{Principal: "alice", Source: irisquerylog.SourceAsk, Question: "how do my boxes hang together",
+		Outcome: irisquerylog.OutcomeMiss, MissClass: "no_data", Intent: "product_question"}
+	rec, err := st.Record(ctx, "acme", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, "acme", "alice", rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MissClass != "no_data" || got.Source != irisquerylog.SourceAsk || got.Outcome != irisquerylog.OutcomeMiss {
+		t.Fatalf("miss round trip: %+v", got)
+	}
+	list, err := st.List(ctx, "acme", irisquerylog.ListFilter{})
+	if err != nil || len(list) == 0 || list[0].MissClass != "no_data" {
+		t.Fatalf("list carries the class: %+v (%v)", list, err)
+	}
+	if other, err := st.List(ctx, "globex", irisquerylog.ListFilter{}); err != nil || len(other) != 0 {
+		t.Fatalf("RLS LEAK: globex lists %d acme misses (%v)", len(other), err)
+	}
+	var n int
+	if err := ps.DB().WithTenant(ctx, "globex", false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM iris_query_log WHERE miss_class <> ''`).Scan(&n)
+	}); err != nil || n != 0 {
+		t.Fatalf("RLS LEAK: globex's session sees %d acme misses (%v)", n, err)
+	}
+	// An unknown class is refused before any SQL.
+	if _, err := st.Record(ctx, "acme", irisquerylog.Record{Principal: "alice", Source: irisquerylog.SourceAsk,
+		Outcome: irisquerylog.OutcomeMiss, MissClass: "made_up"}); !errors.Is(err, irisquerylog.ErrInvalid) {
+		t.Fatalf("unknown class accepted: %v", err)
+	}
+}

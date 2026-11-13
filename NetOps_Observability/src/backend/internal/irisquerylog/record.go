@@ -38,6 +38,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"netops/backend/internal/iristriage"
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/nlquery/compile"
@@ -79,7 +80,11 @@ const (
 
 var outcomes = map[string]bool{OutcomeAnswered: true, OutcomeCompiled: true, OutcomeClarify: true,
 	OutcomeDeclined: true, OutcomeUnparsed: true, OutcomeInvalid: true, OutcomeError: true,
-	OutcomeNotData: true, OutcomeNotFound: true}
+	OutcomeNotData: true, OutcomeNotFound: true, OutcomeMiss: true}
+
+// OutcomeMiss is a non-data Iris answer that left the operator with nothing
+// (SourceAsk); its MissClass says why (internal/iristriage).
+const OutcomeMiss = "miss"
 
 // Sources (closed): which surface answered.
 const (
@@ -87,9 +92,12 @@ const (
 	SourceQueryCompile = "query_compile" // POST /api/ai/query/compile
 	SourceQueryExecute = "query_execute" // POST /api/ai/query/execute
 	SourceConversation = "conversation"  // POST /api/ai/conversations/{id}/messages
+	// SourceAsk is a miss of any non-data Iris arm on /api/ai/ask (the miss
+	// triage, model-first decision point 5). Only misses are recorded.
+	SourceAsk = "ask"
 )
 
-var sources = map[string]bool{SourceRouter: true, SourceQueryCompile: true, SourceQueryExecute: true, SourceConversation: true}
+var sources = map[string]bool{SourceRouter: true, SourceQueryCompile: true, SourceQueryExecute: true, SourceConversation: true, SourceAsk: true}
 
 // CompiledBy values (closed): who wrote the stored query. A record without a
 // query has none.
@@ -187,6 +195,9 @@ type Record struct {
 	// Readings are the reinterpretations the compiler applied and disclosed
 	// ("shwo" read as "show"; "critical" read as confirmed incidents).
 	Readings []Reading `json:"readings"`
+	// MissClass is the triage class of an OutcomeMiss record
+	// (internal/iristriage closed set); "" on every other record.
+	MissClass string `json:"miss_class,omitempty"`
 }
 
 // Reading is one disclosed reinterpretation (compile.Result.Readings).
@@ -325,6 +336,14 @@ func Normalize(tenant string, r Record, now time.Time) (Record, error) {
 	}
 	if err := normalizeQuery(&r); err != nil {
 		return Record{}, err
+	}
+	switch {
+	case r.Outcome == OutcomeMiss && !iristriage.Valid(r.MissClass):
+		return Record{}, fmt.Errorf("%w: a miss needs a known class, got %q", ErrInvalid, r.MissClass)
+	case r.Outcome != OutcomeMiss && r.MissClass != "":
+		return Record{}, fmt.Errorf("%w: only a miss carries a class", ErrInvalid)
+	case (r.Outcome == OutcomeMiss) != (r.Source == SourceAsk):
+		return Record{}, fmt.Errorf("%w: a miss is recorded by the ask source, and the ask source records only misses", ErrInvalid)
 	}
 	// Corrections arrive only through Correct; a record is born without any.
 	r.Corrections = []Correction{}
