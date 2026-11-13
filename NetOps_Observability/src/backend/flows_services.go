@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"time"
 
+	"netops/backend/internal/chschema"
+	"netops/backend/internal/flowquery"
 	"netops/backend/internal/servicecat"
 )
 
@@ -42,6 +44,25 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.services == nil {
 		writeError(w, http.StatusNotImplemented, errServiceStoreOff)
+		return
+	}
+	// Tracker 400 (e), owner decision 2026-11-13 (c): an exact window parsed
+	// fail-closed, the filter bar's keys (a link: device + interface) narrow the
+	// scan, and the platform-traffic exclusion applies as on every other flow
+	// view (flowFilterClause), so the totals agree with the page's toggle.
+	now := time.Now()
+	win, err := flowquery.ParseWindow(r.URL.Query(), now, flowquery.DefaultLimits)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := flowStrictParams(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	tenant, cross := principalTenant(claims)
@@ -73,17 +94,17 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 	// visible devices skips the scan entirely (all totals stay 0, default-closed).
 	tenantClause, noAddrs := s.flowTenantClauseFor(claims)
 	if len(conds) > 0 && !noAddrs {
-		since := durationQuery(r, "since", time.Hour)
 		var sel []string
 		for i, cond := range conds {
 			sel = append(sel,
 				fmt.Sprintf("sumIf(bytes*if(sampling_rate=0,1,sampling_rate), %s) AS b%d", cond, i),
 				fmt.Sprintf("countIf(%s) AS f%d", cond, i))
 		}
-		sql := servicecat.FlowScanSQL(sel, int(since.Seconds()), tenantClause)
+		sql := servicecat.FlowScanWindowSQL(sel, win.Predicate(), tenantClause+flowTypeClause(r)+filter)
 		res, e := s.chRows(r, sql)
 		if e != nil {
-			writeError(w, http.StatusBadGateway, e)
+			logError("flows", "services query failed", map[string]any{"error": e.Error()})
+			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
 			return
 		}
 		if len(res) > 0 {
@@ -94,5 +115,5 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"services": rows, "count": len(rows)})
+	writeJSON(w, http.StatusOK, map[string]any{"services": rows, "count": len(rows), "window": win.Echo(now, chschema.RetentionConfig().Flows)})
 }

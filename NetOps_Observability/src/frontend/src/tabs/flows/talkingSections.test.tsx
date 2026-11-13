@@ -151,11 +151,17 @@ describe("H15a — the Top-N bar tooltip escapes every dynamic interpolation", (
 });
 
 describe("Applications", () => {
-  it("asks for the window in seconds, once", async () => {
+  it("asks for the window in seconds, once, with the filter bar's keys", async () => {
     render(<ApplicationsSection q={q} filterKeys={[]} onDrill={noop} />);
     await waitFor(() => expect(flowsApps).toHaveBeenCalledTimes(1));
-    expect(flowsApps).toHaveBeenCalledWith(3600);
+    expect(flowsApps).toHaveBeenCalledWith(3600, {}, "");
     expect(flowsServices).not.toHaveBeenCalled();
+  });
+
+  it("narrows to one link when the filter bar names it (tracker 400)", async () => {
+    const link = { ...q, filters: { device: "10.0.0.1", if: "3" }, fkey: "link" };
+    render(<ApplicationsSection q={link} filterKeys={["device", "if"]} onDrill={noop} />);
+    await waitFor(() => expect(flowsApps).toHaveBeenCalledWith(3600, { device: "10.0.0.1", if: "3" }, ""));
   });
 
   it("renders the pair with the engine's attribution words", async () => {
@@ -190,11 +196,17 @@ describe("Applications", () => {
     expect(screen.getByRole("button", { name: "Ask Iris about Coverage" })).toBeTruthy();
   });
 
-  it("says the chip filters do not narrow it, naming them in the tooltip", async () => {
+  it("says it follows the window and the filters, naming them in the tooltip", async () => {
     render(<ApplicationsSection q={q} filterKeys={["addr", "device"]} onDrill={noop} />);
     await waitFor(() => expect(flowsApps).toHaveBeenCalled());
-    const caveat = screen.getByText(/the filters above do not narrow these numbers/i);
+    const caveat = screen.getByText(/follow the window and the filters above/i);
     expect(caveat.getAttribute("title")).toMatch(/device/i);
+  });
+
+  it("says the both-directions toggle applies to conversations only", async () => {
+    render(<ApplicationsSection q={{ ...q, direction: "bi" }} filterKeys={[]} onDrill={noop} />);
+    await waitFor(() => expect(flowsApps).toHaveBeenCalled());
+    expect(screen.getByText(/applies to conversations only/i)).toBeInTheDocument();
   });
 
   it("the Application chip narrows the list by name", async () => {

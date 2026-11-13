@@ -569,15 +569,24 @@ var routeIsolationLedger = map[string]string{
 	"/api/flows/flags":                    "scoped",
 	"/api/flows/coverage":                 "scoped",
 	"/api/flows/geo":                      "scoped",
-	"/api/flows/services":                 "scoped",
-	"/api/flows/timeseries":               "scoped",
-	"/api/flows/top":                      "scoped",
-	"/api/flows/topn":                     "scoped",
-	"/api/geomap":                         "scoped",
-	"/api/graphql":                        "scoped",
-	"/api/health/score":                   "scoped",
-	"/api/incidents":                      "scoped",
-	"/api/incidents/":                     "scoped",
+	// Tracker 400: link-level flow APIs. requireFlowsRead (explore) → the stricter
+	// link clause (own stamped rows or own exporter) at the caller's tenant_scope;
+	// proven by flows_links_isolation_test.go and the flowquery integration test.
+	"/api/flows/links":        "scoped",
+	"/api/flows/links/series": "scoped",
+	"/api/flows/links/movers": "scoped",
+	// Capacity reads VictoriaMetrics with the forecast lane's boundary
+	// (extra_filters[] + second-pass row filter); flows_capacity_isolation_test.go.
+	"/api/flows/capacity":   "scoped",
+	"/api/flows/services":   "scoped",
+	"/api/flows/timeseries": "scoped",
+	"/api/flows/top":        "scoped",
+	"/api/flows/topn":       "scoped",
+	"/api/geomap":           "scoped",
+	"/api/graphql":          "scoped",
+	"/api/health/score":     "scoped",
+	"/api/incidents":        "scoped",
+	"/api/incidents/":       "scoped",
 	// RCA auto-ticketing #78 P3: incident policies + outbox/audit are per-tenant
 	// data — requirePerm + principalTenant scope, tenant stamped from token, store
 	// isolation + HTTP cross-tenant tests (ticketing_isolation_test/ticketing_http_test).

@@ -46,6 +46,9 @@ func flowRoutes() []flowRoute {
 		{"/api/flows/fanout", func(s *server) http.HandlerFunc { return s.handleFlowsFanout }, http.StatusOK},
 		{"/api/flows/apps", func(s *server) http.HandlerFunc { return s.handleFlowsApps }, http.StatusOK},
 		{"/api/flows/services", func(s *server) http.HandlerFunc { return s.handleFlowsServices }, http.StatusNotImplemented},
+		{"/api/flows/links", func(s *server) http.HandlerFunc { return s.handleFlowsLinks }, http.StatusOK},
+		{"/api/flows/links/series?device=10.1.0.1&if=7", func(s *server) http.HandlerFunc { return s.handleFlowsLinkSeries }, http.StatusOK},
+		{"/api/flows/links/movers?device=10.1.0.1&if=7", func(s *server) http.HandlerFunc { return s.handleFlowsLinkMovers }, http.StatusOK},
 	}
 }
 

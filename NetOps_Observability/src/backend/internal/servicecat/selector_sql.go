@@ -125,9 +125,16 @@ func BuildSelectorCondition(spec map[string]any) (string, bool) {
 // a scoped principal, "" for cross-tenant) — it bounds the scan because the
 // hybrid flows row policy alone does not isolate untagged rows.
 func FlowScanSQL(sel []string, sinceSec int, tenantClause string) string {
+	return FlowScanWindowSQL(sel, "ts >= now() - INTERVAL "+strconv.Itoa(sinceSec)+" SECOND", tenantClause)
+}
+
+// FlowScanWindowSQL is FlowScanSQL over an explicit window predicate (the
+// flowquery.Window form, tracker 400). windowPred and clause are server-built
+// fragments (integers, parsed addresses, own literals), never caller text;
+// clause carries the tenant clause plus any link filter, each " AND …".
+func FlowScanWindowSQL(sel []string, windowPred, clause string) string {
 	return "SELECT " + strings.Join(sel, ", ") +
-		" FROM netops.flows WHERE ts >= now() - INTERVAL " + strconv.Itoa(sinceSec) + " SECOND" +
-		tenantClause + " FORMAT JSON"
+		" FROM netops.flows WHERE " + windowPred + clause + " FORMAT JSON"
 }
 
 // isUUIDToken mirrors main's SR-011 shape validator (duplicated test fixture —
