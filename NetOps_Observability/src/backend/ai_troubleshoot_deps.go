@@ -3143,11 +3143,9 @@ func (s *server) aiGlossary(r *http.Request, claims jwtClaims) func(context.Cont
 		for _, d := range devs {
 			fp = append(fp, d.ID, d.Name, d.Vendor, d.Model, d.Type, d.Labels["role"], sotSiteFor(d, assign))
 		}
-		var sites []string
 		if s.sites != nil {
 			for _, st := range s.sites.All(tenant, cross) {
 				fp = append(fp, "site", st.Slug, st.Name)
-				sites = append(sites, st.Slug)
 			}
 		}
 		aliases := s.nlqAliasList(tenant, cross)
