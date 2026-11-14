@@ -274,7 +274,12 @@ func corpusCanon(q *nlqast.AST) string {
 			c.Filters[j].Field+c.Filters[j].Op+strings.Join(c.Filters[j].Values, ",")
 	})
 	span := ""
-	for _, tr := range []*nlqast.TimeRange{&c.Time, c.CompareTo} {
+	windows := []*nlqast.TimeRange{&c.Time, c.CompareTo}
+	// The incident set of a per-incident change list (N-S3) has its own window.
+	if c.Time.Anchor != nil && c.Time.Anchor.Incidents != nil {
+		windows = append(windows, &c.Time.Anchor.Incidents.Time)
+	}
+	for _, tr := range windows {
 		if tr != nil && tr.Kind == nlqast.TimeAbsolute && tr.From != nil && tr.To != nil {
 			span += "|span=" + tr.To.Sub(*tr.From).Round(time.Minute).String()
 			tr.From, tr.To = nil, nil
