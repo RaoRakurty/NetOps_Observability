@@ -536,6 +536,58 @@
         "cpu on the switch connected to aus-edge-1 last 6h",
         "cpu of the switch adjacent to AUS-EDGE-1 over the past 6 hours"
       ]
+    },
+    {
+      "id": "devices-logs-001",
+      "category": "devices",
+      "question": "Show error logs on dfw-edge-1 in the last 6 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "search_logs",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "log_search",
+          "target": "device",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "severity",
+              "op": "gte",
+              "values": [
+                "error"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "6h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "log_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "dfw-edge-1 error logs last 6 hours",
+        "errors in the dfw-edge-1 logs over the last 6 hours"
+      ]
     }
   ]
 }

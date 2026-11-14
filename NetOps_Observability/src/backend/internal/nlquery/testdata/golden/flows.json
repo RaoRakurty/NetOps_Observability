@@ -1,0 +1,189 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "flows",
+  "cases": [
+    {
+      "id": "flows-001",
+      "category": "flows",
+      "question": "Who is using the most bandwidth at Austin?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "query_flows",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "flow_top",
+          "target": "device",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "time_range": {},
+          "group_by": [
+            "talker"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "flow_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "biggest bandwidth users in austin",
+        "who's hogging the austin wan"
+      ]
+    },
+    {
+      "id": "flows-002",
+      "category": "flows",
+      "question": "Top destinations from dfw-core-1 today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "query_flows",
+        "entities": [
+          {
+            "input": "dfw-core-1",
+            "type": "device",
+            "id": "device:dfw-core-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "flow_top",
+          "target": "device",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-core-1"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "talker"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "flow_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "top destinations dfw-core-1 today",
+        "where is DFW-CORE-1 sending traffic today"
+      ]
+    },
+    {
+      "id": "flows-003",
+      "category": "flows",
+      "question": "Top talkers on dfw-edge-1 in the last hour.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "query_flows",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "flow_top",
+          "target": "device",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "group_by": [
+            "talker"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "flow_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "top talkers dfw-edge-1 last hour",
+        "who is using dfw-edge-1 the most in the last hour"
+      ]
+    },
+    {
+      "id": "flows-004",
+      "category": "flows",
+      "question": "Which services are using the most bandwidth at Dallas today?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "query_flows",
+        "entities": [
+          {
+            "input": "Dallas",
+            "type": "site",
+            "id": "site:dfw-hq",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "flow_top",
+          "target": "device",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:dfw-hq"
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          },
+          "group_by": [
+            "service"
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "flow_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "services using the most bandwidth in dallas today",
+        "top talkers by service at dallas today"
+      ]
+    }
+  ]
+}

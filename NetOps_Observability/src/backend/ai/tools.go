@@ -18,6 +18,10 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrNotImplemented = errors.New("tool not implemented yet")
 	ErrForbidden      = errors.New("forbidden")
+	// ErrBadArgs marks a tool refusing an argument it cannot honour (an
+	// out-of-range window, an interface without its device). The wrapped
+	// message is the reason, written for the model to correct its call.
+	ErrBadArgs = errors.New("invalid arguments")
 )
 
 // Principal is the minimal, already-resolved caller identity the tools need to
@@ -115,8 +119,10 @@ type EvidenceItem struct {
 	// Class DOWNGRADES this one item's statement class to DERIVED when it is
 	// the server's own reading of observed evidence (an overlay shape, a
 	// role's likely function) inside an otherwise OBSERVED tool's result.
-	// Only ClassDerived is honoured: an item can never claim a STRONGER class
-	// than its tool. Server-stamped, never serialized.
+	// Only ClassDerived is honoured — plus ClassDocumentation inside a
+	// HISTORICAL tool's result (a runbook among recorded knowledge, N-F3): an
+	// item can never claim a STRONGER class than its tool. Server-stamped,
+	// never serialized.
 	Class string `json:"-"`
 }
 

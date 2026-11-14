@@ -387,6 +387,39 @@ misses and "That's not what I meant" corrections as candidate eval cases, with a
 they must be reviewed (remove anything customer-identifying, check the route) before anything
 is added to `docs/ai/golden-examples/`. Nothing is committed automatically.
 
+## Workspace knowledge retrieval (N-F3, 2026-11-14)
+
+`ai/knowledge_eval_test.go` runs `RankKnowledge` over a lab-shaped corpus
+(`ai/testdata/knowledge_eval.json`): tenant acme is the SD-WAN lab (cEdge/vEdge,
+mpls and biz-internet transports, vSmart control plane), tenant globex holds
+SAME-NAMED runbooks and incidents on the same device names. Both tenants sit in
+one corpus, so the tenant pre-filter is part of what is measured.
+
+| Metric | What it measures | Value | Floor |
+|---|---|---:|---:|
+| recall@3 | share of each question's relevant documents in the top 3 | 0.969 | 0.96 |
+| precision@3 | share of returned documents that are relevant | 0.844 | 0.84 |
+| abstention | questions the corpus cannot answer that retrieve nothing | 1.000 | 1.00 |
+| stale flagged | relevant documents past their layer's horizon that come back flagged stale | 1.000 | 1.00 |
+| wrong source | documents of another tenant retrieved | 0 | invariant: 0 |
+
+The floors live in `ai/testdata/knowledge_eval_floor.json`; a change that raises a
+metric raises its floor in the same PR. Recorded miss: "bgp peer … idle on cEdge-81"
+does not reach the incident whose signature is `cbgp-fsm-state-change` — "bgp" and
+"cbgp" are different words to a lexical index. Lexical retrieval stays the design
+(no embeddings, §4.1.5) unless this evaluation shows recall is the bottleneck.
+
+What the layers are and how they are cited:
+
+- **runbook** — the workspace's approved runbooks only (a draft is never
+  retrievable), shown by name and when-to-use, cited as DOCUMENTATION;
+- **incident** — closed incidents of the last year with the newest fix an operator
+  recorded (its kind, change id and date — never the free-text note), cited as
+  HISTORICAL; a device named by an address reads "an address";
+- **environment** — the approved Network context (N-F1). Never citable evidence:
+  when the facts overflow their 4,000-character block, the facts that share the
+  question's terms fill it first.
+
 ## Replay (N-H2, offline leg)
 
 Replay runs one frozen incident through the real answer path and reports what came

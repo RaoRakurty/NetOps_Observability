@@ -311,8 +311,8 @@ test("Who is talking and Capacity read the same way, and About this data holds t
   await expect(cap.getByText("In about 23 days")).toBeVisible();
   await expect(cap.getByText("Collecting history — 6 of 14 days")).toBeVisible();
   await expect(page.getByTestId("capacity-next")).toHaveCount(0);
-  await page.getByRole("button", { name: "Links with no reported speed (1)" }).click();
-  await expect(page.getByRole("table", { name: "Links with no reported speed" })).toBeVisible();
+  await page.getByRole("button", { name: "Speed not reported (1)" }).click();
+  await expect(page.getByRole("table", { name: "Speed not reported" })).toBeVisible();
   audit = await typeAudit(page);
   expect(audit.tooSmall, audit.tooSmall.join("\n")).toEqual([]);
   await shot(page, "flows-capacity");

@@ -162,6 +162,7 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 
 	// Deterministic grounding verifier: strip any evidence citation the model
 	// invented (same guarantee as the grounded engine).
+	ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceGrounding})
 	validIDs := append(make([]string, 0, len(evidence)+len(extraCiteIDs)), extraCiteIDs...)
 	seen := map[string]bool{}
 	for _, ev := range evidence {
@@ -216,7 +217,9 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 	// the first gate, this is the second; the tool itself re-validates args).
 	// Toolbox.Authorize is the SAME gate the grounded engine's execution sites
 	// run (tracker 337 N-A5), so a denial on one path is a denial on the other.
-	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway}
+	// Trace: a streamed ask (N-E2) carries its progress sink in ctx, so the
+	// operator sees each lookup start and finish; elsewhere it is nil (no-op).
+	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway, Trace: ai.TraceFrom(ctx)}
 	// The copilot decision (N-A8) records every step: hashes, outcome, latency.
 	ledger := aidecision.FromContext(ctx)
 	ledgerStep := func(reason string, args ai.ToolArgs, iv ai.Invocation) {
@@ -257,6 +260,14 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return rep, nil
 	case "not_implemented":
 		return fail("this lookup is not available in this build", "not_implemented")
+	case ai.OutcomeBadArgs:
+		// The tool refused an argument (ai.ErrBadArgs): say why, so the model
+		// can correct its call instead of reading the refusal as no data.
+		msg := "invalid arguments"
+		if iv.Err != nil {
+			msg = iv.Err.Error()
+		}
+		return fail(msg, ai.OutcomeBadArgs)
 	case ai.OutcomeRateLimited:
 		return fail("this lookup was not run: the workspace reached its per-minute limit for it — say so, do not invent its data", ai.OutcomeRateLimited)
 	case ai.OutcomeTimeout:

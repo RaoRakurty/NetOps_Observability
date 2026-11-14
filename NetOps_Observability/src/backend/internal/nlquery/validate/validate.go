@@ -40,6 +40,16 @@ const (
 	MaxFilterValues     = 20
 	MaxValueLen         = 128
 	FutureSkew          = 5 * time.Minute
+	// Flows and syslog (N-C4): the same seven-day bound as the Iris flow and
+	// log tools, a short default window, small capped answers.
+	MaxFlowWindow  = 7 * 24 * time.Hour
+	DefaultFlowWin = "1h"
+	DefaultFlowTop = 10
+	MaxFlowTop     = 25
+	MaxLogWindow   = 7 * 24 * time.Hour
+	DefaultLogWin  = "24h"
+	DefaultLogRows = 20
+	MaxLogRows     = 50
 )
 
 // Scope is what the validator asks of the ROOT, which answers from the
@@ -111,10 +121,6 @@ func (c *checker) run() {
 		c.fail("query_type", CodeUnknownQueryType, string(q.Type), "", suggest(string(q.Type), queryTypes(), nil)...)
 		return
 	}
-	if q.Type == ast.FlowTop || q.Type == ast.LogSearch {
-		c.fail("query_type", CodeUnsupportedQueryType, string(q.Type), "flow and log queries are not available through Iris NL yet")
-		return
-	}
 	c.fieldMatrix()
 	if len(c.res.Errors) > 0 {
 		return // shape errors first: the rest would only add noise
@@ -126,6 +132,10 @@ func (c *checker) run() {
 		c.list()
 	case q.Type == ast.IncidentExplain:
 		c.incidentID("incident_id", q.IncidentID)
+	case q.Type == ast.FlowTop:
+		c.flowGroup()
+	case q.Type == ast.LogSearch:
+		c.logFilters()
 	}
 	c.refs()
 	if !q.Type.IsInventory() { // the visible inventory has no window
@@ -135,13 +145,65 @@ func (c *checker) run() {
 	c.limits()
 }
 
+// flowGroup admits the one flow_top grouping (talker or service); none is
+// the conversation ranking, said as a constraint.
+func (c *checker) flowGroup() {
+	q := c.q
+	switch {
+	case len(q.GroupBy) == 0:
+		q.GroupBy = []string{ast.FlowGroupTalker}
+		c.constrain("group_by", "none", ast.FlowGroupTalker, "default_flow_group")
+	case len(q.GroupBy) > 1:
+		c.fail("group_by", CodeTooBroad, strconv.Itoa(len(q.GroupBy)), "flow_top groups by one field", ast.FlowGroups...)
+	case !contains(ast.FlowGroups, q.GroupBy[0]):
+		c.fail("group_by[0]", CodeUnknownDimension, q.GroupBy[0], "flow_top groups by talker or service", ast.FlowGroups...)
+	}
+}
+
+// logFilters admits the closed log_search filters: severity (gte with one
+// level = that level and worse; eq/in = exactly those) and topic (eq/in), each
+// at most once, every value from its closed list.
+func (c *checker) logFilters() {
+	seen := map[string]bool{}
+	for i, f := range c.q.Filters {
+		path := fmt.Sprintf("filters[%d]", i)
+		var vals []string
+		switch f.Field {
+		case ast.FilterSeverity:
+			vals = ast.LogSeverities
+		case ast.FilterTopic:
+			vals = ast.LogTopics
+		default:
+			c.fail(path+".field", CodeUnknownDimension, f.Field, "a log search filters by severity or topic", ast.FilterSeverity, ast.FilterTopic)
+			continue
+		}
+		if seen[f.Field] {
+			c.fail(path, CodeInvalidValue, f.Field, f.Field+" is filtered once")
+			continue
+		}
+		seen[f.Field] = true
+		okOp := f.Op == "eq" && len(f.Values) == 1 || f.Op == "in" && len(f.Values) > 0 ||
+			f.Field == ast.FilterSeverity && f.Op == "gte" && len(f.Values) == 1
+		if !okOp || len(f.Values) > MaxFilterValues {
+			c.fail(path+".op", CodeOperatorNotAllowed, f.Op, "use eq with one value or in with several (gte with one level for severity)")
+			continue
+		}
+		for _, v := range f.Values {
+			if !contains(vals, v) {
+				c.fail(path+".values", CodeInvalidValue, v, "not a "+f.Field+" value", vals...)
+			}
+		}
+	}
+}
+
 // inventoryTargets are the entity types an inventory query counts or lists:
 // the ones the caller's scope can enumerate (plan.Scope Devices / Circuits).
 var inventoryTargets = map[string]bool{"device": true, "site": true, "circuit": true}
 
 func queryTypes() []string {
 	return []string{string(ast.MetricSeries), string(ast.MetricTopK), string(ast.MetricFilter), string(ast.CompareWindows),
-		string(ast.ChangeList), string(ast.IncidentList), string(ast.IncidentExplain), string(ast.EntityCount), string(ast.EntityList)}
+		string(ast.ChangeList), string(ast.IncidentList), string(ast.IncidentExplain), string(ast.EntityCount), string(ast.EntityList),
+		string(ast.FlowTop), string(ast.LogSearch)}
 }
 
 // fieldMatrix enforces which fields each query type requires and forbids.
@@ -190,6 +252,24 @@ func (c *checker) fieldMatrix() {
 		forbid(len(q.OrderBy) > 0, "order_by")
 		forbid(q.Time.Kind != "", "time_range")
 		forbid(q.Type == ast.EntityCount && q.Limit != 0, "limit")
+	case q.Type == ast.FlowTop || q.Type == ast.LogSearch:
+		// Read per device (the exporter that saw the flow, the device that
+		// logged the line); refs narrow to devices or sites.
+		if q.Target != "device" {
+			c.fail("target", CodeInvalidValue, q.Target, "target must be device for "+string(q.Type), "device")
+		}
+		forbid(q.Metric != "" || q.Agg != "", "metric")
+		forbid(q.Predicate != nil, "predicate")
+		forbid(q.CompareTo != nil, "compare_to")
+		forbid(q.IncidentID != "", "incident_id")
+		forbid(len(q.OrderBy) > 0, "order_by")
+		forbid(q.Type == ast.FlowTop && len(q.Filters) > 0, "filters")
+		forbid(q.Type == ast.LogSearch && len(q.GroupBy) > 0, "group_by")
+		for i, r := range q.Refs {
+			if r.Type != "device" && r.Type != "site" {
+				c.fail(fmt.Sprintf("entities[%d].type", i), CodeRelationshipNotAllowed, r.Type, string(q.Type)+" narrows to devices or sites", "device", "site")
+			}
+		}
 	case q.Type == ast.IncidentExplain:
 		need(q.IncidentID != "", "incident_id")
 		forbid(q.Metric != "" || q.Predicate != nil || q.CompareTo != nil || len(q.Filters) > 0 || len(q.GroupBy) > 0, "fields")
@@ -456,8 +536,13 @@ func (c *checker) incidentID(path, id string) {
 func (c *checker) times() {
 	q := c.q
 	max, def := MaxListWindow, DefaultListWin
-	if q.Type.IsMetric() {
+	switch {
+	case q.Type.IsMetric():
 		max, def = MaxMetricWindow, DefaultMetricWin
+	case q.Type == ast.FlowTop:
+		max, def = MaxFlowWindow, DefaultFlowWin
+	case q.Type == ast.LogSearch:
+		max, def = MaxLogWindow, DefaultLogWin
 	}
 	if q.Type == ast.IncidentExplain && q.Time.Kind == "" {
 		return // the incident's own window
@@ -589,6 +674,9 @@ func (c *checker) groupOrder() {
 	}
 	for i, g := range q.GroupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
+		if q.Type == ast.FlowTop {
+			continue // flowGroup owns it
+		}
 		if q.Type.IsInventory() {
 			// A count groups by site, once; a list is not grouped.
 			if q.Type != ast.EntityCount || len(q.GroupBy) > 1 || g != "site" || q.Target == "site" {
@@ -659,6 +747,10 @@ func (c *checker) limits() {
 		clamp(DefaultIncidentRows, MaxIncidentRows, "max_rows")
 	case ast.EntityList:
 		clamp(DefaultEntityRows, MaxEntityRows, "max_rows")
+	case ast.FlowTop:
+		clamp(DefaultFlowTop, MaxFlowTop, "max_topk")
+	case ast.LogSearch:
+		clamp(DefaultLogRows, MaxLogRows, "max_rows")
 	}
 	if q.Type.IsMetric() {
 		m, _ := c.cat.Metric(q.Metric)

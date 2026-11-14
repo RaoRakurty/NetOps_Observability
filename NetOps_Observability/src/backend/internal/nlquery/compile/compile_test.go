@@ -101,7 +101,47 @@ func TestUnanswerableWindowsCompileToRefusable(t *testing.T) {
 	}
 	r = run(t, "show dallas logs", cx)
 	if r.AST == nil || r.AST.Type != ast.LogSearch {
-		t.Fatalf("a log question must compile to the reserved type: %+v", r)
+		t.Fatalf("a log question must compile to log_search: %+v", r)
+	}
+}
+
+// Flow and log questions (N-C4) compile to typed ASTs: the devices or sites
+// named as refs, the window, the grouping or the closed severity and topic
+// filters — never a query string.
+func TestFlowAndLogQuestionsCompileToTypedQueries(t *testing.T) {
+	r := run(t, "top talkers on the dallas wan last hour", cx)
+	if r.AST == nil || r.AST.Type != ast.FlowTop || len(r.AST.Refs) != 1 || r.AST.Refs[0].ID != "site:dfw-hq" ||
+		r.AST.GroupBy[0] != ast.FlowGroupTalker || r.AST.Time.Last != "1h" {
+		t.Fatalf("top talkers: %+v", r.AST)
+	}
+	r = run(t, "which services are using the most bandwidth on edge-1 today", cx)
+	if r.AST == nil || r.AST.Type != ast.FlowTop || r.AST.GroupBy[0] != ast.FlowGroupService || len(r.AST.Refs) != 1 || r.AST.Refs[0].ID != "device:edge-1" {
+		t.Fatalf("busiest services: %+v", r)
+	}
+	r = run(t, "show bgp errors on edge-1 today", cx)
+	if r.AST == nil || r.AST.Type != ast.LogSearch || len(r.AST.Refs) != 1 {
+		t.Fatalf("bgp errors: %+v", r)
+	}
+	var sev, topic *ast.Filter
+	for i := range r.AST.Filters {
+		switch r.AST.Filters[i].Field {
+		case ast.FilterSeverity:
+			sev = &r.AST.Filters[i]
+		case ast.FilterTopic:
+			topic = &r.AST.Filters[i]
+		}
+	}
+	if sev == nil || sev.Op != "gte" || sev.Values[0] != "error" || topic == nil || topic.Values[0] != "bgp" {
+		t.Fatalf("bgp errors filters: %+v", r.AST.Filters)
+	}
+	r = run(t, "dallas logs with errors and warnings", cx)
+	if r.AST == nil || len(r.AST.Filters) != 1 || r.AST.Filters[0].Values[0] != "warning" {
+		t.Fatalf("errors and warnings must floor at warning: %+v", r)
+	}
+	// A word neither vocabulary explains is not dropped: the question stays
+	// unparsed (and goes to the model) instead of answering something else.
+	if r := run(t, "top talkers on the dallas wan to the zorblax", cx); r.AST != nil || !r.Unparsed {
+		t.Fatalf("an unexplained word must leave the flow question unparsed: %+v", r)
 	}
 }
 

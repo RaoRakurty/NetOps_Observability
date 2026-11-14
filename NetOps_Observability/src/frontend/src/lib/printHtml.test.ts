@@ -1,6 +1,15 @@
+/**
+ * @vitest-environment happy-dom
+ * @vitest-environment-options {"settings":{"enableIframePageLoading":true}}
+ */
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+// happy-dom 21 (the version package-lock pins, and CI installs) loads no iframe
+// page unless enableIframePageLoading is set, so contentWindow stays null and
+// printHtmlDocument rightly returns false. Browsers always give an about:blank
+// frame a window; this file opts in so the test models the browser. Scoped to
+// this file so no other test can load a page into a frame.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { printHtmlDocument } from "./printHtml";
 

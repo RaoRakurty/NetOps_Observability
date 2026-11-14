@@ -241,6 +241,13 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		}
 	case ast.EntityList:
 		p.PrimaryView, p.Title = Table, Humanize(q.Target)+"s you can see"
+	case ast.FlowTop:
+		p.PrimaryView, p.Title = Table, "Top talkers"
+		if len(q.GroupBy) == 1 && q.GroupBy[0] == ast.FlowGroupService {
+			p.Title = "Busiest services"
+		}
+	case ast.LogSearch:
+		p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Device log lines"
 	}
 	return p
 }
@@ -285,6 +292,10 @@ func Fits(v View, q *ast.AST, rs *plan.ResultSet) bool {
 		return v == Table || (v == Bar && len(q.GroupBy) > 0)
 	case ast.EntityList:
 		return v == Table || v == EvidenceList
+	case ast.FlowTop:
+		return v == Table || v == Bar || v == EvidenceList
+	case ast.LogSearch:
+		return v == Table || v == Timeline || v == EvidenceList
 	}
 	return false
 }
