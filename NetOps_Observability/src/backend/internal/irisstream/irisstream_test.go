@@ -119,6 +119,33 @@ func TestEmitAllowsOnlyTheClosedVocabulary(t *testing.T) {
 	}
 }
 
+// The routing, investigating and fallback steps pass with their closed
+// values; a routing outcome outside the set is blanked, and a fallback can
+// never carry a model name (the event has no field for one).
+func TestRoutingInvestigatingAndFallbackEvents(t *testing.T) {
+	rec := httptest.NewRecorder()
+	s := Open(rec, testCfg(make(chan time.Time)), nil, nil)
+	s.Emit(Event{Type: TypeRouting, Outcome: "model"})
+	s.Emit(Event{Type: TypeInvestigating})
+	s.Emit(Event{Type: TypeModelFallback, Outcome: "gemini-3.6-flash"})
+	s.Emit(Event{Type: TypeRouting, Outcome: "deterministic; drop table"})
+	done := make(chan struct{})
+	close(done)
+	s.Pump(context.Background(), done)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"event: routing\n", "\"type\":\"routing\",\"outcome\":\"model\"}",
+		"event: investigating\n", "event: model_fallback\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "gemini") || strings.Contains(body, "drop table") {
+		t.Fatalf("a value outside the vocabulary reached the stream:\n%s", body)
+	}
+}
+
 // Emit never blocks; past the cap events are dropped and counted, and the
 // count is reported in done.
 func TestEmitIsBoundedAndNeverBlocks(t *testing.T) {

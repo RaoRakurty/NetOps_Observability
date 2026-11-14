@@ -21,18 +21,30 @@ import type { AiAnswer, AiCitation, AiSkillHop } from "../../services/api";
 
 // The WHOLE api surface is mocked, so "the lane called something else" is an
 // assertable failure rather than an invisible network call.
-const mocks = vi.hoisted(() => ({
-  aiAsk: vi.fn(),
-  other: {
-    correlations: vi.fn(), correlationDetail: vi.fn(), eventsFeed: vi.fn(),
-    metricNames: vi.fn(), metricsQuery: vi.fn(), pathsHealth: vi.fn(),
-    probePaths: vi.fn(), flowsByType: vi.fn(), topTalkers: vi.fn(),
-    copilotChat: vi.fn(), devices: vi.fn(),
-  } as Record<string, ReturnType<typeof vi.fn>>,
+const mocks = vi.hoisted(() => {
+  class StreamBrokenError extends Error {}
+  const aiAsk = vi.fn();
+  // The streamed ask (N-E2) is the lane's first call. By default it delivers
+  // the same answer aiAsk would, through aiAsk, so every grounding assertion
+  // below reads the arguments the answer was asked with.
+  const aiAskStream = vi.fn((q: string, ctx: Record<string, string>) => aiAsk(q, ctx));
+  return {
+    aiAsk, aiAskStream, StreamBrokenError,
+    other: {
+      correlations: vi.fn(), correlationDetail: vi.fn(), eventsFeed: vi.fn(),
+      metricNames: vi.fn(), metricsQuery: vi.fn(), pathsHealth: vi.fn(),
+      probePaths: vi.fn(), flowsByType: vi.fn(), topTalkers: vi.fn(),
+      copilotChat: vi.fn(), devices: vi.fn(),
+    } as Record<string, ReturnType<typeof vi.fn>>,
+  };
+});
+vi.mock("../../services/api", () => ({
+  api: { aiAsk: mocks.aiAsk, aiAskStream: mocks.aiAskStream, ...mocks.other },
+  StreamBrokenError: mocks.StreamBrokenError,
 }));
-vi.mock("../../services/api", () => ({ api: { aiAsk: mocks.aiAsk, ...mocks.other } }));
 
 const aiAsk = mocks.aiAsk;
+const aiAskStream = mocks.aiAskStream;
 const otherApi = mocks.other;
 
 import IrisLane, { chainHops, citeProvenance, hopSelectionLabel, safeCiteHref } from "./IrisLane";
@@ -50,10 +62,54 @@ const hop = (over: Partial<AiSkillHop> = {}): AiSkillHop =>
 
 beforeEach(() => {
   aiAsk.mockReset();
+  aiAskStream.mockReset();
+  aiAskStream.mockImplementation((q: string, ctx: Record<string, string>) => aiAsk(q, ctx));
   Object.values(otherApi).forEach((f) => f.mockReset());
   aiAsk.mockResolvedValue(answer());
 });
 afterEach(() => cleanup());
+
+// ── the operational trace while Iris works (N-E2/N-E3) ───────────────────────
+
+describe("IrisLane progress", () => {
+  it("shows what Iris is doing while it works, then the answer", async () => {
+    let finish: (a: AiAnswer) => void = () => {};
+    aiAskStream.mockImplementation((_q: string, _c: Record<string, string>, _id: unknown, onEvent: (e: { type: string; tool?: string; outcome?: string }) => void) => {
+      onEvent({ type: "planning" });
+      onEvent({ type: "routing", outcome: "model" });
+      onEvent({ type: "investigating" });
+      onEvent({ type: "tool_started", tool: "get_network_topology" });
+      return new Promise<AiAnswer>((res) => { finish = res; });
+    });
+    render(<IrisLane caseId="c-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    const trace = await screen.findByTestId("iris-lane-progress");
+    expect(trace.textContent).toContain("Asking the AI model");
+    expect(trace.textContent).toContain("the network topology");
+    finish(answer({ text: "Eight edges in a full mesh." }));
+    await screen.findByText("Eight edges in a full mesh.");
+    expect(screen.queryByTestId("iris-lane-progress")).toBeNull();
+    expect(aiAsk).not.toHaveBeenCalled();
+  });
+
+  it("falls back once to the plain ask when the stream is cut short", async () => {
+    aiAskStream.mockRejectedValue(new mocks.StreamBrokenError("cut"));
+    aiAsk.mockResolvedValue(answer({ text: "Answered without the stream." }));
+    render(<IrisLane caseId="c-2" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByText("Answered without the stream.");
+    expect(aiAsk).toHaveBeenCalledTimes(1);
+    expect(aiAsk).toHaveBeenCalledWith("Explain this problem and what to check next.", { correlation_id: "c-2" });
+  });
+
+  it("does not retry a refusal through the plain ask", async () => {
+    aiAskStream.mockRejectedValue(new Error("403 Forbidden: {\"error\":\"not permitted\"}"));
+    render(<IrisLane caseId="c-3" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByRole("alert");
+    expect(aiAsk).not.toHaveBeenCalled();
+  });
+});
 
 // ── safeCiteHref: the link allowlist ─────────────────────────────────────────
 

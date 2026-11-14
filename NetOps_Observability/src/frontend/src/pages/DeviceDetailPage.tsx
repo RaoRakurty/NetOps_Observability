@@ -15,6 +15,9 @@ import VrfInterfaces from "./device/VrfInterfaces";
 import ControllerOverview, { controllerOf, controllerOnly } from "./device/ControllerOverview";
 import { vrfTerm } from "../lib/vendorTerms";
 import { deviceSerial } from "./device/serial";
+import { useIrisView } from "../iris/viewContext";
+import { askIrisAbout } from "../components/AskIris";
+import { useAIEntitlements } from "../lib/aiEntitlements";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
 // breadcrumb + identity header + a KPI strip, then tabs (Overview · Interfaces ·
@@ -55,6 +58,10 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
   // show, so it gets the controller's view alone.
   const ctl = controllerOf(d);
   const apiOnly = !!ctl && controllerOnly(d);
+  // While this device is open, it is what Iris means by "this" (N-E4): the
+  // Iris box carries its id and the server re-checks it in this workspace.
+  useIrisView({ kind: "device", id: d.id, label: d.name || d.id });
+  const ent = useAIEntitlements();
 
   return (
     <div className="ddp-scrim" onClick={onClose}>
@@ -62,6 +69,12 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
         {/* Header — breadcrumb + identity + close */}
         <div className="ddp-head">
           <div className="ddp-crumb">Devices <span aria-hidden>›</span> {d.name || d.id}</div>
+          {ent.has("ai.chat") && (
+            <button type="button" className="chip-btn ddp-ask-iris" data-testid="ask-iris-device"
+              onClick={() => askIrisAbout("Is this device healthy right now, and is anything wrong with it?")}>
+              Ask Iris about this device
+            </button>
+          )}
           <button className="ddp-x" onClick={onClose} aria-label="Close">×</button>
           <div className="ddp-title">
             <span className="ddp-typedot" style={{ background: t.color }} />

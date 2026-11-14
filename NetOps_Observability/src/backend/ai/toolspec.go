@@ -73,6 +73,17 @@ type toolMeta struct {
 
 var argProblemID = toolArgSpec{name: "problem_id", desc: "The problem's correlation UUID (take it from a problem:<uuid> citation id — not the P-XXXXXX display handle).", required: true}
 
+// flowToolArgs are the optional link and window arguments of the three flow
+// tools (tracker 406). The server validates every one; a bad value is refused
+// with the reason, a device the caller cannot see reads as not found.
+var flowToolArgs = []toolArgSpec{
+	{name: "device", desc: "Optional: one device (name, id or address) — only traffic its flow exporter saw. Omit for the whole network."},
+	{name: "interface", desc: "Optional, needs device: one interface on it, by name (e.g. GigabitEthernet1) or ifIndex."},
+	{name: "window", desc: "Optional lookback: 15m, 1h, 6h, 24h or 7d (default 24h). Resolve relative phrases yourself (\"this morning\" → 6h)."},
+	{name: "from", desc: "Optional explicit start (RFC 3339), with to; at most 7 days before to. Use window instead unless the question names exact times."},
+	{name: "to", desc: "Optional explicit end (RFC 3339), with from."},
+}
+
 // toolMetas describes every tool the agent loop may expose. Keep descriptions
 // action-oriented and honest about scope/windows so the model picks well.
 var toolMetas = map[string]toolMeta{
@@ -102,16 +113,19 @@ var toolMetas = map[string]toolMeta{
 		},
 	},
 	"get_top_talkers": {
-		description: "Top traffic conversations (heaviest source↔destination pairs) over the last 24 hours.",
+		description: "Top traffic conversations (heaviest source↔destination pairs), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Top talkers",
+		args:        flowToolArgs,
 	},
 	"get_flow_summary": {
-		description: "One-line network traffic totals (bytes, flows, sources) over the last 24 hours.",
+		description: "One-line traffic totals (bytes, flows, sources), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Traffic summary",
+		args:        flowToolArgs,
 	},
 	"get_service_flow_summary": {
-		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic over the last 24 hours.",
+		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic, for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Service traffic",
+		args:        flowToolArgs,
 	},
 	"get_metric_anomalies": {
 		description: "Recent detected metric anomalies (worst first) over the last 6 hours.",

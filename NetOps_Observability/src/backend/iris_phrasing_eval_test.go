@@ -334,6 +334,11 @@ func observePhrasingIn(t *testing.T, s *server, a jwtClaims, q string, uiContext
 	r := httptest.NewRequest(http.MethodPost, "/api/ai/ask", nil).WithContext(context.WithValue(ctx, userCtxKey, a))
 	var obs phrasingObs
 	o := s.newOrchestrator(r, a)
+	// The eval measures ROUTING with the RCA workspace's problem in view; this
+	// fixture has no ClickHouse, so the N-E4 binding would fail closed on the
+	// lookup. The case in context is one the caller owns: resolve it here.
+	// Isolation of the binding is iris_view_binding_isolation_test.go's job.
+	o.DS = phrasingCaseDS{DataSource: o.DS}
 	o.NLQuery = s.aiNLQueryRunning(r, a, nil, "", nil, func(_ *http.Request, _ jwtClaims, checked *nlqast.AST, _ validate.Result) (*plan.ResultSet, error) {
 		obs.q = checked
 		return &plan.ResultSet{QueryID: "phrasing-eval"}, nil
@@ -365,6 +370,14 @@ func observePhrasingIn(t *testing.T, s *server, a jwtClaims, q string, uiContext
 		}
 	}
 	return obs
+}
+
+// phrasingCaseDS resolves any problem id to a problem of the caller's (see
+// observePhrasingIn); every other read is the server's own.
+type phrasingCaseDS struct{ ai.DataSource }
+
+func (phrasingCaseDS) GetProblem(_ context.Context, _ ai.Principal, id string) (*ai.Problem, error) {
+	return &ai.Problem{ID: id, Title: "case in view", Verdict: "suspected"}, nil
 }
 
 type phrasingTally struct{ ok, total int }

@@ -218,6 +218,33 @@ func (e *Exporter) Lookup(tenant, exporter string, ifindex uint32) (string, bool
 	return n, ok
 }
 
+// IndexOf is the reverse of Lookup: the interface index whose exported name is
+// name on (tenant, exporter), compared case-insensitively. ok=false for a miss
+// AND for an ambiguous name (two indexes carrying it) — a name that cannot be
+// pinned to one interface is never guessed. The tenant is the row tenant, as
+// in Lookup; the caller resolves the exporter through its own scope first.
+func (e *Exporter) IndexOf(tenant, exporter, name string) (uint32, bool) {
+	name = strings.TrimSpace(name)
+	if e == nil || name == "" {
+		return 0, false
+	}
+	exporter = NormAddr(exporter)
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var found uint32
+	n := 0
+	for k, v := range e.names {
+		if k.tenant != tenant || k.exporter != exporter || !strings.EqualFold(v, name) {
+			continue
+		}
+		if n == 0 || k.ifindex != found {
+			n++
+			found = k.ifindex
+		}
+	}
+	return found, n == 1
+}
+
 // install swaps in a new name set.
 func (e *Exporter) Install(rows []Row) {
 	m := make(map[key]string, len(rows))

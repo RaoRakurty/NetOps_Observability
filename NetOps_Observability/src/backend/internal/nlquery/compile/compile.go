@@ -237,15 +237,17 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 		st.e.phrase(m)
 		st.readings = append(st.readings, lex.Reading{From: m, To: "last 24 hours", Kind: lex.KindWindow})
 	}
-	// Understood but unanswerable: log and flow questions compile to the
-	// reserved query types so the validator refuses them precisely.
-	// Coverage is not applied here: whatever else the question names, the
-	// answer is the same precise refusal, and it must not degrade to Unparsed.
+	// Device syslog and flows (N-C4): the devices or sites named, the window,
+	// and closed filters — never a query string. Coverage applies as for every
+	// other family: a word neither vocabulary explains leaves the question
+	// unparsed (and to the model), never silently dropped.
 	if logRe.MatchString(text) {
-		return Result{Intent: "search_logs", AST: &ast.AST{V: 1, Type: ast.LogSearch, Target: "device"}}, nil
+		r, err := st.logSearch()
+		return st.done(r), err
 	}
 	if flowRe.MatchString(text) {
-		return Result{Intent: "query_flows", AST: &ast.AST{V: 1, Type: ast.FlowTop, Target: "device"}}, nil
+		r, err := st.flowTop()
+		return st.done(r), err
 	}
 	switch {
 	case cx.IncidentID != "" && isWhatHappened(text) && !mentionsPlace(text):
@@ -384,8 +386,43 @@ func isIncidentQuestion(t string) bool {
 }
 
 var (
-	logRe  = regexp.MustCompile(`\b(?:logs?|syslog|log messages?|log lines?|search .* logs)\b`)
-	flowRe = regexp.MustCompile(`\b(?:top talkers?|talkers|bandwidth users|using the most bandwidth|who is using|sending traffic|traffic between|conversations|netflow|flows?)\b`)
+	// "bgp errors", "ospf messages": a protocol topic with an event word is a
+	// log question. "interface errors" is NOT here — that is the if_errors
+	// metric, and the metric family keeps it.
+	logRe  = regexp.MustCompile(`\b(?:logs?|syslog|log messages?|log lines?|search .* logs|(?:bgp|ospf|isis|is-is|bfd|tunnel|ipsec|ike|ntp|dns|snmp|auth|authentication|login|ssh|config|configuration|omp)\s+(?:errors?|messages?|events?|failures?|warnings?|alerts?))\b`)
+	flowRe = regexp.MustCompile(`\b(?:top talkers?|talkers|bandwidth users|using the most bandwidth|who is using|sending traffic|traffic between|conversations|netflow|flows?|bandwidth hogs?|hogging|top destinations?)\b`)
+	// The framing words of a flow or log question: understood, but carrying
+	// nothing the query needs beyond what flowTop / logSearch already read.
+	flowVocabRe    = regexp.MustCompile(`\b(?:top|talkers?|traffic|bandwidth|heaviest|biggest|busiest|largest|most|using|uses|used|users?|hogs?|sending|consuming|eating|conversations?|netflow|flows?|wan|lan|link|links|uplinks?|network|ranked|ranking|hogging|destinations?)\b`)
+	flowServiceRe  = regexp.MustCompile(`\b(?:services?|ports?|protocols?|applications?|apps?)\b`)
+	logVocabRe     = regexp.MustCompile(`\b(?:logs?|syslog|messages?|lines?|entries|events?|logged|search|searched|newest|errors?|warnings?|notifications?)\b`)
+	logSeverityRes = []struct {
+		re  *regexp.Regexp
+		min string
+	}{
+		{regexp.MustCompile(`\b(?:critical|crit|emergenc(?:y|ies)|alerts?)\b`), "critical"},
+		{regexp.MustCompile(`\b(?:errors?|err|failures?|failed|failing)\b`), "error"},
+		{regexp.MustCompile(`\bwarnings?\b`), "warning"},
+	}
+	logTopicRes = []struct {
+		re    *regexp.Regexp
+		topic string
+	}{
+		{regexp.MustCompile(`\bbgp\b`), "bgp"},
+		{regexp.MustCompile(`\bospf\b`), "ospf"},
+		{regexp.MustCompile(`\b(?:isis|is-is)\b`), "isis"},
+		{regexp.MustCompile(`\bbfd\b`), "bfd"},
+		{regexp.MustCompile(`\b(?:(?:interfaces?|links?|ports?) (?:down|up)|interfaces?|link up|link down|flaps?|flapping)\b`), "interface"},
+		{regexp.MustCompile(`\b(?:tunnels?|ipsec|ike)\b`), "tunnel"},
+		{regexp.MustCompile(`\b(?:control connections?|omp|control plane)\b`), "control"},
+		{regexp.MustCompile(`\b(?:auth|authentication|logins?|ssh)\b`), "auth"},
+		{regexp.MustCompile(`\b(?:config|configuration)\b`), "config"},
+		{regexp.MustCompile(`\bcpu\b`), "cpu"},
+		{regexp.MustCompile(`\bmemory\b`), "memory"},
+		{regexp.MustCompile(`\b(?:ntp|clock)\b`), "ntp"},
+		{regexp.MustCompile(`\bdns\b`), "dns"},
+		{regexp.MustCompile(`\bsnmp\b`), "snmp"},
+	}
 )
 
 // stateMetric maps "which interfaces are down" / "which bgp sessions are
@@ -1170,6 +1207,69 @@ func (s *state) incidents() (Result, error) {
 		q.Limit = 5
 	}
 	return Result{Intent: "list_incidents", AST: q, Entities: refs}, nil
+}
+
+// flowTop compiles a flow question: the devices or sites named (refs), the
+// window, and whether it ranks conversations or destination services.
+func (s *state) flowTop() (Result, error) {
+	refs, clarify, err := s.mentions([]string{"site", "device"})
+	if err != nil {
+		return Result{}, err
+	}
+	if len(clarify) > 0 {
+		return Result{Intent: "query_flows", Clarify: clarify}, nil
+	}
+	group := ast.FlowGroupTalker
+	if flowServiceRe.MatchString(s.text) {
+		group = ast.FlowGroupService
+		s.e.re(flowServiceRe, s.text)
+	}
+	s.e.re(flowRe, s.text)
+	s.e.re(flowVocabRe, s.text)
+	q := &ast.AST{V: 1, Type: ast.FlowTop, Target: "device", Refs: astRefs(refs), Time: s.time,
+		GroupBy: []string{group}, Limit: s.topN()}
+	return Result{Intent: "query_flows", AST: q, Entities: refs}, nil
+}
+
+// logSearch compiles a device-syslog question: the devices or sites named,
+// the window, the minimum severity ("errors" = error and worse) and the
+// protocol topics. Free text is never a filter.
+func (s *state) logSearch() (Result, error) {
+	refs, clarify, err := s.mentions([]string{"site", "device"})
+	if err != nil {
+		return Result{}, err
+	}
+	if len(clarify) > 0 {
+		return Result{Intent: "search_logs", Clarify: clarify}, nil
+	}
+	q := &ast.AST{V: 1, Type: ast.LogSearch, Target: "device", Refs: astRefs(refs), Time: s.time, Limit: s.listLimit()}
+	// The LEAST severe level named is the floor: "errors and warnings" is
+	// warning and worse, never only errors.
+	floor := ""
+	for _, sv := range logSeverityRes {
+		if sv.re.MatchString(s.text) {
+			floor = sv.min
+			s.e.re(sv.re, s.text)
+		}
+	}
+	if floor != "" {
+		q.Filters = append(q.Filters, ast.Filter{Field: ast.FilterSeverity, Op: "gte", Values: []string{floor}})
+	}
+	var topics []string
+	for _, tp := range logTopicRes {
+		if tp.re.MatchString(s.text) {
+			topics = append(topics, tp.topic)
+			s.e.re(tp.re, s.text)
+		}
+	}
+	if len(topics) == 1 {
+		q.Filters = append(q.Filters, ast.Filter{Field: ast.FilterTopic, Op: "eq", Values: topics})
+	} else if len(topics) > 1 {
+		q.Filters = append(q.Filters, ast.Filter{Field: ast.FilterTopic, Op: "in", Values: topics})
+	}
+	s.e.re(logRe, s.text)
+	s.e.re(logVocabRe, s.text)
+	return Result{Intent: "search_logs", AST: q, Entities: refs}, nil
 }
 
 // ---- follow-ups ------------------------------------------------------------------

@@ -10,7 +10,8 @@ import Icon from "../components/Icon";
 import { useWorkspace } from "../context/workspace";
 import { friendlyIncidentId } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
-import AskIris from "../components/AskIris";
+import AskIris, { askIrisAbout } from "../components/AskIris";
+import { useAIEntitlements } from "../lib/aiEntitlements";
 import TacCaseChip from "../components/tac/TacCaseChip";
 import { caseLinkFromIncident } from "../pages/troubleshoot/tacModel";
 
@@ -231,6 +232,13 @@ export default function Incidents() {
 // note entry, and lifecycle actions, refetching by incident id, so it renders
 // correctly inside the dockable Inspector (a captured node) OR as an inline card.
 // `onChanged` lets the parent refresh its list after a lifecycle action.
+/** The question "Ask Iris about this incident" sends: the incident's own title
+ *  (trimmed, one line) and what the operator wants next. */
+export function incidentQuestion(inc: Pick<Incident, "title" | "severity">): string {
+  const title = (inc.title || "").replace(/\s+/g, " ").trim().slice(0, 160) || "this incident";
+  return `Explain the ${(inc.severity || "").trim() || "open"} incident "${title}": what is happening, who is affected and what should I check next?`;
+}
+
 export function IncidentDetailBody({ incident, onChanged }: { incident: Incident; onChanged?: () => void }) {
   const [inc, setInc] = useState<Incident>(incident);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -272,6 +280,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
   };
 
   const open = inc.status !== "resolved" && inc.status !== "closed";
+  const ent = useAIEntitlements();
 
   return (
     <>
@@ -279,6 +288,15 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
         <h2 style={{ margin: 0 }}>
           <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
         </h2>
+        {/* N-E4 entry point: an incident row carries no RCA case id, so the
+            question names the incident by its own title; the server reads it
+            as text and answers from the caller's own data. */}
+        {ent.has("ai.chat") && (
+          <button type="button" className="chip-btn" data-testid="ask-iris-incident"
+            onClick={() => askIrisAbout(incidentQuestion(inc))}>
+            Ask Iris about this incident
+          </button>
+        )}
         <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
           <span style={{ fontFamily: "var(--font-mono)" }} title={inc.id}>{friendlyIncidentId(inc.id)}</span>
           {" · "}{inc.status} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)}

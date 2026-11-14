@@ -78,6 +78,8 @@ var intentTypes = map[string][]ast.QueryType{
 	"count_entities":   {ast.EntityCount},
 	"list_entities":    {ast.EntityList},
 	"lookup":           {ast.EntityList},
+	"query_flows":      {ast.FlowTop},
+	"search_logs":      {ast.LogSearch},
 }
 
 // result kind → the query types that can produce it.
@@ -93,6 +95,8 @@ var kindTypes = map[string][]ast.QueryType{
 	"incident_detail": {ast.IncidentExplain},
 	"entity_count":    {ast.EntityCount},
 	"inventory_rows":  {ast.EntityList},
+	"flow_rows":       {ast.FlowTop},
+	"log_rows":        {ast.LogSearch},
 }
 
 var declines = map[string]bool{
