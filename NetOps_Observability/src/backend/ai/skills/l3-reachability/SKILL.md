@@ -1,21 +1,23 @@
 ---
 name: l3-reachability
 layer: igp
-version: 1
+version: 2
 source: https://github.com/automateyournetwork/netclaw/blob/cfafa46c3227356ca6ef38261fa9c1f4ba4711cb/workspace/skills/pyats-troubleshoot/SKILL.md
 when_to_use: cannot reach, can't reach, cant reach, unreachable from, no route to, destination unreachable, reachability problem, black hole, blackholed, traffic not getting through, is there a route
 symptom_kinds: reachability, routing
-tools: get_device_state, get_rca_verdict, get_topology_context, search_logs, get_recent_changes
+tools: get_device_state, get_rca_verdict, get_topology_context, run_ping, search_logs, get_recent_changes
 gather:
   - get_device_state(device_id, area=routes, target=@prefix)
   - get_rca_verdict(correlation_id)
   - get_topology_context(device_id)
+  - run_ping(target=@device_id)
   - search_logs(device, window=6h)
   - get_recent_changes(device, window=24h)
 look_for:
   - Whether the device has a route for the destination at all, read live from its routing table for the prefix in question. No route and a route to the wrong place are different faults; say which.
   - When the route is there, its next hop and how it was learned (connected, static, OSPF, IS-IS, BGP). A route learned the wrong way is often the whole story.
   - Whether the next hop itself is resolved — an address in the ARP or neighbour table. A route whose next hop never resolves forwards nothing.
+  - Whether the device itself answers from Correlix's own collector, when the workspace has turned active probes on. A device Correlix cannot reach makes every live read of it doubtful; one that answers rules out losing the device itself. Off, the step is skipped and says so.
   - Whether the route changed recently. A route that moved to a new next hop at the time of the complaint is the event; the reachability loss is its symptom.
   - Whether this device's configuration changed shortly before the symptom — a static route or a redistribution line changed is a classic cause, but a change that merely preceded it is correlated, not proven.
 decisions:

@@ -30,6 +30,7 @@ import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
+import InvestigationTrace from "../iris/InvestigationTrace";
 import IrisProgress, { type ProgressStep } from "../iris/IrisProgress";
 import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
@@ -210,6 +211,11 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   };
 }
 
+// The plain risk statement for Iris's active probes (N-I3), shown wherever the
+// opt-in can be changed and repeated in the confirmation before it turns on.
+export const PROBE_RISK =
+  "Iris's troubleshooting methods may send a short test from this Correlix server — 3 pings, one traceroute, one DNS lookup or one web request — to this workspace's own devices and declared probes. Nothing is sent from a customer device, and never to an address the workspace does not own.";
+
 export default function Iris({ controls, context, onBusyChange, onLeave, ask, onAskHandled }: {
   /** The panel's window controls (Dock / Expand), rendered in this header
    *  just before Close — components/IrisPanel.tsx owns what they do. */
@@ -312,6 +318,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   const [tKeyDraft, setTKeyDraft] = useState("");
   // Per-workspace AI access rows (platform owner only).
   const [tenantRows, setTenantRows] = useState<AITenantRow[] | null>(null);
+  // N-I3: whether the installation offers active probes at all (platform owner view).
+  const [probesFeature, setProbesFeature] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
@@ -352,7 +360,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     // isn't authorized for simply stays null.
     api.copilotConfig().then((c) => {
       setCfg(c);
-      api.aiTenants().then((r) => setTenantRows(r.tenants ?? [])).catch(() => setTenantRows(null));
+      api.aiTenants().then((r) => { setTenantRows(r.tenants ?? []); setProbesFeature(Boolean(r.probes_feature)); }).catch(() => setTenantRows(null));
     }).catch(() => setCfg(null));
     api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
   }, []);
@@ -448,7 +456,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   };
 
   // Flip one workspace's AI access / guardrails (platform owner) — optimistic row update.
-  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "max_calls" | "daily_tokens">>) => {
+  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "max_calls" | "daily_tokens" | "probes_enabled">>) => {
+    // Turning active probes on is a deliberate act: the risk is stated and confirmed first.
+    if (patch.probes_enabled && !window.confirm(PROBE_RISK + "\n\nTurn active probes on for " + (row.name || row.tenant_id) + "?")) return;
     const next = { ...row, ...patch };
     setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? next : r)));
     try {
@@ -457,6 +467,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
         investigations_enabled: next.investigations_enabled,
         max_calls: next.max_calls || 0,
         daily_tokens: next.daily_tokens || 0,
+        ...(patch.probes_enabled !== undefined
+          ? { probes_enabled: patch.probes_enabled, probes_acknowledged: patch.probes_enabled }
+          : {}),
       });
     } catch (e) {
       setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
@@ -814,6 +827,10 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 Assistant answers are always scoped to each workspace&apos;s own data. Investigations
                 let the AI run governed, read-only lookups before answering.
               </p>
+              <p data-testid="iris-probes-risk" style={{ color: "var(--muted)", fontSize: 14, margin: "0 0 8px" }}>
+                Active probes: {PROBE_RISK}{" "}
+                {probesFeature ? "Each workspace is off until it is turned on here." : "They are off for every workspace until a platform administrator turns on “Iris active probes” on the Features page."}
+              </p>
               {investigationsHint(aiModels) && (
                 <p data-testid="iris-investigations-hint" style={{ color: "var(--warn)", fontSize: 14, margin: "0 0 8px" }}>
                   {investigationsHint(aiModels)}
@@ -833,6 +850,12 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
                     <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
                       onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
+                    title={probesFeature ? "Let Iris's methods send a short test from Correlix to this workspace's own targets" : "Turn on “Iris active probes” on the Features page first"}>
+                    <input type="checkbox" data-testid="iris-probes-toggle" checked={Boolean(row.probes_enabled)}
+                      disabled={!probesFeature || !row.investigations_enabled}
+                      onChange={(e) => setAccess(row, { probes_enabled: e.target.checked })} /> Active probes
                   </label>
                   {/* Per-workspace spend guardrails — blank = platform default. */}
                   <input type="number" min={0} max={8} value={row.max_calls || ""}
@@ -917,6 +940,28 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 onChange={(e) => setTcfg({ ...tcfg, no_platform_key: !e.target.checked })} />
               Use the platform AI service when no key is set
             </label>
+          )}
+          {/* N-I3: this workspace's own opt-in to active probes. */}
+          {tcfg.investigations_enabled && (
+            <div className="op-field" data-testid="iris-tenant-probes">
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+                <input type="checkbox" checked={Boolean(tcfg.probes_enabled)} disabled={savingCfg || !tcfg.probes_available}
+                  onChange={async (e) => {
+                    const on = e.target.checked;
+                    if (on && !window.confirm(PROBE_RISK + "\n\nTurn active probes on for this workspace?")) return;
+                    setSavingCfg(true);
+                    try {
+                      setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, model_fast: tcfg.model_fast, model_strong: tcfg.model_strong,
+                        no_platform_key: tcfg.no_platform_key, probes_enabled: on, probes_acknowledged: on }));
+                    } catch (err) { setError(operatorError(err, "The active-probe setting could not be changed.")); }
+                    finally { setSavingCfg(false); }
+                  }} />
+                Active probes
+              </label>
+              <p style={{ color: "var(--muted)", fontSize: 14, margin: "4px 0 0" }}>
+                {tcfg.probes_available ? PROBE_RISK : "Not available yet: a platform administrator must turn on “Iris active probes” on the Features page."}
+              </p>
+            </div>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="dash-btn accent" onClick={saveTCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
@@ -1030,7 +1075,14 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 </div>
               )}
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }}
+                    onInvestigate={() => {
+                      // "Investigate this" (N-I1): the operator's own question again,
+                      // as a full read-only investigation. The server binds the scope
+                      // from it and refuses, in words, a caller without AI investigations.
+                      const q = history[i - 1]?.role === "user" ? history[i - 1].content : "";
+                      void sendGrounded(q.trim() ? q : "Investigate this", { iris_action: "investigate" });
+                    }} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
                   ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} citations={chatCites[i]} onCite={leave} />
                   : renderContent(m.content)}
@@ -1205,7 +1257,7 @@ export function didYouMeanAsks(ans: AiAnswer): { label: string; question: string
   return out;
 }
 
-function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite: () => void; onClose: () => void; onAsk?: (q: string) => void }) {
+function GroundedAnswer({ ans, onCite, onClose, onAsk, onInvestigate }: { ans: AiAnswer; onCite: () => void; onClose: () => void; onAsk?: (q: string) => void; onInvestigate?: () => void }) {
   const { openHelp } = useShell();
   const [rated, setRated] = useState<"up" | "down" | null>(null);
   const rate = (r: "up" | "down") => {
@@ -1261,6 +1313,15 @@ function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite
       {/* Lines of investigation (N-B3): what each check observed, beside the
           correlation engine's verdict — never a cause of Iris's own. */}
       {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
+      {/* Read-only investigation (N-I1): how it ran, step by step. */}
+      {ans.investigation && <InvestigationTrace trace={ans.investigation} />}
+      {onInvestigate && !ans.investigation && ans.mode === "troubleshoot_finding" && (
+        <div className="op-chips">
+          <button type="button" className="op-chip" data-testid="iris-investigate" onClick={onInvestigate}>
+            Investigate this fully
+          </button>
+        </div>
+      )}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
         <div data-testid="op-data-answer">
           {/* The server chooses the view (N-E1) and sends it as `presentation`;

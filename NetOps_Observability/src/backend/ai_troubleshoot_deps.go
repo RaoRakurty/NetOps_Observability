@@ -37,7 +37,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"netops/backend/internal/changeapi"
 	"regexp"
 	"sort"
@@ -48,6 +51,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/collectors"
+	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
@@ -64,8 +68,10 @@ import (
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/owner"
+	"netops/backend/internal/probetarget"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/rcaresolution"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
 	"netops/backend/pathgraph"
@@ -200,6 +206,17 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// so the seam is wired whenever it exists and says when nothing has run.
 	if s.demTargets != nil {
 		deps.ProbeResults = s.aiProbeResults(claims)
+	}
+	// N-I3: active probes from this server to the caller's own targets. Wired
+	// whenever there is an inventory or a probe catalogue to aim at; whether a
+	// probe may run is the Policy Engine's call (aiNetProbeGate), per request.
+	if s.discovery != nil || s.demTargets != nil {
+		deps.ActiveProbe = s.aiActiveProbe(claims)
+	}
+	// N-F3: the workspace's recorded knowledge — approved runbooks and closed
+	// incidents with their recorded fixes. Wired when either store exists.
+	if s.tenantRunbooks != nil || s.incidentTimeMetrics != nil {
+		deps.WorkspaceKnowledge = s.aiWorkspaceKnowledge(claims)
 	}
 	// IRIS Phase B: investigation memory. Wired only when the store exists, so a
 	// deployment without it never exposes a tool that could only answer nothing.
@@ -3175,6 +3192,27 @@ func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail
 	return det, nil
 }
 
+// errNLQChainUnread: the incident is visible but its analysis could not be
+// read — the planner shows its changes as correlated in time only, and says so.
+var errNLQChainUnread = errors.New("the incident's root-cause analysis could not be read")
+
+// ChangeChain is the planner's OPTIONAL causal-chain seam (plan.ChangeChainScope,
+// tracker 337 N-S3). It reads through Incident, so the same tenant scope and
+// operator restriction apply: a foreign or unknown incident is ErrNotFound. The
+// placement is kind level only (ai.ChangeChainPlacement).
+func (h *nlqScope) ChangeChain(ctx context.Context, id string) (plan.ChangeChain, error) {
+	det, err := h.Incident(ctx, id)
+	if err != nil {
+		return plan.ChangeChain{}, err
+	}
+	res, ok := det.Detail.(ai.RCAResult)
+	if !ok {
+		return plan.ChangeChain{}, errNLQChainUnread
+	}
+	kinds, step, established, contradicted := ai.ChangeChainPlacement(res)
+	return plan.ChangeChain{Read: true, Kinds: kinds, Step: step, Established: established, Contradicted: contradicted}, nil
+}
+
 // nlqChangeFetch bounds one ledger read (and the answer when the caller set no
 // limit). Every filter is applied by the store BEFORE this limit (N-D1), so the
 // bound is on the matching rows, never on rows a Go filter then discards.
@@ -3965,4 +4003,527 @@ func aiFoldProbe(t dem.Target, ring []dem.WireRun) ai.ProbeSummary {
 		}
 	}
 	return p
+}
+
+// ---- N-I3 active probes ------------------------------------------------------
+//
+// run_ping / run_traceroute / run_dns_test / run_http_test take ONE small,
+// fixed measurement from THIS Correlix server (collectors.RunOneShot) toward a
+// target the caller's workspace owns. Never from a customer device, never
+// through a third-party service (owner rule, 2026-11-13).
+//
+// The Policy Engine has already decided the probe gate (aiNetProbeGate) before
+// a tool ever calls in here; the seam re-checks it as defence in depth. Then:
+//
+//   - §3a: the target is resolved INSIDE the caller's tenant only — an
+//     inventory device the caller can see, or a probe the caller's workspace
+//     declared (internal/dem). Anything else, including another tenant's
+//     device or probe, is ErrNotFound, indistinguishable from "no such thing".
+//     The platform scope (all tenants, provider) sends nothing.
+//   - Every address the target resolves to passes internal/probetarget:
+//     loopback / link-local / metadata / multicast / reserved space never;
+//     internal space only when it is one of the caller's own device addresses.
+//     The address that passed is PINNED — the collector dials it, never the
+//     name again (no DNS rebinding between the check and the probe).
+//   - Each target is probed at most aiProbePerTargetPerMin times a minute per
+//     workspace, and at most aiProbeSlots probes run at once on the server.
+//
+// Nothing here names an address in the result: targets are reported by the
+// name the operator gave them.
+
+const (
+	aiProbePerTargetPerMin = 2
+	aiProbeSlots           = 2
+	aiProbeMaxDeclared     = 3
+)
+
+// aiProbeExec is the active-probe machinery one server owns.
+type aiProbeExec struct {
+	run     func(context.Context, collectors.OneShotRequest) collectors.OneShotResult
+	lookup  probetarget.Lookup
+	limiter *probetarget.Limiter
+	slots   *probetarget.Slots
+}
+
+func newAIProbeExec() aiProbeExec {
+	return aiProbeExec{
+		run:     collectors.RunOneShot,
+		lookup:  aiProbeSystemLookup,
+		limiter: probetarget.NewLimiter(time.Now),
+		slots:   probetarget.NewSlots(aiProbeSlots),
+	}
+}
+
+// aiProbeSystemLookup resolves a target name with the system resolver.
+func aiProbeSystemLookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// aiProbeTarget is one resolved target, before validation.
+type aiProbeTarget struct {
+	label    string // the operator's name for it — device or probe name
+	kind     string // "device" | "probe"
+	host     string // what to resolve: an address, a host name, or (dns) the name to look up
+	port     int
+	scheme   string
+	path     string
+	resolver string // dns: a pinned resolver host[:port], "" = the system resolver
+}
+
+// aiActiveProbe binds the probe seam to the caller's own scope.
+func (s *server) aiActiveProbe(claims jwtClaims) func(context.Context, ai.Principal, ai.ActiveProbeRequest) (ai.ActiveProbeReport, error) {
+	return func(ctx context.Context, _ ai.Principal, req ai.ActiveProbeRequest) (ai.ActiveProbeReport, error) {
+		rep := ai.ActiveProbeReport{Kind: req.Kind}
+		tenant, cross := principalTenant(claims)
+		if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) {
+			return rep, nil // Scoped=false: probes run per workspace
+		}
+		if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+			return rep, nil
+		}
+		rep.Scoped = true
+		if g := s.aiNetProbeGate(claims); !g.Allow {
+			rep.Unavailable = g.Reason // defence in depth: the policy decided first
+			return rep, nil
+		}
+		if s.aiProbe.run == nil {
+			rep.Unavailable = "active probes are not available on this server"
+			return rep, nil
+		}
+		targets, total, err := s.aiProbeTargets(ctx, claims, tenant, req)
+		if err != nil {
+			return ai.ActiveProbeReport{}, err
+		}
+		if len(targets) == 0 {
+			rep.Unavailable = aiProbeNothingDeclared(req.Kind)
+			return rep, nil
+		}
+		rep.TargetsTotal = total
+		owned := s.aiOwnedAddrs(claims)
+		for _, t := range targets {
+			rep.Results = append(rep.Results, s.aiProbeOne(ctx, tenant, req.Kind, t, owned))
+		}
+		return rep, nil
+	}
+}
+
+func aiProbeNothingDeclared(k ai.ActiveProbeKind) string {
+	switch k {
+	case ai.ProbeDNS:
+		return "this workspace declares no DNS probe, so there is no name to test — one can be added on the Digital Experience page (Synthetics)"
+	case ai.ProbeHTTP:
+		return "this workspace declares no web probe, so there is no address to test — one can be added on the Digital Experience page (Synthetics)"
+	default:
+		return "no target to test"
+	}
+}
+
+// aiProbeTargets resolves the request to the caller's own targets. A named
+// target that is neither one of the caller's devices nor one of the
+// workspace's declared probes is ErrNotFound (§3a: another tenant's device or
+// probe reads exactly like a missing one).
+func (s *server) aiProbeTargets(ctx context.Context, claims jwtClaims, tenant string, req ai.ActiveProbeRequest) ([]aiProbeTarget, int, error) {
+	var declared []dem.Target
+	if s.demTargets != nil {
+		ts, err := s.demTargets.List(ctx, tenant)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, t := range ts {
+			if strings.EqualFold(t.TenantID, tenant) { // defence in depth: the store is tenant-keyed
+				declared = append(declared, t)
+			}
+		}
+	}
+	switch req.Kind {
+	case ai.ProbePing, ai.ProbeTraceroute:
+		if dev, ok := s.aiLookupDevice(claims, req.Target); ok {
+			return []aiProbeTarget{{label: dev.Name, kind: "device", host: aiProbeHostOnly(dev.Address)}}, 1, nil
+		}
+		for _, t := range declared {
+			if strings.EqualFold(t.Name, req.Target) {
+				if pt, ok := aiProbeTargetFromDeclared(t, req.Kind); ok {
+					return []aiProbeTarget{pt}, 1, nil
+				}
+			}
+		}
+		return nil, 0, ai.ErrNotFound
+	case ai.ProbeDNS, ai.ProbeHTTP:
+		want := dem.KindDNS
+		if req.Kind == ai.ProbeHTTP {
+			want = dem.KindHTTP
+		}
+		var out []aiProbeTarget
+		total := 0
+		for _, t := range declared {
+			if t.Kind != want || (req.Target == "" && t.Paused) {
+				continue
+			}
+			if req.Target != "" && !strings.EqualFold(t.Name, req.Target) {
+				continue
+			}
+			pt, ok := aiProbeTargetFromDeclared(t, req.Kind)
+			if !ok {
+				continue
+			}
+			total++
+			if len(out) < aiProbeMaxDeclared {
+				out = append(out, pt)
+			}
+		}
+		if req.Target != "" && len(out) == 0 {
+			return nil, 0, ai.ErrNotFound
+		}
+		return out, total, nil
+	}
+	return nil, 0, fmt.Errorf("unknown probe kind %q", req.Kind)
+}
+
+// aiProbeHostOnly drops a port from host[:port].
+func aiProbeHostOnly(host string) string {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// aiProbeTargetFromDeclared projects a declared probe onto what the requested
+// measurement needs. A ping or traceroute takes the probe's host; a DNS test
+// takes the name it resolves and its pinned resolver; a web test takes the
+// URL's scheme, host, port and path (never its query string).
+func aiProbeTargetFromDeclared(t dem.Target, kind ai.ActiveProbeKind) (aiProbeTarget, bool) {
+	pt := aiProbeTarget{label: t.Name, kind: "probe"}
+	switch kind {
+	case ai.ProbeDNS:
+		if t.Kind != dem.KindDNS {
+			return pt, false
+		}
+		pt.host, pt.resolver = strings.TrimSpace(t.Host), strings.TrimSpace(t.Resolver)
+		return pt, pt.host != ""
+	case ai.ProbeHTTP:
+		if t.Kind != dem.KindHTTP {
+			return pt, false
+		}
+		u, err := url.Parse(strings.TrimSpace(t.Host))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			return pt, false
+		}
+		pt.scheme, pt.host, pt.path = u.Scheme, u.Hostname(), u.EscapedPath()
+		if p := u.Port(); p != "" {
+			n, perr := strconv.Atoi(p)
+			if perr != nil {
+				return pt, false
+			}
+			pt.port = n
+		}
+		return pt, true
+	default: // ping, traceroute: the probe's destination host
+		host := strings.TrimSpace(t.Host)
+		if t.Kind == dem.KindHTTP {
+			u, err := url.Parse(host)
+			if err != nil {
+				return pt, false
+			}
+			host = u.Hostname()
+		} else {
+			host = aiProbeHostOnly(host)
+		}
+		pt.host = host
+		return pt, host != ""
+	}
+}
+
+// aiOwnedAddrs is the set of the caller's own device addresses: the only
+// internal addresses an active probe may reach.
+func (s *server) aiOwnedAddrs(claims jwtClaims) probetarget.Owned {
+	set := map[netip.Addr]bool{}
+	if s.discovery != nil {
+		tenant, cross := principalTenant(claims)
+		for _, dev := range s.discovery.Devices() {
+			if !canSeeDevice(dev, tenant, cross) {
+				continue
+			}
+			if a, err := netip.ParseAddr(strings.Trim(aiProbeHostOnly(dev.Address), "[]")); err == nil {
+				set[a.Unmap()] = true
+			}
+		}
+	}
+	return func(a netip.Addr) bool { return set[a.Unmap()] }
+}
+
+// aiProbeOne validates, limits and measures one target.
+func (s *server) aiProbeOne(ctx context.Context, tenant string, kind ai.ActiveProbeKind, t aiProbeTarget, owned probetarget.Owned) ai.ActiveProbeResult {
+	res := ai.ActiveProbeResult{Target: t.label, TargetKind: t.kind}
+	req := collectors.OneShotRequest{}
+	switch kind {
+	case ai.ProbePing:
+		req.Kind = collectors.OneShotPing
+	case ai.ProbeTraceroute:
+		req.Kind = collectors.OneShotTraceroute
+	case ai.ProbeDNS:
+		req.Kind = collectors.OneShotDNS
+	default:
+		req.Kind = collectors.OneShotHTTP
+	}
+	limitKey := tenant + "\x1f" + string(kind) + "\x1f"
+	if kind == ai.ProbeDNS {
+		// The name is resolved as the measurement; the only traffic target is
+		// the resolver, and a pinned resolver must pass like any other target.
+		req.Host = t.host
+		if t.resolver != "" {
+			rhost, rport := t.resolver, 53
+			if h, p, err := net.SplitHostPort(t.resolver); err == nil {
+				n, perr := strconv.Atoi(p)
+				if perr != nil || n <= 0 || n > 65535 {
+					res.Refused = "its resolver is not a valid address"
+					return res
+				}
+				rhost, rport = h, n
+			}
+			ra, err := probetarget.Resolve(ctx, s.aiProbe.lookup, rhost, owned)
+			if err != nil {
+				res.Refused = aiProbeRefusal(err)
+				return res
+			}
+			req.Resolver = netip.AddrPortFrom(ra, uint16(rport))
+		}
+		limitKey += strings.ToLower(t.host)
+	} else {
+		a, err := probetarget.Resolve(ctx, s.aiProbe.lookup, t.host, owned)
+		if err != nil {
+			res.Refused = aiProbeRefusal(err)
+			return res
+		}
+		req.Addr, req.Host, req.Port, req.Scheme, req.Path = a, t.host, t.port, t.scheme, t.path
+		limitKey += a.String()
+	}
+	if !s.aiProbe.limiter.Allow(limitKey, aiProbePerTargetPerMin) {
+		res.Refused = fmt.Sprintf("this target was already tested %d times in the last minute — try again shortly", aiProbePerTargetPerMin)
+		return res
+	}
+	release, ok := s.aiProbe.slots.TryAcquire()
+	if !ok {
+		res.Refused = "another active probe is running on this server — try again in a moment"
+		return res
+	}
+	defer release()
+	got := s.aiProbe.run(ctx, req)
+	logInfo("ai", "active probe sent", map[string]any{
+		"tenant": tenant, "kind": string(kind), "target": t.label, "target_kind": t.kind,
+		"up": got.Up, "unavailable": got.Unavailable != "", "elapsed_ms": got.Elapsed.Milliseconds(),
+	})
+	if got.Unavailable != "" {
+		res.Unavailable = got.Unavailable
+		return res
+	}
+	res.Up, res.Sent, res.Received = got.Up, got.Sent, got.Received
+	res.LossPct, res.RTTms, res.Reached = got.LossPct, got.RTTms, got.Reached
+	res.StatusCode, res.FailClass, res.Answers = got.StatusCode, got.FailClass, got.Answers
+	for _, h := range got.Hops {
+		res.Hops = append(res.Hops, ai.ActiveProbeHop{TTL: h.TTL, Replied: h.Replied, RTTms: h.RTTms})
+	}
+	return res
+}
+
+// aiProbeRefusal words a validation failure for the answer, never with an
+// address in it.
+func aiProbeRefusal(err error) string {
+	var r *probetarget.Refusal
+	if errors.As(err, &r) {
+		return r.Reason
+	}
+	return "its address could not be resolved"
+}
+
+// ---- the workspace's recorded knowledge (tracker 337 N-F3) ----------------
+//
+// search_workspace_knowledge ranks ONE workspace's approved runbooks (N-F2)
+// and its closed incidents with the newest fix an operator recorded (N-F4 +
+// #247). The Network context facts (N-F1) are deliberately NOT read here: they
+// are never citable evidence, and their question-aware ordering lives in
+// orgContextBlockFor.
+//
+// §3a, the same scoping as the probe read: one concrete workspace only. The
+// platform's "All tenants" view and the Provider scope read nothing; an
+// operator-restricted workspace reads nothing for the platform owner. Each
+// store is tenant-keyed already; every document is stamped with the tenant
+// the server read it for, and ai.RankKnowledge re-checks that stamp.
+// Runbooks follow the same entitlement as the runbook overlay itself
+// (ai.runbook.author). An operator's free-text resolution note never enters
+// this path: only the resolution's kind, label, change id and date do.
+
+// Corpus bounds per layer.
+const (
+	aiKnowledgeMaxRunbooks  = 200
+	aiKnowledgeMaxIncidents = 500
+	aiKnowledgeBodyChars    = 2000
+	aiKnowledgeIncidentDays = 365
+)
+
+// aiWorkspaceKnowledge binds the knowledge read to the caller's own scope.
+func (s *server) aiWorkspaceKnowledge(claims jwtClaims) func(context.Context, ai.Principal, []ai.KnowledgeLayer) (ai.KnowledgeCorpus, error) {
+	return func(ctx context.Context, _ ai.Principal, layers []ai.KnowledgeLayer) (ai.KnowledgeCorpus, error) {
+		tenant, cross := principalTenant(claims)
+		if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) {
+			return ai.KnowledgeCorpus{}, nil // Scoped=false: knowledge is per-workspace data
+		}
+		if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+			return ai.KnowledgeCorpus{}, nil
+		}
+		out := ai.KnowledgeCorpus{Scoped: true, Tenant: tenant}
+		for _, l := range layers {
+			var docs []ai.KnowledgeDoc
+			var err error
+			switch l {
+			case ai.LayerRunbook:
+				if s.tenantRunbooks == nil || !s.aiEntitled(claims, aientitlement.RunbookAuthor) {
+					continue
+				}
+				docs, err = s.aiKnowledgeRunbooks(ctx, tenant)
+			case ai.LayerIncident:
+				if s.incidentTimeMetrics == nil {
+					continue
+				}
+				docs, err = s.aiKnowledgeIncidents(ctx, tenant)
+			default:
+				continue // the environment layer is never a tool corpus
+			}
+			if err != nil {
+				logError("iris.knowledge", "a knowledge layer could not be read; the answer says so", map[string]any{"layer": string(l), "error": err.Error()})
+				out.Unread = append(out.Unread, l)
+				continue
+			}
+			out.Docs = append(out.Docs, docs...)
+		}
+		return out, nil
+	}
+}
+
+// aiKnowledgeRunbooks: the tenant's APPROVED runbooks (an unapproved draft is
+// never retrievable). Rendered by name and when-to-use; the approved body is
+// searched, never shown.
+func (s *server) aiKnowledgeRunbooks(ctx context.Context, tenant string) ([]ai.KnowledgeDoc, error) {
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	rows, err := s.tenantRunbooks.List(rctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ai.KnowledgeDoc, 0, len(rows))
+	for _, r := range rows {
+		if !strings.EqualFold(r.TenantID, tenant) {
+			continue // defence in depth: the store is tenant-keyed already
+		}
+		v, ok := r.Active()
+		if !ok {
+			continue
+		}
+		updated := r.CreatedAt
+		if v.DecidedAt != nil {
+			updated = *v.DecidedAt
+		}
+		body := v.Body
+		if len(body) > aiKnowledgeBodyChars {
+			body = body[:aiKnowledgeBodyChars]
+		}
+		when := strings.TrimSpace(r.WhenToUse)
+		if when == "" {
+			when = "no when-to-use line"
+		}
+		out = append(out, ai.KnowledgeDoc{
+			ID: r.ID, Layer: ai.LayerRunbook, Tenant: tenant, Source: "tenant_runbook", Authority: ai.AuthorityApproved,
+			Updated: updated, Scope: r.Scope, Title: r.Name(), Text: "when to use: " + when, Extra: body,
+			Href: "#/admin/iris-runbooks", Label: "approved " + updated.UTC().Format("2006-01-02") + ", version " + strconv.Itoa(v.Version),
+		})
+		if len(out) >= aiKnowledgeMaxRunbooks {
+			break
+		}
+	}
+	return out, nil
+}
+
+// aiKnowledgeIncidents: the tenant's CLOSED incidents of the last year, each
+// with the newest fix an operator recorded. A device or interface named by an
+// address is shown as "an address" (§15).
+func (s *server) aiKnowledgeIncidents(ctx context.Context, tenant string) ([]ai.KnowledgeDoc, error) {
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	since := time.Now().Add(-aiKnowledgeIncidentDays * 24 * time.Hour)
+	rows, err := s.incidentTimeMetrics.ListWindow(rctx, tenant, false, since, timeIntelCalcVersion, timeIntelBackfillCap)
+	if err != nil {
+		return nil, err
+	}
+	safe := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v != "" && irisglossary.HasAddress(v) {
+			return "an address"
+		}
+		return v
+	}
+	var ids []string
+	var keep []int
+	for i, r := range rows {
+		if !strings.EqualFold(r.State, "closed") || r.Internal || r.TenantID != "" && !strings.EqualFold(r.TenantID, tenant) {
+			continue // open, merged, platform-internal, or (defensively) another tenant's row
+		}
+		keep = append(keep, i)
+		ids = append(ids, r.CorrelationID)
+		if len(keep) >= aiKnowledgeMaxIncidents {
+			break
+		}
+	}
+	fixes := map[string]rcaresolution.Resolution{}
+	if s.rcaResolutions != nil && len(ids) > 0 {
+		got, ferr := s.rcaResolutions.Latest(rctx, tenant, ids)
+		if ferr != nil {
+			logError("iris.knowledge", "recorded fixes could not be read; incidents are listed without them", errf(ferr))
+		} else {
+			fixes = got
+		}
+	}
+	out := make([]ai.KnowledgeDoc, 0, len(keep))
+	for _, i := range keep {
+		r := rows[i]
+		g := r.Group
+		var parts []string
+		add := func(label, v string) {
+			if v = safe(v); v != "" {
+				parts = append(parts, label+" "+v)
+			}
+		}
+		add("signature", g["signature"])
+		add("owner domain", r.OwnerDomain)
+		add("seam", r.SeamType)
+		add("provider class", r.Owner)
+		add("device", g["device"])
+		add("interface", g["interface"])
+		add("path", g["app_path"])
+		authority := ai.AuthorityDerived
+		if fx, ok := fixes[r.CorrelationID]; ok && (fx.TenantID == "" || strings.EqualFold(fx.TenantID, tenant)) {
+			line := "fixed by: " + rcaresolution.Label(fx.Kind) + " (recorded by an operator on " + fx.CreatedAt.UTC().Format("2006-01-02")
+			if fx.ChangeID != "" {
+				line += ", change " + safe(fx.ChangeID)
+			}
+			parts = append(parts, line+")")
+			authority = ai.AuthorityRecorded
+		} else {
+			parts = append(parts, "no fix was recorded for it")
+		}
+		day := r.OccurredAt.UTC().Format("2006-01-02")
+		out = append(out, ai.KnowledgeDoc{
+			ID: r.CorrelationID, Layer: ai.LayerIncident, Tenant: tenant, Source: "incident_history", Authority: authority,
+			Updated: r.OccurredAt, Scope: "tenant", Title: "case " + shortCaseID(r.CorrelationID), Text: strings.Join(parts, "; "),
+			Href: "#/monitoring/correlations?id=" + r.CorrelationID, Label: "closed, occurred " + day,
+		})
+	}
+	return out, nil
+}
+
+// shortCaseID is the first eight characters of a case id (operator-visible).
+func shortCaseID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }

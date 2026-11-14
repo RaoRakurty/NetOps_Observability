@@ -462,22 +462,37 @@ const thisWeek = { kind: "absolute", from: "2026-09-21T05:00:00Z", to: NOW };
 const aroundNote = (n: number) =>
   `changes shown are those within 30m0s before / 1m0s after each of ${n} incidents — correlated in time, not established as causes`;
 
-const NEAR_A = change({
+// A per-incident row as plan/lists.go changesAroundIncidents builds it since
+// #254: the incident it was found near (id, display id, title, onset), the
+// minutes before onset, and the relation from chain.go labelRow — "temporal"
+// (DERIVED timing) unless the engine's causal chain for THAT incident names a
+// change of the row's kind ("chain_kind", still not proof of this change).
+function near(over: Json, inc: { id: string; display: string; title: string; at: string }): Json {
+  return change({
+    incident_id: inc.id, incident_display_id: inc.display, incident_title: inc.title, incident_at: inc.at,
+    relation_class: "DERIVED", ...over,
+  });
+}
+const INC_A = { id: "inc-sdwan-a", display: "INC-201", title: "SD-WAN loss at DFW", at: "2026-09-23T11:00:00Z" };
+const INC_B = { id: "inc-sdwan-b", display: "INC-202", title: "Overlay down at AUS", at: "2026-09-22T08:00:00Z" };
+const INC_C = { id: "inc-sdwan-c", display: "INC-180", title: "SJC transport flap", at: "2026-09-02T18:42:00Z" };
+const NEAR_A = near({
   change_id: "chg-2001", time: "2026-09-23T10:48:00Z", type: "NETWORK_CHANGE", actor: "jsmith", object: "dfw-edge-1",
-  summary: "Overlay TLOC preference changed", incident_id: "inc-sdwan-a", minutes_before_incident: 12,
-});
-const NEAR_A2 = change({
+  summary: "Overlay TLOC preference changed", minutes_before_incident: 12,
+}, INC_A);
+const NEAR_A2 = near({
   change_id: "chg-2002", time: "2026-09-23T10:41:00Z", type: "CONFIG_CHANGE", actor: "alice", object: "dfw-core-1",
-  summary: "Syslog server list updated", incident_id: "inc-sdwan-a", minutes_before_incident: 19,
-});
-const NEAR_B = change({
+  summary: "Syslog server list updated", minutes_before_incident: 19,
+}, INC_A);
+const NEAR_B = near({
   change_id: "chg-2003", time: "2026-09-22T07:55:00Z", type: "NETWORK_CHANGE", actor: "bob", object: "aus-edge-1", site: "aus-br",
-  summary: "Control-plane policy pushed from the controller", incident_id: "inc-sdwan-b", minutes_before_incident: 5,
-});
-const NEAR_C = change({
+  summary: "Control-plane policy pushed from the controller", minutes_before_incident: 5,
+  relation: "chain_kind", relation_class: "CORRELIX_RCA", chain_kind: "policy_change", chain_step: 1, chain_established: false,
+}, INC_B);
+const NEAR_C = near({
   change_id: "chg-1801", time: "2026-09-02T18:20:00Z", type: "NETWORK_CHANGE", actor: "jsmith", object: "sjc-edge-1", site: "sjc-br",
-  summary: "Transport color mapping edited", incident_id: "inc-sdwan-c", minutes_before_incident: 22,
-});
+  summary: "Transport color mapping edited", minutes_before_incident: 22,
+}, INC_C);
 
 function s3Answer(question: string): Json {
   const q = question.toLowerCase();
@@ -503,7 +518,7 @@ function s3Answer(question: string): Json {
   return { mode: "unavailable", intent: "capability", modules: [], text: "unexpected question in the N-S3 script", citations: [], disclaimers: [] };
 }
 
-test("N-S3: what changed 30 minutes before every SD-WAN incident — correlated in time, each row linked to its incident", async ({ page }) => {
+test("N-S3: what changed 30 minutes before every SD-WAN incident — grouped per incident with its RCA link, correlated vs causal kind kept distinct", async ({ page }) => {
   const fake = await bootIris(page, { answer: s3Answer, tenantConfig: TENANT_CONFIG });
   await page.goto("/#/overview/home");
   await openIris(page);
@@ -513,14 +528,22 @@ test("N-S3: what changed 30 minutes before every SD-WAN incident — correlated 
   await expect(ans.getByRole("region", { name: "Changes in this window" })).toBeVisible();
   // The server's statement of what this list is — and is not — reaches the operator.
   await expect(ans.getByText(aroundNote(2))).toBeVisible();
-  const grid = ans.getByRole("grid", { name: "Changes" });
-  await expect(grid.getByRole("gridcell", { name: "aus-edge-1" })).toBeVisible();
-  // Correlated, never causal: every row reads "Happened before — not proven cause".
-  await expect(grid.getByText("Linked by the root-cause engine")).toHaveCount(0);
+  // One section per incident, headed by the incident and a link to its RCA.
+  const groupA = ans.getByRole("region", { name: "Changes before INC-201" });
+  const groupB = ans.getByRole("region", { name: "Changes before INC-202" });
+  await expect(groupA.getByRole("link", { name: "INC-201" })).toHaveAttribute("href", /inc-sdwan-a/);
+  await expect(groupA.getByText("SD-WAN loss at DFW")).toBeVisible();
+  await expect(groupB.getByRole("link", { name: "INC-202" })).toHaveAttribute("href", /inc-sdwan-b/);
+  const gridA = groupA.getByRole("grid");
+  await expect(gridA.getByRole("gridcell", { name: "12 min before onset" })).toBeVisible();
+  await expect(gridA.getByRole("gridcell", { name: "dfw-core-1" })).toBeVisible();
+  // Correlated and causal-kind stay distinct; neither is ever stated as the cause.
+  await expect(gridA.getByText("Happened before — not proven cause").first()).toBeVisible();
+  await expect(groupB.getByRole("grid").getByText("Same kind as a root-cause step — not proven cause")).toBeVisible();
+  await expect(ans.getByText("Linked by the root-cause engine")).toHaveCount(0);
 
-  // Each row names the incident it was found near, with how long before it started.
-  // The row opens from its first cell (the time); wide cells overlap in a narrow panel.
-  await grid.getByRole("gridcell", { name: "Sep 23, 10:48:00 UTC" }).click();
+  // A row opens from its first cell (the time); wide cells overlap in a narrow panel.
+  await gridA.getByRole("gridcell", { name: "Sep 23, 10:48:00 UTC" }).click();
   const drawer = page.getByRole("dialog");
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText(/Happened before — not proven cause/)).toBeVisible();
@@ -534,13 +557,13 @@ test("N-S3: what changed 30 minutes before every SD-WAN incident — correlated 
   await askIris(page, "Only WAN changes.");
   await expect(answers(page)).toHaveCount(2);
   ans = lastAnswer(page);
-  await expect(ans.getByRole("grid", { name: "Changes" }).getByRole("gridcell", { name: "dfw-core-1" })).toHaveCount(0);
+  await expect(ans.getByRole("region", { name: "Changes before INC-201" }).getByRole("gridcell", { name: "dfw-core-1" })).toHaveCount(0);
 
   await askIris(page, "Show the last 30 days.");
   await expect(answers(page)).toHaveCount(3);
   ans = lastAnswer(page);
   await expect(ans.getByText(aroundNote(3))).toBeVisible();
-  await expect(ans.getByRole("grid", { name: "Changes" }).getByRole("gridcell", { name: "sjc-edge-1" })).toBeVisible();
+  await expect(ans.getByRole("region", { name: "Changes before INC-180" }).getByRole("gridcell", { name: "sjc-edge-1" })).toBeVisible();
 
   expect(fake.started).toEqual(["conv-1"]);
   expect(new Set(fake.asks.map((a) => a.conversation_id))).toEqual(new Set(["conv-1"]));

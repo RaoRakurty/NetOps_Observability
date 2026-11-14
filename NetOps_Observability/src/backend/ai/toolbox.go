@@ -36,7 +36,17 @@ type Toolbox struct {
 	Gateway *ToolGateway
 	// Trace receives tool_started / tool_finished (N-E2); nil = none.
 	Trace TraceSink
+	// ModelDirected marks a toolbox whose tool NAMES come from a model (the
+	// copilot agent loop). An active probe (CapNetProbe, N-I3) is refused
+	// there whatever the policy says: the model may reach one only as an
+	// authored step of a troubleshooting method or of an investigation plan,
+	// never by naming it (§15 LLM08 — least agency). The engine's own paths,
+	// where the platform names the tool, leave it false.
+	ModelDirected bool
 }
+
+// modelDirectedProbeReason is the gate-2 refusal of a model-named probe.
+const modelDirectedProbeReason = "%s sends traffic from Correlix's collector, so it runs only as a step of a troubleshooting method or investigation plan — a model cannot call it directly"
 
 // BuildToolRegistry is the ONE constructor for the Iris tool registry, used by
 // both the grounded engine and the copilot agent loop:
@@ -74,6 +84,9 @@ func (b Toolbox) Authorize(name string, p Principal) (tool AITool, d Decision, r
 	}
 	if b.Policy == nil {
 		return tool, deny("%s is not permitted: no policy engine", name), true
+	}
+	if b.ModelDirected && tool.Capability() == CapNetProbe {
+		return tool, deny(modelDirectedProbeReason, name), true
 	}
 	return tool, b.Policy.EvaluateTool(tool, p), true
 }
