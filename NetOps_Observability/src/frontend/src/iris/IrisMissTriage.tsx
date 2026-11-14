@@ -16,7 +16,7 @@ import { httpFailure, operatorError } from "../lib/errors";
 
 export const CLASS_LABEL: Record<IrisMissClass, { title: string; fix: string }> = {
   no_tool: { title: "No tool for it", fix: "Nothing in this installation can answer these yet." },
-  no_data: { title: "No data for it", fix: "The right place was searched and held nothing (no document, playbook, page or rows)." },
+  no_data: { title: "Searched, nothing found", fix: "The right place was searched and held nothing (no document, playbook, page or rows)." },
   wrong_route: { title: "Wrong kind of answer", fix: "The operator said the answer was not what they meant." },
   wrong_tool: { title: "Wrong reading", fix: "The operator corrected the device, metric, time window or filter." },
   wording: { title: "Wording not understood", fix: "Nothing read the words — connect an AI model, or check the question." },

@@ -130,14 +130,11 @@ export default function Capacity({ win, onOpenLink }: { win: FlowsWindow; onOpen
         {noSpeed.length > 0 && (
           <div className="tr-nospeed">
             <button className="btn-ghost" aria-expanded={showNoSpeed} onClick={() => setShowNoSpeed((v) => !v)}>
-              Links with no reported speed ({noSpeed.length})
+              Speed not reported ({noSpeed.length})
             </button>
             {showNoSpeed && (
               <>
-                <p className="mini-meta tr-note">
-                  These routers do not report a usable interface speed, so there is no percentage, headroom or forecast — only the throughput.
-                </p>
-                <table className="ds-table tr-cap" aria-label="Links with no reported speed">
+                <table className="ds-table tr-cap" aria-label="Speed not reported">
                   <thead>
                     <tr>
                       <th scope="col">Link</th>
@@ -162,9 +159,8 @@ export default function Capacity({ win, onOpenLink }: { win: FlowsWindow; onOpen
           </div>
         )}
         <p className="mini-meta tr-note" data-testid="capacity-method">
-          95th percentile and peak use five-minute rates over this window (busier direction). "Reaches 90%" fits a straight line through each complete day's
-          95th percentile over the last {cap.data?.forecast.days ?? 28} days; it needs {cap.data?.forecast.min_days ?? 14} days and a steady trend.
-          {cap.data?.forecast.unavailable ? " The daily history could not be read just now, so no forecast is shown." : ""}
+          Forecast needs {cap.data?.forecast.min_days ?? 14} days of steady daily history.
+          {cap.data?.forecast.unavailable ? " Daily history unreadable just now." : ""}
         </p>
         {total > rows.length && <p className="fact-line tr-fact">The {rows.length} busiest of {total} links are shown.</p>}
       </div>

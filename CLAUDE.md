@@ -367,7 +367,8 @@ real Postgres, which carries part of the §3a RLS/isolation corpus; `govulncheck
 `sealing`) only; and **repo-wide `golangci-lint`, which bundles staticcheck +
 gosec** for the rest of the tree — so a standalone repo-wide staticcheck/gosec
 run is NOT the gate and will report findings CI does not. Frontend adds
-`npm run build` and Playwright `npm run e2e`; the correlation engine has its own
+`npm run build`, the vitest unit suite (`npx vitest run`) and Playwright
+`npm run e2e`; the correlation engine has its own
 pytest suite. Run the gate from `src/backend` (the gate module).
 
 ---

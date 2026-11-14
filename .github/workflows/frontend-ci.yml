@@ -79,13 +79,19 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '18'
+          node-version: '20'
           cache: npm
           cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
       - name: npm ci
         run: npm ci
       - name: build (type-check + bundle)
         run: npm run build
+      # Unit tests (vitest). Not run in CI before 2026-11-14, so 17 failures sat on
+      # main unseen; the copy-voice, word-budget and component tests only guard
+      # anything if a red run blocks the merge. vitest 4 needs Node >= 20, which
+      # is also what publish-images and release-bundle build the shipped dist with.
+      - name: unit tests (vitest)
+        run: npx vitest run --reporter=dot
 
   audit:
     # Skipped ONLY when a successful plan wrote exactly 'false' for frontend: a failed,
@@ -99,7 +105,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '18'
+          node-version: '20'
           cache: npm
           cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
       - name: npm audit (high+)
@@ -121,7 +127,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '18'
+          node-version: '20'
           cache: npm
           cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
       - name: npm ci
