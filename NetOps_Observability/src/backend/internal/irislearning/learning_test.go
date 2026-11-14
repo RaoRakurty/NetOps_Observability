@@ -35,7 +35,9 @@ var now = time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 
 // ── fixtures (lab-shaped) ───────────────────────────────────────────────────
 
-func caseID(n int) string { return "00000000-0000-4000-8000-0000000000" + string(rune('a'+n/10)) + string(rune('0'+n%10)) }
+func caseID(n int) string {
+	return "00000000-0000-4000-8000-0000000000" + string(rune('a'+n/10)) + string(rune('0'+n%10))
+}
 
 // labInputs: four cEdge-80 incidents fixed by a provider ticket (one with an
 // operator note carrying a carrier name), two vEdge-51 transient incidents,
@@ -93,7 +95,10 @@ func (c *memAliases) Get(t string, _ bool, id string) (entityalias.Alias, bool) 
 	a, ok := c.m[t+"\x00"+id]
 	return a, ok
 }
-func (c *memAliases) Upsert(a entityalias.Alias) error { c.m[a.TenantID+"\x00"+a.Key()] = a; return nil }
+func (c *memAliases) Upsert(a entityalias.Alias) error {
+	c.m[a.TenantID+"\x00"+a.Key()] = a
+	return nil
+}
 func (c *memAliases) Delete(t string, _ bool, id string) bool {
 	_, ok := c.m[t+"\x00"+id]
 	delete(c.m, t+"\x00"+id)
