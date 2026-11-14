@@ -67,7 +67,27 @@
       "list devices with high cpu",
       "show the last 20 traps",
       "how many syslog messages did we get in the past hour",
-      "list ospf neighbours on core-1"
+      "list ospf neighbours on core-1",
+      "show bgp errors on cedge-80 today",
+      "any ospf messages from vedge-51 in the last hour",
+      "critical logs at site 50 today",
+      "what did cedge-81 log in the last 6 hours",
+      "show me interface down log lines on vedge-52",
+      "bgp notification logs on cedge-80 this morning",
+      "search syslog for tunnel errors at site 80",
+      "were there any authentication failures logged yesterday",
+      "list the warning and error logs from cedge-80",
+      "show ntp log messages for the last day",
+      "dns errors in the logs today",
+      "snmp errors logged by vedge-51",
+      "newest syslog entries from site 50",
+      "bfd log events on cedge-81 in the past hour",
+      "config change messages in syslog this week",
+      "cpu warnings logged in the last 24 hours",
+      "show control connection errors from the edges today",
+      "any memory errors in the device logs",
+      "log lines with errors at site 80 in the last 30 minutes",
+      "what errors has vedge-52 logged since midnight"
     ],
     "troubleshoot": [
       "bgp neighbor down on edge-1, peer is idle",
@@ -399,6 +419,11 @@
     {"q": "low confidence app matches", "module": "app_identification"},
     {"q": "app identification summary", "module": "app_identification"},
     {"q": "how healthy are our saas apps", "module": "cloud_app_observability"},
-    {"q": "office 365 health", "module": "cloud_app_observability"}
+    {"q": "office 365 health", "module": "cloud_app_observability"},
+    {"q": "top talkers on cedge-80 in the last hour", "module": "flow_analytics"},
+    {"q": "who is using the most bandwidth at site 50 today", "module": "flow_analytics"},
+    {"q": "busiest services on vedge-51 over the last 6 hours", "module": "flow_analytics"},
+    {"q": "flow volume on cedge-81 for the past day", "module": "flow_analytics"},
+    {"q": "heaviest conversations on the site 80 wan this week", "module": "flow_analytics"}
   ]
 }
