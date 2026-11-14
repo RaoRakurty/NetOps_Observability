@@ -1917,6 +1917,7 @@ export const SCOPE_OPTIONS: ScopeOption[] = [
   { id: "write:*", kind: "write", what: "Operator authority: every write above." },
   { id: "ingest:cloud", kind: "service", what: "Service credential for collecting cloud telemetry (platform realm only)." },
   { id: "ingest:experience", kind: "ingest", what: "Lets a browser snippet send experience beacons. Reads nothing." },
+  { id: "iris:mcp", kind: "read", what: "Lets an outside AI assistant use Iris's read-only lookups over MCP. Not included in read:*." },
   { id: "admin:*", kind: "admin", what: "Administer the tenant: tenants, users, devices, rules, scans." },
 ];
 

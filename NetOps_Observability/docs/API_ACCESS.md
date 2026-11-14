@@ -65,6 +65,7 @@ narrow the derived role further today.
 | `write:*` | operator | every write above |
 | `ingest:cloud` | read-only + service | the cloud-ingest poller surface — honoured ONLY for a key in the platform realm (`cloud_ingest_service.go`); see [`deployment/docker/cloud-ingest/CREDENTIALS.md`](../deployment/docker/cloud-ingest/CREDENTIALS.md) |
 | `ingest:experience` | ingest (reads nothing) | POST the DEM experience lane (`/api/dem/events`, `/api/dem/business-events`) and nothing else — honoured ONLY for a key bound to a CONCRETE tenant, since the events are stamped with it; write-only on purpose, because the RUM snippet's key is served inside a public page (see [`docs/design/dem-rum-snippet.md`](design/dem-rum-snippet.md)) |
+| `iris:mcp` | read-only role; dedicated | Iris's read-only MCP gateway (`POST /api/ai/mcp`, tracker 337 N-I5) and nothing more. **Not** covered by `read:*` — a key handed to an outside AI assistant is minted for that on purpose. Refused on a key that also carries `admin:*`, and on a platform-realm key. Also needs the `IRIS_MCP` Features switch and the workspace's MCP opt-in (see [Connect an AI assistant to Iris over MCP](../docs-portal/docs/administration/iris-mcp.md)). |
 | `admin:*` | administrator | administer the key's tenant: tenants, users, devices, rules, scans |
 
 `read:*` satisfies any `read:<x>`, `write:*` any `write:<x>`, and `admin:*`

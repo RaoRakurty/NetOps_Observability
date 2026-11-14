@@ -2537,6 +2537,48 @@ export interface IrisMissClassSummary {
   count: number;
   examples: IrisMissExample[];
 }
+// Iris in Slack and Teams (tracker 337 N-I6). A connection never carries a
+// secret back — only whether one is set.
+export type ChatPlatform = "slack" | "teams";
+export interface ChatConnection {
+  platform: ChatPlatform;
+  workspace_id: string;
+  app_id: string;
+  app_tenant?: string;
+  public_url: string;
+  channel_replies: "private" | "public";
+  enabled: boolean;
+  has_signing_secret: boolean;
+  has_bot_token: boolean;
+  has_app_password: boolean;
+  webhook_url: string;
+  updated_by: string;
+  updated_at: string;
+}
+export interface ChatConnectionInput {
+  workspace_id: string;
+  app_id?: string;
+  app_tenant?: string;
+  public_url?: string;
+  channel_replies?: "private" | "public";
+  enabled: boolean;
+  signing_secret?: string;
+  bot_token?: string;
+  app_password?: string;
+  rotate_token?: boolean;
+}
+export interface ChatLink {
+  id: string;
+  platform: ChatPlatform;
+  workspace_id: string;
+  chat_user_id: string;
+  chat_name: string;
+  user_id: string;
+  status: "pending" | "approved" | "revoked";
+  requested_at: string;
+  decided_by?: string;
+  decided_at?: string;
+}
 export interface IrisTriage {
   scope: "tenant" | "platform";
   classes: IrisMissClassSummary[] | null;
@@ -2621,6 +2663,8 @@ export type AITenantRow = {
   name: string;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  /** Read-only MCP gateway opt-in (N-I5). Absent from servers that predate it. */
+  mcp_enabled?: boolean;
   probes_enabled?: boolean; // N-I3: the workspace's active-probe opt-in
   key_present: boolean;
   no_platform_key: boolean;
@@ -7211,8 +7255,8 @@ export const api = {
   setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; probes_feature?: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
-  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; mcp_feature?: boolean; probes_feature?: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; mcp_enabled?: boolean; max_calls?: number; daily_tokens?: number; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
   // entities, how a name resolves, and how a question compiles. All four are
@@ -7282,6 +7326,21 @@ export const api = {
   // Review-gated evaluation candidates from the caller's own misses and
   // corrections; never committed anywhere automatically.
   irisTriageCandidates: () => request<IrisTriageCandidates>("/api/ai/triage/candidates"),
+  // Iris in Slack and Teams (N-I6): connections and link approvals are a
+  // workspace admin's; linking your own chat account is anyone's.
+  chatConnections: () => request<{ switch_on: boolean; connections: ChatConnection[] }>("/api/chatops/connections"),
+  saveChatConnection: (platform: ChatPlatform, input: ChatConnectionInput) =>
+    request<ChatConnection>(`/api/chatops/connections/${platform}`, { method: "PUT", body: JSON.stringify(input) }),
+  removeChatConnection: (platform: ChatPlatform) =>
+    request<void>(`/api/chatops/connections/${platform}`, { method: "DELETE" }),
+  chatLinks: () => request<{ links: ChatLink[] }>("/api/chatops/links"),
+  decideChatLink: (id: string, approve: boolean) =>
+    request<ChatLink>(`/api/chatops/links/${encodeURIComponent(id)}/${approve ? "approve" : "revoke"}`, { method: "POST" }),
+  redeemChatCode: (code: string) =>
+    request<ChatLink>("/api/chatops/link-code", { method: "POST", body: JSON.stringify({ code }) }),
+  myChatLinks: () => request<{ links: ChatLink[] }>("/api/chatops/me"),
+  revokeMyChatLink: (id: string) =>
+    request<ChatLink>(`/api/chatops/me/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

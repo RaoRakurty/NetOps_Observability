@@ -51,6 +51,20 @@ headless:
       handleNMSWebhook, opaque path token + connector signature verification).
       The caller is Meraki or a generic controller, never the browser.
 
+  - route: /api/chatops/slack/
+    reason: >-
+      Inbound Slack receiver for Iris in Slack (internal/chatops, N-I6): the
+      Events API and slash commands. Authenticated by the connection's opaque
+      path token plus Slack's v0 HMAC signature; the caller is Slack, never the
+      browser. The UI shows this address on Iris → Settings → step 7.
+
+  - route: /api/chatops/teams/
+    reason: >-
+      Inbound Microsoft Teams receiver for Iris in Teams (internal/chatops,
+      N-I6): Bot Framework activities. Authenticated by the opaque path token
+      plus the Bot Framework's RS256 JWT; the caller is Microsoft, never the
+      browser. The UI shows this address on Iris → Settings → step 7.
+
   - route: /api/cloud/ingest/connectors
     reason: >-
       Service-to-service fan-out for the cloud poller (cloud_ingest_service.go,
@@ -114,6 +128,15 @@ dynamic:
       Operator-pulled export of one correlation as a frozen replay case for
       `cmd/irisreplay` (tracker 337 N-H2). A machine surface for the eval
       tooling; the result is a file, and there is nothing for a screen to show.
+
+  - route: /api/ai/mcp
+    reason: >-
+      Iris's read-only MCP gateway (tracker 337 N-I5): JSON-RPC over the
+      Model Context Protocol's Streamable HTTP transport for an outside AI
+      assistant, authenticated by a workspace API key with the iris:mcp scope.
+      A machine surface by definition — browser Origins are refused. Its
+      operator controls live elsewhere: the IRIS_MCP Features switch, the
+      workspace's MCP box in Iris settings, and the scope on the API Access page.
 
 missing_ui:
   - route: /api/ai/modules

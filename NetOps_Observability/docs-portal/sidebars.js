@@ -278,6 +278,8 @@ const sidebars = {
         'administration/telemetry-coverage',
         'administration/network-context',
         'administration/iris-runbooks',
+        'administration/iris-mcp',
+        'administration/iris-chat',
         'administration/iris-learning',
         'administration/licence',
         'administration/debug-the-pipeline-cli',

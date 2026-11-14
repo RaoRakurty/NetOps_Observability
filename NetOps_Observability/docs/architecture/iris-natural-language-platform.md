@@ -196,7 +196,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 42 | Configurable source authority order | DONE | `internal/srcauthority`, migration 0065, design §4.2.1 | — |
 | 43 | "Have we seen this before?" | MISSING | — | N-F4 |
 | 44 | Investigative vs executable runbooks separated | DESIGNED | `Executable` flag, one object (design 7) | N-F2 |
-| 45 | ChatOps with identity mapping, never superuser | MISSING | — | N-I6 |
+| 45 | ChatOps with identity mapping, never superuser | DONE | `internal/chatops` (admin-approved links, runs as the linked user, platform owner refused) | — |
 | 46 | Streamed operational progress | MISSING | No SSE/Flusher anywhere | N-E2 |
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
@@ -464,8 +464,8 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-I2 | MISSING | — | alert-triggered / scheduled investigations |
 | N-I3 | SHIPPED (2026-11-14) | `CapNetProbe` tier (`ai/tools.go`, `ai/policy.go` `NetProbeGate`); `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` (`ai/troubleshoot_activeprobe.go`) measured from Correlix's own collector (`collectors/oneshot.go`); target validation + per-target limit + slot gate (`internal/probetarget`); server gate `aiNetProbeGate` (console switch IRIS_AI_PROBES + AI investigations + workspace opt-in `probe_tools`); never in a model manifest, refused when model-named (`Toolbox.ModelDirected`); method steps in dns-resolution, path-seam-handoff, l3-reachability; §3a test `iris_active_probe_isolation_test.go` | ICMP/traceroute need an unprivileged ICMP socket or CAP_NET_RAW on the api container (honestly "unavailable" otherwise); probes run from the api process, not yet routed through the prober sidecar / collector tier (tracker 372); IPv6 targets not probed |
 | N-I4 | MISSING | — | ApprovalGate + two write tools |
-| N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
-| N-I6 | MISSING | — | ChatOps |
+| N-I5 | SHIPPED 2026-11-14 | `internal/irismcp` (protocol), `handleAIMCP` in `ai_handlers.go` (gates, curated tools, `executeAgentTool`), `iris_mcp_isolation_test.go` | — (write/request interfaces stay declined, §6) |
+| N-I6 | SHIPPED | `internal/chatops` + migration 0074; seam in `ai_handlers.go` (`chatopsAsk`) (2026-11-14) | Teams channel answers via a proactive 1:1; Slack Enterprise Grid org installs untested |
 | N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | — (origin `similar_resolution` shipped 2026-11-13: a card grounded in a recorded fix) |
 
 ### Phase A — Land the in-flight work and harden the runtime (foundation)
@@ -619,4 +619,4 @@ knowledge track are new scope that document did not contain.
 
 1. Tier placement of the AI capabilities (N-A7 makes it an entitlement mapping, not code).
 2. Contractual terms for tenant-authored executable runbooks (N-F2).
-3. MCP marketed as an ecosystem story or shipped as a checkbox (N-I5).
+3. ~~MCP marketed as an ecosystem story or shipped as a checkbox (N-I5).~~ Decided 2026-11-14 (owner-delegated): a read-only product checkbox — console-only `IRIS_MCP` switch, workspace opt-in, `iris:mcp` key scope.
