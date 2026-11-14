@@ -32,11 +32,13 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/orgcontext"
+	"netops/backend/internal/tenantrunbook"
 )
 
 // adminPlane is the marker for AI CONFIGURATION routes. They configure the
@@ -69,6 +71,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/aliases":              aientitlement.NLQuery,
 	"/api/ai/context":              aientitlement.ContextAuthor, // Network context (N-F1)
 	"/api/ai/context/":             aientitlement.ContextAuthor,
+	"/api/ai/runbooks":             aientitlement.RunbookAuthor, // tenant runbooks/MOPs (N-F2)
+	"/api/ai/runbooks/":            aientitlement.RunbookAuthor,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -209,6 +213,11 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/context", http.MethodPost, "/api/ai/context", `{"kind":"topology_note","key":"dr","body":"core-02 is the DR site"}`, aientitlement.ContextAuthor},
 	{"/api/ai/context/", http.MethodGet, "/api/ai/context/preview", "", aientitlement.ContextAuthor},
 	{"/api/ai/context/", http.MethodPost, "/api/ai/context/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.ContextAuthor},
+	{"/api/ai/runbooks", http.MethodGet, "/api/ai/runbooks", "", aientitlement.RunbookAuthor},
+	{"/api/ai/runbooks", http.MethodPost, "/api/ai/runbooks", `{"name":"x","kind":"mop","skill_md":"x","cases_yaml":""}`, aientitlement.RunbookAuthor},
+	{"/api/ai/runbooks/", http.MethodGet, "/api/ai/runbooks/" + probeID, "", aientitlement.RunbookAuthor},
+	{"/api/ai/runbooks/", http.MethodPost, "/api/ai/runbooks/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.RunbookAuthor},
+	{"/api/ai/runbooks/", http.MethodPost, "/api/ai/runbooks/" + probeID + "/reprove", "", aientitlement.RunbookAuthor},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 }
 
@@ -246,6 +255,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	a.Role, b.Role = "admin", "admin"
 	s.nlqConvos = irisconvo.NewMemStore()
 	s.orgContext = orgcontext.NewMemStore()
+	s.tenantRunbooks = tenantrunbook.NewMemStore(tenantrunbook.Config{Harness: testRunbookGate(t, s), ToolNames: ai.ToolNames})
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called

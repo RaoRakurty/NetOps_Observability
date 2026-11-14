@@ -822,6 +822,18 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Network Context (N-F1)"
     },
     {
+      "id": "docs-125",
+      "category": "docs",
+      "question": "How do I add our own troubleshooting runbook so Iris follows it?",
+      "expect": {
+        "slugs": [
+          "administration/iris-runbooks"
+        ]
+      },
+      "nav": "admin/iris-runbooks",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Runbooks (N-F2)"
+    },
+    {
       "id": "docs-070",
       "category": "docs",
       "question": "Is the traffic between Correlix services encrypted with TLS?",

@@ -130,6 +130,7 @@ import (
 	"netops/backend/internal/seam"
 	"netops/backend/internal/srcauthority"
 	"netops/backend/internal/tac"
+	"netops/backend/internal/tenantrunbook"
 	// SECURITY-LANE-BEGIN
 	"netops/backend/internal/seclane"
 	// SECURITY-LANE-END
@@ -429,6 +430,14 @@ type server struct {
 	// file-backend deployment (the routes answer 503).
 	orgContext        orgcontext.Store
 	orgContextMetrics *orgcontext.Metrics
+	// tenantRunbooks is the customer runbook/MOP store (tracker 337 N-F2); nil
+	// on a file-backend deployment (the routes answer 503, Iris runs only the
+	// compiled methods). tenantRunbookSets is each tenant's compiled set plus
+	// its approved, proven runbooks, cached per fingerprint.
+	tenantRunbooks       tenantrunbook.Store
+	tenantRunbookMetrics *tenantrunbook.Metrics
+	tenantRunbookSets    *tenantrunbook.OverlayCache
+	tenantRunbookRecheck *runbookRecheck
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -1362,20 +1371,23 @@ func newServer() *server {
 		// Counters for query capture (N-C8) — rendered on /metrics.
 		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
-		aiDecisions:         newAIDecisionStore(),
-		aiDecisionMetrics:   aidecision.NewMetrics(),
-		aiToolGateway:       ai.NewToolGateway(),
-		aiPlanCache:         ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
-		aiGlossaryCache:     irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
-		irisStreamMetrics:   &irisstream.Metrics{},
-		orgContext:          newOrgContextStore(),
-		orgContextMetrics:   &orgcontext.Metrics{},
-		srcAuthority:        newSrcAuthorityStore(),
-		srcAuthorityMetrics: &srcauthority.Metrics{},
-		irisAliasCache:      newIrisAliasCache(),
-		irisContextCache:    newIrisContextCache(),
-		nlqExamples:         modelc.EmbeddedExamples(),
-		aiHypotheses:        irishypo.NewMemStore(),
+		aiDecisions:          newAIDecisionStore(),
+		aiDecisionMetrics:    aidecision.NewMetrics(),
+		aiToolGateway:        ai.NewToolGateway(),
+		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
+		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
+		irisStreamMetrics:    &irisstream.Metrics{},
+		orgContext:           newOrgContextStore(),
+		orgContextMetrics:    &orgcontext.Metrics{},
+		tenantRunbookMetrics: &tenantrunbook.Metrics{},
+		tenantRunbookSets:    &tenantrunbook.OverlayCache{},
+		tenantRunbookRecheck: &runbookRecheck{},
+		srcAuthority:         newSrcAuthorityStore(),
+		srcAuthorityMetrics:  &srcauthority.Metrics{},
+		irisAliasCache:       newIrisAliasCache(),
+		irisContextCache:     newIrisContextCache(),
+		nlqExamples:          modelc.EmbeddedExamples(),
+		aiHypotheses:         irishypo.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -1983,6 +1995,9 @@ func newServer() *server {
 	// the licence, and an install that was already using a model keeps it on
 	// across this upgrade — once. Requirements first, so the seed sees them.
 	srv.wireAISwitches(time.Now())
+	// Tenant runbooks (N-F2) need the platform's models for their harness
+	// fingerprint, so the store is built once the configuration is loaded.
+	srv.tenantRunbooks = srv.newTenantRunbookStore()
 	return srv
 }
 
@@ -4150,6 +4165,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)                // thumbs up/down (audited)
 	mux.HandleFunc("/api/ai/context", s.handleAIContext)                  // Iris Network context (N-F1): facts, review, history
 	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
+	mux.HandleFunc("/api/ai/runbooks", s.handleAIRunbooks)                // Iris tenant runbooks/MOPs (N-F2): list, search, create
+	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)               // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
@@ -5054,6 +5071,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	_ = s.irisStreamMetrics.Write(w)                             // best-effort: nil-safe; a failed scrape write surfaces to the scraper
 	_ = s.aiProvCalls.Write(w)                                   // provider call latency/outcome + breaker state; nil-safe, best-effort
 	_ = s.orgContextMetrics.Write(w)                             // Network context reads (N-F1); nil-safe, best-effort like the line above
+	_ = s.tenantRunbookMetrics.Write(w)                          // tenant runbook harness runs + store ops (N-F2); nil-safe, best-effort like the line above
 	_ = s.srcAuthorityMetrics.Write(w)                           // source-authority resolutions (N-F6); nil-safe, best-effort like the line above
 	_ = iriscache.Write(w, s.irisAliasCache, s.irisContextCache) // Iris per-tenant caches (N-H4); best-effort like the lines above
 	if s.aiToolGateway != nil {
