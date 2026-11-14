@@ -46,6 +46,20 @@ type Store interface {
 	// Latest returns, for each of ids that has one, its newest resolution —
 	// within exactly `tenant` (never cross-tenant).
 	Latest(ctx context.Context, tenant string, ids []string) (map[string]Resolution, error)
+	// Recent returns the tenant's resolutions recorded at or after since,
+	// NEWEST FIRST, at most limit (clamped to MaxRecent) — within exactly
+	// `tenant`, never cross-tenant (the learning loop's input, N-F5).
+	Recent(ctx context.Context, tenant string, since time.Time, limit int) ([]Resolution, error)
+}
+
+// MaxRecent bounds one Recent read.
+const MaxRecent = 2000
+
+func clampRecent(limit int) int {
+	if limit <= 0 || limit > MaxRecent {
+		return MaxRecent
+	}
+	return limit
 }
 
 func newUUIDv4() (string, error) {
@@ -236,6 +250,25 @@ func (s *FileStore) Latest(_ context.Context, tenant string, ids []string) (map[
 	return out, nil
 }
 
+// Recent implements Store.
+func (s *FileStore) Recent(_ context.Context, tenant string, since time.Time, limit int) ([]Resolution, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []Resolution{}
+	for _, rows := range s.rows[NormTenant(tenant)] {
+		for _, r := range rows {
+			if !r.CreatedAt.Before(since) {
+				out = append(out, r)
+			}
+		}
+	}
+	newestFirst(out)
+	if n := clampRecent(limit); len(out) > n {
+		out = out[:n]
+	}
+	return out, nil
+}
+
 // ── Postgres backend ────────────────────────────────────────────────────────
 
 // DB is the tenant-scoped transaction seam (platformdb).
@@ -349,6 +382,32 @@ func (p *pgStore) Latest(ctx context.Context, tenant string, ids []string) (map[
 				return err
 			}
 			out[r.CorrelationID] = r
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (p *pgStore) Recent(ctx context.Context, tenant string, since time.Time, limit int) ([]Resolution, error) {
+	out := []Resolution{}
+	t := NormTenant(tenant)
+	err := p.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+pgCols+` FROM rca_resolutions
+		    WHERE tenant_id = $1 AND created_at >= $2
+		    ORDER BY created_at DESC, id ASC LIMIT $3`, t, since.UTC(), clampRecent(limit))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			r, err := scanRow(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, r)
 		}
 		return rows.Err()
 	})
