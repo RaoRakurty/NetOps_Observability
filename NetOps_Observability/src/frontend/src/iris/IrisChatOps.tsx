@@ -105,7 +105,7 @@ function MyChatLinks() {
           placeholder="ABCD-EFGH"
           onChange={(e) => setCode(e.target.value)}
         />
-        <button type="button" disabled={busy || code.trim().length < 8} onClick={() => void redeem()}>Link</button>
+        <button type="button" style={text14} disabled={busy || code.trim().length < 8} onClick={() => void redeem()}>Link</button>
       </div>
       {note && <p style={muted} role="status">{note}</p>}
       {err && <p role="alert" style={text14}>{err}</p>}
@@ -116,7 +116,7 @@ function MyChatLinks() {
             <li key={l.id} style={text14}>
               {PLATFORM_LABEL[l.platform]} · {l.chat_name || l.chat_user_id} — {STATUS_LABEL[l.status]}
               {l.status !== "revoked" && (
-                <button type="button" style={{ marginLeft: 8 }} onClick={() => void revoke(l.id)}>Revoke</button>
+                <button type="button" style={{ ...text14, marginLeft: 8 }} onClick={() => void revoke(l.id)}>Revoke</button>
               )}
             </li>
           ))}
@@ -184,9 +184,9 @@ function ChatAdmin() {
           <li key={l.id} style={text14}>
             {PLATFORM_LABEL[l.platform]} {l.chat_name || l.chat_user_id} → Correlix user {l.user_id} — {STATUS_LABEL[l.status]}
             {l.status === "pending" && (
-              <button type="button" style={{ marginLeft: 8 }} onClick={() => void decide(l.id, true)}>Approve</button>
+              <button type="button" style={{ ...text14, marginLeft: 8 }} onClick={() => void decide(l.id, true)}>Approve</button>
             )}
-            <button type="button" style={{ marginLeft: 8 }} onClick={() => void decide(l.id, false)}>Revoke</button>
+            <button type="button" style={{ ...text14, marginLeft: 8 }} onClick={() => void decide(l.id, false)}>Revoke</button>
           </li>
         ))}
       </ul>
@@ -287,14 +287,14 @@ function ConnectionForm({ platform, current, onSaved }: { platform: ChatPlatform
         </li>
         <li style={row}>
           <label style={text14}>
-            <input type="checkbox" checked={f.enabled} onChange={(e) => set("enabled", e.target.checked)} /> Answer in {PLATFORM_LABEL[platform]}
+            <input type="checkbox" style={text14} checked={f.enabled} onChange={(e) => set("enabled", e.target.checked)} /> Answer in {PLATFORM_LABEL[platform]}
           </label>
         </li>
       </ol>
       <div style={row}>
-        <button type="button" onClick={() => void save()}>Save</button>
-        {current && <button type="button" onClick={() => void save(true)}>New inbound address</button>}
-        {current && <button type="button" onClick={() => void remove()}>Disconnect</button>}
+        <button type="button" style={text14} onClick={() => void save()}>Save</button>
+        {current && <button type="button" style={text14} onClick={() => void save(true)}>New inbound address</button>}
+        {current && <button type="button" style={text14} onClick={() => void remove()}>Disconnect</button>}
       </div>
       {current && (
         <p style={muted}>
