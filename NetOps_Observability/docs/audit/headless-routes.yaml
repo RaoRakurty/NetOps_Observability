@@ -115,6 +115,15 @@ dynamic:
       `cmd/irisreplay` (tracker 337 N-H2). A machine surface for the eval
       tooling; the result is a file, and there is nothing for a screen to show.
 
+  - route: /api/ai/mcp
+    reason: >-
+      Iris's read-only MCP gateway (tracker 337 N-I5): JSON-RPC over the
+      Model Context Protocol's Streamable HTTP transport for an outside AI
+      assistant, authenticated by a workspace API key with the iris:mcp scope.
+      A machine surface by definition — browser Origins are refused. Its
+      operator controls live elsewhere: the IRIS_MCP Features switch, the
+      workspace's MCP box in Iris settings, and the scope on the API Access page.
+
 missing_ui:
   - route: /api/ai/modules
     reason: >-
