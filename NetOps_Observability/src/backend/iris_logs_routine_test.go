@@ -56,7 +56,7 @@ func TestIrisLogSearchLeavesOutRoutineMgmt(t *testing.T) {
 	if !strings.Contains(strings.Join(tr.Notes, " | "), "left out 1234 routine management-session lines") {
 		t.Errorf("the tool did not say what it left out: %q", tr.Notes)
 	}
-	scopeOff := jsonOf(b["filter"])
+	scopeOff := scopeWithoutRange(b["filter"])
 
 	// Asked for: nothing filtered, still counted, and the scope is unchanged.
 	tr, err = d.ModuleQuery(context.Background(), s.aiPrincipal(claims), "search_logs", ai.ToolArgs{"window": "1h", "include_routine": "true"})
@@ -67,7 +67,7 @@ func TestIrisLogSearchLeavesOutRoutineMgmt(t *testing.T) {
 	if _, has := body["post_filter"]; has {
 		t.Errorf("include_routine=true still filtered: %s", jsonOf(body["post_filter"]))
 	}
-	if got := jsonOf(queryBool(t, body)["filter"]); got != scopeOff {
+	if got := scopeWithoutRange(queryBool(t, body)["filter"]); got != scopeOff {
 		t.Errorf("the tenant scope changed with the flag:\n off %s\n on  %s", scopeOff, got)
 	}
 	if !strings.Contains(strings.Join(tr.Notes, " | "), "includes 1234 routine management-session lines") {
@@ -96,4 +96,27 @@ func TestIrisLogSearchRoutineUsesTheCallersControllers(t *testing.T) {
 	if !strings.Contains(pf, globexCtl) || strings.Contains(pf, acmeCtl) {
 		t.Errorf("globex's routine class must name only globex's controller: %s", pf)
 	}
+}
+
+// scopeWithoutRange renders a query's filter clauses minus the time range.
+// The range is computed from the wall clock at second precision on every call,
+// so two calls a second apart legitimately differ there (tracker 423: the
+// scope comparison above failed whenever the calls straddled a second). What
+// the comparison guards is the TENANT scope, which must not move with
+// include_routine; the window is not part of that claim.
+func scopeWithoutRange(filter any) string {
+	clauses, ok := filter.([]any)
+	if !ok {
+		return "<filter is not a clause list: " + jsonOf(filter) + ">"
+	}
+	kept := make([]any, 0, len(clauses))
+	for _, c := range clauses {
+		if m, isMap := c.(map[string]any); isMap {
+			if _, isRange := m["range"]; isRange {
+				continue
+			}
+		}
+		kept = append(kept, c)
+	}
+	return jsonOf(kept)
 }
