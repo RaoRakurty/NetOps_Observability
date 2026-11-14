@@ -834,6 +834,17 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Runbooks (N-F2)"
     },
     {
+      "id": "docs-126",
+      "category": "docs",
+      "question": "How do I connect an outside AI assistant to Correlix Iris over MCP?",
+      "expect": {
+        "slugs": [
+          "administration/iris-mcp"
+        ]
+      },
+      "notes": "N-I5 read-only MCP gateway: operator setup page"
+    },
+    {
       "id": "docs-070",
       "category": "docs",
       "question": "Is the traffic between Correlix services encrypted with TLS?",

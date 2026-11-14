@@ -22,10 +22,12 @@ import (
 	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
+	"netops/backend/internal/apikey"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
@@ -4020,4 +4022,244 @@ func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scope": scope, "classes": iristriage.Summarize(items, cross),
 		"class_order": iristriage.Classes, "window": "the newest records of each workspace's Iris question log (30 days)"})
+}
+
+// ---- Iris read-only MCP gateway (tracker 337 N-I5, design D17) ---------------
+//
+// POST /api/ai/mcp — the Model Context Protocol (Streamable HTTP, tools only)
+// for an external AI client. Product checkbox, not an ecosystem (owner-
+// delegated decision 2026-11-14): READ-ONLY, behind the console-only IRIS_MCP
+// switch (default off, risky acknowledgement) and the workspace's own opt-in.
+// The protocol lives in internal/irismcp; everything that decides what a
+// caller may see or run is here, and every call runs through the SAME tool
+// gateway and ledger as the investigation loop (executeAgentTool) — there is
+// no second tool path.
+//
+// Gate order (each refusal names its own cause):
+//  1. the ai.mcp entitlement (tier mapping) — the shared route guard;
+//  2. the IRIS_MCP switch — off, the endpoint does not exist (404);
+//  3. the credential — an API key carrying the exact iris:mcp scope, re-read
+//     from the key store so the key's OWN tenant is used (as_tenant and
+//     X-Acting-Tenant never move it), never an admin or platform-realm key;
+//  4. the workspace's MCP opt-in (platform owner, Iris settings).
+
+// mcpToolTitles is the CURATED tool set an MCP client may see, with the title
+// shown to its user. Only CapRead tools: never the device-session probes
+// (get_device_state, run_protocol_diagnostic), never a write. Left out on
+// purpose: compile_query (it can spend the platform's own AI provider),
+// get_config_diff and get_security_findings (detail that should not leave
+// Correlix by default), recall_investigations (per-person investigation
+// memory). A tool must also be registered on this deployment and allowed for
+// the key's permissions to be listed.
+func mcpToolTitles() map[string]string {
+	return map[string]string{
+		"get_active_major_incidents": "Active major incidents",
+		"get_actionable_incidents":   "Incidents to work first",
+		"get_incident_history":       "Incident history",
+		"get_problem":                "Problem summary",
+		"get_problem_evidence":       "Problem evidence",
+		"get_rca_verdict":            "Root-cause verdict",
+		"get_case_timeline":          "Case timeline",
+		"get_causal_chain":           "Causal chain",
+		"get_blast_radius":           "Blast radius",
+		"get_affected_entities":      "Affected entities",
+		"get_confidence_breakdown":   "Confidence breakdown",
+		"get_owner":                  "Owner",
+		"find_similar_incidents":     "Similar past incidents",
+		"get_network_topology":       "Network topology",
+		"get_topology_context":       "Topology around a device",
+		"get_overlay_state":          "SD-WAN overlay state",
+		"get_tunnel_state":           "Tunnel state",
+		"get_path_evidence":          "Measured path evidence",
+		"get_probe_results":          "Synthetic probe results",
+		"get_device_health":          "Device health",
+		"get_metric_anomalies":       "Metric anomalies",
+		"get_top_talkers":            "Top talkers",
+		"get_flow_summary":           "Flow summary",
+		"get_service_flow_summary":   "Service traffic",
+		"search_logs":                "Search device logs",
+		"get_recent_changes":         "Recent changes",
+		"search_docs":                "Correlix documentation",
+	}
+}
+
+// mcpCallsPerMin is the per-key tools/call budget (IRIS_MCP_CALLS_PER_MIN,
+// default 30, clamped 1–600).
+func mcpCallsPerMin() int {
+	n := envInt("IRIS_MCP_CALLS_PER_MIN", 30)
+	if n < 1 {
+		return 1
+	}
+	if n > 600 {
+		return 600
+	}
+	return n
+}
+
+func (s *server) handleAIMCP(w http.ResponseWriter, r *http.Request) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if !s.requireAIEntitlement(w, claims, aientitlement.MCP) {
+		return
+	}
+	if s.features == nil || !s.features.Enabled(aientitlement.SwitchMCP) {
+		http.NotFound(w, r)
+		return
+	}
+	mc, err := s.mcpPrincipal(claims)
+	if err != nil {
+		if errors.Is(err, errMCPCredential) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="correlix-mcp", scope="`+apikey.ScopeIrisMCP+`"`)
+			writeError(w, http.StatusUnauthorized, err)
+			return
+		}
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	// The key's own tenant decides from here: re-run the entitlement for it.
+	if !s.requireAIEntitlement(w, mc, aientitlement.MCP) {
+		return
+	}
+	tenant, _ := principalTenant(mc)
+	if !s.aiTenantCfg.MCPEnabled(tenant) {
+		writeError(w, http.StatusForbidden, errors.New("MCP is not turned on for this workspace — a platform administrator turns it on under Iris settings → Workspace access"))
+		return
+	}
+	// Every read below runs as the KEY's principal, so the request context
+	// carries those claims (the ClickHouse scope and the tool reads take them
+	// from it), never the acting-tenant view the auth layer may have applied.
+	r = r.WithContext(context.WithValue(r.Context(), userCtxKey, mc))
+	orch := s.newOrchestrator(r, mc)
+	reg, pol := agentToolbox(orch)
+	p := s.aiPrincipal(mc)
+	keyID := strings.TrimPrefix(mc.Sub, "apikey:")
+	tools := s.mcpToolList(reg, pol, p)
+	irismcp.Serve(w, r, irismcp.Deps{
+		Tools: func(context.Context) []irismcp.Tool { return tools },
+		Call: func(ctx context.Context, name string, args json.RawMessage) irismcp.Result {
+			return s.mcpCall(r.WithContext(ctx), mc, p, reg, pol, name, args)
+		},
+		AllowCall:     func() bool { return s.mcpLimiter.Allow(keyID, mcpCallsPerMin()) },
+		Audit:         func(method, tool, outcome string) { s.mcpAudit(r, mc, method, tool, outcome) },
+		ServerVersion: version,
+	})
+}
+
+// errMCPCredential marks a refusal that is about the credential itself (wrong
+// kind, missing scope, revoked) — a 401 with a WWW-Authenticate challenge.
+var errMCPCredential = errors.New("MCP needs a workspace API key that carries the " + apikey.ScopeIrisMCP + " scope")
+
+// mcpPrincipal re-derives the caller from the API-key record: its own tenant,
+// scopes and derived role. Refused: anything that is not an API key, a key
+// without the exact iris:mcp scope, a revoked key, an administrative key, and
+// a platform-realm (cross-tenant) key — no platform power reaches MCP.
+func (s *server) mcpPrincipal(claims jwtClaims) (jwtClaims, error) {
+	if !strings.HasPrefix(claims.Sub, "apikey:") || s.apiKeys == nil {
+		return jwtClaims{}, errMCPCredential
+	}
+	k, ok := s.apiKeys.Get(strings.TrimPrefix(claims.Sub, "apikey:"))
+	if !ok || k.RevokedAt != nil {
+		return jwtClaims{}, errMCPCredential
+	}
+	hasMCP := false
+	for _, sc := range k.Scopes {
+		switch strings.ToLower(strings.TrimSpace(sc)) {
+		case apikey.ScopeIrisMCP:
+			hasMCP = true
+		case apikey.ScopeAdminAll:
+			return jwtClaims{}, errors.New("an administrative API key cannot be used for MCP — mint a key with only read scopes and " + apikey.ScopeIrisMCP)
+		}
+	}
+	if !hasMCP {
+		return jwtClaims{}, errMCPCredential
+	}
+	mc := jwtClaims{Sub: claims.Sub, Role: roleFromScopes(k.Scopes), Tenant: k.TenantID, Scopes: k.Scopes}
+	if isSuperAdminRole(mc.Role) {
+		return jwtClaims{}, errors.New("an administrative API key cannot be used for MCP")
+	}
+	if tenant, cross := principalTenant(mc); cross || tenant == "" || isPlatformRealm(k.TenantID) {
+		return jwtClaims{}, errors.New("MCP keys must belong to one workspace — a platform-realm key cannot be used")
+	}
+	if s.tenantSuspended(mc) {
+		return jwtClaims{}, errors.New("tenant suspended")
+	}
+	return mc, nil
+}
+
+// mcpToolList is the caller's tools/list: the curated set ∩ registered here ∩
+// allowed by the policy engine for this principal ∩ CapRead, in name order.
+// Descriptions and schemas are the manifest's own — the same text the
+// investigation loop's model reads.
+func (s *server) mcpToolList(reg *ai.ToolRegistry, pol *ai.PolicyEngine, p ai.Principal) []irismcp.Tool {
+	titles := mcpToolTitles()
+	out := []irismcp.Tool{}
+	for _, spec := range (ai.Toolbox{Registry: reg, Policy: pol}).Manifest(p) {
+		title, curated := titles[spec.Name]
+		if !curated {
+			continue
+		}
+		t, ok := reg.Get(spec.Name)
+		if !ok || t.Capability() != ai.CapRead {
+			continue
+		}
+		out = append(out, irismcp.Tool{Name: spec.Name, Title: title, Description: spec.Description, InputSchema: spec.InputSchema})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// mcpCall runs one tools/call through executeAgentTool — authorize again,
+// validate arguments against the tool's schema, the gateway's per-tenant rate
+// and timeout, the output schema, the audit line — under its own decision
+// ledger record (surface mcp: argument and result HASHES only).
+func (s *server) mcpCall(r *http.Request, claims jwtClaims, p ai.Principal, reg *ai.ToolRegistry, pol *ai.PolicyEngine, name string, args json.RawMessage) irismcp.Result {
+	ctx := r.Context()
+	var rec *aidecision.Recorder
+	if s.aiDecisions != nil {
+		var err error
+		rec, err = aidecision.NewRecorder(claims.Sub, aidecision.SurfaceMCP)
+		if err != nil {
+			logError("ai.ledger", "decision id unavailable — this MCP call is not ledgered", errf(err))
+			s.aiDecisionMetrics.Failed()
+			rec = nil
+		} else {
+			ctx = aidecision.WithRecorder(ctx, rec)
+		}
+	}
+	reply, _ := s.executeAgentTool(ctx, claims, p, reg, pol, ai.ToolCall{ID: "mcp", Name: name, Args: args}) // discard: evidence items are for a model answer's citations; MCP returns the rendered reply only
+	if rec != nil {
+		final := aidecision.Entry{EventType: aidecision.AnswerReturned, Outcome: "answered"}
+		if reply.IsError {
+			final.Outcome = "error"
+		} else {
+			final.ResultSHA256 = aidecision.SHA256Hex([]byte(reply.Content))
+		}
+		rec.Add(final)
+		s.aiDecisionAppend(r, claims, rec)
+	}
+	return irismcp.Result{Text: reply.Content, IsError: reply.IsError}
+}
+
+// mcpAudit enters each MCP request into the platform audit trail: method,
+// tool and outcome — never arguments or results.
+func (s *server) mcpAudit(r *http.Request, claims jwtClaims, method, tool, outcome string) {
+	if s.audit == nil {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	detail := map[string]any{"action": "ai.mcp", "method": method, "outcome": outcome}
+	if tool != "" {
+		detail["tool"] = tool
+	}
+	decision := "allow"
+	if outcome != "ok" && outcome != "notification" {
+		decision = "deny"
+	}
+	s.audit.Record(AuditEvent{
+		Time: time.Now().UTC(), Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: decision, Detail: detail,
+	})
 }

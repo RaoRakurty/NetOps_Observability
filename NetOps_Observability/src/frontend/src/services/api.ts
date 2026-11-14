@@ -2568,6 +2568,8 @@ export type AITenantRow = {
   name: string;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  /** Read-only MCP gateway opt-in (N-I5). Absent from servers that predate it. */
+  mcp_enabled?: boolean;
   key_present: boolean;
   no_platform_key: boolean;
   max_calls: number; // 0 = platform default
@@ -7145,8 +7147,8 @@ export const api = {
   setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
-  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; mcp_feature?: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; mcp_enabled?: boolean; max_calls?: number; daily_tokens?: number }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
   // entities, how a name resolves, and how a question compiles. All four are

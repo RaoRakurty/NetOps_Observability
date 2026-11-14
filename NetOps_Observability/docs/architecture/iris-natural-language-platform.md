@@ -463,7 +463,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-I2 | MISSING | — | alert-triggered / scheduled investigations |
 | N-I3 | PARTIAL | `CapProbe` capability + policy (`ai/tools.go`, `ai/policy.go`) | `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` over the collectors (never device-originated, owner 2026-11-13) |
 | N-I4 | MISSING | — | ApprovalGate + two write tools |
-| N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
+| N-I5 | SHIPPED 2026-11-14 | `internal/irismcp` (protocol), `handleAIMCP` in `ai_handlers.go` (gates, curated tools, `executeAgentTool`), `iris_mcp_isolation_test.go` | — (write/request interfaces stay declined, §6) |
 | N-I6 | MISSING | — | ChatOps |
 | N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | — (origin `similar_resolution` shipped 2026-11-13: a card grounded in a recorded fix) |
 
@@ -618,4 +618,4 @@ knowledge track are new scope that document did not contain.
 
 1. Tier placement of the AI capabilities (N-A7 makes it an entitlement mapping, not code).
 2. Contractual terms for tenant-authored executable runbooks (N-F2).
-3. MCP marketed as an ecosystem story or shipped as a checkbox (N-I5).
+3. ~~MCP marketed as an ecosystem story or shipped as a checkbox (N-I5).~~ Decided 2026-11-14 (owner-delegated): a read-only product checkbox — console-only `IRIS_MCP` switch, workspace opt-in, `iris:mcp` key scope.

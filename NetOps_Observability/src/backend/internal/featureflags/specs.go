@@ -89,5 +89,10 @@ func PlatformSpecs() []Spec {
 			Help: "Let Iris send questions and the evidence it gathered to your configured AI provider for written answers and chat. Off, Iris answers from Correlix data alone."},
 		{Env: "IRIS_AI_INVESTIGATIONS", Label: "AI investigations", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
 			Help: "Let the AI model run read-only lookups across your network data to investigate a question. Needs Iris AI models on; each workspace still opts in."},
+		// N-I5 (D17): read-only MCP. No AI provider call is made by Correlix, so
+		// it needs no iris_model licence; it is still risky because the answers
+		// leave Correlix for the customer's own AI client.
+		{Env: "IRIS_MCP", Label: "Iris over MCP (read-only)", Group: iris, Apply: live, Risky: true, ConsoleOnly: true,
+			Help: "Let an external AI assistant use Iris's read-only lookups over the Model Context Protocol with a workspace API key. Data leaves Correlix for that assistant; each workspace still opts in."},
 	}
 }
