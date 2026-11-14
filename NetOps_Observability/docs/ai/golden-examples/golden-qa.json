@@ -836,6 +836,18 @@
     {
       "id": "docs-126",
       "category": "docs",
+      "question": "How does Iris learn from how my team fixed incidents?",
+      "expect": {
+        "slugs": [
+          "administration/iris-learning"
+        ]
+      },
+      "nav": "admin/iris-learning",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning (N-F5)"
+    },
+    {
+      "id": "docs-127",
+      "category": "docs",
       "question": "How do I connect an outside AI assistant to Correlix Iris over MCP?",
       "expect": {
         "slugs": [

@@ -445,7 +445,10 @@ func TestParaphraseCorpusShape(t *testing.T) {
 var expectedArm = map[string]string{
 	PlanRouteTopology: ArmModel, PlanRouteNetwork: ArmModel, PlanRouteData: ArmData,
 	PlanRouteTroubleshoot: ArmModel, // no skills wired here: the model investigates
-	PlanRouteOutOfScope:   ArmCapability,
+	// No AI investigations on this harness: the troubleshooting arm answers
+	// (and, with no skills, the model), saying what a full investigation needs.
+	PlanRouteInvestigate: ArmModel,
+	PlanRouteOutOfScope:  ArmCapability,
 }
 
 // Routing fidelity over the whole corpus with a stub model that returns each

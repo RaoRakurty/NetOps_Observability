@@ -112,6 +112,20 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/runbooks":  "scoped",
 	"/api/ai/mcp":       "scoped", // read-only MCP gateway (N-I5): the key's own tenant; iris_mcp_isolation_test.go
 	"/api/ai/runbooks/": "scoped",
+	// Iris in Slack / Teams (N-I6): connections, links and link codes are per
+	// tenant (RLS chatops_* + store tenant key, tenant from the token); a Global
+	// view must choose a workspace; a foreign link id → 404 for approve/revoke;
+	// a code issued in one tenant never redeems in another; an inbound question
+	// runs as the LINKED user in the connection's tenant —
+	// chatops_isolation_test.go + internal/chatops.
+	"/api/chatops/": "scoped",
+	// Iris learning loop (N-F5): tenant from the token (RLS
+	// iris_learning_proposals + store tenant key); a refresh reads only the
+	// caller's resolutions, fingerprints, question log and aliases; a Global view
+	// must choose a workspace; a foreign id → 404 for every verb; an as_tenant
+	// walk is ignored — iris_learning_isolation_test.go.
+	"/api/ai/learning":  "scoped",
+	"/api/ai/learning/": "scoped",
 	// Source authority (N-F6): the order is the token tenant's (RLS
 	// iris_source_authority + store tenant key), no id in the path, a Global view
 	// must choose a workspace — source_authority_isolation_test.go.
@@ -132,6 +146,13 @@ var routeIsolationLedger = map[string]string{
 	// another tenant, an as_tenant walk and a malformed id all get 404; the
 	// platform owner reads any tenant's. ai_hypotheses_isolation_test.go.
 	"/api/ai/hypotheses/": "scoped",
+	// Read-only investigations (N-I1): traces held under the decision id in the
+	// asker's tenant from the token (irisinvest store keyed by tenant first);
+	// another tenant, an as_tenant walk and a malformed id all get 404; the
+	// list is the caller's own; the platform owner reads any tenant's.
+	// iris_investigation_isolation_test.go.
+	"/api/ai/investigations":  "scoped",
+	"/api/ai/investigations/": "scoped",
 	// Iris Incident Replay export (N-H2): administration:read, every read through
 	// the caller's tenant-scoped seams (strict corrRowVisible on the engine's
 	// stored object); another tenant's id and an unknown id are the same 404, an
@@ -1000,6 +1021,12 @@ var routeIsolationLedger = map[string]string{
 	// NMS controller webhook: JWT-exempt; authenticated by opaque path token +
 	// the connector's signature verification, tenant derived from the token row.
 	"/api/nms/webhook/": "token",
+	// Iris in Slack / Teams inbound (N-I6): JWT-exempt; authenticated by the
+	// opaque path token + Slack's v0 HMAC (5-min replay window) or the Bot
+	// Framework RS256 JWT (this bot as audience, serviceurl bound); tenant from
+	// the token's connection row, never the request.
+	"/api/chatops/slack/": "token",
+	"/api/chatops/teams/": "token",
 	// vmalert Alertmanager-v2 webhook: JWT-exempt, authenticated by the
 	// VMALERT_WEBHOOK_TOKEN shared secret (Bearer/Basic, constant-time), and
 	// platform-GLOBAL plumbing — it is NOT principal-scoped and carries no

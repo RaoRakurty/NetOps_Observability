@@ -467,6 +467,10 @@ export function defaultPlanFor(result: ResultSet, hint: QueryHint = {}): Present
     case "compare_windows":
       return { primary_view: "BAR", secondary_view: "TABLE", title: metric ? `${metric}: this window against the earlier one` : "This window against the earlier one" };
     case "change_list": {
+      // "What changed before every X incident" (N-S3): grouped by incident.
+      if (result.rows.length > 0 && result.rows.every((r) => typeof r.incident_id === "string" && typeof r.minutes_before_incident === "number")) {
+        return { primary_view: "TABLE", secondary_view: "TIMELINE", title: "Changes before each incident" };
+      }
       const groups = (hint.group_by ?? []).filter(isFieldName);
       if (groups.length > 0) {
         return { primary_view: "BAR", secondary_view: "TABLE", title: `Changes by ${humanize(groups[0])}` };

@@ -20,7 +20,7 @@ describe("IrisMissTriage", () => {
     });
     render(<IrisMissTriage />);
     await waitFor(() => expect(screen.getByTestId("iris-miss-triage")).toBeTruthy());
-    expect(screen.getByText("No data for it")).toBeTruthy();
+    expect(screen.getByText("Searched, nothing found")).toBeTruthy();
     expect(screen.getByText(/3 questions/)).toBeTruthy();
     expect(screen.getByText(/1 question$/)).toBeTruthy();
     // Hostile text renders as text, never as markup.

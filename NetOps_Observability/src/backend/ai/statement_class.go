@@ -134,17 +134,22 @@ type Statement struct {
 // TestEveryDeclaredToolHasAStatementClass keeps it in step with toolMetas.
 var toolStatementClass = map[string]string{
 	// Live reads — what a device, a collector or a register showed.
-	"get_device_state":               ClassObserved,
-	"run_protocol_diagnostic":        ClassObserved,
-	"search_logs":                    ClassObserved,
-	"get_metric_anomalies":           ClassObserved,
-	"get_device_health":              ClassObserved,
-	"get_topology_context":           ClassObserved,
-	"get_network_topology":           ClassObserved,
-	"get_overlay_state":              ClassObserved,
-	"get_tunnel_state":               ClassObserved,
-	"get_path_evidence":              ClassObserved,
-	"get_probe_results":              ClassObserved,
+	"get_device_state":        ClassObserved,
+	"run_protocol_diagnostic": ClassObserved,
+	"search_logs":             ClassObserved,
+	"get_metric_anomalies":    ClassObserved,
+	"get_device_health":       ClassObserved,
+	"get_topology_context":    ClassObserved,
+	"get_network_topology":    ClassObserved,
+	"get_overlay_state":       ClassObserved,
+	"get_tunnel_state":        ClassObserved,
+	"get_path_evidence":       ClassObserved,
+	"get_probe_results":       ClassObserved,
+	// N-I3: a measurement Correlix's collector took just now.
+	"run_ping":                       ClassObserved,
+	"run_traceroute":                 ClassObserved,
+	"run_dns_test":                   ClassObserved,
+	"run_http_test":                  ClassObserved,
 	"get_case_timeline":              ClassObserved,
 	"get_bgp_watchlist":              ClassObserved,
 	"get_bgp_rpki":                   ClassObserved,
@@ -176,6 +181,9 @@ var toolStatementClass = map[string]string{
 	// A prior conclusion — context, never evidence of the present.
 	"recall_investigations":  ClassHistorical,
 	"find_similar_incidents": ClassHistorical,
+	// N-F3: incidents are HISTORICAL; a runbook item carries a per-item
+	// DOCUMENTATION class (stamp), never a stronger one.
+	"search_workspace_knowledge": ClassHistorical,
 	// Reference material.
 	"search_docs": ClassDocumentation,
 	// A computed query result.
@@ -326,8 +334,14 @@ func (sc *statementContext) stamp(ev EvidenceItem, tool string) {
 		return
 	}
 	class := toolStatementClass[tool]
-	if ev.Class == ClassDerived && class != "" {
+	switch {
+	case ev.Class == ClassDerived && class != "":
 		class = ClassDerived // a per-item downgrade only, never an upgrade
+	case ev.Class == ClassDocumentation && class == ClassHistorical:
+		// A recorded procedure inside a recorded-knowledge result (N-F3): both
+		// classes are non-observed, and the item can never claim OBSERVED or
+		// CORRELIX_RCA from its tool.
+		class = ClassDocumentation
 	}
 	sc.items[id] = stmtItem{
 		class: class, role: ev.CauseRole,
@@ -1009,6 +1023,37 @@ func GroundAgentNarrative(text string, evidence []AgentToolEvidence, docIDs []st
 	o := &Orchestrator{Redactor: Redact}
 	out, sts, _, disc := o.applyStatementClasses(text, agentFallbackText, ClassDerived, sc, nil, nil)
 	return AgentGrounding{Text: out, Statements: sts, Disclaimers: disc}
+}
+
+// ---- the causal chain read (NL query planner, N-S3) -------------------------
+
+// IsEngineChangeKind reports whether k is one of the engine's change kinds
+// (engineChangeKinds). The NL query planner's ledger-type → kind map is pinned
+// against it.
+func IsEngineChangeKind(k string) bool {
+	return engineChangeKinds[strings.ToLower(strings.TrimSpace(k))]
+}
+
+// ChangeChainPlacement is the change part of one incident's causal chain, for
+// "what changed before every X incident" (tracker 337 N-S3): every engine
+// change kind its steps observed, the first change step, whether the engine
+// established that step as the cause, and whether its primary sequence is
+// contradicted. Kind level only — the chain names change KINDS, never one
+// ledger row (N-D3), so a caller may say "same kind as a chain step", never
+// "this change caused it".
+func ChangeChainPlacement(res RCAResult) (kinds []string, step int, established, contradicted bool) {
+	seen := map[string]bool{}
+	for _, l := range res.CausalChain {
+		for _, k := range l.Kinds {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if engineChangeKinds[k] && !seen[k] {
+				seen[k] = true
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	v := changeChainFrom(res)
+	return kinds, v.step, v.established, v.contradicted
 }
 
 // ---- the causal chain read (skill path) -------------------------------------

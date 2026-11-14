@@ -67,6 +67,72 @@ func (s *server) aiInvestigationsPlatformOn() bool {
 	return s.aiModelLicensed() && s.aiModelsSwitchOn() && s.aiInvestigationsSwitchOn()
 }
 
+// aiProbesSwitchOn is the console-only "Iris active probes" switch (N-I3).
+func (s *server) aiProbesSwitchOn() bool { return s.features.Enabled(aientitlement.SwitchProbes) }
+
+// aiProbesPlatformOn is the platform half of the active-probe gate: AI
+// investigations available on this installation AND the probe switch on.
+func (s *server) aiProbesPlatformOn() bool {
+	return s.aiInvestigationsPlatformOn() && s.aiProbesSwitchOn()
+}
+
+// aiNetProbeGate is the per-request decision the Policy Engine applies to the
+// active-probe tools (ai.CapNetProbe, N-I3). Every condition must hold: the
+// add-on, models and investigations on (the platform), the "Iris active
+// probes" switch on, ONE concrete workspace in scope (probes are per-workspace
+// — the platform owner's all-tenants view sends nothing), that workspace's
+// investigations granted, and that workspace's OWN opt-in. The reason is what
+// the answer tells the operator when a method's probe step is skipped.
+func (s *server) aiNetProbeGate(claims jwtClaims) ai.NetProbeGate {
+	off := func(reason string) ai.NetProbeGate { return ai.NetProbeGate{Reason: reason} }
+	if s == nil {
+		return off("active probes are not available")
+	}
+	tenant, cross := principalTenant(claims)
+	switch {
+	case !s.aiInvestigationsPlatformOn():
+		return off("AI investigations are off on this installation, so Iris sends no active probe")
+	case !s.aiProbesSwitchOn():
+		return off("active probes are turned off on this installation (Features page: Iris active probes)")
+	case cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal):
+		return off("active probes run for one workspace at a time — no single workspace is in scope")
+	case !s.agentLoopEligible(claims):
+		return off("AI investigations are not turned on for this workspace")
+	case s.aiTenantCfg == nil || !s.aiTenantCfg.ProbeToolsEnabled(tenant):
+		return off("this workspace has not turned active probes on (Iris settings)")
+	}
+	return ai.NetProbeGate{Allow: true}
+}
+
+// errProbesAckRequired refuses turning active probes on without the explicit
+// acknowledgement that Correlix will send test traffic.
+var errProbesAckRequired = errors.New("turning active probes on needs probes_acknowledged: Correlix will send short tests (pings, a traceroute, one DNS lookup or one web request) from this server to the workspace's own devices and declared probes")
+
+// writeAIProbeOptIn applies one workspace's active-probe opt-in (N-I3) and
+// audits it. Turning it ON requires the acknowledgement; turning it off never
+// does. It writes the response itself and returns false on any refusal.
+func (s *server) writeAIProbeOptIn(w http.ResponseWriter, r *http.Request, claims jwtClaims, tenant string, on, acknowledged bool) bool {
+	if on && !acknowledged {
+		writeError(w, http.StatusBadRequest, errProbesAckRequired)
+		return false
+	}
+	if _, err := s.aiTenantCfg.SetProbeTools(tenant, on); err != nil {
+		s.audit.Record(AuditEvent{
+			Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: r.URL.Path,
+			Status: http.StatusInternalServerError, Decision: "deny", Remote: auditClientIP(r),
+			Detail: map[string]any{"action": "ai_probe_opt_in", "to": on, "error": "persist failed"},
+		})
+		writeError(w, http.StatusInternalServerError, errors.New("the active-probe setting was not saved"))
+		return false
+	}
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: r.URL.Path,
+		Status: http.StatusOK, Decision: "allow", Remote: auditClientIP(r),
+		Detail: map[string]any{"action": "ai_probe_opt_in", "to": on, "acknowledged": acknowledged},
+	})
+	return true
+}
+
 // writeAIAddOnRefusal answers a connection test on an install without the AI
 // add-on: 402 with the licence refusal body, and false. A test is licensed
 // alone — not switched — so an administrator can prove the key works before
@@ -294,6 +360,10 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 			Key           string `json:"key"`
 			NoPlatformKey bool   `json:"no_platform_key"`
 			ClearKey      bool   `json:"clear_key"`
+			// N-I3: the workspace's own active-probe opt-in. Absent leaves it
+			// unchanged; turning it on needs ProbesAcknowledged.
+			ProbesEnabled      *bool `json:"probes_enabled,omitempty"`
+			ProbesAcknowledged bool  `json:"probes_acknowledged,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -302,6 +372,17 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 		if p := strings.TrimSpace(req.Provider); p != "" && ai.NormalizeProvider(p) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("unknown provider — use anthropic, openai or gemini"))
 			return
+		}
+		if req.ProbesEnabled != nil {
+			// Refuse before anything else is written, so a refused opt-in never
+			// leaves the rest of the form half-saved.
+			if *req.ProbesEnabled && !req.ProbesAcknowledged {
+				writeError(w, http.StatusBadRequest, errProbesAckRequired)
+				return
+			}
+			if !s.writeAIProbeOptIn(w, r, claims, tenant, *req.ProbesEnabled, req.ProbesAcknowledged) {
+				return
+			}
 		}
 		if _, err := s.aiTenantCfg.SetTenantSettings(tenant, ai.TenantSettings{
 			Provider: req.Provider, Model: req.Model,
@@ -347,6 +428,11 @@ func (s *server) aiTenantConfigView(tenant string) map[string]any {
 		"no_platform_key":        c.NoPlatformKey,
 		"assistant_enabled":      !c.AssistantOff,
 		"investigations_enabled": c.AgentTools && s.aiInvestigationsPlatformOn(),
+		// N-I3: the workspace's own active-probe opt-in, and whether the
+		// installation offers active probes at all (the probe switch and AI
+		// investigations on) — the UI disables the toggle when it does not.
+		"probes_enabled":         c.ProbeTools,
+		"probes_available":       s.aiProbesPlatformOn(),
 		"platform_key_available": s.copilotKeyPresent(),
 		"providers":              []string{"gemini", "anthropic", "openai"},
 		"model_suggestions":      ai.ModelSuggestions(),
@@ -424,8 +510,9 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			Name           string `json:"name"`
 			Assistant      bool   `json:"assistant_enabled"`
 			Investigations bool   `json:"investigations_enabled"`
-			MCP            bool   `json:"mcp_enabled"` // read-only MCP gateway opt-in (N-I5)
-			KeyPresent     bool   `json:"key_present"` // tenant brought their own key
+			MCP            bool   `json:"mcp_enabled"`    // read-only MCP gateway opt-in (N-I5)
+			Probes         bool   `json:"probes_enabled"` // N-I3: the workspace's active-probe opt-in
+			KeyPresent     bool   `json:"key_present"`    // tenant brought their own key
 			NoPlatformKey  bool   `json:"no_platform_key"`
 			MaxCalls       int    `json:"max_calls"`    // 0 = platform default
 			DailyTokens    int    `json:"daily_tokens"` // 0 = platform default
@@ -441,6 +528,7 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 				Assistant:      !c.AssistantOff,
 				Investigations: c.AgentTools,
 				MCP:            c.MCP,
+				Probes:         c.ProbeTools,
 				KeyPresent:     c.Key != "",
 				NoPlatformKey:  c.NoPlatformKey,
 				MaxCalls:       c.MaxCalls,
@@ -454,7 +542,9 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			"tools_feature": s.aiInvestigationsPlatformOn(),
 			// The platform half of MCP (N-I5): the console-only IRIS_MCP switch.
 			"mcp_feature": s.features != nil && s.features.Enabled(aientitlement.SwitchMCP),
-			"models":      s.aiModelsView(),
+			// N-I3: whether the installation offers active probes at all.
+			"probes_feature": s.aiProbesPlatformOn(),
+			"models":         s.aiModelsView(),
 			"defaults": map[string]int{ // platform defaults, for UI placeholders
 				"max_calls":    envInt("AI_TOOLS_MAX_CALLS", 4),
 				"daily_tokens": aiToolsDailyTokens(),
@@ -480,9 +570,17 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			MCP         *bool `json:"mcp_enabled,omitempty"`
 			MaxCalls    int   `json:"max_calls"`    // 0 = platform default
 			DailyTokens int   `json:"daily_tokens"` // 0 = platform default
+			// N-I3: the workspace's active-probe opt-in. Absent leaves it
+			// unchanged; turning it on needs ProbesAcknowledged.
+			Probes             *bool `json:"probes_enabled,omitempty"`
+			ProbesAcknowledged bool  `json:"probes_acknowledged,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.Probes != nil && *req.Probes && !req.ProbesAcknowledged {
+			writeError(w, http.StatusBadRequest, errProbesAckRequired)
 			return
 		}
 		c, err := s.aiTenantCfg.SetEntitlement(t.ID, !req.Assistant, req.Investigations, req.MaxCalls, req.DailyTokens)
@@ -501,11 +599,18 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 					Detail: map[string]any{"action": "ai.mcp.workspace", "enabled": c.MCP}})
 			}
 		}
+		if req.Probes != nil {
+			if !s.writeAIProbeOptIn(w, r, claims, t.ID, *req.Probes, req.ProbesAcknowledged) {
+				return
+			}
+			c = s.aiTenantCfg.Get(t.ID)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tenant_id":              t.ID,
 			"assistant_enabled":      !c.AssistantOff,
 			"investigations_enabled": c.AgentTools,
 			"mcp_enabled":            c.MCP,
+			"probes_enabled":         c.ProbeTools,
 			"max_calls":              c.MaxCalls,
 			"daily_tokens":           c.DailyTokens,
 		})

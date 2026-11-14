@@ -23,15 +23,20 @@ import (
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/chatops"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irisinvest"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/iristriage"
+	"netops/backend/internal/jwks"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
@@ -48,6 +53,7 @@ import (
 	"netops/backend/internal/tac"
 	"netops/backend/internal/tenantrunbook"
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -270,6 +276,8 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	// N-B3: hold the investigation's hypotheses under the decision's id, in the
 	// asker's tenant — before the ledger closes, so it records them.
 	s.aiHypothesesHold(r, claims, rec, &ans)
+	// N-I1: hold a read-only investigation's trace under the same id.
+	s.aiInvestigationHold(r, claims, rec, &ans)
 	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
@@ -380,17 +388,19 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 	// request is a ledgered decision (nil Recorder otherwise: a no-op).
 	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())
 	o := &ai.Orchestrator{
-		DS:       ds,
-		Tools:    tools,
-		LLM:      aiLLM{srv: s, claims: claims},
-		Flags:    envFlagLookup,
-		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		Redactor: s.irisRedactor(claims),                               // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
-		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
-		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
-		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
-		Skills:   s.aiSkillsFor(r.Context(), claims),                   // troubleshooting methods + the tenant's approved runbooks (N-F2); nil = layer disabled
-		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
+		DS:    ds,
+		Tools: tools,
+		LLM:   aiLLM{srv: s, claims: claims},
+		Flags: envFlagLookup,
+		// Read-only by default; the active-probe tools (N-I3) open only when the
+		// installation, investigations and this workspace's opt-in all say so.
+		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{NetProbes: s.aiNetProbeGate(claims)}, envFlagLookup),
+		Redactor: s.irisRedactor(claims),             // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
+		KB:       aiKB,                               // Network Expert KB (supporting knowledge)
+		Docs:     aiDocsIndex,                        // docs-portal retriever (real page citations)
+		TAC:      s.aiTACKnowledge(),                 // vendor TAC knowledge Iris reads before answering
+		Skills:   s.aiSkillsFor(r.Context(), claims), // troubleshooting methods + the tenant's approved runbooks (N-F2); nil = layer disabled
+		Explain:  aiExplanations,                     // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps, // tenant-scoped Phase-A reads
 		// Tool contract v2 (N-A8): the process-lived gateway, so the per-tenant
@@ -403,6 +413,12 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// memory, per principal) until an operator judges it on /api/ai/feedback;
 		// only then is a tenant-scoped memory row written.
 		RecordInvestigation: s.aiRecordInvestigation(claims),
+		// The read-only Investigator (tracker 337 N-I1): the caller's
+		// ai.investigate decision (the AI add-on, its two switches, the
+		// workspace's own switch), and the tenant's runbooks linked to an
+		// investigation's incident or device (N-F2), from the token's tenant.
+		InvestigateAllowed: s.agentLoopEligible(claims),
+		RunbooksFor:        s.aiRunbooksFor(claims),
 		// Production scorecard (tracker 337 N-A3): counts, enums and durations
 		// only — nothing tenant- or entity-identifying crosses this seam.
 		Score: s.aiScoreSink(),
@@ -415,6 +431,11 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// 3 s): a cancelled request must not strip the network context from a
 		// narration that still runs to its budget.
 		OrgContext: func() string { return s.orgContextBlock(context.WithoutCancel(r.Context()), claims) },
+		// N-F3 environment layer: the same block, its facts ordered by the
+		// question when they overflow it.
+		OrgContextFor: func(q string) string {
+			return s.orgContextBlockFor(context.WithoutCancel(r.Context()), claims, q)
+		},
 		// Routing policy (ai/route_policy.go): the caller's own scope and
 		// inventory facts for multi-part questions, from the token and the
 		// caller's visible devices.
@@ -3192,6 +3213,150 @@ func (s *server) handleAIHypotheses(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// aiInvestigationHold names a read-only investigation's trace and holds it in
+// the asker's tenant (tracker 337 N-I1) — the decision's id when the ask is
+// ledgered (one id names the investigation everywhere: its trace, its
+// hypotheses and its ledger record), else a fresh one. The tenant is the
+// token's, never anything in the request. A trace that cannot be held keeps
+// no id — the answer still carries it inline — and the failure is logged.
+func (s *server) aiInvestigationHold(r *http.Request, claims jwtClaims, rec *aidecision.Recorder, ans *ai.Answer) {
+	if ans == nil || ans.Investigation == nil {
+		return
+	}
+	ans.Investigation.ID = ""
+	if s.aiInvestigations == nil {
+		return
+	}
+	id := rec.DecisionID()
+	if id == "" {
+		fresh, err := aidecision.NewID()
+		if err != nil {
+			logError("ai.investigate", "no id — this investigation's trace is not held", errf(err))
+			return
+		}
+		id = fresh
+	}
+	tr := *ans.Investigation
+	tr.ID = id
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), aiHypothesesHoldTimeout)
+	defer cancel()
+	if err := s.aiInvestigations.Put(ctx, tenant, tr); err != nil {
+		logError("ai.investigate", "trace hold failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	ans.Investigation.ID = id
+	logInfo("ai", "investigation", map[string]any{
+		"tenant": claims.Tenant, "sub": claims.Sub, "id": id, "status": tr.Status,
+		"passes": tr.Used.Passes, "tool_calls": tr.Used.ToolCalls, "tokens": tr.Used.Tokens,
+		"duration_ms": tr.Used.DurationMS, "cutoffs": tr.Cutoffs,
+	})
+}
+
+// handleAIInvestigations serves GET /api/ai/investigations (the caller's recent
+// investigations, newest first) and GET /api/ai/investigations/{id} (one
+// trace), in the caller's own tenant (the platform owner: any tenant). Another
+// tenant's id, an expired one and a malformed one are the same 404. Gated by
+// ai.investigate — an investigation exists only where AI investigations run —
+// and by infrastructure:read, which every read in a trace needed.
+func (s *server) handleAIInvestigations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+		return
+	}
+	if s.aiInvestigations == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("investigation traces are not held on this deployment"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/ai/investigations"), "/")
+	if rest == "" {
+		list, err := s.aiInvestigations.List(r.Context(), tenant, cross, 20)
+		if err != nil {
+			logError("ai.investigate", "list failed", errf(err))
+			writeError(w, http.StatusInternalServerError, errors.New("recent investigations could not be read"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"investigations": list})
+		return
+	}
+	if !irisinvest.ValidID(rest) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	tr, err := s.aiInvestigations.Get(r.Context(), tenant, cross, rest)
+	switch {
+	case errors.Is(err, irisinvest.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case err != nil:
+		logError("ai.investigate", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the investigation could not be read"))
+	default:
+		writeJSON(w, http.StatusOK, tr)
+	}
+}
+
+// aiRunbooksForTimeout bounds the linked-runbook lookups of one investigation.
+const aiRunbooksForTimeout = 2 * time.Second
+
+// aiRunbooksFor is runbook retrieval for the read-only Investigator (tracker
+// 337 N-I1 over N-F2): the names of the caller's tenant's runbooks LINKED to
+// the investigation's incident or device. The tenant is the token's; the
+// lookup is the tenant-keyed store's own (ListByLink), and the investigator
+// only ever looks a name up in the caller's own skill set, so a name can
+// never run outside its tenant. nil — no retrieval — for a cross-tenant
+// principal or a caller whose skill set holds no runbooks (the same gate as
+// aiSkillsFor).
+func (s *server) aiRunbooksFor(claims jwtClaims) ai.RunbooksForFunc {
+	tenant, cross := principalTenant(claims)
+	if s.tenantRunbooks == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.RunbookAuthor) {
+		return nil
+	}
+	return func(ctx context.Context, _ ai.Principal, t ai.InvestigationTarget) []string {
+		ctx, cancel := context.WithTimeout(ctx, aiRunbooksForTimeout)
+		defer cancel()
+		seen := map[string]bool{}
+		var out []string
+		lookup := func(lt tenantrunbook.LinkType, key string) {
+			if strings.TrimSpace(key) == "" {
+				return
+			}
+			docs, err := s.tenantRunbooks.ListByLink(ctx, tenant, lt, key)
+			if err != nil {
+				logError("ai.investigate", "linked runbooks could not be read — the investigation uses the methods only",
+					map[string]any{"tenant": tenant, "link_type": string(lt), "error": err.Error()})
+				return
+			}
+			for _, d := range docs {
+				if d.Tenant != "" && d.Tenant != tenant {
+					continue // defence in depth: the store is tenant-keyed
+				}
+				if !seen[d.Name] {
+					seen[d.Name] = true
+					out = append(out, d.Name)
+				}
+			}
+		}
+		lookup(tenantrunbook.LinkIncident, t.CorrelationID)
+		if t.DeviceID != "" {
+			lookup(tenantrunbook.LinkEntity, "device:"+t.DeviceID)
+		}
+		if t.DeviceName != "" && t.DeviceName != t.DeviceID {
+			lookup(tenantrunbook.LinkEntity, "device:"+t.DeviceName)
+		}
+		return out
+	}
+}
+
 // handleAIDecisions serves GET /api/ai/decisions.
 func (s *server) handleAIDecisions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -3651,9 +3816,21 @@ func (rc *runbookRecheck) start(tenant, fp string, ids []string, store tenantrun
 // orgContextRender reads the tenant's active facts, re-validates every one
 // (a row that no longer passes is skipped and counted), and renders the block.
 func (s *server) orgContextRender(ctx context.Context, tenant string) (string, int, int, error) {
-	facts, err := s.orgContext.ActiveFacts(ctx, tenant)
+	out, err := s.orgContextFacts(ctx, tenant)
 	if err != nil {
 		return "", 0, 0, err
+	}
+	block, omitted := ai.OrgContextBlock(out, ai.OrgContextMaxChars, ai.Redact)
+	return block, len(out), omitted, nil
+}
+
+// orgContextFacts reads the tenant's active facts and keeps the ones that
+// still pass validation (a row that no longer passes is skipped and counted),
+// in the store's render order.
+func (s *server) orgContextFacts(ctx context.Context, tenant string) ([]ai.ContextFact, error) {
+	facts, err := s.orgContext.ActiveFacts(ctx, tenant)
+	if err != nil {
+		return nil, err
 	}
 	tools := ai.ToolNames()
 	out := make([]ai.ContextFact, 0, len(facts))
@@ -3665,8 +3842,7 @@ func (s *server) orgContextRender(ctx context.Context, tenant string) (string, i
 		}
 		out = append(out, ai.ContextFact{Kind: orgcontext.Label(f.Kind), Scope: f.Scope, Key: f.Key, Body: f.Body})
 	}
-	block, omitted := ai.OrgContextBlock(out, ai.OrgContextMaxChars, ai.Redact)
-	return block, len(out), omitted, nil
+	return out, nil
 }
 
 // orgContextBlock is the block for one Iris request, or "" — for a Global
@@ -3674,6 +3850,15 @@ func (s *server) orgContextRender(ctx context.Context, tenant string) (string, i
 // or a failed read (the answer then runs without context; the failure is
 // logged and counted, never silent). A rendered block is ledgered as hashes.
 func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
+	return s.orgContextBlockFor(ctx, claims, "")
+}
+
+// orgContextBlockFor is orgContextBlock for one question (N-F3, the
+// environment layer). The block is the cached one whenever every fact fits;
+// only when the workspace holds more approved facts than the block carries
+// are the facts that share the question's terms rendered first, so what is
+// left out is what is least related to this question. Ledgered the same way.
+func (s *server) orgContextBlockFor(ctx context.Context, claims jwtClaims, question string) string {
 	tenant, cross := principalTenant(claims)
 	if s.orgContext == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.ContextAuthor) {
 		return ""
@@ -3683,10 +3868,19 @@ func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
 	// N-H4: the rendered block is cached per tenant; an approve, rollback or
 	// retire invalidates it (orgContextAPI Changed).
 	got, err := s.irisContextCache.Get(iriscache.Key{Tenant: tenant}, func() (orgContextRendered, error) {
-		block, n, _, err := s.orgContextRender(rctx, tenant)
-		return orgContextRendered{block: block, facts: n}, err
+		list, err := s.orgContextFacts(rctx, tenant)
+		if err != nil {
+			return orgContextRendered{}, err
+		}
+		block, omitted := ai.OrgContextBlock(list, ai.OrgContextMaxChars, ai.Redact)
+		return orgContextRendered{block: block, facts: len(list), list: list, omitted: omitted}, nil
 	})
 	block, n := got.block, got.facts
+	if err == nil && got.omitted > 0 && strings.TrimSpace(question) != "" {
+		if ranked, relevant := ai.RankContextFacts(got.list, question); relevant > 0 {
+			block, _ = ai.OrgContextBlock(ranked, ai.OrgContextMaxChars, ai.Redact)
+		}
+	}
 	if err != nil {
 		s.orgContextMetrics.Failed()
 		logError("iris.context", "network context could not be read; answering without it", errf(err))
@@ -3838,6 +4032,10 @@ func (s *server) irisDataTimer(w http.ResponseWriter) (http.ResponseWriter, func
 type orgContextRendered struct {
 	block string
 	facts int
+	// list and omitted let a question-aware request re-order the facts when
+	// they overflow the block (N-F3); list is shared and read-only.
+	list    []ai.ContextFact
+	omitted int
 }
 
 // Cache bounds: invalidation on write is what keeps them correct; the TTL only
@@ -4262,4 +4460,364 @@ func (s *server) mcpAudit(r *http.Request, claims jwtClaims, method, tool, outco
 		Time: time.Now().UTC(), Actor: claims.Sub, Tenant: tenant, Cross: cross,
 		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: decision, Detail: detail,
 	})
+}
+
+// ---- Iris in Slack and Teams (tracker 337 N-I6) --------------------------------
+//
+// internal/chatops owns the chat protocols, the link state machine and the
+// bounded answer queue; this is the seam into the rest of the server. The one
+// rule that lives HERE: a chat question runs as the linked Correlix user,
+// re-read from the user store on every question, confined to that user's own
+// tenant, through the same aiAskRun as /api/ai/ask. The platform owner never
+// answers through chat, whatever the link says.
+
+// chatopsSwitch is the Features-page switch (console-only, risky, default off).
+const chatopsSwitch = "IRIS_CHATOPS"
+
+func (s *server) newChatops() *chatops.Service {
+	var store chatops.Store
+	if ps, ok := platformdb.ActivePG(); ok {
+		var crypt chatops.Crypter // nil when no vault: the store then refuses secrets
+		if s.vault != nil {
+			crypt = s.vault
+		}
+		store = chatops.NewPGStore(ps.DB(), crypt)
+	} else {
+		store = chatops.NewMemStore()
+	}
+	// Outbound chat traffic goes to public Slack / Microsoft endpoints only;
+	// the SSRF-guarded client refuses private and metadata addresses.
+	client := safehttp.Client(20 * time.Second)
+	return chatops.New(chatops.Deps{
+		Store:     store,
+		Enabled:   func() bool { return s.features != nil && s.features.Enabled(chatopsSwitch) },
+		Asker:     s.chatopsAsk,
+		Teams:     jwks.NewFromMetadata(chatops.BotFrameworkMetadata, 0),
+		Slack:     chatops.SlackPoster{Client: client},
+		TeamsRe:   &chatops.TeamsPoster{Client: client},
+		Authorize: s.chatopsAuthorize,
+		Audit: func(tenant, actor, action string, d map[string]any) {
+			detail := map[string]any{"action": action}
+			for k, v := range d {
+				detail[k] = v
+			}
+			s.audit.Record(AuditEvent{Time: time.Now().UTC(), Actor: actor, Tenant: tenant, Method: "CHAT",
+				Path: "/api/chatops", Status: http.StatusOK, Decision: "allow", Detail: detail})
+		},
+		Log: func(level, msg string, f map[string]any) {
+			switch level {
+			case "error":
+				logError("chatops", msg, f)
+			case "warn":
+				logWarn("chatops", msg, f)
+			default:
+				logInfo("chatops", msg, f)
+			}
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	})
+}
+
+// handleChatopsInbound serves POST /api/chatops/{slack|teams}/{token}
+// (JWT-exempt: the handler authenticates the platform's signature).
+func (s *server) handleChatopsInbound(w http.ResponseWriter, r *http.Request) {
+	if s.chatops == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.chatops.HandleInbound(w, r)
+}
+
+// handleChatopsAPI serves the admin and link endpoints under /api/chatops/.
+func (s *server) handleChatopsAPI(w http.ResponseWriter, r *http.Request) {
+	if s.chatops == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.chatops.HandleAPI(w, r)
+}
+
+// chatopsAuthorize: admin endpoints need administration:admin (a workspace
+// admin within their own tenant — principalTenant decides which); the link
+// endpoints need a signed-in person who is not the platform owner.
+func (s *server) chatopsAuthorize(w http.ResponseWriter, r *http.Request, admin bool) (chatops.Caller, bool) {
+	var (
+		claims jwtClaims
+		ok     bool
+	)
+	if admin {
+		claims, ok = s.requirePerm(w, r, "administration", LevelAdmin)
+		if !ok {
+			return chatops.Caller{}, false
+		}
+	} else {
+		claims, ok = userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return chatops.Caller{}, false
+		}
+		if isPlatformOwner(claims) {
+			writeError(w, http.StatusForbidden, errors.New("the platform administrator cannot use Iris from chat — sign in with a workspace account"))
+			return chatops.Caller{}, false
+		}
+	}
+	tenant, cross := principalTenant(claims)
+	return chatops.Caller{Tenant: tenant, Sub: claims.Sub, Cross: cross, Admin: admin,
+		Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+}
+
+// chatopsAsk answers one approved chat question as the linked user.
+func (s *server) chatopsAsk(ctx context.Context, q chatops.Question) (chatops.Answer, error) {
+	refuse := func(msg string) (chatops.Answer, error) { return chatops.Answer{}, chatops.Refusal{Msg: msg} }
+	const account = "Your Correlix account can't use Iris from chat right now — ask a workspace admin to check your chat link."
+	if !aiEnabled() {
+		return refuse("Iris is turned off on this Correlix installation.")
+	}
+	u, ok := s.users.Get(q.UserID)
+	if !ok || u.Status == "disabled" {
+		return refuse(account)
+	}
+	claims := jwtClaims{Sub: u.ID, Role: u.Role, Tenant: u.TenantID}
+	tenant, cross := principalTenant(claims)
+	// Platform-admin powers never reach chat, and the user must still belong
+	// to the tenant whose chat app asked.
+	if cross || isPlatformOwner(claims) || tenant == "" || tenant != chatops.NormTenant(q.Tenant) {
+		return refuse(account)
+	}
+	if s.tenantSuspended(claims) {
+		return refuse("Your Correlix workspace is suspended.")
+	}
+	// The same per-principal budget as /api/ai/ask: chat is not a way around it.
+	if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		return refuse("Iris is answering too many of your questions — wait a minute and ask again.")
+	}
+	if !s.aiEntitled(claims, aientitlement.Chat) {
+		return refuse("Iris chat isn't available for your workspace.")
+	}
+	question := q.Text
+	if ai.IsCommand(question) {
+		canonical, cmd, ok := ai.ResolveCommand(question)
+		if !ok || cmd.Intent == "help" {
+			return chatops.Answer{Text: "Ask me about your network in plain English — for example: what is going on right now?"}, nil
+		}
+		question = canonical
+	}
+	r, err := http.NewRequestWithContext(context.WithValue(ctx, userCtxKey, claims), http.MethodPost, "/api/chatops/ask", nil)
+	if err != nil {
+		return chatops.Answer{}, err
+	}
+	r.RemoteAddr = "chatops"
+	req := aiAskRequest{Question: question}
+	var conv *irisconvo.Conversation
+	if s.nlqConvos != nil && s.aiEntitled(claims, aientitlement.NLQuery) {
+		if id := strings.TrimSpace(q.ConversationID); id != "" {
+			if c, _, err := s.askConversation(r, claims, id); err == nil {
+				conv = &c
+			}
+		}
+		if conv == nil {
+			c, err := s.nlqConvos.Create(ctx, tenant, claims.Sub)
+			if err != nil {
+				// Not fatal: the question is answered, only the follow-up memory is lost.
+				logWarn("chatops", "conversation not started", errf(err))
+			} else {
+				conv = &c
+			}
+		}
+		if conv != nil {
+			req.ConversationID = conv.ID
+		}
+	}
+	ans, err := s.aiAskRun(r, claims, req, question, conv, nil)
+	if err != nil {
+		return chatops.Answer{}, err
+	}
+	out := chatopsAnswerOf(ans)
+	if conv != nil {
+		out.ConversationID = conv.ID
+	}
+	return out, nil
+}
+
+// chatopsAnswerOf flattens an Iris answer into chat text: its words, its key
+// structured lines, its next steps and its citations — never raw evidence.
+func chatopsAnswerOf(ans ai.Answer) chatops.Answer {
+	out := chatops.Answer{Title: ans.Title, Text: ans.Text, Disclaimers: ans.Disclaimers, Note: ans.ProviderNote, Next: ans.NextActions}
+	if cs := ans.CurrentState; cs != nil {
+		if out.Text == "" {
+			out.Text = cs.Summary
+		}
+		out.Bullets = append(out.Bullets, cs.ActiveIncidents...)
+		if len(cs.RecommendedFocus) > 0 {
+			out.Bullets = append(out.Bullets, "Look first at: "+strings.Join(cs.RecommendedFocus, ", "))
+		}
+	}
+	if p := ans.Problem; p != nil {
+		if out.Title == "" {
+			out.Title = p.Title
+		}
+		if out.Text == "" {
+			out.Text = p.Summary
+		}
+		if p.Verdict != "" {
+			v := "Verdict: " + p.Verdict
+			if p.Confidence != "" {
+				v += " (" + p.Confidence + ")"
+			}
+			out.Bullets = append(out.Bullets, v)
+		}
+		if p.RootCauseHypothesis != "" {
+			out.Bullets = append(out.Bullets, "Likely cause: "+p.RootCauseHypothesis)
+		}
+	}
+	if m := ans.Module; m != nil {
+		if out.Text == "" {
+			out.Text = m.Headline
+		}
+		out.Bullets = append(out.Bullets, m.Items...)
+	}
+	for _, c := range ans.Citations {
+		out.Citations = append(out.Citations, chatops.Citation{Label: c.Label, Href: c.Href})
+	}
+	return out
+}
+
+// ── Iris learning loop (tracker 337 N-F5, internal/irislearning) ──────────
+//
+// §3a: per-tenant DATA → requirePerm(administration) + tenant filter; the
+// tenant comes from the principal (Authorize), never the body, and a Global
+// view must choose a workspace. The generators read ONLY the caller's tenant:
+// its recorded resolutions and their incident fingerprints, its Iris question
+// log (corrections, misses) and its aliases. Nothing here activates anything:
+// a proposal is handed to its target's own review — a Network context version
+// (orgcontext: a different person approves), a runbook draft (its own page:
+// cases + a different person), or an alias (here: adopter ≠ approver, every
+// alias check re-run). Default-closed: the routes need ai.context.author, and
+// adopting into a runbook or an alias also needs that target's entitlement.
+
+// newIrisLearningStore: Postgres (RLS) or nothing — a proposal queue that
+// silently vanished on a restart would lose who adopted what.
+func newIrisLearningStore() irislearning.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return irislearning.NewPGStore(ps.DB())
+	}
+	return nil
+}
+
+// learningResolutionLimit bounds the resolutions one refresh reads.
+const learningResolutionLimit = 2000
+
+func (s *server) handleAILearning(w http.ResponseWriter, r *http.Request) {
+	if s.irisLearning == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("iris learning needs the Postgres platform store on this deployment"))
+		return
+	}
+	s.irisLearningAPI().Handler(w, r)
+}
+
+func (s *server) irisLearningTargets() irislearning.Targets {
+	t := irislearning.Targets{Context: s.orgContext, Runbooks: s.tenantRunbooks, ToolNames: ai.ToolNames}
+	if s.nlqAliases != nil && s.nlqCatalog != nil {
+		t.Aliases = s.nlqAliases // never a typed-nil interface
+	}
+	if s.irisContextCache != nil {
+		t.ContextChanged = s.irisContextCache.InvalidateTenant
+	}
+	return t
+}
+
+func (s *server) irisLearningAPI() irislearning.Deps {
+	return irislearning.Deps{
+		Store:   s.irisLearning,
+		Targets: s.irisLearningTargets(),
+		Authorize: func(w http.ResponseWriter, r *http.Request, level orgcontext.Level) (orgcontext.Caller, bool) {
+			perm := LevelRead
+			switch level {
+			case orgcontext.LevelAuthor:
+				perm = LevelWrite
+			case orgcontext.LevelManage:
+				perm = LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, "administration", perm)
+			if !ok || !s.requireAIEntitlement(w, claims, aientitlement.ContextAuthor) {
+				return orgcontext.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return orgcontext.Caller{Tenant: tenant, Cross: cross, Sub: claims.Sub, Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+		},
+		Entitled: func(w http.ResponseWriter, r *http.Request, target irislearning.Target) bool {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			switch target {
+			case irislearning.TargetRunbook:
+				return s.requireAIEntitlement(w, claims, aientitlement.RunbookAuthor)
+			case irislearning.TargetAlias:
+				return s.requireAIEntitlement(w, claims, aientitlement.NLQuery)
+			}
+			return true // org_context: ai.context.author, already checked by Authorize
+		},
+		Inputs: func(ctx context.Context, _ *http.Request, tenant string) (irislearning.Inputs, error) {
+			return s.irisLearningInputs(ctx, tenant)
+		},
+		Visible: func(r *http.Request) irislearning.Visible {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			scope := s.nlqScopeFor(r, claims)
+			return func(ctx context.Context, entityType, entityID string) (bool, error) {
+				return scope.Visible(ctx, nlqast.EntityRef{Type: entityType, ID: entityID})
+			}
+		},
+		Audit: func(r *http.Request, c orgcontext.Caller, decision string, detail map[string]any) {
+			if s.audit == nil {
+				return
+			}
+			s.audit.Record(AuditEvent{
+				Time: time.Now().UTC(), Actor: c.Sub, Tenant: c.Tenant, Cross: c.Cross,
+				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: decision, Detail: detail,
+			})
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Log:        func(msg string, err error) { logError("iris.learning", msg, errf(err)) },
+	}
+}
+
+// irisLearningInputs reads the generators' inputs — every read within exactly
+// tenant. A source that is not wired on this deployment contributes nothing;
+// one that fails is an error (a refresh over half its inputs would propose
+// from a partial picture and say nothing about it).
+func (s *server) irisLearningInputs(ctx context.Context, tenant string) (irislearning.Inputs, error) {
+	in := irislearning.Inputs{Fingerprints: map[string]incidentfp.Fingerprint{}}
+	if s.rcaResolutions != nil {
+		rows, err := s.rcaResolutions.Recent(ctx, tenant, time.Now().UTC().Add(-irislearning.ResolutionLookback), learningResolutionLimit)
+		if err != nil {
+			return irislearning.Inputs{}, fmt.Errorf("resolutions: %w", err)
+		}
+		in.Resolutions = rows
+		if s.incidentFP != nil && len(rows) > 0 {
+			ids := make([]string, 0, len(rows))
+			seen := map[string]bool{}
+			for _, r := range rows {
+				if !seen[r.CorrelationID] {
+					seen[r.CorrelationID] = true
+					ids = append(ids, r.CorrelationID)
+				}
+			}
+			fps, err := s.incidentFP.Get(ctx, tenant, ids)
+			if err != nil {
+				return irislearning.Inputs{}, fmt.Errorf("fingerprints: %w", err)
+			}
+			in.Fingerprints = fps
+		}
+	}
+	if s.nlqQueryLog != nil {
+		recs, err := s.nlqQueryLog.List(ctx, tenant, irisquerylog.ListFilter{Limit: irisquerylog.MaxListLimit})
+		if err != nil {
+			return irislearning.Inputs{}, fmt.Errorf("question log: %w", err)
+		}
+		in.Queries = recs
+	}
+	if s.nlqAliases != nil {
+		in.Aliases = s.nlqAliases.List(tenant, false)
+	}
+	return in, nil
 }

@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/chatops"
 	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
 	"netops/backend/internal/flownames"
@@ -115,6 +116,7 @@ import (
 	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
@@ -143,6 +145,7 @@ import (
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irisinvest"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
@@ -422,6 +425,10 @@ type server struct {
 	// mcpLimiter is the per-API-key budget for MCP tools/call (N-I5), on top
 	// of the key's own request limit and the gateway's per-tenant tool rates.
 	mcpLimiter *irismcp.Limiter
+	// aiProbe is the N-I3 active-probe executor: the per-target limiter, the
+	// process-wide slot gate and the measurement itself (collectors.RunOneShot
+	// in production; a fake in tests, so no test sends real traffic).
+	aiProbe aiProbeExec
 	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
 	// one per process, keyed by tenant and normalised question, route ids only.
 	aiPlanCache *ai.PlannerCache
@@ -438,10 +445,16 @@ type server struct {
 	// on a file-backend deployment (the routes answer 503, Iris runs only the
 	// compiled methods). tenantRunbookSets is each tenant's compiled set plus
 	// its approved, proven runbooks, cached per fingerprint.
-	tenantRunbooks       tenantrunbook.Store
+	tenantRunbooks tenantrunbook.Store
+	// chatops is Iris in Slack and Teams (N-I6): connections, links, the
+	// signed inbound endpoints and the bounded answer queue (internal/chatops).
+	chatops              *chatops.Service
 	tenantRunbookMetrics *tenantrunbook.Metrics
 	tenantRunbookSets    *tenantrunbook.OverlayCache
 	tenantRunbookRecheck *runbookRecheck
+	// irisLearning is the controlled learning loop's proposal queue (tracker
+	// 337 N-F5); nil on a file-backend deployment (the routes answer 503).
+	irisLearning irislearning.Store
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -458,6 +471,10 @@ type server struct {
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
 	aiHypotheses irishypo.Store
+	// Investigation traces (tracker 337 N-I1): each read-only investigation's
+	// structured trace, held per tenant (bounded, in memory) so the Iris panel
+	// can re-open it by id. nil = not held (the answer carries its own trace).
+	aiInvestigations irisinvest.Store
 
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1379,6 +1396,7 @@ func newServer() *server {
 		aiDecisionMetrics:    aidecision.NewMetrics(),
 		aiToolGateway:        ai.NewToolGateway(),
 		mcpLimiter:           irismcp.NewLimiter(nil),
+		aiProbe:              newAIProbeExec(),
 		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
 		irisStreamMetrics:    &irisstream.Metrics{},
@@ -1387,12 +1405,14 @@ func newServer() *server {
 		tenantRunbookMetrics: &tenantrunbook.Metrics{},
 		tenantRunbookSets:    &tenantrunbook.OverlayCache{},
 		tenantRunbookRecheck: &runbookRecheck{},
+		irisLearning:         newIrisLearningStore(),
 		srcAuthority:         newSrcAuthorityStore(),
 		srcAuthorityMetrics:  &srcauthority.Metrics{},
 		irisAliasCache:       newIrisAliasCache(),
 		irisContextCache:     newIrisContextCache(),
 		nlqExamples:          modelc.EmbeddedExamples(),
 		aiHypotheses:         irishypo.NewMemStore(),
+		aiInvestigations:     irisinvest.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -2003,6 +2023,9 @@ func newServer() *server {
 	// Tenant runbooks (N-F2) need the platform's models for their harness
 	// fingerprint, so the store is built once the configuration is loaded.
 	srv.tenantRunbooks = srv.newTenantRunbookStore()
+	// Iris in Slack / Teams (N-I6): built here, answered by the workers started
+	// in run; every inbound request is refused until the console switch is on.
+	srv.chatops = srv.newChatops()
 	return srv
 }
 
@@ -2880,6 +2903,12 @@ func Run() {
 	// saved on another api replica arrives, and a failed read recovers without
 	// a restart (the last good settings stay in force meanwhile).
 	workers.start("platform-alert-route-refresh", func() { srv.platformAlerts.RefreshLoop(ctx, time.Minute) })
+	// Iris in Slack / Teams: two answer workers drain the bounded chat queue.
+	if srv.chatops != nil {
+		for i := 0; i < 2; i++ {
+			workers.start("chatops-answer", func() { srv.chatops.Run(ctx) })
+		}
+	}
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	// Credential sentinel — self-healing SNMP credential resolution. Runs with
@@ -4172,11 +4201,16 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
 	mux.HandleFunc("/api/ai/runbooks", s.handleAIRunbooks)                // Iris tenant runbooks/MOPs (N-F2): list, search, create
 	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)               // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
+	mux.HandleFunc("/api/chatops/", s.handleChatopsAPI)                   // Iris in Slack/Teams (N-I6): connections, links, link-code, me
+	mux.HandleFunc("/api/chatops/slack/", s.handleChatopsInbound)         // Slack inbound: JWT-exempt, path token + v0 HMAC
+	mux.HandleFunc("/api/chatops/teams/", s.handleChatopsInbound)         // Teams inbound: JWT-exempt, path token + Bot Framework JWT
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                          // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
+	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                // Iris learning loop (N-F5): proposals a person decides
+	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)               // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)
@@ -4190,6 +4224,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
 	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)      // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
 	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
+	mux.HandleFunc("/api/ai/investigations", s.handleAIInvestigations)    // Iris read-only investigations (N-I1): own tenant, recent
+	mux.HandleFunc("/api/ai/investigations/", s.handleAIInvestigations)   // Iris read-only investigations (N-I1): one trace by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

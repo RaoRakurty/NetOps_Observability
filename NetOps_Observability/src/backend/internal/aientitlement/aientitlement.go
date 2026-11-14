@@ -258,6 +258,10 @@ const (
 	// SwitchMCP turns the read-only MCP gateway on for the platform (N-I5).
 	// It needs no licence add-on: Correlix makes no AI provider call for it.
 	SwitchMCP = "IRIS_MCP"
+	// SwitchProbes lets Iris's investigation methods send a small, fixed test
+	// from Correlix's own collector to a target a workspace owns (N-I3). It
+	// needs investigations on, and each workspace still opts in.
+	SwitchProbes = "IRIS_AI_PROBES"
 )
 
 // IrisOn is the platform Iris switch with its historical semantics: ON by

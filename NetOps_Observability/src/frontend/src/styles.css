@@ -7717,6 +7717,12 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .iris-note { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
 .iris-empty { margin: 0; padding: 16px; font-size: 14px; color: var(--muted); text-align: center; border: 1px dashed var(--panel-border); border-radius: 8px; }
 .iris-notice { margin: 0; padding: 8px 12px; font-size: 14px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--hover); color: var(--fg); }
+/* N-S3: "what changed before every X incident" — one section per incident. */
+.iris-incident-groups { display: grid; gap: 16px; min-width: 0; }
+.iris-incident-group { display: grid; gap: 8px; min-width: 0; }
+.iris-incident-group-head { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
+.iris-incident-group-head .iris-muted { font-weight: 400; font-size: 14px; }
+.iris-incident-group-title { font-weight: 600; }
 .iris-notes { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
 .iris-view { display: grid; gap: 8px; min-width: 0; }
 .iris-view-secondary { padding-top: 12px; border-top: 1px solid var(--panel-border); }
