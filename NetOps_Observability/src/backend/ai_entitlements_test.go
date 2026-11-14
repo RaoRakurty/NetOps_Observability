@@ -36,6 +36,7 @@ import (
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irisgate"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/tenantrunbook"
@@ -73,6 +74,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/context/":             aientitlement.ContextAuthor,
 	"/api/ai/runbooks":             aientitlement.RunbookAuthor, // tenant runbooks/MOPs (N-F2)
 	"/api/ai/runbooks/":            aientitlement.RunbookAuthor,
+	"/api/ai/learning":             aientitlement.ContextAuthor, // learning loop (N-F5); adopting also needs the target's own
+	"/api/ai/learning/":            aientitlement.ContextAuthor,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -218,6 +221,9 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/runbooks/", http.MethodGet, "/api/ai/runbooks/" + probeID, "", aientitlement.RunbookAuthor},
 	{"/api/ai/runbooks/", http.MethodPost, "/api/ai/runbooks/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.RunbookAuthor},
 	{"/api/ai/runbooks/", http.MethodPost, "/api/ai/runbooks/" + probeID + "/reprove", "", aientitlement.RunbookAuthor},
+	{"/api/ai/learning", http.MethodGet, "/api/ai/learning", "", aientitlement.ContextAuthor},
+	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/refresh", "", aientitlement.ContextAuthor},
+	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/" + probeID + "/adopt", `{}`, aientitlement.ContextAuthor},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 }
 
@@ -257,6 +263,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s.orgContext = orgcontext.NewMemStore()
 	s.tenantRunbooks = tenantrunbook.NewMemStore(tenantrunbook.Config{Harness: testRunbookGate(t, s), ToolNames: ai.ToolNames})
 	s.nlqQueryLog = irisquerylog.NewMemStore()
+	s.irisLearning = irislearning.NewMemStore()
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called
 	mux := http.NewServeMux()

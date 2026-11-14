@@ -115,6 +115,7 @@ import (
 	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
@@ -438,6 +439,9 @@ type server struct {
 	tenantRunbookMetrics *tenantrunbook.Metrics
 	tenantRunbookSets    *tenantrunbook.OverlayCache
 	tenantRunbookRecheck *runbookRecheck
+	// irisLearning is the controlled learning loop's proposal queue (tracker
+	// 337 N-F5); nil on a file-backend deployment (the routes answer 503).
+	irisLearning irislearning.Store
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -1382,6 +1386,7 @@ func newServer() *server {
 		tenantRunbookMetrics: &tenantrunbook.Metrics{},
 		tenantRunbookSets:    &tenantrunbook.OverlayCache{},
 		tenantRunbookRecheck: &runbookRecheck{},
+		irisLearning:         newIrisLearningStore(),
 		srcAuthority:         newSrcAuthorityStore(),
 		srcAuthorityMetrics:  &srcauthority.Metrics{},
 		irisAliasCache:       newIrisAliasCache(),
@@ -4171,6 +4176,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
+	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                // Iris learning loop (N-F5): proposals a person decides
+	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)               // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)

@@ -2244,6 +2244,55 @@ export interface OrgContextPreview {
   omitted: number;
 }
 
+// ---- Iris learning loop (N-F5) ----
+export type LearningTarget = "org_context" | "runbook" | "alias";
+export type LearningState = "proposed" | "adopted" | "applied" | "dismissed";
+export interface LearningEvidence {
+  kind: string;
+  ref: string;
+  at: string;
+  label: string;
+  /** An operator's own note, for the reviewer only — never part of the draft. */
+  quote?: string;
+}
+export interface LearningProposal {
+  id: string;
+  target: LearningTarget;
+  generator: string;
+  subject: string;
+  title: string;
+  why: string;
+  context?: { scope: string; kind: string; key: string; body: string };
+  runbook?: { name: string; skill_md: string };
+  alias?: { entity_type: string; entity_id: string; alias: string };
+  evidence: LearningEvidence[];
+  evidence_count: number;
+  state: LearningState;
+  adopted_by?: string;
+  adopted_at?: string;
+  decided_by?: string;
+  decided_at?: string;
+  reason?: string;
+  target_id?: string;
+  target_version?: number;
+  target_state?: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface LearningList {
+  proposals: LearningProposal[];
+  you: string;
+  limits: { proposals: number; open: number };
+  thresholds: { resolutions: number; alias_people: number; misses: number };
+}
+export interface LearningEdit {
+  key?: string;
+  body?: string;
+  alias?: string;
+  name?: string;
+  skill_md?: string;
+}
+
 // ---- tenant runbooks/MOPs (N-F2) ----
 export type RunbookKind = "investigative" | "mop";
 export interface RunbookRecheck {
@@ -7102,6 +7151,18 @@ export const api = {
   ) =>
     request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
 
+  // Iris learning loop (N-F5). The tenant always comes from the token.
+  learning: () => request<LearningList>("/api/ai/learning"),
+  learningRefresh: () => request<{ added: number; refreshed: number }>("/api/ai/learning/refresh", { method: "POST" }),
+  learningAdopt: (id: string, edit: LearningEdit) =>
+    request<LearningProposal>(`/api/ai/learning/${encodeURIComponent(id)}/adopt`, { method: "POST", body: JSON.stringify(edit) }),
+  learningApprove: (id: string) =>
+    request<LearningProposal>(`/api/ai/learning/${encodeURIComponent(id)}/approve`, { method: "POST", body: "{}" }),
+  learningDismiss: (id: string, reason: string) =>
+    request<LearningProposal>(`/api/ai/learning/${encodeURIComponent(id)}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
   // Tenant runbooks/MOPs (N-F2). The tenant always comes from the token.
   runbooks: () => request<RunbookList>("/api/ai/runbooks"),
   runbookCreate: (r: { name: string; kind: RunbookKind; skill_md: string; cases_yaml: string }) =>

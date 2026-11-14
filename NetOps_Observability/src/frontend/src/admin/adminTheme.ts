@@ -46,6 +46,7 @@ export const ADMIN_LEAF_THEME: Record<string, keyof typeof ADMIN_THEMES> = {
   "sensitive-data-access": "handling",
   "network-context": "iris",
   "iris-runbooks": "iris",
+  "iris-learning": "iris",
   identity: "people",
   api: "people",
   sessions: "people",

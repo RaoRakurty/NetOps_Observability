@@ -23,9 +23,11 @@ import (
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
@@ -4020,4 +4022,143 @@ func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scope": scope, "classes": iristriage.Summarize(items, cross),
 		"class_order": iristriage.Classes, "window": "the newest records of each workspace's Iris question log (30 days)"})
+}
+
+// ── Iris learning loop (tracker 337 N-F5, internal/irislearning) ──────────
+//
+// §3a: per-tenant DATA → requirePerm(administration) + tenant filter; the
+// tenant comes from the principal (Authorize), never the body, and a Global
+// view must choose a workspace. The generators read ONLY the caller's tenant:
+// its recorded resolutions and their incident fingerprints, its Iris question
+// log (corrections, misses) and its aliases. Nothing here activates anything:
+// a proposal is handed to its target's own review — a Network context version
+// (orgcontext: a different person approves), a runbook draft (its own page:
+// cases + a different person), or an alias (here: adopter ≠ approver, every
+// alias check re-run). Default-closed: the routes need ai.context.author, and
+// adopting into a runbook or an alias also needs that target's entitlement.
+
+// newIrisLearningStore: Postgres (RLS) or nothing — a proposal queue that
+// silently vanished on a restart would lose who adopted what.
+func newIrisLearningStore() irislearning.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return irislearning.NewPGStore(ps.DB())
+	}
+	return nil
+}
+
+// learningResolutionLimit bounds the resolutions one refresh reads.
+const learningResolutionLimit = 2000
+
+func (s *server) handleAILearning(w http.ResponseWriter, r *http.Request) {
+	if s.irisLearning == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("iris learning needs the Postgres platform store on this deployment"))
+		return
+	}
+	s.irisLearningAPI().Handler(w, r)
+}
+
+func (s *server) irisLearningTargets() irislearning.Targets {
+	t := irislearning.Targets{Context: s.orgContext, Runbooks: s.tenantRunbooks, ToolNames: ai.ToolNames}
+	if s.nlqAliases != nil && s.nlqCatalog != nil {
+		t.Aliases = s.nlqAliases // never a typed-nil interface
+	}
+	if s.irisContextCache != nil {
+		t.ContextChanged = s.irisContextCache.InvalidateTenant
+	}
+	return t
+}
+
+func (s *server) irisLearningAPI() irislearning.Deps {
+	return irislearning.Deps{
+		Store:   s.irisLearning,
+		Targets: s.irisLearningTargets(),
+		Authorize: func(w http.ResponseWriter, r *http.Request, level orgcontext.Level) (orgcontext.Caller, bool) {
+			perm := LevelRead
+			switch level {
+			case orgcontext.LevelAuthor:
+				perm = LevelWrite
+			case orgcontext.LevelManage:
+				perm = LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, "administration", perm)
+			if !ok || !s.requireAIEntitlement(w, claims, aientitlement.ContextAuthor) {
+				return orgcontext.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return orgcontext.Caller{Tenant: tenant, Cross: cross, Sub: claims.Sub, Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+		},
+		Entitled: func(w http.ResponseWriter, r *http.Request, target irislearning.Target) bool {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			switch target {
+			case irislearning.TargetRunbook:
+				return s.requireAIEntitlement(w, claims, aientitlement.RunbookAuthor)
+			case irislearning.TargetAlias:
+				return s.requireAIEntitlement(w, claims, aientitlement.NLQuery)
+			}
+			return true // org_context: ai.context.author, already checked by Authorize
+		},
+		Inputs: func(ctx context.Context, _ *http.Request, tenant string) (irislearning.Inputs, error) {
+			return s.irisLearningInputs(ctx, tenant)
+		},
+		Visible: func(r *http.Request) irislearning.Visible {
+			claims, _ := userFrom(r.Context()) // Authorize already required a principal
+			scope := s.nlqScopeFor(r, claims)
+			return func(ctx context.Context, entityType, entityID string) (bool, error) {
+				return scope.Visible(ctx, nlqast.EntityRef{Type: entityType, ID: entityID})
+			}
+		},
+		Audit: func(r *http.Request, c orgcontext.Caller, decision string, detail map[string]any) {
+			if s.audit == nil {
+				return
+			}
+			s.audit.Record(AuditEvent{
+				Time: time.Now().UTC(), Actor: c.Sub, Tenant: c.Tenant, Cross: c.Cross,
+				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: decision, Detail: detail,
+			})
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Log:        func(msg string, err error) { logError("iris.learning", msg, errf(err)) },
+	}
+}
+
+// irisLearningInputs reads the generators' inputs — every read within exactly
+// tenant. A source that is not wired on this deployment contributes nothing;
+// one that fails is an error (a refresh over half its inputs would propose
+// from a partial picture and say nothing about it).
+func (s *server) irisLearningInputs(ctx context.Context, tenant string) (irislearning.Inputs, error) {
+	in := irislearning.Inputs{Fingerprints: map[string]incidentfp.Fingerprint{}}
+	if s.rcaResolutions != nil {
+		rows, err := s.rcaResolutions.Recent(ctx, tenant, time.Now().UTC().Add(-irislearning.ResolutionLookback), learningResolutionLimit)
+		if err != nil {
+			return irislearning.Inputs{}, fmt.Errorf("resolutions: %w", err)
+		}
+		in.Resolutions = rows
+		if s.incidentFP != nil && len(rows) > 0 {
+			ids := make([]string, 0, len(rows))
+			seen := map[string]bool{}
+			for _, r := range rows {
+				if !seen[r.CorrelationID] {
+					seen[r.CorrelationID] = true
+					ids = append(ids, r.CorrelationID)
+				}
+			}
+			fps, err := s.incidentFP.Get(ctx, tenant, ids)
+			if err != nil {
+				return irislearning.Inputs{}, fmt.Errorf("fingerprints: %w", err)
+			}
+			in.Fingerprints = fps
+		}
+	}
+	if s.nlqQueryLog != nil {
+		recs, err := s.nlqQueryLog.List(ctx, tenant, irisquerylog.ListFilter{Limit: irisquerylog.MaxListLimit})
+		if err != nil {
+			return irislearning.Inputs{}, fmt.Errorf("question log: %w", err)
+		}
+		in.Queries = recs
+	}
+	if s.nlqAliases != nil {
+		in.Aliases = s.nlqAliases.List(tenant, false)
+	}
+	return in, nil
 }
