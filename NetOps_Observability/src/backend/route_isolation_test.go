@@ -111,6 +111,13 @@ var routeIsolationLedger = map[string]string{
 	// tenant_runbook_isolation_test.go.
 	"/api/ai/runbooks":  "scoped",
 	"/api/ai/runbooks/": "scoped",
+	// Iris learning loop (N-F5): tenant from the token (RLS
+	// iris_learning_proposals + store tenant key); a refresh reads only the
+	// caller's resolutions, fingerprints, question log and aliases; a Global view
+	// must choose a workspace; a foreign id → 404 for every verb; an as_tenant
+	// walk is ignored — iris_learning_isolation_test.go.
+	"/api/ai/learning":  "scoped",
+	"/api/ai/learning/": "scoped",
 	// Source authority (N-F6): the order is the token tenant's (RLS
 	// iris_source_authority + store tenant key), no id in the path, a Global view
 	// must choose a workspace — source_authority_isolation_test.go.

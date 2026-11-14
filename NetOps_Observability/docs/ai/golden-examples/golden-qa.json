@@ -834,6 +834,18 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Runbooks (N-F2)"
     },
     {
+      "id": "docs-126",
+      "category": "docs",
+      "question": "How does Iris learn from how my team fixed incidents?",
+      "expect": {
+        "slugs": [
+          "administration/iris-learning"
+        ]
+      },
+      "nav": "admin/iris-learning",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning (N-F5)"
+    },
+    {
       "id": "docs-070",
       "category": "docs",
       "question": "Is the traffic between Correlix services encrypted with TLS?",

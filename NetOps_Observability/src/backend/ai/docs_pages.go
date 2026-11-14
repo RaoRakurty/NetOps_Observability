@@ -145,6 +145,7 @@ var navPageDocs = map[string]navPage{
 	"admin/discovery":             {Label: "Administration → Data sources → Discovery", Docs: []pageDoc{wholePage("onboard-devices/snmp-profiles"), wholePage("onboard-devices/vendor-snmp-configs"), wholePage("onboard-devices/snmp-discovery"), wholePage("administration/sensors"), wholePage("onboard-devices/data-sources"), wholePage("administration/telemetry-coverage")}},
 	"admin/network-context":       {Label: "Administration → Iris → Network Context", Docs: []pageDoc{wholePage("administration/network-context")}},
 	"admin/iris-runbooks":         {Label: "Administration → Iris → Runbooks", Docs: []pageDoc{wholePage("administration/iris-runbooks")}},
+	"admin/iris-learning":         {Label: "Administration → Iris → Learning", Docs: []pageDoc{wholePage("administration/iris-learning")}},
 	"admin/processors":            {Label: "Administration → Data handling → Processors", Docs: []pageDoc{wholePage("administration/processors")}},
 	"admin/sensitive-data-access": {Label: "Administration → Data handling → Sensitive Data Access", Docs: []pageDoc{wholePage("administration/sensitive-data-access")}},
 	"admin/identity":              {Label: "Administration → People & access → Identity & Access", Docs: []pageDoc{wholePage("administration/identity-access"), wholePage("administration/tenants-orgs"), wholePage("administration/identity-faq")}},

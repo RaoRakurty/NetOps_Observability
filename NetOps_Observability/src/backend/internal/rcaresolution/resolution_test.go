@@ -143,3 +143,29 @@ func TestFileStoreRefusesWritesWhenTheFileIsUnreadable(t *testing.T) {
 		t.Fatalf("a refused write still left a row in memory: %+v", rows)
 	}
 }
+
+// TestRecentStaysInTheTenantAndTheWindow: the learning loop's read (N-F5)
+// returns only the caller's own rows recorded since the cut, newest first.
+func TestRecentStaysInTheTenantAndTheWindow(t *testing.T) {
+	ctx := context.Background()
+	s := NewFileStore("")
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for i, at := range []time.Time{base, base.Add(48 * time.Hour), base.Add(96 * time.Hour)} {
+		if _, err := s.Add(ctx, "acme", Resolution{TenantID: "acme", CorrelationID: "c" + string(rune('1'+i)), Kind: KindReboot, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Add(ctx, "globex", Resolution{TenantID: "globex", CorrelationID: "c9", Kind: KindReboot, CreatedAt: base.Add(72 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Recent(ctx, "acme", base.Add(24*time.Hour), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].CorrelationID != "c3" || rows[1].CorrelationID != "c2" {
+		t.Fatalf("recent = %+v, want c3 then c2 (acme only, since the cut)", rows)
+	}
+	if one, _ := s.Recent(ctx, "acme", base, 1); len(one) != 1 {
+		t.Fatalf("limit 1 returned %d rows", len(one))
+	}
+}
