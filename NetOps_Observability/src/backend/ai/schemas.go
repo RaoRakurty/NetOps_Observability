@@ -146,6 +146,11 @@ type Answer struct {
 	// outcome or a server fact, beside the correlation engine's verdict which
 	// they never override. Set only on a skill-chain answer that opened any.
 	Hypotheses *irishypo.Set `json:"hypotheses,omitempty"`
+	// Investigation is the structured trace of a read-only investigation
+	// (tracker 337 N-I1): what it bound, the engine verdict it read first, the
+	// runbooks and methods it considered, its plan, each bounded pass, what it
+	// spent and why it stopped. Server-built; set only by Investigate.
+	Investigation *InvestigationTrace `json:"investigation,omitempty"`
 	// Statements are the sentences of Text, each CLASSIFIED by the server
 	// (tracker 337 N-B4): OBSERVED | CORRELIX_RCA | DERIVED | HISTORICAL |
 	// DOCUMENTATION | RECOMMENDATION, whether it is grounded in evidence of

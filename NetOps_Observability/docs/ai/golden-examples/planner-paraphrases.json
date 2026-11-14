@@ -381,6 +381,29 @@
       "write python to sort a list",
       "how do I make sourdough",
       "sing me a song"
+    ],
+    "investigate": [
+      "investigate this incident end to end",
+      "dig into what is going on with edge-1",
+      "can you run a full investigation on cedge-80",
+      "look into site 50 and work out what's wrong there",
+      "do a deep dive on the dallas branch problem",
+      "investigate vedge-51 for me",
+      "work this incident like an engineer would and tell me what you find",
+      "start an investigation into the bgp issues at branch-7",
+      "go through everything you can check on cedge-81 and figure out what's happening",
+      "investigate pls - the hq router is acting weird",
+      "i need you to dig deep on vedge-52, check all the things",
+      "please investigate the overlay problem at site 80 thoroughly",
+      "take a full look at this device and investigate it",
+      "invstigate the wan edge in site 20",
+      "do your full troubleshooting routine on edge-1, every check you have",
+      "open an investigation for the current incident and work it",
+      "check this one thoroughly from every angle and tell me what is going on",
+      "investigate why the branch keeps losing connectivity, step by step",
+      "investigate the incident in view and report back",
+      "deep-dive cedge-80 please",
+      "work out what's going on at the dc border, investigate fully"
     ]
   },
   "module_items": [

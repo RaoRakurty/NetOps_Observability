@@ -123,6 +123,8 @@ const (
 	ArmSkill      = "skill"
 	ArmCapability = "capability"
 	ArmClassic    = "classic"
+	// ArmInvestigate is the read-only Investigator (investigator.go, N-I1).
+	ArmInvestigate = "investigate"
 	// ArmModel: a multi-part question no deterministic arm covers whole goes
 	// to the grounded model answer (route_policy.go).
 	ArmModel = "model"

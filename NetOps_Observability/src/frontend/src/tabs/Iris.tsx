@@ -31,6 +31,7 @@ import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
+import InvestigationTrace from "../iris/InvestigationTrace";
 import IrisProgress, { type ProgressStep } from "../iris/IrisProgress";
 import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
@@ -1011,7 +1012,14 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                 </div>
               )}
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={leave} onClose={() => setCopilotOpen(false)} onAsk={(q) => { void send(q); }}
+                    onInvestigate={() => {
+                      // "Investigate this" (N-I1): the operator's own question again,
+                      // as a full read-only investigation. The server binds the scope
+                      // from it and refuses, in words, a caller without AI investigations.
+                      const q = history[i - 1]?.role === "user" ? history[i - 1].content : "";
+                      void sendGrounded(q.trim() ? q : "Investigate this", { iris_action: "investigate" });
+                    }} />
                 : m.role === "assistant" && chatStmts[i] && !m.content.includes("```")
                   ? <StatementText className="op-text" text={m.content} statements={chatStmts[i]} citations={chatCites[i]} onCite={leave} />
                   : renderContent(m.content)}
@@ -1186,7 +1194,7 @@ export function didYouMeanAsks(ans: AiAnswer): { label: string; question: string
   return out;
 }
 
-function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite: () => void; onClose: () => void; onAsk?: (q: string) => void }) {
+function GroundedAnswer({ ans, onCite, onClose, onAsk, onInvestigate }: { ans: AiAnswer; onCite: () => void; onClose: () => void; onAsk?: (q: string) => void; onInvestigate?: () => void }) {
   const { openHelp } = useShell();
   const [rated, setRated] = useState<"up" | "down" | null>(null);
   const rate = (r: "up" | "down") => {
@@ -1242,6 +1250,15 @@ function GroundedAnswer({ ans, onCite, onClose, onAsk }: { ans: AiAnswer; onCite
       {/* Lines of investigation (N-B3): what each check observed, beside the
           correlation engine's verdict — never a cause of Iris's own. */}
       {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
+      {/* Read-only investigation (N-I1): how it ran, step by step. */}
+      {ans.investigation && <InvestigationTrace trace={ans.investigation} />}
+      {onInvestigate && !ans.investigation && ans.mode === "troubleshoot_finding" && (
+        <div className="op-chips">
+          <button type="button" className="op-chip" data-testid="iris-investigate" onClick={onInvestigate}>
+            Investigate this fully
+          </button>
+        </div>
+      )}
       {ans.mode === "data_query" && ans.data?.result !== undefined && (
         <div data-testid="op-data-answer">
           {/* The server chooses the view (N-E1) and sends it as `presentation`;

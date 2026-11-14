@@ -142,6 +142,7 @@ import (
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irisinvest"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
@@ -454,6 +455,10 @@ type server struct {
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
 	aiHypotheses irishypo.Store
+	// Investigation traces (tracker 337 N-I1): each read-only investigation's
+	// structured trace, held per tenant (bounded, in memory) so the Iris panel
+	// can re-open it by id. nil = not held (the answer carries its own trace).
+	aiInvestigations irisinvest.Store
 
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1388,6 +1393,7 @@ func newServer() *server {
 		irisContextCache:     newIrisContextCache(),
 		nlqExamples:          modelc.EmbeddedExamples(),
 		aiHypotheses:         irishypo.NewMemStore(),
+		aiInvestigations:     irisinvest.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -4184,6 +4190,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
 	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)      // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
 	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
+	mux.HandleFunc("/api/ai/investigations", s.handleAIInvestigations)    // Iris read-only investigations (N-I1): own tenant, recent
+	mux.HandleFunc("/api/ai/investigations/", s.handleAIInvestigations)   // Iris read-only investigations (N-I1): one trace by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

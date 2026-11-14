@@ -26,6 +26,7 @@ import (
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irisinvest"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
@@ -265,6 +266,8 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	// N-B3: hold the investigation's hypotheses under the decision's id, in the
 	// asker's tenant — before the ledger closes, so it records them.
 	s.aiHypothesesHold(r, claims, rec, &ans)
+	// N-I1: hold a read-only investigation's trace under the same id.
+	s.aiInvestigationHold(r, claims, rec, &ans)
 	decisionID := s.aiDecisionFinish(r, claims, rec, &ans, nil)
 	// AI audit (best-effort): who asked, intent, modules, provider — never the
 	// question text or any retrieved data (no PII/secret in the audit line).
@@ -398,6 +401,12 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// memory, per principal) until an operator judges it on /api/ai/feedback;
 		// only then is a tenant-scoped memory row written.
 		RecordInvestigation: s.aiRecordInvestigation(claims),
+		// The read-only Investigator (tracker 337 N-I1): the caller's
+		// ai.investigate decision (the AI add-on, its two switches, the
+		// workspace's own switch), and the tenant's runbooks linked to an
+		// investigation's incident or device (N-F2), from the token's tenant.
+		InvestigateAllowed: s.agentLoopEligible(claims),
+		RunbooksFor:        s.aiRunbooksFor(claims),
 		// Production scorecard (tracker 337 N-A3): counts, enums and durations
 		// only — nothing tenant- or entity-identifying crosses this seam.
 		Score: s.aiScoreSink(),
@@ -3184,6 +3193,150 @@ func (s *server) handleAIHypotheses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("the investigation's hypotheses could not be read"))
 	default:
 		writeJSON(w, http.StatusOK, set)
+	}
+}
+
+// aiInvestigationHold names a read-only investigation's trace and holds it in
+// the asker's tenant (tracker 337 N-I1) — the decision's id when the ask is
+// ledgered (one id names the investigation everywhere: its trace, its
+// hypotheses and its ledger record), else a fresh one. The tenant is the
+// token's, never anything in the request. A trace that cannot be held keeps
+// no id — the answer still carries it inline — and the failure is logged.
+func (s *server) aiInvestigationHold(r *http.Request, claims jwtClaims, rec *aidecision.Recorder, ans *ai.Answer) {
+	if ans == nil || ans.Investigation == nil {
+		return
+	}
+	ans.Investigation.ID = ""
+	if s.aiInvestigations == nil {
+		return
+	}
+	id := rec.DecisionID()
+	if id == "" {
+		fresh, err := aidecision.NewID()
+		if err != nil {
+			logError("ai.investigate", "no id — this investigation's trace is not held", errf(err))
+			return
+		}
+		id = fresh
+	}
+	tr := *ans.Investigation
+	tr.ID = id
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), aiHypothesesHoldTimeout)
+	defer cancel()
+	if err := s.aiInvestigations.Put(ctx, tenant, tr); err != nil {
+		logError("ai.investigate", "trace hold failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	ans.Investigation.ID = id
+	logInfo("ai", "investigation", map[string]any{
+		"tenant": claims.Tenant, "sub": claims.Sub, "id": id, "status": tr.Status,
+		"passes": tr.Used.Passes, "tool_calls": tr.Used.ToolCalls, "tokens": tr.Used.Tokens,
+		"duration_ms": tr.Used.DurationMS, "cutoffs": tr.Cutoffs,
+	})
+}
+
+// handleAIInvestigations serves GET /api/ai/investigations (the caller's recent
+// investigations, newest first) and GET /api/ai/investigations/{id} (one
+// trace), in the caller's own tenant (the platform owner: any tenant). Another
+// tenant's id, an expired one and a malformed one are the same 404. Gated by
+// ai.investigate — an investigation exists only where AI investigations run —
+// and by infrastructure:read, which every read in a trace needed.
+func (s *server) handleAIInvestigations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET"))
+		return
+	}
+	if !aiEnabled() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+		return
+	}
+	if s.aiInvestigations == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("investigation traces are not held on this deployment"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/ai/investigations"), "/")
+	if rest == "" {
+		list, err := s.aiInvestigations.List(r.Context(), tenant, cross, 20)
+		if err != nil {
+			logError("ai.investigate", "list failed", errf(err))
+			writeError(w, http.StatusInternalServerError, errors.New("recent investigations could not be read"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"investigations": list})
+		return
+	}
+	if !irisinvest.ValidID(rest) {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	tr, err := s.aiInvestigations.Get(r.Context(), tenant, cross, rest)
+	switch {
+	case errors.Is(err, irisinvest.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case err != nil:
+		logError("ai.investigate", "read failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("the investigation could not be read"))
+	default:
+		writeJSON(w, http.StatusOK, tr)
+	}
+}
+
+// aiRunbooksForTimeout bounds the linked-runbook lookups of one investigation.
+const aiRunbooksForTimeout = 2 * time.Second
+
+// aiRunbooksFor is runbook retrieval for the read-only Investigator (tracker
+// 337 N-I1 over N-F2): the names of the caller's tenant's runbooks LINKED to
+// the investigation's incident or device. The tenant is the token's; the
+// lookup is the tenant-keyed store's own (ListByLink), and the investigator
+// only ever looks a name up in the caller's own skill set, so a name can
+// never run outside its tenant. nil — no retrieval — for a cross-tenant
+// principal or a caller whose skill set holds no runbooks (the same gate as
+// aiSkillsFor).
+func (s *server) aiRunbooksFor(claims jwtClaims) ai.RunbooksForFunc {
+	tenant, cross := principalTenant(claims)
+	if s.tenantRunbooks == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.RunbookAuthor) {
+		return nil
+	}
+	return func(ctx context.Context, _ ai.Principal, t ai.InvestigationTarget) []string {
+		ctx, cancel := context.WithTimeout(ctx, aiRunbooksForTimeout)
+		defer cancel()
+		seen := map[string]bool{}
+		var out []string
+		lookup := func(lt tenantrunbook.LinkType, key string) {
+			if strings.TrimSpace(key) == "" {
+				return
+			}
+			docs, err := s.tenantRunbooks.ListByLink(ctx, tenant, lt, key)
+			if err != nil {
+				logError("ai.investigate", "linked runbooks could not be read — the investigation uses the methods only",
+					map[string]any{"tenant": tenant, "link_type": string(lt), "error": err.Error()})
+				return
+			}
+			for _, d := range docs {
+				if d.Tenant != "" && d.Tenant != tenant {
+					continue // defence in depth: the store is tenant-keyed
+				}
+				if !seen[d.Name] {
+					seen[d.Name] = true
+					out = append(out, d.Name)
+				}
+			}
+		}
+		lookup(tenantrunbook.LinkIncident, t.CorrelationID)
+		if t.DeviceID != "" {
+			lookup(tenantrunbook.LinkEntity, "device:"+t.DeviceID)
+		}
+		if t.DeviceName != "" && t.DeviceName != t.DeviceID {
+			lookup(tenantrunbook.LinkEntity, "device:"+t.DeviceName)
+		}
+		return out
 	}
 }
 

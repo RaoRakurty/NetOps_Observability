@@ -62,6 +62,9 @@ const (
 const (
 	// RouteReasonPlanner: the model planner chose the arm that answered.
 	RouteReasonPlanner = "planner"
+	// RouteReasonInvestigate: the operator asked for a full investigation
+	// ("Investigate this", investigator.go).
+	RouteReasonInvestigate = "investigate_action"
 	// RouteReasonPlannerUnavailable: model-first was on, the planner could not
 	// route (no model answered, or its reply was invalid), and the
 	// deterministic path answered instead.
@@ -86,6 +89,7 @@ const (
 	PlanRouteHandoff      = "shift_handoff"
 	PlanRouteTimeRange    = "time_range"
 	PlanRouteSimilar      = "similar_incidents"
+	PlanRouteInvestigate  = "investigate"
 	PlanRoutePlaybook     = "playbook"
 	PlanRouteModule       = "module"
 	PlanRouteProduct      = "product"
@@ -116,6 +120,7 @@ var plannerRoutes = []plannerRoute{
 	{PlanRouteProblem, "explain one specific problem or incident the operator names by its id (a P-number or a UUID)"},
 	{PlanRouteHandoff, "a shift handoff or pass-down summary for the incoming shift"},
 	{PlanRouteSimilar, "whether an incident has happened before: a repeat or recurrence, earlier cases like it, how often it happens, what it looked like or what was done about it last time (the one they name or have open, else the top incident)"},
+	{PlanRouteInvestigate, "the operator asks Iris to INVESTIGATE end to end: dig into an incident, a device or a site and work out what is going on across several checks, the way an engineer would (a full investigation, not one symptom check, a data listing or an explanation of a known incident)"},
 	{PlanRouteTimeRange, "what happened in a PAST window (last night, yesterday, over the weekend, the last few hours)"},
 	{PlanRoutePlaybook, "general guidance on how to troubleshoot a technology or protocol, not about a live device of theirs"},
 	{PlanRouteModule, "a summary of one data module — name it on a MODULE line"},
@@ -592,6 +597,20 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 			}
 		}
 		return o.answerPlanned(ctx, p, question, uiContext, PlannerChoice{Route: PlanRouteNetwork})
+	case PlanRouteInvestigate:
+		if !o.InvestigateAllowed {
+			// No full investigation for this caller: the troubleshooting arm
+			// still answers the question, and the answer says what a full
+			// investigation needs.
+			ans, handled, err := o.answerPlanned(ctx, p, question, uiContext,
+				PlannerChoice{Route: PlanRouteTroubleshoot, Skill: ch.Skill, Terms: ch.Terms})
+			if handled {
+				ans.Disclaimers = append(ans.Disclaimers, InvestigationNeedsSwitchNote)
+			}
+			return ans, handled, err
+		}
+		o.routed(ArmInvestigate, ModeTroubleshootFinding)
+		return stampPlanned(o.Investigate(ctx, p, question, uiContext, DefaultInvestigationBudget())), true, nil
 	case PlanRouteModule:
 		mr, ok := moduleRouteFor(ch.Module)
 		if !ok {
