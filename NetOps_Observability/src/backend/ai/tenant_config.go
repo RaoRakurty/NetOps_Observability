@@ -33,10 +33,15 @@ type TenantConfig struct {
 	TenantID     string `json:"tenant_id"`
 	AssistantOff bool   `json:"assistant_off,omitempty"` // entitlement: true → assistant disabled for this tenant
 	AgentTools   bool   `json:"agent_tools,omitempty"`   // entitlement: true → bounded agent loop enabled
-	MaxCalls     int    `json:"max_calls,omitempty"`     // guardrail override: lookups per question (0 → platform default, clamp 1-8)
-	DailyTokens  int    `json:"daily_tokens,omitempty"`  // guardrail override: tokens/day (0 → platform default)
-	Provider     string `json:"provider,omitempty"`      // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
-	Model        string `json:"model,omitempty"`         // BYO model override ("" → provider default)
+	// ProbeTools is the workspace's OWN opt-in to Iris's active probes (N-I3):
+	// a short test from Correlix's collector to its own devices or declared
+	// probes. Default off; a workspace admin (or the platform owner) turns it
+	// on with an explicit acknowledgement.
+	ProbeTools  bool   `json:"probe_tools,omitempty"`
+	MaxCalls    int    `json:"max_calls,omitempty"`    // guardrail override: lookups per question (0 → platform default, clamp 1-8)
+	DailyTokens int    `json:"daily_tokens,omitempty"` // guardrail override: tokens/day (0 → platform default)
+	Provider    string `json:"provider,omitempty"`     // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
+	Model       string `json:"model,omitempty"`        // BYO model override ("" → provider default)
 	// ModelFast / ModelStrong are this tenant's OPTIONAL §10 model-router
 	// overrides, and they ride the tenant's OWN key exactly as Model does: they
 	// take effect only on the BYO path, so a tenant can never steer the
@@ -362,6 +367,28 @@ func (s *TenantConfigStore) SetEntitlement(tenant string, assistantOff, agentToo
 		return prev, err
 	}
 	return c, nil
+}
+
+// SetProbeTools records a workspace's opt-in to Iris's active probes (N-I3).
+// The caller has already authorized the write and checked the acknowledgement.
+func (s *TenantConfigStore) SetProbeTools(tenant string, on bool) (TenantConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, had := s.cfgs[tenant]
+	c := prev
+	c.TenantID = tenant
+	c.ProbeTools = on
+	s.cfgs[tenant] = c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
+}
+
+// ProbeToolsEnabled reports a workspace's active-probe opt-in.
+func (s *TenantConfigStore) ProbeToolsEnabled(tenant string) bool {
+	return s.Get(tenant).ProbeTools
 }
 
 // maxCallsFor resolves the per-question lookup cap for a tenant: its override

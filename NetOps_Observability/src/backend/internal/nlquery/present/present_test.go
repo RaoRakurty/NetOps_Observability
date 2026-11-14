@@ -17,6 +17,13 @@ func q(t ast.QueryType, groupBy ...string) *ast.AST {
 	return &ast.AST{V: ast.Version, Type: t, GroupBy: groupBy}
 }
 
+// perIncident is "what changed 30 minutes before every SD-WAN incident".
+func perIncident() *ast.AST {
+	a := q(ast.ChangeList)
+	a.Time = ast.TimeRange{Kind: ast.TimeIncidents, Anchor: &ast.Anchor{Incidents: &ast.IncidentSet{Time: ast.TimeRange{Kind: ast.TimeRelative, Last: "7d"}}, Before: "30m", After: "1m"}}
+	return a
+}
+
 func changeRows(n int) []plan.Row {
 	out := make([]plan.Row, 0, n)
 	for i := 0; i < n; i++ {
@@ -48,9 +55,14 @@ func TestDefaultPlanForEveryShape(t *testing.T) {
 		{"change_list one diffable", q(ast.ChangeList), &plan.ResultSet{Rows: []plan.Row{diffRow}}, Diff, ChangeCard, "What changed"},
 		{"change_list one without diff", q(ast.ChangeList), &plan.ResultSet{Rows: changeRows(1)}, Timeline, Table, "Changes in this window"},
 		{"change_list empty", q(ast.ChangeList), &plan.ResultSet{}, Timeline, Table, "Changes in this window"},
+		// N-S3: one incident with one diffable change is still the per-incident table.
+		{"change_list per incident", perIncident(), &plan.ResultSet{Rows: []plan.Row{diffRow}}, Table, Timeline, "Changes before each incident"},
+		{"change_list per incident empty", perIncident(), &plan.ResultSet{}, Table, Timeline, "Changes before each incident"},
 		{"incident_list", q(ast.IncidentList), &plan.ResultSet{}, Table, Timeline, "Incidents in this window"},
 		{"incident_explain", q(ast.IncidentExplain), &plan.ResultSet{}, IncidentCard, EvidenceList, "Why this incident happened"},
-		{"reserved flow_top", q(ast.FlowTop), &plan.ResultSet{}, Summary, "", "Answer"},
+		{"flow_top talkers", q(ast.FlowTop), &plan.ResultSet{}, Table, "", "Top talkers"},
+		{"flow_top services", q(ast.FlowTop, "service"), &plan.ResultSet{}, Table, "", "Busiest services"},
+		{"log_search", q(ast.LogSearch), &plan.ResultSet{}, Table, Timeline, "Device log lines"},
 		{"nil query", nil, &plan.ResultSet{}, Summary, "", "Answer"},
 		{"nil result", q(ast.MetricSeries), nil, Summary, "", "Answer"},
 	}
@@ -101,7 +113,9 @@ func TestModelSuggestion(t *testing.T) {
 		{"accepted different view", q(ast.ChangeList), changes, raw(`"BAR"`), Bar, Timeline, ChosenByModel, ""},
 		{"accepted same as server", q(ast.ChangeList), changes, raw(`"TIMELINE"`), Timeline, Table, ChosenByModel, ""},
 		{"accepted summary", q(ast.ChangeList), changes, raw(`"SUMMARY"`), Summary, Timeline, ChosenByModel, ""},
-		{"accepted over summary default", q(ast.FlowTop), &plan.ResultSet{}, raw(`"SUMMARY"`), Summary, "", ChosenByModel, ""},
+		{"accepted summary over a table default", q(ast.FlowTop), &plan.ResultSet{}, raw(`"SUMMARY"`), Summary, Table, ChosenByModel, ""},
+		{"timeline for flows refused", q(ast.FlowTop), &plan.ResultSet{}, raw(`"TIMELINE"`), Table, "", ChosenByServer, DisclosureNoFit},
+		{"timeline for logs accepted", q(ast.LogSearch), &plan.ResultSet{}, raw(`"TIMELINE"`), Timeline, Table, ChosenByModel, ""},
 		{"lower case is not the enum", q(ast.ChangeList), changes, raw(`"bar"`), Timeline, Table, ChosenByServer, DisclosureNotAView},
 		{"unknown name", q(ast.ChangeList), changes, raw(`"PIE"`), Timeline, Table, ChosenByServer, DisclosureNotAView},
 		{"markup", q(ast.ChangeList), changes, raw(`"<script>alert(1)</script>"`), Timeline, Table, ChosenByServer, DisclosureNotAView},

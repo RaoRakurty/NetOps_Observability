@@ -451,6 +451,58 @@
         "input errors on DFW-CORE-1 xe-1/0/1 since midnight",
         "rx errors dfw core xe-1/0/1 today"
       ]
+    },
+    {
+      "id": "interfaces-logs-001",
+      "category": "interfaces",
+      "question": "Show interface down log messages at Austin in the last 24 hours.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "search_logs",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "log_search",
+          "target": "device",
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ],
+          "filters": [
+            {
+              "field": "topic",
+              "op": "eq",
+              "values": [
+                "interface"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "24h"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "log_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "link down logs austin last 24h",
+        "interface down logs at austin in the last 24 hours"
+      ]
     }
   ]
 }

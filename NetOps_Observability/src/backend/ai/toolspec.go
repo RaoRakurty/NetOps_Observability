@@ -73,6 +73,17 @@ type toolMeta struct {
 
 var argProblemID = toolArgSpec{name: "problem_id", desc: "The problem's correlation UUID (take it from a problem:<uuid> citation id — not the P-XXXXXX display handle).", required: true}
 
+// flowToolArgs are the optional link and window arguments of the three flow
+// tools (tracker 406). The server validates every one; a bad value is refused
+// with the reason, a device the caller cannot see reads as not found.
+var flowToolArgs = []toolArgSpec{
+	{name: "device", desc: "Optional: one device (name, id or address) — only traffic its flow exporter saw. Omit for the whole network."},
+	{name: "interface", desc: "Optional, needs device: one interface on it, by name (e.g. GigabitEthernet1) or ifIndex."},
+	{name: "window", desc: "Optional lookback: 15m, 1h, 6h, 24h or 7d (default 24h). Resolve relative phrases yourself (\"this morning\" → 6h)."},
+	{name: "from", desc: "Optional explicit start (RFC 3339), with to; at most 7 days before to. Use window instead unless the question names exact times."},
+	{name: "to", desc: "Optional explicit end (RFC 3339), with from."},
+}
+
 // toolMetas describes every tool the agent loop may expose. Keep descriptions
 // action-oriented and honest about scope/windows so the model picks well.
 var toolMetas = map[string]toolMeta{
@@ -102,16 +113,19 @@ var toolMetas = map[string]toolMeta{
 		},
 	},
 	"get_top_talkers": {
-		description: "Top traffic conversations (heaviest source↔destination pairs) over the last 24 hours.",
+		description: "Top traffic conversations (heaviest source↔destination pairs), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Top talkers",
+		args:        flowToolArgs,
 	},
 	"get_flow_summary": {
-		description: "One-line network traffic totals (bytes, flows, sources) over the last 24 hours.",
+		description: "One-line traffic totals (bytes, flows, sources), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Traffic summary",
+		args:        flowToolArgs,
 	},
 	"get_service_flow_summary": {
-		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic over the last 24 hours.",
+		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic, for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Service traffic",
+		args:        flowToolArgs,
 	},
 	"get_metric_anomalies": {
 		description: "Recent detected metric anomalies (worst first) over the last 6 hours.",
@@ -219,6 +233,36 @@ var toolMetas = map[string]toolMeta{
 			{name: "target", desc: "Optional: one probe, by its name."},
 		},
 	},
+	// ── N-I3 active probes. Never in a model's manifest (Manifest skips
+	// CapNetProbe); declared so a method step's arguments and label are typed.
+	"run_ping": {
+		description: "Send 3 ICMP echoes from Correlix's own collector to one of the workspace's devices or declared probe targets, now, and report loss and round-trip time. Nothing is sent from a customer device.",
+		label:       "Ping from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "An inventory device (name or id) or a declared probe, by its name.", required: true},
+		},
+	},
+	"run_traceroute": {
+		description: "Trace the path from Correlix's own collector to one of the workspace's devices or declared probe targets, now (one probe per hop, at most 16 hops): where replies stop and whether the target answered. Nothing is sent from a customer device.",
+		label:       "Traceroute from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "An inventory device (name or id) or a declared probe, by its name.", required: true},
+		},
+	},
+	"run_dns_test": {
+		description: "Re-run the workspace's declared DNS probes once, now, from Correlix's own collector (up to 3): whether each name resolves and how a failure fails.",
+		label:       "DNS test from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "Optional: one declared DNS probe, by its name."},
+		},
+	},
+	"run_http_test": {
+		description: "Re-run the workspace's declared web probes once, now, from Correlix's own collector (up to 3): one GET each, the status and how a failure fails. Redirects are reported, never followed.",
+		label:       "Web test from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "Optional: one declared web probe, by its name."},
+		},
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",
@@ -271,6 +315,15 @@ var toolMetas = map[string]toolMeta{
 		args: []toolArgSpec{
 			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
 			{name: "window", desc: "How far back to look: 30d, 90d, 180d (default) or 365d.", required: false},
+		},
+	},
+	// ── N-F3: the workspace's recorded knowledge (read-only, tenant-scoped) ──
+	"search_workspace_knowledge": {
+		description: "Search THIS workspace's own recorded knowledge: its APPROVED runbooks (the team's written procedures) and its CLOSED incidents with the fix an operator recorded. Use it to find how this team handles a kind of problem, or what happened and what fixed it before. RECORDED KNOWLEDGE, never current state and never proof of the present cause: read the live state first. Says plainly when nothing matches (it never returns a weak near-miss).",
+		label:       "Workspace knowledge",
+		args: []toolArgSpec{
+			{name: "query", desc: "The words to search for, e.g. \"dallas mpls flapping\" or \"bgp peer down carrier\".", required: true},
+			{name: "layer", desc: "Restrict to runbook or incident; omit to search both.", required: false},
 		},
 	},
 	// ── configuration change (review item 10) ──────────────────────────────
@@ -391,6 +444,9 @@ func Manifest(reg *ToolRegistry, pol *PolicyEngine, p Principal) []ToolSpec {
 		t, ok := reg.Get(n)
 		if !ok {
 			continue
+		}
+		if t.Capability() == CapNetProbe {
+			continue // an active probe is never a model's choice (N-I3, LLM08)
 		}
 		if d := pol.EvaluateTool(t, p); !d.Allow {
 			continue // the model never sees a tool this caller can't run

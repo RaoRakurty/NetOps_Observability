@@ -219,6 +219,11 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		switch {
 		case len(q.GroupBy) > 0 && fieldName(q.GroupBy[0]):
 			p.PrimaryView, p.SecondaryView, p.Title = Bar, Table, "Changes by "+Humanize(q.GroupBy[0])
+		case q.Time.Kind == ast.TimeIncidents:
+			// N-S3: "what changed before every X incident" — the table groups
+			// the changes by incident (each linked to its RCA) and says, per
+			// row, correlated or same kind as a chain step; the timeline beside it.
+			p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Changes before each incident"
 		case len(rs.Rows) == 1 && hasBeforeAfter(rs.Rows[0]):
 			p.PrimaryView, p.SecondaryView, p.Title = Diff, ChangeCard, "What changed"
 		default:
@@ -236,6 +241,13 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		}
 	case ast.EntityList:
 		p.PrimaryView, p.Title = Table, Humanize(q.Target)+"s you can see"
+	case ast.FlowTop:
+		p.PrimaryView, p.Title = Table, "Top talkers"
+		if len(q.GroupBy) == 1 && q.GroupBy[0] == ast.FlowGroupService {
+			p.Title = "Busiest services"
+		}
+	case ast.LogSearch:
+		p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Device log lines"
 	}
 	return p
 }
@@ -280,6 +292,10 @@ func Fits(v View, q *ast.AST, rs *plan.ResultSet) bool {
 		return v == Table || (v == Bar && len(q.GroupBy) > 0)
 	case ast.EntityList:
 		return v == Table || v == EvidenceList
+	case ast.FlowTop:
+		return v == Table || v == Bar || v == EvidenceList
+	case ast.LogSearch:
+		return v == Table || v == Timeline || v == EvidenceList
 	}
 	return false
 }

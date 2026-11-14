@@ -11,7 +11,7 @@
       },
       "expect": {
         "intent": "reject",
-        "reject_code": "unsupported_query_type",
+        "reject_code": "invalid_value",
         "rejected_ast": {
           "v": 1,
           "query_type": "flow_top",
@@ -34,34 +34,6 @@
       ]
     },
     {
-      "id": "unsupported-flows-002",
-      "category": "flows",
-      "question": "Who is using the most bandwidth at Austin?",
-      "context": {
-        "tz": "America/Chicago"
-      },
-      "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "flow_top",
-          "target": "site",
-          "entities": [
-            {
-              "type": "site",
-              "id": "site:aus-br"
-            }
-          ],
-          "time_range": {}
-        }
-      },
-      "paraphrases": [
-        "biggest bandwidth users in austin",
-        "who's hogging the austin wan"
-      ]
-    },
-    {
       "id": "unsupported-flows-003",
       "category": "flows",
       "question": "Show NetFlow for 10.1.20.15 over the last 30 minutes.",
@@ -69,17 +41,8 @@
         "tz": "America/Chicago"
       },
       "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "flow_top",
-          "target": "device",
-          "time_range": {
-            "kind": "relative",
-            "last": "30m"
-          }
-        }
+        "intent": "decline",
+        "decline": "not_expressible_v1"
       },
       "paraphrases": [
         "netflow for 10.1.20.15 last 30m",
@@ -95,7 +58,7 @@
       },
       "expect": {
         "intent": "reject",
-        "reject_code": "unsupported_query_type",
+        "reject_code": "invalid_value",
         "rejected_ast": {
           "v": 1,
           "query_type": "flow_top",
@@ -115,38 +78,6 @@
       ]
     },
     {
-      "id": "unsupported-flows-005",
-      "category": "flows",
-      "question": "Top destinations from dfw-core-1 today.",
-      "context": {
-        "tz": "America/Chicago"
-      },
-      "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "flow_top",
-          "target": "device",
-          "entities": [
-            {
-              "type": "device",
-              "id": "device:dfw-core-1"
-            }
-          ],
-          "time_range": {
-            "kind": "absolute",
-            "from": "2026-09-24T05:00:00Z",
-            "to": "2026-09-24T15:00:00Z"
-          }
-        }
-      },
-      "paraphrases": [
-        "top destinations dfw-core-1 today",
-        "where is DFW-CORE-1 sending traffic today"
-      ]
-    },
-    {
       "id": "unsupported-flows-006",
       "category": "flows",
       "question": "Show traffic between 10.1.0.0/16 and 10.2.0.0/16 for the last hour.",
@@ -154,17 +85,8 @@
         "tz": "America/Chicago"
       },
       "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "flow_top",
-          "target": "site",
-          "time_range": {
-            "kind": "relative",
-            "last": "1h"
-          }
-        }
+        "intent": "decline",
+        "decline": "not_expressible_v1"
       },
       "paraphrases": [
         "traffic 10.1/16 to 10.2/16 last hour",
@@ -180,7 +102,7 @@
       },
       "expect": {
         "intent": "reject",
-        "reject_code": "unsupported_query_type",
+        "reject_code": "invalid_value",
         "rejected_ast": {
           "v": 1,
           "query_type": "flow_top",
@@ -203,69 +125,6 @@
       ]
     },
     {
-      "id": "unsupported-bgp-001",
-      "category": "bgp",
-      "question": "Search syslog for BGP NOTIFICATION messages on dfw-edge-1 today.",
-      "context": {
-        "tz": "America/Chicago"
-      },
-      "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "log_search",
-          "target": "device",
-          "entities": [
-            {
-              "type": "device",
-              "id": "device:dfw-edge-1"
-            }
-          ],
-          "time_range": {
-            "kind": "absolute",
-            "from": "2026-09-24T05:00:00Z",
-            "to": "2026-09-24T15:00:00Z"
-          }
-        }
-      },
-      "paraphrases": [
-        "grep syslog for bgp notification dfw-edge-1 today",
-        "bgp notification logs on DFW-EDGE-1 today"
-      ]
-    },
-    {
-      "id": "unsupported-interfaces-001",
-      "category": "interfaces",
-      "question": "Show interface down log messages at Austin in the last 24 hours.",
-      "context": {
-        "tz": "America/Chicago"
-      },
-      "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "log_search",
-          "target": "interface",
-          "entities": [
-            {
-              "type": "site",
-              "id": "site:aus-br"
-            }
-          ],
-          "time_range": {
-            "kind": "relative",
-            "last": "24h"
-          }
-        }
-      },
-      "paraphrases": [
-        "link down logs austin last 24h",
-        "LINK-3-UPDOWN messages at aus past day"
-      ]
-    },
-    {
       "id": "unsupported-devices-001",
       "category": "devices",
       "question": "Grep the firewall logs for denies from 10.1.2.3.",
@@ -273,20 +132,8 @@
         "tz": "America/Chicago"
       },
       "expect": {
-        "intent": "reject",
-        "reject_code": "unsupported_query_type",
-        "rejected_ast": {
-          "v": 1,
-          "query_type": "log_search",
-          "target": "device",
-          "entities": [
-            {
-              "type": "device",
-              "id": "device:dfw-fw-1"
-            }
-          ],
-          "time_range": {}
-        }
+        "intent": "decline",
+        "decline": "not_expressible_v1"
       },
       "paraphrases": [
         "firewall deny logs for 10.1.2.3",

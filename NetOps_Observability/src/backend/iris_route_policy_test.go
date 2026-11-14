@@ -362,8 +362,14 @@ func TestAnotherTenantsProblemInViewIsNotFound(t *testing.T) {
 	g := startRouteGemini(t, "must not be called")
 	out := askIrisCtx(t, s, b, "Explain this problem", map[string]string{"correlation_id": routeProblemID})
 	text, _ := out["text"].(string)
-	if !strings.Contains(text, "isn't available in your scope") {
+	// N-E4: the screen's incident is re-resolved in the caller's scope before
+	// routing; another tenant's reads exactly like an unknown one — declined,
+	// with the one disclosure, and no model call.
+	if !strings.Contains(text, "isn't available in your workspace") {
 		t.Fatalf("a foreign problem must read as not found: %v", out)
+	}
+	if b, _ := json.Marshal(out["disclaimers"]); !strings.Contains(string(b), "this answer does not use it") {
+		t.Fatalf("the view disclosure must be carried: %v", out)
 	}
 	if ids := citationIDs(out); len(ids) != 0 {
 		t.Fatalf("LEAK: evidence of another tenant's problem: %v", ids)

@@ -388,6 +388,59 @@
         "did bgp flap on them",
         "bgp resets on those links?"
       ]
+    },
+    {
+      "id": "bgp-logs-001",
+      "category": "bgp",
+      "question": "Search syslog for BGP NOTIFICATION messages on dfw-edge-1 today.",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "search_logs",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "log_search",
+          "target": "device",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "filters": [
+            {
+              "field": "topic",
+              "op": "eq",
+              "values": [
+                "bgp"
+              ]
+            }
+          ],
+          "time_range": {
+            "kind": "absolute",
+            "from": "2026-09-24T05:00:00Z",
+            "to": "2026-09-24T15:00:00Z"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "log_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "bgp notification logs on DFW-EDGE-1 today",
+        "search syslog for bgp messages on dfw-edge-1 today"
+      ]
     }
   ]
 }

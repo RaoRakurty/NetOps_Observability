@@ -7,7 +7,7 @@
 // procedures for a person (MOPs), written in the same format as Correlix's
 // built-in methods. The page is the workflow, in order:
 //   1. Write a runbook           → POST /api/ai/runbooks (a draft)
-//   2. Check and send for review → POST /{id}/check, /{id}/submit (the cases run)
+//   2. Check and submit → POST /{id}/check, /{id}/submit (the cases run)
 //   3. Review (another admin)    → POST /{id}/approve {version, body_sha256} | /reject
 //   4. What Iris runs            → runs_in_iris / needs_recheck, POST /{id}/reprove
 // plus each runbook's history (restore, stop using) and links (what it is about).
@@ -215,7 +215,7 @@ export default function TenantRunbooks() {
             2
           </span>
           <div className="disc-step-body">
-            <h3 className="disc-step-title">Check and send for review</h3>
+            <h3 className="disc-step-title">Check and submit</h3>
             {mineOpen.length === 0 ? (
               <p className="disc-text">You have no drafts.</p>
             ) : (

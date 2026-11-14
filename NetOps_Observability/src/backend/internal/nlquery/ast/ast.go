@@ -49,10 +49,39 @@ const (
 	// visible inventory, read through the same scoped Scope as every query.
 	EntityCount QueryType = "entity_count"
 	EntityList  QueryType = "entity_list"
-	// Reserved: decodable so the validator can say "not yet" precisely.
+	// Flows and device syslog (tracker 337 N-C4). Neither carries a query
+	// string: flow_top ranks conversations or services over allowlisted
+	// ClickHouse statements, log_search filters syslog by closed severity and
+	// topic values that the server maps to stored fields. The devices and sites
+	// they read are resolved refs, never names.
 	FlowTop   QueryType = "flow_top"
 	LogSearch QueryType = "log_search"
 )
+
+// flow_top groups (its single group_by value). A conversation is an unordered
+// address pair; a service is a destination port.
+const (
+	FlowGroupTalker  = "talker"
+	FlowGroupService = "service"
+)
+
+// FlowGroups is the closed list of flow_top groupings.
+var FlowGroups = []string{FlowGroupTalker, FlowGroupService}
+
+// log_search filters. severity is "at or above" with op gte (one value), or
+// the exact levels with eq/in; topic is OR'd within the filter.
+const (
+	FilterSeverity = "severity"
+	FilterTopic    = "topic"
+)
+
+// LogSeverities are the normalised syslog levels, most severe first.
+var LogSeverities = []string{"critical", "error", "warning", "notice", "info"}
+
+// LogTopics are the closed protocol / subsystem topics a log search may name.
+// The server owns what each one matches (event type families), so a model
+// can name a topic but never write a pattern.
+var LogTopics = []string{"bgp", "ospf", "isis", "bfd", "interface", "tunnel", "control", "auth", "config", "cpu", "memory", "ntp", "dns", "snmp"}
 
 // Known reports whether t is a query type this build recognises at all.
 func (t QueryType) Known() bool {

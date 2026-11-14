@@ -248,8 +248,8 @@ describe("Flows — Capacity", () => {
     expect(m.flowsCapacity).toHaveBeenCalledWith({ since: 3600 }, 100);
     // Nothing is "coming next" any more, and a link with no speed is set apart.
     expect(screen.queryByTestId("capacity-next")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Links with no reported speed (1)" }));
-    expect(await screen.findByLabelText("Links with no reported speed")).toHaveTextContent(/Speed not reported/);
+    fireEvent.click(screen.getByRole("button", { name: "Speed not reported (1)" }));
+    expect(await screen.findByLabelText("Speed not reported")).toHaveTextContent(/Speed not reported/);
     expect(screen.getByTestId("capacity-method")).toHaveTextContent(/14 days/);
     // A row opens that link in Right now.
     fireEvent.click(within(table).getByText("edge-1 · Gi0/3"));

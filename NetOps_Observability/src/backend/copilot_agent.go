@@ -219,7 +219,10 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 	// run (tracker 337 N-A5), so a denial on one path is a denial on the other.
 	// Trace: a streamed ask (N-E2) carries its progress sink in ctx, so the
 	// operator sees each lookup start and finish; elsewhere it is nil (no-op).
-	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway, Trace: ai.TraceFrom(ctx)}
+	// ModelDirected: the model named this tool, so an active probe (N-I3) is
+	// refused here whatever the policy says — probes run only as authored
+	// method or plan steps (the manifest never lists them either).
+	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway, Trace: ai.TraceFrom(ctx), ModelDirected: true}
 	// The copilot decision (N-A8) records every step: hashes, outcome, latency.
 	ledger := aidecision.FromContext(ctx)
 	ledgerStep := func(reason string, args ai.ToolArgs, iv ai.Invocation) {
@@ -260,6 +263,14 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return rep, nil
 	case "not_implemented":
 		return fail("this lookup is not available in this build", "not_implemented")
+	case ai.OutcomeBadArgs:
+		// The tool refused an argument (ai.ErrBadArgs): say why, so the model
+		// can correct its call instead of reading the refusal as no data.
+		msg := "invalid arguments"
+		if iv.Err != nil {
+			msg = iv.Err.Error()
+		}
+		return fail(msg, ai.OutcomeBadArgs)
 	case ai.OutcomeRateLimited:
 		return fail("this lookup was not run: the workspace reached its per-minute limit for it — say so, do not invent its data", ai.OutcomeRateLimited)
 	case ai.OutcomeTimeout:

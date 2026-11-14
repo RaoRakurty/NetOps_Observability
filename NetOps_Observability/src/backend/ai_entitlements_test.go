@@ -87,6 +87,10 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// N-B3 investigation hypotheses: they exist only where the investigation
 	// loop runs, so reading one back is part of ai.investigate.
 	"/api/ai/hypotheses/": aientitlement.Investigate,
+	// N-I1 read-only investigations: traces exist only where AI investigations
+	// run, so reading one back is part of ai.investigate.
+	"/api/ai/investigations":  aientitlement.Investigate,
+	"/api/ai/investigations/": aientitlement.Investigate,
 
 	"/api/ai/source-authority": adminPlane, // requirePerm(administration): the tenant's own source order (N-F6)
 	"/api/ai/tenant-config":    adminPlane, // requireAdmin: the tenant's own BYO provider key
@@ -225,6 +229,8 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/refresh", "", aientitlement.ContextAuthor},
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/" + probeID + "/adopt", `{}`, aientitlement.ContextAuthor},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
+	{"/api/ai/investigations", http.MethodGet, "/api/ai/investigations", "", aientitlement.Investigate},
+	{"/api/ai/investigations/", http.MethodGet, "/api/ai/investigations/" + probeID, "", aientitlement.Investigate},
 }
 
 // policyWithout is a mapping for the tier in force that grants everything

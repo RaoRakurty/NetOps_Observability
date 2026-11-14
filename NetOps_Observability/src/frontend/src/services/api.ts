@@ -2605,6 +2605,10 @@ export type AITenantConfig = {
   no_platform_key: boolean;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  // N-I3: this workspace's own opt-in to Iris's active probes, and whether the
+  // installation offers them at all (the probe switch and AI investigations).
+  probes_enabled?: boolean;
+  probes_available?: boolean;
   platform_key_available: boolean;
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
@@ -2617,6 +2621,7 @@ export type AITenantRow = {
   name: string;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  probes_enabled?: boolean; // N-I3: the workspace's active-probe opt-in
   key_present: boolean;
   no_platform_key: boolean;
   max_calls: number; // 0 = platform default
@@ -7203,11 +7208,11 @@ export const api = {
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
-  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
+  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
-  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; probes_feature?: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
   // entities, how a name resolves, and how a question compiles. All four are
@@ -7265,6 +7270,11 @@ export const api = {
   // investigation by id (its decision id) — the caller's own workspace only;
   // another workspace's id is a 404.
   aiHypotheses: (id: string) => request<AiHypothesisSet>(`/api/ai/hypotheses/${encodeURIComponent(id)}`),
+  // Read-only investigations (N-I1): one trace by id (its decision id), or the
+  // caller's recent ones — the caller's own workspace only; another
+  // workspace's id is a 404.
+  aiInvestigation: (id: string) => request<AiInvestigationTrace>(`/api/ai/investigations/${encodeURIComponent(id)}`),
+  aiInvestigations: () => request<{ investigations: AiInvestigationSummary[] }>("/api/ai/investigations"),
   // Iris miss triage (model-first point 5): the workspace's unanswered
   // questions by why they missed — workspace admins (own workspace, a
   // colleague's wording withheld) or the platform owner (counts only).
@@ -11004,6 +11014,64 @@ export type AiSkillHop = AiSkill & {
   round?: number;
   reason?: string;
 };
+// Read-only investigation (tracker 337 N-I1). Every field is server-built:
+// step summaries are composed from method names, tool labels and counts —
+// never model text. Rendered as escaped text only.
+export type AiInvestigationStep = {
+  seq: number;
+  // bind | context | rca | runbooks | plan | pass | agent | stop | diagnosis
+  kind: string;
+  // ok | none | skipped | not_found | denied | error | cutoff
+  outcome: string;
+  summary: string;
+};
+export type AiInvestigationCandidate = {
+  skill: string;
+  // runbook_link | selected | entry_method
+  source: string;
+  customer_authored?: boolean;
+  applies: boolean;
+  why?: string;
+};
+export type AiInvestigationPass = {
+  pass: number;
+  entry: string;
+  source: string;
+  chain?: AiSkillHop[];
+  lookups?: string[];
+  tool_calls: number;
+  supported: number;
+  rejected: number;
+  inconclusive: number;
+  answered: boolean;
+};
+export type AiInvestigationTrace = {
+  id?: string;
+  // concluded | inconclusive | no_evidence | refused
+  status: string;
+  question?: string;
+  target: { device_id?: string; device?: string; correlation_id?: string };
+  // The CORRELATION ENGINE's verdict, read first — never Iris's words.
+  engine?: { tier?: string; statement?: string; citation_id?: string };
+  context_applied: boolean;
+  candidates?: AiInvestigationCandidate[];
+  plan?: { skill: string; tools: string[] }[];
+  passes?: AiInvestigationPass[];
+  steps: AiInvestigationStep[];
+  budget: { max_passes: number; max_tool_calls: number; max_tokens: number; wall_seconds: number };
+  used: { passes: number; tool_calls: number; tokens: number; duration_ms: number };
+  cutoffs?: string[];
+  started_at?: string;
+  finished_at?: string;
+};
+export type AiInvestigationSummary = {
+  id: string;
+  status: string;
+  target: AiInvestigationTrace["target"];
+  passes: number;
+  started_at: string;
+  finished_at: string;
+};
 export type AiProblemExplanation = {
   problem_id: string;
   title: string;
@@ -11111,6 +11179,10 @@ export type AiAnswer = {
   // correlation engine's verdict, which they never replace. Optional: absent
   // when the investigation opened none.
   hypotheses?: AiHypothesisSet;
+  // Read-only investigation trace (N-I1) — what was bound, the engine verdict
+  // read first, the runbooks and methods considered, each bounded pass, what
+  // it spent and why it stopped. Optional: set only by an investigation.
+  investigation?: AiInvestigationTrace;
   // Statement classes (N-B4) — every sentence of `text`, classified by the
   // server. Optional: an older backend sends none and the text renders plain.
   statements?: AiStatement[];
