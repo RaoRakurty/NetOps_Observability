@@ -180,6 +180,7 @@ import (
 	"netops/backend/chhttp"
 	"netops/backend/collectors"
 	"netops/backend/integration"
+	"netops/backend/internal/rcaresolution"
 	"netops/backend/maintenance"
 	"netops/backend/models"
 	"netops/backend/nms"
@@ -568,6 +569,7 @@ type server struct {
 	incidentTimeline    timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	incidentFP          incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
+	rcaResolutions      rcaresolution.Store       // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
 	aiFeedback          ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
@@ -1537,6 +1539,7 @@ func newServer() *server {
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
 	srv.incidentFP = newIncidentFingerprintStore()          // similar-incident fingerprints (N-F4), written through on demand
+	srv.rcaResolutions = newRcaResolutionStore()            // recorded fixes, read by similar-incident recall (N-F4 residue)
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
 	// IRIS-MEMORY-BEGIN
 	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)

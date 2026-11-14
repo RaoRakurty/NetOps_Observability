@@ -13,11 +13,15 @@ package ai
 // The subject is the incident the question or the screen names; with none
 // named, the top incident right now — said so in the answer, never silently.
 //
-// HISTORY, NEVER A CAUSE. Every answer carries the recall's caveat, a past case
-// is cited as HISTORICAL evidence, and no fix is ever claimed: Correlix does not
-// record how a past case was resolved, so "what fixed it last time" is answered
-// with what the past case looked like and a link to its timeline, plus that
-// limit stated plainly.
+// HISTORY, NEVER A CAUSE. Every answer carries the recall's caveat and a past
+// case is cited as HISTORICAL evidence. "What fixed it last time" is answered
+// from the fix an operator RECORDED when the past case was closed
+// (internal/rcaresolution): "last time this was fixed by a configuration
+// rollback (recorded by an operator on …)". A recorded fix becomes a
+// recommendation card ("consider …"), labelled "No action has been executed"
+// and grounded in that resolution's citation; a case with no recorded fix says
+// so plainly and points at its timeline. Nothing here claims a past fix is the
+// present cause or the right action — the operator confirms it applies.
 
 import (
 	"context"
@@ -27,8 +31,11 @@ import (
 	"strings"
 )
 
-// noFixRecorded is the honest limit for "what fixed it last time".
-const noFixRecorded = "Correlix does not record how a past case was fixed; open it to read its timeline and any ticket."
+// noFixRecorded is the honest limit when no matched case has a recorded fix.
+const noFixRecorded = "No fix was recorded for these past cases; open one to read its timeline and any ticket."
+
+// someFixRecorded closes an answer where only some matched cases carry a fix.
+const someFixRecorded = "Cases without a recorded fix: open them to read their timeline and any ticket."
 
 // similarSubject resolves the incident to compare: the named one, else the top
 // active one. preface says which was chosen when the operator did not name it.
@@ -105,18 +112,38 @@ func (o *Orchestrator) answerSimilar(ctx context.Context, p Principal, plan Plan
 			n = 5
 		}
 		fmt.Fprintf(&b, "%s look%s like %s:\n", plural(len(res.Matches), "earlier incident"), verbS(len(res.Matches)), subject.Display())
+		var fixActions []string
+		seenFix := map[string]bool{}
 		for _, m := range res.Matches[:n] {
 			label := o.pastCaseLabel(ctx, p, m.CorrelationID)
-			fmt.Fprintf(&b, "• A %s match — %s on %s, matched on %s.\n", promptLine(m.Strength), label,
+			fmt.Fprintf(&b, "• A %s match — %s on %s, matched on %s.", promptLine(m.Strength), label,
 				m.OccurredAt.UTC().Format("2006-01-02"), promptLine(strings.Join(m.MatchedOn, ", ")))
 			base.Citations = append(base.Citations, Citation{ID: "similar:" + m.CorrelationID, Kind: "history",
 				Label: label, Href: "#/monitoring/correlations?id=" + m.CorrelationID, Class: ClassHistorical})
+			if fs := fixSentence(m.Fix); fs != "" {
+				cite := "resolution:" + m.CorrelationID
+				b.WriteString(" " + fs)
+				base.Citations = append(base.Citations, Citation{ID: cite, Kind: "resolution",
+					Label: "Recorded fix for " + label, Href: "#/monitoring/correlations?id=" + m.CorrelationID,
+					Class: ClassHistorical})
+				if !seenFix[m.Fix.Kind] {
+					seenFix[m.Fix.Kind] = true
+					fixActions = append(fixActions, fmt.Sprintf("Consider %s — it resolved %s on %s. Check it applies here first: similar is not the same cause.",
+						promptLine(m.Fix.Label), label, m.Fix.RecordedAt.UTC().Format("2006-01-02")))
+				}
+			}
+			b.WriteString("\n")
 		}
 		if len(res.Matches) > n {
 			fmt.Fprintf(&b, "…and %d more.\n", len(res.Matches)-n)
 		}
-		b.WriteString("\n" + noFixRecorded)
-		base.NextActions = []string{"Open a past case above and compare its timeline with this one."}
+		switch {
+		case len(fixActions) == 0:
+			b.WriteString("\n" + noFixRecorded)
+		case countFixes(res.Matches[:n]) < n:
+			b.WriteString("\n" + someFixRecorded)
+		}
+		base.NextActions = append(fixActions, "Open a past case above and compare its timeline with this one.")
 	}
 	base.Text = strings.TrimSpace(b.String())
 	caveat := res.Caveat
@@ -137,6 +164,17 @@ func (o *Orchestrator) pastCaseLabel(ctx context.Context, p Principal, id string
 		return "case " + pr.Display()
 	}
 	return "case " + shortToken(id)
+}
+
+// countFixes counts matches carrying a recorded fix.
+func countFixes(ms []SimilarMatch) int {
+	n := 0
+	for _, m := range ms {
+		if fixSentence(m.Fix) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func verbS(n int) string {
