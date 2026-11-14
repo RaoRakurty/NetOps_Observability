@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
+	"netops/backend/internal/chatops"
 	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
 	"netops/backend/internal/flownames"
@@ -434,7 +435,10 @@ type server struct {
 	// on a file-backend deployment (the routes answer 503, Iris runs only the
 	// compiled methods). tenantRunbookSets is each tenant's compiled set plus
 	// its approved, proven runbooks, cached per fingerprint.
-	tenantRunbooks       tenantrunbook.Store
+	tenantRunbooks tenantrunbook.Store
+	// chatops is Iris in Slack and Teams (N-I6): connections, links, the
+	// signed inbound endpoints and the bounded answer queue (internal/chatops).
+	chatops              *chatops.Service
 	tenantRunbookMetrics *tenantrunbook.Metrics
 	tenantRunbookSets    *tenantrunbook.OverlayCache
 	tenantRunbookRecheck *runbookRecheck
@@ -1998,6 +2002,9 @@ func newServer() *server {
 	// Tenant runbooks (N-F2) need the platform's models for their harness
 	// fingerprint, so the store is built once the configuration is loaded.
 	srv.tenantRunbooks = srv.newTenantRunbookStore()
+	// Iris in Slack / Teams (N-I6): built here, answered by the workers started
+	// in run; every inbound request is refused until the console switch is on.
+	srv.chatops = srv.newChatops()
 	return srv
 }
 
@@ -2875,6 +2882,12 @@ func Run() {
 	// saved on another api replica arrives, and a failed read recovers without
 	// a restart (the last good settings stay in force meanwhile).
 	workers.start("platform-alert-route-refresh", func() { srv.platformAlerts.RefreshLoop(ctx, time.Minute) })
+	// Iris in Slack / Teams: two answer workers drain the bounded chat queue.
+	if srv.chatops != nil {
+		for i := 0; i < 2; i++ {
+			workers.start("chatops-answer", func() { srv.chatops.Run(ctx) })
+		}
+	}
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	// Credential sentinel — self-healing SNMP credential resolution. Runs with
@@ -4167,6 +4180,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
 	mux.HandleFunc("/api/ai/runbooks", s.handleAIRunbooks)                // Iris tenant runbooks/MOPs (N-F2): list, search, create
 	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)               // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
+	mux.HandleFunc("/api/chatops/", s.handleChatopsAPI)                   // Iris in Slack/Teams (N-I6): connections, links, link-code, me
+	mux.HandleFunc("/api/chatops/slack/", s.handleChatopsInbound)         // Slack inbound: JWT-exempt, path token + v0 HMAC
+	mux.HandleFunc("/api/chatops/teams/", s.handleChatopsInbound)         // Teams inbound: JWT-exempt, path token + Bot Framework JWT
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)

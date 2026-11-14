@@ -1203,6 +1203,15 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Iris in Slack / Teams (N-I6): the chat platforms call in with no JWT.
+		// The handler authenticates via the opaque path token + Slack's v0 HMAC
+		// (replay window) or the Bot Framework's RS256 JWT before reading the
+		// message — fail-closed. Only these two inbound paths are exempt; the
+		// rest of /api/chatops/ (admin + link API) keeps the normal auth.
+		if strings.HasPrefix(r.URL.Path, "/api/chatops/slack/") || strings.HasPrefix(r.URL.Path, "/api/chatops/teams/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// NMS controller webhooks (#95): external controllers call in with no
 		// JWT; the handler authenticates via the opaque path token + the
 		// connector's signature verification before touching state — fail-closed.

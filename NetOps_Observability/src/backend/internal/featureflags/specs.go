@@ -89,5 +89,7 @@ func PlatformSpecs() []Spec {
 			Help: "Let Iris send questions and the evidence it gathered to your configured AI provider for written answers and chat. Off, Iris answers from Correlix data alone."},
 		{Env: "IRIS_AI_INVESTIGATIONS", Label: "AI investigations", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
 			Help: "Let the AI model run read-only lookups across your network data to investigate a question. Needs Iris AI models on; each workspace still opts in."},
+		{Env: "IRIS_CHATOPS", Label: "Iris in Slack and Teams", Group: iris, Apply: live, Risky: true, ConsoleOnly: true,
+			Help: "Let people ask Iris from Slack or Microsoft Teams. Answers leave Correlix into that chat service; each workspace connects its own chat app and an admin approves every linked account."},
 	}
 }

@@ -196,7 +196,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 42 | Configurable source authority order | DONE | `internal/srcauthority`, migration 0065, design §4.2.1 | — |
 | 43 | "Have we seen this before?" | MISSING | — | N-F4 |
 | 44 | Investigative vs executable runbooks separated | DESIGNED | `Executable` flag, one object (design 7) | N-F2 |
-| 45 | ChatOps with identity mapping, never superuser | MISSING | — | N-I6 |
+| 45 | ChatOps with identity mapping, never superuser | DONE | `internal/chatops` (admin-approved links, runs as the linked user, platform owner refused) | — |
 | 46 | Streamed operational progress | MISSING | No SSE/Flusher anywhere | N-E2 |
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
@@ -464,7 +464,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-I3 | PARTIAL | `CapProbe` capability + policy (`ai/tools.go`, `ai/policy.go`) | `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` over the collectors (never device-originated, owner 2026-11-13) |
 | N-I4 | MISSING | — | ApprovalGate + two write tools |
 | N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
-| N-I6 | MISSING | — | ChatOps |
+| N-I6 | SHIPPED | `internal/chatops` + migration 0074; seam in `ai_handlers.go` (`chatopsAsk`) (2026-11-14) | Teams channel answers via a proactive 1:1; Slack Enterprise Grid org installs untested |
 | N-I7 | SHIPPED | `ai/recommend.go` (`42726a8a`), `Answer.Recommendations` | — (origin `similar_resolution` shipped 2026-11-13: a card grounded in a recorded fix) |
 
 ### Phase A — Land the in-flight work and harden the runtime (foundation)

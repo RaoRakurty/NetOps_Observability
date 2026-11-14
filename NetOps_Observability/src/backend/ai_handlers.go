@@ -22,6 +22,7 @@ import (
 	"netops/backend/internal/aidecision"
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/aiscore"
+	"netops/backend/internal/chatops"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
@@ -30,6 +31,7 @@ import (
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/iristriage"
+	"netops/backend/internal/jwks"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
 	"netops/backend/internal/nlquery/compile"
@@ -46,6 +48,7 @@ import (
 	"netops/backend/internal/tac"
 	"netops/backend/internal/tenantrunbook"
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -4020,4 +4023,225 @@ func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scope": scope, "classes": iristriage.Summarize(items, cross),
 		"class_order": iristriage.Classes, "window": "the newest records of each workspace's Iris question log (30 days)"})
+}
+
+// ---- Iris in Slack and Teams (tracker 337 N-I6) --------------------------------
+//
+// internal/chatops owns the chat protocols, the link state machine and the
+// bounded answer queue; this is the seam into the rest of the server. The one
+// rule that lives HERE: a chat question runs as the linked Correlix user,
+// re-read from the user store on every question, confined to that user's own
+// tenant, through the same aiAskRun as /api/ai/ask. The platform owner never
+// answers through chat, whatever the link says.
+
+// chatopsSwitch is the Features-page switch (console-only, risky, default off).
+const chatopsSwitch = "IRIS_CHATOPS"
+
+func (s *server) newChatops() *chatops.Service {
+	var store chatops.Store
+	if ps, ok := platformdb.ActivePG(); ok {
+		var crypt chatops.Crypter // nil when no vault: the store then refuses secrets
+		if s.vault != nil {
+			crypt = s.vault
+		}
+		store = chatops.NewPGStore(ps.DB(), crypt)
+	} else {
+		store = chatops.NewMemStore()
+	}
+	// Outbound chat traffic goes to public Slack / Microsoft endpoints only;
+	// the SSRF-guarded client refuses private and metadata addresses.
+	client := safehttp.Client(20 * time.Second)
+	return chatops.New(chatops.Deps{
+		Store:     store,
+		Enabled:   func() bool { return s.features != nil && s.features.Enabled(chatopsSwitch) },
+		Asker:     s.chatopsAsk,
+		Teams:     jwks.NewFromMetadata(chatops.BotFrameworkMetadata, 0),
+		Slack:     chatops.SlackPoster{Client: client},
+		TeamsRe:   &chatops.TeamsPoster{Client: client},
+		Authorize: s.chatopsAuthorize,
+		Audit: func(tenant, actor, action string, d map[string]any) {
+			detail := map[string]any{"action": action}
+			for k, v := range d {
+				detail[k] = v
+			}
+			s.audit.Record(AuditEvent{Time: time.Now().UTC(), Actor: actor, Tenant: tenant, Method: "CHAT",
+				Path: "/api/chatops", Status: http.StatusOK, Decision: "allow", Detail: detail})
+		},
+		Log: func(level, msg string, f map[string]any) {
+			switch level {
+			case "error":
+				logError("chatops", msg, f)
+			case "warn":
+				logWarn("chatops", msg, f)
+			default:
+				logInfo("chatops", msg, f)
+			}
+		},
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	})
+}
+
+// handleChatopsInbound serves POST /api/chatops/{slack|teams}/{token}
+// (JWT-exempt: the handler authenticates the platform's signature).
+func (s *server) handleChatopsInbound(w http.ResponseWriter, r *http.Request) {
+	if s.chatops == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.chatops.HandleInbound(w, r)
+}
+
+// handleChatopsAPI serves the admin and link endpoints under /api/chatops/.
+func (s *server) handleChatopsAPI(w http.ResponseWriter, r *http.Request) {
+	if s.chatops == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.chatops.HandleAPI(w, r)
+}
+
+// chatopsAuthorize: admin endpoints need administration:admin (a workspace
+// admin within their own tenant — principalTenant decides which); the link
+// endpoints need a signed-in person who is not the platform owner.
+func (s *server) chatopsAuthorize(w http.ResponseWriter, r *http.Request, admin bool) (chatops.Caller, bool) {
+	var (
+		claims jwtClaims
+		ok     bool
+	)
+	if admin {
+		claims, ok = s.requirePerm(w, r, "administration", LevelAdmin)
+		if !ok {
+			return chatops.Caller{}, false
+		}
+	} else {
+		claims, ok = userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return chatops.Caller{}, false
+		}
+		if isPlatformOwner(claims) {
+			writeError(w, http.StatusForbidden, errors.New("the platform administrator cannot use Iris from chat — sign in with a workspace account"))
+			return chatops.Caller{}, false
+		}
+	}
+	tenant, cross := principalTenant(claims)
+	return chatops.Caller{Tenant: tenant, Sub: claims.Sub, Cross: cross, Admin: admin,
+		Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+}
+
+// chatopsAsk answers one approved chat question as the linked user.
+func (s *server) chatopsAsk(ctx context.Context, q chatops.Question) (chatops.Answer, error) {
+	refuse := func(msg string) (chatops.Answer, error) { return chatops.Answer{}, chatops.Refusal{Msg: msg} }
+	const account = "Your Correlix account can't use Iris from chat right now — ask a workspace admin to check your chat link."
+	if !aiEnabled() {
+		return refuse("Iris is turned off on this Correlix installation.")
+	}
+	u, ok := s.users.Get(q.UserID)
+	if !ok || u.Status == "disabled" {
+		return refuse(account)
+	}
+	claims := jwtClaims{Sub: u.ID, Role: u.Role, Tenant: u.TenantID}
+	tenant, cross := principalTenant(claims)
+	// Platform-admin powers never reach chat, and the user must still belong
+	// to the tenant whose chat app asked.
+	if cross || isPlatformOwner(claims) || tenant == "" || tenant != chatops.NormTenant(q.Tenant) {
+		return refuse(account)
+	}
+	if s.tenantSuspended(claims) {
+		return refuse("Your Correlix workspace is suspended.")
+	}
+	// The same per-principal budget as /api/ai/ask: chat is not a way around it.
+	if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		return refuse("Iris is answering too many of your questions — wait a minute and ask again.")
+	}
+	if !s.aiEntitled(claims, aientitlement.Chat) {
+		return refuse("Iris chat isn't available for your workspace.")
+	}
+	question := q.Text
+	if ai.IsCommand(question) {
+		canonical, cmd, ok := ai.ResolveCommand(question)
+		if !ok || cmd.Intent == "help" {
+			return chatops.Answer{Text: "Ask me about your network in plain English — for example: what is going on right now?"}, nil
+		}
+		question = canonical
+	}
+	r, err := http.NewRequestWithContext(context.WithValue(ctx, userCtxKey, claims), http.MethodPost, "/api/chatops/ask", nil)
+	if err != nil {
+		return chatops.Answer{}, err
+	}
+	r.RemoteAddr = "chatops"
+	req := aiAskRequest{Question: question}
+	var conv *irisconvo.Conversation
+	if s.nlqConvos != nil && s.aiEntitled(claims, aientitlement.NLQuery) {
+		if id := strings.TrimSpace(q.ConversationID); id != "" {
+			if c, _, err := s.askConversation(r, claims, id); err == nil {
+				conv = &c
+			}
+		}
+		if conv == nil {
+			c, err := s.nlqConvos.Create(ctx, tenant, claims.Sub)
+			if err != nil {
+				// Not fatal: the question is answered, only the follow-up memory is lost.
+				logWarn("chatops", "conversation not started", errf(err))
+			} else {
+				conv = &c
+			}
+		}
+		if conv != nil {
+			req.ConversationID = conv.ID
+		}
+	}
+	ans, err := s.aiAskRun(r, claims, req, question, conv, nil)
+	if err != nil {
+		return chatops.Answer{}, err
+	}
+	out := chatopsAnswerOf(ans)
+	if conv != nil {
+		out.ConversationID = conv.ID
+	}
+	return out, nil
+}
+
+// chatopsAnswerOf flattens an Iris answer into chat text: its words, its key
+// structured lines, its next steps and its citations — never raw evidence.
+func chatopsAnswerOf(ans ai.Answer) chatops.Answer {
+	out := chatops.Answer{Title: ans.Title, Text: ans.Text, Disclaimers: ans.Disclaimers, Note: ans.ProviderNote, Next: ans.NextActions}
+	if cs := ans.CurrentState; cs != nil {
+		if out.Text == "" {
+			out.Text = cs.Summary
+		}
+		out.Bullets = append(out.Bullets, cs.ActiveIncidents...)
+		if len(cs.RecommendedFocus) > 0 {
+			out.Bullets = append(out.Bullets, "Look first at: "+strings.Join(cs.RecommendedFocus, ", "))
+		}
+	}
+	if p := ans.Problem; p != nil {
+		if out.Title == "" {
+			out.Title = p.Title
+		}
+		if out.Text == "" {
+			out.Text = p.Summary
+		}
+		if p.Verdict != "" {
+			v := "Verdict: " + p.Verdict
+			if p.Confidence != "" {
+				v += " (" + p.Confidence + ")"
+			}
+			out.Bullets = append(out.Bullets, v)
+		}
+		if p.RootCauseHypothesis != "" {
+			out.Bullets = append(out.Bullets, "Likely cause: "+p.RootCauseHypothesis)
+		}
+	}
+	if m := ans.Module; m != nil {
+		if out.Text == "" {
+			out.Text = m.Headline
+		}
+		out.Bullets = append(out.Bullets, m.Items...)
+	}
+	for _, c := range ans.Citations {
+		out.Citations = append(out.Citations, chatops.Citation{Label: c.Label, Href: c.Href})
+	}
+	return out
 }

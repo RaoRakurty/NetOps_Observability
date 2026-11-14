@@ -150,8 +150,13 @@ func (c Claims) Audiences() []string {
 // after the floor.
 type Cache struct {
 	issuer string
-	client *http.Client
-	ttl    time.Duration
+	// metadataURL, when set, is fetched INSTEAD of issuer+"/.well-known/
+	// openid-configuration" (NewFromMetadata): a signer such as the Microsoft
+	// Bot Framework publishes its key metadata at a non-standard path and has
+	// no token endpoint, so only jwks_uri is required of it.
+	metadataURL string
+	client      *http.Client
+	ttl         time.Duration
 
 	// refreshMu single-flights the JWKS fetch: one holder performs it, every
 	// concurrent kid-miss waits and re-checks the refreshed cache (stdlib-only
@@ -191,6 +196,17 @@ func New(issuer string, ttl time.Duration) *Cache {
 	}
 }
 
+// NewFromMetadata builds a cache whose signing keys come from the jwks_uri of
+// an explicit metadata document rather than issuer discovery. Only jwks_uri is
+// required of that document; the issuer is still checked per token by
+// VerifyRS256's wantIssuer. Used for the Microsoft Bot Framework, whose
+// metadata lives at https://login.botframework.com/v1/.well-known/openidconfiguration.
+func NewFromMetadata(metadataURL string, ttl time.Duration) *Cache {
+	c := New("", ttl)
+	c.metadataURL = strings.TrimSpace(metadataURL)
+	return c
+}
+
 func (c *Cache) Discovery() (*Discovery, error) {
 	c.mu.RLock()
 	d := c.disc
@@ -199,11 +215,14 @@ func (c *Cache) Discovery() (*Discovery, error) {
 		return d, nil
 	}
 	url := c.issuer + "/.well-known/openid-configuration"
+	if c.metadataURL != "" {
+		url = c.metadataURL
+	}
 	var got Discovery
 	if err := c.getJSON(url, &got); err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
-	if got.JWKSURI == "" || got.TokenEndpoint == "" {
+	if got.JWKSURI == "" || (c.metadataURL == "" && got.TokenEndpoint == "") {
 		return nil, errors.New("oidc discovery incomplete")
 	}
 	c.mu.Lock()
