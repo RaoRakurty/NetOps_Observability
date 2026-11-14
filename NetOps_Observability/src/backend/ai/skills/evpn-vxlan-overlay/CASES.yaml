@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for evpn-vxlan-overlay. Dialect + contract: skill_cases.go.
+
+case: an interface named beneath the fabric sends the investigation to the underlay
+question: vtep down on leaf-3
+ui:
+  - correlation_id=case-evpn-underlay
+  - device=leaf-3
+signals:
+  - verdict:phrase=interface
+  - state:collect=ok
+evidence:
+  - finding
+  - device
+expect_chain:
+  - evpn-vxlan-overlay entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: the underlay beneath the fabric
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - bgp-session-down
+  - log-confirmation
+expect_select: evpn-vxlan-overlay
+
+---
+
+case: BGP named in the verdict sends the investigation to the EVPN control plane
+question: evpn routes missing on leaf-3
+ui:
+  - correlation_id=case-evpn-bgp
+  - device=leaf-3
+tools:
+  - run_protocol_diagnostic=not_found
+signals:
+  - verdict:phrase=bgp
+  - state:collect=ok
+evidence:
+  - finding
+  - device
+expect_chain:
+  - evpn-vxlan-overlay entry
+  - bgp-session-down rule
+expect_selected: rule
+expect_reason: carries the EVPN routes
+expect_verdict:
+  - peer
+  - FSM state
+expect_never:
+  - interface-down
+  - log-confirmation
+
+---
+
+case: an unread fabric leaves the switch's own messages and says so
+question: vni down on leaf-3
+ui:
+  - correlation_id=case-evpn-notwired
+  - device=leaf-3
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - evpn-vxlan-overlay entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - interface-down
+  - bgp-session-down
+
+---
+
+case: a fabric read with no engine lead stays here and quotes the raw output
+question: anycast gateway problem on leaf-3
+ui:
+  - correlation_id=case-evpn-stay
+  - device=leaf-3
+signals:
+  - state:collect=ok
+notes:
+  - the evpn output is raw evidence — no parser exists for this command on this platform
+evidence:
+  - device
+  - finding
+expect_chain:
+  - evpn-vxlan-overlay entry
+expect_selected: none
+expect_verdict:
+  - underlay
+  - raw, not parsed
+expect_notes:
+  - no parser exists
+expect_never:
+  - interface-down
+  - bgp-session-down
+  - log-confirmation

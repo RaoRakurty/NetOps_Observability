@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for scope-contrast. Dialect + contract: skill_cases.go.
+
+case: a boundary the engine places at a handoff continues at that seam
+question: only some sites can reach the erp application
+ui:
+  - correlation_id=case-scope-seam
+  - device=edge-1
+signals:
+  - verdict:phrase=handoff
+  - verdict:tier=suspected
+evidence:
+  - finding
+expect_chain:
+  - scope-contrast entry
+  - path-seam-handoff rule
+expect_selected: rule
+expect_reason: places the boundary at a handoff
+expect_verdict:
+  - hop
+  - owner
+expect_never:
+  - osi-bisection
+  - log-confirmation
+expect_select: scope-contrast
+
+---
+
+case: an engine with no conclusion hands the contrast to the layer bisection
+question: some users but not others cannot log in to the portal
+ui:
+  - correlation_id=case-scope-undetermined
+  - device=edge-1
+signals:
+  - verdict:tier=undetermined
+evidence:
+  - finding
+expect_chain:
+  - scope-contrast entry
+  - osi-bisection rule
+expect_selected: rule
+expect_reason: no conclusion yet
+expect_verdict:
+  - layer
+  - evidence classes
+expect_never:
+  - path-seam-handoff
+  - log-confirmation
+
+---
+
+case: no incident in scope leaves the devices' own messages and says why
+question: why only one building is affected
+ui:
+  - correlation_id=case-scope-none
+  - device=edge-1
+tools:
+  - get_affected_entities=not_found
+evidence:
+  - finding
+expect_chain:
+  - scope-contrast entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no incident is in scope
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - path-seam-handoff
+  - osi-bisection
+
+---
+
+case: a suspected verdict that names no seam stays here and reports both sides
+question: who is affected and who is not by the wan problem
+ui:
+  - correlation_id=case-scope-stay
+  - device=edge-1
+signals:
+  - verdict:tier=suspected
+  - verdict:phrase=circuit
+evidence:
+  - finding
+  - topology
+notes:
+  - the blast radius is partial — two sites could not be read
+expect_chain:
+  - scope-contrast entry
+expect_selected: none
+expect_verdict:
+  - affected
+  - fewest assumptions
+expect_notes:
+  - the blast radius is partial
+expect_never:
+  - path-seam-handoff
+  - osi-bisection
+  - log-confirmation

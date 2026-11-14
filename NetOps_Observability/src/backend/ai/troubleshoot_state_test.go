@@ -296,7 +296,7 @@ func TestDeviceStateSeamErrorPropagates(t *testing.T) {
 // The tool's closed area vocabulary must not drift from the battery's; the root
 // package pins it to protocoldiag.Areas(). Here we pin its shape and order.
 func TestStateAreaVocabularyIsClosed(t *testing.T) {
-	want := []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "logs"}
+	want := []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "logs"}
 	got := StateAreas()
 	if len(got) != len(want) {
 		t.Fatalf("areas = %v, want %v", got, want)

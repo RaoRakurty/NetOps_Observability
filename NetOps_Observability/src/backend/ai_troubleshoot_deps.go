@@ -52,6 +52,7 @@ import (
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
+	"netops/backend/internal/dem"
 	"netops/backend/internal/dem/experience"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/devreach"
@@ -194,6 +195,12 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.SecurityFindings = s.aiSecurityFindings(claims)
 	}
 	deps.CaseTimeline = s.aiCaseTimeline(claims)
+	// NetClaw ingestion Batch 3: the workspace's synthetic probes. The catalogue
+	// is always built (an operator declares probes before enabling collection),
+	// so the seam is wired whenever it exists and says when nothing has run.
+	if s.demTargets != nil {
+		deps.ProbeResults = s.aiProbeResults(claims)
+	}
 	// IRIS Phase B: investigation memory. Wired only when the store exists, so a
 	// deployment without it never exposes a tool that could only answer nothing.
 	if s.irisMemory != nil {
@@ -3840,4 +3847,102 @@ func aiPriorQuestions(turns []string) []string {
 		turns = turns[len(turns)-4:]
 	}
 	return append([]string(nil), turns...)
+}
+
+// ---- the workspace's synthetic probes (NetClaw ingestion Batch 3) ----------
+//
+// get_probe_results reads the probes the operator declared (internal/dem's
+// catalogue) and the runs Correlix's prober recorded for them (the in-memory
+// run rings) — the same two stores the Digital Experience view reads. It never
+// starts a probe and never resolves a name itself.
+//
+// §3a, mirroring the DEM API's own scoping (internal/dem/http.go scoped): ONE
+// concrete workspace only. The platform owner's "All tenants" view and the
+// Provider scope read nothing (the tool then says probes are read per
+// workspace), and a workspace the operator may not see (operator-restricted)
+// reads nothing. Both stores are tenant-keyed and refuse a scopeless read on
+// their own; the fold re-checks each row's tenant as defence in depth.
+
+// aiProbeResults binds the probe read to the caller's own scope.
+func (s *server) aiProbeResults(claims jwtClaims) func(context.Context, ai.Principal, ai.ProbeQuery) (ai.ProbeResults, error) {
+	return func(ctx context.Context, _ ai.Principal, q ai.ProbeQuery) (ai.ProbeResults, error) {
+		tenant, cross := principalTenant(claims)
+		if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) {
+			return ai.ProbeResults{}, nil // Scoped=false: probes are per-workspace data
+		}
+		if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+			return ai.ProbeResults{}, nil
+		}
+		targets, err := s.demTargets.List(ctx, tenant)
+		if err != nil {
+			return ai.ProbeResults{}, err
+		}
+		return aiFoldProbes(targets, s.demRuns, tenant, q, envBool(dem.EnvFeatureFlag)), nil
+	}
+}
+
+// aiFoldProbes folds one workspace's catalogue and run rings into the tool's
+// shape. Pure apart from the run store's own (tenant-keyed) read.
+func aiFoldProbes(targets []dem.Target, runs *dem.RunStore, tenant string, q ai.ProbeQuery, collectionOn bool) ai.ProbeResults {
+	out := ai.ProbeResults{Scoped: true, CollectionOn: collectionOn}
+	for _, t := range targets {
+		if !strings.EqualFold(t.TenantID, tenant) {
+			continue // defence in depth: the store is tenant-keyed already
+		}
+		out.Configured++
+		if !q.ProbeMatches(t.ID, t.Name, t.Kind, t.Site) {
+			continue
+		}
+		out.ProbesTotal++
+		out.Probes = append(out.Probes, aiFoldProbe(t, runs.Runs(tenant, t.ID)))
+	}
+	return out
+}
+
+// aiFoldProbe is one probe and the fold of its recent runs (oldest first).
+// A skipped run is not a measurement; a runner error is counted apart from a
+// target failure and never becomes the target's result.
+func aiFoldProbe(t dem.Target, ring []dem.WireRun) ai.ProbeSummary {
+	kind := strings.ToLower(strings.TrimSpace(t.Kind))
+	p := ai.ProbeSummary{
+		Name: t.Name, Kind: kind,
+		Destination: ai.SafeProbeDestination(kind, t.Host, t.Port),
+		Site:        t.Site, App: t.App, Paused: t.Paused,
+	}
+	if kind == "dns" && strings.TrimSpace(t.Resolver) != "" {
+		p.ResolverPinned = true
+		p.Resolver = ai.SafeProbeDestination("dns", t.Resolver, 0)
+	}
+	vantages := map[string]bool{}
+	var okDurations []float64
+	for _, r := range ring {
+		switch r.Outcome {
+		case dem.RunSuccess:
+			p.Success++
+			if r.DurationMs > 0 {
+				okDurations = append(okDurations, r.DurationMs)
+			}
+		case dem.RunFailure:
+			p.Failure++
+		case dem.RunError:
+			p.Errors++
+		default:
+			continue // skipped: not a measurement
+		}
+		p.Runs++
+		if r.Vantage != "" {
+			vantages[r.Vantage] = true
+		}
+		p.LastOutcome, p.LastReason, p.LastAt = r.Outcome, r.FailReason, r.StartedAt
+	}
+	p.Vantages = len(vantages)
+	if n := len(okDurations); n > 0 {
+		sort.Float64s(okDurations)
+		if n%2 == 1 {
+			p.MedianMs = okDurations[n/2]
+		} else {
+			p.MedianMs = (okDurations[n/2-1] + okDurations[n/2]) / 2
+		}
+	}
+	return p
 }

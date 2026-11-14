@@ -178,6 +178,13 @@ func bindSeams(c *Case, allowed map[string]bool) ai.TroubleshootDeps {
 			return ai.PathEvidence{}, ai.ErrNotImplemented
 		}
 	}
+	// The synthetic-probe read (NetClaw ingestion Batch 3) has no frozen slice
+	// in a case yet either: a case that allows it answers from its fixture.
+	if allowed["get_probe_results"] {
+		d.ProbeResults = func(context.Context, ai.Principal, ai.ProbeQuery) (ai.ProbeResults, error) {
+			return ai.ProbeResults{}, ai.ErrNotImplemented
+		}
+	}
 	if allowed["get_recent_changes"] {
 		d.RecentChanges = func(_ context.Context, p ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
 			return frozenChanges(c, p, q)

@@ -76,6 +76,9 @@ func tsDeps() TroubleshootDeps {
 		PathEvidence: func(_ context.Context, _ Principal, deviceID string) (PathEvidence, error) {
 			return tsPathEvidence(deviceID), nil
 		},
+		ProbeResults: func(_ context.Context, p Principal, q ProbeQuery) (ProbeResults, error) {
+			return tsProbeResults(p.Tenant, q), nil
+		},
 		CaseTimeline: func(_ context.Context, _ Principal, correlationID string) ([]TimelineEvent, error) {
 			if correlationID != "pa" {
 				return nil, ErrNotFound
@@ -164,8 +167,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 15 {
-		t.Fatalf("expected 15 Phase-A/A4/B/F4/network/WAN tools, got %v", names)
+	if len(names) != 16 {
+		t.Fatalf("expected 16 Phase-A/A4/B/F4/network/WAN/probe tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {

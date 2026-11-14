@@ -454,13 +454,30 @@ func TestRunBattery_UnsupportedArea(t *testing.T) {
 	if run.Devices[1].Status != DeviceStatusOK {
 		t.Errorf("the supported device was affected: %q", run.Devices[1].Status)
 	}
-	// The shipped battery has no such gap: every area renders on every dialect.
+	// The shipped battery has no such gap: every area renders on every dialect,
+	// except the gaps named here, each with its reason. An exception is a
+	// documented absence (the platform has no such read without an
+	// operator-chosen subject), answered by the honest Unsupported status above
+	// — never a guessed command. A NEW gap fails this test.
+	knownGaps := map[Area]map[showparse.Dialect]string{
+		AreaEVPN: {
+			// Classic IOS has no VXLAN EVPN data plane to read.
+			showparse.DialectCiscoIOS: "no VXLAN EVPN on classic IOS",
+			// SR OS reads VXLAN per service id; the battery takes no subject.
+			showparse.DialectNokiaSROS: "SR OS VXLAN reads are per service id",
+		},
+	}
 	full := DefaultStateBattery()
 	tgt := Target{Interface: "GigabitEthernet0/0", Prefix: "10.0.0.0/8", Address: "10.0.0.2"}
 	for _, area := range Areas() {
 		for _, d := range showparse.Dialects() {
-			if len(full.Battery(area, d, tgt)) == 0 {
+			rendered := len(full.Battery(area, d, tgt)) > 0
+			_, gap := knownGaps[area][d]
+			switch {
+			case !rendered && !gap:
 				t.Errorf("the shipped battery renders nothing for %s on %s", area, d)
+			case rendered && gap:
+				t.Errorf("%s on %s now renders — remove it from knownGaps", area, d)
 			}
 		}
 	}
