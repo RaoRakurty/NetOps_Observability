@@ -79,6 +79,9 @@ func tsDeps() TroubleshootDeps {
 		ProbeResults: func(_ context.Context, p Principal, q ProbeQuery) (ProbeResults, error) {
 			return tsProbeResults(p.Tenant, q), nil
 		},
+		ActiveProbe: func(_ context.Context, _ Principal, req ActiveProbeRequest) (ActiveProbeReport, error) {
+			return ActiveProbeReport{Kind: req.Kind, Scoped: true, Results: []ActiveProbeResult{{Target: "edge-1", TargetKind: "device", Up: true, Sent: 3, Received: 3, RTTms: 2.5}}}, nil
+		},
 		CaseTimeline: func(_ context.Context, _ Principal, correlationID string) ([]TimelineEvent, error) {
 			if correlationID != "pa" {
 				return nil, ErrNotFound
@@ -167,8 +170,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 16 {
-		t.Fatalf("expected 16 Phase-A/A4/B/F4/network/WAN/probe tools, got %v", names)
+	if len(names) != 20 {
+		t.Fatalf("expected 20 Phase-A/A4/B/F4/network/WAN/probe/active-probe tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {
@@ -181,10 +184,15 @@ func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 			t.Fatalf("tool %q is not registered with fully wired deps", n)
 		}
 		// Read-only on the network: CapRead, or CapProbe for the two tools that
-		// open a read-only device session (N-A8 / D14). Never write/execute.
+		// open a read-only device session (N-A8 / D14), or CapNetProbe for the
+		// four active probes from Correlix's own collector (N-I3). Never
+		// write/execute.
 		want := CapRead
-		if n == "run_protocol_diagnostic" || n == "get_device_state" {
+		switch n {
+		case "run_protocol_diagnostic", "get_device_state":
 			want = CapProbe
+		case "run_ping", "run_traceroute", "run_dns_test", "run_http_test":
+			want = CapNetProbe
 		}
 		if tool.Capability() != want {
 			t.Errorf("%s has capability %q, want %q — the model can never reach a write", n, tool.Capability(), want)
@@ -201,7 +209,20 @@ func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 		// The Policy Engine must actually permit it for a properly permissioned
 		// caller (a read tool that the gate rejects is dead weight).
 		pe := NewPolicyEngine(PolicyConfig{}, func(string) bool { return true })
-		if d := pe.EvaluateTool(tool, Principal{Cross: true}); !d.Allow {
+		d := pe.EvaluateTool(tool, Principal{Cross: true})
+		if tool.Capability() == CapNetProbe {
+			// An active probe is the reverse: the DEFAULT policy denies it, and
+			// only the server's per-request gate opens it (N-I3).
+			if d.Allow {
+				t.Errorf("%s is allowed by the default policy — an active probe must need the probe gate", n)
+			}
+			open := NewPolicyEngine(PolicyConfig{NetProbes: NetProbeGate{Allow: true}}, func(string) bool { return true })
+			if od := open.EvaluateTool(tool, Principal{Cross: true}); !od.Allow {
+				t.Errorf("%s is denied with the probe gate open: %s", n, od.Reason)
+			}
+			continue
+		}
+		if !d.Allow {
 			t.Errorf("%s is denied by the default read-only policy: %s", n, d.Reason)
 		}
 	}

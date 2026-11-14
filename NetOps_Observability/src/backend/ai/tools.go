@@ -154,10 +154,18 @@ func plural(n int, singular string) string {
 type Capability string
 
 const (
-	CapRead    Capability = "read"    // returns data; no side effects (allowed in v1)
-	CapProbe   Capability = "probe"   // opens a READ-ONLY device session (SSH show commands); allowed, rate-limited hard (N-A8, D14)
-	CapWrite   Capability = "write"   // mutates app state (ITSM ticket, owner) — P6, gated
-	CapExecute Capability = "execute" // touches a network device — P6+, fully gated
+	CapRead  Capability = "read"  // returns data; no side effects (allowed in v1)
+	CapProbe Capability = "probe" // opens a READ-ONLY device session (SSH show commands); allowed, rate-limited hard (N-A8, D14)
+	// CapNetProbe sends a small, fixed set of test packets or one request FROM
+	// CORRELIX'S OWN COLLECTOR to a target the workspace owns (ping, traceroute,
+	// a DNS lookup, one HTTP GET) — never from a customer device (N-I3, D14). It
+	// sits above read and below write: it changes nothing, but it originates
+	// traffic, so the Policy Engine allows it only when the installation's probe
+	// switch, AI investigations and the workspace's own opt-in are all on, and
+	// a model can never pick one from its manifest (Toolbox.ModelDirected).
+	CapNetProbe Capability = "net_probe"
+	CapWrite    Capability = "write"   // mutates app state (ITSM ticket, owner) — P6, gated
+	CapExecute  Capability = "execute" // touches a network device — P6+, fully gated
 )
 
 // AITool is the governed tool contract. v1 tools are tenant-scoped, bounded,

@@ -418,6 +418,10 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// aiProbe is the N-I3 active-probe executor: the per-target limiter, the
+	// process-wide slot gate and the measurement itself (collectors.RunOneShot
+	// in production; a fake in tests, so no test sends real traffic).
+	aiProbe aiProbeExec
 	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
 	// one per process, keyed by tenant and normalised question, route ids only.
 	aiPlanCache *ai.PlannerCache
@@ -1374,6 +1378,7 @@ func newServer() *server {
 		aiDecisions:          newAIDecisionStore(),
 		aiDecisionMetrics:    aidecision.NewMetrics(),
 		aiToolGateway:        ai.NewToolGateway(),
+		aiProbe:              newAIProbeExec(),
 		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
 		irisStreamMetrics:    &irisstream.Metrics{},

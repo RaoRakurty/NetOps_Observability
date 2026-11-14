@@ -32,6 +32,7 @@ const features = vi.fn();
 const startIrisConversation = vi.fn();
 const correctIrisQuery = vi.fn();
 const testCopilotConfig = vi.fn();
+const setAITenantAccess = vi.fn();
 // A test can take over the streamed ask (N-E2) to drive progress events.
 type StreamFn = (q: string, ctx: unknown, conv: unknown, onEvent: (e: { type: string; tool?: string; outcome?: string }) => void) => Promise<AiAnswer>;
 const streamOverride: { fn?: StreamFn } = {};
@@ -56,6 +57,7 @@ vi.mock("../services/api", () => ({
     startIrisConversation: (...a: unknown[]) => startIrisConversation(...a),
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
     testCopilotConfig: (...a: unknown[]) => testCopilotConfig(...a),
+    setAITenantAccess: (...a: unknown[]) => setAITenantAccess(...a),
   },
 }));
 
@@ -577,5 +579,51 @@ describe("Iris — connect a model (tracker 337 C2/C3/C5)", () => {
       budget: { daily_tokens_default: 1000000, workspaces_exhausted: 2 } });
     await renderOpsis();
     expect((await screen.findByTestId("connect-model-banner")).textContent).toBe("2 workspaces have spent today's AI budget.");
+  });
+});
+
+// N-I3: the workspace's active-probe opt-in in Iris settings -> Workspace access.
+describe("Iris settings — active probes opt-in", () => {
+  const row = { tenant_id: "t-acme", name: "Acme", assistant_enabled: true, investigations_enabled: true,
+    probes_enabled: false, key_present: false, no_platform_key: false, max_calls: 0, daily_tokens: 0 };
+  function ownerWithWorkspace(probesFeature: boolean) {
+    copilotConfig.mockResolvedValue({ provider: "anthropic", model: "claude-sonnet-4-6", feature_enabled: true, key_present: true });
+    aiTenants.mockResolvedValue({ tenants: [row], tools_feature: true, probes_feature: probesFeature });
+    setAITenantAccess.mockReset();
+    setAITenantAccess.mockResolvedValue({ ...row, probes_enabled: true });
+  }
+
+  it("is disabled, and says why, until the installation turns active probes on", async () => {
+    ownerWithWorkspace(false);
+    await renderOpsis();
+    fireEvent.click(await screen.findByTitle("AI models"));
+    const toggle = (await screen.findByTestId("iris-probes-toggle")) as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+    expect(screen.getByTestId("iris-probes-risk").textContent).toMatch(/Features page/);
+    expect(screen.getByTestId("iris-probes-risk").textContent).toMatch(/Nothing is sent from a customer device/);
+  });
+
+  it("states the risk and asks before turning on, then sends the acknowledgement", async () => {
+    ownerWithWorkspace(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await renderOpsis();
+    fireEvent.click(await screen.findByTitle("AI models"));
+    const toggle = (await screen.findByTestId("iris-probes-toggle")) as HTMLInputElement;
+    expect(toggle.disabled).toBe(false);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(String(confirm.mock.calls[0][0])).toMatch(/3 pings, one traceroute/);
+    expect(setAITenantAccess).toHaveBeenCalledWith("t-acme", expect.objectContaining({ probes_enabled: true, probes_acknowledged: true }));
+    confirm.mockRestore();
+  });
+
+  it("sends nothing when the operator declines", async () => {
+    ownerWithWorkspace(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await renderOpsis();
+    fireEvent.click(await screen.findByTitle("AI models"));
+    await act(async () => { fireEvent.click(await screen.findByTestId("iris-probes-toggle")); });
+    expect(setAITenantAccess).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 });

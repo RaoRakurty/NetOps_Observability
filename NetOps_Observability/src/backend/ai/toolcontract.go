@@ -161,7 +161,7 @@ func validContract(name string, c ToolContract) error {
 		errs = append(errs, errors.New("version must be > 0"))
 	}
 	switch c.Risk {
-	case CapRead, CapProbe:
+	case CapRead, CapProbe, CapNetProbe:
 	case CapWrite, CapExecute:
 		errs = append(errs, fmt.Errorf("risk %q is not registrable (%s)", c.Risk, contractRiskReadOnly))
 	default:
@@ -250,6 +250,16 @@ var toolContracts = map[string]ToolContract{
 	// 60 s per-device timeout fires first; the contract is the backstop.
 	"run_protocol_diagnostic": {1, CapProbe, 75 * time.Second, 6, out(60, defaultMaxTextChars)},
 	"get_device_state":        {1, CapProbe, 75 * time.Second, 6, out(60, defaultMaxTextChars)},
+	// ACTIVE PROBES (N-I3): one small, fixed measurement from Correlix's own
+	// collector to a target the workspace owns. The rates are per workspace per
+	// tool and sit on top of a per-target limit and a process-wide slot gate
+	// the server applies (internal/probetarget). Timeouts cover the fixed
+	// measurement plus resolving the target: ping 3 echoes, traceroute 16 hops
+	// at 800 ms, a DNS test or web test up to 3 probes of 3–5 s each.
+	"run_ping":       {1, CapNetProbe, 15 * time.Second, 6, out(6, defaultMaxTextChars)},
+	"run_traceroute": {1, CapNetProbe, 30 * time.Second, 3, out(20, defaultMaxTextChars)},
+	"run_dns_test":   {1, CapNetProbe, 20 * time.Second, 6, out(6, defaultMaxTextChars)},
+	"run_http_test":  {1, CapNetProbe, 25 * time.Second, 6, out(6, defaultMaxTextChars)},
 	// Configuration history.
 	"get_recent_changes": {1, CapRead, 10 * time.Second, 60, out(25, defaultMaxTextChars)},
 	"get_config_diff":    {1, CapRead, 10 * time.Second, 60, out(16, 2600)},

@@ -461,7 +461,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-H6 | MISSING | — | seasonal baselines + robust z (12–18 ew) |
 | N-I1 | MISSING | the agent loop + skill chain + hypotheses exist; no investigator that retrieves runbooks and repeats bounded | read-only investigator (needs F2 wired, F3) |
 | N-I2 | MISSING | — | alert-triggered / scheduled investigations |
-| N-I3 | PARTIAL | `CapProbe` capability + policy (`ai/tools.go`, `ai/policy.go`) | `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` over the collectors (never device-originated, owner 2026-11-13) |
+| N-I3 | SHIPPED (2026-11-14) | `CapNetProbe` tier (`ai/tools.go`, `ai/policy.go` `NetProbeGate`); `run_ping`/`run_traceroute`/`run_dns_test`/`run_http_test` (`ai/troubleshoot_activeprobe.go`) measured from Correlix's own collector (`collectors/oneshot.go`); target validation + per-target limit + slot gate (`internal/probetarget`); server gate `aiNetProbeGate` (console switch IRIS_AI_PROBES + AI investigations + workspace opt-in `probe_tools`); never in a model manifest, refused when model-named (`Toolbox.ModelDirected`); method steps in dns-resolution, path-seam-handoff, l3-reachability; §3a test `iris_active_probe_isolation_test.go` | ICMP/traceroute need an unprivileged ICMP socket or CAP_NET_RAW on the api container (honestly "unavailable" otherwise); probes run from the api process, not yet routed through the prober sidecar / collector tier (tracker 372); IPv6 targets not probed |
 | N-I4 | MISSING | — | ApprovalGate + two write tools |
 | N-I5 | MISSING | entitlement placeholder only (`internal/aientitlement/aientitlement.go` "Unbacked") | read-only MCP gateway |
 | N-I6 | MISSING | — | ChatOps |

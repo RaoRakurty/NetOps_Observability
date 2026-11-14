@@ -239,6 +239,16 @@ var skillToolAllowlist = map[string]bool{
 	// NetClaw ingestion Batch 3 (2026-11-13): the workspace's own synthetic
 	// probes — recorded runs only; it never starts a probe.
 	"get_probe_results": true,
+	// N-I3 (2026-11-14): ACTIVE probes from Correlix's own collector to a
+	// target the workspace owns. Not read-only in the traffic sense, so the
+	// Policy Engine runs one only when the installation's probe switch, AI
+	// investigations and the workspace's opt-in are all on; with any of them
+	// off the step is skipped and the answer says why. A method is the ONLY
+	// way a model reaches these: the agent loop's manifest never lists them.
+	"run_ping":       true,
+	"run_traceroute": true,
+	"run_dns_test":   true,
+	"run_http_test":  true,
 }
 
 // SkillOrigin says who wrote a skill, which decides where its text may go.

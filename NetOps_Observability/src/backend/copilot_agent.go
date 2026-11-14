@@ -216,7 +216,10 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 	// the first gate, this is the second; the tool itself re-validates args).
 	// Toolbox.Authorize is the SAME gate the grounded engine's execution sites
 	// run (tracker 337 N-A5), so a denial on one path is a denial on the other.
-	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway}
+	// ModelDirected: the model named this tool, so an active probe (N-I3) is
+	// refused here whatever the policy says — probes run only as authored
+	// method or plan steps (the manifest never lists them either).
+	tb := ai.Toolbox{Registry: reg, Policy: pol, Gateway: s.aiToolGateway, ModelDirected: true}
 	// The copilot decision (N-A8) records every step: hashes, outcome, latency.
 	ledger := aidecision.FromContext(ctx)
 	ledgerStep := func(reason string, args ai.ToolArgs, iv ai.Invocation) {
