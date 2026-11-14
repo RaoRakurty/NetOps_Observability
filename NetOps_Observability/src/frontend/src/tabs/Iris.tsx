@@ -24,7 +24,6 @@ import {
   AiAnswer,
   AiCitation,
   AiCommand,
-  StreamBrokenError,
 } from "../services/api";
 import Icon from "../components/Icon";
 import IrisVocabulary from "../components/IrisVocabulary";
@@ -36,11 +35,13 @@ import { applyEvent } from "../iris/progressStream";
 import StatementText from "../iris/StatementText";
 import { answerCiteHref } from "../iris/links";
 import { withPageContext } from "../iris/pageRoute";
+import { withViewContext } from "../iris/viewContext";
+import { askBound } from "../iris/askBound";
 import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { investigationsHint, modelsBanner } from "../iris/aiModelsBanner";
-import { httpFailure, operatorError } from "../lib/errors";
+import { operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
 // lives in the browser, in sessionStorage so it survives the panel closing and
@@ -288,29 +289,24 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     // I looking at?" from that page's docs and ranks them first for product
     // questions. It is re-validated server-side and never scopes data. One
     // point covers the stream, its JSON fallback and every caller.
-    context = withPageContext(context);
-    try {
-      return await api.aiAskStream(content, context, convId, (ev) => setSteps((s) => applyEvent(s, ev)));
-    } catch (e) {
-      if (!(e instanceof StreamBrokenError)) throw e;
-      setSteps([]);
-      return api.aiAsk(content, context, convId);
-    }
+    //
+    // What the operator is looking at (N-E4, iris/viewContext.ts) rides along
+    // too — the incident or device a page registered — UNDER any explicit
+    // context, and is re-resolved in the caller's own workspace server-side.
+    context = withPageContext(withViewContext(context));
+    // The ONE ask path every Iris surface uses (iris/askBound.ts).
+    return (await askBound(content, context, convId, (ev) => setSteps((s) => applyEvent(s, ev)))).answer;
   };
   const askInConversation = async (content: string): Promise<AiAnswer> => {
     let id = convRef.current;
     if (!id && nlqEntitledRef.current) {
       try { id = (await api.startIrisConversation()).id; } catch { id = null; } // conversations unavailable: ask without
     }
-    try {
-      const ans = await askStreaming(content, undefined, id ?? undefined);
-      setConversation(ans.conversation_id ?? null);
-      return ans;
-    } catch (e) {
-      if (!id || httpFailure(e)?.status !== 404) throw e;
-      setConversation(null);
-      return askStreaming(content);
-    }
+    // askBound drops a conversation the server no longer has (404) and asks
+    // once without it; the answer says which conversation it belongs to.
+    const ans = await askStreaming(content, undefined, id ?? undefined);
+    setConversation(ans.conversation_id ?? null);
+    return ans;
   };
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -608,9 +604,18 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   // turn of the conversation.
   const askRef = useRef(sendGrounded);
   askRef.current = sendGrounded;
+  // An entry point's own question ("Ask Iris about this device", N-E4) is a
+  // typed question in the box's conversation: the page's subject rides along
+  // through the view context, exactly as if the operator had typed it.
+  const sendRef = useRef(send);
+  sendRef.current = send;
   useEffect(() => {
-    if (!ask?.topic) return;
-    askRef.current(ask.question?.trim() || `What does ${ask.topic} mean?`, { topic: ask.topic });
+    if (!ask) return;
+    if (ask.topic) {
+      askRef.current(ask.question?.trim() || `What does ${ask.topic} mean?`, { topic: ask.topic });
+    } else if (ask.question?.trim()) {
+      void sendRef.current(ask.question.trim());
+    }
     onAskHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask?.seq]);

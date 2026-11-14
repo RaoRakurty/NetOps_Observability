@@ -2,13 +2,16 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, StreamBrokenError, type AiAnswer, type AiCitation } from "../../services/api";
+import { api, type AiAnswer, type AiCitation } from "../../services/api";
 import Icon from "../Icon";
 import { useAIEntitlements } from "../../lib/aiEntitlements";
-import { httpFailure, operatorError } from "../../lib/errors";
+import { operatorError } from "../../lib/errors";
 import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
 import { applyEvent } from "../../iris/progressStream";
 import { answerCiteHref } from "../../iris/links";
+import { askBound } from "../../iris/askBound";
+import { useIrisView } from "../../iris/viewContext";
+import RecommendationCards from "../../iris/RecommendationCards";
 import { friendlyProblemId } from "./labels";
 
 // RcaAskAi — Iris docked in the RCA view, scoped to THIS problem (RCA document
@@ -98,19 +101,9 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
   }, [turns, steps]);
 
   const context = { correlation_id: correlationId };
-
-  // One ask: streamed progress, the same answer as aiAsk; a cut stream falls
-  // back ONCE to the plain JSON ask.
-  const askOnce = async (q: string, conv: string | undefined): Promise<AiAnswer> => {
-    setSteps([]);
-    try {
-      return await api.aiAskStream(q, context, conv, (ev) => setSteps((s) => applyEvent(s, ev)));
-    } catch (e) {
-      if (!(e instanceof StreamBrokenError)) throw e;
-      setSteps([]);
-      return api.aiAsk(q, context, conv);
-    }
-  };
+  // The problem in view is also what the Iris box binds while this view is
+  // open (N-E4): "explain this" typed there means THIS problem too.
+  useIrisView({ kind: "incident", id: correlationId, label: friendlyProblemId(correlationId) });
 
   const ask = async (raw: string) => {
     const q = raw.trim().slice(0, MAX_QUESTION);
@@ -126,16 +119,11 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
       if (!conv && ent.has("ai.nlquery")) {
         try { conv = (await api.startIrisConversation()).id; } catch { conv = null; }
       }
-      let ans: AiAnswer;
-      try {
-        ans = await askOnce(q, conv ?? undefined);
-      } catch (e) {
-        // A conversation the server no longer has: drop it and ask once without.
-        if (!conv || httpFailure(e)?.status !== 404) throw e;
-        convRef.current = null;
-        ans = await askOnce(q, undefined);
-      }
-      convRef.current = ans.conversation_id ?? null;
+      // The ONE ask path (iris/askBound.ts): streamed progress with one JSON
+      // fallback; a conversation the server no longer has is dropped.
+      setSteps([]);
+      const { answer: ans, conversationId } = await askBound(q, context, conv, (ev) => setSteps((s) => applyEvent(s, ev)));
+      convRef.current = conversationId;
       setTurns((t) => t.map((x) => (x.id === id ? { ...x, answer: ans } : x)));
     } catch (e) {
       const msg = operatorError(e, "Iris could not answer that just now.");
@@ -185,6 +173,11 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
                     {t.answer.problem.recommended_owner && (<><dt>Owner</dt><dd>{t.answer.problem.recommended_owner}</dd></>)}
                     {(t.answer.problem.missing_evidence?.length ?? 0) > 0 && (<><dt>Still missing</dt><dd>{t.answer.problem.missing_evidence.join(", ")}</dd></>)}
                   </dl>
+                )}
+                {/* N-E3: the same grounded recommendation cards the Iris box
+                    shows (escaped text, cited, "no action has been executed"). */}
+                {(t.answer.recommendations?.length ?? 0) > 0 && (
+                  <RecommendationCards cards={t.answer.recommendations ?? []} citations={t.answer.citations ?? []} />
                 )}
                 {(t.answer.citations?.length ?? 0) > 0 && (
                   <div className="ric-cites" aria-label="Evidence">

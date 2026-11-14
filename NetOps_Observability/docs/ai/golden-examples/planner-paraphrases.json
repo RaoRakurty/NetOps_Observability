@@ -429,5 +429,19 @@
     {"q": "busiest services on vedge-51 over the last 6 hours", "module": "flow_analytics"},
     {"q": "flow volume on cedge-81 for the past day", "module": "flow_analytics"},
     {"q": "heaviest conversations on the site 80 wan this week", "module": "flow_analytics"}
+  ],
+  "in_view_items": [
+    {"q": "why is this down?", "view": "device", "route": "troubleshoot"},
+    {"q": "whats wrong with it", "view": "device", "route": "troubleshoot"},
+    {"q": "is this box healthy right now", "view": "device", "route": "troubleshoot"},
+    {"q": "what changed here in the last hour", "view": "device", "route": "troubleshoot"},
+    {"q": "show me the cpu on this one", "view": "device", "route": "data"},
+    {"q": "has this device had problems like this before", "view": "device", "route": "similar_incidents"},
+    {"q": "explain this", "view": "incident", "route": "explain_problem"},
+    {"q": "what changed here", "view": "incident", "route": "explain_problem"},
+    {"q": "is this related to the other incident", "view": "incident", "route": "explain_problem"},
+    {"q": "why is this only suspected?", "view": "incident", "route": "explain_problem"},
+    {"q": "who should own this one", "view": "incident", "route": "explain_problem"},
+    {"q": "what should I check next here", "view": "incident", "route": "explain_problem"}
   ]
 }
