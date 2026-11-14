@@ -42,6 +42,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -357,8 +358,11 @@ func RankContextFacts(facts []ContextFact, question string) ([]ContextFact, int)
 		return facts, 0
 	}
 	docs := make([]KnowledgeDoc, len(facts))
+	index := make(map[string]int, len(facts))
 	for i, f := range facts {
-		docs[i] = KnowledgeDoc{ID: fmt.Sprintf("%06d", i), Layer: LayerEnvironment, Tenant: "t", Authority: AuthorityApproved,
+		id := "fact-" + strconv.Itoa(i)
+		index[id] = i
+		docs[i] = KnowledgeDoc{ID: id, Layer: LayerEnvironment, Tenant: "t", Authority: AuthorityApproved,
 			Title: f.Kind + " " + f.Key, Text: f.Body + " " + strings.TrimPrefix(f.Scope, "site:")}
 	}
 	r := RankKnowledge("t", question, docs, []KnowledgeLayer{LayerEnvironment}, time.Time{}, len(docs))
@@ -368,8 +372,8 @@ func RankContextFacts(facts []ContextFact, question string) ([]ContextFact, int)
 	used := make(map[int]bool, len(r.Hits))
 	out := make([]ContextFact, 0, len(facts))
 	for _, h := range r.Hits {
-		var i int
-		if _, err := fmt.Sscanf(h.Doc.ID, "%d", &i); err != nil || i < 0 || i >= len(facts) || used[i] {
+		i, ok := index[h.Doc.ID]
+		if !ok || used[i] {
 			continue
 		}
 		used[i] = true
