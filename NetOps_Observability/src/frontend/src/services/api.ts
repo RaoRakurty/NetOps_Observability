@@ -2244,6 +2244,63 @@ export interface OrgContextPreview {
   omitted: number;
 }
 
+// ---- tenant runbooks/MOPs (N-F2) ----
+export type RunbookKind = "investigative" | "mop";
+export interface RunbookRecheck {
+  fingerprint: string;
+  passed: boolean;
+  at?: string;
+}
+export interface RunbookVersion extends Omit<OrgContextVersion, "body"> {
+  skill_md: string;
+  cases_yaml: string;
+  harness_passed: boolean;
+  harness_fingerprint?: string;
+  harness_at?: string;
+  rechecks?: RunbookRecheck[];
+}
+export interface Runbook {
+  id: string;
+  name: string;
+  kind: RunbookKind;
+  when_to_use: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  versions: RunbookVersion[];
+  runs_in_iris: boolean;
+  needs_recheck: boolean;
+}
+export interface RunbookList {
+  runbooks: Runbook[];
+  you: string;
+  limits: { runbooks: number; versions: number; cases: number; links: number };
+}
+export interface RunbookCaseProblem {
+  case?: string;
+  message: string;
+}
+export interface RunbookCheck {
+  passed: boolean;
+  cases: number;
+  fingerprint: string;
+}
+export interface RunbookRecheckResult {
+  version: number;
+  passed: boolean;
+  already_current: boolean;
+  fingerprint?: string;
+  cases: number;
+  problems: RunbookCaseProblem[];
+}
+export type RunbookLinkType = "alert" | "signature" | "entity" | "incident";
+export interface RunbookLink {
+  link_type: RunbookLinkType;
+  link_key: string;
+  created_by: string;
+  created_at: string;
+}
+
 // ---- change ledger API (N-D3) ----
 export interface ChangeConfigDiff {
   device_id: string;
@@ -7012,6 +7069,30 @@ export const api = {
     body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
   ) =>
     request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+
+  // Tenant runbooks/MOPs (N-F2). The tenant always comes from the token.
+  runbooks: () => request<RunbookList>("/api/ai/runbooks"),
+  runbookCreate: (r: { name: string; kind: RunbookKind; skill_md: string; cases_yaml: string }) =>
+    request<Runbook>("/api/ai/runbooks", { method: "POST", body: JSON.stringify(r) }),
+  runbookDraft: (id: string, src: { skill_md: string; cases_yaml: string }) =>
+    request<Runbook>(`/api/ai/runbooks/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify(src) }),
+  runbookDiscard: (id: string) =>
+    request<Runbook | undefined>(`/api/ai/runbooks/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  runbookCheck: (id: string) =>
+    request<RunbookCheck>(`/api/ai/runbooks/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  runbookRecheck: (id: string) =>
+    request<RunbookRecheckResult>(`/api/ai/runbooks/${encodeURIComponent(id)}/reprove`, { method: "POST" }),
+  runbookAct: (
+    id: string,
+    verb: "submit" | "withdraw" | "approve" | "reject" | "rollback" | "retire",
+    body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
+  ) => request<Runbook>(`/api/ai/runbooks/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+  runbookLinks: (id: string) => request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`),
+  runbookLink: (id: string, link_type: RunbookLinkType, link_key: string, remove = false) =>
+    request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`, {
+      method: remove ? "DELETE" : "PUT",
+      body: JSON.stringify({ link_type, link_key }),
+    }),
 
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
