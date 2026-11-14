@@ -37,11 +37,16 @@
 // no secrets, no other tenant's data (LLM06).
 
 import { useEffect, useRef, useState } from "react";
-import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import { type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
+import { applyEvent } from "../../iris/progressStream";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
 import InvestigationTrace from "../../iris/InvestigationTrace";
 import StatementText from "../../iris/StatementText";
+import RecommendationCards from "../../iris/RecommendationCards";
+import { askBound } from "../../iris/askBound";
+import { useIrisView } from "../../iris/viewContext";
 
 /** A relative, same-origin path is safe to link. Everything else is inert text.
  *  Both protocol-relative spellings are rejected: browsers normalise a leading
@@ -107,19 +112,29 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
       ? `An operator reports: ${symptomLabel}. What should I check next, and what evidence is missing?`
       : "What is going on right now?";
 
+  // The case driving the investigation is what the Iris box binds too (N-E4).
+  useIrisView(caseId ? { kind: "incident", id: caseId, label: symptomLabel || "this case" } : null);
+  // The operational trace (tracker 337 N-E2/N-E3): what Iris is doing while
+  // it works — server event names mapped to plain words, never model text.
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
+
   const ask = async (investigate = false) => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setSteps([]);
+    const context: Record<string, string> = caseId ? { correlation_id: caseId } : {};
+    // "Investigate" (N-I1): a full read-only investigation of this case — the
+    // engine's verdict first, the runbooks your team linked here, then bounded
+    // passes. The server refuses it, in words, without AI investigations.
+    if (investigate) context.iris_action = "investigate";
+    const q = investigate && !caseId && !symptomLabel ? "Investigate what is going on." : question;
     try {
-      const ctx: Record<string, string> = caseId ? { correlation_id: caseId } : {};
-      // "Investigate" (N-I1): a full read-only investigation of this case —
-      // the engine's verdict first, the runbooks your team linked here, then
-      // bounded passes. The server refuses it, in words, without AI investigations.
-      if (investigate) ctx.iris_action = "investigate";
-      setAns(await api.aiAsk(investigate && !caseId && !symptomLabel ? "Investigate what is going on." : question, ctx));
+      // The ONE ask path the RCA view and the Iris box use (iris/askBound.ts):
+      // streamed progress, one JSON fallback when a proxy cuts the stream.
+      setAns((await askBound(q, context, null, (ev) => setSteps((s) => applyEvent(s, ev)))).answer);
     } catch (e) {
       setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
       setBusy(false);
+      setSteps([]);
     }
   };
 
@@ -153,6 +168,10 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
         </div>
       </div>
       {err && <p className="ts-bad" role="alert">Iris: {err}</p>}
+
+      {busy && steps.length > 0 && (
+        <div data-testid="iris-lane-progress"><IrisProgress steps={steps} /></div>
+      )}
 
       {!ans && !busy && !err && (
         <p className="tsl-sum">
@@ -203,6 +222,11 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
 
           {/* Statement classes (N-B4): each sentence with the server's class. */}
           <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} citations={ans.citations} />
+
+          {/* N-E3: grounded recommendation cards, as in the Iris box. */}
+          {(ans.recommendations?.length ?? 0) > 0 && (
+            <RecommendationCards cards={ans.recommendations ?? []} citations={ans.citations ?? []} />
+          )}
 
           {cites.length > 0 && (
             <div className="tsl-cites" aria-label="Evidence citations">

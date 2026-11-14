@@ -793,6 +793,8 @@ func toolErrReason(err error) string {
 		return "not_found"
 	case errors.Is(err, ErrNotImplemented):
 		return "not_implemented"
+	case errors.Is(err, ErrBadArgs):
+		return OutcomeBadArgs
 	}
 	return "tool_error"
 }

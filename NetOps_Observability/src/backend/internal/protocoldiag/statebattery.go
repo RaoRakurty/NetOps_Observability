@@ -62,6 +62,13 @@ const (
 	AreaL2 Area = "l2"
 	// AreaPlatform is CPU, memory, environment and uptime.
 	AreaPlatform Area = "platform"
+	// AreaEVPN is an EVPN-VXLAN fabric's overlay: VTEP peers and VNIs (NetClaw
+	// ingestion Batch 3). Every row is doc_claimed — no fabric output has been
+	// captured here, so nothing in this area is parsed.
+	AreaEVPN Area = "evpn"
+	// AreaRedundancy is first-hop redundancy (HSRP / VRRP) and link
+	// aggregation (LACP) membership (NetClaw ingestion Batch 3). doc_claimed.
+	AreaRedundancy Area = "redundancy"
 	// AreaLogs is the bounded device log buffer.
 	AreaLogs Area = "logs"
 )
@@ -78,7 +85,7 @@ var ErrUnknownArea = errors.New("protocoldiag: unknown state-battery area")
 
 // Areas returns every battery area in a stable, deterministic order.
 func Areas() []Area {
-	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaLogs}
+	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaEVPN, AreaRedundancy, AreaLogs}
 }
 
 // ValidArea reports whether a is a defined battery area.
@@ -609,6 +616,62 @@ func defaultBatterySpecs() []BatterySpec {
 				showparse.DialectJunos:      "show ntp status",
 				showparse.DialectNokiaSROS:  "show system ntp",
 				showparse.DialectHuaweiVRP:  "display ntp status",
+			}),
+
+		// ── evpn ────────────────────────────────────────────────────────────
+		// NetClaw ingestion Batch 3 (2026-11-13). EVERY row below is
+		// doc_claimed: the command is the vendor's own documented read, but no
+		// EVPN-VXLAN fabric output has been captured here (the lab has none), so
+		// no parser exists and the output reaches the operator as raw evidence.
+		// Nokia SR OS is deliberately absent: its VXLAN reads are per service id,
+		// and a battery command needs no operator-chosen subject.
+		bs(showparse.CmdEVPNPeers, AreaEVPN,
+			"VXLAN tunnel endpoints (VTEP peers) this switch has learned — a peer missing here cannot carry the fabric's traffic, whatever the underlay says",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoNXOS:  "show nve peers",
+				showparse.DialectCiscoIOSXE: "show nve peers",
+				showparse.DialectCiscoIOSXR: "show nve peers",
+				showparse.DialectAristaEOS:  "show vxlan vtep",
+				showparse.DialectJunos:      "show ethernet-switching vxlan-tunnel-end-point remote",
+				showparse.DialectHuaweiVRP:  "display vxlan peer",
+			}),
+		bs(showparse.CmdEVPNVNI, AreaEVPN,
+			"the VNIs (layer-2 and layer-3 segments) configured on the switch and their state",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoNXOS:  "show nve vni",
+				showparse.DialectCiscoIOSXE: "show nve vni",
+				showparse.DialectCiscoIOSXR: "show nve vni",
+				showparse.DialectAristaEOS:  "show vxlan vni",
+				showparse.DialectJunos:      "show evpn instance",
+				showparse.DialectHuaweiVRP:  "display vxlan vni",
+			}),
+
+		// ── redundancy ──────────────────────────────────────────────────────
+		// NetClaw ingestion Batch 3 (2026-11-13). doc_claimed throughout, for the
+		// same reason: no HSRP / VRRP or LACP output has been captured here.
+		bs(showparse.CmdFHRPBrief, AreaRedundancy,
+			"first-hop redundancy groups (HSRP / VRRP): which router is active and which is standby for each gateway address",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOS:   "show standby brief",
+				showparse.DialectCiscoIOSXE: "show standby brief",
+				showparse.DialectCiscoIOSXR: "show hsrp brief",
+				showparse.DialectCiscoNXOS:  "show hsrp brief",
+				showparse.DialectAristaEOS:  "show vrrp brief",
+				showparse.DialectJunos:      "show vrrp summary",
+				showparse.DialectNokiaSROS:  "show router vrrp instance",
+				showparse.DialectHuaweiVRP:  "display vrrp brief",
+			}),
+		bs(showparse.CmdLACPMembers, AreaRedundancy,
+			"link-aggregation bundles and their member links: which members are bundled and which have dropped out",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOS:   "show etherchannel summary",
+				showparse.DialectCiscoIOSXE: "show etherchannel summary",
+				showparse.DialectCiscoIOSXR: "show bundle brief",
+				showparse.DialectCiscoNXOS:  "show port-channel summary",
+				showparse.DialectAristaEOS:  "show port-channel summary",
+				showparse.DialectJunos:      "show lacp interfaces",
+				showparse.DialectNokiaSROS:  "show lag",
+				showparse.DialectHuaweiVRP:  "display eth-trunk",
 			}),
 
 		// ── logs ────────────────────────────────────────────────────────────

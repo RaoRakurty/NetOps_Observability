@@ -552,11 +552,11 @@ func (d aiDataSource) moduleQuery(ctx context.Context, p ai.Principal, query str
 	d = d.with(ctx)
 	switch query {
 	case "top_talkers":
-		return d.moduleTopTalkers()
+		return d.moduleTopTalkers(args)
 	case "flow_summary":
-		return d.moduleFlowSummary()
+		return d.moduleFlowSummary(args)
 	case "service_flow_summary":
-		return d.moduleServiceFlows()
+		return d.moduleServiceFlows(args)
 	case "metric_anomalies":
 		return d.moduleMetricAnomalies()
 	case "app_identity_summary":
@@ -574,42 +574,6 @@ func (d aiDataSource) moduleQuery(ctx context.Context, p ai.Principal, query str
 	default:
 		return ai.ToolResult{}, ai.ErrNotImplemented
 	}
-}
-
-// moduleServiceFlows — top destination services (by well-known port) over the
-// recent window: the "what services are busiest / app-to-DB" read. Tenant-scoped
-// by the flows row policy via d.scope.
-func (d aiDataSource) moduleServiceFlows() (ai.ToolResult, error) {
-	clause, empty := d.srv.flowTenantClauseFor(d.claims)
-	if empty {
-		return ai.ToolResult{}, nil // no visible devices — honest empty, never platform data
-	}
-	sql := `
-SELECT dst_port AS port,
-       sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total,
-       count() AS flows
-  FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR AND dst_port > 0` + clause + `
- GROUP BY port
- ORDER BY bytes_total DESC
- LIMIT 8
- FORMAT JSON`
-	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
-	if err != nil {
-		return ai.ToolResult{}, err
-	}
-	items := make([]ai.EvidenceItem, 0, len(rows))
-	for i, r := range rows {
-		port := int(asFloat(r["port"]))
-		label := servicePortLabel(port)
-		items = append(items, ai.EvidenceItem{
-			CitationID: fmt.Sprintf("flow:svc:%d", i), Kind: "flow",
-			Text: fmt.Sprintf("%s (port %d) — %s over 24h, %s flows",
-				label, port, humanBytes(asFloat(r["bytes_total"])), humanCount(asFloat(r["flows"]))),
-			Href: "#/flows",
-		})
-	}
-	return ai.ToolResult{Items: items}, nil
 }
 
 // moduleIntegrationHealth — connector configuration health (ServiceNow/Jira/
@@ -735,69 +699,6 @@ SELECT app, count() AS flows, round(avg(confidence), 2) AS conf, any(provider) A
 		})
 	}
 	return ai.ToolResult{Items: items}, nil
-}
-
-// moduleTopTalkers — the heaviest conversations (bidirectional pairs) over the
-// recent window, sampling-rate corrected, tenant-scoped.
-func (d aiDataSource) moduleTopTalkers() (ai.ToolResult, error) {
-	clause, empty := d.srv.flowTenantClauseFor(d.claims)
-	if empty {
-		return ai.ToolResult{}, nil
-	}
-	sql := `
-SELECT least(src_addr, dst_addr)  AS a,
-       greatest(src_addr, dst_addr) AS b,
-       sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total
-  FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR` + clause + `
- GROUP BY a, b
- ORDER BY bytes_total DESC
- LIMIT 8
- FORMAT JSON`
-	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
-	if err != nil {
-		return ai.ToolResult{}, err
-	}
-	items := make([]ai.EvidenceItem, 0, len(rows))
-	for i, r := range rows {
-		a, b := asStr(r["a"]), asStr(r["b"])
-		items = append(items, ai.EvidenceItem{
-			CitationID: fmt.Sprintf("flow:talker:%d", i), Kind: "flow",
-			Text: fmt.Sprintf("%s ↔ %s — %s over 24h", a, b, humanBytes(asFloat(r["bytes_total"]))),
-			Href: "#/flows",
-		})
-	}
-	return ai.ToolResult{Items: items}, nil
-}
-
-// moduleFlowSummary — one-line traffic totals over the recent window.
-func (d aiDataSource) moduleFlowSummary() (ai.ToolResult, error) {
-	clause, empty := d.srv.flowTenantClauseFor(d.claims)
-	if empty {
-		return ai.ToolResult{}, nil
-	}
-	sql := `
-SELECT sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
-       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
-       count() AS flows,
-       uniqExact(src_addr) AS sources
-  FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR` + clause + `
- FORMAT JSON`
-	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
-	if err != nil {
-		return ai.ToolResult{}, err
-	}
-	if len(rows) == 0 || asFloat(rows[0]["flows"]) == 0 {
-		return ai.ToolResult{}, nil // honest empty — no flow data in window
-	}
-	r := rows[0]
-	return ai.ToolResult{Items: []ai.EvidenceItem{{
-		CitationID: "flow:summary", Kind: "flow",
-		Text: fmt.Sprintf("24h flow volume: %s across %s flows from %d sources",
-			humanBytes(asFloat(r["bytes_total"])), humanCount(asFloat(r["flows"])), int(asFloat(r["sources"]))),
-		Href: "#/flows",
-	}}}, nil
 }
 
 // moduleMetricAnomalies — recent detected metric anomalies (z-score findings),

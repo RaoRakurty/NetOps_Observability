@@ -18,6 +18,10 @@ describe("IrisProgress", () => {
     expect(stepLabel("found")).toBe("Found results");
     expect(stepLabel("rca_loaded")).toBe("Loaded the root-cause analysis");
     expect(stepLabel("rendering")).toBe("Preparing the answer");
+    // The routing decision, an AI investigation and a switch of model (N-E2).
+    expect(stepLabel("routing_model")).toMatch(/AI model/);
+    expect(stepLabel("investigating")).toMatch(/Investigating/);
+    expect(stepLabel("model_fallback")).toMatch(/backup model/);
   });
 
   it("never echoes an unknown event name (incl. prototype names)", () => {

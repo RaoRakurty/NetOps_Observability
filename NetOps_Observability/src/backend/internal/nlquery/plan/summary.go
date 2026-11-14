@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,10 @@ func Summarize(cat *catalog.Catalog, q *ast.AST, rs *ResultSet) string {
 		summarizeCount(&b, q, rs)
 	case q.Type == ast.EntityList:
 		summarizeInventory(&b, q, rs)
+	case q.Type == ast.FlowTop:
+		summarizeFlows(&b, q, rs)
+	case q.Type == ast.LogSearch:
+		summarizeList(&b, rs, "log line", logLine)
 	default:
 		summarizeList(&b, rs, "row", genericLine)
 	}
@@ -253,6 +258,73 @@ func incidentLine(r Row) string {
 	}
 	return s
 }
+
+// summarizeFlows says the ranking: the heaviest conversations or services,
+// each with its traffic, and the notes the read carried (the sampling basis,
+// the traffic left out).
+func summarizeFlows(b *strings.Builder, q *ast.AST, rs *ResultSet) {
+	noun := "conversation"
+	if len(q.GroupBy) == 1 && q.GroupBy[0] == ast.FlowGroupService {
+		noun = "service"
+	}
+	if len(rs.Rows) == 0 {
+		fmt.Fprintf(b, "No flow records match in this window.")
+		writeNotes(b, rs)
+		return
+	}
+	fmt.Fprintf(b, "The heaviest %s%s:", noun, plural(len(rs.Rows), "", "s"))
+	for i, r := range rs.Rows {
+		if i == summaryItems {
+			fmt.Fprintf(b, "\n… and %d more.", len(rs.Rows)-summaryItems)
+			break
+		}
+		b.WriteString("\n• " + flowLine(r))
+	}
+	writeNotes(b, rs)
+}
+
+func flowLine(r Row) string {
+	bytes, _ := r["bytes"].(float64)
+	flows, _ := r["flows"].(float64)
+	what := str(r["talker_a"]) + " ↔ " + str(r["talker_b"])
+	if svc := str(r["service"]); svc != "" || r["port"] != nil {
+		what = fmt.Sprintf("%s (port %v)", firstStr(svc, "service"), r["port"])
+	}
+	return fmt.Sprintf("%s — %s, %s flow%s", what, humanBytes(bytes), humanInt(flows), plural(int(flows), "", "s"))
+}
+
+func logLine(r Row) string {
+	var parts []string
+	if t, ok := r["time"].(time.Time); ok && !t.IsZero() {
+		parts = append(parts, t.UTC().Format("Jan 2 15:04 UTC"))
+	}
+	for _, k := range []string{"device", "severity"} {
+		if v := str(r[k]); v != "" {
+			parts = append(parts, v)
+		}
+	}
+	s := strings.Join(parts, " · ")
+	if sum := str(r["summary"]); sum != "" {
+		s += " — " + sum
+	}
+	return s
+}
+
+// humanBytes renders a byte count in binary units.
+func humanBytes(b float64) string {
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	i := 0
+	for b >= 1024 && i < len(units)-1 {
+		b /= 1024
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%.0f B", b)
+	}
+	return fmt.Sprintf("%.1f %s", b, units[i])
+}
+
+func humanInt(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
 
 func genericLine(r Row) string {
 	keys := make([]string, 0, len(r))

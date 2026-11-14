@@ -398,6 +398,58 @@ traceroute from customer devices):
   connections to vManage / vBond (stored per controller entity in
   `controller_state_current`, not yet mapped to inventory devices).
 
+**NetClaw ingestion Batch 3 (2026-11-13), the last batch.** Five methods, same
+pin, one new read-only tool and two new battery areas:
+
+- Tool: `get_probe_results` — the workspace's own synthetic probes (the DNS /
+  HTTP / TCP / ICMP checks declared in `internal/dem`) folded from the runs
+  Correlix's prober recorded: last result, recent success count, failure class
+  (the resolver did not answer / answered that the name does not exist / another
+  error), median duration and the number of probers. It never starts a probe or
+  resolves a name. §3a: one concrete workspace only, mirroring the DEM API (the
+  platform's All-tenants and Provider scopes read nothing and say probes are per
+  workspace; an operator-restricted workspace is unreachable) — test
+  `iris_probe_results_isolation_test.go`. Destinations that are addresses are
+  never shown; an HTTP destination is scheme and host only (a path or query can
+  carry a token). New `state:` facets declared by it: `probe`
+  (passing | partial | failing | none) and `dns`
+  (resolving | timeout | nxdomain | failing | none); an unmeasured, paused or
+  runner-errored probe declares nothing.
+- Battery areas `evpn` (VTEP peers, VNIs) and `redundancy` (HSRP / VRRP groups,
+  LACP members): every row doc_claimed — the vendor's documented read, no output
+  captured here, so raw evidence only and the methods say so. EVPN has no row on
+  classic IOS (no VXLAN EVPN) or SR OS (its VXLAN reads are per service id); the
+  battery's every-dialect test names both as known gaps.
+- New skill layer `analysis` for reasoning methods that are neither a fault layer
+  nor the entry method; it ranks last, and there is still exactly one entry method.
+- `dns-resolution` (layer services): the DNS probes first; resolver not
+  answering → the path to it (`path-seam-handoff`); names resolve → past name
+  resolution (`app-edge-5xx`); a resolver error → the log; a name that does not
+  exist stays here and names the record or zone change; no probe declared → said,
+  never inferred.
+- `scope-contrast` (layer analysis): what IS affected against the nearest
+  comparable thing that is NOT, the difference between them, and the change at
+  the moment it started — a generic contrast re-expressed in our own words (no
+  third-party method name or worksheet). The engine's boundary at a handoff →
+  `path-seam-handoff`; an undetermined engine → `osi-bisection`; no incident in
+  scope → the log.
+- `network-design-read` (layer analysis): `get_network_topology` with the Batch 0
+  design fields, then `get_active_major_incidents`; observed facts kept apart
+  from derived ones (overlay shape, single points of failure, likely functions);
+  uncollected redundancy is unknown, never missing; an active incident → a
+  `scope-contrast` of what it touched. "Explain the network topology" itself
+  stays on the planner's topology route (model answer over the same tool); this
+  method answers design-evaluation questions (single points of failure,
+  redundancy, "what if the circuit fails").
+- `evpn-vxlan-overlay` (layer wan_overlay, `applies_when: fact:role=dc_leaf|dc_spine`):
+  underlay before overlay; an interface in the verdict → `interface-down`, BGP →
+  `bgp-session-down` (EVPN routes ride it), an unread fabric → the log. Ruled out
+  on the lab's SD-WAN edges.
+- `fhrp-lag-redundancy` (layer l2): the groups and bundles first, the links
+  beneath them next; a link in the verdict → `interface-down`, MAC movement →
+  `mac-flap`, an unread device → the log.
+- Captures still needed are recorded in tracker 421.
+
 ### 3.4 Proactive checks and intent cross-reference — Phase A4
 - Map NetClaw's heartbeat list onto the engine: non-FULL OSPF / non-UP IS-IS
   (igpmon), BGP IDLE/ACTIVE (bgp watch), CPU/memory thresholds, config change in

@@ -26,6 +26,39 @@ describe("applyEvent", () => {
     expect(finishAll(steps).every((s) => s.state !== "active")).toBe(true);
   });
 
+  it("shows the routing decision, the investigation and a model switch", () => {
+    const steps = run([
+      { type: "planning" },
+      { type: "routing", outcome: "model" },
+      { type: "investigating" },
+      { type: "model_fallback" },
+      { type: "tool_started", tool: "get_network_topology" },
+      { type: "tool_finished", tool: "get_network_topology", outcome: "ok" },
+      { type: "grounding" },
+    ]);
+    expect(steps.map((s) => `${s.event}:${s.detail ?? ""}:${s.state}`)).toEqual([
+      "planning::done",
+      "routing_model::done",
+      // The investigation ends when its first lookup starts (a phase), and the
+      // switch to the backup model is a notice that never ends a phase.
+      "investigating::done",
+      "model_fallback::done",
+      "tool:the network topology:done",
+      "grounding::active",
+    ]);
+  });
+
+  it("ignores a routing event without the one closed outcome", () => {
+    const steps = run([{ type: "planning" }, { type: "routing", outcome: "<b>deterministic</b>" }, { type: "routing" }]);
+    expect(steps.map((s) => s.event)).toEqual(["planning"]);
+    expect(steps[0].state).toBe("active");
+  });
+
+  it("keeps the running step active across a model switch", () => {
+    const steps = run([{ type: "narrating" }, { type: "model_fallback" }]);
+    expect(steps.map((s) => `${s.event}:${s.state}`)).toEqual(["narrating:active", "model_fallback:done"]);
+  });
+
   it("never echoes an unknown tool or event", () => {
     const steps = run([{ type: "tool_started", tool: "<img src=x>" }, { type: "model_text" }, { type: "tool_finished", tool: "nope", outcome: "ok" }]);
     expect(steps).toHaveLength(1);

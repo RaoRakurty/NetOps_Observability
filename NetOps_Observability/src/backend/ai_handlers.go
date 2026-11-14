@@ -234,6 +234,9 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 	// The decision ledger (N-A6): from here on this question is one decision,
 	// and every seam below adds its steps through the request context.
 	r, rec := s.aiDecisionStart(r, claims, req)
+	// N-E2: the sink also rides the request context, for the seams outside the
+	// orchestrator — the agent loop's lookups and the provider chain's fallback.
+	r = r.WithContext(ai.WithTrace(r.Context(), trace))
 	orch := s.newOrchestrator(r, claims)
 	orch.Trace = trace
 	orch.ModelBudgets = aiModelBudgets() // never block a ready answer on a model

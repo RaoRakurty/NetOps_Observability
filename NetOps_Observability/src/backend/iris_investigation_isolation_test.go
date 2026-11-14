@@ -148,10 +148,13 @@ func TestInvestigationNeverBindsAnotherTenantsDevice(t *testing.T) {
 		t.Fatalf("CROSS-TENANT LEAK: t-b bound t-a's device: %v", target)
 	}
 	_ = a
+	// On /api/ai/ask the screen's subject is bound by N-E4 before the
+	// investigator runs (view_binding.go), so the disclosure is the view's.
 	disc, _ := out["disclaimers"].([]any)
 	said := false
 	for _, d := range disc {
-		if s, _ := d.(string); strings.Contains(s, "not in this workspace's inventory") {
+		s, _ := d.(string)
+		if strings.Contains(s, "isn't in your workspace's inventory") || strings.Contains(s, "not in this workspace's inventory") {
 			said = true
 		}
 	}

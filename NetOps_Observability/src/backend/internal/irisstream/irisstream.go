@@ -2,9 +2,10 @@
 // Copyright 2026 Correlix
 
 // Package irisstream writes an Iris answer's PROGRESS as Server-Sent Events
-// (tracker 337 N-E2): planning, tool started / finished (tool NAME only),
-// narrating, grounding — then the answer, exactly as the JSON path would send
-// it, and done.
+// (tracker 337 N-E2): planning, the routing decision, investigating, tool
+// started / finished (tool NAME only), a fallback to another model, narrating,
+// grounding — then the answer, exactly as the JSON path would send it, and
+// done.
 //
 // WHAT AN EVENT MAY CARRY is closed: a type from a fixed set, a registry tool
 // name that matches the tool-name shape, an outcome from a fixed set. Never
@@ -41,12 +42,24 @@ const (
 	TypeToolFinished = "tool_finished"
 	TypeNarrating    = "narrating"
 	TypeGrounding    = "grounding"
+	// TypeRouting is the routing decision; its one outcome is "model" (the
+	// question needs the model, grounded in the caller's data).
+	TypeRouting = "routing"
+	// TypeInvestigating: the bounded agent loop (AI investigations) started.
+	TypeInvestigating = "investigating"
+	// TypeModelFallback: a model did not answer; the next one is tried. It
+	// names no model — the answer's footnote names the one that answered.
+	TypeModelFallback = "model_fallback"
 )
 
-var progressTypes = map[string]bool{TypePlanning: true, TypeToolStarted: true, TypeToolFinished: true, TypeNarrating: true, TypeGrounding: true}
+var progressTypes = map[string]bool{
+	TypePlanning: true, TypeToolStarted: true, TypeToolFinished: true, TypeNarrating: true, TypeGrounding: true,
+	TypeRouting: true, TypeInvestigating: true, TypeModelFallback: true,
+}
 
-// Outcomes a tool_finished may carry (closed; anything else is sent empty).
-var outcomes = map[string]bool{"ok": true, "denied": true, "not_wired": true, "not_found": true, "error": true, "skipped": true}
+// Outcomes an event may carry (closed; anything else is sent empty): a
+// tool_finished's result, or "model" on a routing event.
+var outcomes = map[string]bool{"ok": true, "denied": true, "not_wired": true, "not_found": true, "error": true, "skipped": true, "model": true}
 
 var toolName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 

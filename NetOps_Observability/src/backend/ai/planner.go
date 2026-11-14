@@ -358,7 +358,9 @@ func (o *Orchestrator) planRoute(ctx context.Context, p Principal, question stri
 			o.ToolAudit(ToolAuditEntry{Tool: PlannerTool, Allowed: true, Reason: reason, Selected: ChainSelectedModel})
 		}
 	}()
-	key := plannerCacheKey(p, question, pageKnown)
+	// What is in view (N-E4) is part of the key: "why is this down?" on a
+	// device page is not the same decision as on the overview.
+	key := plannerCacheKey(p, question, pageKnown) + "\x00" + o.view.cacheKey()
 	if ch, hit := o.PlanCache.get(key, time.Now()); hit {
 		reason = PlannerCached
 		return ch, true, nil

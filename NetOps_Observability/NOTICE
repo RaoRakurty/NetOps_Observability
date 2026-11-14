@@ -81,6 +81,22 @@ the tunnel inventory and the measured paths) are this project's own collectors;
 nothing is pinged or traced from a customer device. "NetClaw" is named for
 attribution only.
 
+NetClaw ingestion Batch 3 (2026-11-13), same pin, same terms:
+
+  Skills  : kepner-tregoe-network-troubleshooting (domain signatures)
+                                  -> dns-resolution
+            kepner-tregoe-network-troubleshooting -> scope-contrast
+            pyats-topology, topolograph-igp-analysis -> network-design-read
+            evpn-vxlan-fabric     -> evpn-vxlan-overlay
+            pyats-topology, pyats-junos-interfaces -> fhrp-lag-redundancy
+
+The upstream skill directories are named above for attribution only. The
+affected-versus-unaffected contrast in scope-contrast is a generic reasoning
+idea re-expressed in this project's own words; no third-party method name,
+worksheet or template is reproduced. The synthetic-probe read behind
+dns-resolution, and the EVPN and redundancy command rows (documentation-only,
+no parser until output is captured on a real device), are this project's own.
+
 --------------------------------------------------------------------------------
 elkjs — Eclipse Public License 2.0
 --------------------------------------------------------------------------------
