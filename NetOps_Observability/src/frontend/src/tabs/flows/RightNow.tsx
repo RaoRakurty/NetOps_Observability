@@ -211,7 +211,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
         )}
         {links.some((l) => directionNote(l, "in") || directionNote(l, "out")) && (
           <p className="mini-meta tr-note" data-testid="links-reads-low">
-            ≈ marks a figure that reads low: some of that router's flow records name no interface for that direction. Hover a figure for the share.
+            ≈ reads low: some records name no interface. Hover for the share.
           </p>
         )}
       </div>

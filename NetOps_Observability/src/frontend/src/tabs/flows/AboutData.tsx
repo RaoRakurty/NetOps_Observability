@@ -97,7 +97,7 @@ export default function AboutData({ open, onClose, since, includePlatform, onInc
             </section>
 
             <section>
-              <h3>How the numbers are made</h3>
+              <h3>How we count</h3>
               <ul className="tr-facts" data-testid="about-method">
                 <li>Flow totals are scaled by the sampling rate a router reports, and by nothing else. A router that samples without saying so reads low.</li>
                 <li>A link's traffic comes from the router's own records: "in" entered the device on that interface, "out" left on it. A figure marked ≈ reads low because some records name no interface.</li>

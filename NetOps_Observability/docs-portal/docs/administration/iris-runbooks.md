@@ -36,7 +36,7 @@ Iris refuses a runbook, and says which rule it broke, if it names a tool that is
 
 ### 2. Check it and send it for review
 
-Your draft is listed under **Check and send for review**.
+Your draft is listed under **Check and submit**.
 
 - **Run its cases** runs the test cases now and changes nothing. If a case fails, the page lists each case and what went wrong.
 - **Send for review** runs the cases again and, only if they pass, sends the runbook for review. From then on the text is frozen; **Take back to edit** returns it to a draft.
