@@ -495,4 +495,30 @@ describe("micro-interactions and context (design §10–12)", () => {
     expect(chip(), "no chip when the location names no real page").toBeNull();
     window.location.hash = "";
   });
+
+  // N-E4: what the page registered as in view is shown beside the page, so
+  // the operator sees what "this" will mean; it goes when the page clears it.
+  it("the context chip shows what is in view and clears with it", async () => {
+    const vc = await import("../iris/viewContext");
+    vc.resetIrisViewForTest();
+    render(<Harness />);
+    fireEvent.click(launcher());
+    expect(screen.queryByTestId("iris-view-chip")).toBeNull();
+    act(() => vc.setIrisView({ kind: "device", id: "dev-1", label: "cEdge-80" }));
+    expect(screen.getByTestId("iris-view-chip").textContent).toBe("Device · cEdge-80");
+    expect(screen.getByText("Asking about")).toBeTruthy();
+    act(() => vc.setIrisView(null));
+    expect(screen.queryByTestId("iris-view-chip")).toBeNull();
+  });
+
+  // An entry point's question ("Ask Iris about this device") opens the panel
+  // and is handed to the content as a free question (no topic).
+  it("an entry point's free question opens Iris and reaches the content", async () => {
+    const { askIrisAbout } = await import("./AskIris");
+    const before = probe.asks.length;
+    render(<Harness initial={{ mode: "closed", lastOpen: "docked", beforeExpand: "floating", width: 520, owner: OWNER }} />);
+    act(() => askIrisAbout("Is this device healthy right now?"));
+    expect(current.mode).toBe("docked");
+    expect(probe.asks.slice(before)).toEqual([""]);
+  });
 });

@@ -123,3 +123,78 @@ func TestCancellingTheRequestStopsTheAnswer(t *testing.T) {
 		t.Fatalf("a cancelled read reported ok: %v", rec.seq())
 	}
 }
+
+// A question the deterministic arms cannot cover shows the routing decision
+// first (routing=model), then the model's work; a covered one shows none.
+func TestModelRoutedQuestionTracesTheRoutingDecision(t *testing.T) {
+	o := &Orchestrator{DS: newMockDS(), LLM: &captureLLM{reply: "x [scope:caller]"}, Flags: func(string) bool { return true },
+		Scope: &ScopeFacts{TenantID: "t-a"}}
+	rec := &traceRec{}
+	o.Trace = rec
+	if _, err := o.Ask(context.Background(), tenantA(), "explain the network topology", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(rec.seq(), " ")
+	r, n := strings.Index(got, "routing=model"), strings.Index(got, "narrating")
+	if strings.Index(got, "planning") != 0 || r < 0 || n < 0 || r > n {
+		t.Fatalf("want planning … routing=model … narrating, got %s", got)
+	}
+	if strings.Count(got, "routing") != 1 {
+		t.Fatalf("one routing decision per answer: %s", got)
+	}
+
+	covered := newOrch(newMockDS())
+	crec := &traceRec{}
+	covered.Trace = crec
+	if _, err := covered.Ask(context.Background(), tenantA(), "explain this", map[string]string{"correlation_id": "pa"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(crec.seq(), " "), "routing") {
+		t.Fatalf("a covered question must not claim it went to the model: %v", crec.seq())
+	}
+}
+
+// The agent loop's handoff to the model emits routing before the loop runs.
+func TestAgentPathTracesRoutingBeforeTheLoop(t *testing.T) {
+	o := &Orchestrator{DS: newMockDS(), LLM: &captureLLM{reply: "x"}, Flags: func(string) bool { return true },
+		Scope: &ScopeFacts{TenantID: "t-a"}}
+	rec := &traceRec{}
+	o.Trace = rec
+	o.AgentAnswer = func(ctx context.Context, _ Principal, _ string, _ []string) (Answer, error) {
+		EmitTrace(ctx, TraceEvent{Type: TraceInvestigating}) // ctx carries no sink here: a no-op
+		rec.Trace(TraceEvent{Type: TraceInvestigating})
+		return Answer{Mode: ModeModelAnswer, Text: "from the tools"}, nil
+	}
+	if _, err := o.Ask(context.Background(), tenantA(), "explain the network topology", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(rec.seq(), " ")
+	if !strings.Contains(got, "routing=model investigating") {
+		t.Fatalf("routing must precede the investigation: %s", got)
+	}
+	if strings.Count(got, "investigating") != 1 {
+		t.Fatalf("EmitTrace on a sink-less ctx must be a no-op: %s", got)
+	}
+}
+
+// The context carrier: nil-safe both ways, and the sink comes back out.
+func TestTraceRidesTheContext(t *testing.T) {
+	if TraceFrom(context.Background()) != nil {
+		t.Fatal("a plain context carries no sink")
+	}
+	var nilCtx context.Context
+	if TraceFrom(nilCtx) != nil {
+		t.Fatal("a nil context carries no sink")
+	}
+	base := context.Background()
+	if WithTrace(base, nil) != base {
+		t.Fatal("a nil sink must leave the context unchanged")
+	}
+	rec := &traceRec{}
+	ctx := WithTrace(base, rec)
+	EmitTrace(ctx, TraceEvent{Type: TraceModelFallback})
+	EmitTrace(base, TraceEvent{Type: TraceModelFallback}) // no sink: no-op
+	if got := rec.seq(); len(got) != 1 || got[0] != "model_fallback" {
+		t.Fatalf("got %v", got)
+	}
+}

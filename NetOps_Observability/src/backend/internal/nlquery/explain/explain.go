@@ -132,8 +132,13 @@ func (x explainer) what(q *ast.AST) string {
 		return fmt.Sprintf("Counts the %s you can see.", t)
 	case ast.EntityList:
 		return fmt.Sprintf("Lists the %s you can see.", t)
-	case ast.FlowTop, ast.LogSearch:
-		return fmt.Sprintf("A %s question — this kind of query is not supported yet.", strings.ReplaceAll(string(q.Type), "_", " "))
+	case ast.FlowTop:
+		if len(q.GroupBy) == 1 && q.GroupBy[0] == ast.FlowGroupService {
+			return fmt.Sprintf("Ranks the busiest destination services by flow traffic and lists the top %d.", q.LimitOr(validate.DefaultFlowTop))
+		}
+		return fmt.Sprintf("Ranks the heaviest conversations by flow traffic and lists the top %d.", q.LimitOr(validate.DefaultFlowTop))
+	case ast.LogSearch:
+		return "Lists the newest device syslog lines matching the severity and topic asked for (routine management sessions left out)."
 	}
 	return fmt.Sprintf("A %q query.", string(q.Type))
 }

@@ -50,6 +50,21 @@ test("a broken stream falls back to the plain ask once and still answers", async
   expect(fake.asks).toHaveLength(2);
 });
 
+test("routing, investigation and a model switch stream through to the same answer", async ({ page }) => {
+  const fake = await boot(page, () => ({
+    events: [
+      { type: "planning" }, { type: "routing", outcome: "model" }, { type: "investigating" }, { type: "model_fallback" },
+      { type: "tool_started", tool: "get_network_topology" }, { type: "tool_finished", tool: "get_network_topology", outcome: "ok" },
+      // A routing outcome outside the closed set is ignored, never shown.
+      { type: "routing", outcome: "<b>owned</b>" }, { type: "grounding" },
+    ],
+  }));
+  await askIris(page, "top 3 devices by cpu in the last hour");
+  await expect(answers(page).last().locator(".op-text").first()).toContainText("Cpu — 3 results");
+  await expect(drawer(page).getByText("owned")).toHaveCount(0);
+  expect(fake.asks).toHaveLength(1);
+});
+
 test("hostile event and tool names never reach the screen", async ({ page }) => {
   await boot(page, () => ({ events: [{ type: XSS_IMG }, { type: "tool_started", tool: XSS_IMG }, { type: "tool_started", tool: "<b>owned</b>" }] }));
   await askIris(page, "top 3 devices by cpu in the last hour");

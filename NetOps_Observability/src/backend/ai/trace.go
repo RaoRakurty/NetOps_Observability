@@ -3,6 +3,8 @@
 
 package ai
 
+import "context"
+
 // trace.go — operational progress of one answer (tracker 337 N-E2): what the
 // engine is DOING, never what it has found. The server streams these to the
 // Iris panel while the answer is built.
@@ -21,7 +23,20 @@ const (
 	TraceToolFinished TraceType = "tool_finished"
 	TraceNarrating    TraceType = "narrating" // a model call that writes the answer started (no text)
 	TraceGrounding    TraceType = "grounding" // the answer's citations are being verified
+	// TraceRouting: the routing decision. Its Outcome is "model" — the
+	// question needs the model (grounded in the caller's data). A question
+	// the deterministic arms cover emits none: its tools say what it does.
+	TraceRouting TraceType = "routing"
+	// TraceInvestigating: the bounded agent loop (AI investigations) started.
+	TraceInvestigating TraceType = "investigating"
+	// TraceModelFallback: the configured model did not answer and the
+	// provider's fallback model is being tried. No model name: the answer's
+	// footnote names the model that answered.
+	TraceModelFallback TraceType = "model_fallback"
 )
+
+// RouteModel is the one Outcome a TraceRouting event carries.
+const RouteModel = "model"
 
 // TraceEvent is one progress step.
 type TraceEvent struct {
@@ -55,6 +70,34 @@ func emitTrace(s TraceSink, e TraceEvent) {
 	if s != nil {
 		s.Trace(e)
 	}
+}
+
+// traceCtxKey carries a request's progress sink through context, for the
+// seams outside the orchestrator that cannot take it as a field: the server's
+// agent loop (tool calls, grounding) and its provider chain (fallback model).
+type traceCtxKey struct{}
+
+// WithTrace returns ctx carrying s (nil s returns ctx unchanged).
+func WithTrace(ctx context.Context, s TraceSink) context.Context {
+	if s == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, traceCtxKey{}, s)
+}
+
+// TraceFrom returns the sink ctx carries, or nil. A nil sink is a no-op for
+// EmitTrace and for Toolbox.Trace, so callers need no check.
+func TraceFrom(ctx context.Context) TraceSink {
+	if ctx == nil {
+		return nil
+	}
+	s, _ := ctx.Value(traceCtxKey{}).(TraceSink) // discard: absent = no sink, the documented nil
+	return s
+}
+
+// EmitTrace sends e to the sink ctx carries (none = no-op).
+func EmitTrace(ctx context.Context, e TraceEvent) {
+	emitTrace(TraceFrom(ctx), e)
 }
 
 // trace emits on the orchestrator's sink (nil = no-op).

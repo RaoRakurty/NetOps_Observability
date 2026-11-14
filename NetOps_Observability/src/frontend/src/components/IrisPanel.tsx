@@ -47,6 +47,7 @@ import Iris from "../tabs/Iris";
 import Icon from "./Icon";
 import { IRIS_ASK_EVENT, type IrisAskDetail } from "./AskIris";
 import { currentPageLabel } from "../iris/pageRoute";
+import { useCurrentIrisView, viewChipLabel } from "../iris/viewContext";
 import {
   DOCK_MIN_W,
   DOCK_STEP_W,
@@ -299,10 +300,13 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
     let seq = 0;
     const onAsk = (e: Event) => {
       const d = (e as CustomEvent<IrisAskDetail>).detail;
-      if (!d?.topic?.trim()) return;
+      const topic = d?.topic?.trim() ?? "";
+      // A topic is an authored definition; no topic + a question is an entry
+      // point's question about the screen (askIrisAbout, N-E4).
+      if (!topic && !d?.question?.trim()) return;
       seq += 1;
       dispatch({ type: "open" });
-      setPendingAsk({ topic: d.topic.trim(), question: d.question, seq });
+      setPendingAsk({ topic, question: d.question, seq });
     };
     window.addEventListener(IRIS_ASK_EVENT, onAsk);
     return () => window.removeEventListener(IRIS_ASK_EVENT, onAsk);
@@ -328,14 +332,19 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   // (iris/pageRoute.ts), nothing else. Keyed by the page so the chip animates
   // in when the page changes and stays still while it does not.
   const pageLabel = usePageLabel();
+  // What the page registered as in view (iris/viewContext.ts, N-E4): the
+  // incident or device a question about "this" will mean. The server checks
+  // it again; this chip only shows the operator what rides along.
+  const viewLabel = viewChipLabel(useCurrentIrisView());
   const context = useMemo(
-    () => (pageLabel ? (
+    () => (pageLabel || viewLabel ? (
       <div className="iris-context">
-        <span className="iris-context-label">Current page</span>
-        <span key={pageLabel} className="iris-context-chip" title={pageLabel}>{pageLabel}</span>
+        <span className="iris-context-label">{viewLabel ? "Asking about" : "Current page"}</span>
+        {pageLabel && <span key={pageLabel} className="iris-context-chip" title={pageLabel}>{pageLabel}</span>}
+        {viewLabel && <span key={viewLabel} className="iris-context-chip" data-testid="iris-view-chip" title={viewLabel}>{viewLabel}</span>}
       </div>
     ) : null),
-    [pageLabel],
+    [pageLabel, viewLabel],
   );
 
   // A citation is taking the operator to another page. Docked, Iris stays

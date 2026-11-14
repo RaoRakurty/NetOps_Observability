@@ -284,3 +284,50 @@ func TestAskHandsTheQuestionToTheContextRanker(t *testing.T) {
 		t.Fatalf("the context ranker must see the question, got %q", got)
 	}
 }
+
+// The investigator's runbook retrieval (N-I1 step 4) also takes the tenant's
+// approved runbooks whose text matches the question, through the gateway —
+// and only names present in the caller's own skill set, never a compiled
+// method that happens to share a retrieved name.
+func TestInvestigationRetrievesMatchingRunbooks(t *testing.T) {
+	runbook := invSkill("edge-uplink-check", LayerBGP, SkillOriginTenant, gatherAnoms)
+	set := invSet(runbook, invSkill("bgp-session-down", LayerBGP, SkillOriginCompiled, gatherAnoms))
+	o, audit := invOrch(t, MockLLM{Reply: "edge-1 health read [health:dev-a]."}, set)
+	o.Tools.add(workspaceKnowledgeTool{deps: TroubleshootDeps{
+		WorkspaceKnowledge: func(_ context.Context, p Principal, layers []KnowledgeLayer) (KnowledgeCorpus, error) {
+			if p.Tenant != "t-a" || len(layers) != 1 || layers[0] != LayerRunbook {
+				t.Errorf("retrieval asked for tenant %q layers %v", p.Tenant, layers)
+			}
+			return KnowledgeCorpus{Scoped: true, Tenant: "t-a", Docs: []KnowledgeDoc{
+				kbRunbook("rb-1", "t-a", "edge-uplink-check", "edge-1 uplink errors or bgp flaps on the edge", day),
+				kbRunbook("rb-2", "t-a", "ghost-runbook", "edge-1 uplink errors and bgp flaps", day),        // not in the skill set
+				kbRunbook("rb-3", "t-a", "osi-bisection", "edge-1 uplink errors bgp flaps osi layers", day), // a compiled name
+			}}, nil
+		}}})
+	ans := o.Investigate(context.Background(), runPrincipal(), "edge-1 uplink errors and bgp flaps",
+		map[string]string{"device": "edge-1"}, DefaultInvestigationBudget())
+	tr := ans.Investigation
+	var found bool
+	for _, c := range tr.Candidates {
+		switch {
+		case c.Skill == "edge-uplink-check" && c.Source == InvSourceRunbookRetrieved:
+			found = true
+		case c.Skill == "ghost-runbook":
+			t.Errorf("a retrieved name outside the caller's skill set became a candidate")
+		case c.Skill == "osi-bisection" && c.Source == InvSourceRunbookRetrieved:
+			t.Errorf("a compiled method was taken as a retrieved runbook")
+		}
+	}
+	if !found {
+		t.Fatalf("candidates = %+v, want the matching runbook retrieved", tr.Candidates)
+	}
+	var audited bool
+	for _, e := range *audit {
+		if e.Tool == "search_workspace_knowledge" {
+			audited = true
+		}
+	}
+	if !audited {
+		t.Fatal("the retrieval must be audited like every investigation read")
+	}
+}

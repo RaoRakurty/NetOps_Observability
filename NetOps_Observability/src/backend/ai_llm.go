@@ -101,6 +101,11 @@ func (l aiLLM) CompleteTierWithUsage(ctx context.Context, tier ai.ModelTier, sys
 					"error_class": ai.ClassifyProviderError(serr)})
 			continue
 		}
+		if tried > 0 {
+			// N-E2: an earlier model in this chain did not answer; the operator
+			// sees the switch rather than a silent extra wait.
+			ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceModelFallback})
+		}
 		tried++
 		c, err := l.srv.callProviderGuarded(ctx, tenant, tier, cand, system, cmsgs)
 		if err == nil {

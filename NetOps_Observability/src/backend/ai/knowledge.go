@@ -481,6 +481,11 @@ func RenderKnowledge(c KnowledgeCorpus, q string, layers []KnowledgeLayer, now t
 	}
 	for _, h := range r.Hits {
 		tr.Items = append(tr.Items, knowledgeItem(h))
+		// The runbook's NAME as a machine fact, so the investigator can turn
+		// a retrieved runbook into a candidate without re-parsing the text.
+		if h.Doc.Layer == LayerRunbook && reRunbookName.MatchString(h.Doc.Title) {
+			tr.Signals = append(tr.Signals, KnowledgeRunbookSignal+"="+h.Doc.Title)
+		}
 	}
 	tr.Notes = append(tr.Notes,
 		"these items are the workspace's own RECORDED knowledge — approved runbooks and closed incidents — never current state and never proof of the present cause; read the live state before relying on one",
@@ -557,6 +562,39 @@ func (o *Orchestrator) knowledgeEvidence(ctx context.Context, p Principal, quest
 		}
 		sc.stamp(it, tool)
 		out = append(out, it)
+	}
+	return out
+}
+
+// KnowledgeRunbookSignal is the signal key naming a retrieved runbook.
+const KnowledgeRunbookSignal = "knowledge:runbook"
+
+// reRunbookName is the shape a runbook name must have to travel as a signal.
+var reRunbookName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,79}$`)
+
+// retrievedRunbookNames runs search_workspace_knowledge over the runbook
+// layer through the Toolbox (policy, contract, audit) and returns the names
+// of the approved runbooks that match the question, best first. Nothing when
+// the tool is not wired, not permitted, failed, or matched nothing.
+func (o *Orchestrator) retrievedRunbookNames(ctx context.Context, p Principal, question string) []string {
+	if strings.TrimSpace(question) == "" {
+		return nil
+	}
+	const tool = "search_workspace_knowledge"
+	args := ToolArgs{"query": truncateRunes(question, maxKnowledgeQueryChars), "layer": string(LayerRunbook)}
+	iv := o.Toolbox().Invoke(ctx, p, tool, args)
+	if !iv.Registered {
+		return nil
+	}
+	o.auditInvocation(tool, args, iv)
+	if !iv.OK() {
+		return nil
+	}
+	var out []string
+	for _, s := range iv.Result.Signals {
+		if name, ok := strings.CutPrefix(s, KnowledgeRunbookSignal+"="); ok && reRunbookName.MatchString(name) {
+			out = append(out, name)
+		}
 	}
 	return out
 }
