@@ -331,7 +331,7 @@ work is now tools and data, never another phrase rule.
 
 The corpus is `docs/ai/golden-examples/planner-paraphrases.json`: about 20 model-written,
 reviewed phrasings for each planner route (typos, abbreviations, indirect wording), plus
-module items. It is never regenerated in CI. Three tests read it:
+module items. It is never regenerated in CI. The `data` route carries 20 more for N-S3 ("what changed before every X incident", "which changes caused incidents"; 2026-11-14), each of which the deterministic grammar compiles (`TestEveryS3ParaphraseCompilesDeterministically`). Three tests read it:
 
 | Test | What it asserts |
 |---|---|

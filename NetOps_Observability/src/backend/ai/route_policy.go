@@ -183,7 +183,7 @@ func (o *Orchestrator) compoundCoverage(ctx context.Context, p Principal, parts 
 			if inv, err := o.Inventory(ctx, p); err == nil {
 				pa.text, pa.ok = discoveryAnswer(inv), true
 			}
-		case o.NLQuery != nil && pl.Intent != "problem_explanation" && !diagnosticCue.MatchString(part) && !listingCue.MatchString(part):
+		case o.NLQuery != nil && pl.Intent != "problem_explanation" && !asksDiagnosis(part) && !listingCue.MatchString(part):
 			// The grammar only: a part is never worth a model compile on its own.
 			if d, err := o.NLQuery(ctx, p, part, DataOpts{ClassicIntent: pl.Intent}); err == nil && d.Status == DataAnswered {
 				pa.text, pa.data, pa.ok = d.Text, d, true

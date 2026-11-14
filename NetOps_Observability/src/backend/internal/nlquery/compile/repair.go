@@ -33,6 +33,8 @@ import (
 // missing here (or in the other sources), so a word the grammar reads can
 // never be "corrected" into another.
 var grammarWords = []string{
+	// N-S3 causal change phrasings (causalChangesRe, causedFollowRe).
+	"behind", "broke", "came", "lead", "might", "preceded", "preceding", "tied", "trigger", "triggered",
 	"above", "below", "under", "over", "exceeds", "exceed", "greater", "higher", "lower", "least", "less",
 	"percent", "milliseconds", "millisecond", "confidence", "grouped", "group", "broken", "break", "each",
 	"unusual", "abnormal", "normal", "baseline", "anomalous", "elevated", "high", "losing", "dropping",

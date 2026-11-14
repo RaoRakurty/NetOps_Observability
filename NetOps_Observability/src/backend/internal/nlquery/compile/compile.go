@@ -910,9 +910,30 @@ var (
 	listLimitRe = regexp.MustCompile(`\b(?:the\s+)?(?:(\d{1,3})\s+most recent|most recent\s+(\d{1,3})|last\s+(\d{1,3})|latest\s+(\d{1,3})|(\d{1,3})\s+latest)\b`)
 	actorRe     = regexp.MustCompile(`\b(?:by|did|made by|changes? by|from)\s+([a-z][a-z0-9._-]{1,30})(?:\s+(?:or|and)\s+([a-z][a-z0-9._-]{1,30}))?\b`)
 	changeIDRe  = regexp.MustCompile(`\bchange\s+([a-z]{2,6}-\d{1,9})\b`)
-	everyIncRe  = regexp.MustCompile(`\b(\d{1,3})\s*(minutes?|mins?|hours?)\s+before\s+(?:every|each|all)\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents?|outages?)\b`)
-	notTypeRe   = regexp.MustCompile(`\bnon[- ]?(dns|config|cloud|security|route|routing|network)\b`)
-	actorWords  = map[string]bool{"type": true, "site": true, "actor": true, "person": true, "seam": true, "device": true, "owner": true,
+	everyIncRe  = regexp.MustCompile(`\b(\d{1,3})\s*(minutes?|mins?|m|hours?|hrs?|h)\s+(?:right\s+|just\s+)?before\s+(?:every|each|all)\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents?|outages?)\b`)
+	// beforeIncRe: "before every / each / all X incidents" or "before the X
+	// incidents" (plural) with no number next to it — the window is read by
+	// windowWords. Groups 1 and 2 are the seam class word.
+	beforeIncRe = regexp.MustCompile(`\bbefore\s+(?:(?:every|each|all)\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents?|outages?)|the\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents|outages))\b`)
+	// forEachIncRe + priorWindowRe: "for each sdwan incident this week, what
+	// changed in the prior 30 minutes".
+	forEachIncRe  = regexp.MustCompile(`\b(?:for|across|in)\s+(?:every|each|all)\s+(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents?|outages?)\b`)
+	priorWindowRe = regexp.MustCompile(`\b(?:the\s+)?(?:prior|previous|preceding)\s+(\d{1,3})\s*(minutes?|mins?|m|hours?|hrs?|h)\b`)
+	halfHourRe    = regexp.MustCompile(`\b(?:the\s+)?half(?:\s+an?)?\s+hour\b`)
+	anHourRe      = regexp.MustCompile(`\b(?:an?|one)\s+hour\b`)
+	windowNumRe   = regexp.MustCompile(`\b(\d{1,3})\s*(minutes?|mins?|m|hours?|hrs?|h)\b`)
+	// perIncidentFraming: connective words of the per-incident phrasings.
+	perIncidentFraming = regexp.MustCompile(`\b(?:made|happened|came|right|just|were there|was there|who|what|pull up)\b`)
+	// causalChangesRe: a change list asked in causal words, over SEVERAL
+	// incidents (plural or a quantifier) — "which changes caused incidents",
+	// "changes that led to sdwan outages", "changes behind every incident".
+	// Group 1 is the seam class word, as in everyIncRe.
+	causalChangesRe = regexp.MustCompile(`\bchanges?\b(?:\s+\w+){0,4}?\s+(?:caus(?:e|ed|ing)|led to|lead(?:ing)? to|behind|linked to|tied to|related to|preceded|triggered|broke)\s+(?:any\s+|the\s+|those\s+|these\s+|every\s+|each\s+|all\s+|our\s+)?(sdwan|vpn|cloud|wan|isp|internet|dia)?\s*(?:incidents|outages|problems|(?:every|each|any|all)\s+(?:incident|outage))\b`)
+	// causedFollowRe: "did any of those changes cause incidents?" — over the
+	// PRIOR change list (followUp).
+	causedFollowRe = regexp.MustCompile(`^(?:so\s+)?(?:did|do|have|has|were|was|could|can|might)?\s*(?:any|all|some|one)?\s*(?:of\s+)?(?:those|these|them|the|that|this|it|they|he|she)?\s*(?:changes?\s+)?(?:have\s+|been\s+)?(?:cause|caused|causing|lead to|led to|trigger|triggered|break|broke|linked to|tied to|behind)\s+(?:any\s+|an\s+)?(?:incidents?|outages?|problems?|issues?)\b`)
+	notTypeRe      = regexp.MustCompile(`\bnon[- ]?(dns|config|cloud|security|route|routing|network)\b`)
+	actorWords     = map[string]bool{"type": true, "site": true, "actor": true, "person": true, "seam": true, "device": true, "owner": true,
 		"they": true, "he": true, "she": true, "him": true, "her": true, "them": true, "it": true, "someone": true, "anyone": true, "you": true, "we": true, "i": true}
 )
 
@@ -1035,31 +1056,99 @@ func (s *state) isKnownWord(w string) bool {
 // changesAroundEveryIncident answers "what changed 30 minutes before every
 // SD-WAN incident this week".
 func (s *state) changesAroundEveryIncident() (Result, bool) {
-	m := everyIncRe.FindStringSubmatch(s.text)
-	if m == nil {
+	before, seam, ok := s.perIncidentWindow()
+	if !ok {
 		return Result{}, false
-	}
-	s.e.phrase(m[0])
-	unit := "m"
-	if strings.HasPrefix(m[2], "h") {
-		unit = "h"
 	}
 	set := &ast.IncidentSet{Time: s.time}
 	if set.Time.Kind == "" {
 		set.Time = ast.TimeRange{Kind: ast.TimeRelative, Last: "7d"}
 	}
-	if m[3] != "" {
-		v := map[string]string{"internet": "isp", "dia": "isp"}[m[3]]
+	if seam != "" {
+		v := map[string]string{"internet": "isp", "dia": "isp"}[seam]
 		if v == "" {
-			v = m[3]
+			v = seam
 		}
 		set.Filters = []ast.Filter{{Field: "seam_class", Op: "eq", Values: []string{v}}}
 	}
 	s.e.re(changeWords, s.text)
+	s.e.re(perIncidentFraming, s.text)
 	q := &ast.AST{V: 1, Type: ast.ChangeList, Target: "change",
-		Time:    ast.TimeRange{Kind: ast.TimeIncidents, Anchor: &ast.Anchor{Incidents: set, Before: m[1] + unit, After: "1m"}},
+		Time:    ast.TimeRange{Kind: ast.TimeIncidents, Anchor: &ast.Anchor{Incidents: set, Before: before, After: "1m"}},
 		OrderBy: []ast.OrderKey{{Field: "event_at", Dir: "desc"}}}
+	// "Which CONFIG changes caused incidents": the change-type words narrow
+	// the changes, exactly as on the plain change list.
+	if f := s.changeTypeFilter(); f != nil && !notTypeRe.MatchString(s.text) {
+		q.Filters = append(q.Filters, *f)
+	}
 	return Result{Intent: "list_changes", AST: q}, true
+}
+
+// perIncidentWindow reads "what changed N before every X incident" in its
+// forms and returns the window before each incident and the seam class word.
+// The number may be "30 minutes", "30m", "an hour" or "half an hour"; with no
+// number the window is 30 minutes. A SINGLE incident ("before this incident")
+// is never this query: it is the one-incident anchor.
+func (s *state) perIncidentWindow() (before, seam string, ok bool) {
+	if m := everyIncRe.FindStringSubmatch(s.text); m != nil {
+		s.e.phrase(m[0])
+		return durationToken(m[1], m[2]), m[3], true
+	}
+	if m := beforeIncRe.FindStringSubmatch(s.text); m != nil {
+		s.e.phrase(m[0])
+		return s.windowWords(), firstNonEmpty(m[1], m[2]), true
+	}
+	if m := forEachIncRe.FindStringSubmatch(s.text); m != nil {
+		if p := priorWindowRe.FindStringSubmatch(s.text); p != nil {
+			s.e.phrase(m[0])
+			s.e.phrase(p[0])
+			return durationToken(p[1], p[2]), m[1], true
+		}
+	}
+	// "Which changes caused incidents this week", "changes linked to
+	// sd-wan outages": the causal phrasing asks the same question with the
+	// default window. The answer keeps correlated and causal apart
+	// (plan/chain.go) — the grammar never decides cause.
+	if c := causalChangesRe.FindStringSubmatch(s.text); c != nil {
+		s.e.phrase(c[0])
+		return s.windowWords(), c[1], true
+	}
+	return "", "", false
+}
+
+// windowWords reads a window length said in words anywhere in the question
+// ("an hour", "half an hour", "45 minutes"); 30 minutes when none is said.
+func (s *state) windowWords() string {
+	if m := halfHourRe.FindString(s.text); m != "" {
+		s.e.phrase(m)
+		return "30m"
+	}
+	if m := anHourRe.FindString(s.text); m != "" {
+		s.e.phrase(m)
+		return "1h"
+	}
+	if m := windowNumRe.FindStringSubmatch(s.text); m != nil {
+		s.e.phrase(m[0])
+		return durationToken(m[1], m[2])
+	}
+	return "30m"
+}
+
+// durationToken turns "45" + "minutes" into the AST's "45m" ("2" + "hrs" → "2h").
+func durationToken(n, unit string) string {
+	if strings.HasPrefix(unit, "h") {
+		return n + "h"
+	}
+	return n + "m"
+}
+
+func firstNonEmpty(xs ...string) string {
+	for _, x := range xs {
+		if x != "" {
+			return x
+		}
+	}
+	return ""
 }
 
 func (s *state) changeTypeFilter() *ast.Filter {
@@ -1223,6 +1312,33 @@ func (c Compiler) followUp(ctx context.Context, text string, cx Context) (Result
 		}
 		q.OrderBy, q.Limit = []ast.OrderKey{{Field: "delta", Dir: "desc"}}, 10
 		return Result{Intent: "compare_windows", AST: q}, true, nil
+	case causedFollowRe.MatchString(text):
+		// "Did any of those changes cause incidents?" over a change list: the
+		// same changes, now set against every incident that followed them
+		// (N-S3). Each change is placed in the window before an incident; the
+		// planner labels it correlated, or same-kind-as-a-chain-step — the
+		// grammar never decides cause.
+		if q.Type != ast.ChangeList {
+			return Result{}, false, nil
+		}
+		if q.Time.Kind != ast.TimeIncidents {
+			set := &ast.IncidentSet{Time: q.Time}
+			switch set.Time.Kind {
+			case "":
+				set.Time = ast.TimeRange{Kind: ast.TimeRelative, Last: "24h"}
+			case ast.TimeAbsolute:
+				// An incident up to the window length after the last change
+				// still counts: widen the incident set's end by that much.
+				if set.Time.To != nil {
+					widened := set.Time.To.Add(30 * time.Minute)
+					set.Time.To = &widened
+				}
+			case ast.TimeIncident:
+				return Result{}, false, nil // already about one incident
+			}
+			q.Time = ast.TimeRange{Kind: ast.TimeIncidents, Anchor: &ast.Anchor{Incidents: set, Before: "30m", After: "1m"}}
+		}
+		return Result{Intent: "list_changes", AST: q}, true, nil
 	case lastNRe.MatchString(text) || strings.HasPrefix(text, "show the last") || strings.HasPrefix(text, "for the last"):
 		if tp, ok := parseTime(text, cx.Now, cx.Loc); ok && len(strings.Fields(text)) <= 7 {
 			if q.Time.Kind == ast.TimeIncidents && q.Time.Anchor != nil && q.Time.Anchor.Incidents != nil {

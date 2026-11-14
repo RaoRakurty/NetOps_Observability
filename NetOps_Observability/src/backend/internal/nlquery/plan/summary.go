@@ -32,6 +32,8 @@ func Summarize(cat *catalog.Catalog, q *ast.AST, rs *ResultSet) string {
 	switch {
 	case q.Type.IsMetric():
 		summarizeMetric(&b, cat, q, rs)
+	case q.Type == ast.ChangeList && q.Time.Kind == ast.TimeIncidents:
+		summarizeChangesAroundIncidents(&b, rs)
 	case q.Type == ast.ChangeList:
 		summarizeList(&b, rs, "change", changeLine)
 	case q.Type == ast.IncidentList:
