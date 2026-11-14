@@ -356,6 +356,19 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 
 	st := newChainState()
 	st.facts.device, st.facts.deviceRead, st.facts.deviceName = ent.facts, ent.factsRead, ent.values["device"]
+	// An investigation read the engine's verdict FIRST (investigator.go): every
+	// pass starts from it, so the hypotheses resolve against the engine and
+	// the narration sees its conclusion before any device evidence.
+	if sd := o.invSeed; sd != nil {
+		if _, inScope := ent.get("correlation_id"); inScope {
+			st.facts.addSignals(sd.signals)
+			for _, ev := range sd.items {
+				st.stmt.stamp(ev, sd.tool)
+			}
+			st.facts.addEvidence(sd.items)
+			st.addEvidence(sd.items)
+		}
+	}
 	var last *Skill
 	cur, selected, reason := o.applicableEntry(sk, match.Reason, st)
 	for round := 1; round <= MaxInvestigationRounds; round++ {
@@ -644,6 +657,9 @@ func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill
 			break // the per-turn ceiling; the caller discloses it
 		}
 		st.toolCalls++
+		if o.invMeter != nil {
+			o.invMeter.addCall() // the investigation's lookup budget (investigator.go)
+		}
 		iv := tb.Invoke(ctx, p, step.Tool, step.Args)
 		elapsed := iv.Elapsed
 		switch iv.Outcome {

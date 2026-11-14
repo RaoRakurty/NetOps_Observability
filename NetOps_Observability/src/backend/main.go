@@ -116,6 +116,7 @@ import (
 	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
@@ -143,6 +144,7 @@ import (
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
+	"netops/backend/internal/irisinvest"
 	"netops/backend/internal/irisquerylog"
 	"netops/backend/internal/nlquery/catalog"
 	"netops/backend/internal/secobs"
@@ -419,6 +421,10 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// aiProbe is the N-I3 active-probe executor: the per-target limiter, the
+	// process-wide slot gate and the measurement itself (collectors.RunOneShot
+	// in production; a fake in tests, so no test sends real traffic).
+	aiProbe aiProbeExec
 	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
 	// one per process, keyed by tenant and normalised question, route ids only.
 	aiPlanCache *ai.PlannerCache
@@ -442,6 +448,9 @@ type server struct {
 	tenantRunbookMetrics *tenantrunbook.Metrics
 	tenantRunbookSets    *tenantrunbook.OverlayCache
 	tenantRunbookRecheck *runbookRecheck
+	// irisLearning is the controlled learning loop's proposal queue (tracker
+	// 337 N-F5); nil on a file-backend deployment (the routes answer 503).
+	irisLearning irislearning.Store
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -458,6 +467,10 @@ type server struct {
 	// held per tenant (bounded, in memory) so the trace can be re-opened by id.
 	// nil = not held (the answer still carries its own set).
 	aiHypotheses irishypo.Store
+	// Investigation traces (tracker 337 N-I1): each read-only investigation's
+	// structured trace, held per tenant (bounded, in memory) so the Iris panel
+	// can re-open it by id. nil = not held (the answer carries its own trace).
+	aiInvestigations irisinvest.Store
 
 	deviceSites *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy   *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
@@ -1378,6 +1391,7 @@ func newServer() *server {
 		aiDecisions:          newAIDecisionStore(),
 		aiDecisionMetrics:    aidecision.NewMetrics(),
 		aiToolGateway:        ai.NewToolGateway(),
+		aiProbe:              newAIProbeExec(),
 		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
 		irisStreamMetrics:    &irisstream.Metrics{},
@@ -1386,12 +1400,14 @@ func newServer() *server {
 		tenantRunbookMetrics: &tenantrunbook.Metrics{},
 		tenantRunbookSets:    &tenantrunbook.OverlayCache{},
 		tenantRunbookRecheck: &runbookRecheck{},
+		irisLearning:         newIrisLearningStore(),
 		srcAuthority:         newSrcAuthorityStore(),
 		srcAuthorityMetrics:  &srcauthority.Metrics{},
 		irisAliasCache:       newIrisAliasCache(),
 		irisContextCache:     newIrisContextCache(),
 		nlqExamples:          modelc.EmbeddedExamples(),
 		aiHypotheses:         irishypo.NewMemStore(),
+		aiInvestigations:     irisinvest.NewMemStore(),
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
@@ -4187,6 +4203,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
+	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                // Iris learning loop (N-F5): proposals a person decides
+	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)               // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)
@@ -4200,6 +4218,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
 	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)      // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
 	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
+	mux.HandleFunc("/api/ai/investigations", s.handleAIInvestigations)    // Iris read-only investigations (N-I1): own tenant, recent
+	mux.HandleFunc("/api/ai/investigations/", s.handleAIInvestigations)   // Iris read-only investigations (N-I1): one trace by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

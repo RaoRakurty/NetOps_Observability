@@ -219,6 +219,11 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		switch {
 		case len(q.GroupBy) > 0 && fieldName(q.GroupBy[0]):
 			p.PrimaryView, p.SecondaryView, p.Title = Bar, Table, "Changes by "+Humanize(q.GroupBy[0])
+		case q.Time.Kind == ast.TimeIncidents:
+			// N-S3: "what changed before every X incident" — the table groups
+			// the changes by incident (each linked to its RCA) and says, per
+			// row, correlated or same kind as a chain step; the timeline beside it.
+			p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Changes before each incident"
 		case len(rs.Rows) == 1 && hasBeforeAfter(rs.Rows[0]):
 			p.PrimaryView, p.SecondaryView, p.Title = Diff, ChangeCard, "What changed"
 		default:

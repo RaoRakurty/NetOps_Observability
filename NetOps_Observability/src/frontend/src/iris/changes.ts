@@ -21,6 +21,10 @@ export function relationText(r: Row): string {
       return "Happened before — not proven cause";
     case "causal":
       return "Linked by the root-cause engine";
+    // N-S3: the engine's causal chain for that incident names a change of this
+    // KIND. The chain does not name the individual change, so this is not proof.
+    case "chain_kind":
+      return "Same kind as a root-cause step — not proven cause";
     default:
       return "Not stated";
   }
@@ -63,4 +67,18 @@ export function beforeAfterShort(r: Row): string | null {
     return one.length > 40 ? `${one.slice(0, 40)}…` : one;
   };
   return `${short(b)} → ${short(a)}`;
+}
+
+/** "12 min before onset" / "at onset" / "3 min after onset"; null when absent. */
+export function beforeOnsetText(r: Row): string | null {
+  const m = r.minutes_before_incident;
+  if (typeof m !== "number" || !Number.isFinite(m)) return null;
+  if (m > 0) return `${m} min before onset`;
+  if (m === 0) return "At onset";
+  return `${-m} min after onset`;
+}
+
+/** Rows found near an incident ("what changed before every X incident"). */
+export function isPerIncidentRow(r: Row): boolean {
+  return str(r, "incident_id") !== "" && typeof r.minutes_before_incident === "number";
 }
