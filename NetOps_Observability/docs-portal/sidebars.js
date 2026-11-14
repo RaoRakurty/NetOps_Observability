@@ -277,6 +277,7 @@ const sidebars = {
         'administration/sensitive-data-access',
         'administration/telemetry-coverage',
         'administration/network-context',
+        'administration/iris-runbooks',
         'administration/licence',
         'administration/debug-the-pipeline-cli',
         'administration/review-quarantined-telemetry',
