@@ -46,6 +46,7 @@ const TOOL_LABEL: Record<string, string> = {
   run_traceroute: "a traceroute from Correlix",
   run_dns_test: "a DNS test from Correlix",
   run_http_test: "a web test from Correlix",
+  search_workspace_knowledge: "your runbooks and past incidents",
   get_security_findings: "security findings",
   get_recent_changes: "recent changes",
   get_config_diff: "a configuration change",

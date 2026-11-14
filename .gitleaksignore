@@ -90,3 +90,11 @@ e63e3021ee136c513fa797aeccb086d9161c0ed2:NetOps_Observability/src/backend/intern
 # from the label at runtime, so only this one historical commit carries the
 # literal. Commit eda0b806, verified 2026-09-14.
 eda0b8063ef29b66c961004c8c12791a43cc0dd0:NetOps_Observability/src/backend/internal/protocoldiag/redactstream_trailing_test.go:private-key:95
+#
+# chatops/service_test.go — false positive (generic-api-key): the test's Slack
+# signing-secret constant is the example value from Slack's own public API
+# documentation, used to check request signatures in a unit test. Never a live
+# secret. Only this one historical commit on feat/iris-chatops carries it; the
+# branch tip uses an obviously fake value. Landed on main so every PR's merge
+# ref carries the entry (CI scans all branches' history). Reviewed 2026-11-14.
+4a1d75e9578e0466bd384b3082a8e9fe3f337391:NetOps_Observability/src/backend/internal/chatops/service_test.go:generic-api-key:27

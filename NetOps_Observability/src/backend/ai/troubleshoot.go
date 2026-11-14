@@ -275,6 +275,12 @@ type TroubleshootDeps struct {
 	// the tools on the probe switch, investigations and the workspace opt-in
 	// before this is ever called. nil = active probes are not wired here.
 	ActiveProbe func(ctx context.Context, p Principal, req ActiveProbeRequest) (ActiveProbeReport, error)
+	// WorkspaceKnowledge reads the caller's own retrievable knowledge for the
+	// requested layers (tracker 337 N-F3): approved runbooks and closed
+	// incidents with their recorded fixes. One concrete workspace only; the
+	// platform scope reads nothing. nil = search_workspace_knowledge is not
+	// registered.
+	WorkspaceKnowledge func(ctx context.Context, p Principal, layers []KnowledgeLayer) (KnowledgeCorpus, error)
 	// CaseTimeline returns one correlation case's ordered timeline.
 	CaseTimeline func(ctx context.Context, p Principal, correlationID string) ([]TimelineEvent, error)
 
@@ -922,6 +928,11 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 			r.add(activeProbeTool{kind: k, deps: d})
 		}
 	}
+	// The workspace's recorded knowledge (N-F3) is workspace-scoped: no device
+	// argument to resolve.
+	if d.WorkspaceKnowledge != nil {
+		r.add(workspaceKnowledgeTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -1005,6 +1016,8 @@ func TroubleshootToolNames() []string {
 		"get_probe_results",
 		// N-I3: active probes from Correlix's own collector.
 		"run_ping", "run_traceroute", "run_dns_test", "run_http_test",
+		// N-F3: the workspace's runbooks and incident history.
+		"search_workspace_knowledge",
 	}
 	sort.Strings(out)
 	return out

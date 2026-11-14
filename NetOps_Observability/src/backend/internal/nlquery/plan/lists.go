@@ -133,6 +133,9 @@ func (p Planner) changesAroundIncidents(ctx context.Context, sc Scope, q *ast.AS
 	}
 	rs.Truncated = trunc
 	before, after := anchorSpan(q.Time.Anchor)
+	// Optional seam: a Scope without it leaves every row temporal, and says so.
+	chains, hasChains := sc.(ChangeChainScope)
+	var report chainReport
 	for _, inc := range incs {
 		cq := base
 		cq.From, cq.To = inc.CreatedAt.Add(-before), inc.CreatedAt.Add(after)
@@ -141,9 +144,44 @@ func (p Planner) changesAroundIncidents(ctx context.Context, sc Scope, q *ast.AS
 			return err
 		}
 		rs.Truncated = rs.Truncated || t2
+		if len(rows) == 0 {
+			continue
+		}
+		// The chain is read only for an incident that has changes to label —
+		// one bounded read per such incident, in the caller's scope.
+		var ch ChangeChain
+		if hasChains {
+			got, cerr := chains.ChangeChain(ctx, inc.ID)
+			switch {
+			case cerr != nil:
+				report.unread++ // not proof of anything: the rows stay temporal and the answer says so
+			default:
+				ch = got
+				report.checked++
+				switch {
+				case ch.Contradicted:
+					report.contradicted++
+				case len(ch.Kinds) == 0:
+					report.noChangeStep++
+				case ch.Established:
+					report.established = append(report.established, firstStr(inc.DisplayID, inc.ID))
+				}
+			}
+		} else {
+			report.unread++
+		}
 		for _, c := range rows {
 			r := changeRow(c, inc.ID)
 			r["minutes_before_incident"] = int(inc.CreatedAt.Sub(c.At).Minutes())
+			r["incident_display_id"] = firstStr(inc.DisplayID, inc.ID)
+			if inc.Title != "" {
+				r["incident_title"] = inc.Title
+			}
+			r["incident_at"] = inc.CreatedAt
+			labelRow(r, ch)
+			if r["relation"] == RelationChainKind {
+				report.matched++
+			}
 			rs.Rows = append(rs.Rows, r)
 		}
 	}
@@ -157,6 +195,7 @@ func (p Planner) changesAroundIncidents(ctx context.Context, sc Scope, q *ast.AS
 	}
 	rs.Notes = append(rs.Notes, fmt.Sprintf("changes shown are those within %s before / %s after each of %d incidents — correlated in time, not established as causes",
 		before, after, len(incs)))
+	rs.Notes = append(rs.Notes, report.notes()...)
 	source(rs, "change_ledger")
 	source(rs, "clickhouse:corr_current")
 	return nil

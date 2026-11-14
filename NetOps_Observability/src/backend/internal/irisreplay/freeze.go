@@ -140,6 +140,11 @@ func bindSeams(c *Case, allowed map[string]bool) ai.TroubleshootDeps {
 			return ai.SimilarIncidents{}, ai.ErrNotImplemented
 		}
 	}
+	if allowed["search_workspace_knowledge"] {
+		d.WorkspaceKnowledge = func(context.Context, ai.Principal, []ai.KnowledgeLayer) (ai.KnowledgeCorpus, error) {
+			return ai.KnowledgeCorpus{}, ai.ErrNotImplemented
+		}
+	}
 	if allowed["compile_query"] {
 		d.CompileQuery = func(context.Context, ai.Principal, string) (ai.QueryInterpretation, error) {
 			return ai.QueryInterpretation{}, ai.ErrNotImplemented

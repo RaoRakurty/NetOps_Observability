@@ -235,6 +235,10 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("ActiveProbe")
 			return ActiveProbeReport{Kind: req.Kind, Scoped: true}, nil
 		},
+		WorkspaceKnowledge: func(context.Context, Principal, []KnowledgeLayer) (KnowledgeCorpus, error) {
+			env.touch("WorkspaceKnowledge")
+			return KnowledgeCorpus{Scoped: true}, nil
+		},
 		// The N-B2 engine projections (get_blast_radius, get_affected_entities
 		// are on the skill allowlist): the case's scripted outcome is what a
 		// step returns, so this seam only has to exist.

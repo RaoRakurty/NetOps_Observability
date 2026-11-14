@@ -91,6 +91,28 @@ type NLQueryFunc func(ctx context.Context, p Principal, question string, opts Da
 // diagnosticCue marks a question that asks for a diagnosis, not a listing.
 var diagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|caused?|causing|troubleshoot\w*|diagnos\w*|investigat\w*|fix|explain)\b|\bwhat (?:do|should) (?:i|we) (?:check|look at|do)\b`)
 
+// hardDiagnosticCue is diagnosticCue without the bare "cause" words: a
+// question carrying one of these is a diagnosis whatever else it says.
+var hardDiagnosticCue = regexp.MustCompile(`(?i)\b(?:why|root cause|troubleshoot\w*|diagnos\w*|investigat\w*|fix|explain)\b|\bwhat (?:do|should) (?:i|we) (?:check|look at|do)\b`)
+
+// changeIncidentCue is a LISTING asked in causal words (tracker 337 N-S3):
+// "which changes caused incidents this week", or the follow-up "did any of
+// those changes cause incidents?". The data arm answers it with the
+// per-incident change list, which keeps correlated and causal apart — it is
+// not a diagnosis of one problem. The follow-up form needs a pronoun pointing
+// at the previous answer, so "did the bgp flap cause an outage" stays a
+// diagnosis.
+var changeIncidentCue = regexp.MustCompile(`(?i)\bchanges?\b.*\b(?:caus\w*|led to|lead to|behind|linked to|tied to|trigger\w*|broke)\b.*\b(?:incidents|outages|problems|issues|(?:every|each|any|all)\s+(?:incident|outage))\b|^(?:so\s+)?(?:did|do|were|was|could|have|has)\s+(?:any\s+|all\s+|some\s+)?(?:of\s+)?(?:those|these|they|them)\b.*\b(?:caus\w*|led to|lead to|behind|trigger\w*)\b.*\b(?:incidents?|outages?|problems?)\b`)
+
+// asksDiagnosis reports a question the skills and the model should diagnose
+// rather than the data arm list.
+func asksDiagnosis(q string) bool {
+	if !diagnosticCue.MatchString(q) {
+		return false
+	}
+	return hardDiagnosticCue.MatchString(q) || !changeIncidentCue.MatchString(q)
+}
+
 // listingCue is a symptom phrasing that is a listing when it names a thing:
 // "what's wrong with edge-1" is that device's incidents. The data arm takes
 // it only as an incident list about a resolved entity (IncidentRefOnly);
@@ -100,7 +122,7 @@ var listingCue = regexp.MustCompile(`(?i)\b(?:what'?s wrong|what is wrong|not wo
 // answerData runs the data arm; handled=false leaves the question to the
 // classic path. A failing data arm is never fatal: the classic path answers.
 func (o *Orchestrator) answerData(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, bool) {
-	if o.NLQuery == nil || plan.Intent == "problem_explanation" || diagnosticCue.MatchString(question) {
+	if o.NLQuery == nil || plan.Intent == "problem_explanation" || asksDiagnosis(question) {
 		return Answer{}, false
 	}
 	// Several questions in one message (hybrid NLU plan A6): when every part
@@ -167,7 +189,7 @@ func (o *Orchestrator) answerDataParts(ctx context.Context, p Principal, parts [
 	var answered []DataAnswer
 	for _, part := range parts {
 		pl := Classify(part, nil)
-		if pl.Intent == "problem_explanation" || diagnosticCue.MatchString(part) || listingCue.MatchString(part) {
+		if pl.Intent == "problem_explanation" || asksDiagnosis(part) || listingCue.MatchString(part) {
 			return Answer{}, false
 		}
 		// The model is never spent on a part: a multi-question message is
