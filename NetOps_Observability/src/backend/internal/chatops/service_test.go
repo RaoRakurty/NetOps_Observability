@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	testSecret = "8f742231b10e8888abcd99yyyzzz85a5"
+	testSecret = "test-signing-secret-for-the-unit-test"
 	testBot    = "xoxb-1111-2222-SECRETBOTTOKEN"
 	tenantA    = "t-alpha"
 	tenantB    = "t-beta"
