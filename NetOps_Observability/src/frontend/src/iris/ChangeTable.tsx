@@ -163,10 +163,6 @@ export default function ChangeTable({
                   {g.display}
                 </SafeLink>
                 {g.title && <span className="iris-incident-group-title"> {g.title}</span>}
-                <span className="iris-muted">
-                  {" "}
-                  · {g.rows.length} {g.rows.length === 1 ? "change" : "changes"} before it · open the incident for its root-cause analysis
-                </span>
               </h4>
               <DataTable<Keyed>
                 rows={g.rows}

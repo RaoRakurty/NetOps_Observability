@@ -56,8 +56,8 @@ describe("ChangeTable grouped by incident", () => {
     expect(sections.map((s) => s.getAttribute("aria-label"))).toEqual(["Changes before P-AAA001", "Changes before P-BBB002"]);
     const link = within(sections[0]).getByRole("link", { name: "P-AAA001" });
     expect(link.getAttribute("href")).toBe(`/#/investigate/rca?id=${incA}`);
-    expect(within(sections[0]).getByText(/2 changes before it/)).toBeInTheDocument();
-    expect(within(sections[1]).getByText(/1 change before it/)).toBeInTheDocument();
+    expect(within(sections[0]).getAllByRole("row").length - 1).toBe(2); // header row + 2 changes
+    expect(within(sections[1]).getAllByRole("row").length - 1).toBe(1);
   });
 
   it("adds the Before onset column and words both relations honestly", () => {
