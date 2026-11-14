@@ -3160,6 +3160,27 @@ func (h *nlqScope) Incident(ctx context.Context, id string) (plan.IncidentDetail
 	return det, nil
 }
 
+// errNLQChainUnread: the incident is visible but its analysis could not be
+// read — the planner shows its changes as correlated in time only, and says so.
+var errNLQChainUnread = errors.New("the incident's root-cause analysis could not be read")
+
+// ChangeChain is the planner's OPTIONAL causal-chain seam (plan.ChangeChainScope,
+// tracker 337 N-S3). It reads through Incident, so the same tenant scope and
+// operator restriction apply: a foreign or unknown incident is ErrNotFound. The
+// placement is kind level only (ai.ChangeChainPlacement).
+func (h *nlqScope) ChangeChain(ctx context.Context, id string) (plan.ChangeChain, error) {
+	det, err := h.Incident(ctx, id)
+	if err != nil {
+		return plan.ChangeChain{}, err
+	}
+	res, ok := det.Detail.(ai.RCAResult)
+	if !ok {
+		return plan.ChangeChain{}, errNLQChainUnread
+	}
+	kinds, step, established, contradicted := ai.ChangeChainPlacement(res)
+	return plan.ChangeChain{Read: true, Kinds: kinds, Step: step, Established: established, Contradicted: contradicted}, nil
+}
+
 // nlqChangeFetch bounds one ledger read (and the answer when the caller set no
 // limit). Every filter is applied by the store BEFORE this limit (N-D1), so the
 // bound is on the matching rows, never on rows a Go filter then discards.

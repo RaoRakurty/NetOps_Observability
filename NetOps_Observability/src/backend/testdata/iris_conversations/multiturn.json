@@ -23,8 +23,8 @@
      "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]}],"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
     {"q": "Only WAN policies.",
      "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]},{"field":"class","op":"eq","values":["wan"]}],"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}},
-    {"q": "Did any of those changes cause incidents?", "expect_outcome": "unparsed",
-     "gap": "N-S1/N-S3: change-to-incident causality (correlated vs causal kept distinct) is not a query type"}
+    {"q": "Did any of those changes cause incidents?",
+     "expect_ast": {"v":1,"query_type":"change_list","target":"change","filters":[{"field":"actor","op":"in","values":["John Smith"]},{"field":"id","op":"ne","values":["chg-1"]},{"field":"class","op":"eq","values":["wan"]}],"time_range":{"kind":"incidents","anchor":{"incidents":{"time_range":{"kind":"absolute","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:30:00Z"},"max":50},"before":"30m","after":"1m"}},"order_by":[{"field":"event_at","dir":"desc"}],"limit":100}}
    ]
   },
   {

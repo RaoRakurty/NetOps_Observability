@@ -1011,6 +1011,37 @@ func GroundAgentNarrative(text string, evidence []AgentToolEvidence, docIDs []st
 	return AgentGrounding{Text: out, Statements: sts, Disclaimers: disc}
 }
 
+// ---- the causal chain read (NL query planner, N-S3) -------------------------
+
+// IsEngineChangeKind reports whether k is one of the engine's change kinds
+// (engineChangeKinds). The NL query planner's ledger-type → kind map is pinned
+// against it.
+func IsEngineChangeKind(k string) bool {
+	return engineChangeKinds[strings.ToLower(strings.TrimSpace(k))]
+}
+
+// ChangeChainPlacement is the change part of one incident's causal chain, for
+// "what changed before every X incident" (tracker 337 N-S3): every engine
+// change kind its steps observed, the first change step, whether the engine
+// established that step as the cause, and whether its primary sequence is
+// contradicted. Kind level only — the chain names change KINDS, never one
+// ledger row (N-D3), so a caller may say "same kind as a chain step", never
+// "this change caused it".
+func ChangeChainPlacement(res RCAResult) (kinds []string, step int, established, contradicted bool) {
+	seen := map[string]bool{}
+	for _, l := range res.CausalChain {
+		for _, k := range l.Kinds {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if engineChangeKinds[k] && !seen[k] {
+				seen[k] = true
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	v := changeChainFrom(res)
+	return kinds, v.step, v.established, v.contradicted
+}
+
 // ---- the causal chain read (skill path) -------------------------------------
 
 // changeChainFrom places a change relative to the engine's chain. The match is
