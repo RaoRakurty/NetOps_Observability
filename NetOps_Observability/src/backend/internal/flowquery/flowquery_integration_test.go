@@ -334,6 +334,62 @@ func TestIntegrationSeriesZeroFilledAndExact(t *testing.T) {
 // (60 × 100) to 24000 B (60 × 400) — exactly +300 % — and the DNS server that
 // only appears in the current window (6 × 1000 B leaving on 12) is new. The
 // port view names 6/443 and 17/53. Totals are counted once per record.
+// The Iris flow statements (tracker 406 / N-C4) against the real server: they
+// are accepted, they add up to the corpus exactly, the device and interface
+// conditions narrow as the page's do, the platform-traffic exclusion removes
+// exactly its records, and under acme's scope the row policy keeps globex's
+// record on the SHARED exporter out even though the device condition names
+// that exporter.
+func TestIntegrationToolStatementsExactAndIsolated(t *testing.T) {
+	c := chFromEnv(t)
+	t0 := testT0()
+	loadCorpus(t, c, t0)
+	w := Window{From: t0, To: t0.Add(time.Hour), Explicit: true}
+	dev := " AND (tenant_id = 'acme' OR sampler_address IN ('10.0.0.1', '10.0.0.3')) AND sampler_address = '10.0.0.1'"
+
+	tot := c.rows(t, "acme", TotalsSQL(w, dev))
+	if len(tot) != 1 || Num(tot[0]["bytes_total"]) != 30000 || Num(tot[0]["packets_total"]) != 300 ||
+		Num(tot[0]["flows"]) != 66 || Num(tot[0]["sources"]) != 2 || Num(tot[0]["rate_reported"]) != 0 {
+		t.Fatalf("device totals = %v, want 30000 B, 300 packets, 66 flows, 2 sources, 0 rate-reported (globex's 7777 B never summed)", tot)
+	}
+	if got := SamplingOf(Num(tot[0]["flows"]), Num(tot[0]["rate_reported"])); got != SamplingNotReported {
+		t.Errorf("sampling basis %q, want not_reported", got)
+	}
+	ifc := dev + " AND " + Link{Exporter: "10.0.0.1", IfIndex: 12}.IfCond(DirBoth)
+	if it := c.rows(t, "acme", TotalsSQL(w, ifc)); Num(it[0]["bytes_total"]) != 30000 || Num(it[0]["flows"]) != 66 {
+		t.Errorf("interface 12 (in or out) totals = %v, want every record of the device", it)
+	}
+	if it := c.rows(t, "acme", TotalsSQL(w, dev+" AND "+Link{Exporter: "10.0.0.1", IfIndex: 20}.IfCond(DirBoth))); Num(it[0]["bytes_total"]) != 24000 {
+		t.Errorf("interface 20 totals = %v, want 24000", it)
+	}
+
+	talkers := c.rows(t, "acme", TalkersSQL(w, dev, 8))
+	if len(talkers) != 2 || Str(talkers[0]["a"]) != "192.0.2.10" || Str(talkers[0]["b"]) != "198.51.100.1" ||
+		Num(talkers[0]["bytes_total"]) != 24000 || Num(talkers[1]["bytes_total"]) != 6000 {
+		t.Fatalf("talkers = %v, want the two acme pairs, heaviest first", talkers)
+	}
+	for _, r := range talkers {
+		if Str(r["a"]) == "10.8.8.8" || Str(r["b"]) == "10.9.9.9" {
+			t.Fatalf("TENANT LEAK: globex's conversation in acme's talkers: %v", r)
+		}
+	}
+	svc := c.rows(t, "acme", ServicesSQL(w, dev, 8))
+	if len(svc) != 2 || Num(svc[0]["port"]) != 443 || Num(svc[0]["bytes_total"]) != 24000 || Num(svc[1]["port"]) != 50000 {
+		t.Fatalf("services = %v", svc)
+	}
+
+	// Correlix's own monitoring traffic (here: 203.0.113.5) is left out exactly.
+	plat := dev + " AND NOT (src_addr IN ('203.0.113.5') OR dst_addr IN ('203.0.113.5'))"
+	if pt := c.rows(t, "acme", TotalsSQL(w, plat)); Num(pt[0]["bytes_total"]) != 24000 || Num(pt[0]["flows"]) != 60 || Num(pt[0]["sources"]) != 1 {
+		t.Errorf("platform-excluded totals = %v, want 24000 B, 60 flows, 1 source", pt)
+	}
+
+	// The reported 1:100 rate scales; the record counts as rate-reported.
+	if r := c.rows(t, "acme", TotalsSQL(w, " AND sampler_address = '10.0.0.3'")); Num(r[0]["bytes_total"]) != 1000 || Num(r[0]["rate_reported"]) != 1 {
+		t.Errorf("rate-reported exporter totals = %v", r)
+	}
+}
+
 func TestIntegrationMoversStepChangeExact(t *testing.T) {
 	c := chFromEnv(t)
 	t0 := testT0()

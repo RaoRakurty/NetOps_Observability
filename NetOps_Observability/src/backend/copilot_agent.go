@@ -260,6 +260,14 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return rep, nil
 	case "not_implemented":
 		return fail("this lookup is not available in this build", "not_implemented")
+	case ai.OutcomeBadArgs:
+		// The tool refused an argument (ai.ErrBadArgs): say why, so the model
+		// can correct its call instead of reading the refusal as no data.
+		msg := "invalid arguments"
+		if iv.Err != nil {
+			msg = iv.Err.Error()
+		}
+		return fail(msg, ai.OutcomeBadArgs)
 	case ai.OutcomeRateLimited:
 		return fail("this lookup was not run: the workspace reached its per-minute limit for it — say so, do not invent its data", ai.OutcomeRateLimited)
 	case ai.OutcomeTimeout:

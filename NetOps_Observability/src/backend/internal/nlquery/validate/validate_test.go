@@ -118,7 +118,19 @@ func TestRules(t *testing.T) {
 	cases := []struct{ name, js, code string }{
 		{"version", strings.Replace(series, `"v":1`, `"v":2`, 1), CodeInvalidValue},
 		{"unknown type", strings.Replace(series, "metric_series", "metric_seriez", 1), CodeUnknownQueryType},
-		{"reserved type", `{"v":1,"query_type":"log_search","target":"device"}`, CodeUnsupportedQueryType},
+		{"log free-text filter", `{"v":1,"query_type":"log_search","target":"device","filters":[{"field":"message","op":"eq","values":["drop table"]}]}`, CodeUnknownDimension},
+		{"log severity not on the list", `{"v":1,"query_type":"log_search","target":"device","filters":[{"field":"severity","op":"gte","values":["catastrophic"]}]}`, CodeInvalidValue},
+		{"log topic not on the list", `{"v":1,"query_type":"log_search","target":"device","filters":[{"field":"topic","op":"eq","values":["*bgp*"]}]}`, CodeInvalidValue},
+		{"log gte on topic", `{"v":1,"query_type":"log_search","target":"device","filters":[{"field":"topic","op":"gte","values":["bgp"]}]}`, CodeOperatorNotAllowed},
+		{"log severity twice", `{"v":1,"query_type":"log_search","target":"device","filters":[{"field":"severity","op":"gte","values":["error"]},{"field":"severity","op":"eq","values":["info"]}]}`, CodeInvalidValue},
+		{"log grouped", `{"v":1,"query_type":"log_search","target":"device","group_by":["device"]}`, CodeForbiddenFieldForType},
+		{"log window too large", `{"v":1,"query_type":"log_search","target":"device","time_range":{"kind":"relative","last":"30d"}}`, CodeWindowTooLarge},
+		{"flow group not on the list", `{"v":1,"query_type":"flow_top","target":"device","group_by":["src_addr"]}`, CodeUnknownDimension},
+		{"flow two groups", `{"v":1,"query_type":"flow_top","target":"device","group_by":["talker","service"]}`, CodeTooBroad},
+		{"flow filters", `{"v":1,"query_type":"flow_top","target":"device","filters":[{"field":"topic","op":"eq","values":["bgp"]}]}`, CodeForbiddenFieldForType},
+		{"flow metric", `{"v":1,"query_type":"flow_top","target":"device","metric":"cpu_util_pct"}`, CodeForbiddenFieldForType},
+		{"flow wrong target", `{"v":1,"query_type":"flow_top","target":"circuit"}`, CodeInvalidValue},
+		{"flow window too large", `{"v":1,"query_type":"flow_top","target":"device","time_range":{"kind":"relative","last":"8d"}}`, CodeWindowTooLarge},
 		{"missing metric", strings.Replace(series, `"metric":"cpu_util_pct",`, "", 1), CodeMissingField},
 		{"filters on metric", strings.Replace(series, `"time_range"`, `"filters":[{"field":"type","op":"eq","values":["x"]}],"time_range"`, 1), CodeForbiddenFieldForType},
 		{"filter without predicate", strings.Replace(series, "metric_series", "metric_filter", 1), CodeMissingField},
@@ -256,4 +268,34 @@ func TestUnmappedProviderIsRefusedPrecisely(t *testing.T) {
 		}
 	}
 	mustFail(t, fakeScope{cross: true}, mk("provider:tenant-b-carrier"), CodeUnknownEntity)
+}
+
+// flow_top and log_search (N-C4): a well-formed query passes with its defaults
+// stated; a ref narrows to devices or sites only, and a foreign one reads
+// exactly like a missing one.
+func TestFlowAndLogQueriesDefaultsAndRefs(t *testing.T) {
+	out, res := Validate(context.Background(), cat, fakeScope{}, q(t,
+		`{"v":1,"query_type":"flow_top","target":"device","entities":[{"type":"site","id":"site:dfw-hq"}],"limit":90}`))
+	if !res.Valid {
+		t.Fatalf("flow_top refused: %s", codes(res))
+	}
+	if out.Time.Last != DefaultFlowWin || len(out.GroupBy) != 1 || out.GroupBy[0] != ast.FlowGroupTalker || out.Limit != MaxFlowTop {
+		t.Fatalf("flow_top defaults: time %+v group %v limit %d", out.Time, out.GroupBy, out.Limit)
+	}
+	if len(res.Constraints) != 3 {
+		t.Fatalf("the default window, the default grouping and the clamp must all be stated: %+v", res.Constraints)
+	}
+	out, res = Validate(context.Background(), cat, fakeScope{}, q(t,
+		`{"v":1,"query_type":"log_search","target":"device","entities":[{"type":"device","id":"device:edge-1"}],
+		  "filters":[{"field":"severity","op":"gte","values":["error"]},{"field":"topic","op":"in","values":["bgp","bfd"]}]}`))
+	if !res.Valid || out.Time.Last != DefaultLogWin || out.Limit != DefaultLogRows {
+		t.Fatalf("log_search: valid=%v time %+v limit %d errors %s", res.Valid, out.Time, out.Limit, codes(res))
+	}
+	// A device of another tenant: the same error as one that does not exist.
+	foreign := mustFail(t, fakeScope{}, `{"v":1,"query_type":"log_search","target":"device","entities":[{"type":"device","id":"device:tenant-b-core"}]}`, CodeUnknownEntity)
+	missing := mustFail(t, fakeScope{}, `{"v":1,"query_type":"log_search","target":"device","entities":[{"type":"device","id":"device:no-such"}]}`, CodeUnknownEntity)
+	if strings.ReplaceAll(foreign.Message, "tenant-b-core", "X") != strings.ReplaceAll(missing.Message, "no-such", "X") {
+		t.Fatalf("foreign and missing devices must be indistinguishable: %q vs %q", foreign.Message, missing.Message)
+	}
+	mustFail(t, fakeScope{}, `{"v":1,"query_type":"flow_top","target":"device","entities":[{"type":"circuit","id":"circuit:dfw-comcast"}]}`, CodeRelationshipNotAllowed)
 }

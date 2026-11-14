@@ -33,6 +33,10 @@ import (
 // missing here (or in the other sources), so a word the grammar reads can
 // never be "corrected" into another.
 var grammarWords = []string{
+	// flow and log questions (N-C4)
+	"connection", "consuming", "control", "crit", "eating", "entries", "heaviest", "ipsec", "largest",
+	"login", "newest", "plane", "protocol", "uplink", "used", "uses", "warning", "auth", "authentication", "clock",
+	"destination", "hogging",
 	"above", "below", "under", "over", "exceeds", "exceed", "greater", "higher", "lower", "least", "less",
 	"percent", "milliseconds", "millisecond", "confidence", "grouped", "group", "broken", "break", "each",
 	"unusual", "abnormal", "normal", "baseline", "anomalous", "elevated", "high", "losing", "dropping",
