@@ -43,6 +43,14 @@ export default function RcaSimilarIncidents({ correlationId }: { correlationId: 
               </a>{" "}
               — matched on {(m.matched_on ?? []).join(", ")}
               {m.differences && m.differences.length > 0 ? `; differs in ${m.differences.join(", ")}` : ""}
+              {m.resolution ? (
+                <div className="disc-text" data-testid="similar-fix">
+                  Last time this was fixed by {m.resolution.label}
+                  {m.resolution.change_id ? ` (change ${m.resolution.change_id})` : ""}
+                  {" — recorded by an operator on "}{fmtDateTime(m.resolution.recorded_at)}.
+                  {m.resolution.note ? <><br /><span style={{ color: "var(--muted)" }}>{m.resolution.note}</span></> : null}
+                </div>
+              ) : null}
             </li>
           ))}
         </ol>
