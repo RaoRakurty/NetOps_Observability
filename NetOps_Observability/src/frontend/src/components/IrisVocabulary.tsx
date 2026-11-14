@@ -24,6 +24,7 @@ import QueryCorrection from "../iris/QueryCorrection";
 import FilterChipBar, { type FilterChipChange } from "../iris/FilterChipBar";
 import RecentQuestions from "../iris/RecentQuestions";
 import IrisMissTriage from "../iris/IrisMissTriage";
+import IrisChatOps from "../iris/IrisChatOps";
 import DecisionLedger from "../iris/DecisionLedger";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
@@ -520,6 +521,10 @@ export default function IrisVocabulary() {
       <div style={stepHead}>6. What Iris could not answer</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Questions Iris left unanswered, grouped by why — a missing tool, missing data, the wrong route or reading, wording, or the AI model not answering. Workspace admins only.</p>
       <IrisMissTriage refreshKey={asked} />
+
+      <div style={stepHead}>7. Iris in Slack and Teams</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>Ask Iris from chat. Answers use your own Correlix permissions; a workspace admin approves each linked account.</p>
+      <IrisChatOps />
     </div>
   );
 }

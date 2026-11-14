@@ -111,6 +111,13 @@ var routeIsolationLedger = map[string]string{
 	// tenant_runbook_isolation_test.go.
 	"/api/ai/runbooks":  "scoped",
 	"/api/ai/runbooks/": "scoped",
+	// Iris in Slack / Teams (N-I6): connections, links and link codes are per
+	// tenant (RLS chatops_* + store tenant key, tenant from the token); a Global
+	// view must choose a workspace; a foreign link id → 404 for approve/revoke;
+	// a code issued in one tenant never redeems in another; an inbound question
+	// runs as the LINKED user in the connection's tenant —
+	// chatops_isolation_test.go + internal/chatops.
+	"/api/chatops/": "scoped",
 	// Iris learning loop (N-F5): tenant from the token (RLS
 	// iris_learning_proposals + store tenant key); a refresh reads only the
 	// caller's resolutions, fingerprints, question log and aliases; a Global view
@@ -1013,6 +1020,12 @@ var routeIsolationLedger = map[string]string{
 	// NMS controller webhook: JWT-exempt; authenticated by opaque path token +
 	// the connector's signature verification, tenant derived from the token row.
 	"/api/nms/webhook/": "token",
+	// Iris in Slack / Teams inbound (N-I6): JWT-exempt; authenticated by the
+	// opaque path token + Slack's v0 HMAC (5-min replay window) or the Bot
+	// Framework RS256 JWT (this bot as audience, serviceurl bound); tenant from
+	// the token's connection row, never the request.
+	"/api/chatops/slack/": "token",
+	"/api/chatops/teams/": "token",
 	// vmalert Alertmanager-v2 webhook: JWT-exempt, authenticated by the
 	// VMALERT_WEBHOOK_TOKEN shared secret (Bearer/Basic, constant-time), and
 	// platform-GLOBAL plumbing — it is NOT principal-scoped and carries no
