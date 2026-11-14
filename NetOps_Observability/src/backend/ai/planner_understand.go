@@ -94,12 +94,21 @@ func parsePlannerTerms(line string) (string, bool) {
 	return t, true
 }
 
-// glossaryText is the caller's generated vocabulary, or "" when none is wired.
+// glossaryText is the caller's generated vocabulary followed by what is in
+// view on their screen (view_binding.go, N-E4) — the fenced context every
+// model path reads. "" when neither is available.
 func (o *Orchestrator) glossaryText(ctx context.Context, p Principal) string {
-	if o.Glossary == nil {
-		return ""
+	g := ""
+	if o.Glossary != nil {
+		g = strings.TrimSpace(o.Glossary(ctx, p))
 	}
-	return strings.TrimSpace(o.Glossary(ctx, p))
+	if v := o.view.block(); v != "" {
+		if g != "" {
+			g += "\n\n"
+		}
+		g += v
+	}
+	return g
 }
 
 // readAsNote discloses that an arm searched with the planner's restatement.

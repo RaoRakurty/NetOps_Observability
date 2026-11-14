@@ -118,6 +118,15 @@ func scoreboardQuestions(t *testing.T) []routeQ {
 	return qs
 }
 
+// routeDS resolves ANY problem id to a problem of the caller's: the
+// scoreboard measures ROUTING with a problem in view, and the skill cases name
+// their own case ids. Isolation of the binding is view_binding_test.go's job.
+type routeDS struct{ *mockDS }
+
+func (routeDS) GetProblem(_ context.Context, _ Principal, id string) (*Problem, error) {
+	return &Problem{ID: id, Title: "case in view", Verdict: "suspected"}, nil
+}
+
 func routeAll(t *testing.T, qs []routeQ, llm LLMClient) []RouteDecision {
 	t.Helper()
 	set := loadTestSkills(t)
@@ -125,7 +134,7 @@ func routeAll(t *testing.T, qs []routeQ, llm LLMClient) []RouteDecision {
 	for i, q := range qs {
 		var got RouteDecision
 		o := &Orchestrator{
-			DS: newMockDS(), Docs: goldenIndex(), Skills: set, LLM: llm,
+			DS: routeDS{newMockDS()}, Docs: goldenIndex(), Skills: set, LLM: llm,
 			Flags: func(string) bool { return true },
 			// The data arm answers only when the tie-break let the model
 			// compile run — the adversarial half of the invariance proof.
