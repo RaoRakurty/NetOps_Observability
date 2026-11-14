@@ -312,6 +312,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   const [tKeyDraft, setTKeyDraft] = useState("");
   // Per-workspace AI access rows (platform owner only).
   const [tenantRows, setTenantRows] = useState<AITenantRow[] | null>(null);
+  // The platform half of read-only MCP (IRIS_MCP on the Features page).
+  const [mcpFeature, setMcpFeature] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
@@ -352,7 +354,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     // isn't authorized for simply stays null.
     api.copilotConfig().then((c) => {
       setCfg(c);
-      api.aiTenants().then((r) => setTenantRows(r.tenants ?? [])).catch(() => setTenantRows(null));
+      api.aiTenants().then((r) => { setTenantRows(r.tenants ?? []); setMcpFeature(!!r.mcp_feature); }).catch(() => setTenantRows(null));
     }).catch(() => setCfg(null));
     api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
   }, []);
@@ -448,13 +450,16 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   };
 
   // Flip one workspace's AI access / guardrails (platform owner) — optimistic row update.
-  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "max_calls" | "daily_tokens">>) => {
+  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "mcp_enabled" | "max_calls" | "daily_tokens">>) => {
     const next = { ...row, ...patch };
     setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? next : r)));
     try {
       await api.setAITenantAccess(row.tenant_id, {
         assistant_enabled: next.assistant_enabled,
         investigations_enabled: next.investigations_enabled,
+        // Sent only when this edit touched it, so a row loaded from an older
+        // server never switches MCP off by omission.
+        ...("mcp_enabled" in patch ? { mcp_enabled: !!next.mcp_enabled } : {}),
         max_calls: next.max_calls || 0,
         daily_tokens: next.daily_tokens || 0,
       });
@@ -819,6 +824,12 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
                     <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
                       onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
+                  </label>
+                  {/* Read-only MCP (N-I5): an outside AI assistant may use Iris's lookups with a workspace API key. */}
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
+                    title={mcpFeature ? "Let an outside AI assistant use Iris's read-only lookups with an API key that has the iris:mcp scope" : "Turn on Iris over MCP under Administration → Features first"}>
+                    <input type="checkbox" data-testid="iris-mcp-toggle" checked={!!row.mcp_enabled} disabled={!mcpFeature}
+                      onChange={(e) => setAccess(row, { mcp_enabled: e.target.checked })} /> MCP
                   </label>
                   {/* Per-workspace spend guardrails — blank = platform default. */}
                   <input type="number" min={0} max={8} value={row.max_calls || ""}

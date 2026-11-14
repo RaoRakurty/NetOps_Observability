@@ -53,7 +53,7 @@ describe("scope vocabulary", () => {
     // ingest:experience stayed missing from the picker (tracker 272).
     const constants: Record<string, string> = {
       ScopeReadAll: "read:*", ScopeWriteAll: "write:*",
-      ScopeIngestCloud: "ingest:cloud", ScopeIngestExperience: "ingest:experience",
+      ScopeIngestCloud: "ingest:cloud", ScopeIngestExperience: "ingest:experience", ScopeIrisMCP: "iris:mcp",
       ScopeAdminAll: "admin:*",
     };
     const backend = [

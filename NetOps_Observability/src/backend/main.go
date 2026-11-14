@@ -115,6 +115,7 @@ import (
 	"netops/backend/internal/featureflags"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
@@ -418,6 +419,9 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// mcpLimiter is the per-API-key budget for MCP tools/call (N-I5), on top
+	// of the key's own request limit and the gateway's per-tenant tool rates.
+	mcpLimiter *irismcp.Limiter
 	// aiPlanCache is the model planner's exact-match route cache (ai/planner.go):
 	// one per process, keyed by tenant and normalised question, route ids only.
 	aiPlanCache *ai.PlannerCache
@@ -1374,6 +1378,7 @@ func newServer() *server {
 		aiDecisions:          newAIDecisionStore(),
 		aiDecisionMetrics:    aidecision.NewMetrics(),
 		aiToolGateway:        ai.NewToolGateway(),
+		mcpLimiter:           irismcp.NewLimiter(nil),
 		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
 		irisStreamMetrics:    &irisstream.Metrics{},
@@ -4169,6 +4174,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)               // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                          // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)

@@ -33,10 +33,13 @@ type TenantConfig struct {
 	TenantID     string `json:"tenant_id"`
 	AssistantOff bool   `json:"assistant_off,omitempty"` // entitlement: true → assistant disabled for this tenant
 	AgentTools   bool   `json:"agent_tools,omitempty"`   // entitlement: true → bounded agent loop enabled
-	MaxCalls     int    `json:"max_calls,omitempty"`     // guardrail override: lookups per question (0 → platform default, clamp 1-8)
-	DailyTokens  int    `json:"daily_tokens,omitempty"`  // guardrail override: tokens/day (0 → platform default)
-	Provider     string `json:"provider,omitempty"`      // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
-	Model        string `json:"model,omitempty"`         // BYO model override ("" → provider default)
+	// MCP: the workspace opted in to Iris's read-only MCP gateway (N-I5).
+	// Default off; set by the platform owner beside the investigation grant.
+	MCP         bool   `json:"mcp,omitempty"`
+	MaxCalls    int    `json:"max_calls,omitempty"`    // guardrail override: lookups per question (0 → platform default, clamp 1-8)
+	DailyTokens int    `json:"daily_tokens,omitempty"` // guardrail override: tokens/day (0 → platform default)
+	Provider    string `json:"provider,omitempty"`     // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
+	Model       string `json:"model,omitempty"`        // BYO model override ("" → provider default)
 	// ModelFast / ModelStrong are this tenant's OPTIONAL §10 model-router
 	// overrides, and they ride the tenant's OWN key exactly as Model does: they
 	// take effect only on the BYO path, so a tenant can never steer the
@@ -224,6 +227,29 @@ func (s *TenantConfigStore) AssistantEnabled(tenant string) bool {
 // agentToolsEnabled: is the bounded agent loop entitled for this tenant?
 func (s *TenantConfigStore) AgentToolsEnabled(tenant string) bool {
 	return s.Get(tenant).AgentTools
+}
+
+// MCPEnabled: has this workspace opted in to the read-only MCP gateway?
+func (s *TenantConfigStore) MCPEnabled(tenant string) bool {
+	return s.Get(tenant).MCP
+}
+
+// SetMCP records the workspace's MCP opt-in (a platform-owner field, like the
+// investigation grant). Persisted with the rest of the record; on a save
+// failure the previous value is kept and the error returned.
+func (s *TenantConfigStore) SetMCP(tenant string, on bool) (TenantConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, had := s.cfgs[tenant]
+	c := prev
+	c.TenantID = tenant
+	c.MCP = on
+	s.cfgs[tenant] = c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
 }
 
 // BYOProvider returns the tenant's own provider configuration when a key is

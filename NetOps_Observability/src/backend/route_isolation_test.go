@@ -110,6 +110,7 @@ var routeIsolationLedger = map[string]string{
 	// only the caller's approved runbooks reach the caller's Iris —
 	// tenant_runbook_isolation_test.go.
 	"/api/ai/runbooks":  "scoped",
+	"/api/ai/mcp":       "scoped", // read-only MCP gateway (N-I5): the key's own tenant; iris_mcp_isolation_test.go
 	"/api/ai/runbooks/": "scoped",
 	// Source authority (N-F6): the order is the token tenant's (RLS
 	// iris_source_authority + store tenant key), no id in the path, a Global view

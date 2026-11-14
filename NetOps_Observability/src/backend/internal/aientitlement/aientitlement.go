@@ -74,10 +74,8 @@ const (
 
 	// The three below were defined before their features landed, so the tier
 	// mapping, the frontend and the licence conversation could name them first.
-	// ContextAuthor (N-F1) and RunbookAuthor (N-F2) are backed now; MCP (N-I5)
-	// still gates nothing: Backed() reports false for it, and the route guard
-	// test refuses a route that claims it until Backed() is flipped in the
-	// same change.
+	// ContextAuthor (N-F1), RunbookAuthor (N-F2) and MCP (N-I5) are all
+	// backed now.
 
 	// ContextAuthor — tenant-authored Network context for Iris (N-F1): the
 	// /api/ai/context routes, and whether approved facts reach a prompt.
@@ -86,7 +84,9 @@ const (
 	// /api/ai/runbooks routes, and whether a tenant's approved runbooks reach
 	// Iris's troubleshooting methods.
 	RunbookAuthor Entitlement = "ai.runbook.author"
-	// MCP — the MCP adapter over the tool gateway (N-I5). Unbacked.
+	// MCP — the read-only MCP gateway over the tool gateway (N-I5, D17):
+	// /api/ai/mcp. On top of the tier mapping it needs the console-only
+	// SwitchMCP and the workspace's own MCP opt-in, both checked by the route.
 	MCP Entitlement = "ai.mcp"
 
 	// Model — MODEL-BACKED Iris (owner decisions 2026-11-12/13): any call to
@@ -111,7 +111,7 @@ var backed = map[Entitlement]bool{
 	NLQuery:       true,
 	ContextAuthor: true,
 	RunbookAuthor: true,
-	// MCP: not backed yet — see the const block.
+	MCP:           true,
 }
 
 // All returns the closed vocabulary in display order.
@@ -255,6 +255,9 @@ const (
 const (
 	SwitchModels         = "IRIS_AI_MODELS"
 	SwitchInvestigations = "IRIS_AI_INVESTIGATIONS"
+	// SwitchMCP turns the read-only MCP gateway on for the platform (N-I5).
+	// It needs no licence add-on: Correlix makes no AI provider call for it.
+	SwitchMCP = "IRIS_MCP"
 )
 
 // IrisOn is the platform Iris switch with its historical semantics: ON by
