@@ -207,6 +207,12 @@ func (o *Orchestrator) completeTier(ctx context.Context, tier ModelTier, system 
 	if o == nil || o.LLM == nil {
 		return "", "", ErrNoProvider
 	}
+	// An investigation's model-token budget (investigator.go): once spent, no
+	// further model call is made; every caller degrades to its deterministic
+	// answer on the error.
+	if o.invMeter != nil && o.invMeter.exhausted() {
+		return "", "", ErrInvestigationTokenBudget
+	}
 	// Never block a ready answer on a model (Iris latency batch 2026-11-10):
 	// every call site here already holds a complete deterministic answer and
 	// degrades to it on an error, so the model gets a short per-stage budget and
@@ -233,6 +239,9 @@ func (o *Orchestrator) completeTier(ctx context.Context, tier ModelTier, system 
 	}
 	if s := o.score(); s != nil {
 		s.ProviderObserved(ProviderScore{Usage: usage, Investigation: investigation})
+	}
+	if o.invMeter != nil {
+		o.invMeter.add(estimateCallTokens(usage, system, msgs, text))
 	}
 	return text, provider, err
 }

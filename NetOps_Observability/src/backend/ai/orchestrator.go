@@ -128,6 +128,18 @@ type Orchestrator struct {
 	// view is the server-validated subject of the screen behind the question
 	// being answered (view_binding.go, N-E4), set at the top of ask.
 	view ViewBinding
+	// The read-only Investigator (investigator.go, tracker 337 N-I1).
+	// InvestigateAllowed is the server's ai.investigate decision for this
+	// caller (the AI add-on, its two switches, the workspace's own switch);
+	// false refuses an investigation with a clear message. RunbooksFor
+	// returns the names of the tenant's runbooks linked to the investigation's
+	// incident or device (nil = no runbook retrieval).
+	InvestigateAllowed bool
+	RunbooksFor        RunbooksForFunc
+	// invMeter and invSeed live for one Investigate call: the token budget
+	// every model call consults, and the engine verdict every pass starts from.
+	invMeter *tokenMeter
+	invSeed  *investigationSeed
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -493,6 +505,16 @@ func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, ui
 				ans.Disclaimers = appendMissing(ans.Disclaimers, notes...)
 			}
 		}()
+	}
+	// "Investigate this" (tracker 337 N-I1): the operator asked for a full
+	// investigation of what is in view. It is an explicit action, not a
+	// question to classify, so it runs before every router; the investigator
+	// itself refuses, with a clear message, a caller without AI investigations.
+	if WantsInvestigation(uiContext) {
+		o.routed(ArmInvestigate, ModeTroubleshootFinding)
+		ans := o.Investigate(ctx, p, question, uiContext, DefaultInvestigationBudget())
+		ans.Routing = &Routing{Path: RoutePathDeterministic, Reason: RouteReasonInvestigate}
+		return ans, nil
 	}
 	// A question about the incident on the screen ("explain this", or the
 	// one-click ask with no words) whose incident did not resolve is not
@@ -1958,15 +1980,21 @@ func (o *Orchestrator) answerFuturePhase(plan Plan) Answer {
 // rules and the data-not-instructions fence follows the block, so the fence is
 // the last word before evidence. Without context the prompt is unchanged.
 func (o *Orchestrator) systemPrompt() string {
+	if o.orgContextBlock() == "" {
+		return o.baseSystemPrompt()
+	}
+	return o.baseSystemPrompt() + "\n\n" + o.orgBlock + "\n\n" + DataNotInstructionsFence()
+}
+
+// orgContextBlock is the customer's approved Network context block (N-F1),
+// read once per orchestrator ("" = none).
+func (o *Orchestrator) orgContextBlock() string {
 	o.orgOnce.Do(func() {
 		if o.OrgContext != nil {
 			o.orgBlock = strings.TrimSpace(o.OrgContext())
 		}
 	})
-	if o.orgBlock == "" {
-		return o.baseSystemPrompt()
-	}
-	return o.baseSystemPrompt() + "\n\n" + o.orgBlock + "\n\n" + DataNotInstructionsFence()
+	return o.orgBlock
 }
 
 func (o *Orchestrator) baseSystemPrompt() string { return baseSystemPromptText() }
