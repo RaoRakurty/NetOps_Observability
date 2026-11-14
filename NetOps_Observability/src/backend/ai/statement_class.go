@@ -176,6 +176,9 @@ var toolStatementClass = map[string]string{
 	// A prior conclusion — context, never evidence of the present.
 	"recall_investigations":  ClassHistorical,
 	"find_similar_incidents": ClassHistorical,
+	// N-F3: incidents are HISTORICAL; a runbook item carries a per-item
+	// DOCUMENTATION class (stamp), never a stronger one.
+	"search_workspace_knowledge": ClassHistorical,
 	// Reference material.
 	"search_docs": ClassDocumentation,
 	// A computed query result.
@@ -326,8 +329,14 @@ func (sc *statementContext) stamp(ev EvidenceItem, tool string) {
 		return
 	}
 	class := toolStatementClass[tool]
-	if ev.Class == ClassDerived && class != "" {
+	switch {
+	case ev.Class == ClassDerived && class != "":
 		class = ClassDerived // a per-item downgrade only, never an upgrade
+	case ev.Class == ClassDocumentation && class == ClassHistorical:
+		// A recorded procedure inside a recorded-knowledge result (N-F3): both
+		// classes are non-observed, and the item can never claim OBSERVED or
+		// CORRELIX_RCA from its tool.
+		class = ClassDocumentation
 	}
 	sc.items[id] = stmtItem{
 		class: class, role: ev.CauseRole,

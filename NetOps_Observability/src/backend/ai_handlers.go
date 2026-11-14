@@ -410,6 +410,11 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// 3 s): a cancelled request must not strip the network context from a
 		// narration that still runs to its budget.
 		OrgContext: func() string { return s.orgContextBlock(context.WithoutCancel(r.Context()), claims) },
+		// N-F3 environment layer: the same block, its facts ordered by the
+		// question when they overflow it.
+		OrgContextFor: func(q string) string {
+			return s.orgContextBlockFor(context.WithoutCancel(r.Context()), claims, q)
+		},
 		// Routing policy (ai/route_policy.go): the caller's own scope and
 		// inventory facts for multi-part questions, from the token and the
 		// caller's visible devices.
@@ -3646,9 +3651,21 @@ func (rc *runbookRecheck) start(tenant, fp string, ids []string, store tenantrun
 // orgContextRender reads the tenant's active facts, re-validates every one
 // (a row that no longer passes is skipped and counted), and renders the block.
 func (s *server) orgContextRender(ctx context.Context, tenant string) (string, int, int, error) {
-	facts, err := s.orgContext.ActiveFacts(ctx, tenant)
+	out, err := s.orgContextFacts(ctx, tenant)
 	if err != nil {
 		return "", 0, 0, err
+	}
+	block, omitted := ai.OrgContextBlock(out, ai.OrgContextMaxChars, ai.Redact)
+	return block, len(out), omitted, nil
+}
+
+// orgContextFacts reads the tenant's active facts and keeps the ones that
+// still pass validation (a row that no longer passes is skipped and counted),
+// in the store's render order.
+func (s *server) orgContextFacts(ctx context.Context, tenant string) ([]ai.ContextFact, error) {
+	facts, err := s.orgContext.ActiveFacts(ctx, tenant)
+	if err != nil {
+		return nil, err
 	}
 	tools := ai.ToolNames()
 	out := make([]ai.ContextFact, 0, len(facts))
@@ -3660,8 +3677,7 @@ func (s *server) orgContextRender(ctx context.Context, tenant string) (string, i
 		}
 		out = append(out, ai.ContextFact{Kind: orgcontext.Label(f.Kind), Scope: f.Scope, Key: f.Key, Body: f.Body})
 	}
-	block, omitted := ai.OrgContextBlock(out, ai.OrgContextMaxChars, ai.Redact)
-	return block, len(out), omitted, nil
+	return out, nil
 }
 
 // orgContextBlock is the block for one Iris request, or "" — for a Global
@@ -3669,6 +3685,15 @@ func (s *server) orgContextRender(ctx context.Context, tenant string) (string, i
 // or a failed read (the answer then runs without context; the failure is
 // logged and counted, never silent). A rendered block is ledgered as hashes.
 func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
+	return s.orgContextBlockFor(ctx, claims, "")
+}
+
+// orgContextBlockFor is orgContextBlock for one question (N-F3, the
+// environment layer). The block is the cached one whenever every fact fits;
+// only when the workspace holds more approved facts than the block carries
+// are the facts that share the question's terms rendered first, so what is
+// left out is what is least related to this question. Ledgered the same way.
+func (s *server) orgContextBlockFor(ctx context.Context, claims jwtClaims, question string) string {
 	tenant, cross := principalTenant(claims)
 	if s.orgContext == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.ContextAuthor) {
 		return ""
@@ -3678,10 +3703,19 @@ func (s *server) orgContextBlock(ctx context.Context, claims jwtClaims) string {
 	// N-H4: the rendered block is cached per tenant; an approve, rollback or
 	// retire invalidates it (orgContextAPI Changed).
 	got, err := s.irisContextCache.Get(iriscache.Key{Tenant: tenant}, func() (orgContextRendered, error) {
-		block, n, _, err := s.orgContextRender(rctx, tenant)
-		return orgContextRendered{block: block, facts: n}, err
+		list, err := s.orgContextFacts(rctx, tenant)
+		if err != nil {
+			return orgContextRendered{}, err
+		}
+		block, omitted := ai.OrgContextBlock(list, ai.OrgContextMaxChars, ai.Redact)
+		return orgContextRendered{block: block, facts: len(list), list: list, omitted: omitted}, nil
 	})
 	block, n := got.block, got.facts
+	if err == nil && got.omitted > 0 && strings.TrimSpace(question) != "" {
+		if ranked, relevant := ai.RankContextFacts(got.list, question); relevant > 0 {
+			block, _ = ai.OrgContextBlock(ranked, ai.OrgContextMaxChars, ai.Redact)
+		}
+	}
 	if err != nil {
 		s.orgContextMetrics.Failed()
 		logError("iris.context", "network context could not be read; answering without it", errf(err))
@@ -3833,6 +3867,10 @@ func (s *server) irisDataTimer(w http.ResponseWriter) (http.ResponseWriter, func
 type orgContextRendered struct {
 	block string
 	facts int
+	// list and omitted let a question-aware request re-order the facts when
+	// they overflow the block (N-F3); list is shared and read-only.
+	list    []ai.ContextFact
+	omitted int
 }
 
 // Cache bounds: invalidation on write is what keeps them correct; the TTL only

@@ -273,6 +273,15 @@ var toolMetas = map[string]toolMeta{
 			{name: "window", desc: "How far back to look: 30d, 90d, 180d (default) or 365d.", required: false},
 		},
 	},
+	// ── N-F3: the workspace's recorded knowledge (read-only, tenant-scoped) ──
+	"search_workspace_knowledge": {
+		description: "Search THIS workspace's own recorded knowledge: its APPROVED runbooks (the team's written procedures) and its CLOSED incidents with the fix an operator recorded. Use it to find how this team handles a kind of problem, or what happened and what fixed it before. RECORDED KNOWLEDGE, never current state and never proof of the present cause: read the live state first. Says plainly when nothing matches (it never returns a weak near-miss).",
+		label:       "Workspace knowledge",
+		args: []toolArgSpec{
+			{name: "query", desc: "The words to search for, e.g. \"dallas mpls flapping\" or \"bgp peer down carrier\".", required: true},
+			{name: "layer", desc: "Restrict to runbook or incident; omit to search both.", required: false},
+		},
+	},
 	// ── configuration change (review item 10) ──────────────────────────────
 	"get_recent_changes": {
 		description: "Configuration changes recorded for this tenant's devices: which device moved, when, how many lines, and whether it has drifted from its golden baseline. ASK THIS EARLY — a fault that began shortly after a configuration change is a different investigation from one that did not. Says plainly when a device has never been captured (that is NOT the same as unchanged).",
