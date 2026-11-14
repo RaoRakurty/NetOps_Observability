@@ -115,8 +115,10 @@ type EvidenceItem struct {
 	// Class DOWNGRADES this one item's statement class to DERIVED when it is
 	// the server's own reading of observed evidence (an overlay shape, a
 	// role's likely function) inside an otherwise OBSERVED tool's result.
-	// Only ClassDerived is honoured: an item can never claim a STRONGER class
-	// than its tool. Server-stamped, never serialized.
+	// Only ClassDerived is honoured — plus ClassDocumentation inside a
+	// HISTORICAL tool's result (a runbook among recorded knowledge, N-F3): an
+	// item can never claim a STRONGER class than its tool. Server-stamped,
+	// never serialized.
 	Class string `json:"-"`
 }
 

@@ -231,6 +231,8 @@ var toolContracts = map[string]ToolContract{
 	"recall_investigations": {1, CapRead, 5 * time.Second, 60, out(5, defaultMaxTextChars)},
 	// N-F4: may build up to 8 past fingerprints (ClickHouse) on a cold store.
 	"find_similar_incidents": {1, CapRead, 15 * time.Second, 30, out(5, defaultMaxTextChars)},
+	// N-F3: one in-memory BM25 over the workspace's runbooks + closed incidents.
+	"search_workspace_knowledge": {1, CapRead, 10 * time.Second, 60, out(8, defaultMaxTextChars)},
 	// Device-scoped.
 	"get_security_findings": {1, CapRead, 10 * time.Second, 60, out(50, defaultMaxTextChars)},
 	"get_topology_context":  {1, CapRead, 10 * time.Second, 60, out(46, defaultMaxTextChars)},

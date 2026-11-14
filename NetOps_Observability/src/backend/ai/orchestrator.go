@@ -77,11 +77,19 @@ type Orchestrator struct {
 	// byte-for-byte what it was before the store existed. Read once per
 	// orchestrator (one request).
 	OrgContext func() string
+	// OrgContextFor is the question-aware form (N-F3 environment layer): when
+	// the workspace holds more approved facts than the block fits, the facts
+	// that share the question's terms fill it first. It wins over OrgContext
+	// when set; with every fact fitting it renders the same block.
+	OrgContextFor func(question string) string
 	// Routed receives the router's FIRST claim for each question (N-G4
 	// scoreboard): which arm took it, before that arm ran. nil in production.
-	Routed      func(RouteDecision)
-	orgOnce     sync.Once
-	orgBlock    string
+	Routed   func(RouteDecision)
+	orgOnce  sync.Once
+	orgBlock string
+	// question is the request's question, recorded by Ask before any arm runs
+	// so the (lazy, once-per-request) system prompt can rank context for it.
+	question    string
 	gatewayOnce sync.Once
 	ownGateway  *ToolGateway
 	// RecordInvestigation receives one CONCLUDED skill-chain investigation (IRIS
@@ -458,6 +466,9 @@ func Classify(question string, uiContext map[string]string) Plan {
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	started := time.Now()
 	ctx, note := WithModelNote(ctx)
+	if o.question == "" {
+		o.question = question
+	}
 	ans, err := o.ask(ctx, p, question, uiContext)
 	if err == nil {
 		// Every answer carries its routing decision (route_policy.go); a path
@@ -1938,7 +1949,10 @@ func (o *Orchestrator) answerFuturePhase(plan Plan) Answer {
 // the last word before evidence. Without context the prompt is unchanged.
 func (o *Orchestrator) systemPrompt() string {
 	o.orgOnce.Do(func() {
-		if o.OrgContext != nil {
+		switch {
+		case o.OrgContextFor != nil:
+			o.orgBlock = strings.TrimSpace(o.OrgContextFor(o.question))
+		case o.OrgContext != nil:
 			o.orgBlock = strings.TrimSpace(o.OrgContext())
 		}
 	})

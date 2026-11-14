@@ -48,6 +48,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/collectors"
+	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/configdrift"
@@ -66,6 +67,7 @@ import (
 	"netops/backend/internal/owner"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/rcaresolution"
 	"netops/backend/internal/showparse"
 	"netops/backend/models"
 	"netops/backend/pathgraph"
@@ -200,6 +202,11 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// so the seam is wired whenever it exists and says when nothing has run.
 	if s.demTargets != nil {
 		deps.ProbeResults = s.aiProbeResults(claims)
+	}
+	// N-F3: the workspace's recorded knowledge — approved runbooks and closed
+	// incidents with their recorded fixes. Wired when either store exists.
+	if s.tenantRunbooks != nil || s.incidentTimeMetrics != nil {
+		deps.WorkspaceKnowledge = s.aiWorkspaceKnowledge(claims)
 	}
 	// IRIS Phase B: investigation memory. Wired only when the store exists, so a
 	// deployment without it never exposes a tool that could only answer nothing.
@@ -3945,4 +3952,196 @@ func aiFoldProbe(t dem.Target, ring []dem.WireRun) ai.ProbeSummary {
 		}
 	}
 	return p
+}
+
+// ---- the workspace's recorded knowledge (tracker 337 N-F3) ----------------
+//
+// search_workspace_knowledge ranks ONE workspace's approved runbooks (N-F2)
+// and its closed incidents with the newest fix an operator recorded (N-F4 +
+// #247). The Network context facts (N-F1) are deliberately NOT read here: they
+// are never citable evidence, and their question-aware ordering lives in
+// orgContextBlockFor.
+//
+// §3a, the same scoping as the probe read: one concrete workspace only. The
+// platform's "All tenants" view and the Provider scope read nothing; an
+// operator-restricted workspace reads nothing for the platform owner. Each
+// store is tenant-keyed already; every document is stamped with the tenant
+// the server read it for, and ai.RankKnowledge re-checks that stamp.
+// Runbooks follow the same entitlement as the runbook overlay itself
+// (ai.runbook.author). An operator's free-text resolution note never enters
+// this path: only the resolution's kind, label, change id and date do.
+
+// Corpus bounds per layer.
+const (
+	aiKnowledgeMaxRunbooks  = 200
+	aiKnowledgeMaxIncidents = 500
+	aiKnowledgeBodyChars    = 2000
+	aiKnowledgeIncidentDays = 365
+)
+
+// aiWorkspaceKnowledge binds the knowledge read to the caller's own scope.
+func (s *server) aiWorkspaceKnowledge(claims jwtClaims) func(context.Context, ai.Principal, []ai.KnowledgeLayer) (ai.KnowledgeCorpus, error) {
+	return func(ctx context.Context, _ ai.Principal, layers []ai.KnowledgeLayer) (ai.KnowledgeCorpus, error) {
+		tenant, cross := principalTenant(claims)
+		if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) {
+			return ai.KnowledgeCorpus{}, nil // Scoped=false: knowledge is per-workspace data
+		}
+		if _, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+			return ai.KnowledgeCorpus{}, nil
+		}
+		out := ai.KnowledgeCorpus{Scoped: true, Tenant: tenant}
+		for _, l := range layers {
+			var docs []ai.KnowledgeDoc
+			var err error
+			switch l {
+			case ai.LayerRunbook:
+				if s.tenantRunbooks == nil || !s.aiEntitled(claims, aientitlement.RunbookAuthor) {
+					continue
+				}
+				docs, err = s.aiKnowledgeRunbooks(ctx, tenant)
+			case ai.LayerIncident:
+				if s.incidentTimeMetrics == nil {
+					continue
+				}
+				docs, err = s.aiKnowledgeIncidents(ctx, tenant)
+			default:
+				continue // the environment layer is never a tool corpus
+			}
+			if err != nil {
+				logError("iris.knowledge", "a knowledge layer could not be read; the answer says so", map[string]any{"layer": string(l), "error": err.Error()})
+				out.Unread = append(out.Unread, l)
+				continue
+			}
+			out.Docs = append(out.Docs, docs...)
+		}
+		return out, nil
+	}
+}
+
+// aiKnowledgeRunbooks: the tenant's APPROVED runbooks (an unapproved draft is
+// never retrievable). Rendered by name and when-to-use; the approved body is
+// searched, never shown.
+func (s *server) aiKnowledgeRunbooks(ctx context.Context, tenant string) ([]ai.KnowledgeDoc, error) {
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	rows, err := s.tenantRunbooks.List(rctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ai.KnowledgeDoc, 0, len(rows))
+	for _, r := range rows {
+		if !strings.EqualFold(r.TenantID, tenant) {
+			continue // defence in depth: the store is tenant-keyed already
+		}
+		v, ok := r.Active()
+		if !ok {
+			continue
+		}
+		updated := r.CreatedAt
+		if v.DecidedAt != nil {
+			updated = *v.DecidedAt
+		}
+		body := v.Body
+		if len(body) > aiKnowledgeBodyChars {
+			body = body[:aiKnowledgeBodyChars]
+		}
+		when := strings.TrimSpace(r.WhenToUse)
+		if when == "" {
+			when = "no when-to-use line"
+		}
+		out = append(out, ai.KnowledgeDoc{
+			ID: r.ID, Layer: ai.LayerRunbook, Tenant: tenant, Source: "tenant_runbook", Authority: ai.AuthorityApproved,
+			Updated: updated, Scope: r.Scope, Title: r.Name(), Text: "when to use: " + when, Extra: body,
+			Href: "#/admin/iris-runbooks", Label: "approved " + updated.UTC().Format("2006-01-02") + ", version " + strconv.Itoa(v.Version),
+		})
+		if len(out) >= aiKnowledgeMaxRunbooks {
+			break
+		}
+	}
+	return out, nil
+}
+
+// aiKnowledgeIncidents: the tenant's CLOSED incidents of the last year, each
+// with the newest fix an operator recorded. A device or interface named by an
+// address is shown as "an address" (§15).
+func (s *server) aiKnowledgeIncidents(ctx context.Context, tenant string) ([]ai.KnowledgeDoc, error) {
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	since := time.Now().Add(-aiKnowledgeIncidentDays * 24 * time.Hour)
+	rows, err := s.incidentTimeMetrics.ListWindow(rctx, tenant, false, since, timeIntelCalcVersion, timeIntelBackfillCap)
+	if err != nil {
+		return nil, err
+	}
+	safe := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v != "" && irisglossary.HasAddress(v) {
+			return "an address"
+		}
+		return v
+	}
+	var ids []string
+	var keep []int
+	for i, r := range rows {
+		if !strings.EqualFold(r.State, "closed") || r.Internal || r.TenantID != "" && !strings.EqualFold(r.TenantID, tenant) {
+			continue // open, merged, platform-internal, or (defensively) another tenant's row
+		}
+		keep = append(keep, i)
+		ids = append(ids, r.CorrelationID)
+		if len(keep) >= aiKnowledgeMaxIncidents {
+			break
+		}
+	}
+	fixes := map[string]rcaresolution.Resolution{}
+	if s.rcaResolutions != nil && len(ids) > 0 {
+		got, ferr := s.rcaResolutions.Latest(rctx, tenant, ids)
+		if ferr != nil {
+			logError("iris.knowledge", "recorded fixes could not be read; incidents are listed without them", errf(ferr))
+		} else {
+			fixes = got
+		}
+	}
+	out := make([]ai.KnowledgeDoc, 0, len(keep))
+	for _, i := range keep {
+		r := rows[i]
+		g := r.Group
+		var parts []string
+		add := func(label, v string) {
+			if v = safe(v); v != "" {
+				parts = append(parts, label+" "+v)
+			}
+		}
+		add("signature", g["signature"])
+		add("owner domain", r.OwnerDomain)
+		add("seam", r.SeamType)
+		add("provider class", r.Owner)
+		add("device", g["device"])
+		add("interface", g["interface"])
+		add("path", g["app_path"])
+		authority := ai.AuthorityDerived
+		if fx, ok := fixes[r.CorrelationID]; ok && (fx.TenantID == "" || strings.EqualFold(fx.TenantID, tenant)) {
+			line := "fixed by: " + rcaresolution.Label(fx.Kind) + " (recorded by an operator on " + fx.CreatedAt.UTC().Format("2006-01-02")
+			if fx.ChangeID != "" {
+				line += ", change " + safe(fx.ChangeID)
+			}
+			parts = append(parts, line+")")
+			authority = ai.AuthorityRecorded
+		} else {
+			parts = append(parts, "no fix was recorded for it")
+		}
+		day := r.OccurredAt.UTC().Format("2006-01-02")
+		out = append(out, ai.KnowledgeDoc{
+			ID: r.CorrelationID, Layer: ai.LayerIncident, Tenant: tenant, Source: "incident_history", Authority: authority,
+			Updated: r.OccurredAt, Scope: "tenant", Title: "case " + shortCaseID(r.CorrelationID), Text: strings.Join(parts, "; "),
+			Href: "#/monitoring/correlations?id=" + r.CorrelationID, Label: "closed, occurred " + day,
+		})
+	}
+	return out, nil
+}
+
+// shortCaseID is the first eight characters of a case id (operator-visible).
+func shortCaseID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }

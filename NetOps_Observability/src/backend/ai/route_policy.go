@@ -310,7 +310,8 @@ func (o *Orchestrator) answerByModel(ctx context.Context, p Principal, question,
 
 // maxTopologyEvidence bounds the whole-network topology items one grounded
 // model answer carries, so the active problems keep at least
-// maxModelEvidence - 2 - maxTopologyEvidence (13) slots.
+// maxModelEvidence - 2 - maxTopologyEvidence - maxKnowledgeEvidence (10)
+// slots even when the workspace's recorded knowledge also matched (N-F3).
 const maxTopologyEvidence = 10
 
 // reTopologyQuestion recognises a question about how the caller's network is
@@ -338,6 +339,10 @@ func (o *Orchestrator) modelEvidence(ctx context.Context, p Principal, question 
 	if o.forceTopology || reTopologyQuestion.MatchString(question) {
 		ev = append(ev, o.topologyEvidence(ctx, p, sc)...)
 	}
+	// N-F3: the workspace's own approved runbooks and closed incidents that
+	// match the question — recorded knowledge, cited as DOCUMENTATION or
+	// HISTORICAL, never as the present state. Nothing when nothing matches.
+	ev = append(ev, o.knowledgeEvidence(ctx, p, question, sc)...)
 	if o.DS != nil {
 		probs, err := o.DS.ListActiveProblems(ctx, p, 100)
 		if err != nil {
@@ -397,6 +402,16 @@ func (o *Orchestrator) topologyEvidence(ctx context.Context, p Principal, sc *st
 	return out
 }
 
+// hasKnowledgeEvidence: the block carries retrieved workspace knowledge.
+func hasKnowledgeEvidence(ev []EvidenceItem) bool {
+	for _, e := range ev {
+		if strings.HasPrefix(e.CitationID, KnowledgeCitationPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasTopologyEvidence: the block carries whole-network topology items.
 func hasTopologyEvidence(ev []EvidenceItem) bool {
 	for _, e := range ev {
@@ -437,6 +452,11 @@ func (o *Orchestrator) modelAnswerPrompt(question string, ev []EvidenceItem, glo
 		// The caller's generated vocabulary, after the instructions and fenced
 		// as data: it helps read the question, it is never evidence to cite.
 		b.WriteString("\n\n" + glossary + "\n(The vocabulary is for understanding the question only — it is not evidence; cite only the ids above.)")
+	}
+	if hasKnowledgeEvidence(ev) {
+		b.WriteString(" Items whose id starts with kb: are this workspace's RECORDED knowledge — an approved runbook (what the team wrote) " +
+			"or a closed past incident (what happened before and the fix an operator recorded). Present them as that, never as the " +
+			"current state or the present cause, and keep any \"check it still applies\" warning they carry.")
 	}
 	if hasTopologyEvidence(ev) {
 		b.WriteString(" For the topology: explain how the network is built in network terms — the overlay and its transports, " +
