@@ -189,8 +189,11 @@ func (p *TeamsPoster) token(ctx context.Context, c Connection) (string, error) {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
 	}
-	if err := json.Unmarshal(raw, &tr); err != nil || tr.AccessToken == "" {
-		return "", errors.New("chatops: teams token unreadable")
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		return "", fmt.Errorf("chatops: teams token response unreadable: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return "", errors.New("chatops: teams token response carried no access token")
 	}
 	life := time.Duration(tr.ExpiresIn)*time.Second - time.Minute
 	if life < time.Minute {
