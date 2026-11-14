@@ -237,6 +237,30 @@ describe("focus and Esc", () => {
     expect(document.activeElement, "focus stays where the operator was").toBe(pageCtl);
   });
 
+  it("an Esc for a modal opened from an answer closes only that modal, not Iris", () => {
+    // The change drawer (iris/ChangeDrawer.tsx) is a Modal rendered INSIDE the
+    // panel, so focus is "inside" Iris while it is open. Its Esc is its own:
+    // closing the whole panel with it threw the conversation away.
+    render(<Harness />);
+    fireEvent.click(launcher());
+    const panel = document.getElementById("iris-panel")!;
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const close = document.createElement("button");
+    close.textContent = "Close";
+    dialog.appendChild(close);
+    panel.appendChild(dialog);
+    close.focus();
+    press("Escape", close);
+    expect(current.mode, "the drawer's Esc is not Iris's").toBe("docked");
+    dialog.remove();
+    const box = screen.getByRole("textbox", { name: "Question" });
+    box.focus();
+    press("Escape", box);
+    expect(current.mode, "with no modal open, Esc closes Iris again").toBe("closed");
+  });
+
   it("an Esc already handled inside Iris (an open menu) is left alone", () => {
     render(<Harness />);
     fireEvent.click(launcher());

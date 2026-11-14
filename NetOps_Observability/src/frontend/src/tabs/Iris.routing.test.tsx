@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
+import { StrictMode } from "react";
 import Iris from "./Iris";
 import { ShellContext, TIME_RANGES, type ShellState } from "../context/shell";
 import { StreamBrokenError, type AiAnswer } from "../services/api";
@@ -577,5 +578,46 @@ describe("Iris — connect a model (tracker 337 C2/C3/C5)", () => {
       budget: { daily_tokens_default: 1000000, workspaces_exhausted: 2 } });
     await renderOpsis();
     expect((await screen.findByTestId("connect-model-banner")).textContent).toBe("2 workspaces have spent today's AI budget.");
+  });
+});
+
+describe("Iris — an entry point's question is asked once (found by e2e/irisFlagshipSlices.spec.ts)", () => {
+  it("one pending ask sends one question, even when effects run twice (React.StrictMode)", async () => {
+    aiAsk.mockResolvedValue(citedAnswer());
+    const onAskHandled = vi.fn();
+    const pending = { topic: "", question: "Explain the open incident \"WAN loss\"", seq: 1 };
+    render(
+      <StrictMode>
+        <ShellContext.Provider value={shell}><Iris ask={pending} onAskHandled={onAskHandled} /></ShellContext.Provider>
+      </StrictMode>,
+    );
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(aiAsk).toHaveBeenCalled());
+    // StrictMode runs the mount effect twice; the same ask (same seq) is one question.
+    expect(aiAsk.mock.calls.filter((c) => c[0] === pending.question)).toHaveLength(1);
+  });
+
+  it("waits for the AI entitlements, then asks inside a conversation so the follow-up can bind to it", async () => {
+    let resolveFeatures: (v: unknown) => void = () => {};
+    features.mockReturnValue(new Promise((r) => { resolveFeatures = r; }));
+    startIrisConversation.mockResolvedValue({ id: "conv-9", created_at: "", updated_at: "", turns: [] });
+    aiAsk.mockResolvedValue(citedAnswer({ conversation_id: "conv-9" } as Partial<AiAnswer>));
+    const pending = { topic: "", question: "Explain the open incident \"WAN loss\"", seq: 1 };
+    render(<ShellContext.Provider value={shell}><Iris ask={pending} /></ShellContext.Provider>);
+    await act(async () => { await Promise.resolve(); });
+    expect(aiAsk, "nothing is asked before the entitlements are known").not.toHaveBeenCalled();
+    await act(async () => { resolveFeatures({ copilot: true }); await Promise.resolve(); });
+    await waitFor(() => expect(aiAsk).toHaveBeenCalled());
+    expect(startIrisConversation).toHaveBeenCalledTimes(1);
+    expect(aiAsk.mock.calls[0][0]).toBe(pending.question);
+    expect(aiAsk.mock.calls[0][2], "the entry point's question is turn 1 of the conversation").toBe("conv-9");
+  });
+
+  it("drops an entry point's ask when Iris is turned off", async () => {
+    features.mockResolvedValue({ copilot: false });
+    const onAskHandled = vi.fn();
+    render(<ShellContext.Provider value={shell}><Iris ask={{ topic: "", question: "anything", seq: 1 }} onAskHandled={onAskHandled} /></ShellContext.Provider>);
+    await waitFor(() => expect(onAskHandled).toHaveBeenCalled());
+    expect(aiAsk).not.toHaveBeenCalled();
   });
 });

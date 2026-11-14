@@ -597,16 +597,30 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   // through the view context, exactly as if the operator had typed it.
   const sendRef = useRef(send);
   sendRef.current = send;
+  // The seq already asked: an effect that runs twice for the same ask (React
+  // StrictMode's mount re-run, or a remount before the panel clears it) must
+  // not ask the question twice — each ask can be a model call.
+  const askedSeqRef = useRef<number | null>(null);
   useEffect(() => {
     if (!ask) return;
-    if (ask.topic) {
-      askRef.current(ask.question?.trim() || `What does ${ask.topic} mean?`, { topic: ask.topic });
-    } else if (ask.question?.trim()) {
-      void sendRef.current(ask.question.trim());
+    // An entry point usually opens Iris AND asks at once, before the caller's
+    // AI entitlements have loaded. Asked then, the question went out with no
+    // conversation (one starts only once ai.nlquery is known), so the server
+    // never held it and the follow-up ("Who changed it?") had nothing to bind
+    // to. Wait for the entitlements; drop the ask if Iris is off.
+    if (enabled === null) return;
+    if (askedSeqRef.current === ask.seq) return;
+    askedSeqRef.current = ask.seq;
+    if (enabled) {
+      if (ask.topic) {
+        askRef.current(ask.question?.trim() || `What does ${ask.topic} mean?`, { topic: ask.topic });
+      } else if (ask.question?.trim()) {
+        void sendRef.current(ask.question.trim());
+      }
     }
     onAskHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ask?.seq]);
+  }, [ask?.seq, enabled]);
 
   if (enabled === false) {
     return (

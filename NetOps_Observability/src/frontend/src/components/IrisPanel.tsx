@@ -252,19 +252,21 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   // Expanded → the mode it came from; Floating/Docked → closed. A docked panel
   // is part of the page, so an Esc pressed in the page (closing a page menu)
   // is the page's — Esc reaches Iris when focus is in it or on its control.
-  // An open modal dialog elsewhere also keeps its own Esc.
+  // An open modal dialog keeps its own Esc — elsewhere on the page AND one
+  // opened from an answer inside the panel (the change drawer): focus is then
+  // "inside" Iris, and closing the whole panel with the drawer threw the
+  // conversation away (found by e2e/irisFlagshipSlices.spec.ts).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       const el = panelRef.current;
+      const modal = document.querySelector('[aria-modal="true"]');
+      if (modal && modal !== el && !(el && modal.contains(el))) return;
       const active = document.activeElement;
       const inside = !!el && !!active && el.contains(active);
       const onControl = !!active && active.id === IRIS_LAUNCHER_ID;
-      if (!inside && !onControl) {
-        if (presentation === "docked") return;
-        if (document.querySelector('[aria-modal="true"]')) return;
-      }
+      if (!inside && !onControl && presentation === "docked") return;
       e.preventDefault();
       transition({ type: "escape" });
     };
@@ -296,17 +298,20 @@ export default function IrisPanel({ state, dispatch }: { state: IrisPanelState; 
   // listener. The panel opens in the operator's mode and the ask is handed to
   // the Iris content. `seq` makes the same topic askable twice.
   const [pendingAsk, setPendingAsk] = useState<(IrisAskDetail & { seq: number }) | null>(null);
+  // Monotonic for the panel's lifetime (a ref, not a per-effect counter): the
+  // content treats a seq it has already asked as done, so a re-run of this
+  // effect must never hand out seq 1 again.
+  const askSeqRef = useRef(0);
   useEffect(() => {
-    let seq = 0;
     const onAsk = (e: Event) => {
       const d = (e as CustomEvent<IrisAskDetail>).detail;
       const topic = d?.topic?.trim() ?? "";
       // A topic is an authored definition; no topic + a question is an entry
       // point's question about the screen (askIrisAbout, N-E4).
       if (!topic && !d?.question?.trim()) return;
-      seq += 1;
+      askSeqRef.current += 1;
       dispatch({ type: "open" });
-      setPendingAsk({ topic, question: d.question, seq });
+      setPendingAsk({ topic, question: d.question, seq: askSeqRef.current });
     };
     window.addEventListener(IRIS_ASK_EVENT, onAsk);
     return () => window.removeEventListener(IRIS_ASK_EVENT, onAsk);
