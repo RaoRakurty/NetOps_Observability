@@ -64,7 +64,8 @@ export function stepWord(kind: string | undefined): string {
 }
 
 const SOURCE_WORD: Record<string, string> = {
-  runbook_link: "your runbook, linked here", selected: "matches the question", entry_method: "top-level method",
+  runbook_link: "your runbook, linked here", runbook_retrieved: "your runbook, matches the question",
+  selected: "matches the question", entry_method: "top-level method",
 };
 
 const CUTOFF_WORD: Record<string, string> = {

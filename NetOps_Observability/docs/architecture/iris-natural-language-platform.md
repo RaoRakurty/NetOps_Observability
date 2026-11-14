@@ -161,9 +161,9 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 7 | Entity recognition + `ResolvedEntityRef` + 6-rung priority; ambiguity blocks actions | MISSING | No alias table; `/api/search` covers device/app/case, not site/interface/circuit (`search_unified.go:44`) | N-C2 |
 | 8 | `SemanticSchemaCatalog` | MISSING | Real metric names enumerated in the audit (e.g. `circuit_loss_pct`, `device_if_in_octets`, `device_bgp_peer_state`, `probe_rtt_ms`) | N-C1 |
 | 9 | Schema RAG (relevant fragments only) | SHIPPED | Lexical (catalog alias index + description overlap, no vector store): `internal/nlquery/modelc/retrieve.go` | — |
-| 10 | Multi-layer RAG A–G (schema, environment, runbook, incident, docs, structured change, never-vector telemetry) | PARTIAL | Docs BM25 (E) shipped; others missing | N-C5, N-F3, N-F4, N-D3 |
-| 11 | Hybrid retrieval (filters + lexical + semantic + recency + authority + rerank) | PARTIAL | Lexical BM25 + tier tie-break only | N-F3 |
-| 12 | RAG security: tenant pre-filter, provenance fields, retrieved content is data | PARTIAL | Docs corpus is platform-global (no tenant data); investigation memory is tenant-scoped | N-F3 |
+| 10 | Multi-layer RAG A–G (schema, environment, runbook, incident, docs, structured change, never-vector telemetry) | PARTIAL | Docs BM25 (E) shipped; environment, runbook and incident layers shipped 2026-11-14 (N-F3, `ai/knowledge.go`); schema/structured-change layers remain | N-C5, N-D3 |
+| 11 | Hybrid retrieval (filters + lexical + semantic + recency + authority + rerank) | SHIPPED (lexical) | Tenant/layer pre-filter + BM25 with folding and compound names + authority/recency rerank (N-F3); no semantic leg by standing decision §4.1.5 | — |
+| 12 | RAG security: tenant pre-filter, provenance fields, retrieved content is data | SHIPPED | Every retrieval object carries tenant/source/authority/timestamp/type/scope; the seam and `RankKnowledge` both re-check the tenant; items are fenced data (N-F3, `iris_workspace_knowledge_isolation_test.go`) | — |
 | 13 | `IrisConversationState` | DONE | `internal/irisconvo` + migration 0053 (2026-09-27); design §9 of `iris-nl-query-design.md` | — |
 | 14 | Reference resolution (that/it/there/those) from structured state | DONE | `compile/refer.go` — bound from server state or Unparsed (2026-09-27) | — |
 | 15 | `NLQueryCompiler` pipeline + compile/execute/get/explain APIs + `compile_query` tool | PARTIAL | Grammar → guarded model fallback (`internal/nlquery/modelc`) → validator; compile/execute APIs; `compile_query` tool (`ai/compile_query.go`, interpret-only). `GET /api/ai/query/{id}` + `/explain` missing | N-C5 |
@@ -200,7 +200,7 @@ Evidence paths are relative to `src/backend/` unless prefixed. "Closes in" names
 | 46 | Streamed operational progress | MISSING | No SSE/Flusher anywhere | N-E2 |
 | 47 | Performance targets per class; tenant-keyed caches | MISSING | — | N-C5, N-H4 |
 | 48 | Query eval metrics + targets (entity ≥99 %, exec ≥98 %, semantic ≥95 %) | MISSING | — | N-C6, N-H5 |
-| 49 | RAG evaluation per layer | PARTIAL | Docs hit@1/hit@3 floors 0.75/0.95 (N-G2 shipped); other layers not built | N-F3 |
+| 49 | RAG evaluation per layer | SHIPPED | Docs hit@1/hit@3 floors 0.75/0.95 (N-G2); workspace knowledge recall@3 / precision@3 / abstention / stale / wrong-source with a ratchet (N-F3, `ai/knowledge_eval_test.go`) | — |
 | 50 | Multi-turn naturalness tests | PARTIAL | Unit + HTTP follow-up tests (`refer_test.go`, `nlquery_convo_isolation_test.go`); no scored multi-turn corpus yet | N-C7 |
 | 51 | Flagship test 1: change incident conversation | MISSING | — | N-S1 |
 | 52 | Flagship test 2: Comcast circuits → only Dallas → BGP flaps | MISSING | — | N-S2 |
@@ -449,7 +449,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-S2, N-S3 | PARTIAL | scripted in the multi-turn corpus (`internal/nlquery/golden_test.go`) | N-S3's correlated-vs-causal change query is not a query type (`testdata/iris_conversations/multiturn.json` gap note) |
 | N-F1 | SHIPPED | Org Context Store `internal/orgcontext`, `/api/ai/context` (`main.go`), prompt block `ai/org_context_prompt.go` (`f54fcf72`) | — |
 | N-F2 | SHIPPED (2026-11-14) | `/api/ai/runbooks` mounted (`ai_handlers.go handleAIRunbooks`, gated on `ai.runbook.author` + administration perms, tenant from the token); approved, investigative runbooks whose cases passed under the CURRENT fingerprint join the tenant's method set (`aiSkillsFor` → `SkillSet.Overlay`, cached per tenant + fingerprint); re-checks after a platform change recorded beside the frozen proof (migration 0072, `POST /{id}/reprove`, lazy background re-check); Administration → Iris → Runbooks; §3a test `tenant_runbook_isolation_test.go` | remaining: none in scope — a runbook's text never enters the model-first planner (by design); captures for vendor-specific commands follow NetClaw batches |
-| N-F3 | MISSING | BM25 exists for product docs only (`ai/docs_index.go`) | tenant-scoped retrieval over Network context, runbooks and incident history |
+| N-F3 | SHIPPED 2026-11-14 | `ai/knowledge.go` (`RankKnowledge`, `search_workspace_knowledge`, `RankContextFacts`); server seam `aiWorkspaceKnowledge` (`ai_troubleshoot_deps.go`); question-aware `orgContextBlockFor` (`ai_handlers.go`); eval `ai/knowledge_eval_test.go` | Runbook layer = approved runbooks (DOCUMENTATION), incident layer = closed incidents + recorded fix kind (HISTORICAL), environment layer = N-F1 facts ordered by the question when they overflow the block (never citable). Lexical limit recorded: "bgp" does not match "cbgp" |
 | N-F4 | SHIPPED | `internal/incidentfp`, RCA card, `find_similar_incidents`, planner route `similar_incidents` (`ai/similar_answer.go`) | — (recorded fixes shipped 2026-11-13: `internal/rcaresolution`, migration 0071; recall says them as history) |
 | N-F5 | MISSING | — | controlled learning loop (resolved incident → proposed context/runbook/alias → review → activate) |
 | N-F6 | SHIPPED | `internal/srcauthority` (`d9f7affd`) | — |

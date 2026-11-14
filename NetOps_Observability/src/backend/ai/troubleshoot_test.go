@@ -126,6 +126,16 @@ func tsDeps() TroubleshootDeps {
 				ResolvedAt: tsMemoryDay,
 			}}, nil
 		},
+		WorkspaceKnowledge: func(_ context.Context, p Principal, _ []KnowledgeLayer) (KnowledgeCorpus, error) {
+			if p.Tenant != "t-a" {
+				return KnowledgeCorpus{Scoped: true, Tenant: p.Tenant}, nil // another tenant's knowledge is simply not there
+			}
+			return KnowledgeCorpus{Scoped: true, Tenant: "t-a", Docs: []KnowledgeDoc{{
+				ID: "rb-1", Layer: LayerRunbook, Tenant: "t-a", Source: "tenant_runbook", Authority: AuthorityApproved,
+				Updated: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Scope: "tenant", Title: "edge-uplink-check",
+				Text: "when to use: edge-1 uplink errors or BGP flaps on the edge", Label: "approved 2026-10-01, version 1",
+			}}}, nil
+		},
 		BGPFeedRecent: func(_ context.Context, _ Principal, prefix string, limit int) (BGPFeedReport, error) {
 			return BGPFeedReport{
 				Scope: "t-a", Resources: []string{"203.0.113.0/24"},
@@ -167,8 +177,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 16 {
-		t.Fatalf("expected 16 Phase-A/A4/B/F4/network/WAN/probe tools, got %v", names)
+	if len(names) != 17 {
+		t.Fatalf("expected 17 Phase-A/A4/B/F4/network/WAN/probe/knowledge tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {

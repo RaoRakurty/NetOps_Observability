@@ -114,9 +114,10 @@ const (
 
 // Candidate sources (closed): why a method was considered.
 const (
-	InvSourceRunbookLink = "runbook_link" // the tenant linked this runbook to the incident or device
-	InvSourceSelected    = "selected"     // the method the question selects
-	InvSourceEntry       = "entry_method" // the top-level method
+	InvSourceRunbookLink      = "runbook_link"      // the tenant linked this runbook to the incident or device
+	InvSourceRunbookRetrieved = "runbook_retrieved" // N-F3: the tenant's approved runbook matches the question
+	InvSourceSelected         = "selected"          // the method the question selects
+	InvSourceEntry            = "entry_method"      // the top-level method
 )
 
 // Cutoff reasons (closed), in addition to the chain's own.
@@ -670,6 +671,14 @@ func (o *Orchestrator) investigationCandidates(ctx context.Context, p Principal,
 			}
 		}
 	}
+	// (a2) The tenant's approved runbooks whose text matches the question
+	// (N-F3 retrieval, through the gateway). Again only names present in the
+	// caller's own skill set can be added.
+	for _, n := range o.retrievedRunbookNames(ctx, p, question) {
+		if sk, ok := o.Skills.Get(n); ok && sk.customerAuthored() {
+			add(sk, InvSourceRunbookRetrieved, "your team's runbook "+humanizeSkillName(sk.Name)+" matches this question")
+		}
+	}
 	// (b) The method the question selects.
 	if m, ok := SelectSkill(o.Skills, question, Plan{Intent: "troubleshoot", Entities: Classify(question, boundUIContext(ent)).Entities}); ok {
 		add(m.Skill, InvSourceSelected, m.Reason)
@@ -808,7 +817,7 @@ func candidatesSummary(cs []InvestigationCandidate) string {
 	}
 	runbooks, applies := 0, 0
 	for _, c := range cs {
-		if c.Source == InvSourceRunbookLink {
+		if c.Source == InvSourceRunbookLink || c.Source == InvSourceRunbookRetrieved {
 			runbooks++
 		}
 		if c.Applies {
@@ -817,7 +826,7 @@ func candidatesSummary(cs []InvestigationCandidate) string {
 	}
 	s := plural(len(cs), "method") + " considered, " + strconv.Itoa(applies) + " applicable"
 	if runbooks > 0 {
-		s += "; " + plural(runbooks, "runbook") + " your team linked to this scope"
+		s += "; " + plural(runbooks, "runbook") + " your team wrote for this scope or question"
 	}
 	return s
 }
