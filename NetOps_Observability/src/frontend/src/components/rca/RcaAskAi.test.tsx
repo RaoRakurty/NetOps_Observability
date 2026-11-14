@@ -191,4 +191,26 @@ describe("RcaAskAi — docked, problem-scoped conversation", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("rca-iris-chat")).toBeNull();
   });
+
+  // N-E3: the classic RCA answer shows the same grounded recommendation cards
+  // the Iris box does — escaped text, cited, and "no action has been executed".
+  it("renders the answer's recommendation cards", async () => {
+    aiAskStream.mockResolvedValue(answer({
+      recommendations: [{ id: "r1", title: "Check the Gi4 optics <b>now</b>", steps: ["Read the DOM levels"], why: "Errors rose first on Gi4", basis: ["sig-1"] }],
+    }));
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Explain this problem" }));
+    expect(await screen.findByText("Check the Gi4 optics <b>now</b>")).toBeTruthy();
+    expect(screen.getAllByText(/No action has been executed/).length).toBeGreaterThan(0);
+    expect(document.querySelector(".ric b")).toBeNull();
+  });
+
+  // N-E4: while the RCA view is open, the problem is what the Iris box binds.
+  it("registers the problem as what is in view, and clears it on close", async () => {
+    const vc = await import("../../iris/viewContext");
+    const { unmount } = render(<RcaAskAi correlationId={CORR} />);
+    expect(vc.currentIrisView()).toMatchObject({ kind: "incident", id: CORR });
+    unmount();
+    expect(vc.currentIrisView()).toBeNull();
+  });
 });

@@ -18,6 +18,10 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrNotImplemented = errors.New("tool not implemented yet")
 	ErrForbidden      = errors.New("forbidden")
+	// ErrBadArgs marks a tool refusing an argument it cannot honour (an
+	// out-of-range window, an interface without its device). The wrapped
+	// message is the reason, written for the model to correct its call.
+	ErrBadArgs = errors.New("invalid arguments")
 )
 
 // Principal is the minimal, already-resolved caller identity the tools need to

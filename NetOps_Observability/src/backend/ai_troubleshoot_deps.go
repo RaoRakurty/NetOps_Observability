@@ -2986,6 +2986,21 @@ func (h *nlqScope) DeviceReachability(ctx context.Context, ids []string) (map[st
 	return out, nil
 }
 
+// FlowTop is plan.FlowScope (N-C4): the same allowlisted flow statements and
+// scope rules as the Iris flow tools, at the caller's tenant_scope.
+func (h *nlqScope) FlowTop(ctx context.Context, q plan.FlowQuery) (plan.FlowAnswer, error) {
+	d := aiDataSource{srv: h.s, ctx: ctx, scope: h.s.chTenantScopeFor(h.claims), claims: h.claims}
+	return d.nlqFlowTop(q)
+}
+
+// LogSearch is plan.LogScope (N-C4): the same syslog read as the search_logs
+// tool — per-tenant index, doc-level tenant filter, operator restriction,
+// routine sessions left out — with closed severity and topic filters only.
+func (h *nlqScope) LogSearch(ctx context.Context, q plan.LogQuery) (plan.LogAnswer, error) {
+	d := aiDataSource{srv: h.s, ctx: ctx, scope: h.s.chTenantScopeFor(h.claims), claims: h.claims}
+	return d.nlqLogSearch(h.s.aiPrincipal(h.claims), q)
+}
+
 func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.DeviceRef, error) {
 	ids, sites := stringSet(f.IDs), stringSet(f.Sites)
 	var out []plan.DeviceRef
@@ -3766,13 +3781,12 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 			}
 		}
 		turn := ai.RedactSecrets(question)
-		if orch.Glossary != nil {
-			// The caller's generated vocabulary (names, never instructions),
-			// after the question: it helps the loop read "the Dallas box" or
-			// an alias without a phrase list (model-first decision point 3).
-			if g := strings.TrimSpace(orch.Glossary(ctx, p)); g != "" {
-				turn += "\n\n" + ai.RedactSecrets(g)
-			}
+		// The caller's generated vocabulary (names, never instructions) and
+		// what is in view on their screen (N-E4, server-validated), after the
+		// question: the loop reads "the Dallas box", an alias, or "this
+		// device" without a phrase list (model-first decision point 3).
+		if g := strings.TrimSpace(orch.ViewText(ctx, p)); g != "" {
+			turn += "\n\n" + ai.RedactSecrets(g)
 		}
 		msgs = append(msgs, copilotMessage{Role: "user", Content: turn})
 		ctx, cancel := context.WithTimeout(ctx, aiAgentAnswerBudget)

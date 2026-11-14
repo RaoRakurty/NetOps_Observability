@@ -55,9 +55,11 @@ func TestTheClassicPathKeepsWhatTheDataArmDoesNotClaim(t *testing.T) {
 		err error
 		arm bool // whether the arm may even be consulted
 	}{
-		"diagnostic":      {q: "why is cpu high on edge-1", d: DataAnswer{Status: DataAnswered}, arm: false},
-		"root cause":      {q: "what is the root cause of the loss in dallas", d: DataAnswer{Status: DataAnswered}, arm: false},
-		"problem id":      {q: "show cpu", ui: map[string]string{"problem_id": "p-1"}, d: DataAnswer{Status: DataAnswered}, arm: false},
+		"diagnostic": {q: "why is cpu high on edge-1", d: DataAnswer{Status: DataAnswered}, arm: false},
+		"root cause": {q: "what is the root cause of the loss in dallas", d: DataAnswer{Status: DataAnswered}, arm: false},
+		// The caller's own problem in view (N-E4 binds only an id the caller's
+		// scope resolves): the data arm stays out of it.
+		"problem id":      {q: "show cpu", ui: map[string]string{"problem_id": "pa"}, d: DataAnswer{Status: DataAnswered}, arm: false},
 		"not data":        {q: "how do I add a device", d: DataAnswer{Status: DataNotData}, arm: true},
 		"arm failed":      {q: "show cpu on edge-1", err: errors.New("vm down"), arm: true},
 		"unknown outcome": {q: "show cpu on edge-1", d: DataAnswer{Status: "maybe"}, arm: true},

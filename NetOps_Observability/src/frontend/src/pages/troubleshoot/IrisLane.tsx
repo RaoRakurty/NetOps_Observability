@@ -37,12 +37,15 @@
 // no secrets, no other tenant's data (LLM06).
 
 import { useEffect, useRef, useState } from "react";
-import { api, StreamBrokenError, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import { type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
 import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
 import { applyEvent } from "../../iris/progressStream";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
 import StatementText from "../../iris/StatementText";
+import RecommendationCards from "../../iris/RecommendationCards";
+import { askBound } from "../../iris/askBound";
+import { useIrisView } from "../../iris/viewContext";
 
 /** A relative, same-origin path is safe to link. Everything else is inert text.
  *  Both protocol-relative spellings are rejected: browsers normalise a leading
@@ -108,6 +111,8 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
       ? `An operator reports: ${symptomLabel}. What should I check next, and what evidence is missing?`
       : "What is going on right now?";
 
+  // The case driving the investigation is what the Iris box binds too (N-E4).
+  useIrisView(caseId ? { kind: "incident", id: caseId, label: symptomLabel || "this case" } : null);
   // The operational trace (tracker 337 N-E2/N-E3): what Iris is doing while
   // it works — server event names mapped to plain words, never model text.
   const [steps, setSteps] = useState<ProgressStep[]>([]);
@@ -116,14 +121,9 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
     setBusy(true); setErr(null); setSteps([]);
     const context: Record<string, string> = caseId ? { correlation_id: caseId } : {};
     try {
-      try {
-        setAns(await api.aiAskStream(question, context, undefined, (ev) => setSteps((s) => applyEvent(s, ev))));
-      } catch (e) {
-        // A stream a proxy cut short falls back ONCE to the plain ask.
-        if (!(e instanceof StreamBrokenError)) throw e;
-        setSteps([]);
-        setAns(await api.aiAsk(question, context));
-      }
+      // The ONE ask path the RCA view and the Iris box use (iris/askBound.ts):
+      // streamed progress, one JSON fallback when a proxy cuts the stream.
+      setAns((await askBound(question, context, null, (ev) => setSteps((s) => applyEvent(s, ev)))).answer);
     } catch (e) {
       setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
@@ -210,6 +210,11 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
 
           {/* Statement classes (N-B4): each sentence with the server's class. */}
           <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} citations={ans.citations} />
+
+          {/* N-E3: grounded recommendation cards, as in the Iris box. */}
+          {(ans.recommendations?.length ?? 0) > 0 && (
+            <RecommendationCards cards={ans.recommendations ?? []} citations={ans.citations ?? []} />
+          )}
 
           {cites.length > 0 && (
             <div className="tsl-cites" aria-label="Evidence citations">
