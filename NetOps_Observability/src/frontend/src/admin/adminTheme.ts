@@ -45,6 +45,7 @@ export const ADMIN_LEAF_THEME: Record<string, keyof typeof ADMIN_THEMES> = {
   processors: "handling",
   "sensitive-data-access": "handling",
   "network-context": "iris",
+  "iris-runbooks": "iris",
   identity: "people",
   api: "people",
   sessions: "people",

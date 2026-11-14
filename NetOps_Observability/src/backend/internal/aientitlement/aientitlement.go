@@ -72,19 +72,19 @@ const (
 	// arm of /api/ai/ask.
 	NLQuery Entitlement = "ai.nlquery"
 
-	// The three below are DEFINED BUT GATE NOTHING YET: no route, feature or
-	// tool backs them today (tracker 337 N-F1 tenant context authoring, N-F2
-	// tenant-authored runbooks, N-I5 MCP adapter). They exist now so the tier
-	// mapping, the frontend and the licence conversation can name them before
-	// the features land — and so the feature that lands gates on an
-	// entitlement that already exists instead of inventing one. Backed()
-	// reports false for them, and the route guard test refuses a route that
-	// claims one until Backed() is flipped in the same change.
+	// The three below were defined before their features landed, so the tier
+	// mapping, the frontend and the licence conversation could name them first.
+	// ContextAuthor (N-F1) and RunbookAuthor (N-F2) are backed now; MCP (N-I5)
+	// still gates nothing: Backed() reports false for it, and the route guard
+	// test refuses a route that claims it until Backed() is flipped in the
+	// same change.
 
 	// ContextAuthor — tenant-authored Network context for Iris (N-F1): the
 	// /api/ai/context routes, and whether approved facts reach a prompt.
 	ContextAuthor Entitlement = "ai.context.author"
-	// RunbookAuthor — tenant-authored runbooks (N-F2). Unbacked.
+	// RunbookAuthor — tenant-authored runbooks and MOPs (N-F2): the
+	// /api/ai/runbooks routes, and whether a tenant's approved runbooks reach
+	// Iris's troubleshooting methods.
 	RunbookAuthor Entitlement = "ai.runbook.author"
 	// MCP — the MCP adapter over the tool gateway (N-I5). Unbacked.
 	MCP Entitlement = "ai.mcp"
@@ -110,7 +110,8 @@ var backed = map[Entitlement]bool{
 	Investigate:   true,
 	NLQuery:       true,
 	ContextAuthor: true,
-	// RunbookAuthor, MCP: not backed yet — see the const block.
+	RunbookAuthor: true,
+	// MCP: not backed yet — see the const block.
 }
 
 // All returns the closed vocabulary in display order.

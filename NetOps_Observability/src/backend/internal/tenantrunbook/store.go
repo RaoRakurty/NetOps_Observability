@@ -34,6 +34,11 @@ type Store interface {
 	// Check runs the harness over the open version (or, with none, the active
 	// one) and changes nothing.
 	Check(ctx context.Context, tenant, id string) (HarnessResult, error)
+	// Reprove re-runs the ACTIVE version's cases under the current fingerprint
+	// and records the result on that version (active.go). The text and its
+	// approval are untouched; ErrNothingActive when nothing is approved. actor
+	// is who asked (a person, or the server's lazy re-check), for the record.
+	Reprove(ctx context.Context, tenant, id, actor string) (ReproveResult, error)
 	// Links lists a runbook's links.
 	Links(ctx context.Context, tenant, id string) ([]Link, error)
 	// PutLink adds a link; adding one that exists changes nothing.
@@ -86,7 +91,7 @@ func newRunbook(tenant, actor, id, body, whenToUse string, in NewRunbook, now ti
 			ID: id, TenantID: tenant, Scope: orgcontext.ScopeTenant, Key: in.Name, CreatedBy: actor, CreatedAt: now, UpdatedAt: now,
 			Versions: []orgcontext.Version{{Version: 1, Body: body, BodySHA256: orgcontext.BodySHA256(body), State: orgcontext.StateDraft, Author: actor, CreatedAt: now}},
 		},
-		RunbookKind: in.Kind, WhenToUse: whenToUse, Harness: map[int]Stamp{},
+		RunbookKind: in.Kind, WhenToUse: whenToUse, Harness: map[int]Stamp{}, Recheck: map[int]map[string]Stamp{},
 	}
 }
 
@@ -418,6 +423,30 @@ func (m *MemStore) Do(ctx context.Context, tenant, id string, op orgcontext.Op) 
 	}
 	m.rows[tenant][id] = after
 	return after.clone(), nil
+}
+
+// Reprove implements Store.
+// The memory store keeps no re-check author; PGStore records it.
+func (m *MemStore) Reprove(ctx context.Context, tenant, id, _ string) (out ReproveResult, err error) {
+	defer func() { m.cfg.Metrics.op("reprove", err) }()
+	before, err := m.Get(ctx, tenant, id)
+	if err != nil {
+		return ReproveResult{}, err
+	}
+	v, res, out, err := m.cfg.reprovePrepare(ctx, before, func() ([]Runbook, error) { return m.List(ctx, tenant) })
+	if err != nil || out.AlreadyOK {
+		return out, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.rows[tenant][id]
+	if !ok {
+		return ReproveResult{}, orgcontext.ErrNotFound
+	}
+	if st, record := m.cfg.reproveDecide(cur, v.Version, v.BodySHA256, res, m.now()); record {
+		m.rows[tenant][id] = withRecheck(cur, v.Version, st)
+	}
+	return out, nil
 }
 
 // Check implements Store.
