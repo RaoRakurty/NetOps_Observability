@@ -42,6 +42,7 @@ import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
 import { applyEvent } from "../../iris/progressStream";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
+import InvestigationTrace from "../../iris/InvestigationTrace";
 import StatementText from "../../iris/StatementText";
 import RecommendationCards from "../../iris/RecommendationCards";
 import { askBound } from "../../iris/askBound";
@@ -117,13 +118,18 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
   // it works — server event names mapped to plain words, never model text.
   const [steps, setSteps] = useState<ProgressStep[]>([]);
 
-  const ask = async () => {
+  const ask = async (investigate = false) => {
     setBusy(true); setErr(null); setSteps([]);
     const context: Record<string, string> = caseId ? { correlation_id: caseId } : {};
+    // "Investigate" (N-I1): a full read-only investigation of this case — the
+    // engine's verdict first, the runbooks your team linked here, then bounded
+    // passes. The server refuses it, in words, without AI investigations.
+    if (investigate) context.iris_action = "investigate";
+    const q = investigate && !caseId && !symptomLabel ? "Investigate what is going on." : question;
     try {
       // The ONE ask path the RCA view and the Iris box use (iris/askBound.ts):
       // streamed progress, one JSON fallback when a proxy cuts the stream.
-      setAns((await askBound(question, context, null, (ev) => setSteps((s) => applyEvent(s, ev)))).answer);
+      setAns((await askBound(q, context, null, (ev) => setSteps((s) => applyEvent(s, ev)))).answer);
     } catch (e) {
       setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
@@ -150,8 +156,11 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
       <div className="tsl-head">
         <h3 id="lane-h-iris" className="tsl-title">Ask Iris</h3>
         <div className="tsl-head-actions">
-          <button type="button" className="btn-accent" onClick={ask} disabled={busy} aria-busy={busy}>
+          <button type="button" className="btn-accent" onClick={() => { void ask(); }} disabled={busy} aria-busy={busy}>
             {busy ? "Thinking…" : ans ? "Re-ask" : "Ask Iris"}
+          </button>
+          <button type="button" className="chip-btn" data-testid="iris-lane-investigate" onClick={() => { void ask(true); }} disabled={busy}>
+            Investigate
           </button>
           {onOpenDrawer && (
             <button type="button" className="chip-btn" onClick={onOpenDrawer}>Open Iris</button>
@@ -207,6 +216,9 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
 
           {/* Lines of investigation (N-B3) — beside the engine's verdict. */}
           {ans.hypotheses && <HypothesisTrace set={ans.hypotheses} />}
+
+          {/* Read-only investigation (N-I1): how it ran, step by step. */}
+          {ans.investigation && <InvestigationTrace trace={ans.investigation} />}
 
           {/* Statement classes (N-B4): each sentence with the server's class. */}
           <StatementText className="tsl-iris-text" text={ans.text || "No answer."} statements={ans.statements} citations={ans.citations} />

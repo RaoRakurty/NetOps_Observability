@@ -131,6 +131,13 @@ var routeIsolationLedger = map[string]string{
 	// another tenant, an as_tenant walk and a malformed id all get 404; the
 	// platform owner reads any tenant's. ai_hypotheses_isolation_test.go.
 	"/api/ai/hypotheses/": "scoped",
+	// Read-only investigations (N-I1): traces held under the decision id in the
+	// asker's tenant from the token (irisinvest store keyed by tenant first);
+	// another tenant, an as_tenant walk and a malformed id all get 404; the
+	// list is the caller's own; the platform owner reads any tenant's.
+	// iris_investigation_isolation_test.go.
+	"/api/ai/investigations":  "scoped",
+	"/api/ai/investigations/": "scoped",
 	// Iris Incident Replay export (N-H2): administration:read, every read through
 	// the caller's tenant-scoped seams (strict corrRowVisible on the engine's
 	// stored object); another tenant's id and an unknown id are the same 404, an
