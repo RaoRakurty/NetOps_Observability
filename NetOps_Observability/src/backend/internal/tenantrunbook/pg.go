@@ -162,6 +162,49 @@ func (p *PGStore) Do(ctx context.Context, tenant, id string, op orgcontext.Op) (
 	return out, nil
 }
 
+// Reprove implements Store. Like Do, the run happens before the lock; the locked
+// step records it only if the same text is still the active one.
+func (p *PGStore) Reprove(ctx context.Context, tenant, id, actor string) (out ReproveResult, err error) {
+	defer func() { p.cfg.Metrics.op("reprove", err) }()
+	before, err := p.Get(ctx, tenant, id)
+	if err != nil {
+		return ReproveResult{}, err
+	}
+	v, res, out, err := p.cfg.reprovePrepare(ctx, before, func() ([]Runbook, error) { return p.List(ctx, tenant) })
+	if err != nil || out.AlreadyOK {
+		return out, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pgTimeout)
+	defer cancel()
+	err = p.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		rows, err := loadRunbooks(ctx, tx, tenant, id, true)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return orgcontext.ErrNotFound
+		}
+		st, record := p.cfg.reproveDecide(rows[0], v.Version, v.BodySHA256, res, p.now())
+		if !record {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO tenant_runbook_reproofs
+		      (tenant_id, runbook_id, version, fingerprint, passed, cases, problems, checked_by, checked_at)
+		    VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)
+		    ON CONFLICT (tenant_id, runbook_id, version, fingerprint)
+		    DO UPDATE SET passed = EXCLUDED.passed, cases = EXCLUDED.cases, problems = EXCLUDED.problems,
+		                  checked_by = EXCLUDED.checked_by, checked_at = EXCLUDED.checked_at`,
+			tenant, id, v.Version, st.Fingerprint, st.Passed, res.Cases, len(res.Problems), actor, st.At); err != nil {
+			return fmt.Errorf("record re-check: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return ReproveResult{}, wrap("reprove", err)
+	}
+	return out, nil
+}
+
 // Check implements Store. It holds no lock and no transaction across the run.
 func (p *PGStore) Check(ctx context.Context, tenant, id string) (HarnessResult, error) {
 	r, err := p.Get(ctx, tenant, id)
@@ -505,6 +548,7 @@ func loadRunbooks(ctx context.Context, tx pgx.Tx, tenant, id string, lock bool) 
 			return nil, err
 		}
 		r.RunbookKind, r.TenantID, r.Scope, r.Harness = Kind(kind), tenant, orgcontext.ScopeTenant, map[int]Stamp{}
+		r.Recheck = map[int]map[string]Stamp{}
 		idx[r.ID] = len(out)
 		out = append(out, r)
 	}
@@ -545,7 +589,43 @@ func loadRunbooks(ctx context.Context, tx pgx.Tx, tenant, id string, lock bool) 
 			}
 		}
 	}
-	return out, vrows.Err()
+	if err := vrows.Err(); err != nil {
+		return nil, err
+	}
+	vrows.Close()
+	return out, loadRechecks(ctx, tx, tenant, id, args, idx, out)
+}
+
+// loadRechecks reads the re-checks (migration 0072) of the loaded runbooks.
+func loadRechecks(ctx context.Context, tx pgx.Tx, tenant, id string, args []any, idx map[string]int, out []Runbook) error {
+	q := `SELECT runbook_id::text, version, fingerprint, passed, checked_at FROM tenant_runbook_reproofs WHERE tenant_id = $1::text`
+	if id != "" {
+		q += ` AND runbook_id = $2::uuid`
+	}
+	rows, err := tx.Query(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("load re-checks: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rid, fp string
+		var version int
+		var passed bool
+		var at time.Time
+		if err := rows.Scan(&rid, &version, &fp, &passed, &at); err != nil {
+			return err
+		}
+		i, ok := idx[rid]
+		if !ok {
+			continue
+		}
+		if out[i].Recheck[version] == nil {
+			out[i].Recheck[version] = map[string]Stamp{}
+		}
+		a := at
+		out[i].Recheck[version][fp] = Stamp{Passed: passed, Fingerprint: fp, At: &a}
+	}
+	return rows.Err()
 }
 
 func uniqueViolation(err error) bool {

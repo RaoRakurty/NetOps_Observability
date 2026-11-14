@@ -108,8 +108,12 @@ type Runbook struct {
 	RunbookKind Kind
 	// WhenToUse is the searchable text: the active version's while there is one.
 	WhenToUse string
-	// Harness is each proven version's result, by version number.
+	// Harness is each proven version's result, by version number. Frozen once
+	// submitted (migration 0066's trigger).
 	Harness map[int]Stamp
+	// Recheck is each active version's re-checks under later fingerprints
+	// (migration 0072), by version then fingerprint. Never over Harness.
+	Recheck map[int]map[string]Stamp
 }
 
 // Name is the runbook's unique, immutable name.
@@ -122,6 +126,15 @@ func (r Runbook) clone() Runbook {
 		h[k] = v
 	}
 	r.Harness = h
+	rc := make(map[int]map[string]Stamp, len(r.Recheck))
+	for v, byFP := range r.Recheck {
+		m := make(map[string]Stamp, len(byFP))
+		for fp, st := range byFP {
+			m[fp] = st
+		}
+		rc[v] = m
+	}
+	r.Recheck = rc
 	return r
 }
 

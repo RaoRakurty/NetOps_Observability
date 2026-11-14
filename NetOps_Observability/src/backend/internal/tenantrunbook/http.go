@@ -13,6 +13,8 @@ package tenantrunbook
 //	PUT    /api/ai/runbooks/{id}/draft         write / edit the open draft
 //	DELETE /api/ai/runbooks/{id}/draft         discard the open draft
 //	POST   /api/ai/runbooks/{id}/check         run the cases; changes nothing
+//	POST   /api/ai/runbooks/{id}/reprove       re-run the APPROVED version's cases against
+//	                                           the current platform and record the result
 //	POST   /api/ai/runbooks/{id}/submit        run the cases, then send for review
 //	POST   /api/ai/runbooks/{id}/withdraw      take it back to draft
 //	POST   /api/ai/runbooks/{id}/approve       {version, body_sha256} — not the author
@@ -33,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,10 +60,13 @@ type Deps struct {
 	// Audit records one decision; detail never carries runbook text.
 	Audit func(r *http.Request, c orgcontext.Caller, decision string, detail map[string]any)
 	// Changed is called after a committed change to what is active.
-	Changed    func(tenant string)
-	WriteJSON  func(w http.ResponseWriter, status int, v any)
-	WriteError func(w http.ResponseWriter, status int, err error)
-	Log        func(msg string, err error)
+	Changed func(tenant string)
+	// CurrentFingerprint is the harness fingerprint now (nil: views carry no
+	// runs_in_iris / needs_recheck).
+	CurrentFingerprint func() string
+	WriteJSON          func(w http.ResponseWriter, status int, v any)
+	WriteError         func(w http.ResponseWriter, status int, err error)
+	Log                func(msg string, err error)
 }
 
 // Handler serves /api/ai/runbooks and /api/ai/runbooks/.
@@ -112,6 +118,23 @@ type VersionView struct {
 	HarnessPassed      bool       `json:"harness_passed"`
 	HarnessFingerprint string     `json:"harness_fingerprint,omitempty"`
 	HarnessAt          *time.Time `json:"harness_at,omitempty"`
+	// Rechecks are this version's re-checks under later platform fingerprints,
+	// newest first (migration 0072). The harness_* fields stay the frozen proof.
+	Rechecks []RecheckView `json:"rechecks,omitempty"`
+}
+
+// RecheckView is one re-check of an approved version.
+type RecheckView struct {
+	Fingerprint string     `json:"fingerprint"`
+	Passed      bool       `json:"passed"`
+	At          *time.Time `json:"at,omitempty"`
+}
+
+func recheckAt(r RecheckView) time.Time {
+	if r.At == nil {
+		return time.Time{}
+	}
+	return *r.At
 }
 
 // MarshalJSON leaves out the canonical body: it is the two texts joined, and the
@@ -140,14 +163,33 @@ type RunbookView struct {
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 	Versions  []VersionView `json:"versions"`
+	// RunsInIris: an investigative runbook whose approved version has passed
+	// its cases under the platform as it is now — Iris may select it.
+	// NeedsRecheck: it has an approved version, but the platform changed since
+	// its cases last passed (or a re-check failed); Iris skips it until a
+	// re-check passes.
+	RunsInIris   bool `json:"runs_in_iris"`
+	NeedsRecheck bool `json:"needs_recheck"`
 }
 
-func viewOf(rb Runbook) RunbookView {
+// viewOf is rb as the API shows it. With a current fingerprint it also says
+// whether Iris runs the runbook now, or why not.
+func (d Deps) viewOf(rb Runbook) RunbookView {
 	out := RunbookView{ID: rb.ID, Name: rb.Name(), Kind: rb.RunbookKind, WhenToUse: rb.WhenToUse, CreatedBy: rb.CreatedBy,
 		CreatedAt: rb.CreatedAt, UpdatedAt: rb.UpdatedAt, Versions: make([]VersionView, 0, len(rb.Versions))}
+	if d.CurrentFingerprint != nil && rb.RunbookKind == KindInvestigative {
+		if a, ok := rb.Active(); ok {
+			out.RunsInIris = Runnable(rb, a.Version, d.CurrentFingerprint())
+			out.NeedsRecheck = !out.RunsInIris
+		}
+	}
 	for _, v := range rb.Versions {
 		st := rb.Harness[v.Version]
 		vv := VersionView{Version: v, HarnessPassed: st.Passed, HarnessFingerprint: st.Fingerprint, HarnessAt: st.At}
+		for fp, rc := range rb.Recheck[v.Version] {
+			vv.Rechecks = append(vv.Rechecks, RecheckView{Fingerprint: fp, Passed: rc.Passed, At: rc.At})
+		}
+		sort.Slice(vv.Rechecks, func(i, j int) bool { return recheckAt(vv.Rechecks[i]).After(recheckAt(vv.Rechecks[j])) })
 		// A body that does not split was never written by this package; the view
 		// then shows no text rather than a guess at it.
 		if src, err := SplitBody(v.Body); err == nil {
@@ -203,7 +245,7 @@ func (d Deps) list(w http.ResponseWriter, r *http.Request) {
 		}
 		views := make([]RunbookView, 0, len(rows))
 		for _, rb := range rows {
-			views = append(views, viewOf(rb))
+			views = append(views, d.viewOf(rb))
 		}
 		d.WriteJSON(w, http.StatusOK, map[string]any{
 			"runbooks": views, "you": c.Sub,
@@ -233,7 +275,7 @@ func (d Deps) get(w http.ResponseWriter, r *http.Request, id string) {
 		d.fail(w, r, c, "get", id, err)
 		return
 	}
-	d.WriteJSON(w, http.StatusOK, viewOf(rb))
+	d.WriteJSON(w, http.StatusOK, d.viewOf(rb))
 }
 
 // decode reads one bounded JSON object. A smuggled tenant_id is an error, not a
@@ -273,7 +315,7 @@ func (d Deps) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Audit(r, c, "allow", detail(rb, 1, "create"))
-	d.WriteJSON(w, http.StatusCreated, viewOf(rb))
+	d.WriteJSON(w, http.StatusCreated, d.viewOf(rb))
 }
 
 func (d Deps) action(w http.ResponseWriter, r *http.Request, id, verb string) {
@@ -281,7 +323,7 @@ func (d Deps) action(w http.ResponseWriter, r *http.Request, id, verb string) {
 	switch verb {
 	case "approve", "reject", "rollback", "retire":
 		level = orgcontext.LevelManage
-	case "draft", "check", "submit", "withdraw":
+	case "draft", "check", "submit", "withdraw", "reprove":
 	default:
 		d.WriteError(w, http.StatusNotFound, errors.New("not found"))
 		return
@@ -316,6 +358,10 @@ func (d Deps) action(w http.ResponseWriter, r *http.Request, id, verb string) {
 	}
 	if verb == "check" {
 		d.check(w, r, c, id)
+		return
+	}
+	if verb == "reprove" {
+		d.reprove(w, r, c, id)
 		return
 	}
 	op := orgcontext.Op{Actor: c.Sub, Now: time.Now().UTC(), Version: req.Version, BodySHA256: req.BodySHA256, ToVersion: req.ToVersion, Reason: req.Reason}
@@ -354,7 +400,7 @@ func (d Deps) action(w http.ResponseWriter, r *http.Request, id, verb string) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	d.WriteJSON(w, http.StatusOK, viewOf(rb))
+	d.WriteJSON(w, http.StatusOK, d.viewOf(rb))
 }
 
 func (d Deps) check(w http.ResponseWriter, r *http.Request, c orgcontext.Caller, id string) {
@@ -368,6 +414,27 @@ func (d Deps) check(w http.ResponseWriter, r *http.Request, c orgcontext.Caller,
 		return
 	}
 	d.WriteJSON(w, http.StatusOK, map[string]any{"passed": true, "cases": res.Cases, "fingerprint": res.Fingerprint})
+}
+
+// reprove re-runs the approved version's cases. A pass keeps (or restores) the
+// runbook in Iris; a failure takes it out until its author fixes it. Either way
+// what is active may have changed, so the tenant's cached set is dropped.
+func (d Deps) reprove(w http.ResponseWriter, r *http.Request, c orgcontext.Caller, id string) {
+	res, err := d.Store.Reprove(r.Context(), c.Tenant, id, c.Sub)
+	if err != nil {
+		d.fail(w, r, c, "reprove", id, err)
+		return
+	}
+	if !res.AlreadyOK {
+		d.Audit(r, c, "allow", map[string]any{"runbook_id": id, "action": "reprove", "version": res.Version, "passed": res.Passed, "problems": len(res.Problems)})
+		if d.Changed != nil {
+			d.Changed(c.Tenant)
+		}
+	}
+	if res.Problems == nil {
+		res.Problems = []CaseProblem{}
+	}
+	d.WriteJSON(w, http.StatusOK, res)
 }
 
 func (d Deps) links(w http.ResponseWriter, r *http.Request, id string) {
@@ -496,6 +563,8 @@ func (d Deps) fail(w http.ResponseWriter, r *http.Request, c orgcontext.Caller, 
 		d.WriteError(w, http.StatusConflict, errors.New("the limit is reached (30 runbooks per workspace, 50 versions per runbook, 20 links per runbook)"))
 	case errors.Is(err, orgcontext.ErrInvalid):
 		d.WriteError(w, http.StatusBadRequest, errors.New("the request is not valid"))
+	case errors.Is(err, ErrNothingActive):
+		d.WriteError(w, http.StatusConflict, errors.New("this runbook has no approved version yet, so there is nothing to re-check"))
 	case errors.Is(err, ErrHarnessBusy):
 		d.WriteError(w, http.StatusServiceUnavailable, errors.New("too many runbook checks are running — try again in a moment"))
 	default:

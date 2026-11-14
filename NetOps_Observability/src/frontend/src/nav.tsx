@@ -94,6 +94,8 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   RcaTickets: () => import("./pages/admin/RcaTickets"),
   // Network context (Administration → Iris): the facts Iris reads (N-F1).
   NetworkContext: () => import("./pages/admin/NetworkContext"),
+  // Runbooks (Administration → Iris): the workspace's own methods + MOPs (N-F2).
+  TenantRunbooks: () => import("./pages/admin/TenantRunbooks"),
   // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
@@ -182,6 +184,7 @@ const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<
 const RcaTickets = lazy(ROUTE_CHUNKS["RcaTickets"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DiscoveryHub = lazy(ROUTE_CHUNKS["DiscoveryHub"] as () => Promise<{ default: React.ComponentType<any> }>);
 const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ default: React.ComponentType<any> }>);
+const TenantRunbooks = lazy(ROUTE_CHUNKS["TenantRunbooks"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -513,6 +516,9 @@ export const NAV: NavSection[] = [
       // own tenant (a Global view is told to choose a workspace), and approval
       // needs a second administrator — tenant-level, not platform-stamped.
       { id: "network-context", label: "Network Context", group: "Iris", render: () => <NetworkContext /> },
+      // The /api/ai/runbooks routes: requirePerm(administration) + ai.runbook.author
+      // + the caller's own tenant; approval needs a second administrator.
+      { id: "iris-runbooks", label: "Runbooks", group: "Iris", render: () => <TenantRunbooks /> },
       { id: "identity", label: "Identity & Access", group: "People & access", render: () => <IdentityAccess /> },
       {
         id: "api", label: "API Access", group: "People & access", render: () => <ApiAccessAdmin />,

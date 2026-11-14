@@ -44,6 +44,7 @@ import (
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/srcauthority"
 	"netops/backend/internal/tac"
+	"netops/backend/internal/tenantrunbook"
 	"netops/backend/models"
 )
 
@@ -383,7 +384,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
 		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
 		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
-		Skills:   aiSkills,                                             // troubleshooting methods (nil = layer disabled)
+		Skills:   s.aiSkillsFor(r.Context(), claims),                   // troubleshooting methods + the tenant's approved runbooks (N-F2); nil = layer disabled
 		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps, // tenant-scoped Phase-A reads
@@ -3404,6 +3405,242 @@ func (s *server) orgContextAPI() orgcontext.Deps {
 		WriteError: writeError,
 		Log:        func(msg string, err error) { logError("iris.context", msg, errf(err)) },
 	}
+}
+
+// ── Tenant runbooks/MOPs (tracker 337 N-F2, internal/tenantrunbook) ───────
+//
+// §3a: per-tenant DATA → requirePerm(administration) + tenant filter, the
+// tenant from the principal (Authorize), never the body; a Global view must
+// choose a workspace. Writing and approving need a PERSON, approving needs a
+// DIFFERENT person (orgcontext.Apply, the same two-person rule as N-F1).
+// Default-closed: without ai.runbook.author the routes refuse and no runbook
+// reaches Iris.
+//
+// What reaches Iris (aiSkillsFor): only APPROVED, INVESTIGATIVE runbooks whose
+// cases passed under the platform as it is NOW, joined to the compiled methods
+// in a new per-tenant set (ai.SkillSet.Overlay — one tenant per set, and a
+// compiled method can never hand off to customer text). A runbook's text never
+// enters the model-first planner's prompt (ai.plannerOffers): it is selected by
+// its own when_to_use phrases, and the model may only follow its authored next
+// steps (§15).
+
+// newTenantRunbookStore: Postgres (RLS, durable history) or nothing, for the
+// same reason as the Network context store. The harness is the real case gate
+// over the compiled methods.
+func (s *server) newTenantRunbookStore() tenantrunbook.Store {
+	ps, ok := platformdb.ActivePG()
+	if !ok {
+		return nil
+	}
+	gate, err := tenantrunbook.NewCaseGate(s.runbookFingerprint, ai.ToolNames)
+	if err != nil {
+		logError("iris.runbooks", "the runbook case gate could not be built — tenant runbooks are DISABLED for this process", errf(err))
+		return nil
+	}
+	return tenantrunbook.NewPGStore(ps.DB(), tenantrunbook.Config{Harness: gate, ToolNames: ai.ToolNames, Metrics: s.tenantRunbookMetrics})
+}
+
+// runbookFingerprint is what a runbook's case results depend on now: the
+// prompts, the tools and their contracts, the compiled methods and the
+// platform's models. A change moves it, and every runbook proven under the old
+// value stops running until a re-check passes.
+func (s *server) runbookFingerprint() string {
+	var models ai.TierModels
+	if s.copilotCfg != nil {
+		models = s.copilotCfg.Get().Models()
+	}
+	return ai.HarnessFingerprint(models)
+}
+
+func (s *server) handleAIRunbooks(w http.ResponseWriter, r *http.Request) {
+	if s.tenantRunbooks == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("tenant runbooks need the Postgres platform store on this deployment"))
+		return
+	}
+	s.tenantRunbookAPI(r).Handler(w, r)
+}
+
+func (s *server) tenantRunbookAPI(r *http.Request) tenantrunbook.Deps {
+	return tenantrunbook.Deps{
+		Store: s.tenantRunbooks,
+		Authorize: func(w http.ResponseWriter, r *http.Request, level orgcontext.Level) (orgcontext.Caller, bool) {
+			perm := LevelRead
+			switch level {
+			case orgcontext.LevelAuthor:
+				perm = LevelWrite
+			case orgcontext.LevelManage:
+				perm = LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, "administration", perm)
+			if !ok || !s.requireAIEntitlement(w, claims, aientitlement.RunbookAuthor) {
+				return orgcontext.Caller{}, false
+			}
+			tenant, cross := principalTenant(claims)
+			return orgcontext.Caller{Tenant: tenant, Cross: cross, Sub: claims.Sub, Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+		},
+		LinkTargetExists: func(ctx context.Context, _ orgcontext.Caller, t tenantrunbook.LinkType, key string) (bool, error) {
+			return s.runbookLinkTargetExists(ctx, r, t, key)
+		},
+		Audit: func(r *http.Request, c orgcontext.Caller, decision string, detail map[string]any) {
+			s.audit.Record(AuditEvent{
+				Time: time.Now().UTC(), Actor: c.Sub, Tenant: c.Tenant, Cross: c.Cross,
+				Method: r.Method, Path: r.URL.Path, Status: 200, Decision: decision, Detail: detail,
+			})
+		},
+		// What Iris may run changed: drop the tenant's cached set.
+		Changed:            s.tenantRunbookSets.Invalidate,
+		CurrentFingerprint: s.runbookFingerprint,
+		WriteJSON:          writeJSON,
+		WriteError:         writeError,
+		Log:                func(msg string, err error) { logError("iris.runbooks", msg, errf(err)) },
+	}
+}
+
+// runbookLinkEntityTypes are the entity kinds a runbook may be linked to.
+var runbookLinkEntityTypes = map[string]bool{"device": true, "interface": true, "site": true, "circuit": true, "application": true}
+
+// runbookLinkTargetExists reports whether the CALLER'S workspace has what a link
+// points at. Entities and incidents go through the same tenant-scoped resolver
+// as every NL query (a foreign one is simply absent); a signature is a
+// hypothesis id from the platform catalogue and an alert a platform rule name —
+// neither is tenant data. Entity keys are "<type>:<id>", e.g. "device:edge-1".
+func (s *server) runbookLinkTargetExists(ctx context.Context, r *http.Request, t tenantrunbook.LinkType, key string) (bool, error) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		return false, nil
+	}
+	switch t {
+	case tenantrunbook.LinkEntity:
+		typ, _, found := strings.Cut(key, ":")
+		if !found || !runbookLinkEntityTypes[typ] {
+			return false, nil
+		}
+		return s.nlqScopeFor(r, claims).Visible(ctx, nlqast.EntityRef{Type: typ, ID: key})
+	case tenantrunbook.LinkIncident:
+		// The incident record, read the way the incident API reads it: the
+		// caller's own tenant only (a foreign id is simply not found).
+		if s.incidents == nil {
+			return false, nil
+		}
+		tenant, cross := principalTenant(claims)
+		_, _, found, err := s.incidents.Get(ctx, tenant, cross, key)
+		return found, err
+	case tenantrunbook.LinkSignature:
+		for _, d := range irishypo.Catalogue() {
+			if d.ID == key {
+				return true, nil
+			}
+		}
+		return false, nil
+	case tenantrunbook.LinkAlert:
+		if s.alerts == nil {
+			return false, nil
+		}
+		for _, rule := range s.alerts.Rules() {
+			if rule.Name == key {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return false, nil
+}
+
+// aiSkillsFor is the troubleshooting-method set for one Iris request: the
+// compiled methods, plus — for a concrete tenant holding ai.runbook.author —
+// that tenant's approved runbooks whose cases passed under the current
+// fingerprint. Any failure answers the compiled set and is logged and counted
+// (never silent): a customer's runbook can only add to Iris, never take the
+// compiled methods away.
+func (s *server) aiSkillsFor(ctx context.Context, claims jwtClaims) *ai.SkillSet {
+	tenant, cross := principalTenant(claims)
+	if aiSkills == nil || s.tenantRunbooks == nil || cross || tenant == "" || !s.aiEntitled(claims, aientitlement.RunbookAuthor) {
+		return aiSkills
+	}
+	fp := s.runbookFingerprint()
+	now := time.Now()
+	if set, ok := s.tenantRunbookSets.Get(tenant, fp, now); ok {
+		return set
+	}
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	rows, err := s.tenantRunbooks.List(rctx, tenant)
+	if err != nil {
+		logError("iris.runbooks", "the tenant's runbooks could not be read — this answer uses the compiled methods only", map[string]any{"tenant": tenant, "error": err.Error()})
+		return aiSkills
+	}
+	skills, skipped := tenantrunbook.ActiveSkills(tenant, rows, fp, ai.ToolNames())
+	var stale []string
+	for _, sk := range skipped {
+		if sk.Reason == "stale_cases" {
+			stale = append(stale, sk.ID)
+			continue
+		}
+		logError("iris.runbooks", "an approved runbook no longer parses and was left out", map[string]any{"tenant": tenant, "runbook_id": sk.ID, "reason": sk.Reason})
+	}
+	if len(stale) > 0 {
+		s.tenantRunbookRecheck.start(tenant, fp, stale, s.tenantRunbooks, s.tenantRunbookSets)
+	}
+	set := aiSkills
+	if len(skills) > 0 {
+		joined, err := aiSkills.Overlay(skills)
+		if err != nil {
+			logError("iris.runbooks", "the tenant's runbooks could not join the compiled methods — this answer uses the compiled methods only", map[string]any{"tenant": tenant, "error": err.Error()})
+			return aiSkills
+		}
+		set = joined
+	}
+	s.tenantRunbookSets.Put(tenant, fp, set, now)
+	return set
+}
+
+// runbookRecheck re-runs, in the background, the cases of approved runbooks
+// whose proof predates a platform change — once per (tenant, fingerprint), at
+// most one tenant at a time per process, bounded by the case gate's own slots
+// and timeout. A pass restores the runbook; a failure is recorded for its page.
+type runbookRecheck struct {
+	mu      sync.Mutex
+	started map[string]bool // tenant + "\x00" + fingerprint
+}
+
+// runbookRecheckActor is the re-check author recorded for the lazy re-check.
+const runbookRecheckActor = "system:runbook-recheck"
+
+func (rc *runbookRecheck) start(tenant, fp string, ids []string, store tenantrunbook.Store, sets *tenantrunbook.OverlayCache) {
+	if rc == nil || store == nil {
+		return
+	}
+	key := tenant + "\x00" + fp
+	rc.mu.Lock()
+	if rc.started == nil {
+		rc.started = map[string]bool{}
+	}
+	if rc.started[key] {
+		rc.mu.Unlock()
+		return
+	}
+	rc.started[key] = true
+	rc.mu.Unlock()
+	safeGo("iris.runbook-recheck", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(ids)+1)*(tenantrunbook.HarnessTimeout+5*time.Second))
+		defer cancel()
+		passed, failed := 0, 0
+		for _, id := range ids {
+			res, err := store.Reprove(ctx, tenant, id, runbookRecheckActor)
+			switch {
+			case err != nil:
+				failed++
+				logError("iris.runbooks", "an approved runbook could not be re-checked after a platform change", map[string]any{"tenant": tenant, "runbook_id": id, "error": err.Error()})
+			case res.Passed:
+				passed++
+			default:
+				failed++
+				logInfo("iris.runbooks", "an approved runbook failed its cases after a platform change and stays out of Iris until its author fixes it", map[string]any{"tenant": tenant, "runbook_id": id, "problems": len(res.Problems)})
+			}
+		}
+		sets.Invalidate(tenant)
+		logInfo("iris.runbooks", "re-checked approved runbooks after a platform change", map[string]any{"tenant": tenant, "passed": passed, "failed": failed})
+	})
 }
 
 // orgContextRender reads the tenant's active facts, re-validates every one
