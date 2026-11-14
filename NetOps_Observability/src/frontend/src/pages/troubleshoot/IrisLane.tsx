@@ -37,7 +37,9 @@
 // no secrets, no other tenant's data (LLM06).
 
 import { useEffect, useRef, useState } from "react";
-import { api, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import { api, StreamBrokenError, type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
+import { applyEvent } from "../../iris/progressStream";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
 import StatementText from "../../iris/StatementText";
@@ -106,14 +108,27 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
       ? `An operator reports: ${symptomLabel}. What should I check next, and what evidence is missing?`
       : "What is going on right now?";
 
+  // The operational trace (tracker 337 N-E2/N-E3): what Iris is doing while
+  // it works — server event names mapped to plain words, never model text.
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
+
   const ask = async () => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setSteps([]);
+    const context: Record<string, string> = caseId ? { correlation_id: caseId } : {};
     try {
-      setAns(await api.aiAsk(question, caseId ? { correlation_id: caseId } : {}));
+      try {
+        setAns(await api.aiAskStream(question, context, undefined, (ev) => setSteps((s) => applyEvent(s, ev))));
+      } catch (e) {
+        // A stream a proxy cut short falls back ONCE to the plain ask.
+        if (!(e instanceof StreamBrokenError)) throw e;
+        setSteps([]);
+        setAns(await api.aiAsk(question, context));
+      }
     } catch (e) {
       setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
       setBusy(false);
+      setSteps([]);
     }
   };
 
@@ -144,6 +159,10 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
         </div>
       </div>
       {err && <p className="ts-bad" role="alert">Iris: {err}</p>}
+
+      {busy && steps.length > 0 && (
+        <div data-testid="iris-lane-progress"><IrisProgress steps={steps} /></div>
+      )}
 
       {!ans && !busy && !err && (
         <p className="tsl-sum">

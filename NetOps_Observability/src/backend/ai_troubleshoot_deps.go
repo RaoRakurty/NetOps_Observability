@@ -2996,6 +2996,21 @@ func (h *nlqScope) DeviceReachability(ctx context.Context, ids []string) (map[st
 	return out, nil
 }
 
+// FlowTop is plan.FlowScope (N-C4): the same allowlisted flow statements and
+// scope rules as the Iris flow tools, at the caller's tenant_scope.
+func (h *nlqScope) FlowTop(ctx context.Context, q plan.FlowQuery) (plan.FlowAnswer, error) {
+	d := aiDataSource{srv: h.s, ctx: ctx, scope: h.s.chTenantScopeFor(h.claims), claims: h.claims}
+	return d.nlqFlowTop(q)
+}
+
+// LogSearch is plan.LogScope (N-C4): the same syslog read as the search_logs
+// tool — per-tenant index, doc-level tenant filter, operator restriction,
+// routine sessions left out — with closed severity and topic filters only.
+func (h *nlqScope) LogSearch(ctx context.Context, q plan.LogQuery) (plan.LogAnswer, error) {
+	d := aiDataSource{srv: h.s, ctx: ctx, scope: h.s.chTenantScopeFor(h.claims), claims: h.claims}
+	return d.nlqLogSearch(h.s.aiPrincipal(h.claims), q)
+}
+
 func (h *nlqScope) Devices(_ context.Context, f plan.DeviceFilter) ([]plan.DeviceRef, error) {
 	ids, sites := stringSet(f.IDs), stringSet(f.Sites)
 	var out []plan.DeviceRef
@@ -3798,6 +3813,9 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 			err              error
 			name, key, model string
 		)
+		// N-E2: the operator sees the investigation start; its lookups follow
+		// as they run (executeAgentTool traces through ctx).
+		ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceInvestigating})
 		for attempt := 0; attempt < aiAgentModelAttempts; attempt++ {
 			var skipped error
 			name, key, model, skipped = s.firstUsableProvider(ctx, claims)
@@ -3808,6 +3826,9 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 					err = skipped
 				}
 				break
+			}
+			if attempt > 0 {
+				ai.EmitTrace(ctx, ai.TraceEvent{Type: ai.TraceModelFallback})
 			}
 			n, k, m := name, key, model
 			call := func(cctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {

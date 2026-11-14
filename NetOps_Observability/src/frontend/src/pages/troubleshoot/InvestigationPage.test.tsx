@@ -45,6 +45,9 @@ const mocks = vi.hoisted(() => ({
   probePaths: vi.fn(), flowsByType: vi.fn(), topTalkers: vi.fn(),
   // iris + the TAC escalation panel that hangs off the answer
   aiAsk: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
+  // The lane asks over the progress stream first (N-E2); by default the
+  // stream delivers aiAsk's answer, so the grounding assertions read aiAsk.
+  aiAskStream: vi.fn(),
   // the caller's AI entitlements (N-A7) — "Ask Iris" needs ai.chat
   features: vi.fn(),
   tacState: vi.fn(), tacClassify: vi.fn(),
@@ -56,12 +59,14 @@ const errs = vi.hoisted(() => {
   class FakeNotPromoted extends Error {
     constructor(public reason: string) { super(reason); this.name = "RcaNotPromotedError"; }
   }
-  return { FakeNotPromoted };
+  class FakeStreamBroken extends Error {}
+  return { FakeNotPromoted, FakeStreamBroken };
 });
 
 vi.mock("../../services/api", () => ({
   api: { ...mocks },
   RcaNotPromotedError: errs.FakeNotPromoted,
+  StreamBrokenError: errs.FakeStreamBroken,
 }));
 
 import InvestigationPage, { caseDevice } from "./InvestigationPage";
@@ -150,6 +155,7 @@ beforeEach(() => {
   mocks.flowsByType.mockResolvedValue({ data: [] });
   mocks.topTalkers.mockResolvedValue({ data: [] });
   mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "ok", citations: [], disclaimers: [] });
+  mocks.aiAskStream.mockImplementation((q: string, ctx: Record<string, string>) => mocks.aiAsk(q, ctx));
   mocks.devices.mockResolvedValue([]);
   mocks.features.mockResolvedValue({ ai_entitlements: ["ai.chat", "ai.nlquery"] });
   // Nothing has been escalated in these fixtures — the state the panel renders
