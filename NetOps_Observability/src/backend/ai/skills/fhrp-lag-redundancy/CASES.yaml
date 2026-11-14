@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for fhrp-lag-redundancy. Dialect + contract: skill_cases.go.
+
+case: a link named beneath the group sends the investigation to that link
+question: hsrp flapping on core-1
+ui:
+  - correlation_id=case-fhrp-link
+  - device=core-1
+signals:
+  - verdict:phrase=link
+  - state:collect=ok
+evidence:
+  - finding
+  - device
+expect_chain:
+  - fhrp-lag-redundancy entry
+  - interface-down rule
+expect_selected: rule
+expect_reason: the member or uplink beneath the group
+expect_verdict:
+  - interface
+  - transition time
+expect_never:
+  - mac-flap
+  - log-confirmation
+expect_select: fhrp-lag-redundancy
+
+---
+
+case: MAC movement in the verdict points at a gateway flapping or a split bundle
+question: gateway failover keeps happening on core-1
+ui:
+  - correlation_id=case-fhrp-mac
+  - device=core-1
+signals:
+  - verdict:phrase=mac
+  - state:collect=ok
+evidence:
+  - finding
+  - device
+expect_chain:
+  - fhrp-lag-redundancy entry
+  - mac-flap rule
+expect_selected: rule
+expect_reason: names MAC movement
+expect_verdict:
+  - address
+  - move rate
+expect_never:
+  - interface-down
+  - log-confirmation
+
+---
+
+case: unread redundancy groups leave the device's own state-change messages
+question: lacp bundle member down on core-1
+ui:
+  - correlation_id=case-fhrp-notwired
+  - device=core-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - fhrp-lag-redundancy entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - interface-down
+  - mac-flap
+
+---
+
+case: a group read with no engine lead stays here and quotes the raw output
+question: vrrp active standby on core-1
+ui:
+  - correlation_id=case-fhrp-stay
+  - device=core-1
+signals:
+  - state:collect=ok
+notes:
+  - the redundancy output is raw evidence — no parser exists for this command on this platform
+evidence:
+  - device
+  - finding
+expect_chain:
+  - fhrp-lag-redundancy entry
+expect_selected: none
+expect_verdict:
+  - active
+  - raw, not parsed
+expect_notes:
+  - no parser exists
+expect_never:
+  - interface-down
+  - mac-flap
+  - log-confirmation

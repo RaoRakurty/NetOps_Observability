@@ -261,6 +261,11 @@ type TroubleshootDeps struct {
 	OverlayState func(ctx context.Context, p Principal, deviceID string) (OverlayState, error)
 	TunnelState  func(ctx context.Context, p Principal, deviceID string) (TunnelState, error)
 	PathEvidence func(ctx context.Context, p Principal, deviceID string) (PathEvidence, error)
+	// ProbeResults reads the caller's own synthetic probes (NetClaw ingestion
+	// Batch 3): the DNS / HTTP / TCP / ICMP checks the operator declared and the
+	// runs Correlix's prober recorded for them. One concrete workspace only; the
+	// platform scope reads nothing. nil = the read is not wired here.
+	ProbeResults func(ctx context.Context, p Principal, q ProbeQuery) (ProbeResults, error)
 	// CaseTimeline returns one correlation case's ordered timeline.
 	CaseTimeline func(ctx context.Context, p Principal, correlationID string) ([]TimelineEvent, error)
 
@@ -896,6 +901,11 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.NetworkTopology != nil {
 		r.add(networkTopologyTool{deps: d})
 	}
+	// The caller's synthetic probes (NetClaw ingestion Batch 3) are workspace-
+	// scoped, not device-scoped: no device argument to resolve.
+	if d.ProbeResults != nil {
+		r.add(probeResultsTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -975,6 +985,8 @@ func TroubleshootToolNames() []string {
 		"get_network_topology",
 		// NetClaw ingestion Batch 2: the WAN reads of one device.
 		"get_overlay_state", "get_tunnel_state", "get_path_evidence",
+		// NetClaw ingestion Batch 3: the caller's synthetic probes.
+		"get_probe_results",
 	}
 	sort.Strings(out)
 	return out

@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for dns-resolution. Dialect + contract: skill_cases.go.
+
+case: a resolver that does not answer sends the investigation to the path to the resolver
+question: the site is down but ping by ip works
+ui:
+  - correlation_id=case-dns-timeout
+  - device=edge-1
+signals:
+  - state:dns=timeout
+  - state:probe=failing
+evidence:
+  - metric
+  - finding
+expect_chain:
+  - dns-resolution entry
+  - path-seam-handoff rule
+expect_selected: rule
+expect_reason: not answering at all
+expect_verdict:
+  - hop
+  - seam
+expect_never:
+  - app-edge-5xx
+  - log-confirmation
+expect_select: dns-resolution
+
+---
+
+case: probes that resolve cleanly move the question past name resolution
+question: dns not working for the portal
+ui:
+  - correlation_id=case-dns-resolving
+  - device=edge-1
+signals:
+  - state:dns=resolving
+  - state:probe=partial
+evidence:
+  - finding
+expect_chain:
+  - dns-resolution entry
+  - app-edge-5xx rule
+expect_selected: rule
+expect_reason: past name resolution
+expect_verdict:
+  - baseline
+  - service-side signal
+expect_never:
+  - path-seam-handoff
+
+---
+
+case: a resolver that returns an error needs its own words
+question: dns failing for the intranet
+ui:
+  - correlation_id=case-dns-failing
+  - device=edge-1
+signals:
+  - state:dns=failing
+  - state:probe=failing
+evidence:
+  - metric
+  - finding
+expect_chain:
+  - dns-resolution entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: answers with an error
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - path-seam-handoff
+  - app-edge-5xx
+
+---
+
+case: a name the resolver says does not exist stays here and names the record change
+question: nxdomain for the payroll site
+ui:
+  - correlation_id=case-dns-nxdomain
+  - device=edge-1
+signals:
+  - state:dns=nxdomain
+  - state:probe=failing
+evidence:
+  - metric
+  - finding
+expect_chain:
+  - dns-resolution entry
+expect_selected: none
+expect_verdict:
+  - resolver
+  - record or zone change
+expect_never:
+  - path-seam-handoff
+  - app-edge-5xx
+  - log-confirmation
+
+---
+
+case: no DNS probe declared is said plainly and nothing is inferred
+question: is name resolution working
+ui:
+  - correlation_id=case-dns-none
+  - device=edge-1
+signals:
+  - state:dns=none
+  - state:probe=none
+notes:
+  - with no probe to read, say what is NOT measured (name resolution, service reachability)
+evidence:
+  - metric
+expect_chain:
+  - dns-resolution entry
+expect_selected: none
+expect_verdict:
+  - DNS probe
+expect_notes:
+  - say what is NOT measured
+expect_never:
+  - path-seam-handoff
+  - app-edge-5xx
+  - log-confirmation

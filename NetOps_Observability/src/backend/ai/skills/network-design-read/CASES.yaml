@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for network-design-read. Dialect + contract: skill_cases.go.
+#
+# The design facts get_network_topology declares (topo:overlay_shape, topo:spof,
+# topo:coverage) are not case-fixture signals (skill_cases.go accepts only what a
+# TOOL may declare there), so these cases pin the routing on the incident
+# evidence and the disclosure on the topology tool's own notes.
+
+case: an active incident turns the design reading into a contrast of what it touched
+question: where are the single points of failure in our network
+ui:
+  - correlation_id=case-design-incident
+evidence:
+  - topology
+  - finding
+expect_chain:
+  - network-design-read entry
+  - scope-contrast rule
+expect_selected: rule
+expect_reason: an incident is active now
+expect_verdict:
+  - affected
+  - fewest assumptions
+expect_never:
+  - osi-bisection
+expect_select: network-design-read
+
+---
+
+case: a quiet network is read as a design and takes no hop
+question: explain our network design
+evidence:
+  - topology
+expect_chain:
+  - network-design-read entry
+expect_selected: none
+expect_verdict:
+  - observed
+  - derived
+  - single point of failure
+expect_never:
+  - scope-contrast
+expect_select: network-design-read
+
+---
+
+case: partial coverage is said plainly and uncollected redundancy is not called missing
+question: is our network redundant
+notes:
+  - no physical adjacency (LLDP, CDP or routing-protocol link) is recorded — say how devices are cabled is UNKNOWN, not that they are unconnected
+evidence:
+  - topology
+expect_chain:
+  - network-design-read entry
+expect_selected: none
+expect_verdict:
+  - could not see
+  - redundancy
+expect_notes:
+  - how devices are cabled is UNKNOWN
+expect_never:
+  - scope-contrast

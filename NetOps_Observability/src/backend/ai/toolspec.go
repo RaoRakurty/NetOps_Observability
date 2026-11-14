@@ -224,6 +224,15 @@ var toolMetas = map[string]toolMeta{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
 		},
 	},
+	"get_probe_results": {
+		description: "The workspace's own SYNTHETIC PROBES (DNS, HTTP, TCP, ICMP checks the operator declared) and what Correlix's prober measured: each probe's last result, how many recent runs succeeded and, for a failing DNS probe, HOW it fails (the resolver did not answer, or answered that the name does not exist). Use it for name-resolution and service-reachability questions (\"the site is down but ping by IP works\", \"is DNS working\"). It reads recorded runs only; it never starts a probe or resolves a name itself.",
+		label:       "Synthetic probes",
+		args: []toolArgSpec{
+			{name: "kind", desc: "Optional: dns, http, tcp or icmp."},
+			{name: "site", desc: "Optional: only the probes of this site."},
+			{name: "target", desc: "Optional: one probe, by its name."},
+		},
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",
@@ -233,12 +242,12 @@ var toolMetas = map[string]toolMeta{
 	},
 	// ── IRIS Phase A4: show-first device state + BGP operations reads ──
 	"get_device_state": {
-		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
+		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime), evpn (VXLAN VTEP peers and VNIs), redundancy (HSRP/VRRP groups, LACP bundles) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
 		label:       "Device state",
 		args: []toolArgSpec{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
-			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, logs.", required: true},
-			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform and logs take no target.", required: false},
+			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, evpn, redundancy, logs.", required: true},
+			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform, evpn, redundancy and logs take no target.", required: false},
 		},
 	},
 	"get_bgp_watchlist": {
