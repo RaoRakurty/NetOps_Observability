@@ -127,6 +127,10 @@ func TestMaskCapabilityTokenPath(t *testing.T) {
 		// The provider segment is safe and stays (it is what makes the line useful).
 		{"/api/nms/webhook/opaque-token-123", "/api/nms/webhook/" + caplink.MaskedTokenSegment},
 		{"/api/integrations/webhook/servicenow/opaque-token-123", "/api/integrations/webhook/servicenow/" + caplink.MaskedTokenSegment},
+		{"/api/chatops/slack/opaque-token-123", "/api/chatops/slack/" + caplink.MaskedTokenSegment},
+		{"/api/chatops/teams/opaque-token-123", "/api/chatops/teams/" + caplink.MaskedTokenSegment},
+		// The chat admin + link API carries no token and stays readable.
+		{"/api/chatops/links/abc/approve", "/api/chatops/links/abc/approve"},
 		// Header form / bare prefix — nothing to mask.
 		{"/api/reports/view/", "/api/reports/view/"},
 		// Everything else is untouched.

@@ -39,6 +39,8 @@ var capabilityTokenPaths = []caplink.PathRule{
 	{Prefix: "/api/exports/view/", Keep: 0},         // …/{token}
 	{Prefix: "/api/integrations/webhook/", Keep: 1}, // …/{provider}/{token}
 	{Prefix: "/api/nms/webhook/", Keep: 0},          // …/{token}
+	{Prefix: "/api/chatops/slack/", Keep: 0},        // …/{token} (Iris in Slack, N-I6)
+	{Prefix: "/api/chatops/teams/", Keep: 0},        // …/{token} (Iris in Teams, N-I6)
 }
 
 // maskCapabilityTokenPath returns a path safe to write to a log store.
