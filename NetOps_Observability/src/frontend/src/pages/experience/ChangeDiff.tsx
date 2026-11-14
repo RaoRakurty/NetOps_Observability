@@ -13,12 +13,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, type ChangeDiffResponse } from "../../services/api";
-import { operatorError } from "../../lib/errors";
+import { httpFailure, operatorError } from "../../lib/errors";
 
 /** A 404 means the change is not the caller's (or is gone) — never a diff. */
 export function changeDiffError(e: unknown): string {
-  const msg = (e instanceof Error ? e.message : String(e ?? "")).replace(/^Error:\s*/, "").trim();
-  if (/^404\b/.test(msg)) return "This change is not in your workspace, or it no longer exists.";
+  if (httpFailure(e)?.status === 404) return "This change is not in your workspace, or it no longer exists.";
   return operatorError(e, "What this change did could not be read.");
 }
 
