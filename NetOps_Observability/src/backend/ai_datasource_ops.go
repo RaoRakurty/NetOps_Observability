@@ -514,7 +514,7 @@ func (d aiDataSource) aiFlowDevice(arg string) (dev models.Device, found, ambigu
 func (d aiDataSource) aiFlowScopeFor(args ai.ToolArgs) (sc aiFlowScope, empty bool, err error) {
 	win, err := flowquery.ParseToolWindow(args["window"], args["from"], args["to"], time.Now())
 	if err != nil {
-		return sc, false, fmt.Errorf("%w: %v", ai.ErrBadArgs, err)
+		return sc, false, fmt.Errorf("%w: %w", ai.ErrBadArgs, err)
 	}
 	sc.win = win
 	devArg, ifArg := strings.TrimSpace(args["device"]), strings.TrimSpace(args["interface"])
