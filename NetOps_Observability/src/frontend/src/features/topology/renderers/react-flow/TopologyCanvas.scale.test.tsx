@@ -69,7 +69,9 @@ describe("TopologyCanvas load-flash guard", () => {
     // Resolve with a DISTINCT live view and the placeholder gives way to it.
     resolveView({ view: smallView, status: "live" });
     await waitFor(() => expect(screen.queryByText(/Loading topology/i)).toBeNull());
-    expect(await screen.findByText("unique-marker-dev")).toBeInTheDocument();
+    // The live node is named on the canvas AND in the inventory list; on a slow
+    // runner both have rendered by the time this looks, so match one-or-more.
+    expect((await screen.findAllByText("unique-marker-dev")).length).toBeGreaterThan(0);
     // The sample never appeared.
     expect(screen.queryByText("dmz-fw")).toBeNull();
   });
