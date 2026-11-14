@@ -1,14 +1,15 @@
 ---
 name: path-seam-handoff
 layer: path_seam
-version: 2
+version: 3
 source: https://github.com/automateyournetwork/netclaw/blob/cfafa46c3227356ca6ef38261fa9c1f4ba4711cb/workspace/skills/gtrace-path-analysis/SKILL.md
 when_to_use: packet loss, latency, jitter, slow path, isp, provider, seam, handoff, wan, dia, mpls, is it the network, hop loss, traceroute, brownout
 symptom_kinds: path, loss, latency, ownership
-tools: get_topology_context, get_path_evidence, get_rca_verdict, get_case_timeline, get_metric_anomalies
+tools: get_topology_context, get_path_evidence, run_traceroute, get_rca_verdict, get_case_timeline, get_metric_anomalies
 gather:
   - get_rca_verdict(correlation_id)
   - get_path_evidence(device_id)
+  - run_traceroute(target=@device_id)
   - get_topology_context(device_id)
   - get_case_timeline(correlation_id)
   - get_metric_anomalies()
@@ -17,6 +18,7 @@ look_for:
   - Which side of the seam the degraded hop sits on. That single fact decides whether this is ours to fix or to escalate.
   - Whether the path CHANGED. A new hop sequence with new latency is a re-route, and the re-route is the event, not the latency.
   - Comparison against the path's own baseline rather than an absolute threshold. Forty milliseconds is fine on one path and an outage on another.
+  - A trace taken now from Correlix's own collector toward the device, when the workspace has turned active probes on: where replies stop, and whether the device answers at all. It is one vantage and it runs from Correlix, never from the device; off, the step is skipped and says so.
   - Whether the path is measured at all. Correlix measures paths from its own probers and never from a customer device; a device no prober measures through has an UNMEASURED path, which is not a clean one.
 decisions:
   - next=optics-degraded when the degraded hop is a link we own and shows errors

@@ -228,6 +228,13 @@ func harnessDeps(env harnessEnv, c SkillCase) TroubleshootDeps {
 			env.touch("ProbeResults")
 			return ProbeResults{Scoped: true}, nil
 		},
+		// N-I3 active probes: the seam exists so the steps register; the
+		// harness policy never opens the probe gate, so a case sees the step
+		// skipped with its reason — exactly what an opted-out workspace sees.
+		ActiveProbe: func(_ context.Context, _ Principal, req ActiveProbeRequest) (ActiveProbeReport, error) {
+			env.touch("ActiveProbe")
+			return ActiveProbeReport{Kind: req.Kind, Scoped: true}, nil
+		},
 		WorkspaceKnowledge: func(context.Context, Principal, []KnowledgeLayer) (KnowledgeCorpus, error) {
 			env.touch("WorkspaceKnowledge")
 			return KnowledgeCorpus{Scoped: true}, nil
