@@ -83,15 +83,37 @@ def _race_body(names: list[str]) -> str:
 
 
 class FakeRunner:
-    def __init__(self, *outputs: tuple[int, str]) -> None:
+    def __init__(self, *outputs: tuple) -> None:
         self.outputs = list(outputs)
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, **kwargs) -> subprocess.CompletedProcess:
         assert kwargs["timeout"] > 0 and kwargs["check"] is False
         self.calls.append(cmd)
-        rc, out = self.outputs.pop(0)
-        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+        rc, out, *err = self.outputs.pop(0)
+        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=err[0] if err else "")
+
+
+# Tracker 425: what stderr carried in the two CI runs where the race was NOT
+# retried. Vector writes its log records to stderr — here the shipped remap's
+# multi-line VRL compilation warning (run 43604779647, verbatim apart from the
+# timestamp) — and docker writes its pull progress there (run 43532122947).
+VRL_WARNING_STDERR = """2026-11-14T14:55:55.123456Z  WARN transform{component_kind="transform" component_id=syslog_admission_stamp component_type=remap}: vector::transforms::remap: VRL compilation warning. warnings=
+warning[E900]: unused variable `cx_pk_app`
+  ┌─ :68:1
+  │
+68 │ cx_pk_app = downcase(string(.appname) ?? "")
+  │ ^^^^^^^^^ help: use the result of this expression or remove it
+  │
+  = this expression has no side-effects
+
+"""
+DOCKER_PULL_STDERR = """Unable to find image 'timberio/vector:0.40.0-alpine' locally
+0.40.0-alpine: Pulling from timberio/vector
+c6a83fedfae6: Pulling fs layer
+b9fc015ecb16: Pulling fs layer
+Status: Downloaded newer image for timberio/vector:0.40.0-alpine
+"""
 
 
 CMD = ["docker", "run", "--rm", "timberio/vector:0.40.0-alpine", "test", "/x.yaml"]
@@ -164,6 +186,29 @@ def test_the_race_is_retried_once_and_loudly(monkeypatch, tmp_path):
     assert run.race_cases == ("flows: protocol PIM is 103",)
     text = summary.read_text(encoding="utf-8")
     assert "router parse-trace" in text and "Tracker 350" in text
+
+
+def test_stderr_noise_never_hides_the_race_from_the_retry():
+    """Tracker 425: the race was lost on CI because stderr (a multi-line VRL
+    warning, docker's pull progress) was read as part of the failure body.
+    Diagnosis reads stdout only, so the same race is retried."""
+    for noise in (VRL_WARNING_STDERR, DOCKER_PULL_STDERR):
+        assert not vh.diagnose(FIXTURE14_RACE + noise).race_only, (
+            "precondition: glued to stdout this noise defeats the diagnosis")
+        r = FakeRunner((78, FIXTURE14_RACE, noise), (0, PASS))
+        with pytest.warns(vh.VectorHarnessRaceRetry):
+            run = vh.run_vector_test(CMD, label="x", timeout=60, runner=r)
+        assert len(r.calls) == 2 and run.retried and run.final.returncode == 0
+        assert noise.splitlines()[1] in run.first_attempt_output, (
+            "the report must still carry the stderr of the lost attempt")
+
+
+def test_stderr_noise_never_turns_a_real_failure_into_a_retry():
+    r = FakeRunner((78, REAL_FAILURE, VRL_WARNING_STDERR))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        run = vh.run_vector_test(CMD, label="x", timeout=60, runner=r)
+    assert len(r.calls) == 1 and not run.retried and run.final.returncode == 78
 
 
 def test_a_retry_that_fails_again_fails_and_reports_both_attempts():
