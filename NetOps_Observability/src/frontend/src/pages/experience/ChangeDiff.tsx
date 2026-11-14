@@ -5,16 +5,52 @@
 // from /api/changes/{id}/diff on demand. A configuration change shows the
 // redacted unified diff of its two captured versions; any other change its
 // redacted before → after. Everything is rendered as text.
+//
+// Iris opens it too (the change drawer, a one-change answer, and the change
+// record page): `initiallyOpen` reads the diff on mount instead of on click.
+// The read is the caller's own: another workspace's change id answers 404,
+// which is said plainly and never shown as a diff.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type ChangeDiffResponse } from "../../services/api";
 import { operatorError } from "../../lib/errors";
 
-export default function ChangeDiff({ id }: { id: string }) {
-  const [open, setOpen] = useState(false);
+/** A 404 means the change is not the caller's (or is gone) — never a diff. */
+export function changeDiffError(e: unknown): string {
+  const msg = (e instanceof Error ? e.message : String(e ?? "")).replace(/^Error:\s*/, "").trim();
+  if (/^404\b/.test(msg)) return "This change is not in your workspace, or it no longer exists.";
+  return operatorError(e, "What this change did could not be read.");
+}
+
+export default function ChangeDiff({ id, initiallyOpen = false }: { id: string; initiallyOpen?: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const [data, setData] = useState<ChangeDiffResponse | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // The id already read (StrictMode runs the mount effect twice; one read).
+  const readFor = useRef("");
+
+  const load = async () => {
+    readFor.current = id;
+    setBusy(true);
+    setErr("");
+    try {
+      setData(await api.changeDiff(id));
+    } catch (e) {
+      setErr(changeDiffError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (initiallyOpen && id && readFor.current !== id) {
+      setData(null);
+      void load();
+    }
+    // load reads the current id; re-run only when the id or mode changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, initiallyOpen]);
 
   const toggle = async () => {
     if (open) {
@@ -22,16 +58,8 @@ export default function ChangeDiff({ id }: { id: string }) {
       return;
     }
     setOpen(true);
-    if (data) return;
-    setBusy(true);
-    setErr("");
-    try {
-      setData(await api.changeDiff(id));
-    } catch (e) {
-      setErr(operatorError(e, "What this change did could not be read."));
-    } finally {
-      setBusy(false);
-    }
+    if (data || readFor.current === id) return;
+    await load();
   };
 
   const d = data?.diff;

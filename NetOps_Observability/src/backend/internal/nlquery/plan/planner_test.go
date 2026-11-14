@@ -32,6 +32,8 @@ type fakeScope struct {
 	changeQs   []ChangeQuery
 	incidentQs []IncidentQuery
 	incs       []IncidentRow
+	// circuitRefs answers Circuits by id (the compare interface lookup).
+	circuitRefs []CircuitRef
 }
 
 func (f *fakeScope) MetricRange(_ context.Context, e mql.Expr, _, _ time.Time, _ time.Duration, _ int) ([]Series, bool, error) {
@@ -67,6 +69,15 @@ func (f *fakeScope) Devices(_ context.Context, df DeviceFilter) ([]DeviceRef, er
 	return out, nil
 }
 func (f *fakeScope) Circuits(_ context.Context, cf CircuitFilter) ([]CircuitRef, error) {
+	if len(cf.IDs) > 0 && len(f.circuitRefs) > 0 {
+		var out []CircuitRef
+		for _, c := range f.circuitRefs {
+			if contains(cf.IDs, c.ID) {
+				out = append(out, c)
+			}
+		}
+		return out, nil
+	}
 	if contains(cf.Providers, "comcast") || contains(cf.Sites, "dfw-hq") {
 		return []CircuitRef{{ID: "c-dfw-1", LocalDevice: "edge-1", Site: "dfw-hq", Provider: "comcast"}}, nil
 	}
@@ -209,6 +220,54 @@ func TestCompareRanksByAbsoluteChange(t *testing.T) {
 	}
 	if rs.Rows[0]["device"] != "edge-2" || rs.Rows[0]["delta"] != -50.0 || rs.Compare == nil {
 		t.Fatalf("largest |Δ| first: %+v", rs.Rows)
+	}
+}
+
+// "Which interfaces changed most?" over circuit loss (N-S2a turn 4): loss is
+// measured per circuit, so each ranked circuit row names the interface its
+// circuit ends on, a circuit with no recorded interface gets none (and is
+// counted), and the note says the measurement is per circuit.
+func TestCompareCircuitsNameTheirInterfaces(t *testing.T) {
+	yest := now.Add(-24 * time.Hour)
+	lbl := func(c string) map[string]string { return map[string]string{"circuit": c, "local_device": "edge-1"} }
+	sc := &fakeScope{
+		samples: map[time.Time][]Sample{
+			now:  {{Labels: lbl("c-dfw-1"), Value: 2.2}, {Labels: lbl("c-dfw-2"), Value: 0.9}, {Labels: lbl("c-dfw-3"), Value: 0.4}},
+			yest: {{Labels: lbl("c-dfw-1"), Value: 0.3}, {Labels: lbl("c-dfw-2"), Value: 0.5}, {Labels: lbl("c-dfw-3"), Value: 0.4}},
+		},
+		circuitRefs: []CircuitRef{
+			{ID: "c-dfw-1", LocalDevice: "edge-1", LocalIf: "Gi0/0/1", Site: "dfw-hq", Provider: "comcast"},
+			{ID: "c-dfw-2", LocalDevice: "edge-1", LocalIf: "Gi0/0/2", Site: "dfw-hq", Provider: "comcast"},
+			{ID: "c-dfw-3", LocalDevice: "edge-1", Site: "dfw-hq", Provider: "comcast"}, // interface not recorded
+		},
+	}
+	const js = `{"v":1,"query_type":"compare_windows","target":"circuit","metric":"circuit_loss_pct","aggregation":"avg","entities":[{"type":"provider","id":"provider:comcast"}],"time_range":{"kind":"relative","last":"2h"},"compare_to":{"kind":"relative","last":"2h","offset":"1d"},"order_by":[{"field":"delta","dir":"desc"}],"limit":10}`
+	rs := run(t, sc, js)
+	if len(rs.Rows) != 3 || rs.Rows[0]["circuit"] != "c-dfw-1" || rs.Rows[0]["interface"] != "Gi0/0/1" || rs.Rows[1]["interface"] != "Gi0/0/2" {
+		t.Fatalf("largest change first, each named with its interface: %+v", rs.Rows)
+	}
+	if _, ok := rs.Rows[2]["interface"]; ok {
+		t.Fatalf("a circuit with no recorded interface must not get one: %+v", rs.Rows[2])
+	}
+	notes := strings.Join(rs.Notes, " ")
+	if !strings.Contains(notes, "measured per circuit, not per interface") || !strings.Contains(notes, "1 circuit has no recorded interface") {
+		t.Fatalf("notes = %v", rs.Notes)
+	}
+	if sum := Summarize(cat, mustAST(t, js), rs); !strings.Contains(sum, "edge-1 Gi0/0/1") || !strings.Contains(sum, "measured per circuit") {
+		t.Fatalf("the summary names the interface and says how it is measured: %q", sum)
+	}
+}
+
+// A device compare reads no circuit inventory and adds no circuit note.
+func TestCompareDevicesHasNoCircuitNote(t *testing.T) {
+	yest := now.Add(-24 * time.Hour)
+	sc := &fakeScope{samples: map[time.Time][]Sample{
+		now:  {{Labels: map[string]string{"device": "edge-1"}, Value: 50}},
+		yest: {{Labels: map[string]string{"device": "edge-1"}, Value: 45}},
+	}}
+	rs := run(t, sc, `{"v":1,"query_type":"compare_windows","target":"device","metric":"cpu_util_pct","time_range":{"kind":"relative","last":"2h"},"compare_to":{"kind":"relative","last":"2h","offset":"1d"}}`)
+	if strings.Contains(strings.Join(rs.Notes, " "), "per circuit") {
+		t.Fatalf("device compare must not carry the circuit note: %v", rs.Notes)
 	}
 }
 

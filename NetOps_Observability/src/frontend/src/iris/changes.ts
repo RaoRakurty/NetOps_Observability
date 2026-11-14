@@ -7,7 +7,7 @@
 // change the ledger found near a problem is related IN TIME only. "temporal" is
 // never shown as a cause; only the engine's causal chain can say "caused".
 
-import { cellText, humanize, type Row } from "./presentation";
+import { cellText, hasBeforeAfter, humanize, type Row } from "./presentation";
 
 export function str(r: Row, k: string): string {
   const v = r[k];
@@ -48,12 +48,48 @@ export function changeSourceText(r: Row): string {
   return s || "Not recorded";
 }
 
+// The ledger's change types (experience.ChangeType) in the operator's words.
+// One map for every change surface — the table, its drawer and the title —
+// so a row never says NETWORK_CHANGE where the drawer says "Network change".
+const CHANGE_TYPE_WORDS: Record<string, string> = {
+  APPLICATION_DEPLOY: "Application deploy",
+  CONFIG_CHANGE: "Config change",
+  FEATURE_FLAG_CHANGE: "Feature flag change",
+  CLOUD_CHANGE: "Cloud change",
+  NETWORK_CHANGE: "Network change",
+  SECURITY_POLICY_CHANGE: "Security policy change",
+  DNS_CHANGE: "DNS change",
+  ROUTE_CHANGE: "Routing change",
+  INFRASTRUCTURE_CHANGE: "Infrastructure change",
+};
+
+/** The change type in plain words; "" when the row records none. */
+export function changeTypeText(r: Row): string {
+  const t = str(r, "type").trim();
+  if (!t) return "";
+  const key = t.toUpperCase();
+  // Own keys only: a hostile "__proto__" must not resolve to Object's.
+  if (Object.prototype.hasOwnProperty.call(CHANGE_TYPE_WORDS, key)) return CHANGE_TYPE_WORDS[key];
+  return humanize(t);
+}
+
 /** A one-line name for a change: "Config change · core-sw-1". */
 export function changeTitle(r: Row): string {
-  const type = str(r, "type");
   const obj = str(r, "object");
-  const parts = [type ? humanize(type) : "Change", obj].filter(Boolean);
+  const parts = [changeTypeText(r) || "Change", obj].filter(Boolean);
   return parts.join(" · ");
+}
+
+/**
+ * The ledger id whose diff can be read from /api/changes/{id}/diff, or "".
+ * Only when the row says a diff exists (has_diff) and does not already carry
+ * its own before/after — then there is nothing to fetch.
+ */
+export function diffableChangeId(r: Row): string {
+  if (r.has_diff !== true || hasBeforeAfter(r)) return "";
+  const id = str(r, "change_id").trim();
+  // The ledger's id shape (changeapi idRe); anything else is not fetched.
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id) ? id : "";
 }
 
 /** A short before → after for the table cell, or null when none is recorded. */
