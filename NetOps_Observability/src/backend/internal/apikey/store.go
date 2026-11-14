@@ -359,6 +359,11 @@ const (
 	// public, so its credential must be assumed public: a key that could also
 	// read would hand a tenant's experience data to anyone who viewed source.
 	ScopeIngestExperience = "ingest:experience"
+	// ScopeIrisMCP is the dedicated scope for Iris's read-only MCP gateway
+	// (N-I5). It is NOT covered by read:* on purpose: a key handed to an
+	// external AI client is minted for that, explicitly, and the gateway
+	// checks for this exact scope. It derives the read-only role.
+	ScopeIrisMCP = "iris:mcp"
 )
 
 // knownScopes is the closed vocabulary (immutable lookup table, same shape as
@@ -376,6 +381,7 @@ var knownScopes = map[string]bool{
 	ScopeIngestCloud:      true,
 	ScopeIngestExperience: true,
 	ScopeAdminAll:         true,
+	ScopeIrisMCP:          true,
 }
 
 // KnownScopes returns the closed scope vocabulary in display order (read →
@@ -384,7 +390,7 @@ func KnownScopes() []string {
 	return []string{
 		"read:metrics", "read:alerts", "read:devices", "read:flows", ScopeReadAll,
 		"write:incidents", "write:alerts", "write:devices", ScopeWriteAll,
-		ScopeIngestCloud, ScopeIngestExperience, ScopeAdminAll,
+		ScopeIngestCloud, ScopeIngestExperience, ScopeIrisMCP, ScopeAdminAll,
 	}
 }
 

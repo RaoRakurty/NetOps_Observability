@@ -73,6 +73,7 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/context":              aientitlement.ContextAuthor, // Network context (N-F1)
 	"/api/ai/context/":             aientitlement.ContextAuthor,
 	"/api/ai/runbooks":             aientitlement.RunbookAuthor, // tenant runbooks/MOPs (N-F2)
+	"/api/ai/mcp":                  aientitlement.MCP,           // read-only MCP gateway (N-I5); + IRIS_MCP switch, iris:mcp key, workspace opt-in
 	"/api/ai/runbooks/":            aientitlement.RunbookAuthor,
 	"/api/ai/learning":             aientitlement.ContextAuthor, // learning loop (N-F5); adopting also needs the target's own
 	"/api/ai/learning/":            aientitlement.ContextAuthor,
@@ -220,6 +221,7 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/context", http.MethodPost, "/api/ai/context", `{"kind":"topology_note","key":"dr","body":"core-02 is the DR site"}`, aientitlement.ContextAuthor},
 	{"/api/ai/context/", http.MethodGet, "/api/ai/context/preview", "", aientitlement.ContextAuthor},
 	{"/api/ai/context/", http.MethodPost, "/api/ai/context/" + probeID + "/approve", `{"version":1,"body_sha256":"x"}`, aientitlement.ContextAuthor},
+	{"/api/ai/mcp", http.MethodPost, "/api/ai/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, aientitlement.MCP},
 	{"/api/ai/runbooks", http.MethodGet, "/api/ai/runbooks", "", aientitlement.RunbookAuthor},
 	{"/api/ai/runbooks", http.MethodPost, "/api/ai/runbooks", `{"name":"x","kind":"mop","skill_md":"x","cases_yaml":""}`, aientitlement.RunbookAuthor},
 	{"/api/ai/runbooks/", http.MethodGet, "/api/ai/runbooks/" + probeID, "", aientitlement.RunbookAuthor},

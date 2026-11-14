@@ -110,6 +110,7 @@ var routeIsolationLedger = map[string]string{
 	// only the caller's approved runbooks reach the caller's Iris —
 	// tenant_runbook_isolation_test.go.
 	"/api/ai/runbooks":  "scoped",
+	"/api/ai/mcp":       "scoped", // read-only MCP gateway (N-I5): the key's own tenant; iris_mcp_isolation_test.go
 	"/api/ai/runbooks/": "scoped",
 	// Iris in Slack / Teams (N-I6): connections, links and link codes are per
 	// tenant (RLS chatops_* + store tenant key, tenant from the token); a Global

@@ -33,6 +33,9 @@ type TenantConfig struct {
 	TenantID     string `json:"tenant_id"`
 	AssistantOff bool   `json:"assistant_off,omitempty"` // entitlement: true → assistant disabled for this tenant
 	AgentTools   bool   `json:"agent_tools,omitempty"`   // entitlement: true → bounded agent loop enabled
+	// MCP: the workspace opted in to Iris's read-only MCP gateway (N-I5).
+	// Default off; set by the platform owner beside the investigation grant.
+	MCP bool `json:"mcp,omitempty"`
 	// ProbeTools is the workspace's OWN opt-in to Iris's active probes (N-I3):
 	// a short test from Correlix's collector to its own devices or declared
 	// probes. Default off; a workspace admin (or the platform owner) turns it
@@ -229,6 +232,29 @@ func (s *TenantConfigStore) AssistantEnabled(tenant string) bool {
 // agentToolsEnabled: is the bounded agent loop entitled for this tenant?
 func (s *TenantConfigStore) AgentToolsEnabled(tenant string) bool {
 	return s.Get(tenant).AgentTools
+}
+
+// MCPEnabled: has this workspace opted in to the read-only MCP gateway?
+func (s *TenantConfigStore) MCPEnabled(tenant string) bool {
+	return s.Get(tenant).MCP
+}
+
+// SetMCP records the workspace's MCP opt-in (a platform-owner field, like the
+// investigation grant). Persisted with the rest of the record; on a save
+// failure the previous value is kept and the error returned.
+func (s *TenantConfigStore) SetMCP(tenant string, on bool) (TenantConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, had := s.cfgs[tenant]
+	c := prev
+	c.TenantID = tenant
+	c.MCP = on
+	s.cfgs[tenant] = c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
 }
 
 // BYOProvider returns the tenant's own provider configuration when a key is

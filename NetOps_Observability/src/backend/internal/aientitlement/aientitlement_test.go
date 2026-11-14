@@ -77,7 +77,7 @@ func TestVocabularyIsClosedAndBackingIsHonest(t *testing.T) {
 			t.Errorf("%q must not be valid", e)
 		}
 	}
-	backed := map[aientitlement.Entitlement]bool{aientitlement.Chat: true, aientitlement.Model: true, aientitlement.Investigate: true, aientitlement.NLQuery: true, aientitlement.ContextAuthor: true, aientitlement.RunbookAuthor: true}
+	backed := map[aientitlement.Entitlement]bool{aientitlement.Chat: true, aientitlement.Model: true, aientitlement.Investigate: true, aientitlement.NLQuery: true, aientitlement.ContextAuthor: true, aientitlement.RunbookAuthor: true, aientitlement.MCP: true}
 	for _, e := range aientitlement.All() {
 		if aientitlement.Backed(e) != backed[e] {
 			t.Errorf("Backed(%s) = %v, want %v", e, aientitlement.Backed(e), backed[e])

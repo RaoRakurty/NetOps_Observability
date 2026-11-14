@@ -510,6 +510,7 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			Name           string `json:"name"`
 			Assistant      bool   `json:"assistant_enabled"`
 			Investigations bool   `json:"investigations_enabled"`
+			MCP            bool   `json:"mcp_enabled"`    // read-only MCP gateway opt-in (N-I5)
 			Probes         bool   `json:"probes_enabled"` // N-I3: the workspace's active-probe opt-in
 			KeyPresent     bool   `json:"key_present"`    // tenant brought their own key
 			NoPlatformKey  bool   `json:"no_platform_key"`
@@ -526,6 +527,7 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 				TenantID: t.ID, Name: t.Name,
 				Assistant:      !c.AssistantOff,
 				Investigations: c.AgentTools,
+				MCP:            c.MCP,
 				Probes:         c.ProbeTools,
 				KeyPresent:     c.Key != "",
 				NoPlatformKey:  c.NoPlatformKey,
@@ -538,6 +540,8 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			// Investigations also need the platform half: the AI add-on and both
 			// console switches (Features page). Kept under its historical key.
 			"tools_feature": s.aiInvestigationsPlatformOn(),
+			// The platform half of MCP (N-I5): the console-only IRIS_MCP switch.
+			"mcp_feature": s.features != nil && s.features.Enabled(aientitlement.SwitchMCP),
 			// N-I3: whether the installation offers active probes at all.
 			"probes_feature": s.aiProbesPlatformOn(),
 			"models":         s.aiModelsView(),
@@ -561,8 +565,11 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Assistant      bool `json:"assistant_enabled"`
 			Investigations bool `json:"investigations_enabled"`
-			MaxCalls       int  `json:"max_calls"`    // 0 = platform default
-			DailyTokens    int  `json:"daily_tokens"` // 0 = platform default
+			// MCP is optional so a client that predates N-I5 never switches it
+			// off by omission: absent → the stored value is kept.
+			MCP         *bool `json:"mcp_enabled,omitempty"`
+			MaxCalls    int   `json:"max_calls"`    // 0 = platform default
+			DailyTokens int   `json:"daily_tokens"` // 0 = platform default
 			// N-I3: the workspace's active-probe opt-in. Absent leaves it
 			// unchanged; turning it on needs ProbesAcknowledged.
 			Probes             *bool `json:"probes_enabled,omitempty"`
@@ -581,6 +588,17 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, errors.New("entitlement was not saved"))
 			return
 		}
+		if req.MCP != nil && *req.MCP != c.MCP {
+			if c, err = s.aiTenantCfg.SetMCP(t.ID, *req.MCP); err != nil {
+				writeError(w, http.StatusInternalServerError, errors.New("MCP setting was not saved"))
+				return
+			}
+			if s.audit != nil {
+				s.audit.Record(AuditEvent{Time: time.Now().UTC(), Actor: claims.Sub, Tenant: t.ID, Cross: true,
+					Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+					Detail: map[string]any{"action": "ai.mcp.workspace", "enabled": c.MCP}})
+			}
+		}
 		if req.Probes != nil {
 			if !s.writeAIProbeOptIn(w, r, claims, t.ID, *req.Probes, req.ProbesAcknowledged) {
 				return
@@ -591,6 +609,7 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			"tenant_id":              t.ID,
 			"assistant_enabled":      !c.AssistantOff,
 			"investigations_enabled": c.AgentTools,
+			"mcp_enabled":            c.MCP,
 			"probes_enabled":         c.ProbeTools,
 			"max_calls":              c.MaxCalls,
 			"daily_tokens":           c.DailyTokens,

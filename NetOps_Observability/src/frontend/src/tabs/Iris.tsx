@@ -318,6 +318,8 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   const [tKeyDraft, setTKeyDraft] = useState("");
   // Per-workspace AI access rows (platform owner only).
   const [tenantRows, setTenantRows] = useState<AITenantRow[] | null>(null);
+  // The platform half of read-only MCP (IRIS_MCP on the Features page).
+  const [mcpFeature, setMcpFeature] = useState(false);
   // N-I3: whether the installation offers active probes at all (platform owner view).
   const [probesFeature, setProbesFeature] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -360,7 +362,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     // isn't authorized for simply stays null.
     api.copilotConfig().then((c) => {
       setCfg(c);
-      api.aiTenants().then((r) => { setTenantRows(r.tenants ?? []); setProbesFeature(Boolean(r.probes_feature)); }).catch(() => setTenantRows(null));
+      api.aiTenants().then((r) => { setTenantRows(r.tenants ?? []); setMcpFeature(!!r.mcp_feature); setProbesFeature(Boolean(r.probes_feature)); }).catch(() => setTenantRows(null));
     }).catch(() => setCfg(null));
     api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
   }, []);
@@ -456,7 +458,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   };
 
   // Flip one workspace's AI access / guardrails (platform owner) — optimistic row update.
-  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "max_calls" | "daily_tokens" | "probes_enabled">>) => {
+  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "mcp_enabled" | "max_calls" | "daily_tokens" | "probes_enabled">>) => {
     // Turning active probes on is a deliberate act: the risk is stated and confirmed first.
     if (patch.probes_enabled && !window.confirm(PROBE_RISK + "\n\nTurn active probes on for " + (row.name || row.tenant_id) + "?")) return;
     const next = { ...row, ...patch };
@@ -465,6 +467,9 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       await api.setAITenantAccess(row.tenant_id, {
         assistant_enabled: next.assistant_enabled,
         investigations_enabled: next.investigations_enabled,
+        // Sent only when this edit touched it, so a row loaded from an older
+        // server never switches MCP off by omission.
+        ...("mcp_enabled" in patch ? { mcp_enabled: !!next.mcp_enabled } : {}),
         max_calls: next.max_calls || 0,
         daily_tokens: next.daily_tokens || 0,
         ...(patch.probes_enabled !== undefined
@@ -836,6 +841,12 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
                     <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
                       onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
+                  </label>
+                  {/* Read-only MCP (N-I5): an outside AI assistant may use Iris's lookups with a workspace API key. */}
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
+                    title={mcpFeature ? "Let an outside AI assistant use Iris's read-only lookups with an API key that has the iris:mcp scope" : "Turn on Iris over MCP under Administration → Features first"}>
+                    <input type="checkbox" data-testid="iris-mcp-toggle" checked={!!row.mcp_enabled} disabled={!mcpFeature}
+                      onChange={(e) => setAccess(row, { mcp_enabled: e.target.checked })} /> MCP
                   </label>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
                     title={probesFeature ? "Let Iris's methods send a short test from Correlix to this workspace's own targets" : "Turn on “Iris active probes” on the Features page first"}>

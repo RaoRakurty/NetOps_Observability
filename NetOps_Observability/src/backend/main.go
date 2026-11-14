@@ -117,6 +117,7 @@ import (
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
 	"netops/backend/internal/irislearning"
+	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
@@ -421,6 +422,9 @@ type server struct {
 	// aiToolGateway applies the Iris tool contracts (tracker 337 N-A8). One
 	// per process, so a tenant's per-tool rate budget spans requests.
 	aiToolGateway *ai.ToolGateway
+	// mcpLimiter is the per-API-key budget for MCP tools/call (N-I5), on top
+	// of the key's own request limit and the gateway's per-tenant tool rates.
+	mcpLimiter *irismcp.Limiter
 	// aiProbe is the N-I3 active-probe executor: the per-target limiter, the
 	// process-wide slot gate and the measurement itself (collectors.RunOneShot
 	// in production; a fake in tests, so no test sends real traffic).
@@ -1391,6 +1395,7 @@ func newServer() *server {
 		aiDecisions:          newAIDecisionStore(),
 		aiDecisionMetrics:    aidecision.NewMetrics(),
 		aiToolGateway:        ai.NewToolGateway(),
+		mcpLimiter:           irismcp.NewLimiter(nil),
 		aiProbe:              newAIProbeExec(),
 		aiPlanCache:          ai.NewPlannerCache(aiPlanCacheSize, aiPlanCacheTTL),
 		aiGlossaryCache:      irisglossary.NewCache(aiGlossaryCacheSize, aiGlossaryTTL),
@@ -4201,6 +4206,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chatops/teams/", s.handleChatopsInbound)         // Teams inbound: JWT-exempt, path token + Bot Framework JWT
 	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
 	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                          // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
 	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                // Iris learning loop (N-F5): proposals a person decides
