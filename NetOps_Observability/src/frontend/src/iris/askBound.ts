@@ -34,7 +34,7 @@ export async function askBound(
       return await api.aiAskStream(question, context, conv, onEvent ?? (() => {}));
     } catch (e) {
       if (!(e instanceof StreamBrokenError)) throw e;
-      return api.aiAsk(question, context, conv);
+      return conv ? api.aiAsk(question, context, conv) : api.aiAsk(question, context);
     }
   };
   const conv = conversationId ?? undefined;

@@ -46,7 +46,7 @@ describe("askBound", () => {
     aiAsk.mockResolvedValue(ans({ text: "json" }));
     const r = await askBound("q", { correlation_id: "x" }, undefined);
     expect(aiAsk).toHaveBeenCalledTimes(1);
-    expect(aiAsk).toHaveBeenCalledWith("q", { correlation_id: "x" }, undefined);
+    expect(aiAsk).toHaveBeenCalledWith("q", { correlation_id: "x" });
     expect(r.answer.text).toBe("json");
   });
 

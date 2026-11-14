@@ -251,6 +251,9 @@ const maxModelEvidence = 25
 // scope — and its citations are verified against that block. ok=false means
 // no model answered; err says why (the caller writes the honest answer).
 func (o *Orchestrator) answerByModel(ctx context.Context, p Principal, question, intent, reason string) (Answer, bool, error) {
+	// N-E2: the routing decision is the first thing the operator sees change —
+	// the deterministic arms could not cover this, so the model answers.
+	emitTrace(o.Trace, TraceEvent{Type: TraceRouting, Outcome: RouteModel})
 	if o.AgentAnswer != nil {
 		ans, err := o.AgentAnswer(ctx, p, question, o.PriorQuestions)
 		if err == nil {

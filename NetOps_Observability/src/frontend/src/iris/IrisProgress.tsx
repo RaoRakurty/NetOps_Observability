@@ -34,6 +34,9 @@ const EVENT_LABEL: Record<string, string> = {
   tool: "Reading",
   narrating: "Writing the answer",
   grounding: "Checking the answer against the evidence",
+  routing_model: "Asking the AI model — it answers only from your Correlix data",
+  investigating: "Investigating: the AI model is looking things up",
+  model_fallback: "The first model did not answer — trying the backup model",
 };
 
 export function stepLabel(event: string): string {

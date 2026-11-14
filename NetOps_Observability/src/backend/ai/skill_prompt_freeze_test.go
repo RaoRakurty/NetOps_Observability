@@ -86,6 +86,13 @@ func compiledPromptParts(t *testing.T, set *SkillSet, sk *Skill) []string {
 
 // frozenCompiledPrompts was recorded on main at fb28c64a, before tenant origin.
 var frozenCompiledPrompts = map[string]string{
+	// NetClaw Batch 3 (2026-11-13): five new methods. No existing skill's prompt
+	// moved — none of them hands off to a Batch 3 method.
+	"dns-resolution":      "173db793656608315a8d08e4a5edafdcca4e2991918013d3ea07adce03b81b20",
+	"evpn-vxlan-overlay":  "6f36c4aeef522439852f30c0017e7b590bbcdbf961ff18b2f38a6e7ebdd33298",
+	"fhrp-lag-redundancy": "523010bedca3a6d1b81c056333c243b67dc9f8e782c2cbb00319c226df435b50",
+	"network-design-read": "eb3f379731e4f3cd53bdfecd9631faa7986a5bb65e83884f4c560634d0993646",
+	"scope-contrast":      "f632f5d7276bfdccc29bb0f93ef15b80435f20f9289c7b366bfc079ea85b3efe",
 	// NetClaw Batch 2 (2026-11-13): path-seam-handoff v2 gathers the measured
 	// path and its hop menu moved; app-edge-5xx, bgp-prefix-missing and
 	// bgp-session-down hand off to it, so their prompts moved with it, and the

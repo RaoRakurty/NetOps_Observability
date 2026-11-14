@@ -73,6 +73,17 @@ type toolMeta struct {
 
 var argProblemID = toolArgSpec{name: "problem_id", desc: "The problem's correlation UUID (take it from a problem:<uuid> citation id — not the P-XXXXXX display handle).", required: true}
 
+// flowToolArgs are the optional link and window arguments of the three flow
+// tools (tracker 406). The server validates every one; a bad value is refused
+// with the reason, a device the caller cannot see reads as not found.
+var flowToolArgs = []toolArgSpec{
+	{name: "device", desc: "Optional: one device (name, id or address) — only traffic its flow exporter saw. Omit for the whole network."},
+	{name: "interface", desc: "Optional, needs device: one interface on it, by name (e.g. GigabitEthernet1) or ifIndex."},
+	{name: "window", desc: "Optional lookback: 15m, 1h, 6h, 24h or 7d (default 24h). Resolve relative phrases yourself (\"this morning\" → 6h)."},
+	{name: "from", desc: "Optional explicit start (RFC 3339), with to; at most 7 days before to. Use window instead unless the question names exact times."},
+	{name: "to", desc: "Optional explicit end (RFC 3339), with from."},
+}
+
 // toolMetas describes every tool the agent loop may expose. Keep descriptions
 // action-oriented and honest about scope/windows so the model picks well.
 var toolMetas = map[string]toolMeta{
@@ -102,16 +113,19 @@ var toolMetas = map[string]toolMeta{
 		},
 	},
 	"get_top_talkers": {
-		description: "Top traffic conversations (heaviest source↔destination pairs) over the last 24 hours.",
+		description: "Top traffic conversations (heaviest source↔destination pairs), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Top talkers",
+		args:        flowToolArgs,
 	},
 	"get_flow_summary": {
-		description: "One-line network traffic totals (bytes, flows, sources) over the last 24 hours.",
+		description: "One-line traffic totals (bytes, flows, sources), for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Traffic summary",
+		args:        flowToolArgs,
 	},
 	"get_service_flow_summary": {
-		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic over the last 24 hours.",
+		description: "Busiest destination services (HTTPS, DNS, databases, …) by traffic, for the whole network or one device / one interface, over a window (default the last 24 hours).",
 		label:       "Service traffic",
+		args:        flowToolArgs,
 	},
 	"get_metric_anomalies": {
 		description: "Recent detected metric anomalies (worst first) over the last 6 hours.",
@@ -210,6 +224,15 @@ var toolMetas = map[string]toolMeta{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
 		},
 	},
+	"get_probe_results": {
+		description: "The workspace's own SYNTHETIC PROBES (DNS, HTTP, TCP, ICMP checks the operator declared) and what Correlix's prober measured: each probe's last result, how many recent runs succeeded and, for a failing DNS probe, HOW it fails (the resolver did not answer, or answered that the name does not exist). Use it for name-resolution and service-reachability questions (\"the site is down but ping by IP works\", \"is DNS working\"). It reads recorded runs only; it never starts a probe or resolves a name itself.",
+		label:       "Synthetic probes",
+		args: []toolArgSpec{
+			{name: "kind", desc: "Optional: dns, http, tcp or icmp."},
+			{name: "site", desc: "Optional: only the probes of this site."},
+			{name: "target", desc: "Optional: one probe, by its name."},
+		},
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",
@@ -219,12 +242,12 @@ var toolMetas = map[string]toolMeta{
 	},
 	// ── IRIS Phase A4: show-first device state + BGP operations reads ──
 	"get_device_state": {
-		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
+		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime), evpn (VXLAN VTEP peers and VNIs), redundancy (HSRP/VRRP groups, LACP bundles) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
 		label:       "Device state",
 		args: []toolArgSpec{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
-			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, logs.", required: true},
-			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform and logs take no target.", required: false},
+			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, evpn, redundancy, logs.", required: true},
+			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform, evpn, redundancy and logs take no target.", required: false},
 		},
 	},
 	"get_bgp_watchlist": {

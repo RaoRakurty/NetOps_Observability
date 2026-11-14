@@ -38,6 +38,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { type AiAnswer, type AiCitation, type AiSkillHop } from "../../services/api";
+import IrisProgress, { type ProgressStep } from "../../iris/IrisProgress";
+import { applyEvent } from "../../iris/progressStream";
 import { operatorError } from "../../lib/errors";
 import HypothesisTrace from "../../iris/HypothesisTrace";
 import StatementText from "../../iris/StatementText";
@@ -111,16 +113,22 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
 
   // The case driving the investigation is what the Iris box binds too (N-E4).
   useIrisView(caseId ? { kind: "incident", id: caseId, label: symptomLabel || "this case" } : null);
+  // The operational trace (tracker 337 N-E2/N-E3): what Iris is doing while
+  // it works — server event names mapped to plain words, never model text.
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
 
   const ask = async () => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setSteps([]);
+    const context: Record<string, string> = caseId ? { correlation_id: caseId } : {};
     try {
-      // The ONE ask path the RCA view and the Iris box use (iris/askBound.ts).
-      setAns((await askBound(question, caseId ? { correlation_id: caseId } : {}, null)).answer);
+      // The ONE ask path the RCA view and the Iris box use (iris/askBound.ts):
+      // streamed progress, one JSON fallback when a proxy cuts the stream.
+      setAns((await askBound(question, context, null, (ev) => setSteps((s) => applyEvent(s, ev)))).answer);
     } catch (e) {
       setErr(operatorError(e, "Iris could not answer just now."));
     } finally {
       setBusy(false);
+      setSteps([]);
     }
   };
 
@@ -151,6 +159,10 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
         </div>
       </div>
       {err && <p className="ts-bad" role="alert">Iris: {err}</p>}
+
+      {busy && steps.length > 0 && (
+        <div data-testid="iris-lane-progress"><IrisProgress steps={steps} /></div>
+      )}
 
       {!ans && !busy && !err && (
         <p className="tsl-sum">

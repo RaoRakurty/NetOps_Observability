@@ -206,6 +206,41 @@ func TestIfaceNameLookupKeyedByRowTenant(t *testing.T) {
 
 func ifx32(n uint32) string { return strconv.FormatUint(uint64(n), 10) }
 
+// IndexOf (tracker 406: an Iris flow tool's interface named, not numbered) is
+// the reverse of Lookup: keyed by the ROW tenant and exporter, case-insensitive,
+// and never a guess — an ambiguous or foreign name is a miss.
+func TestIfaceIndexOfIsTenantKeyedAndNeverGuesses(t *testing.T) {
+	e := NewExporter()
+	e.Install([]Row{
+		{TenantID: "acme", ExporterAddr: "10.1.0.1", IfIndex: 7, IfName: "GigabitEthernet7"},
+		{TenantID: "acme", ExporterAddr: "10.1.0.1", IfIndex: 8, IfName: "Tunnel0"},
+		{TenantID: "acme", ExporterAddr: "10.1.0.1", IfIndex: 9, IfName: "tunnel0"}, // same name, two indexes
+		{TenantID: "globex", ExporterAddr: "10.1.0.1", IfIndex: 3, IfName: "WAN-Uplink"},
+	})
+	if ix, ok := e.IndexOf("acme", "10.1.0.1", "gigabitethernet7"); !ok || ix != 7 {
+		t.Fatalf("case-insensitive unique name: %d %v", ix, ok)
+	}
+	if ix, ok := e.IndexOf("acme", "10.1.0.1:2055", "GigabitEthernet7"); !ok || ix != 7 {
+		t.Fatalf("exporter is normalised like Lookup: %d %v", ix, ok)
+	}
+	if _, ok := e.IndexOf("acme", "10.1.0.1", "Tunnel0"); ok {
+		t.Fatal("a name carried by two indexes must never resolve")
+	}
+	if _, ok := e.IndexOf("acme", "10.1.0.1", "WAN-Uplink"); ok {
+		t.Fatal("another tenant's interface name on a shared exporter address must never resolve")
+	}
+	if ix, ok := e.IndexOf("globex", "10.1.0.1", "wan-uplink"); !ok || ix != 3 {
+		t.Fatalf("its own tenant resolves it: %d %v", ix, ok)
+	}
+	if _, ok := e.IndexOf("acme", "10.1.0.1", "  "); ok {
+		t.Fatal("an empty name is a miss")
+	}
+	var nilE *Exporter
+	if _, ok := nilE.IndexOf("acme", "10.1.0.1", "Gi7"); ok {
+		t.Fatal("nil exporter is a miss")
+	}
+}
+
 // tenantOf is the api's deviceTenant rule for these fixtures: the inventory
 // tenant, lower-cased, "" for the platform.
 func tenantOf(d models.Device) string { return strings.ToLower(strings.TrimSpace(d.TenantID)) }
