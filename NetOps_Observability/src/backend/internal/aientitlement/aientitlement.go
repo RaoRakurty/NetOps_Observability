@@ -255,6 +255,10 @@ const (
 const (
 	SwitchModels         = "IRIS_AI_MODELS"
 	SwitchInvestigations = "IRIS_AI_INVESTIGATIONS"
+	// SwitchProbes lets Iris's investigation methods send a small, fixed test
+	// from Correlix's own collector to a target a workspace owns (N-I3). It
+	// needs investigations on, and each workspace still opts in.
+	SwitchProbes = "IRIS_AI_PROBES"
 )
 
 // IrisOn is the platform Iris switch with its historical semantics: ON by

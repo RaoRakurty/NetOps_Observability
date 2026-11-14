@@ -2556,6 +2556,10 @@ export type AITenantConfig = {
   no_platform_key: boolean;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  // N-I3: this workspace's own opt-in to Iris's active probes, and whether the
+  // installation offers them at all (the probe switch and AI investigations).
+  probes_enabled?: boolean;
+  probes_available?: boolean;
   platform_key_available: boolean;
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
@@ -2568,6 +2572,7 @@ export type AITenantRow = {
   name: string;
   assistant_enabled: boolean;
   investigations_enabled: boolean;
+  probes_enabled?: boolean; // N-I3: the workspace's active-probe opt-in
   key_present: boolean;
   no_platform_key: boolean;
   max_calls: number; // 0 = platform default
@@ -7142,11 +7147,11 @@ export const api = {
   // Per-workspace AI settings (tenant admin): own provider key + platform-service
   // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
   aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
-  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
+  setAITenantConfig: (cfg: { provider: string; model: string; model_fast?: string; model_strong?: string; key?: string; no_platform_key: boolean; clear_key?: boolean; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
-  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; probes_feature?: boolean; models?: AIModelsState; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number; probes_enabled?: boolean; probes_acknowledged?: boolean }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   // Iris vocabulary (tracker 337 N-C2/N-C5): the workspace's own names for its
   // entities, how a name resolves, and how a question compiles. All four are

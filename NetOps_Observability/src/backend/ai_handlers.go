@@ -378,17 +378,19 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 	// request is a ledgered decision (nil Recorder otherwise: a no-op).
 	toolAudit, ledger := s.aiToolAudit(claims), aidecision.FromContext(r.Context())
 	o := &ai.Orchestrator{
-		DS:       ds,
-		Tools:    tools,
-		LLM:      aiLLM{srv: s, claims: claims},
-		Flags:    envFlagLookup,
-		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		Redactor: s.irisRedactor(claims),                               // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
-		KB:       aiKB,                                                 // Network Expert KB (supporting knowledge)
-		Docs:     aiDocsIndex,                                          // docs-portal retriever (real page citations)
-		TAC:      s.aiTACKnowledge(),                                   // vendor TAC knowledge Iris reads before answering
-		Skills:   s.aiSkillsFor(r.Context(), claims),                   // troubleshooting methods + the tenant's approved runbooks (N-F2); nil = layer disabled
-		Explain:  aiExplanations,                                       // authored UI explanations (the AskIris (i))
+		DS:    ds,
+		Tools: tools,
+		LLM:   aiLLM{srv: s, claims: claims},
+		Flags: envFlagLookup,
+		// Read-only by default; the active-probe tools (N-I3) open only when the
+		// installation, investigations and this workspace's opt-in all say so.
+		Policy:   ai.NewPolicyEngine(ai.PolicyConfig{NetProbes: s.aiNetProbeGate(claims)}, envFlagLookup),
+		Redactor: s.irisRedactor(claims),             // outbound DLP: secrets + direct identifiers + configured communities (LLM06)
+		KB:       aiKB,                               // Network Expert KB (supporting knowledge)
+		Docs:     aiDocsIndex,                        // docs-portal retriever (real page citations)
+		TAC:      s.aiTACKnowledge(),                 // vendor TAC knowledge Iris reads before answering
+		Skills:   s.aiSkillsFor(r.Context(), claims), // troubleshooting methods + the tenant's approved runbooks (N-F2); nil = layer disabled
+		Explain:  aiExplanations,                     // authored UI explanations (the AskIris (i))
 
 		Troubleshoot: deps, // tenant-scoped Phase-A reads
 		// Tool contract v2 (N-A8): the process-lived gateway, so the per-tenant

@@ -185,6 +185,11 @@ func bindSeams(c *Case, allowed map[string]bool) ai.TroubleshootDeps {
 			return ai.ProbeResults{}, ai.ErrNotImplemented
 		}
 	}
+	// The active probes (N-I3: run_ping, run_traceroute, run_dns_test,
+	// run_http_test) are DELIBERATELY never wired in a replay, whatever a case
+	// allows: a replay re-runs Iris on a frozen slice, and a probe would send
+	// real traffic now and measure the present, not the frozen moment.
+	// d.ActiveProbe stays nil, so the tools are not registered at all.
 	if allowed["get_recent_changes"] {
 		d.RecentChanges = func(_ context.Context, p ai.Principal, q ai.ChangeQuery) (ai.ChangeReport, error) {
 			return frozenChanges(c, p, q)

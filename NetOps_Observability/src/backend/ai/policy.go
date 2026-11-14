@@ -32,7 +32,22 @@ type PolicyConfig struct {
 	AllowTools []string `json:"allow_tools,omitempty"`
 	// DenyModules blocks whole modules regardless of availability.
 	DenyModules []string `json:"deny_modules,omitempty"`
+	// NetProbes decides the ACTIVE-PROBE tools (CapNetProbe, N-I3). The zero
+	// value denies them: a policy built without the server's per-request
+	// decision (tests, replay, an orchestrator literal) never sends traffic.
+	NetProbes NetProbeGate `json:"net_probes"`
 }
+
+// NetProbeGate is the server's per-request decision for the active-probe tools:
+// the installation's probe switch, AI investigations and the workspace's own
+// opt-in, all on. Reason is the operator-facing "why not" when Allow is false.
+type NetProbeGate struct {
+	Allow  bool   `json:"allow"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// netProbesOffReason is the denial when no reason was given.
+const netProbesOffReason = "active probes are not turned on for this workspace"
 
 // Decision is the gate's verdict — always with a reason (for audit + UI).
 type Decision struct {
@@ -87,6 +102,16 @@ func (e *PolicyEngine) EvaluateTool(t AITool, p Principal) Decision {
 		// permitted (subject to the rest). A probe opens a read-only device
 		// session; the tool itself still requires infrastructure write to run
 		// one, and its contract rate-limits it hard (N-A8).
+	case CapNetProbe:
+		// An active probe originates traffic from Correlix's collector (N-I3):
+		// only when the server's per-request gate says every switch is on.
+		if !e.Cfg.NetProbes.Allow {
+			reason := e.Cfg.NetProbes.Reason
+			if reason == "" {
+				reason = netProbesOffReason
+			}
+			return deny("%s", reason)
+		}
 	case CapWrite, CapExecute:
 		if !e.Cfg.AllowActions {
 			return deny("%s is a %s action — disabled (read-only mode); requires the gated action subsystem (HLD P6)", t.Name(), t.Capability())

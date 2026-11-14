@@ -89,5 +89,7 @@ func PlatformSpecs() []Spec {
 			Help: "Let Iris send questions and the evidence it gathered to your configured AI provider for written answers and chat. Off, Iris answers from Correlix data alone."},
 		{Env: "IRIS_AI_INVESTIGATIONS", Label: "AI investigations", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
 			Help: "Let the AI model run read-only lookups across your network data to investigate a question. Needs Iris AI models on; each workspace still opts in."},
+		{Env: "IRIS_AI_PROBES", Label: "Iris active probes", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
+			Help: "Let Iris's troubleshooting methods send a short test (3 pings, one traceroute, one DNS lookup or one web request) from this Correlix server to a workspace's own devices or declared probes. Never from a customer device. Needs AI investigations on; each workspace still opts in."},
 	}
 }

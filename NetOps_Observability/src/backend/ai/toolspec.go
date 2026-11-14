@@ -233,6 +233,36 @@ var toolMetas = map[string]toolMeta{
 			{name: "target", desc: "Optional: one probe, by its name."},
 		},
 	},
+	// ── N-I3 active probes. Never in a model's manifest (Manifest skips
+	// CapNetProbe); declared so a method step's arguments and label are typed.
+	"run_ping": {
+		description: "Send 3 ICMP echoes from Correlix's own collector to one of the workspace's devices or declared probe targets, now, and report loss and round-trip time. Nothing is sent from a customer device.",
+		label:       "Ping from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "An inventory device (name or id) or a declared probe, by its name.", required: true},
+		},
+	},
+	"run_traceroute": {
+		description: "Trace the path from Correlix's own collector to one of the workspace's devices or declared probe targets, now (one probe per hop, at most 16 hops): where replies stop and whether the target answered. Nothing is sent from a customer device.",
+		label:       "Traceroute from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "An inventory device (name or id) or a declared probe, by its name.", required: true},
+		},
+	},
+	"run_dns_test": {
+		description: "Re-run the workspace's declared DNS probes once, now, from Correlix's own collector (up to 3): whether each name resolves and how a failure fails.",
+		label:       "DNS test from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "Optional: one declared DNS probe, by its name."},
+		},
+	},
+	"run_http_test": {
+		description: "Re-run the workspace's declared web probes once, now, from Correlix's own collector (up to 3): one GET each, the status and how a failure fails. Redirects are reported, never followed.",
+		label:       "Web test from Correlix",
+		args: []toolArgSpec{
+			{name: "target", desc: "Optional: one declared web probe, by its name."},
+		},
+	},
 	"get_case_timeline": {
 		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
 		label:       "Case timeline",
@@ -405,6 +435,9 @@ func Manifest(reg *ToolRegistry, pol *PolicyEngine, p Principal) []ToolSpec {
 		t, ok := reg.Get(n)
 		if !ok {
 			continue
+		}
+		if t.Capability() == CapNetProbe {
+			continue // an active probe is never a model's choice (N-I3, LLM08)
 		}
 		if d := pol.EvaluateTool(t, p); !d.Allow {
 			continue // the model never sees a tool this caller can't run
