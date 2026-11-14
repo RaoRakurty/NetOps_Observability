@@ -64,9 +64,14 @@ func (s *plannerLLM) plannedCalls() int {
 }
 
 // plannerOrch is a model-first orchestrator over the mock data source.
+// The similar-incident recall is wired as the server always wires it (the
+// fingerprint store falls back to memory, never nil): no earlier case matches.
 func plannerOrch(llm LLMClient) *Orchestrator {
 	return &Orchestrator{DS: newMockDS(), LLM: llm, Flags: func(string) bool { return true },
-		Scope: &ScopeFacts{TenantID: "t-a"}, ModelFirst: true}
+		Scope: &ScopeFacts{TenantID: "t-a"}, ModelFirst: true,
+		Troubleshoot: TroubleshootDeps{SimilarIncidents: func(context.Context, Principal, string, string) (SimilarIncidents, error) {
+			return SimilarIncidents{Verdict: "no_similar_incident", Caveat: "Similar is not the same cause."}, nil
+		}}}
 }
 
 func TestParsePlannerReply(t *testing.T) {

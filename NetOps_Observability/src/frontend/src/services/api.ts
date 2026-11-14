@@ -2244,6 +2244,63 @@ export interface OrgContextPreview {
   omitted: number;
 }
 
+// ---- tenant runbooks/MOPs (N-F2) ----
+export type RunbookKind = "investigative" | "mop";
+export interface RunbookRecheck {
+  fingerprint: string;
+  passed: boolean;
+  at?: string;
+}
+export interface RunbookVersion extends Omit<OrgContextVersion, "body"> {
+  skill_md: string;
+  cases_yaml: string;
+  harness_passed: boolean;
+  harness_fingerprint?: string;
+  harness_at?: string;
+  rechecks?: RunbookRecheck[];
+}
+export interface Runbook {
+  id: string;
+  name: string;
+  kind: RunbookKind;
+  when_to_use: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  versions: RunbookVersion[];
+  runs_in_iris: boolean;
+  needs_recheck: boolean;
+}
+export interface RunbookList {
+  runbooks: Runbook[];
+  you: string;
+  limits: { runbooks: number; versions: number; cases: number; links: number };
+}
+export interface RunbookCaseProblem {
+  case?: string;
+  message: string;
+}
+export interface RunbookCheck {
+  passed: boolean;
+  cases: number;
+  fingerprint: string;
+}
+export interface RunbookRecheckResult {
+  version: number;
+  passed: boolean;
+  already_current: boolean;
+  fingerprint?: string;
+  cases: number;
+  problems: RunbookCaseProblem[];
+}
+export type RunbookLinkType = "alert" | "signature" | "entity" | "incident";
+export interface RunbookLink {
+  link_type: RunbookLinkType;
+  link_key: string;
+  created_by: string;
+  created_at: string;
+}
+
 // ---- change ledger API (N-D3) ----
 export interface ChangeConfigDiff {
   device_id: string;
@@ -5615,7 +5672,32 @@ export interface SimilarIncidentMatch {
   differences?: string[];
   occurred_at: string;
   partial?: boolean;
+  /** How an operator recorded this past case was fixed (N-F4 residue). History, never the present cause. */
+  resolution?: PastResolution;
 }
+/** A past case's recorded fix as similar-incident recall reports it. */
+export interface PastResolution {
+  kind: RcaResolutionKind;
+  label: string;
+  note?: string;
+  change_id?: string;
+  recorded_at: string;
+}
+/** How an RCA case was resolved — closed vocabulary (server: internal/rcaresolution). */
+export type RcaResolutionKind =
+  | "config_rollback" | "hardware_replace" | "provider_ticket" | "reboot"
+  | "routing_change" | "capacity_add" | "no_action_transient" | "other";
+export type RcaResolution = {
+  id: string;
+  correlation_id: string;
+  kind: RcaResolutionKind;
+  note?: string;
+  change_id?: string;
+  created_by: string;
+  created_at: string;
+};
+export type RcaResolutionList = { correlation_id: string; resolutions: RcaResolution[]; count: number };
+export type RcaResolutionCreate = { kind: RcaResolutionKind; note?: string; change_id?: string };
 export interface SimilarIncidents {
   verdict: "similar_incidents" | "no_similar_incident";
   matches: SimilarIncidentMatch[];
@@ -6892,6 +6974,13 @@ export const api = {
   correlationFeedbackCreate: (id: string, body: RcaFeedbackCreate) =>
     request<RcaFeedback>(`/api/correlations/${encodeURIComponent(id)}/feedback`,
       { method: "POST", body: JSON.stringify(body) }),
+  // How the case was resolved (tracker 337 N-F4 residue): newest first; a
+  // create appends and returns 201 with the stored record.
+  correlationResolutions: (id: string) =>
+    request<RcaResolutionList>(`/api/correlations/${encodeURIComponent(id)}/resolution`),
+  correlationResolutionCreate: (id: string, body: RcaResolutionCreate) =>
+    request<RcaResolution>(`/api/correlations/${encodeURIComponent(id)}/resolution`,
+      { method: "POST", body: JSON.stringify(body) }),
   rcaFeedbackSummary: (days = 30) =>
     request<RcaFeedbackSummary>(`/api/correlations/feedback/summary?days=${encodeURIComponent(String(days))}`),
   // Active Verification (RCA spec item 8): latest run for a case + manual
@@ -7012,6 +7101,30 @@ export const api = {
     body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
   ) =>
     request<OrgContextFact>(`/api/ai/context/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+
+  // Tenant runbooks/MOPs (N-F2). The tenant always comes from the token.
+  runbooks: () => request<RunbookList>("/api/ai/runbooks"),
+  runbookCreate: (r: { name: string; kind: RunbookKind; skill_md: string; cases_yaml: string }) =>
+    request<Runbook>("/api/ai/runbooks", { method: "POST", body: JSON.stringify(r) }),
+  runbookDraft: (id: string, src: { skill_md: string; cases_yaml: string }) =>
+    request<Runbook>(`/api/ai/runbooks/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify(src) }),
+  runbookDiscard: (id: string) =>
+    request<Runbook | undefined>(`/api/ai/runbooks/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  runbookCheck: (id: string) =>
+    request<RunbookCheck>(`/api/ai/runbooks/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  runbookRecheck: (id: string) =>
+    request<RunbookRecheckResult>(`/api/ai/runbooks/${encodeURIComponent(id)}/reprove`, { method: "POST" }),
+  runbookAct: (
+    id: string,
+    verb: "submit" | "withdraw" | "approve" | "reject" | "rollback" | "retire",
+    body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
+  ) => request<Runbook>(`/api/ai/runbooks/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+  runbookLinks: (id: string) => request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`),
+  runbookLink: (id: string, link_type: RunbookLinkType, link_key: string, remove = false) =>
+    request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`, {
+      method: remove ? "DELETE" : "PUT",
+      body: JSON.stringify({ link_type, link_key }),
+    }),
 
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),

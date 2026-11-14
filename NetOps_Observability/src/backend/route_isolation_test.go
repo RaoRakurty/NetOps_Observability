@@ -104,6 +104,13 @@ var routeIsolationLedger = map[string]string{
 	// foreign approve/rollback/retire → 404 — org_context_isolation_test.go.
 	"/api/ai/context":  "scoped",
 	"/api/ai/context/": "scoped",
+	// Tenant runbooks/MOPs (N-F2): tenant from the token (RLS tenant_runbook_* +
+	// store tenant key); a Global view must choose a workspace; a foreign id →
+	// 404 for every verb incl. links and reprove; an as_tenant walk is ignored;
+	// only the caller's approved runbooks reach the caller's Iris —
+	// tenant_runbook_isolation_test.go.
+	"/api/ai/runbooks":  "scoped",
+	"/api/ai/runbooks/": "scoped",
 	// Source authority (N-F6): the order is the token tenant's (RLS
 	// iris_source_authority + store tenant key), no id in the path, a Global view
 	// must choose a workspace — source_authority_isolation_test.go.

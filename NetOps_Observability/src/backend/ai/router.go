@@ -84,7 +84,7 @@ func ClassFor(mode AnswerMode, intent string) (RequestClass, string) {
 	switch mode {
 	case ModeProductAnswer, ModeProductNavigationHelp, ModeInvestigationPlan:
 		return ClassProduct, "answered"
-	case ModeDataQuery, ModeIncidentStatusBreakdown, ModeShiftHandoff, ModeTimeRangeOutageSummary:
+	case ModeDataQuery, ModeIncidentStatusBreakdown, ModeShiftHandoff, ModeTimeRangeOutageSummary, ModeSimilarIncidents:
 		return ClassData, "answered"
 	case ModeProblemExplanation, ModeTopIncidentExplanation, ModeNocFocusRecommendation, ModeCurrentStateSummary,
 		ModeModuleHealthSummary, ModeTopologyPathExplanation, ModeEvidenceExplanation, ModeMissingEvidenceExplained,

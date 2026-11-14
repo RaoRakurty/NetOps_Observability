@@ -25,10 +25,13 @@ const (
 	ModeMissingEvidenceExplained AnswerMode = "missing_evidence_explanation"
 	ModeItsmUpdate               AnswerMode = "itsm_update"
 	ModeShiftHandoff             AnswerMode = "shift_handoff"
-	ModeExecutiveSummary         AnswerMode = "executive_summary"
-	ModeProductNavigationHelp    AnswerMode = "product_navigation_help"
-	ModeProductAnswer            AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
-	ModeInvestigationPlan        AnswerMode = "investigation_plan"
+	// ModeSimilarIncidents answers "have we seen this before?" from the
+	// caller's own closed incidents (tracker 337 N-F4, similar_answer.go).
+	ModeSimilarIncidents      AnswerMode = "similar_incidents"
+	ModeExecutiveSummary      AnswerMode = "executive_summary"
+	ModeProductNavigationHelp AnswerMode = "product_navigation_help"
+	ModeProductAnswer         AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
+	ModeInvestigationPlan     AnswerMode = "investigation_plan"
 	// ModeTroubleshootFinding is the IRIS Phase-A skill answer: a grounded,
 	// cited troubleshooting finding produced by a SKILL (skills/<name>/SKILL.md)
 	// whose gather step ran governed read-only tools before the model narrated.

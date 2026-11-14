@@ -64,7 +64,7 @@ const (
 // internal/protocoldiag, and a tool argument vocabulary that could drift with a
 // library is not a closed vocabulary. TestDeviceStateAreasMatchTheBattery in the
 // root package pins the two together.
-var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "logs"}
+var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "logs"}
 
 var stateAreas = func() map[string]bool {
 	m := make(map[string]bool, len(stateAreaOrder))
@@ -94,7 +94,7 @@ func stateRowCap(area string) int {
 		return MaxStateRowsRoutes
 	case "l2":
 		return MaxStateRowsL2
-	case "platform":
+	case "platform", "evpn", "redundancy":
 		return MaxStateRowsPlatform
 	case "logs":
 		return MaxStateRowsLogs
@@ -127,6 +127,8 @@ const (
 //	l2          optional  an address; without one only the ARP table renders
 //	                      (the MAC read requires an address and is omitted).
 //	platform    none      CPU/memory/environment/uptime take no subject.
+//	evpn        none      VTEP peers and VNIs of the whole switch.
+//	redundancy  none      every HSRP/VRRP group and LACP bundle on the device.
 //	logs        none      the buffer read is bounded by a constant, not an arg.
 var stateTargetRules = map[string]stateTargetRule{
 	"interfaces": stateTargetOptional,
@@ -135,6 +137,8 @@ var stateTargetRules = map[string]stateTargetRule{
 	"routes":     stateTargetRequired,
 	"l2":         stateTargetOptional,
 	"platform":   stateTargetNone,
+	"evpn":       stateTargetNone,
+	"redundancy": stateTargetNone,
 	"logs":       stateTargetNone,
 }
 

@@ -29,7 +29,11 @@ export default function RcaSimilarIncidents({ correlationId }: { correlationId: 
   return (
     <section className="rw-panel" aria-label="Similar past incidents">
       {matches.length === 0 ? (
-        <p className="disc-text"><strong>No similar incident.</strong> {res.note}</p>
+        <p className="disc-text">
+          <strong>No earlier incident matches yet.</strong>{" "}
+          {res.examined > 0 ? `${res.examined} closed incident${res.examined === 1 ? "" : "s"} compared. ` : ""}
+          {res.note}
+        </p>
       ) : (
         <ol className="op-actions">
           {matches.map((m) => (
@@ -39,6 +43,14 @@ export default function RcaSimilarIncidents({ correlationId }: { correlationId: 
               </a>{" "}
               — matched on {(m.matched_on ?? []).join(", ")}
               {m.differences && m.differences.length > 0 ? `; differs in ${m.differences.join(", ")}` : ""}
+              {m.resolution ? (
+                <div className="disc-text" data-testid="similar-fix">
+                  Last time this was fixed by {m.resolution.label}
+                  {m.resolution.change_id ? ` (change ${m.resolution.change_id})` : ""}
+                  {" — recorded by an operator on "}{fmtDateTime(m.resolution.recorded_at)}.
+                  {m.resolution.note ? <><br /><span style={{ color: "var(--muted)" }}>{m.resolution.note}</span></> : null}
+                </div>
+              ) : null}
             </li>
           ))}
         </ol>

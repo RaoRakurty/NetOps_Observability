@@ -554,7 +554,121 @@ func TestTenantRunbookMigrationUpAndDownPG(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_class WHERE relname LIKE 'tenant_runbook%' AND relkind = 'r' AND relrowsecurity AND relforcerowsecurity`).Scan(&forced); err != nil {
 		t.Fatal(err)
 	}
-	if forced != 3 {
-		t.Fatalf("%d of 3 tables have FORCE RLS after the re-apply", forced)
+	if forced != 4 {
+		t.Fatalf("%d of 4 tables (0066's three + 0072's re-checks) have FORCE RLS after the re-apply", forced)
+	}
+}
+
+// Re-checks (migration 0072): recorded BESIDE the frozen proof (0066's trigger
+// would refuse a rewrite of it), scoped by RLS, and they decide whether an
+// approved runbook runs under a moved fingerprint.
+func TestTenantRunbookRecheckPG(t *testing.T) {
+	ps, st, h, _ := pgFixture(t)
+	ctx := context.Background()
+	r := create(t, st, "acme", "alice", good())
+	activate(t, st, "acme", r.ID, "alice", "bob")
+
+	h.set(func(f *fakeHarness) { f.fp = "fp-2" })
+	rows, err := st.List(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skills, _ := ActiveSkills("acme", rows, "fp-2", ai.ToolNames()); len(skills) != 0 {
+		t.Fatal("a moved fingerprint must stop the runbook")
+	}
+	res, err := st.Reprove(ctx, "acme", r.ID, "carol")
+	if err != nil || !res.Passed || res.Fingerprint != "fp-2" {
+		t.Fatalf("reprove: %+v %v", res, err)
+	}
+	got, err := st.Get(ctx, "acme", r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := got.Active()
+	if got.Harness[v.Version].Fingerprint != "fp-1" {
+		t.Fatalf("the frozen proof must survive a re-check: %+v", got.Harness)
+	}
+	if st2, ok := got.Recheck[v.Version]["fp-2"]; !ok || !st2.Passed {
+		t.Fatalf("the re-check round-trips: %+v", got.Recheck)
+	}
+	if skills, _ := ActiveSkills("acme", []Runbook{got}, "fp-2", ai.ToolNames()); len(skills) != 1 {
+		t.Fatal("after a passing re-check the runbook runs again")
+	}
+
+	// A failing re-check under a newer fingerprint is recorded, and keeps it out.
+	h.set(func(f *fakeHarness) { f.fp = "fp-3"; f.fail = true })
+	if res, err := st.Reprove(ctx, "acme", r.ID, "carol"); err != nil || res.Passed {
+		t.Fatalf("a failing re-check is a result: %+v %v", res, err)
+	}
+	got, _ = st.Get(ctx, "acme", r.ID)
+	if rc, ok := got.Recheck[v.Version]["fp-3"]; !ok || rc.Passed {
+		t.Fatalf("the failure is recorded: %+v", got.Recheck)
+	}
+
+	// RLS: another tenant can neither re-check nor see re-checks, nor forge one.
+	if _, err := st.Reprove(ctx, "globex", r.ID, "mallory"); !errors.Is(err, orgcontext.ErrNotFound) {
+		t.Fatalf("RLS LEAK: globex re-checked acme's runbook (%v)", err)
+	}
+	var n int
+	if err := ps.DB().WithTenant(ctx, "globex", false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM tenant_runbook_reproofs`).Scan(&n)
+	}); err != nil || n != 0 {
+		t.Fatalf("RLS LEAK: globex counts %d re-checks (%v)", n, err)
+	}
+	err = ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO tenant_runbook_reproofs (tenant_id, runbook_id, version, fingerprint, passed)
+		    VALUES ('globex', $1::uuid, 1, 'forged', true)`, r.ID)
+		return err
+	})
+	if pgCode(err) != "42501" {
+		t.Fatalf("WITH CHECK must refuse a forged tenant in the re-check table, got %v", err)
+	}
+}
+
+func TestTenantRunbookRecheckMigrationUpAndDownPG(t *testing.T) {
+	ps, st, h, dsn := pgFixture(t)
+	ctx := context.Background()
+	r := create(t, st, "acme", "alice", good())
+	activate(t, st, "acme", r.ID, "alice", "bob")
+	h.set(func(f *fakeHarness) { f.fp = "fp-2" })
+	if _, err := st.Reprove(ctx, "acme", r.ID, "carol"); err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile("../platformdb/migrations/rollback/0072_tenant_runbook_reproofs.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := conn.Close(ctx); err != nil {
+			t.Logf("close: %v", err)
+		}
+	}()
+	if _, err := conn.Exec(ctx, string(down)); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	var tables int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_tables WHERE tablename = 'tenant_runbook_reproofs'`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatal("the re-check table survived its rollback")
+	}
+	// 0066's tables and the approved runbook are untouched by 0072's rollback.
+	if _, err := st.Get(ctx, "acme", r.ID); err == nil {
+		t.Fatal("reads expect the re-check table; with it gone a read must fail loudly, not pretend")
+	}
+	if err := ps.DB().Migrate(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	got, err := st.Get(ctx, "acme", r.ID)
+	if err != nil {
+		t.Fatalf("after up again: %v", err)
+	}
+	if _, ok := got.Active(); !ok {
+		t.Fatal("the approved runbook survives a 0072 down/up")
 	}
 }

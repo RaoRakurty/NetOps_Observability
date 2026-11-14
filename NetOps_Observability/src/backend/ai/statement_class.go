@@ -144,6 +144,7 @@ var toolStatementClass = map[string]string{
 	"get_overlay_state":              ClassObserved,
 	"get_tunnel_state":               ClassObserved,
 	"get_path_evidence":              ClassObserved,
+	"get_probe_results":              ClassObserved,
 	"get_case_timeline":              ClassObserved,
 	"get_bgp_watchlist":              ClassObserved,
 	"get_bgp_rpki":                   ClassObserved,

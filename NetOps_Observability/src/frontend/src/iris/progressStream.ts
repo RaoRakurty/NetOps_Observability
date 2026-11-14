@@ -41,6 +41,7 @@ const TOOL_LABEL: Record<string, string> = {
   get_overlay_state: "the SD-WAN overlay",
   get_tunnel_state: "tunnels",
   get_path_evidence: "measured paths",
+  get_probe_results: "synthetic probes",
   get_security_findings: "security findings",
   get_recent_changes: "recent changes",
   get_config_diff: "a configuration change",

@@ -30,6 +30,7 @@ var skillExcludedIntents = map[string]bool{
 	"current_state":              true,
 	"shift_handoff":              true,
 	"time_range_summary":         true,
+	"similar_incidents":          true, // history recall has its own answer (similar_answer.go)
 	"incident_list":              true,
 	"noc_focus":                  true,
 	"incident_breakdown":         true,
