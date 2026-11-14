@@ -59,10 +59,16 @@ const errs = vi.hoisted(() => {
   return { FakeNotPromoted };
 });
 
-vi.mock("../../services/api", () => ({
-  api: { ...mocks },
-  RcaNotPromotedError: errs.FakeNotPromoted,
-}));
+// Iris asks through the ONE shared path (iris/askBound.ts), which streams; the
+// stream delegates to aiAsk so the assertions below read one ask.
+vi.mock("../../services/api", () => {
+  class StreamBrokenError extends Error {}
+  return {
+    api: { ...mocks, aiAskStream: (q: string, ctx: unknown) => mocks.aiAsk(q, ctx) },
+    RcaNotPromotedError: errs.FakeNotPromoted,
+    StreamBrokenError,
+  };
+});
 
 import InvestigationPage, { caseDevice } from "./InvestigationPage";
 import { ALL_LANES, LANE_TITLE, type LaneId } from "./investigationModel";

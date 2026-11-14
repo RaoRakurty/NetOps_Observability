@@ -125,6 +125,9 @@ type Orchestrator struct {
 	// forceTopology: the planner routed a question about how the network is
 	// built, so the grounded model answer carries the topology evidence.
 	forceTopology bool
+	// view is the server-validated subject of the screen behind the question
+	// being answered (view_binding.go, N-E4), set at the top of ask.
+	view ViewBinding
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -480,6 +483,24 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 
 func (o *Orchestrator) ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (ans Answer, err error) {
 	o.trace(TracePlanning)
+	// N-E4: the screen's subject (incident, device, page) is re-resolved in the
+	// caller's own scope before anything routes; what does not resolve leaves
+	// the context and the answer says once that it was not used.
+	uiContext, o.view = o.bindView(ctx, p, uiContext)
+	if notes := o.view.disclosures(); len(notes) > 0 {
+		defer func() {
+			if err == nil {
+				ans.Disclaimers = appendMissing(ans.Disclaimers, notes...)
+			}
+		}()
+	}
+	// A question about the incident on the screen ("explain this", or the
+	// one-click ask with no words) whose incident did not resolve is not
+	// answered about something else: it says the incident is not available,
+	// identically for an unknown id and another tenant's.
+	if o.view.droppedIncident() && o.view.Device == "" && (strings.TrimSpace(question) == "" || reAboutTheProblem.MatchString(question)) {
+		return viewIncidentUnavailable(), nil
+	}
 	// An EXPLAIN ask is a lookup, not a classification: the `(i)` next to a
 	// number on a screen already named the term it wants defined, and the answer
 	// is server-authored prose returned verbatim (explain.go). It runs first so a

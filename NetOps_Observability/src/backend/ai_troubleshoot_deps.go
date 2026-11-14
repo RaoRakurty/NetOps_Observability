@@ -3759,13 +3759,12 @@ func (s *server) aiAgentAnswer(r *http.Request, claims jwtClaims, orch *ai.Orche
 			}
 		}
 		turn := ai.RedactSecrets(question)
-		if orch.Glossary != nil {
-			// The caller's generated vocabulary (names, never instructions),
-			// after the question: it helps the loop read "the Dallas box" or
-			// an alias without a phrase list (model-first decision point 3).
-			if g := strings.TrimSpace(orch.Glossary(ctx, p)); g != "" {
-				turn += "\n\n" + ai.RedactSecrets(g)
-			}
+		// The caller's generated vocabulary (names, never instructions) and
+		// what is in view on their screen (N-E4, server-validated), after the
+		// question: the loop reads "the Dallas box", an alias, or "this
+		// device" without a phrase list (model-first decision point 3).
+		if g := strings.TrimSpace(orch.ViewText(ctx, p)); g != "" {
+			turn += "\n\n" + ai.RedactSecrets(g)
 		}
 		msgs = append(msgs, copilotMessage{Role: "user", Content: turn})
 		ctx, cancel := context.WithTimeout(ctx, aiAgentAnswerBudget)

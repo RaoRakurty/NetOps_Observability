@@ -30,7 +30,19 @@ const mocks = vi.hoisted(() => ({
     copilotChat: vi.fn(), devices: vi.fn(),
   } as Record<string, ReturnType<typeof vi.fn>>,
 }));
-vi.mock("../../services/api", () => ({ api: { aiAsk: mocks.aiAsk, ...mocks.other } }));
+// The lane asks through the ONE shared path (iris/askBound.ts), which streams;
+// the stream mock delegates to aiAsk so every assertion below reads one ask.
+vi.mock("../../services/api", () => {
+  class StreamBrokenError extends Error {}
+  return {
+    StreamBrokenError,
+    api: {
+      aiAsk: mocks.aiAsk,
+      aiAskStream: (q: string, ctx: unknown) => mocks.aiAsk(q, ctx),
+      ...mocks.other,
+    },
+  };
+});
 
 const aiAsk = mocks.aiAsk;
 const otherApi = mocks.other;

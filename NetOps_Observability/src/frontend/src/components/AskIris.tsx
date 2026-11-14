@@ -62,6 +62,19 @@ export function askIris(topic: string, label: string): void {
   );
 }
 
+/**
+ * Opens Iris with a question about what is on the screen (tracker 337 N-E4):
+ * "Ask Iris about this device" / "… this incident". It carries ONLY the
+ * question text — the subject travels as the page's registered view
+ * (iris/viewContext.ts) and the server re-resolves it in the caller's own
+ * workspace. topic "" marks it a free question, not an authored definition.
+ */
+export function askIrisAbout(question: string): void {
+  const q = question.trim().slice(0, 300);
+  if (!q) return;
+  window.dispatchEvent(new CustomEvent<IrisAskDetail>(IRIS_ASK_EVENT, { detail: { topic: "", question: q } }));
+}
+
 export default function AskIris({ topic, label, className }: {
   /** Authored topic id, e.g. "kpi.confirmed-rca". */
   topic: string;
