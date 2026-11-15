@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for MonitoredSourcesSilent (rules-scale-slo.yaml,
+# engine-liveness, tier: page) — page condition (2) "ingest silent when it
+# should not be", seen from the devices themselves (2026-11-15). Still FOUR
+# page conditions: a third vantage on (2), like NMSIngestSilent.
+#
+# The 2026-11-14 lab shape: the gateway went down, every lane stopped at once,
+# and an SNMP/syslog-only install would have paged no one.
+#
+# Acceptance: FIRES on that shape and stays SILENT on every look-alike that
+# would get it muted:
+#   * the outage itself pages, after `for: 15m`;
+#   * no devices in the inventory (a fresh install) never pages;
+#   * an install whose collectors never reached a device never pages — there
+#     was never anything to go silent;
+#   * polling lost but syslog still arriving is a polling problem, not "every
+#     device silent";
+#   * the api going away is not this page (the inventory series goes absent).
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) THE OUTAGE: 8 devices, reachable and sending until 60m, then nothing.
+  #    increase(...[30m]) reaches 0 at 90m; reachability is 0 from 61m; the
+  #    condition holds from ~90m and the page fires after `for: 15m`.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_monitored_devices_total{job="netops-api",instance="api:8080"}'
+        values: "8x180"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "8x60 0x120"
+      - series: 'collector_targets_reachable{collector="netconf"}'
+        values: "8x60 0x120"
+      - series: 'vector_component_received_events_total{component_id="syslog_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0+50x60 3000x120"
+      - series: 'vector_component_received_events_total{component_id="trap_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0+5x60 300x120"
+    alert_rule_test:
+      # Still inside the 30m increase window: syslog counted recently.
+      - eval_time: 80m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []
+      # Condition true, still pending.
+      - eval_time: 100m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: MonitoredSourcesSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "Every monitored device is SILENT: none can be polled and no syslog or trap has arrived from any device for 30m"
+              description: "The inventory holds monitored devices and the collectors reached them earlier this week, but now no collector target is reachable and vector-aggregator received no syslog and no SNMP trap for 30 minutes. Nothing is arriving for the pipeline to move, so every consumer and lag check can be green while this fires. When every lane stops at once the path between this server and the devices is the likely cause (a gateway, a route, a VPN or SD-WAN tunnel the management traffic rides, a firewall change), not the pipeline. From the Correlix host check `ip route get` to a device address and whether that next hop answers."
+              runbook: "docs/runbooks/devices-silent.md"
+
+  # ==========================================================================
+  # 2) FRESH INSTALL: no devices in the inventory, nothing reachable, nothing
+  #    arriving -> silent. Paging here is how a pager gets muted.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_monitored_devices_total{job="netops-api",instance="api:8080"}'
+        values: "0x180"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "0x180"
+      - series: 'vector_component_received_events_total{component_id="syslog_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) NEVER CONNECTED: devices are inventoried but the collectors have never
+  #    reached one (wrong community on day one) -> silent. There was never
+  #    ingest to go silent; CollectorAllTargetsUnreachable is the warning.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_monitored_devices_total{job="netops-api",instance="api:8080"}'
+        values: "5x180"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "0x180"
+      - series: 'vector_component_received_events_total{component_id="syslog_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 4) POLLING LOST, SYSLOG STILL ARRIVING -> silent. The devices are still
+  #    reporting; that is a polling problem (credentials, an ACL), not every
+  #    device going dark.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_monitored_devices_total{job="netops-api",instance="api:8080"}'
+        values: "8x180"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "8x60 0x120"
+      - series: 'vector_component_received_events_total{component_id="syslog_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0+50x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 5) THE API WENT AWAY: the inventory series stops (absent) while nothing
+  #    arrives -> silent. A dead api is ScrapeTargetDown's and the watchdog's
+  #    page, not a second one here.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_monitored_devices_total{job="netops-api",instance="api:8080"}'
+        values: "8x60"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "8x60 0x120"
+      - series: 'vector_component_received_events_total{component_id="syslog_in",instance="vector-aggregator:9598",component_kind="source"}'
+        values: "0+50x60 3000x120"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MonitoredSourcesSilent
+        exp_alerts: []

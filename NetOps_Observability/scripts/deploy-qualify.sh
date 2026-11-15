@@ -182,6 +182,16 @@ WHAT IT DOES
            construction on a healthy fresh appliance)
       Q7  the API answers 200 with a non-empty body
       Q9r OpenSearch cluster status is not RED
+      Q11 the MONITORED DEVICES are reporting: when the inventory holds at
+          least one device, some lane (SNMP/NETCONF polling, syslog, SNMP
+          traps, NetFlow/IPFIX) carried device telemetry within the last
+          DQ_SOURCES_WINDOW minutes. Every other check proves the pipeline
+          can move data; this one proves data is arriving. On 2026-11-14 the
+          lab gateway went down for 24 h, nothing from any device arrived,
+          and this gate still said QUALIFIED. When every lane went quiet at
+          the same moment it says so: the path to the devices (gateway,
+          route), not the pipeline, is the likely cause. No devices in the
+          inventory (a fresh install) is an ADVISORY skip, not a failure
     ADVISORY (reported, never fatal)
       Q8  alert-delivery heartbeat is fresh
       Q9  OpenSearch cluster status is present and green/yellow
@@ -222,6 +232,8 @@ CONFIG (all optional; a bare checkout works with the defaults)
     DQ_AGG_INSTANCE        Vector aggregator scrape instance  (vector-aggregator:9598)
     DQ_ROUTER_INSTANCE     Vector router scrape instance      (vector-router:9598)
     DQ_HEARTBEAT_MAX_AGE   Q8 freshness bound, seconds        (default 900)
+    DQ_SOURCES_WINDOW      Q11: device telemetry must be newer than this
+                           many MINUTES                       (default 15)
     DQ_Q2_MIN_OBSERVE      Q2c: seconds a quiet partition is watched before
                            it counts as idle; extends the window if needed,
                            within the global deadline        (default 120)
@@ -332,6 +344,15 @@ DOCKER_TIMEOUT="${DQ_DOCKER_TIMEOUT:-30}"
 AGG_INSTANCE="${DQ_AGG_INSTANCE:-vector-aggregator:9598}"
 ROUTER_INSTANCE="${DQ_ROUTER_INSTANCE:-vector-router:9598}"
 HEARTBEAT_MAX_AGE="${DQ_HEARTBEAT_MAX_AGE:-900}"
+# Q11: how recent a device's telemetry must be, in MINUTES. Whole number only;
+# anything else falls back to the default with a warning (a typo must not
+# silently turn the check off).
+SOURCES_WINDOW_MIN="${DQ_SOURCES_WINDOW:-15}"
+case "$SOURCES_WINDOW_MIN" in
+  ''|*[!0-9]*|0)
+    warn "DQ_SOURCES_WINDOW='$SOURCES_WINDOW_MIN' is not a whole number of minutes > 0 — using 15"
+    SOURCES_WINDOW_MIN=15 ;;
+esac
 APP_URL="${APP_URL:-http://localhost:8000/}"
 API_PROBE_URL="${API_PROBE_URL:-${APP_URL%/}/admin/version}"
 APP_CACERT="${APP_CACERT:-}"
@@ -1714,6 +1735,181 @@ if poll_until "Q7 api serving" probe_q7; then
   record PASS REQUIRED "Q7 api serving" "$API_PROBE_URL — $PROBE_DETAIL"
 else
   record FAIL REQUIRED "Q7 api serving" "$API_PROBE_URL — $PROBE_DETAIL"
+fi
+
+# --- Q11 (REQUIRED): are the MONITORED DEVICES reporting? --------------------
+# Every check above proves the pipeline CAN move data. None of them proves data
+# is ARRIVING. On 2026-11-14 the lab gateway went down for 24 hours: no syslog,
+# trap, flow or poll result reached the platform from any device, and this gate
+# returned QUALIFIED 13/13 several times, because the consumers were joined,
+# the Vector tiers were emitting (Correlix's own app logs) and lag was zero.
+# The same gap was noted after the 2026-11-01 lab-gateway incident.
+#
+# THE EXPECTED-ACTIVITY GUARD is the inventory itself: netops_monitored_devices_
+# total, the api's own count of devices it is told to watch. Zero devices is a
+# fresh install and is an ADVISORY skip — a gate that fails every new appliance
+# before its first device is added gets bypassed. One or more devices means
+# telemetry is expected, so silence on every lane is a failure.
+#
+# THE LANES, each read from where the data first enters the platform so that a
+# consumer replaying a backlog can never look like fresh device traffic:
+#   polling  collector_targets_reachable (the api's SNMP/NETCONF collectors)
+#   syslog   vector-aggregator's syslog_in source (fed by syslog-ng)
+#   traps    vector-aggregator's trap_in source
+#   flows    goflow2's producer offsets on netops.flows.raw (kafka-exporter);
+#            without kafka-exporter, vector-router's kafka_flows_raw source
+# A lane whose series does not exist at all (an NMS-only install has no SNMP
+# collectors) is left out; a lane that could not be READ is named as such and
+# never counted as silent or as reporting.
+#
+# PASS: at least one lane carried device telemetry inside the window.
+# FAIL: none did. When every lane that has a history went quiet within ten
+#       minutes of each other, the verdict says so: the path to the devices
+#       (gateway, route, firewall) is the likely cause, not the pipeline.
+
+# fmt_utc: epoch seconds -> "YYYY-MM-DD HH:MM UTC". GNU date first; BusyBox and
+# BSD date do not take -d @epoch, and a timestamp that cannot be pretty-printed
+# is still a fact, so the fallback prints the raw epoch instead of failing the
+# whole check. The `2>/dev/null` is that inspected, optional formatting step.
+# shellcheck disable=SC2329  # reached through probe_q11, which poll_until invokes indirectly
+fmt_utc() {
+  local s="${1%%.*}"
+  date -u -d "@$s" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || printf 'epoch %s' "$s"
+}
+
+# ago_text: seconds between two epochs as "3d 2h" / "4h 10m" / "7m".
+# shellcheck disable=SC2329  # reached through probe_q11, which poll_until invokes indirectly
+ago_text() {  # $1 now, $2 then
+  awk -v n="$1" -v t="$2" 'BEGIN {
+    d = int(n - t); if (d < 0) d = 0
+    if (d >= 86400)     printf "%dd %dh", d / 86400, (d % 86400) / 3600
+    else if (d >= 3600) printf "%dh %dm", d / 3600, (d % 3600) / 60
+    else                printf "%dm", d / 60
+  }'
+}
+
+# sources_judge — PURE (tests/test_deploy_qualify.py runs this shipped function).
+#   $1 now (epoch)  $2 window (minutes)  $3 monitored-device count (or a reason)
+#   $4.. one spec per lane: "name|fresh|last"
+#        fresh: 1 reported inside the window · 0 did not · ? could not be read
+#        last:  epoch of the newest arrival in the last 48 h, or empty for none
+# Prints "VERDICT<TAB>detail" where VERDICT is PASS, FAIL, SKIP (could not
+# judge — a required question left unanswered) or NODEV (no devices, nothing is
+# expected to report).
+# shellcheck disable=SC2329  # reached through probe_q11, which poll_until invokes indirectly
+sources_judge() {
+  local now="$1" win="$2" dev="$3"; shift 3
+  if ! is_num "$dev"; then
+    printf 'SKIP\tthe monitored-device count could not be read (%s), so whether any device should be reporting is unknown' "$dev"
+    return 0
+  fi
+  if ! num_gt "$dev" 0; then
+    printf 'NODEV\tthe inventory holds no monitored devices, so none is expected to report (a fresh install) — nothing to judge'
+    return 0
+  fi
+  local spec name rest fresh last fresh_l='' silent='' unread='' n_read=0 n_ts=0 lo='' hi=''
+  for spec in "$@"; do
+    name="${spec%%|*}"; rest="${spec#*|}"
+    fresh="${rest%%|*}"; last="${rest#*|}"
+    case "$fresh" in
+      1) fresh_l="${fresh_l:+$fresh_l, }$name" ;;
+      0)
+        n_read=$((n_read + 1))
+        if is_num "$last" && num_gt "$last" 0; then
+          n_ts=$((n_ts + 1))
+          silent="${silent:+$silent; }$name silent since $(fmt_utc "$last") ($(ago_text "$now" "$last") ago)"
+          if [ -z "$lo" ] || num_gt "$lo" "$last"; then lo="$last"; fi
+          if [ -z "$hi" ] || num_gt "$last" "$hi"; then hi="$last"; fi
+        else
+          silent="${silent:+$silent; }$name: nothing in the last 48 h"
+        fi ;;
+      *) unread="${unread:+$unread, }$name" ;;
+    esac
+  done
+  if [ -n "$fresh_l" ]; then
+    printf 'PASS\t%s monitored device(s); device telemetry arrived within the last %sm on: %s' "$dev" "$win" "$fresh_l"
+    [ -n "$silent" ] && printf ' · quiet lanes: %s' "$silent"
+    [ -n "$unread" ] && printf ' · could not read: %s' "$unread"
+    return 0
+  fi
+  if [ "$n_read" -eq 0 ]; then
+    printf 'SKIP\tno device-telemetry lane could be read (%s), so whether the %s monitored device(s) are reporting is unknown' "${unread:-none present}" "$dev"
+    return 0
+  fi
+  printf 'FAIL\t%s monitored device(s) in the inventory, but NO device telemetry arrived in the last %sm — %s' "$dev" "$win" "$silent"
+  [ -n "$unread" ] && printf '; could not read: %s' "$unread"
+  if [ "$n_ts" -ge 2 ] && ! num_gt "$(awk -v a="$hi" -v b="$lo" 'BEGIN { print a - b }')" 600; then
+    printf ' · every lane stopped at the same time (within 10 minutes, around %s) — the path to the devices (gateway, route, firewall) is the likely cause, not the pipeline: check that this server can still reach the devices' "$(fmt_utc "$hi")"
+  fi
+  return 0
+}
+
+# q11_lane: one lane's spec. $1 name, $2 "fresh" PromQL, $3 "last arrival"
+# PromQL. Prints "name|fresh|last", or nothing when the lane's series does not
+# exist at all (that lane is not part of this install).
+# shellcheck disable=SC2329  # reached through probe_q11, which poll_until invokes indirectly
+q11_lane() {
+  local name="$1" fexpr="$2" lexpr="$3" f l
+  if ! f="$(vm_scalar "$fexpr" 2>&1)"; then
+    case "$f" in
+      *'empty result set'*) return 0 ;;
+      *) printf '%s|?|' "$name"; return 0 ;;
+    esac
+  fi
+  if ! is_num "$f"; then printf '%s|?|' "$name"; return 0; fi
+  if num_gt "$f" 0; then f=1; else f=0; fi
+  if ! l="$(vm_scalar "$lexpr" 2>&1)" || ! is_num "$l"; then l=''; fi
+  printf '%s|%s|%s' "$name" "$f" "$l"
+}
+
+# A counter lane: increase inside the window, and the last minute it moved.
+# shellcheck disable=SC2329  # reached through probe_q11, which poll_until invokes indirectly
+q11_counter_lane() {  # $1 name, $2 counter selector
+  q11_lane "$1" \
+    "sum(increase($2[${SOURCES_WINDOW_MIN}m]))" \
+    "tlast_over_time((sum(increase($2[5m])) > 0)[48h:1m])"
+}
+
+Q11_LABEL="Q11 monitored sources reporting"
+Q11_VERDICT=''
+# shellcheck disable=SC2329  # invoked indirectly by poll_until "$@"
+probe_q11() {
+  local dev lanes=() spec out
+  if ! dev="$(vm_scalar 'sum(netops_monitored_devices_total)' 2>&1)"; then
+    dev="netops_monitored_devices_total: $(oneline "$dev" 120)"
+  fi
+  spec="$(q11_lane polling \
+    "max(max_over_time(collector_targets_reachable[${SOURCES_WINDOW_MIN}m]))" \
+    'tlast_over_time((max(collector_targets_reachable) > 0)[48h:1m])')"
+  [ -n "$spec" ] && lanes+=("$spec")
+  spec="$(q11_counter_lane syslog "vector_component_received_events_total{component_id=\"syslog_in\",instance=\"$AGG_INSTANCE\"}")"
+  [ -n "$spec" ] && lanes+=("$spec")
+  spec="$(q11_counter_lane traps "vector_component_received_events_total{component_id=\"trap_in\",instance=\"$AGG_INSTANCE\"}")"
+  [ -n "$spec" ] && lanes+=("$spec")
+  if [ -n "$EXPORTER_CID" ]; then
+    spec="$(q11_counter_lane flows 'kafka_topic_partition_current_offset{topic="netops.flows.raw"}')"
+  else
+    spec="$(q11_counter_lane flows "vector_component_received_events_total{component_id=\"kafka_flows_raw\",instance=\"$ROUTER_INSTANCE\"}")"
+  fi
+  [ -n "$spec" ] && lanes+=("$spec")
+  out="$(sources_judge "$(date +%s)" "$SOURCES_WINDOW_MIN" "$dev" ${lanes[@]+"${lanes[@]}"})"
+  Q11_VERDICT="${out%%$'\t'*}"
+  PROBE_DETAIL="${out#*$'\t'}"
+  # Keep polling only while the answer is "not yet": a fresh install whose first
+  # poll cycle is still running gets the rest of the window to report.
+  [ "$Q11_VERDICT" != FAIL ]
+}
+
+if [ "$METRICS_OK" -eq 0 ]; then
+  record SKIP REQUIRED "$Q11_LABEL" "$VICTORIA_SKIP_REASON"
+else
+  poll_until "Q11" probe_q11 || true  # a FAIL verdict is recorded below, never swallowed
+  case "$Q11_VERDICT" in
+    PASS)  record PASS REQUIRED "$Q11_LABEL" "$PROBE_DETAIL" ;;
+    FAIL)  record FAIL REQUIRED "$Q11_LABEL" "$PROBE_DETAIL" ;;
+    NODEV) record SKIP ADVISORY "$Q11_LABEL" "$PROBE_DETAIL" ;;
+    *)     record SKIP REQUIRED "$Q11_LABEL" "${PROBE_DETAIL:-the check produced no verdict}" ;;
+  esac
 fi
 
 # --- Q8 (ADVISORY): the alert DELIVERY chain is alive -----------------------

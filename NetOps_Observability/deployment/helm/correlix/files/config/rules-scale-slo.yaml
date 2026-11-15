@@ -677,6 +677,60 @@ groups:
           runbook: "docs/runbooks/engine-not-consuming.md"
 
       # ------------------------------------------------------------------
+      # PAGE 2, THIRD VANTAGE: EVERY MONITORED DEVICE WENT SILENT (2026-11-15).
+      # Still FOUR page conditions — another vantage on (2), like
+      # NMSIngestSilent above.
+      #
+      # The gap it closes: on 2026-11-14 the lab gateway went down for 24 h.
+      # No device could be polled and no syslog or trap arrived, yet:
+      #   * IngestPipelineSilent stayed quiet BY DESIGN — its guard needs a
+      #     reachable collector, and the aggregator kept emitting Correlix's
+      #     own docker app logs anyway;
+      #   * CollectorAllTargetsUnreachable fired, but it is not page tier;
+      #   * only NMSIngestSilent paged, because the lab also has a vManage
+      #     integration. An SNMP/syslog-only install would have paged no one.
+      #
+      # THE EXPECTED-ACTIVITY GUARD has two parts, both independent of the
+      # lanes being judged:
+      #   * the inventory holds devices (netops_monitored_devices_total, the
+      #     api's own scrape — a dead api makes it absent and this rule silent;
+      #     ScrapeTargetDown and the watchdog own a dead api);
+      #   * the collectors DID reach a device within the last 7 days (the
+      #     metric retention), so this is a CHANGE, not an install that was
+      #     never connected — the same reasoning as NMSIngestSilent's
+      #     ever_succeeded.
+      # The silence itself is judged on lanes read where data ENTERS the
+      # platform: the collectors' reachability, and vector-aggregator's own
+      # syslog_in / trap_in sources. Flows are left out on purpose: their
+      # producer offsets come from kafka-exporter, an optional profile, and a
+      # missing exporter would make the whole expression empty (silent).
+      # ------------------------------------------------------------------
+      - alert: MonitoredSourcesSilent
+        expr: |
+          (
+            max(collector_targets_reachable) == 0
+            and on() (sum(increase(vector_component_received_events_total{component_id=~"syslog_in|trap_in",instance=~"vector-aggregator.*"}[30m])) == 0)
+          )
+          and on() (sum(netops_monitored_devices_total{job="netops-api"}) > 0)
+          and on() (max_over_time(max(collector_targets_reachable)[7d:10m]) > 0)
+        for: 15m
+        labels: { severity: critical, layer: ingest, tier: page }
+        annotations:
+          summary: "Every monitored device is SILENT: none can be polled and no syslog or trap has arrived from any device for 30m"
+          description: >-
+            The inventory holds monitored devices and the collectors reached
+            them earlier this week, but now no collector target is reachable
+            and vector-aggregator received no syslog and no SNMP trap for 30
+            minutes. Nothing is arriving for the pipeline to move, so every
+            consumer and lag check can be green while this fires. When every
+            lane stops at once the path between this server and the devices is
+            the likely cause (a gateway, a route, a VPN or SD-WAN tunnel the
+            management traffic rides, a firewall change), not the pipeline.
+            From the Correlix host check `ip route get` to a device address and
+            whether that next hop answers.
+          runbook: "docs/runbooks/devices-silent.md"
+
+      # ------------------------------------------------------------------
       # PAGE 3: STORAGE REFUSING WRITES — the ClickHouse half.
       #
       # The OpenSearch half is already covered and stays where it is:
