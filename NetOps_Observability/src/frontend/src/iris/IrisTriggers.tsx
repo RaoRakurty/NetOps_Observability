@@ -51,13 +51,38 @@ export function runOutcome(r: InvestigationTriggerRun): string {
   return DONE_LABEL[r.reason ?? ""] ?? "Done";
 }
 
+const DEFAULT_LIMITS: InvestigationTriggerOverview["limits"] = {
+  max_triggers: 20, min_every_minutes: 15, max_every_minutes: 1440, max_runs_per_day: 100, max_tokens_per_day: 1000000,
+};
+
+/** Fill anything an older server or a proxy left out, so a partial answer can
+ *  never take the whole settings page down. */
+export function normalizeOverview(raw: Partial<InvestigationTriggerOverview> | null | undefined): InvestigationTriggerOverview {
+  const r = raw ?? {};
+  const s = (r.settings ?? {}) as Partial<InvestigationTriggerSettings>;
+  return {
+    settings: {
+      enabled: s.enabled === true,
+      max_runs_per_day: typeof s.max_runs_per_day === "number" ? s.max_runs_per_day : 20,
+      max_tokens_per_day: typeof s.max_tokens_per_day === "number" ? s.max_tokens_per_day : 200000,
+    },
+    triggers: Array.isArray(r.triggers) ? r.triggers : [],
+    runs: Array.isArray(r.runs) ? r.runs : [],
+    tokens_today: typeof r.tokens_today === "number" ? r.tokens_today : 0,
+    investigations_on: r.investigations_on === true,
+    durable: r.durable !== false,
+    limits: { ...DEFAULT_LIMITS, ...(r.limits ?? {}) },
+  };
+}
+
 function describe(t: InvestigationTrigger): string {
-  if (t.kind === "schedule") return `Every ${t.schedule.every_minutes} min`;
+  if (t.kind === "schedule") return `Every ${t.schedule?.every_minutes ?? "?"} min`;
+  const f = t.filter ?? {};
   const parts: string[] = [];
-  if (t.filter.min_severity) parts.push(`${t.filter.min_severity} or worse`);
-  if (t.filter.signature) parts.push(`text “${t.filter.signature}”`);
-  if (t.filter.site) parts.push(`site ${t.filter.site}`);
-  if (t.filter.role) parts.push(`role ${t.filter.role}`);
+  if (f.min_severity) parts.push(`${f.min_severity} or worse`);
+  if (f.signature) parts.push(`text “${f.signature}”`);
+  if (f.site) parts.push(`site ${f.site}`);
+  if (f.role) parts.push(`role ${f.role}`);
   return `New incident: ${parts.join(", ")}`;
 }
 
@@ -69,7 +94,7 @@ export default function IrisTriggers() {
 
   const load = useCallback(async () => {
     try {
-      setData(await api.investigationTriggers());
+      setData(normalizeOverview(await api.investigationTriggers()));
       setLoadErr("");
     } catch (e) {
       if (httpFailure(e)?.status === 403) {
@@ -198,7 +223,7 @@ function AddTrigger({ minEvery, onAdd }: { minEvery: number; onAdd: (i: Investig
 
   return (
     <fieldset data-testid="trigger-add" style={{ border: "1px solid var(--border)", padding: 8, margin: "8px 0" }}>
-      <legend style={text14}><strong>Add a trigger</strong></legend>
+      <legend style={text14}><strong>New trigger</strong></legend>
       <ol style={{ ...text14, paddingLeft: 20, margin: 0 }}>
         <li style={row}>
           <label style={text14}>Name <input aria-label="Trigger name" style={field} maxLength={80} value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -234,11 +259,11 @@ function AddTrigger({ minEvery, onAdd }: { minEvery: number; onAdd: (i: Investig
           </li>
         )}
         <li style={row}>
-          <label style={text14}>Question (optional) <input aria-label="Question for Iris" style={{ ...field, minWidth: 320 }} maxLength={300} value={question} onChange={(e) => setQuestion(e.target.value)} /></label>
+          <label style={text14}>Look into (optional) <input aria-label="What Iris should look into" style={{ ...field, minWidth: 320 }} maxLength={300} value={question} onChange={(e) => setQuestion(e.target.value)} /></label>
         </li>
       </ol>
       <div style={row}>
-        <button type="button" style={text14} disabled={name.trim() === ""} onClick={() => void submit()}>Add</button>
+        <button type="button" style={text14} disabled={name.trim() === ""} onClick={() => void submit()}>Create trigger</button>
       </div>
     </fieldset>
   );

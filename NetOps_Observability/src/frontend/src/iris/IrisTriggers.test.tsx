@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import IrisTriggers, { runOutcome } from "./IrisTriggers";
+import IrisTriggers, { normalizeOverview, runOutcome } from "./IrisTriggers";
 import { api, type InvestigationTriggerOverview, type InvestigationTriggerRun } from "../services/api";
 
 afterEach(() => vi.restoreAllMocks());
@@ -36,7 +36,7 @@ describe("IrisTriggers", () => {
     expect(screen.getByText("No triggers yet.")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Trigger name"), { target: { value: " Critical BGP " } });
     fireEvent.change(screen.getByLabelText("Text in the incident"), { target: { value: "bgp" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create trigger" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0][0]).toMatchObject({
       name: "Critical BGP", kind: "incident", filter: { min_severity: "critical", signature: "bgp" },
@@ -51,7 +51,7 @@ describe("IrisTriggers", () => {
     fireEvent.change(screen.getByLabelText("Trigger name"), { target: { value: "Hourly sweep" } });
     fireEvent.change(screen.getByLabelText("When it runs"), { target: { value: "schedule" } });
     fireEvent.change(screen.getByLabelText("Minutes between runs"), { target: { value: "30" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create trigger" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0][0]).toMatchObject({ kind: "schedule", schedule: { every_minutes: 30 }, filter: {} });
   });
@@ -93,6 +93,15 @@ describe("IrisTriggers", () => {
     render(<IrisTriggers />);
     await waitFor(() => expect(screen.getByTestId("triggers-need-investigations")).toBeTruthy());
     expect(screen.getByText(/a restart clears them/)).toBeTruthy();
+  });
+
+  it("survives a partial answer (an older server or a proxy) without breaking the page", async () => {
+    vi.spyOn(api, "investigationTriggers").mockResolvedValue({} as InvestigationTriggerOverview);
+    render(<IrisTriggers />);
+    await waitFor(() => expect(screen.getByTestId("trigger-settings")).toBeTruthy());
+    expect(screen.getByText("No triggers yet.")).toBeTruthy();
+    expect(screen.getByText("No runs yet.")).toBeTruthy();
+    expect(normalizeOverview(null).settings.enabled).toBe(false);
   });
 
   it("tells a non-admin who sets it up", async () => {
