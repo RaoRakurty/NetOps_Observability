@@ -117,7 +117,12 @@ jobs:
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.frontend != 'false' }}
     name: Playwright E2E (blocking)
-    runs-on: ubuntu-latest
+    # PINNED (2026-11-15): ubuntu-latest moved to Ubuntu 26.04 and Playwright
+    # 1.60.0 refuses to install Chromium there ("Playwright does not support
+    # chromium on ubuntu26.04-x64"), which failed this gate on every PR. 24.04 is
+    # a supported host for the pinned Playwright. Move this to ubuntu-latest only
+    # together with a Playwright bump that lists the new image as supported.
+    runs-on: ubuntu-24.04
     # Browser-level proof that the operator workflows actually work (gap-report #2):
     # drives the real SPA in headless Chromium against the Vite dev server with the
     # backend mocked at the network boundary — no 19-service stack needed. Playwright
