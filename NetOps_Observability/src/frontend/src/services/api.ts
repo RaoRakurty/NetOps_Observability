@@ -2598,6 +2598,56 @@ export interface ChatLink {
   decided_by?: string;
   decided_at?: string;
 }
+// Triggered investigations (tracker 337 N-I2).
+export type InvestigationTriggerKind = "incident" | "schedule";
+export interface InvestigationTriggerFilter {
+  min_severity?: string;
+  signature?: string;
+  site?: string;
+  role?: string;
+}
+export interface InvestigationTriggerInput {
+  name: string;
+  kind: InvestigationTriggerKind;
+  filter: InvestigationTriggerFilter;
+  schedule: { every_minutes: number };
+  question?: string;
+}
+export interface InvestigationTrigger extends InvestigationTriggerInput {
+  id: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string;
+}
+export interface InvestigationTriggerSettings {
+  enabled: boolean;
+  max_runs_per_day: number;
+  max_tokens_per_day: number;
+}
+export interface InvestigationTriggerRun {
+  id: string;
+  trigger_id: string;
+  trigger_name: string;
+  incident_id?: string;
+  status: "running" | "done" | "skipped" | "failed";
+  reason?: string;
+  investigation_id?: string;
+  tokens: number;
+  summary?: string;
+  started_at: string;
+  finished_at?: string;
+}
+export interface InvestigationTriggerOverview {
+  settings: InvestigationTriggerSettings;
+  triggers: InvestigationTrigger[];
+  runs: InvestigationTriggerRun[];
+  tokens_today: number;
+  investigations_on: boolean;
+  durable: boolean;
+  limits: { max_triggers: number; min_every_minutes: number; max_every_minutes: number; max_runs_per_day: number; max_tokens_per_day: number };
+}
 export interface IrisTriage {
   scope: "tenant" | "platform";
   classes: IrisMissClassSummary[] | null;
@@ -7360,6 +7410,17 @@ export const api = {
   myChatLinks: () => request<{ links: ChatLink[] }>("/api/chatops/me"),
   revokeMyChatLink: (id: string) =>
     request<ChatLink>(`/api/chatops/me/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  // Triggered investigations (N-I2): a workspace admin's; reads need
+  // administration access, changes need admin and AI investigations.
+  investigationTriggers: () => request<InvestigationTriggerOverview>("/api/ai/investigation-triggers"),
+  createInvestigationTrigger: (input: InvestigationTriggerInput) =>
+    request<InvestigationTrigger>("/api/ai/investigation-triggers", { method: "POST", body: JSON.stringify(input) }),
+  setInvestigationTriggerEnabled: (id: string, enabled: boolean) =>
+    request<InvestigationTrigger>(`/api/ai/investigation-triggers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) }),
+  deleteInvestigationTrigger: (id: string) =>
+    request<void>(`/api/ai/investigation-triggers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  saveInvestigationTriggerSettings: (s: InvestigationTriggerSettings) =>
+    request<InvestigationTriggerSettings>("/api/ai/investigation-triggers/settings", { method: "PUT", body: JSON.stringify(s) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
