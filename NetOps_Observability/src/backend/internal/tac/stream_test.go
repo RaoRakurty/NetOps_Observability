@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/metrics"
 	"strings"
 	"testing"
 	"time"
@@ -287,33 +288,45 @@ func TestStreamedFirstAskNeverBuffersFiftyMegabytes(t *testing.T) {
 		t.Fatal("a runner that implements StreamingRunner must be detected as streamable")
 	}
 
-	// PEAK LIVE HEAP is the measure, not TotalAlloc: the redactor legitimately
-	// churns through hundreds of megabytes of short-lived per-line strings while
-	// it works, and counting those would say nothing about whether the stream
-	// was buffered. What must stay small is how much is LIVE at once.
+	// RETAINED bytes are the measure: /gc/heap/live:bytes is what the GC marked
+	// live at the end of its last cycle, so the redactor's hundreds of megabytes
+	// of short-lived per-line strings (garbage the moment a line is written) do
+	// not count. Tracker 424: this test used to read MemStats.HeapAlloc, which
+	// also counts garbage not yet swept, so on a loaded runner — where the GC
+	// falls behind the allocation rate — the peak climbed past the bound with
+	// nothing buffered. A buffered stream is RETAINED, so it is marked live at
+	// every cycle that runs while it is held; the cycle count proves cycles ran.
+	samples := []metrics.Sample{{Name: "/gc/heap/live:bytes"}, {Name: "/gc/cycles/total:gc-cycles"}}
+	read := func() (live, cycles uint64) {
+		metrics.Read(samples)
+		return samples[0].Value.Uint64(), samples[1].Value.Uint64()
+	}
 	runtime.GC()
-	var base runtime.MemStats
-	runtime.ReadMemStats(&base)
-	peak := make(chan uint64, 1)
+	baseLive, baseCycles := read()
+	peak := make(chan [2]uint64, 1)
 	stop := make(chan struct{})
 	go func() {
-		var high uint64
-		var ms runtime.MemStats
-		// SAMPLED, not spun: ReadMemStats stops the world, and calling it in a
-		// tight loop would make this test measure the sampler rather than the
-		// collector. 2 ms is far finer than the seconds a 50 MB stream takes.
+		var high, cycles uint64
+		// metrics.Read does not stop the world; 2 ms is far finer than the
+		// seconds a 50 MB stream takes, and a cycle's live figure holds until
+		// the next cycle replaces it, so no cycle's reading is missed.
 		tick := time.NewTicker(2 * time.Millisecond)
 		defer tick.Stop()
+		sample := func() {
+			live, c := read()
+			if live > high {
+				high = live
+			}
+			cycles = c
+		}
 		for {
 			select {
 			case <-stop:
-				peak <- high
+				sample()
+				peak <- [2]uint64{high, cycles}
 				return
 			case <-tick.C:
-				runtime.ReadMemStats(&ms)
-				if ms.HeapAlloc > high {
-					high = ms.HeapAlloc
-				}
+				sample()
 			}
 		}
 	}()
@@ -329,10 +342,15 @@ func TestStreamedFirstAskNeverBuffersFiftyMegabytes(t *testing.T) {
 		}
 	}()
 
-	high := <-peak
-	if high > base.HeapAlloc && high-base.HeapAlloc > 16<<20 {
-		t.Fatalf("collecting a %d-byte output held %d bytes live at once — something buffered the stream",
-			fifty, high-base.HeapAlloc)
+	got := <-peak
+	high, cycles := got[0], got[1]
+	if cycles-baseCycles < 2 {
+		t.Fatalf("only %d GC cycles ran while a %d-byte output was collected — the live-heap reading proves nothing",
+			cycles-baseCycles, fifty)
+	}
+	if high > baseLive && high-baseLive > 16<<20 {
+		t.Fatalf("collecting a %d-byte output kept %d bytes live at a GC — something buffered the stream",
+			fifty, high-baseLive)
 	}
 
 	var streamed *CollectedCommand

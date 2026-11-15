@@ -23,6 +23,15 @@ vi.mock("../DeviceNeighbors", () => ({ default: () => null }));
 vi.mock("../config/DeviceConfigPanel", () => ({ default: () => null }));
 vi.mock("../capture/DevicePcapPanel", () => ({ default: () => null }));
 vi.mock("./VrfInterfaces", () => ({ default: () => null }));
+// The page's "Ask Iris about this device" entry (#250) reads the caller's AI
+// entitlements from /api/features. Unmocked, that was a REAL request: the test
+// finished with it in flight and happy-dom's teardown aborted it, which vitest
+// reports as an unhandled AbortError and fails the whole run with every test
+// green (tracker 426). These tests are about the controller view, so the
+// entitlement read answers "none" at once.
+vi.mock("../../lib/aiEntitlements", () => ({
+  useAIEntitlements: () => ({ ready: true, has: () => false }),
+}));
 
 import DeviceDetailPage from "../DeviceDetailPage";
 import { controllerOf, controllerOnly } from "./ControllerOverview";
