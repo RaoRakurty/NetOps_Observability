@@ -256,7 +256,10 @@ describe("the answer card", () => {
     const card = await screen.findByRole("region", { name: "Recovery" });
     // The question still stands; the answer is the failure, not a blank verdict.
     expect(within(card).getByText("Can this appliance be recovered, and how much would be lost?")).toBeTruthy();
-    expect(within(card).getByRole("alert")).toBeTruthy();
+    // findBy, not getBy (tracker 426): the card renders while the read is still
+    // in flight, so the region can resolve a tick before the rejected read turns
+    // into the alert; a one-shot getBy then missed it on a loaded runner.
+    expect(await within(card).findByRole("alert")).toBeTruthy();
     expect(within(card).queryByText("Yes")).toBeNull();
   });
 

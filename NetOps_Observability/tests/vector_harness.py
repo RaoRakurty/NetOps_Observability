@@ -214,7 +214,16 @@ def run_vector_test(cmd: Sequence[str], *, label: str, timeout: float,
     first_out = (first.stdout or "") + (first.stderr or "")
     if first.returncode == 0:
         return VectorTestRun(final=first, retried=False)
-    diag = diagnose(first_out)
+    # Diagnose STDOUT only (tracker 425). `vector test` writes its case results
+    # and failure bodies to stdout; its log records, including a remap's
+    # multi-line "VRL compilation warning" diagnostic, go to stderr, and so does
+    # docker's "Unable to find image ... Pulling fs layer" progress. Glued
+    # together, those stderr lines landed after the `failures:` block, were read
+    # as part of the race case's body, and made a pure race look like "more than
+    # the signature" — so the retry never fired and the race failed the job
+    # (CI runs 43604779647, 43430333415: VRL warning; 43532122947: docker pull).
+    # The report still carries both streams.
+    diag = diagnose(first.stdout or "")
     if not diag.race_only:
         return VectorTestRun(final=first, retried=False)
     _record_retry(label, diag.failed)

@@ -98,5 +98,9 @@ func PlatformSpecs() []Spec {
 			Help: "Let people ask Iris from Slack or Microsoft Teams. Answers leave Correlix into that chat service; each workspace connects its own chat app and an admin approves every linked account."},
 		{Env: "IRIS_AI_PROBES", Label: "Iris active probes", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
 			Help: "Let Iris's troubleshooting methods send a short test (3 pings, one traceroute, one DNS lookup or one web request) from this Correlix server to a workspace's own devices or declared probes. Never from a customer device. Needs AI investigations on; each workspace still opts in."},
+		// N-I4 (D15): the kill switch for Iris's approval-gated writes. Risky
+		// because an approved action leaves Correlix for the ITSM system.
+		{Env: "IRIS_AI_ACTIONS", Label: "Iris actions (approval needed)", Group: iris, Apply: live, Risky: true, ConsoleOnly: true, Requires: "iris_model",
+			Help: "Let Iris propose a note for an incident's ITSM ticket and save its finding to investigation memory. Nothing is sent until someone other than the person Iris answered approves it. Never a device change. Needs AI investigations on; each workspace still opts in."},
 	}
 }

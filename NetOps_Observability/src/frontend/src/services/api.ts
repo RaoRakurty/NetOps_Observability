@@ -2598,6 +2598,47 @@ export interface ChatLink {
   decided_by?: string;
   decided_at?: string;
 }
+// Iris approval-gated writes (N-I4): mirrors internal/irisaction.
+export type IrisActionKind = "itsm_note" | "investigation_note";
+export type IrisActionStatus = "proposed" | "dry_run" | "executing" | "executed" | "failed" | "rejected" | "expired";
+export interface IrisActionSettings {
+  enabled: boolean;
+  kinds: IrisActionKind[];
+  dry_run_only: boolean;
+}
+export interface IrisActionRequest {
+  id: string;
+  kind: IrisActionKind;
+  kind_label: string;
+  tool: string;
+  proposed_by: string;
+  proposed_via: string;
+  correlation_id: string;
+  citations: string[];
+  summary: string;
+  preview: string;
+  dry_run: { performed: boolean; ok: boolean; description: string; problem?: string };
+  policy: string;
+  status: IrisActionStatus;
+  created_at: string;
+  expires_at: string;
+  decided_by?: string;
+  decided_at?: string;
+  reason?: string;
+  executed_at?: string;
+  result?: { external_ref?: string; url?: string; message?: string };
+  can_approve: boolean;
+  can_reject: boolean;
+  mine: boolean;
+}
+export interface IrisActionsView {
+  settings: IrisActionSettings;
+  available: boolean;
+  unavailable_reason: string;
+  kinds: { kind: IrisActionKind; label: string; tool: string }[];
+  requests: IrisActionRequest[];
+  open: number;
+}
 // Triggered investigations (tracker 337 N-I2).
 export type InvestigationTriggerKind = "incident" | "schedule";
 export interface InvestigationTriggerFilter {
@@ -2656,7 +2697,11 @@ export interface IrisTriage {
 }
 export interface IrisTriageCandidates {
   review: string;
-  candidates: { question: string; class?: string; route?: string; source: string; correction_kind?: string; note?: string }[];
+  candidates: { question: string; class?: string; route?: string; source: string; correction_kind?: string; note?: string; pooled?: boolean }[];
+}
+export interface IrisEvalConsent {
+  consented: boolean;
+  updated_at?: string;
 }
 export interface IrisTurn {
   at: string;
@@ -7395,6 +7440,11 @@ export const api = {
   // Review-gated evaluation candidates from the caller's own misses and
   // corrections; never committed anywhere automatically.
   irisTriageCandidates: () => request<IrisTriageCandidates>("/api/ai/triage/candidates"),
+  // N-H3: the caller's OWN opt-in to sharing their Iris questions with their
+  // workspace's eval set. Default off; anyone can read and change their own.
+  irisEvalConsent: () => request<IrisEvalConsent>("/api/ai/eval-consent"),
+  setIrisEvalConsent: (consented: boolean) =>
+    request<IrisEvalConsent>("/api/ai/eval-consent", { method: "PUT", body: JSON.stringify({ consented }) }),
   // Iris in Slack and Teams (N-I6): connections and link approvals are a
   // workspace admin's; linking your own chat account is anyone's.
   chatConnections: () => request<{ switch_on: boolean; connections: ChatConnection[] }>("/api/chatops/connections"),
@@ -7421,6 +7471,16 @@ export const api = {
     request<void>(`/api/ai/investigation-triggers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   saveInvestigationTriggerSettings: (s: InvestigationTriggerSettings) =>
     request<InvestigationTriggerSettings>("/api/ai/investigation-triggers/settings", { method: "PUT", body: JSON.stringify(s) }),
+
+  // Iris approval-gated writes (N-I4). There is no "propose" call: Iris
+  // proposes at the end of a concluded investigation; people only decide.
+  irisActions: (status?: IrisActionStatus) =>
+    request<IrisActionsView>(`/api/ai/actions${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  decideIrisAction: (id: string, approve: boolean, reason: string) =>
+    request<IrisActionRequest>(`/api/ai/actions/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`,
+      { method: "POST", body: JSON.stringify({ reason }) }),
+  saveIrisActionSettings: (s: IrisActionSettings & { acknowledged?: boolean }) =>
+    request<{ settings: IrisActionSettings }>("/api/ai/actions/settings", { method: "PUT", body: JSON.stringify(s) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -11342,6 +11402,9 @@ export type AiAnswer = {
   // N-I7: the next actions as grounded cards (basis = citation ids of this
   // answer). Optional: an older backend sends none.
   recommendations?: AiRecommendation[];
+  // N-I4: writes Iris PROPOSED at the end of a concluded investigation; each
+  // waits for someone other than the person Iris answered. Nothing is sent.
+  action_proposals?: AiActionProposal[];
   missing_evidence?: string[];
   mode_badges?: string[];
   evidence_only?: boolean;
@@ -11349,6 +11412,17 @@ export type AiAnswer = {
   title?: string; // card heading (spec §2)
   counts?: AiIncidentCounts; // normalized counts (spec §6)
 };
+
+// A proposed write on an answer (N-I4). Never carries the payload text.
+export interface AiActionProposal {
+  id?: string;
+  kind: string;
+  label: string;
+  summary: string;
+  status: "proposed" | "dry_run" | "existing" | "not_proposed";
+  policy: string;
+  note?: string;
+}
 
 // A recommendation card (N-I7). Text and citation ids only — no action field.
 export interface AiRecommendation {

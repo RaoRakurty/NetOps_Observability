@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import threading
 import time
 from datetime import timedelta
 from typing import ClassVar
@@ -109,49 +110,70 @@ async def _worst_lag_while(work, interval: float = 0.02) -> tuple[float, float]:
     return worst, dur
 
 
+# How long the gated call waits for proof that the loop ran while it was in
+# flight. It is NOT a performance budget: on a healthy build the proof arrives
+# within one ticker period (milliseconds); the wait only runs out when the call
+# is on the loop thread itself (the regression), where nothing can ever set it.
+LOOP_PROOF_TIMEOUT_S = 30.0
+
+
 def test_snap_call_offloads_large_objects_and_keeps_the_loop_alive(giant):
     """The core bound: serializing a giant object must NOT freeze the loop.
 
-    Asserted as a RATIO — the worst loop stall stays a small fraction of the
-    work it overlaps. Inline (the regression) makes the two equal by
-    definition, because the loop is the thing doing the work.
+    Proved as a HANDSHAKE, not a timing ratio (tracker 422: the earlier
+    worst-stall / duration ratio failed on loaded CI runners, because GIL and
+    CPU contention decide a ratio, not the code). Each real per-object call is
+    wrapped so that, once started, it cannot finish until a LOOP task has run:
+    the wrapper clears an event and waits for the loop's ticker to set it
+    again. Offloaded, the ticker runs on the loop thread while the call waits
+    in the executor, so the call completes at once. Inline (the regression),
+    the call holds the loop thread, the ticker can never run, and the wait
+    expires — so the test fails exactly when the work is back on the loop.
     """
     assert main._snap_elements(giant) >= main.CORR_OFFLOAD_MIN_ELEMENTS, (
         "fixture must exceed the offload threshold or the test proves nothing")
 
-    # P1 §3 (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md): content_hash caches
-    # its digest on the instance, and `giant` is a module-scoped fixture — so
-    # whichever leg ran first would leave the other measuring a cache hit instead
-    # of a serialize, and this test's whole point is that BOTH legs do the same
-    # work. Both therefore call the uncached body directly; _snap_call's offload
-    # decision (what is actually under test) is unchanged by which callable it is
-    # handed, and test_small_objects_keep_the_inline_path still drives the real
-    # content_hash through it.
-    async def offloaded():
-        await main._snap_call(giant, giant._content_hash_uncached)
-        await main._snap_call(giant, giant.to_object_row, 1, "open", "")
-        await main._snap_call(giant, giant.to_edge_rows, 1)
+    work_threads: list[int] = []
+    loop_thread: list[int] = []
 
-    async def inline():
-        giant._content_hash_uncached()
-        giant.to_object_row(1, "open", "")
-        giant.to_edge_rows(1)
+    def gated(real, ticked: threading.Event):
+        def call(*a, **k):
+            work_threads.append(threading.get_ident())
+            ticked.clear()
+            if not ticked.wait(LOOP_PROOF_TIMEOUT_S):
+                raise AssertionError(
+                    f"{real.__name__}: the event loop did not run while the call "
+                    "was in flight — the giant-object work is back on the loop")
+            return real(*a, **k)
+        call.__name__ = real.__name__
+        return call
 
-    worst_off, dur_off = asyncio.run(_worst_lag_while(offloaded))
-    worst_in, dur_in = asyncio.run(_worst_lag_while(inline))
+    async def scenario():
+        loop_thread.append(threading.get_ident())
+        ticked = threading.Event()
+        stop = asyncio.Event()
 
-    # Inline: the loop is frozen for essentially the whole call.
-    assert worst_in > dur_in * 0.5, (
-        f"the inline baseline should freeze the loop (stall={worst_in:.2f}s of "
-        f"{dur_in:.2f}s) — if it does not, the fixture is too small to measure")
-    # Offloaded: the loop keeps running. 0.5 is a deliberately loose bound (the
-    # measured live ratio was 0.39s stall / 2.80s work = 0.14).
-    assert worst_off < dur_off * 0.5, (
-        f"offloaded serialization still froze the loop for {worst_off:.2f}s of "
-        f"{dur_off:.2f}s — the giant-object work is back on the event loop")
-    # And strictly better than the inline path it replaces.
-    assert worst_off < worst_in, (
-        f"offload did not reduce the stall: {worst_off:.2f}s vs {worst_in:.2f}s")
+        async def ticker():
+            while not stop.is_set():
+                ticked.set()
+                await asyncio.sleep(0.005)
+
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0)          # the ticker is scheduled before we call
+        try:
+            # P1 §3: content_hash caches its digest on the instance and `giant`
+            # is module-scoped, so the uncached body is what does the work.
+            await main._snap_call(giant, gated(giant._content_hash_uncached, ticked))
+            await main._snap_call(giant, gated(giant.to_object_row, ticked), 1, "open", "")
+            await main._snap_call(giant, gated(giant.to_edge_rows, ticked), 1)
+        finally:
+            stop.set()
+            await t
+
+    asyncio.run(scenario())
+    assert len(work_threads) == 3, f"every call must have run once, got {work_threads}"
+    assert loop_thread[0] not in work_threads, (
+        "a giant-object call ran on the event-loop thread")
 
 
 def test_small_objects_keep_the_inline_path(giant):

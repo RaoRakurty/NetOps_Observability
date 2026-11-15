@@ -144,6 +144,10 @@ type Orchestrator struct {
 	// incident or device (nil = no runbook retrieval).
 	InvestigateAllowed bool
 	RunbooksFor        RunbooksForFunc
+	// ProposeActions is the server's proposal step for Iris's approval-gated
+	// writes (action_proposal.go, N-I4): called only when an investigation
+	// concluded on a resolved case. nil = Iris proposes nothing.
+	ProposeActions ProposeActionsFunc
 	// invMeter and invSeed live for one Investigate call: the token budget
 	// every model call consults, and the engine verdict every pass starts from.
 	invMeter *tokenMeter

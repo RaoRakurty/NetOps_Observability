@@ -13,14 +13,19 @@ import (
 	"os"
 )
 
-const usage = `irisreplay — Iris Incident Replay (offline leg)
+const usage = `irisreplay — Iris Incident Replay
 
-  run --cases <dir> --report out.json [--markdown out.md] [--engine-semver V] [--catalog-version V] [--prices prices.json]
+  run --cases <dir> --report out.json [--markdown out.md] [--engine-semver V] [--catalog-version V] [--prices prices.json] [--live]
   compare a.json b.json [--json]
   fingerprint [--cases <dir>] [--engine-semver V]
 
-Offline only: the model is scripted, the engine is not re-run, no store and no
-provider is reached. Exit status: 0 ok, 1 a case failed, 2 usage or I/O error.
+By default the model is scripted: the engine is not re-run, and no store and no
+provider is reached. --live puts every case to a REAL provider instead; it reads
+the provider, key and model ONLY from NLQ_EVAL_PROVIDER, NLQ_EVAL_API_KEY and
+NLQ_EVAL_MODEL in this process's environment and spends that key. Compare a
+--live report with a scripted one to see what the live model changed.
+
+Exit status: 0 ok, 1 a case failed, 2 usage or I/O error.
 `
 
 // CLI is the command's body, so that cmd/irisreplay holds no logic.
@@ -59,6 +64,7 @@ func cliRun(ctx context.Context, args []string, stdout, stderr io.Writer) (int, 
 	engine := fs.String("engine-semver", "", "ENGINE_SEMVER the reader runs now, compared with each case's pin")
 	catalog := fs.String("catalog-version", "", "catalog version the reader runs now, compared with each case's pin")
 	prices := fs.String("prices", "", `JSON {"<provider>/<name>":{"input_per_mtok":N,"output_per_mtok":N}}; without it cost is censored`)
+	live := fs.Bool("live", false, "put every case to a real provider (key from "+EnvLiveKey+" only); spends that key")
 	if err := fs.Parse(args); err != nil {
 		return 0, err
 	}
@@ -70,6 +76,14 @@ func cliRun(ctx context.Context, args []string, stdout, stderr io.Writer) (int, 
 		return 0, err
 	}
 	opt := Options{EngineSemver: *engine, CatalogVersion: *catalog}
+	if *live {
+		leg, err := LiveLegFromEnv(nil)
+		if err != nil {
+			return 0, err
+		}
+		opt.Leg = leg
+		fmt.Fprintf(stderr, "irisreplay: live leg %s — every case is sent to the provider\n", leg.Name())
+	}
 	if *prices != "" {
 		raw, err := os.ReadFile(*prices) // #nosec G304 -- an operator-named file on this command line
 		if err != nil {

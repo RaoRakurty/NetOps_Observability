@@ -34,6 +34,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/irisaction"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irislearning"
@@ -50,6 +51,14 @@ import (
 // operator would be locked out of the very switch the entitlement reads.
 const adminPlane = aientitlement.Entitlement("admin-plane")
 
+// selfPlane is the marker for a person's OWN AI setting that any signed-in
+// person changes for themselves (never for someone else). It is not a use of
+// the assistant and must stay changeable after an AI entitlement lapses — a
+// person can always withdraw consent. Each selfPlane route has a probe in
+// selfPlaneProbes (iris_eval_consent_test.go) proving it refuses the
+// unauthenticated and API keys and admits a plain operator.
+const selfPlane = aientitlement.Entitlement("self-plane")
+
 // aiRouteEntitlements is THE classification of every AI route.
 var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/ask": aientitlement.Chat,
@@ -62,6 +71,9 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// after an AI entitlement lapses (it shows why answers were missed).
 	"/api/ai/triage":  adminPlane,
 	"/api/ai/triage/": adminPlane,
+	// N-H3 eval consent: the caller's own opt-in to pooled eval candidates.
+	// Self-plane: never gated on a usage entitlement (withdrawal must always work).
+	"/api/ai/eval-consent": selfPlane,
 	// N-H2 replay export: administration:read, like the ledger it compares with.
 	// It is a support and audit read of one incident, not a use of the assistant.
 	"/api/ai/replay/export/":       adminPlane,
@@ -78,6 +90,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/runbooks/":            aientitlement.RunbookAuthor,
 	"/api/ai/learning":             aientitlement.ContextAuthor, // learning loop (N-F5); adopting also needs the target's own
 	"/api/ai/learning/":            aientitlement.ContextAuthor,
+	"/api/ai/actions":              aientitlement.Investigate, // approval-gated writes (N-I4); + IRIS_AI_ACTIONS switch, workspace toggle
+	"/api/ai/actions/":             aientitlement.Investigate,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -154,7 +168,7 @@ func TestEveryAIRouteIsEntitlementGated(t *testing.T) {
 				"entitlement (internal/aientitlement) and classify it in aiRouteEntitlements, with a probe in aiRouteProbes", r)
 			continue
 		}
-		if e == adminPlane {
+		if e == adminPlane || e == selfPlane {
 			continue
 		}
 		if !aientitlement.Valid(e) {
@@ -178,8 +192,17 @@ func TestEveryAIRouteIsEntitlementGated(t *testing.T) {
 		}
 	}
 	for r, e := range aiRouteEntitlements {
-		if e != adminPlane && !probed[r] {
+		if e != adminPlane && e != selfPlane && !probed[r] {
 			t.Errorf("gated AI route %q has no refusal probe in aiRouteProbes", r)
+		}
+	}
+	selfProbed := map[string]bool{}
+	for _, p := range selfPlaneProbes {
+		selfProbed[p] = true
+	}
+	for r, e := range aiRouteEntitlements {
+		if e == selfPlane && !selfProbed[r] {
+			t.Errorf("self-plane AI route %q has no probe in selfPlaneProbes", r)
 		}
 	}
 	for _, p := range adminPlaneProbes {
@@ -236,6 +259,9 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/learning", http.MethodGet, "/api/ai/learning", "", aientitlement.ContextAuthor},
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/refresh", "", aientitlement.ContextAuthor},
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/" + probeID + "/adopt", `{}`, aientitlement.ContextAuthor},
+	{"/api/ai/actions", http.MethodGet, "/api/ai/actions", "", aientitlement.Investigate},
+	{"/api/ai/actions/", http.MethodPost, "/api/ai/actions/" + probeID + "/approve", `{}`, aientitlement.Investigate},
+	{"/api/ai/actions/", http.MethodPut, "/api/ai/actions/settings", `{"enabled":false}`, aientitlement.Investigate},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 	{"/api/ai/investigations", http.MethodGet, "/api/ai/investigations", "", aientitlement.Investigate},
 	{"/api/ai/investigations/", http.MethodGet, "/api/ai/investigations/" + probeID, "", aientitlement.Investigate},
@@ -283,6 +309,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.irisLearning = irislearning.NewMemStore()
 	s.irisTriggers = iristrigger.NewMemStore()
+	s.irisActions = s.newIrisActions(irisaction.NewMemStore())
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called
 	mux := http.NewServeMux()

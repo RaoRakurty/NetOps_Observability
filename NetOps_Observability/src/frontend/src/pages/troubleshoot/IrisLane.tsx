@@ -45,6 +45,7 @@ import HypothesisTrace from "../../iris/HypothesisTrace";
 import InvestigationTrace from "../../iris/InvestigationTrace";
 import StatementText from "../../iris/StatementText";
 import RecommendationCards from "../../iris/RecommendationCards";
+import ActionProposalCards from "../../iris/ActionProposalCards";
 import { askBound } from "../../iris/askBound";
 import { useIrisView } from "../../iris/viewContext";
 
@@ -227,6 +228,8 @@ export default function IrisLane({ caseId, symptomLabel, auto = false, onOpenDra
           {(ans.recommendations?.length ?? 0) > 0 && (
             <RecommendationCards cards={ans.recommendations ?? []} citations={ans.citations ?? []} />
           )}
+          {/* N-I4: writes Iris proposed at the end of the investigation. */}
+          {(ans.action_proposals?.length ?? 0) > 0 && <ActionProposalCards proposals={ans.action_proposals ?? []} />}
 
           {cites.length > 0 && (
             <div className="tsl-cites" aria-label="Evidence citations">
