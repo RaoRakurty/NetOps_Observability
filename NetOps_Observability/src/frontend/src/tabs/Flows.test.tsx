@@ -32,6 +32,7 @@ const m = {
   flowsLinkSeries: vi.fn(),
   flowsLinkMovers: vi.fn(),
   flowsCapacity: vi.fn(),
+  flowsSampling: vi.fn(),
 };
 vi.mock("../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (...a: unknown[]) => (m as Record<string, (...x: unknown[]) => unknown>)[k](...a) }),
@@ -149,6 +150,7 @@ beforeEach(() => {
   m.flowsLinkSeries.mockResolvedValue(SERIES);
   m.flowsLinkMovers.mockResolvedValue(MOVERS);
   m.flowsCapacity.mockResolvedValue(CAPACITY);
+  m.flowsSampling.mockResolvedValue({ declarations: [], exporters: [] });
 });
 
 describe("Flows — Right now", () => {

@@ -16,11 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/chhttp"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/flownames"
 	"netops/backend/internal/flowquery"
+	"netops/backend/internal/flowsampling"
 	"netops/backend/internal/iana"
+	"netops/backend/internal/platformdb"
 	"netops/backend/models"
 )
 
@@ -1520,7 +1523,9 @@ func (s *server) handleFlowsLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := clause + flowLinkTenantNarrow(r, claims) + flowTypeClause(r) + filter
-	rows, err := s.chRows(r, flowquery.LinksSQL(win, scope, limit))
+	core, _ := flowFilterCore(r) // discard: flowFilterClause above already validated the same parameters
+	src := s.flowSource(r, claims, clause, scope, core != "")
+	rows, err := s.chRows(r, flowquery.LinksSourceSQL(win, src, limit))
 	if err != nil {
 		logError("flows", "links query failed", map[string]any{"error": err.Error()})
 		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
@@ -1528,7 +1533,7 @@ func (s *server) handleFlowsLinks(w http.ResponseWriter, r *http.Request) {
 	}
 	cov := map[flowquery.CovKey]flowquery.Coverage{}
 	if len(rows) > 0 {
-		covRows, err := s.chRows(r, flowquery.CoverageSQL(win, scope, flowquery.Exporters(rows)))
+		covRows, err := s.chRows(r, flowquery.CoverageSourceSQL(win, src, flowquery.Exporters(rows)))
 		if err != nil {
 			logError("flows", "links coverage query failed", map[string]any{"error": err.Error()})
 			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
@@ -1616,13 +1621,14 @@ func (s *server) handleFlowsLinkSeries(w http.ResponseWriter, r *http.Request) {
 		// The link itself is the filter: the filter bar's device/interface keys
 		// are not applied a second time, only the platform-traffic exclusion.
 		scope := clause + flowLinkTenantNarrow(r, claims) + flowTypeClause(r) + flowTrafficClassClause(r)
-		rows, err = s.chRows(r, flowquery.SeriesSQL(link, from, to, step, scope))
+		src := s.flowSource(r, claims, clause, scope, false)
+		rows, err = s.chRows(r, flowquery.SeriesSourceSQL(link, from, to, step, src))
 		if err != nil {
 			logError("flows", "link series query failed", map[string]any{"error": err.Error()})
 			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
 			return
 		}
-		covRows, err := s.chRows(r, flowquery.CoverageSQL(win, scope, []string{link.Exporter}))
+		covRows, err := s.chRows(r, flowquery.CoverageSourceSQL(win, src, []string{link.Exporter}))
 		if err != nil {
 			logError("flows", "link series coverage query failed", map[string]any{"error": err.Error()})
 			writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
@@ -1636,4 +1642,330 @@ func (s *server) handleFlowsLinkSeries(w http.ResponseWriter, r *http.Request) {
 	b := flowquery.BuildSeries(rows, from, to, step, now, c)
 	b.Window = echo
 	writeJSON(w, http.StatusOK, flowLinkSeriesBody{SeriesBody: b, Exporter: link.Exporter, IfIndex: link.IfIndex})
+}
+
+// ── tracker 401: rollup source and declared sampling ────────────────────────
+
+// newFlowSamplingStore selects the Postgres store under the Postgres backend
+// (migration 0078, FORCE RLS), else the tenant-keyed file store.
+func newFlowSamplingStore() flowsampling.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return flowsampling.NewPGStore(ps.DB())
+	}
+	return flowsampling.NewFileStore(envOr("FLOW_SAMPLING_FILE", "/data/flow_declared_sampling.json"))
+}
+
+// flowRollupBudget bounds one rollup statement server-side. It stays under the
+// shared ClickHouse client's 12-second timeout (chClientFor): the client must
+// always outlive the server-side bound it asked for (the 2026-08-29 lesson).
+const flowRollupBudget = 10 * time.Second
+
+// runFlowIfaceRollup keeps netops.flow_iface_1m (tracker 401 (a)) until ctx
+// ends. No-op without ClickHouse. The Roller runs at the platform scope: each
+// rolled row keeps its record's own tenant, and readers apply the caller's
+// predicate to it exactly as to raw records.
+func (s *server) runFlowIfaceRollup(ctx context.Context) {
+	if envOr("CLICKHOUSE_URL", "") == "" {
+		return
+	}
+	r := &flowquery.Roller{
+		Exec: func(ctx context.Context, sql string) error {
+			_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+				SQL: sql, Op: "flow rollup insert", Scope: "__all__",
+				LogComment: "worker:flow-iface-rollup", Settings: chInsertTolerance(), Budget: flowRollupBudget,
+			})
+			return err
+		},
+		Query: func(ctx context.Context, sql string) ([]map[string]any, error) {
+			return s.chRowsScope(ctx, "__all__", sql, "worker:flow-iface-rollup")
+		},
+		Now:          time.Now,
+		PlatformCond: platformAddrsFromEnv().SQLCond(),
+		Retention:    time.Duration(chschema.RetentionConfig().Flows) * 24 * time.Hour,
+	}
+	s.flowRollup.Store(r)
+	r.Run(ctx, 30*time.Second, func(msg string, err error) {
+		if err != nil {
+			logWarn("flows", msg, map[string]any{"error": err.Error()})
+			return
+		}
+		logInfo("flows", msg, nil)
+	})
+}
+
+// flowSource builds the Source a link statement reads (tracker 401). rawScope
+// is the caller's full predicate on raw columns. The rollup is read only when
+// that predicate is expressible on rollup columns: no filter-bar condition
+// (addresses, ports and protocols are not rolled up) and no restricted-tenant
+// exclusion (it names endpoint addresses). Otherwise every row comes from raw
+// records — same numbers, just slower.
+func (s *server) flowSource(r *http.Request, claims jwtClaims, clause, rawScope string, filterUsed bool) flowquery.Source {
+	src := flowquery.Source{RawScope: rawScope, Declared: s.flowDeclared(r.Context(), claims)}
+	roller := s.flowRollup.Load()
+	st, ok := roller.State()
+	if !ok || filterUsed || len(s.restrictedTelemetry(claims).addrs) > 0 {
+		return src
+	}
+	if st.Sig != flowquery.PlatformSignature(platformAddrsFromEnv().SQLCond()) {
+		return src // classified under another platform-address set: re-rolling
+	}
+	rollScope := clause + flowLinkTenantNarrow(r, claims) + flowTypeClause(r)
+	if !includePlatformTraffic(r) && platformAddrsFromEnv().SQLCond() != "" {
+		rollScope += " AND platform = 0"
+	}
+	src.RollupScope, src.RollupLo, src.RollupHi, src.PlatformSig = rollScope, st.Lo, st.Hi, st.Sig
+	return src
+}
+
+// flowDeclared is the declared sampling the caller's view applies, per (row
+// tenant, exporter). A scoped caller's own declarations also apply to the
+// untagged records of an exporter it owns unambiguously (the stricter links
+// rule already shows those records to it, and only to it); the All-tenants view
+// applies each declaration to its owner's stamped records only. A store error
+// applies nothing — the figures then read as reported, and the basis says so.
+func (s *server) flowDeclared(ctx context.Context, claims jwtClaims) map[flowquery.DeclKey]uint32 {
+	if s.flowSampling == nil {
+		return nil
+	}
+	tenant, cross := principalTenant(claims)
+	list, err := s.flowSampling.List(ctx, tenant, cross)
+	if err != nil {
+		logWarn("flows", "declared flow sampling could not be read; figures use reported rates only", map[string]any{"error": err.Error()})
+		return nil
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	out := make(map[flowquery.DeclKey]uint32, len(list))
+	var owned map[string]bool
+	if !cross {
+		owned = map[string]bool{}
+		for _, a := range s.untaggedClaimForTenant(tenant).Addrs {
+			owned[a] = true
+		}
+	}
+	for _, d := range list {
+		out[flowquery.DeclKey{Tenant: d.TenantID, Exporter: d.Exporter}] = d.Rate
+		if !cross && owned[d.Exporter] {
+			out[flowquery.DeclKey{Tenant: "", Exporter: d.Exporter}] = d.Rate
+		}
+	}
+	return out
+}
+
+// flowSamplingExporter is one exporter on the declared-sampling page.
+type flowSamplingExporter struct {
+	TenantID     string  `json:"tenant_id,omitempty"`
+	Exporter     string  `json:"exporter"`
+	DeviceName   string  `json:"device_name,omitempty"`
+	Flows        float64 `json:"flows"`
+	RateReported float64 `json:"flows_rate_reported"`
+	DeclaredRate uint32  `json:"declared_rate,omitempty"`
+	CanDeclare   bool    `json:"can_declare"`
+}
+
+type flowSamplingBody struct {
+	Declarations []flowsampling.Declaration `json:"declarations"`
+	Exporters    []flowSamplingExporter     `json:"exporters"`
+}
+
+// handleFlowsSampling serves /api/flows/sampling (tracker 401 (c)).
+//
+//	GET    — the caller's declarations and the exporters seen in the last day
+//	         (Explore read).
+//	PUT    — {exporter, rate, note}: declare "1 in rate" for an exporter the
+//	         workspace owns (infrastructure write). Stamped from the token.
+//	DELETE — ?exporter=: remove the workspace's declaration.
+//
+// A cross-tenant caller reads every declaration but must act inside a
+// workspace to write one. Another workspace's exporter, or one nobody in the
+// workspace owns, answers 404 — never revealing whose it is.
+func (s *server) handleFlowsSampling(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.flowSamplingGet(w, r)
+	case http.MethodPut:
+		s.flowSamplingPut(w, r)
+	case http.MethodDelete:
+		s.flowSamplingDelete(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
+	}
+}
+
+func (s *server) flowSamplingGet(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireFlowsRead(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	body := flowSamplingBody{Declarations: []flowsampling.Declaration{}, Exporters: []flowSamplingExporter{}}
+	if s.flowSampling != nil {
+		list, err := s.flowSampling.List(r.Context(), tenant, cross)
+		if err != nil {
+			logError("flows", "declared sampling list failed", map[string]any{"error": err.Error()})
+			writeError(w, http.StatusServiceUnavailable, errors.New("declared sampling could not be read"))
+			return
+		}
+		body.Declarations = list
+	}
+	clause, empty := s.flowLinkTenantClauseFor(claims)
+	if empty {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	since := time.Now().UTC().Add(-24 * time.Hour)
+	rows, err := s.chRows(r, `SELECT tenant_id AS tid, sampler_address AS exporter, count() AS fl,
+       countIf(`+flowquery.RateReported+`) AS fl_rr
+  FROM netops.flows
+ WHERE ts >= `+flowquery.TSLit(since)+clause+`
+ GROUP BY tid, exporter ORDER BY fl DESC LIMIT 500 FORMAT JSON`)
+	if err != nil {
+		logError("flows", "declared sampling exporter list failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	declared := map[flowquery.DeclKey]uint32{}
+	for _, d := range body.Declarations {
+		declared[flowquery.DeclKey{Tenant: d.TenantID, Exporter: d.Exporter}] = d.Rate
+	}
+	device := s.flowLinkDevices(claims)
+	seen := map[string]bool{}
+	for _, row := range rows {
+		tid, exp := flowquery.Str(row["tid"]), flowquery.Str(row["exporter"])
+		owner := tid
+		if !cross {
+			owner = tenant
+			if seen[exp] {
+				continue // a scoped caller's own and untagged rows for one exporter fold together
+			}
+			seen[exp] = true
+		}
+		e := flowSamplingExporter{Exporter: exp, Flows: flowquery.Num(row["fl"]), RateReported: flowquery.Num(row["fl_rr"]),
+			DeclaredRate: declared[flowquery.DeclKey{Tenant: owner, Exporter: exp}]}
+		if d, ok := device(tid, exp); ok {
+			e.DeviceName = d.name
+		}
+		if cross {
+			e.TenantID = tid
+		} else {
+			owned, err := s.flowExporterOwned(r.Context(), tenant, exp)
+			if err != nil {
+				logError("flows", "declared sampling ownership check failed", map[string]any{"error": err.Error()})
+				writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+				return
+			}
+			e.CanDeclare = owned
+		}
+		body.Exporters = append(body.Exporters, e)
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// flowExporterOwned reports whether the workspace may declare sampling for an
+// exporter: the address is one of its devices' UNAMBIGUOUS addresses, or the
+// workspace holds records stamped to it from that exporter (two tenants behind
+// one exporter address then each declare for their own records). A failed
+// lookup is an error, never "not owned": callers answer 502, so an outage does
+// not read as "this router is not yours".
+func (s *server) flowExporterOwned(ctx context.Context, tenant, exporter string) (bool, error) {
+	for _, a := range s.untaggedClaimForTenant(tenant).Addrs {
+		if a == exporter {
+			return true, nil
+		}
+	}
+	rows, err := s.chRowsScope(ctx, tenant, `SELECT count() AS n FROM netops.flows
+ WHERE ts >= `+flowquery.TSLit(time.Now().UTC().Add(-7*24*time.Hour))+`
+   AND tenant_id = `+chStringLiteral(normTenant(tenant))+` AND sampler_address = `+flowquery.Quote(exporter)+` FORMAT JSON`, "flows:sampling-owner")
+	if err != nil {
+		return false, err
+	}
+	if len(rows) == 0 {
+		return false, nil // count() always answers one row; none means no records
+	}
+	return flowquery.Num(rows[0]["n"]) > 0, nil
+}
+
+func (s *server) flowSamplingPut(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New("choose a workspace first: a declared sampling rate belongs to one workspace"))
+		return
+	}
+	if s.flowSampling == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("declared sampling is unavailable"))
+		return
+	}
+	var in struct {
+		Exporter string `json:"exporter"`
+		Rate     uint32 `json:"rate"`
+		Note     string `json:"note"`
+	}
+	if err := decodeJSONBody(w, r, 4<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("body must be JSON: {exporter, rate, note}"))
+		return
+	}
+	d, err := flowsampling.Validate(flowsampling.Declaration{Exporter: in.Exporter, Rate: in.Rate, Note: in.Note})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	owned, err := s.flowExporterOwned(r.Context(), tenant, d.Exporter)
+	if err != nil {
+		logError("flows", "declared sampling ownership check failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	if !owned {
+		writeError(w, http.StatusNotFound, errors.New("no exporter with that address in your workspace"))
+		return
+	}
+	d.UpdatedBy = claims.Sub
+	saved, err := s.flowSampling.Put(r.Context(), tenant, d)
+	switch {
+	case errors.Is(err, flowsampling.ErrTooMany):
+		writeError(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		logError("flows", "declared sampling save failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusServiceUnavailable, errors.New("declared sampling could not be saved"))
+		return
+	}
+	s.audit.Record(AuditEvent{Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: "/api/flows/sampling", Status: http.StatusOK, Decision: "allow",
+		Detail: map[string]any{"action": "flow_sampling_declare", "exporter": saved.Exporter, "rate": saved.Rate}})
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (s *server) flowSamplingDelete(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New("choose a workspace first: a declared sampling rate belongs to one workspace"))
+		return
+	}
+	if s.flowSampling == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("declared sampling is unavailable"))
+		return
+	}
+	exp := strings.TrimSpace(r.URL.Query().Get("exporter"))
+	err := s.flowSampling.Delete(r.Context(), tenant, exp)
+	switch {
+	case errors.Is(err, flowsampling.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("no declared rate for that exporter in your workspace"))
+		return
+	case err != nil:
+		logError("flows", "declared sampling delete failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusServiceUnavailable, errors.New("declared sampling could not be removed"))
+		return
+	}
+	s.audit.Record(AuditEvent{Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: "/api/flows/sampling", Status: http.StatusOK, Decision: "allow",
+		Detail: map[string]any{"action": "flow_sampling_remove", "exporter": exp}})
+	writeJSON(w, http.StatusOK, map[string]any{"removed": true})
 }

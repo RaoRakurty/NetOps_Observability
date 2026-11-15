@@ -236,11 +236,15 @@ func TestLinksSQLShape(t *testing.T) {
 	sql := LinksSQL(w, " AND (tenant_id = 'acme')", 50)
 	for _, want := range []string{
 		"ARRAY JOIN [(in_if, 'in'), (out_if, 'out')] AS d",
-		"WHERE ts >= toDateTime64(1794546000, 3, 'UTC') AND ts < toDateTime64(1794553200, 3, 'UTC') AND (tenant_id = 'acme')",
-		"AND d.1 NOT IN (0, 4294967295)",
+		// Raw rows: the previous window's start up to an hour (plus a minute)
+		// past the end, so a long flow received after the window still spreads into it.
+		"WHERE ((ts >= toDateTime64(1794546000, 3, 'UTC') AND ts < toDateTime64(1794556860, 3, 'UTC'))) AND (tenant_id = 'acme')",
+		"WHERE minute >= toDateTime(1794546000, 'UTC') AND minute < toDateTime(1794553200, 'UTC')",
+		"WHERE ifx NOT IN (0, 4294967295)",
 		"GROUP BY tid, exporter, ifx",
-		"sumIf(bytes * if(sampling_rate = 0, 1, sampling_rate), d.2 = 'in' AND ts >= toDateTime64(1794549600, 3, 'UTC'))",
-		"d.2 = 'in' AND NOT ts >= toDateTime64(1794549600, 3, 'UTC')",
+		"sumIf((b * if(rr = 1, 1, 1)), dir = 'in' AND minute >= toDateTime(1794549600, 'UTC'))",
+		"dir = 'in' AND NOT minute >= toDateTime(1794549600, 'UTC')",
+		"sumIf(rec, minute >= toDateTime(1794549600, 'UTC')) AS fl",
 		"ON n.tenant_id = a.tid AND n.exporter_addr = a.exporter AND n.ifindex = a.ifx",
 		"LIMIT 50",
 	} {
@@ -261,10 +265,11 @@ func TestSeriesSQLShape(t *testing.T) {
 	l := Link{Exporter: "10.1.0.1", IfIndex: 12}
 	sql := SeriesSQL(l, time.Unix(1794549600, 0), time.Unix(1794553200, 0), 300, " AND (tenant_id = 'acme')")
 	for _, want := range []string{
-		"toUnixTimestamp(toStartOfInterval(ts, INTERVAL 300 SECOND)) AS t",
-		"sumIf(bytes * if(sampling_rate = 0, 1, sampling_rate), in_if = 12)    AS in_b",
-		"sumIf(bytes * if(sampling_rate = 0, 1, sampling_rate), out_if = 12)   AS out_b",
+		"toUnixTimestamp(toStartOfInterval(minute, INTERVAL 300 SECOND)) AS t",
+		"sumIf((b * if(rr = 1, 1, 1)), dir = 'in')  AS in_b",
+		"sumIf((b * if(rr = 1, 1, 1)), dir = 'out') AS out_b",
 		"AND sampler_address = '10.1.0.1' AND (in_if = 12 OR out_if = 12) AND (tenant_id = 'acme')",
+		"WHERE exporter = '10.1.0.1' AND ifx = 12",
 		"GROUP BY t",
 	} {
 		if !strings.Contains(sql, want) {
@@ -347,7 +352,7 @@ func TestBuildLinks(t *testing.T) {
 			t.Errorf("prevKnown=false still gave a previous figure: %+v", r)
 		}
 	}
-	if tot := Totals(cov); tot.Flows != 150 || tot.FlowsRateReported != 50 || tot.Sampling != "mixed" || tot.BucketTime != "received" {
+	if tot := Totals(cov); tot.Flows != 150 || tot.FlowsRateReported != 50 || tot.Sampling != "mixed" || tot.BucketTime != "flow" {
 		t.Errorf("Totals = %+v", tot)
 	}
 	if ex := Exporters(rows); strings.Join(ex, ",") != "10.1.0.1,10.1.0.2,10.1.0.3" {

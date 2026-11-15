@@ -56,7 +56,9 @@ func TestOnlyTheSharedTelemetryTablesAreLenient(t *testing.T) {
 		}
 	}
 	sort.Strings(lenient)
-	want := []string{"findings", "flows", "iface_names", "tunnels"}
+	// flow_iface_1m (tracker 401) keeps each source record's tenant_id, so it
+	// carries the same untagged rows as flows and is narrowed the same way.
+	want := []string{"findings", "flow_iface_1m", "flows", "iface_names", "tunnels"}
 	if strings.Join(lenient, ",") != strings.Join(want, ",") {
 		t.Fatalf("lenient row policies = %v, want exactly %v", lenient, want)
 	}
