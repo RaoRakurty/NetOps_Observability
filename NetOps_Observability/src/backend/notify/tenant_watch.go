@@ -359,6 +359,33 @@ func (r *TenantWatchRouter) enqueue(tenant string, l TenantLane, a models.Alert,
 	r.d.deliverJob(sendJob{ch: ch, alert: a, resolve: resolve})
 }
 
+// Notice hands ONE informational message to the tenant's Slack lanes, outside
+// any episode — the result of a triggered Iris investigation (tracker 337
+// N-I2). Never PagerDuty: a finished investigation is something to read, not a
+// page. tenant MUST be server-stamped; the platform realm and wildcards are
+// refused exactly as for Fire. It returns how many lanes it was queued to, so
+// the caller can say "not announced: no Slack lane" honestly; delivery outcome
+// rides the dispatcher's existing tenant-slack counters.
+func (r *TenantWatchRouter) Notice(tenant string, a models.Alert) int {
+	if r == nil || r.d == nil {
+		return 0
+	}
+	t, ok := customerTenant(tenant)
+	if !ok {
+		r.refusedTenant.Add(1)
+		return 0
+	}
+	n := 0
+	for _, l := range r.lanesFor(t) {
+		if l.System != TenantLaneSlack {
+			continue
+		}
+		r.enqueue(t, l, a, false)
+		n++
+	}
+	return n
+}
+
 // slackClearedCopy makes the episode-end message read as a clear even when the
 // evaluator's resolution summary does not say so (a cloud monitor's resolve
 // carries its OK reading).

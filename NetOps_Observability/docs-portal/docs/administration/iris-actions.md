@@ -23,7 +23,7 @@ Iris proposes only at the end of an investigation that **concluded** with suppor
 
 ## Turn actions on for your workspace
 
-1. Open **Iris → Settings** and go to **8. Actions Iris proposes**.
+1. Open **Iris → Settings** and go to **9. Actions Iris proposes**.
 2. Tick **Iris can propose actions for this workspace**.
 3. Tick each kind Iris may propose.
 4. Optional: tick **Dry runs only** — Iris then shows what it would send and sends nothing.
@@ -31,7 +31,7 @@ Iris proposes only at the end of an investigation that **concluded** with suppor
 
 ## Approve or decline an action
 
-When Iris proposes an action, the answer shows a card: *Proposed — needs approval by someone else.* The request waits under **8. Actions Iris proposes → Waiting for approval**.
+When Iris proposes an action, the answer shows a card: *Proposed — needs approval by someone else.* The request waits under **9. Actions Iris proposes → Waiting for approval**.
 
 1. Read the **exact text that will be sent** and the check Correlix ran (for a ticket note: the ticket still exists and is still linked to the case).
 2. **Approve and send** — or write a reason and **Decline**.

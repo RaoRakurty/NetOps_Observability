@@ -39,6 +39,7 @@ import (
 	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irisquerylog"
+	"netops/backend/internal/iristrigger"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/tenantrunbook"
 )
@@ -95,6 +96,11 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// run, so reading one back is part of ai.investigate.
 	"/api/ai/investigations":  aientitlement.Investigate,
 	"/api/ai/investigations/": aientitlement.Investigate,
+	// N-I2 triggered investigations: arming one (create, enable, settings) is a
+	// use of ai.investigate; the GET overview stays an administration read so a
+	// workspace can still see its run history after the entitlement lapses.
+	"/api/ai/investigation-triggers":  aientitlement.Investigate,
+	"/api/ai/investigation-triggers/": aientitlement.Investigate,
 
 	"/api/ai/source-authority": adminPlane, // requirePerm(administration): the tenant's own source order (N-F6)
 	"/api/ai/tenant-config":    adminPlane, // requireAdmin: the tenant's own BYO provider key
@@ -239,6 +245,10 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 	{"/api/ai/investigations", http.MethodGet, "/api/ai/investigations", "", aientitlement.Investigate},
 	{"/api/ai/investigations/", http.MethodGet, "/api/ai/investigations/" + probeID, "", aientitlement.Investigate},
+	{"/api/ai/investigation-triggers", http.MethodPost, "/api/ai/investigation-triggers",
+		`{"name":"probe","kind":"schedule","schedule":{"every_minutes":30}}`, aientitlement.Investigate},
+	{"/api/ai/investigation-triggers/", http.MethodPut, "/api/ai/investigation-triggers/settings",
+		`{"enabled":false,"max_runs_per_day":5,"max_tokens_per_day":5000}`, aientitlement.Investigate},
 }
 
 // policyWithout is a mapping for the tier in force that grants everything
@@ -278,6 +288,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s.tenantRunbooks = tenantrunbook.NewMemStore(tenantrunbook.Config{Harness: testRunbookGate(t, s), ToolNames: ai.ToolNames})
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.irisLearning = irislearning.NewMemStore()
+	s.irisTriggers = iristrigger.NewMemStore()
 	s.irisActions = s.newIrisActions(irisaction.NewMemStore())
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called

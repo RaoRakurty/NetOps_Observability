@@ -25,6 +25,7 @@ import FilterChipBar, { type FilterChipChange } from "../iris/FilterChipBar";
 import RecentQuestions from "../iris/RecentQuestions";
 import IrisMissTriage from "../iris/IrisMissTriage";
 import IrisChatOps from "../iris/IrisChatOps";
+import IrisTriggers from "../iris/IrisTriggers";
 import IrisActions from "../iris/IrisActions";
 import DecisionLedger from "../iris/DecisionLedger";
 
@@ -527,7 +528,10 @@ export default function IrisVocabulary() {
       <p style={{ ...muted, margin: "0 0 6px" }}>Ask Iris from chat. Answers use your own Correlix permissions; a workspace admin approves each linked account.</p>
       <IrisChatOps />
 
-      <div style={stepHead}>8. Actions Iris proposes</div>
+      <div style={stepHead}>8. Investigations on their own</div>
+      <p style={{ ...muted, margin: "0 0 6px" }}>Iris investigates new incidents that match, or on a schedule, read-only, and posts the result on the incident and your Slack lane.</p>
+      <IrisTriggers />
+      <div style={stepHead}>9. Actions Iris proposes</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>A note for the case's ticket, or a finding for investigation memory. Someone else approves each one.</p>
       <IrisActions />
     </div>
