@@ -18,6 +18,7 @@ import { api } from "../../services/api";
 import type { DemChangesResponse, DemCohort, DemWindow } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
 import ChangeDiff from "./ChangeDiff";
+import ChangeRecord from "./ChangeRecord";
 import { ProvenanceChip, Loading, LoadError, Panel } from "./honest";
 import { useDemRead } from "./state";
 import type { DxRoute } from "./state";
@@ -38,6 +39,8 @@ export default function ExperienceChanges({ window: win, route }: {
   const type = route.get("type");
   const app = route.get("app");
   const site = route.get("site");
+  // `?id=` opens one change record (the link Iris answers carry).
+  const id = route.get("id");
 
   const res = useDemRead<DemChangesResponse>(
     () => api.demChanges({
@@ -51,6 +54,7 @@ export default function ExperienceChanges({ window: win, route }: {
 
   return (
     <div className="dx-section">
+      {id && <ChangeRecord id={id} onShowAll={() => route.setParam("id", "")} />}
       <Panel title="Change feed" label="Change feed filters">
         <div className="dx-field-row">
           <div className="dx-field">

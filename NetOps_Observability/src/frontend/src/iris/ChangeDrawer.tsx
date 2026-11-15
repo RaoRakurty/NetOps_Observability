@@ -12,9 +12,10 @@
 import { Modal } from "../components/ui";
 import { fmtDateTime } from "../lib/time";
 import { cellText, hasBeforeAfter, type ResultSet, type Row } from "./presentation";
-import { automationText, changeSourceText, changeTitle, relationText, str } from "./changes";
+import { automationText, changeSourceText, changeTitle, changeTypeText, diffableChangeId, relationText, str } from "./changes";
 import { SafeLink } from "./links";
 import JsonDiff from "./JsonDiff";
+import ChangeDiff from "../pages/experience/ChangeDiff";
 import { EvidenceDetails } from "./EvidenceDrawer";
 
 function Field({ label, value }: { label: string; value: string | null }) {
@@ -41,17 +42,16 @@ export default function ChangeDrawer({
   const minutes = typeof row.minutes_before_incident === "number" && Number.isFinite(row.minutes_before_incident)
     ? row.minutes_before_incident
     : null;
-  // One note, whichever applies (the word budget allows one per card).
-  const diffNote = row.has_diff === true
-    ? "Before/after not included here — open the change record."
-    : "No before/after was recorded for this change.";
+  // The answer row says a diff exists but does not carry it: read it from the
+  // change ledger (the caller's own — another workspace's id answers 404).
+  const fetchId = diffableChangeId(row);
   return (
     <Modal title={changeTitle(row)} subtitle={time ? fmtDateTime(time) : "Time not recorded"} onClose={onClose}>
       <div className="iris-drawer">
         {cellText(row.summary) && <p className="iris-text">{cellText(row.summary)}</p>}
         <dl className="iris-kv">
           <Field label="Who" value={cellText(row.actor)} />
-          <Field label="Change type" value={cellText(row.type)} />
+          <Field label="Change type" value={changeTypeText(row) || null} />
           <Field label="Object" value={cellText(row.object)} />
           <Field label="Object kind" value={cellText(row.object_kind)} />
           <dt>Site</dt>
@@ -96,8 +96,13 @@ export default function ChangeDrawer({
 
         {hasBeforeAfter(row) ? (
           <JsonDiff before={row.before} after={row.after} />
+        ) : fetchId ? (
+          <section aria-label="What this change did">
+            <h3 className="iris-h">What changed</h3>
+            <ChangeDiff id={fetchId} initiallyOpen />
+          </section>
         ) : (
-          <p className="iris-note">{diffNote}</p>
+          <p className="iris-note">No before/after was recorded for this change.</p>
         )}
 
         {result && (
