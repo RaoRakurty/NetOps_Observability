@@ -28,6 +28,7 @@ skips loudly rather than passing vacuously.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,10 @@ LAB_VALUES = os.path.join(CHART, "values-lab.yaml")
 STAGE_SCRIPT = os.path.join(ROOT, "deployment", "helm", "stage-configs.sh")
 COMPOSE = os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")
 KUBE_VERSION = "1.30.0"
+# Pinned, vendored JSON schemas (provenance + sha256 in the README there).
+# kubeconform reads ONLY this directory: a gate that downloads at test time is
+# a flake source and cannot run offline (#267, one failed download).
+KUBECONFORM_SCHEMAS = os.path.join(ROOT, "tests", "fixtures", "kubeconform-schemas")
 
 # Correlix builds these itself, per commit. They have no published digest until
 # a pipeline pushes them, so they carry a tag and are gated by
@@ -110,6 +115,20 @@ def _render(*extra: str) -> str:
     return proc.stdout
 
 
+def _kubeconform_cmd(manifest: str) -> list[str]:
+    """kubeconform against the vendored schemas only — no remote location and
+    no -ignore-missing-schemas, so an unknown kind fails instead of skipping."""
+    location = os.path.join(
+        KUBECONFORM_SCHEMAS,
+        "{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}",
+        "{{ .ResourceKind }}{{ .KindSuffix }}.json",
+    )
+    return [
+        KUBECONFORM or "kubeconform", "-kubernetes-version", KUBE_VERSION,
+        "-strict", "-summary", "-schema-location", location, manifest,
+    ]
+
+
 def _docs(text: str) -> list[dict]:
     return [d for d in yaml.safe_load_all(text) if isinstance(d, dict)]
 
@@ -173,21 +192,59 @@ def test_helm_lint_lab_values():
 def test_kubeconform_validates_rendered_manifests(tmp_path, extra):
     rendered = tmp_path / "rendered.yaml"
     rendered.write_text(_render(*extra))
-    proc = _run([
-        KUBECONFORM, "-kubernetes-version", KUBE_VERSION,
-        "-strict", "-summary", "-ignore-missing-schemas", str(rendered),
-    ])
-    if proc.returncode != 0 and "could not" in (proc.stderr or "").lower() \
-            and "schema" in (proc.stderr or "").lower():
-        pytest.skip(f"kubeconform could not fetch the {KUBE_VERSION} schemas "
-                    f"(offline?): {proc.stderr.strip()[:200]}")
+    proc = _run(_kubeconform_cmd(str(rendered)))
+    # The schemas are vendored (KUBECONFORM_SCHEMAS) and no remote location is
+    # given, so there is no download that could fail — a non-zero exit is a
+    # real finding: an invalid manifest, or a rendered kind with no vendored
+    # schema ("could not find schema"). Never skipped.
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    # -ignore-missing-schemas turns an unknown kind into a SKIP, and a skipped
-    # object is an unvalidated object. Nothing in the default or lab render is
-    # a CRD, so the count must be zero.
+    # Belt and braces: a skipped object is an unvalidated object.
     skipped = re.search(r"Skipped:\s*(\d+)", proc.stdout)
     assert skipped and skipped.group(1) == "0", \
         f"objects were skipped rather than validated: {proc.stdout}"
+
+
+def test_kubeconform_reads_only_vendored_schemas():
+    """The gate never downloads a schema (#267's flake), and the vendored set
+    is complete and untampered. Runs without helm or kubeconform."""
+    cmd = _kubeconform_cmd("rendered.yaml")
+    locations = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-schema-location"]
+    assert locations, "kubeconform must be given an explicit -schema-location"
+    for loc in locations:
+        assert not re.match(r"(?i)^(https?|ftp)://", loc), \
+            f"remote schema location in the chart gate: {loc}"
+        assert loc.startswith(KUBECONFORM_SCHEMAS), loc
+    assert "default" not in locations, "the 'default' location is remote"
+
+    schema_dir = os.path.join(KUBECONFORM_SCHEMAS,
+                              f"v{KUBE_VERSION}-standalone-strict")
+    readme = _read(KUBECONFORM_SCHEMAS, "README.md")
+    pinned = dict(re.findall(r"^\| ([a-z0-9.-]+\.json) \| `([0-9a-f]{64})` \|$",
+                             readme, re.MULTILINE))
+    on_disk = sorted(f for f in os.listdir(schema_dir) if f.endswith(".json"))
+    assert on_disk == sorted(pinned), \
+        f"README digest table and vendored files differ: {on_disk} vs {sorted(pinned)}"
+    for name, digest in pinned.items():
+        with open(os.path.join(schema_dir, name), "rb") as fh:
+            assert hashlib.sha256(fh.read()).hexdigest() == digest, \
+                f"{name} does not match its pinned sha256"
+
+    # Every native kind a template can render has a schema here. CRDs (a
+    # dotted group outside the Kubernetes API groups) are named in the README.
+    pair = re.compile(r"^apiVersion:\s*(\S+)\s*\n(?:#.*\n)*kind:\s*(\w+)", re.MULTILINE)
+    missing = set()
+    templates = os.path.join(CHART, "templates")
+    for fname in os.listdir(templates):
+        if not fname.endswith(".yaml"):
+            continue
+        for api, kind in pair.findall(_read(templates, fname)):
+            group, _, version = api.rpartition("/")
+            if group and "." in group and not group.endswith(".k8s.io"):
+                continue  # a CRD, e.g. cert-manager.io Certificate
+            suffix = f"-{group.split('.')[0]}-{version}" if group else f"-{version}"
+            if f"{kind.lower()}{suffix}.json" not in pinned:
+                missing.add(f"{kind} ({api})")
+    assert not missing, f"templates render kinds with no vendored schema: {sorted(missing)}"
 
 
 @needs_helm
