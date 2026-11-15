@@ -25,7 +25,7 @@ var embeddedV1 []byte
 var (
 	resolvers    = set("site_store", "discovery", "label_pair", "wan_projection", "alias_table", "corr_current", "change_ledger")
 	backends     = set("victoriametrics", "clickhouse", "postgres")
-	scopes       = set("device_scoped", "gated:N-B5")
+	scopes       = set("device_scoped", "gated:N-B5", "tenant_labeled")
 	aggregations = set("avg", "max", "min", "sum", "last", "p95", "count")
 	operators    = set("eq", "ne", "in", "gt", "ge", "lt", "le", "between", "above_baseline", "increased_by")
 	dimTypes     = set("enum", "string", "number", "time")
@@ -151,6 +151,35 @@ func (c *Catalog) index() error {
 		}
 		c.byMetric[m.Name] = m
 		c.addAliases("metric", m.Name, strings.Join(m.EntityTypes, ","), append([]string{m.Name}, m.Aliases...))
+	}
+	// A tenant equivalent must be a real, tenant-labeled metric that answers
+	// the same question: same unit, the gated metric's entity types, and every
+	// aggregation the gated one allows (the validator swaps the metric AFTER
+	// the question's aggregation was chosen against the gated one).
+	for i := range c.Metrics {
+		m := &c.Metrics[i]
+		if m.TenantEquivalent == "" {
+			continue
+		}
+		eq := c.byMetric[m.TenantEquivalent]
+		switch {
+		case m.Scope != "gated:N-B5":
+			return fmt.Errorf("catalog: metric %q: only a gated metric may declare a tenant_equivalent", m.Name)
+		case eq == nil || eq.Scope != "tenant_labeled":
+			return fmt.Errorf("catalog: metric %q: tenant_equivalent %q is not a tenant_labeled metric", m.Name, m.TenantEquivalent)
+		case eq.Unit != m.Unit:
+			return fmt.Errorf("catalog: metric %q: tenant_equivalent %q measures in %q, not %q", m.Name, eq.Name, eq.Unit, m.Unit)
+		}
+		for _, et := range m.EntityTypes {
+			if !contains(eq.EntityTypes, et) {
+				return fmt.Errorf("catalog: metric %q: tenant_equivalent %q does not apply to %q", m.Name, eq.Name, et)
+			}
+		}
+		for _, a := range m.Aggregations {
+			if !contains(eq.Aggregations, a) {
+				return fmt.Errorf("catalog: metric %q: tenant_equivalent %q lacks aggregation %q", m.Name, eq.Name, a)
+			}
+		}
 	}
 	for i := range c.Dimensions {
 		d := &c.Dimensions[i]

@@ -142,6 +142,88 @@ type resolved struct {
 	// carry (MaxMatchValues), so only the first ones were read — the answer
 	// is partial and must say so.
 	capped bool
+	// checkNames maps a Digital Experience check id (the series' `target`
+	// label) to the name its workspace gave it, so an answer names the check,
+	// not its opaque id. Set only for tenant-labeled metrics.
+	checkNames map[string]string
+}
+
+// tenantLabeledReads routes a tenant-labeled metric's reads through the
+// tenant-label filter; every other Scope method is the caller's own.
+type tenantLabeledReads struct {
+	Scope
+	tl TenantLabeledScope
+}
+
+func (r tenantLabeledReads) MetricRange(ctx context.Context, e mql.Expr, from, to time.Time, step time.Duration, maxSeries int) ([]Series, bool, error) {
+	return r.tl.TenantMetricRange(ctx, e, from, to, step, maxSeries)
+}
+
+func (r tenantLabeledReads) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]Sample, bool, error) {
+	return r.tl.TenantMetricInstant(ctx, e, at, maxSeries)
+}
+
+// resolveChecks narrows a tenant-labeled read to the caller's OWN checks the
+// question names. Ownership is the scope's tenant filter, not this function:
+// with no check named, the read covers every check the caller owns; a named
+// check the caller does not own resolves to nothing visible.
+func (p Planner) resolveChecks(ctx context.Context, tl TenantLabeledScope, refs []ast.EntityRef, rs *ResultSet) (resolved, error) {
+	var keys []string
+	other := map[string]bool{}
+	for _, r := range refs {
+		if r.Type == "probe_target" {
+			keys = append(keys, stripPrefix(r.ID))
+		} else {
+			other[r.Type] = true
+		}
+	}
+	if len(other) > 0 {
+		types := make([]string, 0, len(other))
+		for t := range other {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		rs.Notes = append(rs.Notes, "Your Digital Experience checks cannot be narrowed by "+strings.Join(types, ", ")+
+			"; this answer covers the checks named, or all of yours when none is.")
+	}
+	checks, err := tl.ProbeTargets(ctx, keys)
+	if err != nil {
+		return resolved{}, err
+	}
+	out := resolved{checkNames: map[string]string{}}
+	var ids []string
+	for _, c := range checks {
+		ids = append(ids, c.ID)
+		if c.Name != "" {
+			out.checkNames[c.ID] = c.Name
+		}
+	}
+	if len(checks) == 0 {
+		return out, ErrEmptyScope
+	}
+	if len(keys) > 0 {
+		out.matchers = append(out.matchers, mql.Matcher{Label: "target", Op: "=~", Values: out.cap(ids)})
+	}
+	return out, nil
+}
+
+// nameChecks replaces each check id in the answer with its workspace name.
+func (r resolved) nameChecks(rs *ResultSet) {
+	if len(r.checkNames) == 0 {
+		return
+	}
+	for i := range rs.Series {
+		if n, ok := r.checkNames[rs.Series[i].Entity["probe_target"]]; ok {
+			rs.Series[i].Entity["probe_target"] = n
+		}
+	}
+	for i := range rs.Rows {
+		if id, _ := rs.Rows[i]["probe_target"].(string); id != "" {
+			if n, ok := r.checkNames[id]; ok {
+				rs.Rows[i]["probe_target"] = n
+			}
+		}
+	}
 }
 
 func stripPrefix(id string) string {
@@ -336,7 +418,19 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 	if err != nil {
 		return err
 	}
-	res, err := p.resolve(ctx, sc, q.Target, q.Refs)
+	var res resolved
+	if t.tenantLabeled {
+		// N-B5: the workspace's own checks, read through the tenant-label
+		// filter — never the device filter, which these series cannot match.
+		tl, ok := sc.(TenantLabeledScope)
+		if !ok {
+			return fmt.Errorf("plan: metric %q needs the workspace check scope, which this deployment does not provide", q.Metric)
+		}
+		sc = tenantLabeledReads{Scope: sc, tl: tl}
+		res, err = p.resolveChecks(ctx, tl, q.Refs, rs)
+	} else {
+		res, err = p.resolve(ctx, sc, q.Target, q.Refs)
+	}
 	if err == nil && res.capped {
 		rs.Truncated = true
 		rs.Notes = append(rs.Notes, fmt.Sprintf("The selection named more than %d entities; only the first %d were read, so this answer is partial.", MaxMatchValues, MaxMatchValues))
@@ -414,8 +508,13 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 		rs.Rows, rs.Truncated = samplesToRows(t.labels, samples, res, "value"), trunc
 		sortRows(rs.Rows, "value", q.Type == ast.MetricTopK || orderDesc(q))
 	case ast.CompareWindows:
-		return p.compare(ctx, sc, q, t, c, res, rs, step)
+		if err := p.compare(ctx, sc, q, t, c, res, rs, step); err != nil {
+			return err
+		}
+		res.nameChecks(rs)
+		return nil
 	}
+	res.nameChecks(rs)
 	if err := p.applyGrouping(ctx, sc, q, rs); err != nil {
 		return err
 	}
@@ -586,7 +685,7 @@ func absDelta(r Row) float64 {
 // other label (incl. the circuit series' own `tenant`).
 func entityOf(labels []string, raw map[string]string) map[string]string {
 	name := map[string]string{"device": "device", "ifName": "interface", "peer": "bgp_peer",
-		"circuit": "circuit", "local_device": "device", "dst": "probe_target"}
+		"circuit": "circuit", "local_device": "device", "dst": "probe_target", "target": "probe_target"}
 	out := map[string]string{}
 	for _, l := range labels {
 		if v := raw[l]; v != "" {
