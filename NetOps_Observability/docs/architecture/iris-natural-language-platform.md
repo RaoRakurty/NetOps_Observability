@@ -456,7 +456,7 @@ table wins where they disagree.** Each row was checked in code, not inferred fro
 | N-F6 | SHIPPED | `internal/srcauthority` (`d9f7affd`) | — |
 | N-G1, G3, G4 | SHIPPED | help pages + golden per nav leaf; page-aware help (`5e516d62`); tie-break + scoreboard `ai/route_tiebreak.go` (`29929b6b`); model-first planner `ai/planner.go` (#239, #241) | — |
 | N-H1 | SHIPPED | golden incident corpus (`6d30127c`) | — |
-| N-H2 | SHIPPED 2026-11-15 | offline replay `internal/irisreplay` (`b745da9a`); live model leg `internal/irisreplay/live.go` (`run --live`, key from `NLQ_EVAL_*` env only, provider usage passed through, outage cases kept; `live_eval_test.go` behind `nlqmodeleval`); re-run triggers in `docs/ai/evals.md` | — (the live run is by hand, never in CI) |
+| N-H2 | SHIPPED 2026-11-15 | offline replay `internal/irisreplay` (`b745da9a`); live model leg `internal/irisreplay/live.go` (`run --live`, key from `NLQ_EVAL_API_KEY` in the environment only, provider usage passed through, outage cases kept; `live_eval_test.go` behind `nlqmodeleval`); re-run triggers in `docs/ai/evals.md` | — (the live run is by hand, never in CI) |
 | N-H3 | SHIPPED 2026-11-15 | split + leak guards `internal/evalsplit` (`930052db`); review-gated candidates export (#241); per-install field-eval store `internal/fieldeval` + `cmd/iriseval` (data/iris-eval, held out, labelled-only scoring, refuses an in-repo root; guard `tests/test_iris_field_eval_store.py`); consented pooling `internal/evalconsent` (migration 0077, `/api/ai/eval-consent`, opt-in default off, revocable, audited, own workspace only) | — |
 | N-H4, N-H5 | SHIPPED | `internal/iriscache` (`010e2a6c`); `internal/irisgate` release gates (`6c07f9ab`) | — |
 | N-H6 | MISSING | — | seasonal baselines + robust z (12–18 ew) |
