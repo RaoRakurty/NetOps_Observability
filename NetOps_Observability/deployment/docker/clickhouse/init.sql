@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS netops.flows
     -- fresh installs.
     time_received_ns UInt64 CODEC(DoubleDelta, LZ4),
     sampler_address String,
+    odid            UInt32 DEFAULT 0,  -- tracker 401 (b): exporter observation domain (IPFIX ODID / v9 source id) via goflow2; 0 = not exported
     src_addr        String CODEC(ZSTD(1)),
     dst_addr        String CODEC(ZSTD(1)),
     src_port        UInt16,
@@ -42,7 +43,9 @@ CREATE TABLE IF NOT EXISTS netops.flows
     tenant_id       LowCardinality(String) DEFAULT '',  -- #20: stamped at Vector ingest (device→tenant); '' = global
     exporter_app_id   LowCardinality(String) DEFAULT '',  -- IPFIX/NetFlow v9 IE 95 as "<engine>:<selector>" (RFC 6759); '' = not exported
     exporter_app_name LowCardinality(String) DEFAULT '',  -- IE 96, validated printable ≤64; '' = not exported (most exporters send names only in an options template)
-    sampling_status   LowCardinality(String) DEFAULT ''   -- reported | not_reported_1to1 (vector-router, from sampling_rate); '' = row older than the column. A label: no total reads it
+    sampling_status   LowCardinality(String) DEFAULT '',  -- reported | not_reported_1to1 (vector-router, from sampling_rate); '' = row older than the column. A label: no total reads it
+    flow_start      DateTime64(3) DEFAULT toDateTime64(0, 3) CODEC(DoubleDelta, LZ4),  -- tracker 401 (b): flow start/end (goflow2 time_flow_*_ns); epoch 0 = not exported. Only the DURATION is used (source.go)
+    flow_end        DateTime64(3) DEFAULT toDateTime64(0, 3) CODEC(DoubleDelta, LZ4)
 )
 ENGINE = MergeTree
 -- #20 Phase 3 — at-rest separation: tenant_id leads the partition key, so each
@@ -1068,6 +1071,48 @@ TTL updated + INTERVAL 8 DAY
 SETTINGS index_granularity = 8192;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_iface_names ON netops.iface_names
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- Tracker 401 (a): per-interface flow rollup.
+--
+-- MIRRORED IN src/backend/internal/chschema/flow_iface_schema.go (converged on
+-- every API boot). Written by the flowquery Roller (internal/flowquery/rollup.go)
+-- with INSERT ... SELECT at the platform scope — NOT a materialized view (the
+-- flows_hourly regression above). Each row keeps its source record's tenant_id
+-- and sampler_address, so the link views' ownership predicate reads it exactly
+-- like raw flows; LENIENT policy for the same reason as netops.flows. A received
+-- minute that late records reached is re-rolled whole under a higher version
+-- (ReplacingMergeTree, read with FINAL). bytes/packets carry the REPORTED
+-- sampling rate only; declared sampling is applied at read time.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.flow_iface_1m
+(
+    tenant_id       LowCardinality(String) DEFAULT '',
+    minute          DateTime,
+    recv_minute     DateTime,
+    sampler_address String,
+    odid            UInt32,
+    ifindex         UInt32,
+    direction       LowCardinality(String),
+    flow_type       LowCardinality(String) DEFAULT 'unknown',
+    rate_reported   UInt8,
+    platform        UInt8,
+    platform_sig    UInt64,
+    bytes           UInt64,
+    packets         UInt64,
+    records         UInt64,
+    version         UInt64
+)
+ENGINE = ReplacingMergeTree(version)
+PARTITION BY (tenant_id, toYYYYMMDD(recv_minute))
+ORDER BY (tenant_id, recv_minute, sampler_address, ifindex, direction, minute, odid, flow_type, rate_reported, platform, platform_sig)
+TTL recv_minute + INTERVAL 7 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_flow_iface_1m ON netops.flow_iface_1m
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 

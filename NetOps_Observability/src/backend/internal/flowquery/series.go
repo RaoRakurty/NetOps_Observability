@@ -15,17 +15,28 @@ import (
 // are absent here and filled with zeros in Go: WITH FILL fails on DateTime64
 // bounds in ClickHouse 24.8 (code 475).
 func SeriesSQL(l Link, from, to time.Time, step int64, scope string) string {
+	return SeriesSourceSQL(l, from, to, step, Source{RawScope: scope})
+}
+
+// SeriesSourceSQL is the per-link in/out series over the unified rows
+// (source.go): bytes and packets placed by flow duration, bucketed by the
+// minute they fall in. Steps are whole minutes (Steps), so every minute lands
+// in exactly one bucket.
+func SeriesSourceSQL(l Link, from, to time.Time, step int64, src Source) string {
 	ix := strconv.FormatUint(uint64(l.IfIndex), 10)
 	st := strconv.FormatInt(step, 10)
+	exp := " AND sampler_address = " + Quote(l.Exporter)
+	src.RawScope = " AND " + l.Cond(DirBoth) + src.RawScope
+	src.RollupScope = exp + " AND ifindex = " + ix + src.RollupScope
+	sb, sp := scaledB(src.Declared), scaledP(src.Declared)
 	return `
-SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL ` + st + ` SECOND)) AS t,
-       sumIf(` + ScaledBytes + `, in_if = ` + ix + `)    AS in_b,
-       sumIf(` + ScaledBytes + `, out_if = ` + ix + `)   AS out_b,
-       sumIf(` + ScaledPackets + `, in_if = ` + ix + `)  AS in_p,
-       sumIf(` + ScaledPackets + `, out_if = ` + ix + `) AS out_p
-  FROM netops.flows
- WHERE ts >= ` + TSLit(from) + ` AND ts < ` + TSLit(to) + `
-   AND ` + l.Cond(DirBoth) + scope + `
+SELECT toUnixTimestamp(toStartOfInterval(minute, INTERVAL ` + st + ` SECOND)) AS t,
+       sumIf(` + sb + `, dir = 'in')  AS in_b,
+       sumIf(` + sb + `, dir = 'out') AS out_b,
+       sumIf(` + sp + `, dir = 'in')  AS in_p,
+       sumIf(` + sp + `, dir = 'out') AS out_p
+  FROM ` + sourceSQL(src, from, to) + `
+ WHERE exporter = ` + Quote(l.Exporter) + ` AND ifx = ` + ix + `
  GROUP BY t
  ORDER BY t
  FORMAT JSON`

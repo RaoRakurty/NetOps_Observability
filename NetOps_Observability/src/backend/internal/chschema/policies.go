@@ -60,6 +60,11 @@ func ConvergeStmts(extra ...[]string) []string {
 		// vector-router. Same upgrade path: it lands once the column exists, and
 		// a row older than the column reads ''.
 		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS sampling_status LowCardinality(String) DEFAULT '' AFTER exporter_app_name",
+	}
+	// Tracker 401 (b): observation domain and flow start/end, from goflow2 via
+	// vector-router. Same upgrade path as the columns above.
+	stmts = append(stmts, FlowColumnsDDL()...)
+	stmts = append(stmts, []string{
 		// Build-order #8: query-time IP→country enrichment. Lazy ip_trie
 		// dictionary over the operator-supplied CSV (scripts/geoip-prepare.py);
 		// safe to create with the file absent — the Geo endpoints probe and
@@ -93,7 +98,7 @@ func ConvergeStmts(extra ...[]string) []string {
 		// easily covers an immediate retry. Must follow the CREATE — findings
 		// is created by init.sql, like the row policy directly above it.
 		"ALTER TABLE netops.findings MODIFY SETTING non_replicated_deduplication_window = 1000",
-	}
+	}...)
 	// Correlation Engine v2 (#67) frozen schema — tables + view + row policies
 	// (corr_schema.go). Same converge-on-boot contract as everything above.
 	stmts = append(stmts, CorrSchemaDDL()...)
@@ -123,6 +128,9 @@ func ConvergeStmts(extra ...[]string) []string {
 	// (iface_names_schema.go, LENIENT policy like flows). Same converge-on-boot
 	// contract; init.sql carries identical DDL for fresh installs.
 	stmts = append(stmts, IfaceNamesSchemaDDL()...)
+	// Tracker 401 (a): the per-interface flow rollup (flow_iface_schema.go,
+	// LENIENT policy like flows). Same converge-on-boot contract.
+	stmts = append(stmts, FlowIfaceSchemaDDL()...)
 	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.

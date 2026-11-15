@@ -10,10 +10,11 @@ import (
 	"strings"
 )
 
-// Column expressions shared by every statement. Totals are scaled by the
-// sampling rate the exporter REPORTED and by nothing else: a sampling exporter
-// that reports no rate reads as 1:1, and the basis says so (tracker 387: "do
-// not multiply"; declared sampling is tracker 401).
+// Column expressions shared by the raw-record statements. Totals are scaled by
+// the sampling rate the exporter REPORTED; a record whose exporter reported
+// none is multiplied only by a rate an operator DECLARED for that exporter
+// (tracker 401 (c), applied in source.go) and otherwise reads as 1:1, with the
+// basis saying which (tracker 387: never guess a rate).
 //
 // No output is ever aliased `bytes`, `packets` or `ts`: ClickHouse resolves a
 // SELECT alias inside the same statement and the alias wins over the column, so
@@ -45,6 +46,10 @@ const (
 	SamplingReported    = "reported"
 	SamplingNotReported = "not_reported"
 	SamplingMixed       = "mixed"
+	// SamplingDeclared: every record lacked a reported rate and an operator
+	// declared the exporter's rate (tracker 401 (c)); totals are multiplied by
+	// the declared rate — "declared, not reported".
+	SamplingDeclared = "declared"
 	SamplingNoFlows     = "no_flows"
 )
 
@@ -52,12 +57,16 @@ const (
 type ResponseBasis struct {
 	Flows             float64 `json:"flows"`
 	FlowsRateReported float64 `json:"flows_rate_reported"`
-	// Sampling: reported | not_reported (the exporter samples or not, but says
-	// nothing, so totals read as 1:1) | mixed | no_flows.
+	// FlowsRateDeclared: records with no reported rate whose rate an operator
+	// declared, so their totals are scaled by the declared rate.
+	FlowsRateDeclared float64 `json:"flows_rate_declared"`
+	// Sampling: reported | declared (no rate reported; an operator declared it)
+	// | not_reported (the exporter samples or not, but says nothing, so totals
+	// read as 1:1) | mixed | no_flows.
 	Sampling string `json:"sampling"`
-	// BucketTime: which clock places a record in a bucket. `ts` is stamped when
-	// the record is received, not when the flow started, so a long flow lands
-	// whole in the bucket it was exported in (flow start/end columns: tracker 401).
+	// BucketTime: how a record is placed in time. "flow": spread over its flow
+	// duration, ending when it was received (source.go); a record with no usable
+	// duration is placed in the minute it was received. Windows are whole minutes.
 	BucketTime string `json:"bucket_time"`
 }
 
@@ -74,9 +83,30 @@ func SamplingOf(flows, reported float64) string {
 	return SamplingMixed
 }
 
+// SamplingOfDeclared derives the sampling label when some records lacking a
+// reported rate carry an operator-declared one.
+func SamplingOfDeclared(flows, reported, declared float64) string {
+	switch {
+	case flows <= 0:
+		return SamplingNoFlows
+	case declared <= 0:
+		return SamplingOf(flows, reported)
+	case reported <= 0 && declared >= flows:
+		return SamplingDeclared
+	}
+	return SamplingMixed
+}
+
 // NewResponseBasis builds the response-level basis.
 func NewResponseBasis(flows, reported float64) ResponseBasis {
-	return ResponseBasis{Flows: flows, FlowsRateReported: reported, Sampling: SamplingOf(flows, reported), BucketTime: "received"}
+	return NewResponseBasisDeclared(flows, reported, 0)
+}
+
+// NewResponseBasisDeclared builds the response-level basis with declared
+// sampling counted.
+func NewResponseBasisDeclared(flows, reported, declared float64) ResponseBasis {
+	return ResponseBasis{Flows: flows, FlowsRateReported: reported, FlowsRateDeclared: declared,
+		Sampling: SamplingOfDeclared(flows, reported, declared), BucketTime: "flow"}
 }
 
 // ExportBasis classifies one direction of one exporter from how many of its
@@ -93,37 +123,42 @@ func ExportBasis(flows, missing float64) Basis {
 
 // ── statements ──────────────────────────────────────────────────────────────
 
-// LinksSQL is the busiest-links statement: ONE scan over the current and the
-// previous window, each record counted once per direction it names an
-// interface for (ARRAY JOIN over (in_if,'in') and (out_if,'out')), grouped per
-// (row tenant, exporter, ifIndex) so two tenants behind one exporter address
-// are never merged. Interface names are LEFT JOINed from netops.iface_names on
-// the ROW's own tenant (the flows.go flowIfaceTopNSQL contract).
-//
-// scope is the caller's tenant clause plus the filter bar (" AND …", already
-// safe). A link is listed when it carried traffic in the current window.
+// LinksSQL is the busiest-links statement over raw records only (no rollup,
+// no declared sampling). Kept for callers that have no Source.
 func LinksSQL(w Window, scope string, limit int) string {
-	cur := w.CurCond()
-	in, out := "d.2 = 'in'", "d.2 = 'out'"
+	return LinksSourceSQL(w, Source{RawScope: scope}, limit)
+}
+
+// LinksSourceSQL is the busiest-links statement: ONE pass over the current and
+// the previous window's unified rows (source.go), each record counted once per
+// direction it names an interface for, grouped per (row tenant, exporter,
+// ifIndex) so two tenants behind one exporter address are never merged.
+// Interface names are LEFT JOINed from netops.iface_names on the ROW's own
+// tenant (the flows.go flowIfaceTopNSQL contract). A link is listed when it
+// carried traffic in the current window. doms counts the exporter's
+// observation domains (ODIDs, tracker 401 (b)) seen on the link.
+func LinksSourceSQL(w Window, src Source, limit int) string {
+	cur := curCond(w)
+	in, out := "dir = 'in'", "dir = 'out'"
+	sb, sp := scaledB(src.Declared), scaledP(src.Declared)
 	return `
 SELECT a.tid AS tid, a.exporter AS exporter, a.ifx AS ifx,
        n.ifname AS if_name,
        if(n.ifname != '', 'resolved', 'absent') AS if_name_basis,
        a.in_b AS in_b, a.out_b AS out_b, a.prev_in_b AS prev_in_b, a.prev_out_b AS prev_out_b,
-       a.in_p AS in_p, a.out_p AS out_p, a.fl AS fl
+       a.in_p AS in_p, a.out_p AS out_p, a.fl AS fl, a.doms AS doms
   FROM (
-    SELECT tenant_id AS tid, sampler_address AS exporter, d.1 AS ifx,
-           sumIf(` + ScaledBytes + `, ` + in + ` AND ` + cur + `)        AS in_b,
-           sumIf(` + ScaledBytes + `, ` + out + ` AND ` + cur + `)       AS out_b,
-           sumIf(` + ScaledBytes + `, ` + in + ` AND NOT ` + cur + `)    AS prev_in_b,
-           sumIf(` + ScaledBytes + `, ` + out + ` AND NOT ` + cur + `)   AS prev_out_b,
-           sumIf(` + ScaledPackets + `, ` + in + ` AND ` + cur + `)      AS in_p,
-           sumIf(` + ScaledPackets + `, ` + out + ` AND ` + cur + `)     AS out_p,
-           countIf(` + cur + `) AS fl
-      FROM netops.flows
-     ARRAY JOIN [(in_if, 'in'), (out_if, 'out')] AS d
-     WHERE ` + w.ScanPredicate() + scope + `
-       AND d.1 NOT IN ` + IfSentinels + `
+    SELECT tid, exporter, ifx,
+           sumIf(` + sb + `, ` + in + ` AND ` + cur + `)        AS in_b,
+           sumIf(` + sb + `, ` + out + ` AND ` + cur + `)       AS out_b,
+           sumIf(` + sb + `, ` + in + ` AND NOT ` + cur + `)    AS prev_in_b,
+           sumIf(` + sb + `, ` + out + ` AND NOT ` + cur + `)   AS prev_out_b,
+           sumIf(` + sp + `, ` + in + ` AND ` + cur + `)        AS in_p,
+           sumIf(` + sp + `, ` + out + ` AND ` + cur + `)       AS out_p,
+           sumIf(rec, ` + cur + `) AS fl,
+           uniqExactIf(odid, ` + cur + ` AND rec > 0) AS doms
+      FROM ` + sourceSQL(src, w.PrevFrom(), w.To) + `
+     WHERE ifx NOT IN ` + IfSentinels + `
      GROUP BY tid, exporter, ifx
     HAVING fl > 0
      ORDER BY in_b + out_b DESC, exporter, ifx
@@ -138,30 +173,43 @@ SELECT a.tid AS tid, a.exporter AS exporter, a.ifx AS ifx,
  FORMAT JSON`
 }
 
-// CoverageSQL counts, per (row tenant, exporter), what the exporter exports:
-// records in each window, records that reported a sampling rate, and records
-// (and their bytes) that name no interface per direction. It feeds the
-// per-direction basis. exporters (from the links answer) bound the scan; an
-// empty list means "every exporter the scope admits".
+// CoverageSQL counts, over raw records only, what each exporter exports.
 func CoverageSQL(w Window, scope string, exporters []string) string {
-	cur := w.CurCond()
-	noIn, noOut := "in_if IN "+IfSentinels, "out_if IN "+IfSentinels
-	only := ""
+	return CoverageSourceSQL(w, Source{RawScope: scope}, exporters)
+}
+
+// CoverageSourceSQL counts, per (row tenant, exporter), what the exporter
+// exports: records in each window, records that reported a sampling rate,
+// records whose missing rate was DECLARED by an operator, records (and their
+// bytes) that name no interface per direction, and its observation domains. It
+// feeds the per-direction basis. exporters (from the links answer) bound the
+// scan; an empty list means "every exporter the scope admits".
+//
+// Each record has exactly one 'in' row, so record and byte totals are read off
+// the 'in' rows; "names no output interface" is read off the 'out' rows.
+func CoverageSourceSQL(w Window, src Source, exporters []string) string {
+	cur := curCond(w)
 	if len(exporters) > 0 {
-		only = " AND sampler_address IN (" + QuoteList(exporters) + ")"
+		only := " AND sampler_address IN (" + QuoteList(exporters) + ")"
+		src.RawScope += only
+		src.RollupScope += only
 	}
+	sb := scaledB(src.Declared)
+	sent := "ifx IN " + IfSentinels
+	inC, outC := "dir = 'in' AND "+cur, "dir = 'out' AND "+cur
 	return `
-SELECT tenant_id AS tid, sampler_address AS exporter,
-       countIf(` + cur + `) AS fl,
-       countIf(NOT ` + cur + `) AS prev_fl,
-       countIf(` + cur + ` AND ` + RateReported + `) AS fl_rr,
-       countIf(` + cur + ` AND ` + noIn + `) AS fl_no_in,
-       countIf(` + cur + ` AND ` + noOut + `) AS fl_no_out,
-       sumIf(` + ScaledBytes + `, ` + cur + `) AS b_all,
-       sumIf(` + ScaledBytes + `, ` + cur + ` AND ` + noIn + `) AS b_no_in,
-       sumIf(` + ScaledBytes + `, ` + cur + ` AND ` + noOut + `) AS b_no_out
-  FROM netops.flows
- WHERE ` + w.ScanPredicate() + scope + only + `
+SELECT tid, exporter,
+       sumIf(rec, ` + inC + `) AS fl,
+       sumIf(rec, dir = 'in' AND NOT ` + cur + `) AS prev_fl,
+       sumIf(rec, ` + inC + ` AND rr = 1) AS fl_rr,
+       sumIf(rec, ` + inC + ` AND rr = 0 AND ` + DeclaredExpr(src.Declared) + ` > 1) AS fl_decl,
+       sumIf(rec, ` + inC + ` AND ` + sent + `) AS fl_no_in,
+       sumIf(rec, ` + outC + ` AND ` + sent + `) AS fl_no_out,
+       sumIf(` + sb + `, ` + inC + `) AS b_all,
+       sumIf(` + sb + `, ` + inC + ` AND ` + sent + `) AS b_no_in,
+       sumIf(` + sb + `, ` + outC + ` AND ` + sent + `) AS b_no_out,
+       uniqExactIf(odid, ` + inC + ` AND rec > 0) AS doms
+  FROM ` + sourceSQL(src, w.PrevFrom(), w.To) + `
  GROUP BY tid, exporter
  FORMAT JSON`
 }
@@ -205,8 +253,13 @@ type CovKey struct{ Tenant, Exporter string }
 // Coverage is one exporter's export profile over the current window.
 type Coverage struct {
 	Flows, PrevFlows, RateReported float64
-	NoIn, NoOut                    float64
-	Bytes, BytesNoIn, BytesNoOut   float64
+	// RateDeclared: records whose exporter reported no rate and whose rate an
+	// operator declared (tracker 401 (c)) — their totals are multiplied by it.
+	RateDeclared                 float64
+	NoIn, NoOut                  float64
+	Bytes, BytesNoIn, BytesNoOut float64
+	// Domains: observation domains (ODIDs) the exporter used in the window.
+	Domains float64
 }
 
 // InBasis and OutBasis classify the two directions.
@@ -228,7 +281,8 @@ func ParseCoverage(rows []map[string]any) map[CovKey]Coverage {
 	out := make(map[CovKey]Coverage, len(rows))
 	for _, r := range rows {
 		out[CovKey{Str(r["tid"]), Str(r["exporter"])}] = Coverage{
-			Flows: Num(r["fl"]), PrevFlows: Num(r["prev_fl"]), RateReported: Num(r["fl_rr"]),
+			Flows: Num(r["fl"]), PrevFlows: Num(r["prev_fl"]), RateReported: Num(r["fl_rr"]), RateDeclared: Num(r["fl_decl"]),
+			Domains: Num(r["doms"]),
 			NoIn: Num(r["fl_no_in"]), NoOut: Num(r["fl_no_out"]),
 			Bytes: Num(r["b_all"]), BytesNoIn: Num(r["b_no_in"]), BytesNoOut: Num(r["b_no_out"]),
 		}
@@ -238,12 +292,13 @@ func ParseCoverage(rows []map[string]any) map[CovKey]Coverage {
 
 // Totals sums a coverage map into a response basis.
 func Totals(cov map[CovKey]Coverage) ResponseBasis {
-	var fl, rr float64
+	var fl, rr, decl float64
 	for _, c := range cov {
 		fl += c.Flows
 		rr += c.RateReported
+		decl += c.RateDeclared
 	}
-	return NewResponseBasis(fl, rr)
+	return NewResponseBasisDeclared(fl, rr, decl)
 }
 
 // LinkRow is one link in a /api/flows/links answer. A null byte figure means
@@ -271,6 +326,10 @@ type LinkRow struct {
 	InUnnamedPct  *float64 `json:"in_unnamed_pct,omitempty"`
 	OutUnnamedPct *float64 `json:"out_unnamed_pct,omitempty"`
 	Sampling      string   `json:"sampling"`
+	// Domains: observation domains (ODIDs) seen on the link in the window. More
+	// than one means the exporter reported this interface from several domains
+	// (line cards, monitors); the figures add them up.
+	Domains float64 `json:"domains"`
 }
 
 func ptr(v float64) *float64 { return &v }
@@ -289,6 +348,7 @@ func BuildLinks(rows []map[string]any, cov map[CovKey]Coverage, prevKnown bool) 
 			TenantID: Str(r["tid"]), Exporter: Str(r["exporter"]), IfIndex: uint32(ix),
 			IfName: strings.TrimSpace(Str(r["if_name"])), IfNameBasis: Str(r["if_name_basis"]),
 			InPackets: Num(r["in_p"]), OutPackets: Num(r["out_p"]), Flows: Num(r["fl"]),
+			Domains: Num(r["doms"]),
 		}
 		if row.IfName == "" {
 			row.IfNameBasis = "absent"
@@ -301,7 +361,7 @@ func BuildLinks(rows []map[string]any, cov map[CovKey]Coverage, prevKnown bool) 
 		}
 		row.InBasis, row.OutBasis = c.InBasis(), c.OutBasis()
 		row.InUnnamedPct, row.OutUnnamedPct = unnamedPct(c.BytesNoIn, c.Bytes), unnamedPct(c.BytesNoOut, c.Bytes)
-		row.Sampling = SamplingOf(c.Flows, c.RateReported)
+		row.Sampling = SamplingOfDeclared(c.Flows, c.RateReported, c.RateDeclared)
 		prevOK := prevKnown && c.PrevFlows > 0
 		if row.InBasis != NotExported {
 			row.InBytes = ptr(Num(r["in_b"]))

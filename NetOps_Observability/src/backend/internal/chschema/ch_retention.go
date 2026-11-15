@@ -177,6 +177,9 @@ type chRetentionTable struct {
 func chRetentionTables() []chRetentionTable {
 	return []chRetentionTable{
 		{"flows", "toDateTime(ts)", func(d chRetentionDays) int { return d.Flows }},
+		// Tracker 401 (a): the per-interface rollup ages with the records it is
+		// built from (the owner kept flow retention unchanged, 2026-10-18).
+		{"flow_iface_1m", "recv_minute", func(d chRetentionDays) int { return d.Flows }},
 		{"findings", "toDateTime(ts)", func(d chRetentionDays) int { return d.Findings }},
 		{"tunnels", "toDateTime(ts)", func(d chRetentionDays) int { return d.Tunnels }},
 		{"corr_signals", "toDateTime(ts)", func(d chRetentionDays) int { return d.CorrSignals }},
