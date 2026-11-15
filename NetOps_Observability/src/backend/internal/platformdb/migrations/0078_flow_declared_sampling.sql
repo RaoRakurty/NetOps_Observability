@@ -1,4 +1,4 @@
--- 0077_flow_declared_sampling.sql — the sampling rate an operator DECLARES for
+-- 0078_flow_declared_sampling.sql — the sampling rate an operator DECLARES for
 -- a flow exporter (tracker 401 (c)).
 --
 -- An exporter that samples but reports no rate reads 1:1 on the Flows page

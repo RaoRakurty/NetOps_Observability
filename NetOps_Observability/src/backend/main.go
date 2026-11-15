@@ -612,7 +612,7 @@ type server struct {
 	incidentFP          incidentfp.Store                 // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
 	rcaResolutions      rcaresolution.Store              // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
 	flowRollup          atomic.Pointer[flowquery.Roller] // per-interface flow rollup (tracker 401 (a)); nil until its worker starts
-	flowSampling        flowsampling.Store               // operator-declared flow sampling per exporter (tracker 401 (c); migration 0077 / file fallback)
+	flowSampling        flowsampling.Store               // operator-declared flow sampling per exporter (tracker 401 (c); migration 0078 / file fallback)
 	aiFeedback          ai.FeedbackStore                 // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations

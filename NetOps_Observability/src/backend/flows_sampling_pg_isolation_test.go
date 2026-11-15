@@ -4,7 +4,7 @@
 package backend
 
 // flows_sampling_pg_isolation_test.go — tracker 401 (c) against a real
-// Postgres (migration 0077, FORCE RLS). Runs in CI's pgintegration leg.
+// Postgres (migration 0078, FORCE RLS). Runs in CI's pgintegration leg.
 
 import (
 	"context"

@@ -1647,7 +1647,7 @@ func (s *server) handleFlowsLinkSeries(w http.ResponseWriter, r *http.Request) {
 // ── tracker 401: rollup source and declared sampling ────────────────────────
 
 // newFlowSamplingStore selects the Postgres store under the Postgres backend
-// (migration 0077, FORCE RLS), else the tenant-keyed file store.
+// (migration 0078, FORCE RLS), else the tenant-keyed file store.
 func newFlowSamplingStore() flowsampling.Store {
 	if ps, ok := platformdb.ActivePG(); ok {
 		return flowsampling.NewPGStore(ps.DB())

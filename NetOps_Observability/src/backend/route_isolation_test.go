@@ -630,7 +630,7 @@ var routeIsolationLedger = map[string]string{
 	// (extra_filters[] + second-pass row filter); flows_capacity_isolation_test.go.
 	"/api/flows/capacity": "scoped",
 	// Tracker 401 (c): declared sampling per exporter — tenant data (migration
-	// 0077 FORCE RLS / tenant-keyed file), stamped from the token, foreign
+	// 0078 FORCE RLS / tenant-keyed file), stamped from the token, foreign
 	// exporter → 404; flows_sampling_isolation_test.go + the PG isolation test.
 	"/api/flows/sampling":   "scoped",
 	"/api/flows/services":   "scoped",

@@ -7,7 +7,7 @@
 // The flow views multiply ONLY that exporter's records that carried no
 // reported rate by the declared rate, per (tenant, exporter): a rate the
 // exporter reports always wins, and two tenants behind one exporter address
-// declare independently. Postgres (migration 0077, FORCE RLS) under the
+// declare independently. Postgres (migration 0078, FORCE RLS) under the
 // Postgres backend; a tenant-keyed file otherwise.
 package flowsampling
 
@@ -257,7 +257,7 @@ type DB interface {
 
 type pgStore struct{ db DB }
 
-// NewPGStore builds the Postgres-backed store (migration 0077).
+// NewPGStore builds the Postgres-backed store (migration 0078).
 func NewPGStore(db DB) Store { return &pgStore{db: db} }
 
 const pgCols = `tenant_id, exporter_addr, rate, note, updated_by, updated_at`
