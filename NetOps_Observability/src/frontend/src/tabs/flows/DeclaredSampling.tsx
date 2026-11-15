@@ -75,7 +75,7 @@ export default function DeclaredSampling() {
             {unreported.map((r) => (
               <tr key={`${r.tenant_id ?? ""}|${r.exporter}`}>
                 <td>{r.device_name || r.exporter}</td>
-                <td>{fmtNum(Math.max(0, r.flows - r.flows_rate_reported))} of {fmtNum(r.flows)}</td>
+                <td>{fmtNum(r.flows > r.flows_rate_reported ? r.flows - r.flows_rate_reported : 0)} of {fmtNum(r.flows)}</td>
                 <td>
                   {r.can_declare ? (
                     <input
