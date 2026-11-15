@@ -2372,6 +2372,25 @@ export interface ChangeDiffResponse {
   has_diff?: boolean;
 }
 
+/** GET /api/changes/{id} — one change-ledger record (internal/changeapi View). */
+export interface ChangeRecord {
+  id: string;
+  type: string;
+  event_at: string;
+  actor?: string;
+  automation?: boolean;
+  object: string;
+  object_kind?: string;
+  site?: string;
+  app?: string;
+  summary: string;
+  source_system: string;
+  ticket_ref?: string;
+  has_diff: boolean;
+  before?: string;
+  after?: string;
+}
+
 export interface IrisAlias {
   entity_type: string;
   entity_id: string;
@@ -2578,6 +2597,56 @@ export interface ChatLink {
   requested_at: string;
   decided_by?: string;
   decided_at?: string;
+}
+// Triggered investigations (tracker 337 N-I2).
+export type InvestigationTriggerKind = "incident" | "schedule";
+export interface InvestigationTriggerFilter {
+  min_severity?: string;
+  signature?: string;
+  site?: string;
+  role?: string;
+}
+export interface InvestigationTriggerInput {
+  name: string;
+  kind: InvestigationTriggerKind;
+  filter: InvestigationTriggerFilter;
+  schedule: { every_minutes: number };
+  question?: string;
+}
+export interface InvestigationTrigger extends InvestigationTriggerInput {
+  id: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string;
+}
+export interface InvestigationTriggerSettings {
+  enabled: boolean;
+  max_runs_per_day: number;
+  max_tokens_per_day: number;
+}
+export interface InvestigationTriggerRun {
+  id: string;
+  trigger_id: string;
+  trigger_name: string;
+  incident_id?: string;
+  status: "running" | "done" | "skipped" | "failed";
+  reason?: string;
+  investigation_id?: string;
+  tokens: number;
+  summary?: string;
+  started_at: string;
+  finished_at?: string;
+}
+export interface InvestigationTriggerOverview {
+  settings: InvestigationTriggerSettings;
+  triggers: InvestigationTrigger[];
+  runs: InvestigationTriggerRun[];
+  tokens_today: number;
+  investigations_on: boolean;
+  durable: boolean;
+  limits: { max_triggers: number; min_every_minutes: number; max_every_minutes: number; max_runs_per_day: number; max_tokens_per_day: number };
 }
 export interface IrisTriage {
   scope: "tenant" | "platform";
@@ -7341,6 +7410,17 @@ export const api = {
   myChatLinks: () => request<{ links: ChatLink[] }>("/api/chatops/me"),
   revokeMyChatLink: (id: string) =>
     request<ChatLink>(`/api/chatops/me/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  // Triggered investigations (N-I2): a workspace admin's; reads need
+  // administration access, changes need admin and AI investigations.
+  investigationTriggers: () => request<InvestigationTriggerOverview>("/api/ai/investigation-triggers"),
+  createInvestigationTrigger: (input: InvestigationTriggerInput) =>
+    request<InvestigationTrigger>("/api/ai/investigation-triggers", { method: "POST", body: JSON.stringify(input) }),
+  setInvestigationTriggerEnabled: (id: string, enabled: boolean) =>
+    request<InvestigationTrigger>(`/api/ai/investigation-triggers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) }),
+  deleteInvestigationTrigger: (id: string) =>
+    request<void>(`/api/ai/investigation-triggers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  saveInvestigationTriggerSettings: (s: InvestigationTriggerSettings) =>
+    request<InvestigationTriggerSettings>("/api/ai/investigation-triggers/settings", { method: "PUT", body: JSON.stringify(s) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -8521,6 +8601,8 @@ export const api = {
   // a configuration change as the redacted unified diff of its two captured
   // versions, any other change as its redacted before/after.
   changeDiff: (id: string) => request<ChangeDiffResponse>(`/api/changes/${encodeURIComponent(id)}/diff`),
+  /** One ledger change (redacted values). Another tenant's id answers 404. */
+  change: (id: string) => request<ChangeRecord>(`/api/changes/${encodeURIComponent(id)}`),
   demChanges: (opts: DemChangeQuery = {}) =>
     request<DemChangesResponse>(`/api/dem/changes${demChangeParams(opts)}`),
   /** Record a change event. The owning tenant is stamped from the token. */

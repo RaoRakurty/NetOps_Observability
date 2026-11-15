@@ -366,5 +366,40 @@ func TestTenantWatchNilRouterIsSafe(t *testing.T) {
 	var r *TenantWatchRouter
 	r.Fire("acme", watchAlert("a"))
 	r.Resolve("acme", watchAlert("a"))
+	if r.Notice("acme", watchAlert("a")) != 0 {
+		t.Fatal("a nil router queued a notice")
+	}
 	r.WriteMetrics(&bytes.Buffer{})
+}
+
+// A triggered-investigation notice (tracker 337 N-I2) goes to the tenant's
+// Slack lane only — never PagerDuty — opens no episode, and is refused for the
+// platform realm like every tenant lane.
+func TestTenantWatchNoticeIsSlackOnlyAndOpensNoEpisode(t *testing.T) {
+	r, _, rec, _ := newRouterUnderTest(t, map[string][]TenantLane{
+		"acme": {{System: TenantLaneSlack, Secret: "https://hooks.example/A"}, {System: TenantLanePagerDuty, Secret: "rk-acme"}},
+	})
+	n := models.Alert{ID: "iris-run-1", Rule: "iris_investigation", Severity: "info", Summary: "Iris investigated INC-1"}
+	if got := r.Notice("acme", n); got != 1 {
+		t.Fatalf("queued to %d lanes, want 1 (Slack only)", got)
+	}
+	if got := r.Notice("acme", n); got != 1 {
+		t.Fatalf("a second notice was deduped as an episode: %d", got)
+	}
+	waitUntil(t, "two notices delivered", func() bool { return len(rec.hits()) == 2 })
+	for _, h := range rec.hits() {
+		if h.system != TenantLaneSlack {
+			t.Fatalf("a notice reached %s", h.system)
+		}
+	}
+	for _, tenant := range []string{"", "global", "*"} {
+		if got := r.Notice(tenant, n); got != 0 {
+			t.Fatalf("tenant %q got a notice", tenant)
+		}
+	}
+	var buf bytes.Buffer
+	r.WriteMetrics(&buf)
+	if !strings.Contains(buf.String(), `netops_notify_tenant_watch_open_episodes 0`) {
+		t.Fatalf("a notice opened an episode:\n%s", buf.String())
+	}
 }

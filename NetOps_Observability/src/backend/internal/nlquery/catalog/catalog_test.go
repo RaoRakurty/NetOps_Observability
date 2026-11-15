@@ -89,7 +89,7 @@ func TestParseRejects(t *testing.T) {
 			metricNamed(m, "dem_probe_latency_ms")["aggregations"] = []any{"avg", "max"}
 			metricNamed(m, "dem_probe_latency_ms")["default_agg"] = "avg"
 		},
-		"bad id pattern":           func(m map[string]any) { first(m, "entities")["id_pattern"] = "([" },
+		"bad id pattern": func(m map[string]any) { first(m, "entities")["id_pattern"] = "([" },
 		"restricted filterable": func(m map[string]any) {
 			for _, d := range m["dimensions"].([]any) {
 				if d.(map[string]any)["name"] == "before" {

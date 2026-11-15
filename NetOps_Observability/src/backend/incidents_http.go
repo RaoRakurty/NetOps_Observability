@@ -58,6 +58,9 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 	if created {
 		s.incidentCreated(inc)
 		s.notifyIncidentSlackActions(inc)
+		// Triggered Iris investigations (N-I2): matching triggers are QUEUED
+		// (bounded, never run on the alert path).
+		s.irisTriggersOnIncident(inc, a.DeviceID)
 		logInfo("incidents", "incident created", fields)
 		// Auto-policy: critical incidents promote to an ITSM ticket (dedup by the
 		// incident itself; the sync worker is idempotent). Skipped if no ITSM is

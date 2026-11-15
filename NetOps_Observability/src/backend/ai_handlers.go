@@ -25,6 +25,7 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/chatops"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/incident"
 	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
@@ -36,6 +37,7 @@ import (
 	"netops/backend/internal/irisreplay"
 	"netops/backend/internal/irisstream"
 	"netops/backend/internal/iristriage"
+	"netops/backend/internal/iristrigger"
 	"netops/backend/internal/jwks"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/chips"
@@ -4832,4 +4834,583 @@ func (s *server) irisLearningInputs(ctx context.Context, tenant string) (irislea
 		in.Aliases = s.nlqAliases.List(tenant, false)
 	}
 	return in, nil
+}
+
+// ── triggered investigations (tracker 337 N-I2, design of record D16) ──────
+//
+// A tenant admin asks Iris to run its read-only Investigator (N-I1) on its own:
+// when a new incident matches a filter, or on a schedule. Each run is a SYSTEM
+// principal bound to the trigger's tenant with the read-only role — never the
+// platform owner, never cross-tenant — so it reads exactly what that
+// workspace's read-only users read, through the same orchestrator, tool
+// gateway, budgets and decision ledger as an operator's "Investigate this".
+// The read-only role also keeps active probes (N-I3, infrastructure:write) out
+// of every unattended run.
+//
+// Admission, in order (each skip is recorded with its reason except the two
+// "this workspace has not turned it on" cases, which the settings page shows
+// as state instead of filling the history with one row per incident):
+//   1. the workspace switch for triggered investigations is on;
+//   2. AI investigations are entitled for the workspace (licence, the Features
+//      switches, the workspace's own Investigations access);
+//   3. the workspace's daily token allowance for triggered runs, and the
+//      overall per-tenant AI token budget, have room;
+//   4. an AI model is reachable (an overloaded or down provider is a recorded
+//      "skipped: model unavailable", never a silent retry);
+//   5. the daily run cap (counted under the store's lock) and the dedupe key
+//      (one run per incident, one per schedule slot) admit it.
+// The result is held as an investigation trace, attached to the incident as a
+// note, and announced on the workspace's own Slack lane (never PagerDuty).
+
+const (
+	irisTriggerSystemSub  = "system:iris-trigger"
+	irisTriggerRunTimeout = 3 * time.Minute
+	irisTriggerQueue      = 64
+	irisTriggerWorkers    = 2
+	irisTriggerBodyLimit  = 16 << 10
+)
+
+// newIrisTriggerStore: Postgres (RLS) when the platform store is Postgres,
+// otherwise in memory — the settings page then says triggers do not survive a
+// restart.
+func newIrisTriggerStore() iristrigger.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return iristrigger.NewPGStore(ps.DB())
+	}
+	return iristrigger.NewMemStore()
+}
+
+// irisTriggerJob is one queued run: an incident trigger carries its incident.
+type irisTriggerJob struct {
+	trigger iristrigger.Trigger
+	event   *iristrigger.IncidentEvent
+}
+
+// irisTriggerTenant is the default-closed tenant check for an unattended run:
+// a concrete customer workspace, never the platform realm or a wildcard.
+func irisTriggerTenant(t string) (string, bool) {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == "" || t == TenantGlobal || strings.HasPrefix(t, "__") || strings.ContainsAny(t, "*\x00") {
+		return "", false
+	}
+	return t, true
+}
+
+// irisTriggerClaims is the system principal a triggered run acts as: bound to
+// exactly tenant, read-only role, no API-key scopes. principalTenant answers
+// (tenant, false) for it — never cross-tenant.
+func irisTriggerClaims(tenant string) jwtClaims {
+	return jwtClaims{Sub: irisTriggerSystemSub, Role: RoleReadOnly, Tenant: tenant}
+}
+
+// irisTriggerModelReady reports whether an AI model can be reached for the
+// tenant right now (a provider whose breaker is open, or none configured,
+// answers false). s.irisTriggerModelCheck overrides it in tests.
+func (s *server) irisTriggerModelReady(ctx context.Context, claims jwtClaims) bool {
+	if s.irisTriggerModelCheck != nil {
+		return s.irisTriggerModelCheck(ctx, claims)
+	}
+	_, key, _, skipped := s.firstUsableProvider(ctx, claims)
+	if key == "" && skipped != nil {
+		logInfo("iris.trigger", "no AI model usable for a triggered run", map[string]any{"tenant": claims.Tenant, "reason": skipped.Error()})
+	}
+	return key != ""
+}
+
+// irisTriggerRun admits and runs one triggered investigation. The returned run
+// has an empty Status when nothing was recorded (the workspace has not turned
+// triggered investigations on, or is not entitled to AI investigations).
+func (s *server) irisTriggerRun(ctx context.Context, tr iristrigger.Trigger, ev *iristrigger.IncidentEvent, now time.Time) (iristrigger.Run, error) {
+	if s.irisTriggers == nil {
+		return iristrigger.Run{}, nil
+	}
+	tenant, ok := irisTriggerTenant(tr.TenantID)
+	if !ok {
+		return iristrigger.Run{}, fmt.Errorf("iris trigger %s has no customer workspace", tr.ID)
+	}
+	base := iristrigger.Run{TriggerID: tr.ID, TriggerName: tr.Name}
+	if ev != nil {
+		base.IncidentID, base.DedupeKey = ev.IncidentID, iristrigger.IncidentKey(ev.IncidentID)
+	} else {
+		base.DedupeKey = tr.ScheduleSlot(now)
+	}
+	set, err := s.irisTriggers.Settings(ctx, tenant)
+	if err != nil {
+		return iristrigger.Run{}, fmt.Errorf("settings: %w", err)
+	}
+	claims := irisTriggerClaims(tenant)
+	if !set.Enabled || !aiEnabled() || !s.aiEntitled(claims, aientitlement.Investigate) {
+		return iristrigger.Run{}, nil // state, not history: the settings page says why
+	}
+	skip := func(reason string) (iristrigger.Run, error) {
+		r := base
+		r.Reason, r.Summary = reason, iristrigger.SkipText(reason)
+		out, err := s.irisTriggers.Skip(ctx, tenant, r, now)
+		if errors.Is(err, iristrigger.ErrDuplicate) {
+			return iristrigger.Run{}, nil
+		}
+		return out, err
+	}
+	used, err := s.irisTriggers.TokensToday(ctx, tenant, now)
+	if err != nil {
+		return iristrigger.Run{}, fmt.Errorf("tokens today: %w", err)
+	}
+	if used >= set.MaxTokensPerDay || (s.aiToolBudget != nil && !s.aiToolBudget.Allow(tenant, s.dailyTokensFor(tenant))) {
+		return skip(iristrigger.SkipTokenCap)
+	}
+	if !s.irisTriggerModelReady(ctx, claims) {
+		return skip(iristrigger.SkipModelUnavailable)
+	}
+	run, err := s.irisTriggers.Admit(ctx, tenant, base, set.MaxRunsPerDay, now)
+	switch {
+	case errors.Is(err, iristrigger.ErrDuplicate):
+		return iristrigger.Run{}, nil
+	case err != nil:
+		return iristrigger.Run{}, fmt.Errorf("admit: %w", err)
+	case run.Status != iristrigger.RunRunning:
+		return run, nil // skipped at the daily run cap, recorded
+	}
+	return s.irisTriggerExecute(ctx, claims, tr, ev, run, set.MaxTokensPerDay-used)
+}
+
+// irisTriggerExecute runs the admitted investigation as the system principal
+// and closes the run.
+func (s *server) irisTriggerExecute(ctx context.Context, claims jwtClaims, tr iristrigger.Trigger, ev *iristrigger.IncidentEvent, run iristrigger.Run, tokensLeft int) (iristrigger.Run, error) {
+	tenant := claims.Tenant
+	finish := func(status, reason, invID string, tokens int, summary string) (iristrigger.Run, error) {
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		at := time.Now().UTC()
+		if err := s.irisTriggers.Finish(fctx, tenant, run.ID, status, reason, invID, tokens, summary, at); err != nil {
+			return run, fmt.Errorf("finish: %w", err)
+		}
+		run.Status, run.Reason, run.InvestigationID, run.Tokens, run.Summary, run.FinishedAt = status, reason, invID, tokens, summary, &at
+		return run, nil
+	}
+	r, err := http.NewRequestWithContext(context.WithValue(ctx, userCtxKey, claims), http.MethodPost, "/internal/iris/trigger", nil)
+	if err != nil {
+		return finish(iristrigger.RunFailed, "internal", "", 0, "The investigation could not start.")
+	}
+	r.RemoteAddr = "iris-trigger"
+	budget := ai.DefaultInvestigationBudget()
+	if tokensLeft > 0 && tokensLeft < budget.MaxTokens {
+		budget.MaxTokens = tokensLeft
+	}
+	ui := map[string]string{}
+	if ev != nil && ev.DeviceID != "" {
+		ui["device_id"] = ev.DeviceID
+	}
+	ans := s.newOrchestrator(r, claims).Investigate(ctx, s.aiPrincipal(claims), iristrigger.DefaultQuestion(tr, ev), ui, budget)
+	trace := ans.Investigation
+	if trace == nil {
+		return finish(iristrigger.RunFailed, "internal", "", 0, "The investigation returned no trace.")
+	}
+	switch {
+	case trace.Status == ai.InvestigationStatusRefused:
+		return finish(iristrigger.RunSkipped, iristrigger.SkipNotEntitled, "", trace.Used.Tokens, iristrigger.SkipText(iristrigger.SkipNotEntitled))
+	case ans.Mode == ai.ModeUnavailable:
+		return finish(iristrigger.RunSkipped, iristrigger.SkipModelUnavailable, "", trace.Used.Tokens, iristrigger.SkipText(iristrigger.SkipModelUnavailable))
+	}
+	invID := s.irisTriggerHoldTrace(ctx, tenant, *trace)
+	summary := irisTriggerSummary(trace.Status, ans.Text)
+	s.irisTriggerAttach(ctx, tenant, tr, ev, invID, summary)
+	s.irisTriggerAnnounce(tenant, tr, ev, run, summary)
+	return finish(iristrigger.RunDone, trace.Status, invID, trace.Used.Tokens, summary)
+}
+
+// irisTriggerHoldTrace stores the trace under a fresh id in the run's tenant,
+// so an operator opens it from the run history like any investigation. A
+// trace that cannot be held keeps no id; the failure is logged.
+func (s *server) irisTriggerHoldTrace(ctx context.Context, tenant string, tr ai.InvestigationTrace) string {
+	if s.aiInvestigations == nil {
+		return ""
+	}
+	id, err := aidecision.NewID()
+	if err != nil {
+		logError("iris.trigger", "no id — this triggered investigation's trace is not held", errf(err))
+		return ""
+	}
+	tr.ID = id
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), aiHypothesesHoldTimeout)
+	defer cancel()
+	if err := s.aiInvestigations.Put(hctx, tenant, tr); err != nil {
+		logError("iris.trigger", "trace hold failed", map[string]any{"tenant": tenant, "error": err.Error()})
+		return ""
+	}
+	return id
+}
+
+// irisTriggerSummary is the run's one-line outcome: the investigation's
+// status in words, then the start of Iris's answer.
+func irisTriggerSummary(status, text string) string {
+	lead := map[string]string{
+		ai.InvestigationStatusConcluded:    "Iris found a supported explanation.",
+		ai.InvestigationStatusInconclusive: "Iris gathered evidence but could not support one explanation.",
+		ai.InvestigationStatusNoEvidence:   "Iris found nothing it could read for this scope.",
+	}[status]
+	if lead == "" {
+		lead = "Iris finished the investigation."
+	}
+	body := strings.Join(strings.Fields(text), " ")
+	if r := []rune(body); len(r) > 280 {
+		body = string(r[:279]) + "…"
+	}
+	if body == "" {
+		return lead
+	}
+	return lead + " " + body
+}
+
+// irisTriggerAttach adds the result to the incident's timeline as a note from
+// Iris, in the incident's own tenant.
+func (s *server) irisTriggerAttach(ctx context.Context, tenant string, tr iristrigger.Trigger, ev *iristrigger.IncidentEvent, invID, summary string) {
+	if ev == nil || s.incidents == nil {
+		return
+	}
+	note := fmt.Sprintf("Iris investigated this incident automatically (trigger %q). %s", tr.Name, summary)
+	if invID != "" {
+		note += " Open the full trace in Iris → recent investigations (" + invID + ")."
+	}
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := s.incidents.AddNote(actx, tenant, false, ev.IncidentID, "iris", note); err != nil {
+		logError("iris.trigger", "result not attached to the incident", map[string]any{
+			"tenant": tenant, "incident_id": ev.IncidentID, "error": err.Error()})
+	}
+}
+
+// irisTriggerAnnounce posts the outcome on the workspace's own Slack lane
+// (never PagerDuty: a finished investigation is something to read, not a page).
+func (s *server) irisTriggerAnnounce(tenant string, tr iristrigger.Trigger, ev *iristrigger.IncidentEvent, run iristrigger.Run, summary string) {
+	subject := "the schedule \"" + tr.Name + "\""
+	if ev != nil {
+		subject = incidentDisplayID(ev.IncidentID) + " (trigger \"" + tr.Name + "\")"
+	}
+	n := s.tenantWatch.Notice(tenant, models.Alert{
+		ID: "iris-trigger-run:" + run.ID, Rule: "iris_investigation", Severity: "info",
+		Summary: "Iris investigated " + subject + ": " + summary, FiredAt: time.Now().UTC(),
+	})
+	if n == 0 {
+		logInfo("iris.trigger", "result not announced: the workspace has no Slack lane opted into watch alerts", map[string]any{"tenant": tenant, "run": run.ID})
+	}
+}
+
+// incidentDisplayID is the operator's handle for an incident (INC-3FA2C1).
+func incidentDisplayID(id string) string { return incident.DisplayID(id) }
+
+// irisTriggersOnIncident is called once when an incident is CREATED. Matching
+// incident triggers are queued (bounded); nothing runs on the alert path.
+func (s *server) irisTriggersOnIncident(inc Incident, deviceID string) {
+	if s.irisTriggers == nil {
+		return
+	}
+	tenant, ok := irisTriggerTenant(inc.TenantID)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	set, err := s.irisTriggers.Settings(ctx, tenant)
+	if err != nil {
+		logError("iris.trigger", "settings unread — incident triggers not evaluated", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	if !set.Enabled {
+		return
+	}
+	trigs, err := s.irisTriggers.List(ctx, tenant)
+	if err != nil {
+		logError("iris.trigger", "triggers unread — incident triggers not evaluated", map[string]any{"tenant": tenant, "error": err.Error()})
+		return
+	}
+	ev := iristrigger.IncidentEvent{IncidentID: inc.ID, Severity: inc.Severity, Title: inc.Title, Rule: inc.SourceID, DeviceID: deviceID}
+	needFacts := false
+	for _, t := range trigs {
+		if t.Enabled && t.Kind == iristrigger.KindIncident && (t.Filter.Site != "" || t.Filter.Role != "") {
+			needFacts = true
+		}
+	}
+	if needFacts && deviceID != "" {
+		ev.Site, ev.Role = s.irisTriggerDeviceFacts(ctx, tenant, deviceID)
+	}
+	for _, t := range trigs {
+		if t.Matches(ev) {
+			e := ev
+			s.irisTriggerEnqueue(irisTriggerJob{trigger: t, event: &e})
+		}
+	}
+}
+
+// irisTriggerDeviceFacts reads the firing device's site and role from the
+// tenant's OWN inventory (the system principal's view); a device the tenant
+// does not hold reads as unknown.
+func (s *server) irisTriggerDeviceFacts(ctx context.Context, tenant, deviceID string) (site, role string) {
+	claims := irisTriggerClaims(tenant)
+	for _, d := range s.visibleDevicesFor(claims) {
+		if d.ID != deviceID {
+			continue
+		}
+		site = sotSiteFor(d, s.geoAssignments(tenant, false))
+		role = strings.TrimSpace(d.Labels["role"])
+		if role == "" {
+			role = s.deviceRoleIndex(ctx, claims)[d.ID].Role
+		}
+		return site, role
+	}
+	return "", ""
+}
+
+// irisTriggerEnqueue hands a run to the workers without blocking; a full queue
+// is logged and the run is not taken (the next incident or slot is).
+func (s *server) irisTriggerEnqueue(j irisTriggerJob) bool {
+	if s.irisTriggerJobs == nil {
+		return false
+	}
+	select {
+	case s.irisTriggerJobs <- j:
+		return true
+	default:
+		logWarn("iris.trigger", "triggered-investigation queue full — this run was not queued", map[string]any{
+			"tenant": j.trigger.TenantID, "trigger": j.trigger.ID})
+		return false
+	}
+}
+
+// irisTriggerWorker drains the queue until ctx ends.
+func (s *server) irisTriggerWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case j := <-s.irisTriggerJobs:
+			rctx, cancel := context.WithTimeout(ctx, irisTriggerRunTimeout)
+			run, err := s.irisTriggerRun(rctx, j.trigger, j.event, time.Now())
+			cancel()
+			if err != nil {
+				logError("iris.trigger", "triggered investigation failed", map[string]any{
+					"tenant": j.trigger.TenantID, "trigger": j.trigger.ID, "error": err.Error()})
+				continue
+			}
+			if run.Status != "" {
+				logInfo("iris.trigger", "triggered investigation", map[string]any{
+					"tenant": j.trigger.TenantID, "trigger": j.trigger.ID, "run": run.ID,
+					"status": run.Status, "reason": run.Reason, "tokens": run.Tokens})
+			}
+		}
+	}
+}
+
+// irisTriggerScheduleLoop queues the schedule triggers that are due, every
+// tick, until ctx ends. The dedupe slot makes a second tick (or replica) in
+// the same interval a no-op.
+func (s *server) irisTriggerScheduleLoop(ctx context.Context, every time.Duration) {
+	if s.irisTriggers == nil {
+		return
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			due, err := s.irisTriggers.DueSchedules(ctx, now)
+			if err != nil {
+				logError("iris.trigger", "due schedules unread", errf(err))
+				continue
+			}
+			for _, tr := range due {
+				s.irisTriggerEnqueue(irisTriggerJob{trigger: tr})
+			}
+		}
+	}
+}
+
+// ── /api/ai/investigation-triggers ─────────────────────────────────────────
+//
+//	GET    /api/ai/investigation-triggers           settings, triggers, recent runs
+//	POST   /api/ai/investigation-triggers           create a trigger
+//	PUT    /api/ai/investigation-triggers/settings  the workspace switch + caps
+//	PUT    /api/ai/investigation-triggers/{id}      {"enabled": bool}
+//	DELETE /api/ai/investigation-triggers/{id}
+//	GET    /api/ai/investigation-triggers/runs      recent runs
+//
+// Reads need administration:read; every change needs administration:admin
+// AND ai.investigate for the caller (a workspace not entitled to AI
+// investigations cannot arm a trigger). The tenant is the token's: the
+// platform owner's all-tenants view is refused (choose a workspace), an
+// as_tenant on a request is ignored, and another tenant's id is 404.
+func (s *server) handleAIInvestigationTriggers(w http.ResponseWriter, r *http.Request) {
+	if s.irisTriggers == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("triggered investigations are not available on this deployment"))
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/ai/investigation-triggers"), "/")
+	level := LevelRead
+	if r.Method != http.MethodGet {
+		level = LevelAdmin
+	}
+	claims, ok := s.requirePerm(w, r, "administration", level)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		writeError(w, http.StatusBadRequest, errors.New("choose a workspace first: triggered investigations belong to one workspace"))
+		return
+	}
+	if _, ok := irisTriggerTenant(tenant); !ok {
+		writeError(w, http.StatusBadRequest, errors.New("triggered investigations belong to a customer workspace"))
+		return
+	}
+	if r.Method != http.MethodGet && !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+		return
+	}
+	ctx := r.Context()
+	switch {
+	case rest == "" && r.Method == http.MethodGet:
+		s.irisTriggerOverview(w, r, claims, tenant)
+	case rest == "" && r.Method == http.MethodPost:
+		var body iristrigger.Trigger
+		if !irisTriggerDecode(w, r, &body) {
+			return
+		}
+		body.Enabled = true
+		tr, err := s.irisTriggers.Create(ctx, tenant, claims.Sub, body, time.Now())
+		if !s.irisTriggerStoreErr(w, err) {
+			return
+		}
+		s.irisTriggerAudit(r, claims, "create", map[string]any{"trigger": tr.ID, "kind": string(tr.Kind)})
+		writeJSON(w, http.StatusCreated, tr)
+	case rest == "settings" && r.Method == http.MethodPut:
+		var body iristrigger.Settings
+		if !irisTriggerDecode(w, r, &body) {
+			return
+		}
+		if err := s.irisTriggers.PutSettings(ctx, tenant, body); !s.irisTriggerStoreErr(w, err) {
+			return
+		}
+		s.irisTriggerAudit(r, claims, "settings", map[string]any{"enabled": body.Enabled,
+			"max_runs_per_day": body.MaxRunsPerDay, "max_tokens_per_day": body.MaxTokensPerDay})
+		writeJSON(w, http.StatusOK, body)
+	case rest == "runs" && r.Method == http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit")) // discard: a bad or absent limit reads as the default
+		if limit == 0 {
+			limit = 20
+		}
+		runs, err := s.irisTriggers.Runs(ctx, tenant, limit)
+		if !s.irisTriggerStoreErr(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+	case iristrigger.ValidID(rest) && r.Method == http.MethodPut:
+		var body struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if !irisTriggerDecode(w, r, &body) {
+			return
+		}
+		if body.Enabled == nil {
+			writeError(w, http.StatusBadRequest, errors.New(`send {"enabled": true} or {"enabled": false}`))
+			return
+		}
+		tr, err := s.irisTriggers.SetEnabled(ctx, tenant, rest, *body.Enabled, time.Now())
+		if !s.irisTriggerStoreErr(w, err) {
+			return
+		}
+		s.irisTriggerAudit(r, claims, "enable", map[string]any{"trigger": tr.ID, "enabled": tr.Enabled})
+		writeJSON(w, http.StatusOK, tr)
+	case iristrigger.ValidID(rest) && r.Method == http.MethodDelete:
+		if err := s.irisTriggers.Delete(ctx, tenant, rest); !s.irisTriggerStoreErr(w, err) {
+			return
+		}
+		s.irisTriggerAudit(r, claims, "delete", map[string]any{"trigger": rest})
+		w.WriteHeader(http.StatusNoContent)
+	case rest != "" && rest != "settings" && rest != "runs" && !iristrigger.ValidID(rest):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+// irisTriggerOverview is the settings page's one read: the workspace switch
+// and caps, its triggers, the recent runs, today's use, and whether the
+// prerequisites (AI investigations, durable storage) hold.
+func (s *server) irisTriggerOverview(w http.ResponseWriter, r *http.Request, claims jwtClaims, tenant string) {
+	ctx := r.Context()
+	set, err := s.irisTriggers.Settings(ctx, tenant)
+	if !s.irisTriggerStoreErr(w, err) {
+		return
+	}
+	trigs, err := s.irisTriggers.List(ctx, tenant)
+	if !s.irisTriggerStoreErr(w, err) {
+		return
+	}
+	runs, err := s.irisTriggers.Runs(ctx, tenant, 20)
+	if !s.irisTriggerStoreErr(w, err) {
+		return
+	}
+	used, err := s.irisTriggers.TokensToday(ctx, tenant, time.Now())
+	if !s.irisTriggerStoreErr(w, err) {
+		return
+	}
+	_, durable := s.irisTriggers.(*iristrigger.PGStore)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings":          set,
+		"triggers":          trigs,
+		"runs":              runs,
+		"tokens_today":      used,
+		"investigations_on": aiEnabled() && s.aiEntitled(irisTriggerClaims(tenant), aientitlement.Investigate),
+		"durable":           durable,
+		"limits": map[string]int{
+			"max_triggers": iristrigger.MaxTriggersPerTenant, "min_every_minutes": iristrigger.MinEveryMinutes,
+			"max_every_minutes": iristrigger.MaxEveryMinutes, "max_runs_per_day": iristrigger.MaxRunsPerDayCap,
+			"max_tokens_per_day": iristrigger.MaxTokensPerDayCap,
+		},
+	})
+}
+
+// irisTriggerDecode reads a bounded JSON body and refuses unknown fields (a
+// tenant, author or id in the body is a request to be refused, not ignored).
+func irisTriggerDecode(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, irisTriggerBodyLimit))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("the request body is not a valid trigger request"))
+		return false
+	}
+	return true
+}
+
+// irisTriggerStoreErr writes the store error's status; true means no error.
+func (s *server) irisTriggerStoreErr(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, iristrigger.ErrNotFound):
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+	case errors.Is(err, iristrigger.ErrTooMany):
+		writeError(w, http.StatusConflict, fmt.Errorf("a workspace can have up to %d triggers", iristrigger.MaxTriggersPerTenant))
+	case errors.Is(err, iristrigger.ErrInvalid):
+		writeError(w, http.StatusBadRequest, err)
+	default:
+		logError("iris.trigger", "store", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("triggered investigations could not be read or saved"))
+	}
+	return false
+}
+
+func (s *server) irisTriggerAudit(r *http.Request, claims jwtClaims, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = "iris_trigger_" + action
+	s.audit.Record(AuditEvent{
+		Time: time.Now().UTC(), Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow", Detail: detail,
+	})
 }
