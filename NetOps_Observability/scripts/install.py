@@ -1444,6 +1444,32 @@ def _prune_env_migrate_backups(env_path: Path, keep: int = ENV_MIGRATE_BACKUP_KE
         info(f"removed the old .env migration backup {old.name} (keeping the newest {keep})")
 
 
+# `KEY=` + blanks + `#…`: an EMPTY value with an inline comment. Anything else
+# (`KEY=value  # note`, `KEY=#literal`, `KEY =x`) is left alone.
+_INLINE_COMMENT_VALUE = re.compile(r"^([A-Z][A-Z0-9_]*)=[ \t]+#[ \t]?(.*)$")
+
+
+def _repair_inline_comment_values(text: str) -> tuple[str, list[str]]:
+    """Rewrite every `KEY=   # comment` line as `# comment` above `KEY=`.
+
+    Returns the new text and the key NAMES moved, in file order. Lines of any
+    other shape — including a key with a real value followed by a comment —
+    are returned unchanged, byte for byte, so this never alters a value an
+    operator set. Running it on its own output changes nothing."""
+    out: list[str] = []
+    moved: list[str] = []
+    for line in text.split("\n"):
+        m = _INLINE_COMMENT_VALUE.match(line)
+        if m is None:
+            out.append(line)
+            continue
+        comment = m.group(2).rstrip()
+        out.append(f"# {comment}" if comment else "#")
+        out.append(f"{m.group(1)}=")
+        moved.append(m.group(1))
+    return "\n".join(out), moved
+
+
 def migrate_env_for_upgrade(env_path: Path) -> list[str]:
     """`install.py --migrate-env`: bring an existing .env up to this release.
 
@@ -1528,6 +1554,19 @@ def write_env(env_path: Path, port: int, *, force: bool,
                  "would make the broker refuse its own data. Restore the key from "
                  f"{env_snapshot_path(env_path).name} or a backup (see "
                  "docs/runbooks/secret-rotation.md for a deliberate rotation).")
+        # Repair (tracker 427): templates before #243 wrote empty optional keys
+        # as `AWS_REGION=          # e.g. us-east-1`, and an env-file reader
+        # trims the blank before `#`, so the key's value became the comment
+        # (the api then refused e.g. the SNS region). Only that exact shape —
+        # nothing but blanks between `=` and `#` — is rewritten, to the
+        # comment-above-key form the template now uses; a key with a real
+        # value keeps it byte for byte. Idempotent.
+        repaired, moved = _repair_inline_comment_values(env_path.read_text(encoding="utf-8"))
+        if moved:
+            write_env_text(env_path, repaired, what="move inline comments off empty keys")
+            ok(f"moved the inline comment off {len(moved)} empty key(s) so it is "
+               f"no longer read as the value: {', '.join(moved)}")
+            env = _parse_env(env_path)
         # Before the migration lines: it must MOVE the app-role password, never
         # let them mint a second one beside it.
         migrate_env_credentials(env_path)
