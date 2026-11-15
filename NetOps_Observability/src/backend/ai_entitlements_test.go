@@ -51,6 +51,14 @@ import (
 // operator would be locked out of the very switch the entitlement reads.
 const adminPlane = aientitlement.Entitlement("admin-plane")
 
+// selfPlane is the marker for a person's OWN AI setting that any signed-in
+// person changes for themselves (never for someone else). It is not a use of
+// the assistant and must stay changeable after an AI entitlement lapses — a
+// person can always withdraw consent. Each selfPlane route has a probe in
+// selfPlaneProbes (iris_eval_consent_test.go) proving it refuses the
+// unauthenticated and API keys and admits a plain operator.
+const selfPlane = aientitlement.Entitlement("self-plane")
+
 // aiRouteEntitlements is THE classification of every AI route.
 var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/ask": aientitlement.Chat,
@@ -63,6 +71,9 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	// after an AI entitlement lapses (it shows why answers were missed).
 	"/api/ai/triage":  adminPlane,
 	"/api/ai/triage/": adminPlane,
+	// N-H3 eval consent: the caller's own opt-in to pooled eval candidates.
+	// Self-plane: never gated on a usage entitlement (withdrawal must always work).
+	"/api/ai/eval-consent": selfPlane,
 	// N-H2 replay export: administration:read, like the ledger it compares with.
 	// It is a support and audit read of one incident, not a use of the assistant.
 	"/api/ai/replay/export/":       adminPlane,
@@ -157,7 +168,7 @@ func TestEveryAIRouteIsEntitlementGated(t *testing.T) {
 				"entitlement (internal/aientitlement) and classify it in aiRouteEntitlements, with a probe in aiRouteProbes", r)
 			continue
 		}
-		if e == adminPlane {
+		if e == adminPlane || e == selfPlane {
 			continue
 		}
 		if !aientitlement.Valid(e) {
@@ -181,8 +192,17 @@ func TestEveryAIRouteIsEntitlementGated(t *testing.T) {
 		}
 	}
 	for r, e := range aiRouteEntitlements {
-		if e != adminPlane && !probed[r] {
+		if e != adminPlane && e != selfPlane && !probed[r] {
 			t.Errorf("gated AI route %q has no refusal probe in aiRouteProbes", r)
+		}
+	}
+	selfProbed := map[string]bool{}
+	for _, p := range selfPlaneProbes {
+		selfProbed[p] = true
+	}
+	for r, e := range aiRouteEntitlements {
+		if e == selfPlane && !selfProbed[r] {
+			t.Errorf("self-plane AI route %q has no probe in selfPlaneProbes", r)
 		}
 	}
 	for _, p := range adminPlaneProbes {

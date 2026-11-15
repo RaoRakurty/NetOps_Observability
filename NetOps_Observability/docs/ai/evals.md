@@ -420,19 +420,52 @@ What the layers are and how they are cited:
   when the facts overflow their 4,000-character block, the facts that share the
   question's terms fill it first.
 
-## Replay (N-H2, offline leg)
+## Replay (N-H2)
 
 Replay runs one frozen incident through the real answer path and reports what came
 out, so that a change to a prompt, a skill, a tool contract or a model is judged on
-cases. Code: `src/backend/internal/irisreplay`, `cmd/irisreplay`. The offline leg
-is built; **the live-model leg is not**, and `ModelLeg` is its seam.
+cases. Code: `src/backend/internal/irisreplay`, `cmd/irisreplay`. Two model legs
+share everything else (the frozen seams, the answer path, the report):
+
+- **Scripted (default).** Each model call gets the case's scripted reply. No
+  provider is reached. Deterministic; this is what CI runs.
+- **Live (`run --live`).** Each model call goes to a REAL provider, so the report
+  shows what a live model says over the same frozen evidence. The provider, key and
+  model come ONLY from `NLQ_EVAL_PROVIDER`, `NLQ_EVAL_API_KEY` and `NLQ_EVAL_MODEL`
+  in that process's environment — never a flag (shell history, `ps`), never the
+  platform's sealed provider settings — and the key never reaches the report (the
+  leg is named `live:<provider>/<model>`). A case that scripts a provider outage
+  still replays as an outage. Cost is the provider's own token accounting, or
+  `censored` when it reports none. Latency now includes the provider.
 
 ```bash
 cd src/backend
-go run ./cmd/irisreplay run --cases ai/testdata/golden_incidents --report /tmp/a.json --markdown /tmp/a.md
-go run ./cmd/irisreplay compare /tmp/a.json /tmp/b.json   # names what changed
+go run ./cmd/irisreplay run --cases ai/testdata/golden_incidents --report /tmp/scripted.json --markdown /tmp/scripted.md
+NLQ_EVAL_PROVIDER=gemini NLQ_EVAL_API_KEY=... NLQ_EVAL_MODEL=gemini-3.5-flash-lite \
+  go run ./cmd/irisreplay run --cases ai/testdata/golden_incidents --report /tmp/live.json --live
+go run ./cmd/irisreplay compare /tmp/scripted.json /tmp/live.json   # what the live model changed
 go run ./cmd/irisreplay fingerprint
+# the same live run as a test (never compiled in CI):
+NLQ_EVAL_PROVIDER=gemini NLQ_EVAL_API_KEY=... IRIS_REPLAY_LIVE_REPORT=/tmp/live.json \
+  go test -tags nlqmodeleval ./internal/irisreplay -run TestReplayLiveProvider -v -timeout 60m
 ```
+
+The live test fails only on a FAIL the guards produce (a prohibited tool, a
+forbidden citation, a cross-tenant leak). A live model wording things differently
+from the scripted reply is the point of the run: it is reported, not failed.
+
+**When to re-run (both legs).** Re-run, and compare with the last report, whenever
+the replay fingerprint moves — `irisreplay fingerprint` hashes the skill files, the
+rendered prompt builders, the tool contracts, the cases' `ENGINE_SEMVER` pins and
+the model names, so `compare` names the file that changed — and in addition on:
+
+| Change | Leg | Why the fingerprint may not show it |
+|---|---|---|
+| a provider model (or its `-latest` alias moving) | live | the model is named, but an alias can change behind the same name |
+| a prompt, skill file or tool contract | both | in the fingerprint |
+| a tenant runbook approved or changed (N-F2) | both, on cases that select it | runbooks are tenant data, not compiled in |
+| an engine release (`ENGINE_SEMVER`) or a catalog version | both | pins are compared; the stored RCA blob in a case does not change by itself — re-capture the case |
+| a guard (`VerifyGrounding`, redaction, statement classes) | both | code, not a fingerprinted file |
 
 **One corpus, one loader.** A case is a golden incident plus optional fields:
 `frozen_at`, `engine_version`, `catalog_version`, `topology`, `config`,
@@ -479,10 +512,62 @@ re-runs a probe or `compile_query`.
 `data/iris-replay/` (gitignored). `tests/test_iris_replay_customer_data.py` refuses
 `*.replay.json` under `src/` outside the corpus, and any field case inside it.
 
-**What the offline leg does not prove.**
+## Field eval cases (N-H3): where they live, and consented pooling
+
+**Where.** A question an operator really asked is customer data even after review,
+so field cases never enter the repository. They live in a per-install store on the
+host — default `data/iris-eval/<tenant>/field-<time>.json`, under the `data/`
+directory git ignores, written 0600 in 0700 directories — managed with
+`cmd/iriseval` (code: `internal/fieldeval`). The store has no HTTP surface: only
+someone with shell access to the install (the platform owner) files or reads it,
+and `iriseval field-list` prints counts per tenant, never question text. It refuses
+a root inside a git work tree unless the path passes through a `data/` directory,
+and `tests/test_iris_field_eval_store.py` fails if a stored file appears anywhere
+in the tree outside `data/`.
+
+```bash
+cd src/backend
+# a workspace admin exports review-gated candidates (their own questions, plus
+# colleagues who opted in) from GET /api/ai/triage/candidates and REVIEWS them; then:
+go run ./cmd/iriseval field-import --tenant <tenant-id> --candidates reviewed.json   # default --root data/iris-eval
+go run ./cmd/iriseval field-list
+```
+
+Every field case is **held out** (`evalsplit`: source `field` is always held out),
+so it can measure generalisation and must never feed a prompt, a few-shot library or
+a phrase list. An import never invents a label: a case becomes scorable only when a
+reviewer writes its `expected_route` in the file; until then it is kept, not scored.
+A re-import of the same question (case- and space-insensitive) adds nothing.
+
+**Consented pooling (decision, owner-delegated 2026-11-15).** A colleague's typed
+question is theirs: the question log and the triage view withhold it from everyone
+else. Pooling is offered per person — Iris settings, step 4, "Share my questions to
+help test Iris":
+
+- opt-in, **default off**, revocable; nobody can set it for someone else (the API
+  takes the person and workspace from the token and refuses a body naming either);
+  an API key cannot make the choice; the platform view has no workspace to share with;
+- with it, the person's questions join **their own workspace's** candidates export,
+  marked `pooled` and never named; their correction notes stay withheld, and so does
+  the triage view's example text;
+- without it, an export holds only the exporting admin's own questions (the
+  behaviour before N-H3);
+- revoking takes effect at the next export (consent is read at export time); what an
+  admin already downloaded is outside the server, which the settings text says;
+- every grant and revoke is in the audit log (`ai.eval_consent.grant` / `.revoke`);
+- the platform owner's export never carries pooled text (counts only across tenants).
+
+Storage: `internal/evalconsent`, migration 0077 (`iris_eval_consent`, tenant_iso
+FORCE-RLS) or memory without Postgres. API: `GET/PUT /api/ai/eval-consent`, a
+self-plane route — never gated on an AI usage entitlement, so a person can always
+withdraw. Tests: `iris_eval_consent_test.go` (§3a), `internal/evalconsent`
+(+ pgintegration RLS), `IrisEvalConsent.test.tsx`.
+
+**What the scripted leg does not prove.**
 
 - The model is scripted. It shows what the guards do with a given reply, not what a
-  live model would say. Every corpus reply is the worst plausible one.
+  live model would say (that is the live leg). Every corpus reply is the worst
+  plausible one.
 - Topology and configuration are tool results as of capture, not as-of state: the api
   has no versioned topology store.
 - An exported case replays evidence-only until someone scripts a reply, because the

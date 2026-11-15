@@ -25,6 +25,7 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/chatops"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/evalconsent"
 	"netops/backend/internal/incident"
 	"netops/backend/internal/incidentfp"
 	"netops/backend/internal/irisaction"
@@ -4129,7 +4130,14 @@ func (s *server) irisRecordMiss(r *http.Request, claims jwtClaims, question stri
 // colleague's typed text is withheld exactly as the query-log read path
 // withholds it (withholdColleagueText): counts are the workspace's, example
 // text only the caller's own.
-func (s *server) irisTriageItems(r *http.Request, claims jwtClaims, tenant string, cross bool) ([]iristriage.Item, []iristriage.Candidate, error) {
+//
+// pooled (N-H3) names the colleagues of THIS tenant who opted in to sharing
+// their questions with the workspace's eval set (internal/evalconsent). Their
+// questions join the CANDIDATES export, marked pooled and never named; their
+// notes and the triage view's example text stay withheld. A cross-tenant
+// caller never gets pooled text (counts only), and pooled is always read for
+// the record's own tenant, so a question never crosses a workspace.
+func (s *server) irisTriageItems(r *http.Request, claims jwtClaims, tenant string, cross bool, pooled map[string]bool) ([]iristriage.Item, []iristriage.Candidate, error) {
 	recs, err := s.nlqQueryLog.List(r.Context(), tenant, irisquerylog.ListFilter{Limit: irisTriageListLimit})
 	if err != nil {
 		return nil, nil, err
@@ -4138,15 +4146,21 @@ func (s *server) irisTriageItems(r *http.Request, claims jwtClaims, tenant strin
 	var cands []iristriage.Candidate
 	for _, rec := range recs {
 		own := rec.Principal == claims.Sub && !cross
+		shared := !cross && !own && rec.Principal != "" && pooled[rec.Principal]
+		sharedQuestion := rec.Question // read before withholding; used only when shared
 		if !own {
 			withholdColleagueText(&rec)
 		}
 		var kinds []string
 		for _, c := range rec.Corrections {
 			kinds = append(kinds, c.Kind)
-			if own {
+			switch {
+			case own:
 				cands = append(cands, iristriage.Candidate{Question: rec.Question, Source: "correction", Kind: c.Kind,
 					Note: c.Note, Corrected: c.CorrectedHash, Route: rec.Intent})
+			case shared && sharedQuestion != "":
+				cands = append(cands, iristriage.Candidate{Question: sharedQuestion, Source: "correction", Kind: c.Kind,
+					Corrected: c.CorrectedHash, Route: rec.Intent, Pooled: true})
 			}
 		}
 		class := rec.MissClass
@@ -4159,8 +4173,11 @@ func (s *server) irisTriageItems(r *http.Request, claims jwtClaims, tenant strin
 			}
 		}
 		items = append(items, iristriage.Item{Class: class, Question: rec.Question, Route: rec.Intent, Tenant: tenant})
-		if own && rec.Question != "" {
+		switch {
+		case own && rec.Question != "":
 			cands = append(cands, iristriage.Candidate{Question: rec.Question, Class: class, Route: rec.Intent, Source: "miss"})
+		case shared && sharedQuestion != "":
+			cands = append(cands, iristriage.Candidate{Question: sharedQuestion, Class: class, Route: rec.Intent, Source: "miss", Pooled: true})
 		}
 	}
 	return items, cands, nil
@@ -4207,7 +4224,17 @@ func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(tn) == "" {
 			continue
 		}
-		it, cs, err := s.irisTriageItems(r, claims, tn, cross)
+		var pooled map[string]bool
+		if !cross && sub == "/candidates" {
+			p, perr := s.irisEvalConsenting(r.Context(), tn)
+			if perr != nil {
+				// Fail closed: without a readable consent, nobody's questions are pooled.
+				logError("iris.triage", "eval consent read failed; exporting own questions only", errf(perr))
+			} else {
+				pooled = p
+			}
+		}
+		it, cs, err := s.irisTriageItems(r, claims, tn, cross, pooled)
 		if err != nil {
 			logError("iris.triage", "read failed", errf(err))
 			writeError(w, http.StatusInternalServerError, errors.New("the Iris question log could not be read"))
@@ -4226,6 +4253,103 @@ func (s *server) handleAIIrisTriage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scope": scope, "classes": iristriage.Summarize(items, cross),
 		"class_order": iristriage.Classes, "window": "the newest records of each workspace's Iris question log (30 days)"})
+}
+
+// ---- Iris eval consent (tracker 337 N-H3, consented pooling) ----------------
+//
+// GET/PUT /api/ai/eval-consent — the CALLER'S OWN choice to share their Iris
+// questions with their workspace's eval set. Opt-in, default off, revocable
+// (internal/evalconsent has the decision). Any signed-in person may read and
+// change their own; nobody can set it for someone else (the principal and
+// tenant come from the token, a body field naming either is refused), an API
+// key is not a person and is refused, and a cross-tenant platform principal has
+// no workspace to share with. It is a self-plane route: never gated on an AI
+// usage entitlement, so a person can always withdraw consent, even after their
+// workspace's AI entitlement lapses. Every change is audited.
+
+// newEvalConsentStore picks Postgres (migration 0077, RLS) when the platform
+// database is active, otherwise memory — the same rule as the question log it
+// governs.
+func newEvalConsentStore() evalconsent.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return evalconsent.NewPGStore(ps.DB())
+	}
+	return evalconsent.NewMemStore()
+}
+
+// irisEvalConsenting returns the principals of tenant who consent now. No
+// store means nobody (fail closed).
+func (s *server) irisEvalConsenting(ctx context.Context, tenant string) (map[string]bool, error) {
+	if s.evalConsent == nil {
+		return nil, nil
+	}
+	return s.evalConsent.Consenting(ctx, tenant)
+}
+
+// evalConsentBody is the PUT body. Unknown fields are refused, so a body that
+// tries to name another person or tenant fails instead of being ignored.
+type evalConsentBody struct {
+	Consented *bool `json:"consented"`
+}
+
+func (s *server) handleAIEvalConsent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		w.Header().Set("Allow", "GET, PUT")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+		return
+	}
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if strings.HasPrefix(claims.Sub, "apikey:") {
+		writeError(w, http.StatusForbidden, errors.New("sharing questions is a person's own choice; an API key cannot make it"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	if cross || strings.TrimSpace(tenant) == "" || strings.TrimSpace(claims.Sub) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("sharing questions applies inside one workspace; the platform view has none"))
+		return
+	}
+	if s.evalConsent == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("question sharing is not available on this deployment"))
+		return
+	}
+	if r.Method == http.MethodGet {
+		c, err := s.evalConsent.Get(r.Context(), tenant, claims.Sub)
+		if err != nil {
+			logError("iris.eval_consent", "read failed", errf(err))
+			writeError(w, http.StatusInternalServerError, errors.New("your sharing choice could not be read"))
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var body evalConsentBody
+	if err := dec.Decode(&body); err != nil || body.Consented == nil {
+		writeError(w, http.StatusBadRequest, errors.New(`send {"consented": true} or {"consented": false}`))
+		return
+	}
+	c, err := s.evalConsent.Set(r.Context(), tenant, claims.Sub, *body.Consented, time.Now())
+	if err != nil {
+		logError("iris.eval_consent", "write failed", errf(err))
+		writeError(w, http.StatusInternalServerError, errors.New("your sharing choice could not be saved"))
+		return
+	}
+	action := "ai.eval_consent.revoke"
+	if c.Consented {
+		action = "ai.eval_consent.grant"
+	}
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: false, SessionID: claims.Sid,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: map[string]any{"action": action},
+	})
+	writeJSON(w, http.StatusOK, c)
 }
 
 // ---- Iris read-only MCP gateway (tracker 337 N-I5, design D17) ---------------
