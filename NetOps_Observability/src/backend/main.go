@@ -147,6 +147,7 @@ import (
 	"netops/backend/internal/aiprovider"
 	"netops/backend/internal/aiscore"
 	"netops/backend/internal/entityalias"
+	"netops/backend/internal/evalconsent"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
 	"netops/backend/internal/irisinvest"
@@ -418,6 +419,9 @@ type server struct {
 	// question, for offline evaluation only. nil = capture off.
 	nlqQueryLog        irisquerylog.Store
 	nlqQueryLogMetrics *irisquerylog.Metrics
+	// Who opted in to sharing their questions with the workspace's eval set
+	// (N-H3, migration 0077 / memory). nil = nobody's questions are pooled.
+	evalConsent evalconsent.Store
 	// IRIS-NLQUERY-END
 	// The Iris AI decision ledger (tracker 337 N-A6): append-only, tenant-RLS,
 	// hashes only. nil = the ledger is off (asks are not ledgered).
@@ -1407,6 +1411,7 @@ func newServer() *server {
 		nlqAliases:      &entityalias.Store{C: aliasKV, Cat: nlqCat},
 		nlqConvos:       newIrisConvoStore(),
 		nlqQueryLog:     newIrisQueryLogStore(),
+		evalConsent:     newEvalConsentStore(),
 		// Counters for query capture (N-C8) — rendered on /metrics.
 		nlqQueryLogMetrics: irisquerylog.NewMetrics(),
 		// The AI decision ledger (N-A6) + its counters, rendered on /metrics.
@@ -4241,6 +4246,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                                       // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
 	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                             // Iris: miss triage by class (model-first point 5)
 	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)                            // Iris: review-gated eval candidates
+	mux.HandleFunc("/api/ai/eval-consent", s.handleAIEvalConsent)                      // Iris: the caller's own opt-in to pooled eval candidates (N-H3)
 	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                             // Iris learning loop (N-F5): proposals a person decides
 	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)                            // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
 	mux.HandleFunc("/api/ai/investigation-triggers", s.handleAIInvestigationTriggers)  // triggered investigations (N-I2): settings, triggers, runs

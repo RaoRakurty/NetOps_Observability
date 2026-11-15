@@ -2705,7 +2705,11 @@ export interface IrisTriage {
 }
 export interface IrisTriageCandidates {
   review: string;
-  candidates: { question: string; class?: string; route?: string; source: string; correction_kind?: string; note?: string }[];
+  candidates: { question: string; class?: string; route?: string; source: string; correction_kind?: string; note?: string; pooled?: boolean }[];
+}
+export interface IrisEvalConsent {
+  consented: boolean;
+  updated_at?: string;
 }
 export interface IrisTurn {
   at: string;
@@ -7450,6 +7454,11 @@ export const api = {
   // Review-gated evaluation candidates from the caller's own misses and
   // corrections; never committed anywhere automatically.
   irisTriageCandidates: () => request<IrisTriageCandidates>("/api/ai/triage/candidates"),
+  // N-H3: the caller's OWN opt-in to sharing their Iris questions with their
+  // workspace's eval set. Default off; anyone can read and change their own.
+  irisEvalConsent: () => request<IrisEvalConsent>("/api/ai/eval-consent"),
+  setIrisEvalConsent: (consented: boolean) =>
+    request<IrisEvalConsent>("/api/ai/eval-consent", { method: "PUT", body: JSON.stringify({ consented }) }),
   // Iris in Slack and Teams (N-I6): connections and link approvals are a
   // workspace admin's; linking your own chat account is anyone's.
   chatConnections: () => request<{ switch_on: boolean; connections: ChatConnection[] }>("/api/chatops/connections"),

@@ -22,9 +22,9 @@ import (
 // a defect, and a defect must not hang the runner.
 const caseBudget = 2 * time.Minute
 
-// ModelLeg supplies the model for one case. ScriptedLeg is the only
-// implementation: this package never calls a provider. A live leg is a later,
-// separately gated item.
+// ModelLeg supplies the model for one case. ScriptedLeg (the default) never
+// calls a provider; LiveLeg (live.go) does, and only when an operator asks for
+// it with a key in the environment of that run.
 type ModelLeg interface {
 	// Name is recorded in the report and the fingerprint.
 	Name() string
@@ -175,8 +175,13 @@ func (l *recordingLLM) CompleteTier(ctx context.Context, _ ai.ModelTier, system 
 }
 
 // CompleteTierWithUsage implements ai.LLMUsageClient. A scripted call reports
-// tokens only when the case states them: nothing here estimates a token.
+// tokens only when the case states them; a live call reports the provider's
+// own accounting. Nothing here estimates a token.
 func (l *recordingLLM) CompleteTierWithUsage(ctx context.Context, _ ai.ModelTier, system string, msgs []ai.LLMMessage) (string, string, ai.TokenUsage, error) {
+	if live, ok := l.inner.(usageReporter); ok && l.usage == nil {
+		l.record(system, msgs)
+		return live.providerUsage(ctx, system, msgs)
+	}
 	text, provider, err := l.Complete(ctx, system, msgs)
 	if err != nil || l.usage == nil {
 		return text, provider, ai.TokenUsage{}, err
