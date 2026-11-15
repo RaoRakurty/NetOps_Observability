@@ -119,6 +119,7 @@ import (
 	"netops/backend/internal/irislearning"
 	"netops/backend/internal/irismcp"
 	"netops/backend/internal/irisstream"
+	"netops/backend/internal/iristrigger"
 	"netops/backend/internal/nlquery/modelc"
 	"netops/backend/internal/orgcontext"
 	"netops/backend/internal/owner"
@@ -455,6 +456,13 @@ type server struct {
 	// irisLearning is the controlled learning loop's proposal queue (tracker
 	// 337 N-F5); nil on a file-backend deployment (the routes answer 503).
 	irisLearning irislearning.Store
+	// irisTriggers holds a workspace's triggered Iris investigations (tracker
+	// 337 N-I2): triggers, the workspace switch + daily caps, and every run.
+	// irisTriggerJobs is the bounded run queue two workers drain;
+	// irisTriggerModelCheck overrides the "is a model reachable" check in tests.
+	irisTriggers          iristrigger.Store
+	irisTriggerJobs       chan irisTriggerJob
+	irisTriggerModelCheck func(context.Context, jwtClaims) bool
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -1406,6 +1414,8 @@ func newServer() *server {
 		tenantRunbookSets:    &tenantrunbook.OverlayCache{},
 		tenantRunbookRecheck: &runbookRecheck{},
 		irisLearning:         newIrisLearningStore(),
+		irisTriggers:         newIrisTriggerStore(),
+		irisTriggerJobs:      make(chan irisTriggerJob, irisTriggerQueue),
 		srcAuthority:         newSrcAuthorityStore(),
 		srcAuthorityMetrics:  &srcauthority.Metrics{},
 		irisAliasCache:       newIrisAliasCache(),
@@ -2903,6 +2913,12 @@ func Run() {
 	// saved on another api replica arrives, and a failed read recovers without
 	// a restart (the last good settings stay in force meanwhile).
 	workers.start("platform-alert-route-refresh", func() { srv.platformAlerts.RefreshLoop(ctx, time.Minute) })
+	// Triggered Iris investigations (tracker 337 N-I2): two run workers drain
+	// the bounded queue; the scheduler queues due schedules every minute.
+	for i := 0; i < irisTriggerWorkers; i++ {
+		workers.start("iris-trigger-run", func() { srv.irisTriggerWorker(ctx) })
+	}
+	workers.start("iris-trigger-schedule", func() { srv.irisTriggerScheduleLoop(ctx, time.Minute) })
 	// Iris in Slack / Teams: two answer workers drain the bounded chat queue.
 	if srv.chatops != nil {
 		for i := 0; i < 2; i++ {
@@ -4194,38 +4210,40 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
-	mux.HandleFunc("/api/ai/commands", s.handleAICommands)                // slash-command registry for the "/" menu
-	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)    // typed-fragment suggestions
-	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)                // thumbs up/down (audited)
-	mux.HandleFunc("/api/ai/context", s.handleAIContext)                  // Iris Network context (N-F1): facts, review, history
-	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                 // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
-	mux.HandleFunc("/api/ai/runbooks", s.handleAIRunbooks)                // Iris tenant runbooks/MOPs (N-F2): list, search, create
-	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)               // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
-	mux.HandleFunc("/api/chatops/", s.handleChatopsAPI)                   // Iris in Slack/Teams (N-I6): connections, links, link-code, me
-	mux.HandleFunc("/api/chatops/slack/", s.handleChatopsInbound)         // Slack inbound: JWT-exempt, path token + v0 HMAC
-	mux.HandleFunc("/api/chatops/teams/", s.handleChatopsInbound)         // Teams inbound: JWT-exempt, path token + Bot Framework JWT
-	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority) // Iris: which source wins per device fact (N-F6)
-	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                  // Iris NL: per-tenant entity aliases (N-C2)
-	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                          // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
-	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                // Iris: miss triage by class (model-first point 5)
-	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)               // Iris: review-gated eval candidates
-	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                // Iris learning loop (N-F5): proposals a person decides
-	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)               // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
-	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)   // Iris NL: resolution ladder (N-C2)
-	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)       // Iris NL: question → validated query (N-C5)
-	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)       // Iris NL: validated query → ResultSet (N-C5)
-	mux.HandleFunc("/api/ai/query/", s.handleAIQueryRecord)               // Iris NL: one query + /explain (N-C5)
-	mux.HandleFunc("/api/changes", s.handleChanges)                       // change ledger (N-D3): list, one, diff
-	mux.HandleFunc("/api/changes/", s.handleChanges)                      // /{id} · /{id}/diff
-	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)      // Iris NL: start a conversation (N-C7)
-	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)      // Iris NL: read one · ask in context (N-C7)
-	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                  // Iris NL: recent questions (N-C8)
-	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)         // Iris NL: "that's not what I meant" (N-C8)
-	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)              // Iris AI decision ledger (N-A6): admins, own tenant
-	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)      // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
-	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)           // Iris investigation hypotheses (N-B3): own tenant, by id
-	mux.HandleFunc("/api/ai/investigations", s.handleAIInvestigations)    // Iris read-only investigations (N-I1): own tenant, recent
-	mux.HandleFunc("/api/ai/investigations/", s.handleAIInvestigations)   // Iris read-only investigations (N-I1): one trace by id
+	mux.HandleFunc("/api/ai/commands", s.handleAICommands)                             // slash-command registry for the "/" menu
+	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands)                 // typed-fragment suggestions
+	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)                             // thumbs up/down (audited)
+	mux.HandleFunc("/api/ai/context", s.handleAIContext)                               // Iris Network context (N-F1): facts, review, history
+	mux.HandleFunc("/api/ai/context/", s.handleAIContext)                              // /preview · /{id} · /{id}/{draft,submit,withdraw,approve,reject,rollback,retire}
+	mux.HandleFunc("/api/ai/runbooks", s.handleAIRunbooks)                             // Iris tenant runbooks/MOPs (N-F2): list, search, create
+	mux.HandleFunc("/api/ai/runbooks/", s.handleAIRunbooks)                            // /{id} · /{id}/{draft,check,submit,withdraw,approve,reject,rollback,retire,reprove,links}
+	mux.HandleFunc("/api/chatops/", s.handleChatopsAPI)                                // Iris in Slack/Teams (N-I6): connections, links, link-code, me
+	mux.HandleFunc("/api/chatops/slack/", s.handleChatopsInbound)                      // Slack inbound: JWT-exempt, path token + v0 HMAC
+	mux.HandleFunc("/api/chatops/teams/", s.handleChatopsInbound)                      // Teams inbound: JWT-exempt, path token + Bot Framework JWT
+	mux.HandleFunc("/api/ai/source-authority", s.handleAISourceAuthority)              // Iris: which source wins per device fact (N-F6)
+	mux.HandleFunc("/api/ai/aliases", s.handleAIAliases)                               // Iris NL: per-tenant entity aliases (N-C2)
+	mux.HandleFunc("/api/ai/mcp", s.handleAIMCP)                                       // Iris read-only MCP gateway (N-I5): JSON-RPC over Streamable HTTP, API key with iris:mcp
+	mux.HandleFunc("/api/ai/triage", s.handleAIIrisTriage)                             // Iris: miss triage by class (model-first point 5)
+	mux.HandleFunc("/api/ai/triage/", s.handleAIIrisTriage)                            // Iris: review-gated eval candidates
+	mux.HandleFunc("/api/ai/learning", s.handleAILearning)                             // Iris learning loop (N-F5): proposals a person decides
+	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)                            // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
+	mux.HandleFunc("/api/ai/investigation-triggers", s.handleAIInvestigationTriggers)  // triggered investigations (N-I2): settings, triggers, runs
+	mux.HandleFunc("/api/ai/investigation-triggers/", s.handleAIInvestigationTriggers) // /settings · /runs · /{id}
+	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)                // Iris NL: resolution ladder (N-C2)
+	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)                    // Iris NL: question → validated query (N-C5)
+	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)                    // Iris NL: validated query → ResultSet (N-C5)
+	mux.HandleFunc("/api/ai/query/", s.handleAIQueryRecord)                            // Iris NL: one query + /explain (N-C5)
+	mux.HandleFunc("/api/changes", s.handleChanges)                                    // change ledger (N-D3): list, one, diff
+	mux.HandleFunc("/api/changes/", s.handleChanges)                                   // /{id} · /{id}/diff
+	mux.HandleFunc("/api/ai/conversations", s.handleAIConversations)                   // Iris NL: start a conversation (N-C7)
+	mux.HandleFunc("/api/ai/conversations/", s.handleAIConversation)                   // Iris NL: read one · ask in context (N-C7)
+	mux.HandleFunc("/api/ai/queries", s.handleAIQueries)                               // Iris NL: recent questions (N-C8)
+	mux.HandleFunc("/api/ai/queries/", s.handleAIQueryCorrection)                      // Iris NL: "that's not what I meant" (N-C8)
+	mux.HandleFunc("/api/ai/decisions", s.handleAIDecisions)                           // Iris AI decision ledger (N-A6): admins, own tenant
+	mux.HandleFunc("/api/ai/replay/export/", s.handleAIReplayExport)                   // Iris Incident Replay (N-H2): one correlation as a frozen case, own tenant
+	mux.HandleFunc("/api/ai/hypotheses/", s.handleAIHypotheses)                        // Iris investigation hypotheses (N-B3): own tenant, by id
+	mux.HandleFunc("/api/ai/investigations", s.handleAIInvestigations)                 // Iris read-only investigations (N-I1): own tenant, recent
+	mux.HandleFunc("/api/ai/investigations/", s.handleAIInvestigations)                // Iris read-only investigations (N-I1): one trace by id
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
