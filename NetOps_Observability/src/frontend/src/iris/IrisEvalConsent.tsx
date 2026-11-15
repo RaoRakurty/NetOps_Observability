@@ -62,7 +62,7 @@ export default function IrisEvalConsent() {
     <div data-testid="iris-eval-consent" style={{ ...text14, margin: "6px 0" }}>
       <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}>
         <input type="checkbox" checked={on} disabled={busy} onChange={(e) => void change(e.target.checked)} style={{ fontSize: 14 }} />
-        Share my questions to help test Iris
+        Let my workspace use what I ask to test Iris
       </label>
       <p style={{ ...muted, margin: "2px 0 0" }}>
         Your admin may export them, unnamed, for review. Untick to stop.

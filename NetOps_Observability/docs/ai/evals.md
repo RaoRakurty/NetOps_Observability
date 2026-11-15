@@ -541,8 +541,8 @@ A re-import of the same question (case- and space-insensitive) adds nothing.
 
 **Consented pooling (decision, owner-delegated 2026-11-15).** A colleague's typed
 question is theirs: the question log and the triage view withhold it from everyone
-else. Pooling is offered per person — Iris settings, step 4, "Share my questions to
-help test Iris":
+else. Pooling is offered per person — Iris settings, step 4, "Let my workspace use
+what I ask to test Iris":
 
 - opt-in, **default off**, revocable; nobody can set it for someone else (the API
   takes the person and workspace from the token and refuses a body naming either);

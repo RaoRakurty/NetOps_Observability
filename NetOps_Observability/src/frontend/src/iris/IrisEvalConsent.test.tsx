@@ -23,7 +23,7 @@ describe("IrisEvalConsent", () => {
     get.mockResolvedValue({ consented: false });
     set.mockResolvedValue({ consented: true });
     render(<IrisEvalConsent />);
-    const box = (await screen.findByRole("checkbox", { name: /share my questions/i })) as HTMLInputElement;
+    const box = (await screen.findByRole("checkbox", { name: /use what i ask to test iris/i })) as HTMLInputElement;
     expect(box.checked).toBe(false);
     fireEvent.click(box);
     await waitFor(() => expect(set).toHaveBeenCalledWith(true));
@@ -34,7 +34,7 @@ describe("IrisEvalConsent", () => {
     get.mockResolvedValue({ consented: true });
     set.mockResolvedValue({ consented: false });
     render(<IrisEvalConsent />);
-    const box = (await screen.findByRole("checkbox", { name: /share my questions/i })) as HTMLInputElement;
+    const box = (await screen.findByRole("checkbox", { name: /use what i ask to test iris/i })) as HTMLInputElement;
     expect(box.checked).toBe(true);
     fireEvent.click(box);
     await waitFor(() => expect(set).toHaveBeenCalledWith(false));
@@ -50,7 +50,7 @@ describe("IrisEvalConsent", () => {
   it("an empty answer reads as off, never as on", async () => {
     get.mockResolvedValue({});
     render(<IrisEvalConsent />);
-    const box = (await screen.findByRole("checkbox", { name: /share my questions/i })) as HTMLInputElement;
+    const box = (await screen.findByRole("checkbox", { name: /use what i ask to test iris/i })) as HTMLInputElement;
     expect(box.checked).toBe(false);
   });
 });
