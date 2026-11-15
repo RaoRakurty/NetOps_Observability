@@ -41,12 +41,34 @@ export const STATUS_LABEL: Record<IrisActionRequest["status"], string> = {
   expired: "Expired",
 };
 
+const NOT_AVAILABLE = "Iris actions are not available here.";
+
+/** A partial or older answer must never take the whole Settings panel down:
+ *  every missing field reads as "off / nothing", never as an approve button. */
+export function normalizeActionsView(raw: Partial<IrisActionsView> | null | undefined): IrisActionsView {
+  const r = raw ?? {};
+  const s = r.settings;
+  const available = r.available === true;
+  return {
+    settings: {
+      enabled: s?.enabled === true,
+      kinds: Array.isArray(s?.kinds) ? s.kinds : [],
+      dry_run_only: s?.dry_run_only === true,
+    },
+    available,
+    unavailable_reason: available ? "" : (r.unavailable_reason || NOT_AVAILABLE),
+    kinds: Array.isArray(r.kinds) ? r.kinds : [],
+    requests: Array.isArray(r.requests) ? r.requests : [],
+    open: typeof r.open === "number" ? r.open : 0,
+  };
+}
+
 export default function IrisActions() {
   const [view, setView] = useState<IrisActionsView | null>(null);
   const [loadErr, setLoadErr] = useState("");
   const load = useCallback(async () => {
     try {
-      setView(await api.irisActions());
+      setView(normalizeActionsView(await api.irisActions()));
       setLoadErr("");
     } catch (e) {
       setLoadErr(operatorError(e, "Iris actions could not be loaded."));
@@ -122,25 +144,25 @@ function ActionSettings({ view, onSaved }: { view: IrisActionsView; onSaved: () 
   return (
     <div style={box} aria-label="Action settings">
       <label style={row}>
-        <input type="checkbox" checked={draft.enabled} disabled={!view.available || busy}
+        <input type="checkbox" style={text14} checked={draft.enabled} disabled={!view.available || busy}
           onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))} />
         Iris can propose actions for this workspace
       </label>
       {view.kinds.map((k) => (
         <label key={k.kind} style={{ ...row, marginLeft: 24 }}>
-          <input type="checkbox" checked={draft.kinds.includes(k.kind)} disabled={!draft.enabled || busy}
+          <input type="checkbox" style={text14} checked={draft.kinds.includes(k.kind)} disabled={!draft.enabled || busy}
             onChange={(e) => toggleKind(k.kind, e.target.checked)} />
           {k.label}
         </label>
       ))}
       <label style={{ ...row, marginLeft: 24 }}>
-        <input type="checkbox" checked={draft.dry_run_only} disabled={!draft.enabled || busy}
+        <input type="checkbox" style={text14} checked={draft.dry_run_only} disabled={!draft.enabled || busy}
           onChange={(e) => setDraft((d) => ({ ...d, dry_run_only: e.target.checked }))} />
         Dry runs only — show what would be sent, send nothing
       </label>
       {turningOn && (
         <label style={{ ...row, marginLeft: 24 }}>
-          <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+          <input type="checkbox" style={text14} checked={ack} onChange={(e) => setAck(e.target.checked)} />
           I understand: an approved action is sent to the ticketing system or saved to investigation memory
         </label>
       )}

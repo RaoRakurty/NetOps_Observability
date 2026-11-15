@@ -80,6 +80,15 @@ describe("IrisActions", () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith({ enabled: true, kinds: [], dry_run_only: false, acknowledged: true }));
   });
 
+  it("survives a partial answer: off, nothing waiting, no approve button", async () => {
+    vi.spyOn(api, "irisActions").mockResolvedValue({} as IrisActionsView);
+    render(<IrisActions />);
+    await waitFor(() => expect(screen.getByText("Nothing is waiting.")).toBeTruthy());
+    expect(screen.getByRole("status").textContent).toMatch(/not available here/);
+    expect((screen.getByLabelText("Iris can propose actions for this workspace") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Approve and send" })).toBeNull();
+  });
+
   it("says why when the installation has actions off", async () => {
     vi.spyOn(api, "irisActions").mockResolvedValue(view({ available: false, unavailable_reason: "Iris actions are turned off on this installation", requests: [], open: 0 }));
     render(<IrisActions />);
