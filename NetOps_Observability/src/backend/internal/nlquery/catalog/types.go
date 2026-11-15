@@ -96,12 +96,24 @@ type Metric struct {
 	BaselineOK       bool     `json:"baseline_ok"`
 	// FanoutHint is the expected series per entity (cost estimation).
 	FanoutHint int `json:"fanout_hint"`
-	// Scope is "device_scoped" or "gated:N-B5" (series a scoped tenant cannot
-	// yet see; the validator refuses them for non-cross callers).
-	Scope    string    `json:"scope"`
-	Emitters []Emitter `json:"emitters"`
-	Quality  []string  `json:"quality,omitempty"`
-	Examples []string  `json:"examples,omitempty"`
+	// Scope is one of:
+	//   - "device_scoped": series carry the device/tenant labels the metric
+	//     scope filter binds;
+	//   - "gated:N-B5": platform series with no tenant owner (env-configured
+	//     targets); the validator refuses them for non-cross callers, or swaps
+	//     in TenantEquivalent when one is declared;
+	//   - "tenant_labeled": series stamped with the owning workspace's
+	//     `tenant` label (the DEM prober); read only through the tenant-label
+	//     filter, never the device filter.
+	Scope string `json:"scope"`
+	// TenantEquivalent names the "tenant_labeled" metric a non-cross caller
+	// reads in place of this gated one: the same measurement taken by that
+	// workspace's OWN declared probes (tracker 337 N-B5). Empty = none, and
+	// the metric stays platform-only.
+	TenantEquivalent string    `json:"tenant_equivalent,omitempty"`
+	Emitters         []Emitter `json:"emitters"`
+	Quality          []string  `json:"quality,omitempty"`
+	Examples         []string  `json:"examples,omitempty"`
 	// Superlatives are the words that rank BY this metric when the question
 	// names no metric ("busiest" interfaces → utilization, top first). One
 	// word may belong to several metrics only for disjoint entity types, like

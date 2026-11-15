@@ -1336,6 +1336,18 @@ func (l nlqLookups) Inventory(ctx context.Context, types []string) ([]resolve.Na
 			out = append(out, resolve.Named{Type: "circuit", ID: "circuit:" + c.ID, Names: []string{c.ID, c.Local.Device + " " + c.Local.Interface}})
 		}
 	}
+	if want["probe_target"] {
+		// N-B5: the caller's OWN Digital Experience checks, by the name the
+		// workspace gave them and the host they measure — so "loss to the ERP
+		// check" resolves. The Global view and a hidden workspace own none.
+		checks, err := l.h.ownChecks(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range checks {
+			out = append(out, resolve.Named{Type: "probe_target", ID: "probe:" + t.ID, Names: []string{t.Name, checkHost(t)}})
+		}
+	}
 	if want["application"] {
 		// Application seeding (N-C2): the applications the caller's OWN data
 		// names. Providers are not listed here — a carrier is named through

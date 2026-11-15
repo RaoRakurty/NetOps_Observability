@@ -25,6 +25,11 @@ type template struct {
 	series   func(c tctx) (mql.Expr, error)
 	windowed func(c tctx) (mql.Expr, error)
 	labels   []string // the physical labels a result series is keyed by
+	// tenantLabeled marks a catalog "tenant_labeled" metric: its series carry
+	// the owning workspace's `tenant` label and no device label, so it is read
+	// through TenantLabeledScope (the tenant-label filter), never the device
+	// filter — which would match nothing and read as "no data".
+	tenantLabeled bool
 }
 
 func raw(phys string) func(c tctx) (mql.Expr, error) {
@@ -113,6 +118,7 @@ var (
 	deviceLabels  = []string{"device"}
 	circuitLabels = []string{"circuit", "local_device"}
 	probeLabels   = []string{"dst"}
+	demLabels     = []string{"target"}
 )
 
 // templates are keyed by catalog metric name. A test asserts this key set
@@ -163,6 +169,10 @@ var templates = map[string]template{
 	"probe_loss_pct":     {series: raw("probe_loss_pct"), labels: probeLabels},
 	"probe_pdv_ms":       {series: raw("probe_pdv_ms"), labels: probeLabels},
 	"probe_owd_ms":       {series: raw("probe_owd_ms"), labels: probeLabels},
+	// N-B5: the workspace's own Digital Experience checks — what a scoped
+	// caller reads in place of the platform probe_* series.
+	"dem_probe_latency_ms": {series: raw("dem_probe_latency_ms"), labels: demLabels, tenantLabeled: true},
+	"dem_probe_loss_pct":   {series: raw("dem_probe_loss_pct"), labels: demLabels, tenantLabeled: true},
 }
 
 // aggregate turns a per-step series into one value over the whole window.

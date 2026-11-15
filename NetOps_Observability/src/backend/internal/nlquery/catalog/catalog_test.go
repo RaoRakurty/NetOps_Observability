@@ -46,6 +46,15 @@ func mutate(t *testing.T, f func(m map[string]any)) error {
 
 func first(m map[string]any, key string) map[string]any { return m[key].([]any)[0].(map[string]any) }
 
+func metricNamed(m map[string]any, name string) map[string]any {
+	for _, x := range m["metrics"].([]any) {
+		if mm := x.(map[string]any); mm["name"] == name {
+			return mm
+		}
+	}
+	panic("test fixture: no metric " + name)
+}
+
 func TestParseRejects(t *testing.T) {
 	cases := map[string]func(m map[string]any){
 		"unknown top-level field": func(m map[string]any) { m["tenant"] = "t-a" },
@@ -62,6 +71,24 @@ func TestParseRejects(t *testing.T) {
 		"operator outside set":     func(m map[string]any) { first(m, "metrics")["operators"] = []any{"regex"} },
 		"default agg not allowed":  func(m map[string]any) { first(m, "metrics")["default_agg"] = "sum" },
 		"no emitters":              func(m map[string]any) { first(m, "metrics")["emitters"] = []any{} },
+		// N-B5: a tenant equivalent must be a tenant-labeled metric answering
+		// the same question, and only a gated metric may declare one.
+		"tenant equivalent on a device-scoped metric": func(m map[string]any) {
+			metricNamed(m, "cpu_util_pct")["tenant_equivalent"] = "dem_probe_loss_pct"
+		},
+		"tenant equivalent that does not exist": func(m map[string]any) {
+			metricNamed(m, "probe_rtt_ms")["tenant_equivalent"] = "dem_probe_jitter_ms"
+		},
+		"tenant equivalent that is not tenant-labeled": func(m map[string]any) {
+			metricNamed(m, "probe_rtt_ms")["tenant_equivalent"] = "probe_loss_pct"
+		},
+		"tenant equivalent in another unit": func(m map[string]any) {
+			metricNamed(m, "probe_rtt_ms")["tenant_equivalent"] = "dem_probe_loss_pct"
+		},
+		"tenant equivalent missing an aggregation": func(m map[string]any) {
+			metricNamed(m, "dem_probe_latency_ms")["aggregations"] = []any{"avg", "max"}
+			metricNamed(m, "dem_probe_latency_ms")["default_agg"] = "avg"
+		},
 		"bad id pattern":           func(m map[string]any) { first(m, "entities")["id_pattern"] = "([" },
 		"restricted filterable": func(m map[string]any) {
 			for _, d := range m["dimensions"].([]any) {
