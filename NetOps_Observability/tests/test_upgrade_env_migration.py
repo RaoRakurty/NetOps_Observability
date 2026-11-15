@@ -297,3 +297,80 @@ def test_cli_refuses_to_combine_with_another_mode(cli_tree):
     assert r.returncode == 2
     assert "--migrate-env runs on its own" in r.stderr
     assert (cd / ".env").read_text() == before
+
+
+# ---- tracker 427: pre-#243 inline comments on empty keys are repaired ----
+
+OLD_TEMPLATE_LINES = (
+    "AWS_REGION=                    # e.g. us-east-1\n"
+    "SNS_PHONE_NUMBERS=             # comma-separated E.164 numbers, OR set SNS_TOPIC_ARN\n"
+    "SMTP_HOST=\t# e.g. smtp.example.com:587\n"
+)
+REAL_VALUE_LINE = "JIRA_MIN_SEVERITY=critical     # critical|error|warning|notice|info\n"
+REPAIRED_KEYS = ("AWS_REGION", "SNS_PHONE_NUMBERS", "SMTP_HOST")
+
+
+def _with_old_lines(env_path: Path) -> None:
+    """Replace the template's (now comment-above) keys with the pre-#243 inline form."""
+    keep = [line for line in env_path.read_text().splitlines(keepends=True)
+            if line.split("=", 1)[0] not in REPAIRED_KEYS + ("JIRA_MIN_SEVERITY",)]
+    env_path.write_text("".join(keep) + OLD_TEMPLATE_LINES + REAL_VALUE_LINE)
+
+
+def test_inline_comment_on_an_empty_key_is_moved_above_it(tree, capsys):
+    _, env_path, _ = tree
+    _with_old_lines(env_path)
+    assert install._parse_env(env_path)["AWS_REGION"].startswith("#"), "precondition: the bug"
+    install.migrate_env_for_upgrade(env_path)
+    text = env_path.read_text()
+    env = install._parse_env(env_path)
+    for key in REPAIRED_KEYS:
+        assert env[key] == "", f"{key} still reads a comment as its value"
+    assert "# e.g. us-east-1\nAWS_REGION=\n" in text
+    assert "# e.g. smtp.example.com:587\nSMTP_HOST=\n" in text
+    # A real value followed by a comment is never touched.
+    assert REAL_VALUE_LINE in text
+    moved_line = next(l for l in capsys.readouterr().out.splitlines() if "moved the inline comment" in l)
+    assert all(k in moved_line for k in REPAIRED_KEYS)
+    assert "us-east-1" not in moved_line, "a comment's text was printed; names only"
+
+
+def test_repair_is_idempotent(tree):
+    _, env_path, _ = tree
+    _with_old_lines(env_path)
+    install.migrate_env_for_upgrade(env_path)
+    once = env_path.read_text()
+    install.migrate_env_for_upgrade(env_path)
+    assert env_path.read_text() == once, "a second run changed the .env"
+
+
+def test_repair_backs_up_first_and_keeps_the_file_owner_only(tree):
+    cd, env_path, _ = tree
+    _with_old_lines(env_path)
+    before = env_path.read_text()
+    owner = (env_path.stat().st_uid, env_path.stat().st_gid)
+    install.migrate_env_for_upgrade(env_path)
+    st = env_path.stat()
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    assert (st.st_uid, st.st_gid) == owner
+    assert any(b.read_text() == before for b in _backups(cd)), "no backup of the pre-repair .env"
+
+
+def test_repair_function_touches_only_the_empty_inline_shape():
+    text = ("A=   # note\n"
+            "B=value   # note\n"
+            "C=#literal-hash-value\n"
+            "D =  # spaced key, not ours\n"
+            "E=\n"
+            "# plain comment\n"
+            "F=\t#\n")
+    repaired, moved = install._repair_inline_comment_values(text)
+    assert moved == ["A", "F"]
+    assert repaired == ("# note\nA=\n"
+                        "B=value   # note\n"
+                        "C=#literal-hash-value\n"
+                        "D =  # spaced key, not ours\n"
+                        "E=\n"
+                        "# plain comment\n"
+                        "#\nF=\n")
+    assert install._repair_inline_comment_values(repaired) == (repaired, [])
