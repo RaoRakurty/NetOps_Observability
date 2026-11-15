@@ -9,7 +9,7 @@ sidebar_position: 40
 
 # Built-in alert rules
 
-Correlix ships 154 alert rules and evaluates them continuously against the metric store. They are defined in `src/config/rules.yaml` (device and interface conditions) and `src/config/rules-scale-slo.yaml` (platform self-health). Edit either file and restart `vmalert` to change them.
+Correlix ships 201 alert rules and evaluates them continuously against the metric store. They are defined in `src/config/rules.yaml` (device and interface conditions) and `src/config/rules-scale-slo.yaml` (platform self-health). Edit either file and restart `vmalert` to change them.
 
 ## Delivery tiers
 
@@ -21,7 +21,7 @@ A rule's `tier` label decides where a firing alert goes:
 | (none) | Every other firing rule. | Pushed at default priority. |
 | `heartbeat` | A synthetic always-firing rule that proves the delivery path works. | Never routed to a person. |
 
-### The 9 paging conditions
+### The 13 paging conditions
 
 These are the conditions that wake somebody up. Each one means telemetry is being produced and is not arriving, or is arriving and not being processed.
 
@@ -31,9 +31,13 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `CorrelationLagGrowing` | correlation | Correlation lag is GROWING (+&#123;&#123; $value &#125;&#125; in 10m) while the consumer group still has members — the engine is joined but not draining |
 | `RouterConsumerDead` | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; has ZERO consumers — vector-router is not draining it; logs/flows/traps on that lane are accumulating on the bus and reaching no store |
 | `RouterConsumerLagGrowing` | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; lag is GROWING (+&#123;&#123; $value &#125;&#125; in 10m) with a consumer still joined — vector-router is joined but not draining this lane |
+| `RouterConsumerWedged` | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; partition &#123;&#123; $labels.topic &#125;&#125;/&#123;&#123; $labels.partition &#125;&#125; is JOINED but NOT CONSUMING — records keep arriving, nothing has been committed for 15 minutes, &#123;&#123; $value &#125;&#125; unread |
 | `IngestPipelineSilent` | ingest | Ingest funnel is SILENT: vector-aggregator emitted zero events in 15m while the collectors can still reach devices — telemetry is being produced and is not arriving |
+| `NMSIngestSilent` | ingest | NMS ingest is SILENT: &#123;&#123; $value &#125;&#125; controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m) |
+| `MonitoredSourcesSilent` | ingest | Every monitored device is SILENT: none can be polled and no syslog or trap has arrived from any device for 30m |
 | `ClickHouseWritesRejected` | clickhouse | ClickHouse REJECTED &#123;&#123; $value &#125;&#125; write batch(es) in 15m — analytics rows are being refused, not retried |
 | `AlertDeliveryBroken` | platform | ALERT DELIVERY IS BROKEN: no AlertingHeartbeat has reached the api webhook for over 15m — every other alert in this stack is going nowhere |
+| `PlatformAlertsReachNobody` | platform | PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere |
 | `CorrConsumerNotRunning` | correlation | Correlation engine reports its REQUIRED subscription is NOT live (corr_consumer_running == 0) — the engine is up and consuming nothing |
 | `CorrConsumerRestartLoop` | correlation | Correlation consumer is in a RESTART LOOP: &#123;&#123; $value &#125;&#125; supervision rounds ended in failure in 10m on &#123;&#123; $labels.instance &#125;&#125; |
 
@@ -80,10 +84,12 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `OpticTxPowerLow` | warning |  | &#123;&#123; $labels.device &#125;&#125; if&#123;&#123; $labels.index &#125;&#125; optic Tx &#123;&#123; $value &#125;&#125;dBm low (failing laser) |
 | `OpticTemperatureHigh` | warning |  | &#123;&#123; $labels.device &#125;&#125; if&#123;&#123; $labels.index &#125;&#125; transceiver &#123;&#123; $value &#125;&#125;C |
 | `OpticBiasDrift` | info |  | &#123;&#123; $labels.device &#125;&#125; if&#123;&#123; $labels.index &#125;&#125; optic bias drift |
-| `BGPSessionDown` | critical |  | &#123;&#123; $labels.device &#125;&#125; BGP peer &#123;&#123; $labels.peer &#125;&#125; not established |
+| `BGPSessionDown` | critical |  | &#123;&#123; $labels.device &#125;&#125; BGP peer &#123;&#123; $labels.peer &#125;&#125;&#123;&#123; if $labels.vrf &#125;&#125; in &#123;&#123; $labels.vrf &#125;&#125;&#123;&#123; end &#125;&#125; not established |
 | `BGPPeerFlapping` | warning |  | &#123;&#123; $labels.device &#125;&#125; BGP peer &#123;&#123; $labels.peer &#125;&#125; flapping |
 | `BGPPrefixDrop` | critical |  | &#123;&#123; $labels.device &#125;&#125; BGP peer &#123;&#123; $labels.peer &#125;&#125; dropped &gt;1000 prefixes |
 | `BGPAllPeersDown` | critical |  | &#123;&#123; $labels.device &#125;&#125; has zero established BGP peers (isolation) |
+| `OMPPeerDown` | warning |  | &#123;&#123; $labels.device &#125;&#125; OMP session to &#123;&#123; $labels.type &#125;&#125; &#123;&#123; $labels.peer &#125;&#125; is not up |
+| `OMPNoControllers` | critical |  | &#123;&#123; $labels.device &#125;&#125; has no OMP session up to any SD-WAN controller |
 | `OSPFAdjacencyDown` | critical |  | &#123;&#123; $labels.device &#125;&#125; OSPF neighbor &#123;&#123; $labels.neighbor &#125;&#125; not full |
 | `OSPFAdjacencyFlapping` | warning |  | &#123;&#123; $labels.device &#125;&#125; OSPF neighbor &#123;&#123; $labels.neighbor &#125;&#125; flapping |
 | `ISISAdjacencyDown` | critical |  | &#123;&#123; $labels.device &#125;&#125; IS-IS adjacency to &#123;&#123; $labels.isis_neighbor &#125;&#125; on &#123;&#123; $labels.ifName &#125;&#125; not up |
@@ -108,6 +114,8 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `PortAuthFailure` | warning |  | &#123;&#123; $labels.device &#125;&#125; if&#123;&#123; $labels.index &#125;&#125; 802.1X failures |
 | `TLSServedCertExpiringSoon` | warning |  | &#123;&#123; $labels.endpoint &#125;&#125; is SERVING a TLS certificate that expires in under 24h — the loading service needs a reload/restart to pick up the re-minted SVID |
 | `TLSServedCertExpiryCritical` | critical |  | &#123;&#123; $labels.endpoint &#125;&#125; serves a certificate expiring in under 6h — clients of this endpoint WILL start failing; reload/restart it now |
+| `TLSClientCertExpiringSoon` | warning |  | &#123;&#123; $labels.identity &#125;&#125; is presenting a client certificate that expires in under 48h — it loaded its SVID at start and has not picked up the re-mint; run scripts/rotate-tls-services.sh or restart that service |
+| `TLSClientCertExpiryCritical` | critical |  | &#123;&#123; $labels.identity &#125;&#125; presents a client certificate expiring in under 12h — its mTLS calls into the api (alert delivery, if this is vmalert) WILL fail; restart it now |
 | `TLSPeerProbeFailed` | warning |  | served-certificate probe of &#123;&#123; $labels.endpoint &#125;&#125; has captured nothing for 20m — endpoint down, not serving TLS, or unreachable; its expiry is UNWATCHED while this fires |
 | `TLSApiCertExpiringSoon` | warning |  | the api's own served certificate expires in under 24h — the in-process reloader should have rotated it; investigate the reissue loop |
 | `TLSReissueLoopSuspect` | warning |  | the api's own cert shows under 72h left, below the TTL/2=84h floor the re-issue loop maintains — the mint loop is dead or wedged; every service's SVID stops refreshing from here (check api logs for 'SVID re-issue') |
@@ -115,12 +123,23 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `SecurityExceptionStale` | warning |  | declared plaintext exception &#123;&#123; $labels.edge &#125;&#125; was accepted over 90 days ago and never revisited — re-review it and bump its accepted date in the transport inventory (or retire the exception) |
 | `TLSHandshakeErrorsSustained` | warning |  | the api listener is failing TLS handshakes at &#123;&#123; $value \| printf \"%.2f\" &#125;&#125;/s sustained — some peer is presenting broken or expired material in a retry loop (the 2026-08-05 nginx-expired-SVID signature) |
 | `TLSIdentityRejected` | critical |  | the api rejected &#123;&#123; $value \| printf \"%.0f\" &#125;&#125; mTLS peer(s) in 30m whose chain was TRUSTED but whose identity is not allowed — a valid mesh credential is knocking from the wrong workload; investigate before widening any allowlist |
+| `LicenceExpiringSoon` | warning |  | the installed Correlix licence expires in &#123;&#123; $value &#125;&#125; day(s) — renew it before then; on expiry the commercial ceilings fall back to Community, nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected |
+| `LicenceInGrace` | warning |  | the Correlix licence has expired and the deployment is running on its grace period — the commercial ceilings are still honoured for now, but when grace ends they fall back to Community; nothing is deleted and nothing is hidden, and isolation, permissions and sign-in are unaffected; install a renewed licence before grace runs out |
+| `LicenceExpired` | warning |  | the Correlix licence has lapsed past its grace period — the commercial ceilings have fallen back to Community, so creating or configuring paid capability is now refused; everything already here stays visible and exportable, everything over a ceiling is listed, and nothing has been disabled or deleted; isolation, permissions and sign-in are unaffected; install a renewed licence to lift the ceilings again |
+| `LicenceCeilingApproaching` | warning |  | Correlix is using &#123;&#123; $value \| humanizePercentage &#125;&#125; of the licensed &#123;&#123; $labels.ceiling &#125;&#125; allowance — nothing is limited yet; this is the point to plan an expansion rather than discover it mid-incident |
+| `LicenceCeilingReached` | warning |  | Correlix is at &#123;&#123; $value \| humanizePercentage &#125;&#125; of the licensed &#123;&#123; $labels.ceiling &#125;&#125; allowance — on your tier this ceiling does not block, so going past it is allowed and recorded for true-up; nothing will be disabled |
+| `LicenceOverage` | warning |  | &#123;&#123; $value &#125;&#125; monitored device(s) above the licensed allowance — every one of them is still being collected from and nothing has been blocked, disabled or deleted; the overage is recorded for true-up |
+| `MeteringSnapshotStale` | warning |  | no usage snapshot has been recorded in over 3 hours — the daily usage roll-up is missing hours, so a usage report for today will understate what was in use; nothing about collection, alerting or isolation is affected |
+| `MeteringNeverRecorded` | warning |  | no usage snapshot has EVER been recorded on this installation — usage reports will be empty; check that the metering store is writable |
+| `MeteringSnapshotsFailing` | warning |  | usage snapshots are failing — hours are missing from the daily usage roll-up even though some are still landing; a usage report for the period will understate what was in use |
+| `NMSIntegrationDown` | warning |  | NMS integration &#123;&#123; $labels.integration_id &#125;&#125; (&#123;&#123; $labels.vendor &#125;&#125;, tenant &#123;&#123; $labels.tenant_id &#125;&#125;) is not delivering: 3+ failed poll cycles in a row or its circuit breaker is open |
 | `CollectorDown` | critical |  | Collector &#123;&#123; $labels.collector &#125;&#125; is down |
 | `CollectorTelemetryMissing` | critical |  | No collector telemetry is reaching the metric store — every collector alert in this group is blind |
 | `CollectorAllTargetsUnreachable` | critical |  | Collector &#123;&#123; $labels.collector &#125;&#125; cannot reach any target |
 | `CollectorPartialReachability` | warning |  | Collector &#123;&#123; $labels.collector &#125;&#125; reaching &lt;80% of targets |
 | `CollectorPollSlow` | warning |  | Collector &#123;&#123; $labels.collector &#125;&#125; poll &#123;&#123; $value &#125;&#125;ms (slow) |
 | `NoSamplesIngested` | warning |  | Collector &#123;&#123; $labels.collector &#125;&#125; produced 0 samples |
+| `ProtocolDiagCollectorPanics` | warning |  | a show-output parser panicked while collecting protocol diagnostics — the api survived and the device was marked failed, but that device returns no diagnostics until the parser is fixed |
 | `StorageBackendDown` | critical |  | Stack backend &#123;&#123; $labels.job &#125;&#125; is DOWN (scrape target unreachable) — writes to it are failing |
 | `StorageExporterAbsent` | warning |  | No scrape target for stack backend &#123;&#123; $labels.job &#125;&#125; — StorageBackendDown is BLIND for it |
 | `ContainerMetricsMissing` | critical | stack | cAdvisor is reporting &#123;&#123; $value &#125;&#125; containers — the container OOM/restart/memory alerts below are matching nothing and cannot fire |
@@ -138,6 +157,8 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `CHFailedQueriesRising` | warning | clickhouse | ClickHouse failing &#123;&#123; $value &#125;&#125; queries/15m — check system.query_log exceptions (read paths or ingest) |
 | `CorrVersionChurnUndamped` | warning | correlation | Correlation persisting &#123;&#123; $value &#125;&#125; versions/30m with ZERO damped writes — the #100 write damper is not suppressing storm churn |
 | `CorrCurrentProjectionFailing` | critical | correlation | corr_current projection lost &#123;&#123; $value &#125;&#125; write(s)/10m — Command Center may be serving STALE incidents; check correlation logs (corr_current projection write FAILED) and ClickHouse health |
+| `CorrCurrentStateDriftPersisting` | warning | correlation | corr_current has called &#123;&#123; $value &#125;&#125; closed object(s) open for 3 h despite repair — Command Center overcounts open incidents; check corr-current-reconcile in the api log |
+| `CorrCurrentReconcileFailing` | warning | correlation | corr_current reconciler: &#123;&#123; $value &#125;&#125; failed step(s) in 3 h — drift is not being repaired; check corr-current-reconcile in the api log and ClickHouse health |
 | `CorrTenantWriteAmpOverBudget` | warning | correlation | Tenant &#123;&#123; $labels.tenant_id &#125;&#125; persisted &#123;&#123; $value &#125;&#125; correlation versions in one write-amp window — storm exceeding write budget; see correlation-storm runbook (chaos fixture? damping regression? real multi-entity incident?) |
 | `CorrHeartbeatTouchNotEngaging` | warning | correlation | Correlation heartbeat-touch path not engaging — zero heartbeat_touch outcomes in 6h while damping is active; corr_objects version growth is back at the pre-P3 rate (check CORR_HEARTBEAT_TOUCH_ONLY) |
 | `CorrDeadLettersRising` | warning | correlation | Correlation dead-letters rising (&#123;&#123; $value &#125;&#125; in 15m) — malformed events are being parked; check correlation logs |
@@ -154,13 +175,15 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `LogIngestRateDegraded` | warning | ingest | Log indexing rate has been under half its 6h MEDIAN baseline for 45m (&#123;&#123; $value &#125;&#125; docs/15m) — sustained partial ingest loss, not a stall |
 | `LogIngestStalled` | critical | ingest | OpenSearch indexed ZERO documents in 15m — the log pipeline has stopped |
 | `OpenSearchStatsMissing` | critical | storage | The OpenSearch doc_status lane is gone — document-rejection alerting is BLIND (check vector-aggregator's opensearch_indexing_stats source) |
-| `OpenSearchClusterNotGreen` | warning | storage | OpenSearch cluster is &#123;&#123; $labels.status_text &#125;&#125; (&#123;&#123; $value &#125;&#125;) — a lane is missing a template, or a shard cannot be allocated |
+| `OpenSearchClusterNotGreen` | warning | storage | OpenSearch cluster status &#123;&#123; $value &#125;&#125; (0 green · 1 yellow · 2 red · 3 unknown) — a lane is missing a template, or a shard cannot be allocated |
 | `OpenSearchUnassignedShards` | warning | storage | &#123;&#123; $value &#125;&#125; unassigned shards — on a single-node cluster this is almost always number_of_replicas &gt; 0 on a new index pattern |
 | `OpenSearchShardCountHigh` | warning | storage | &#123;&#123; $value &#125;&#125; shards/node — heap exhaustion risk; consolidate to weekly or aliased per-tenant indices, and verify ISM deletes every lane |
 | `OpenSearchShardCountCritical` | critical | storage | &#123;&#123; $value &#125;&#125; shards/node — approaching cluster.max_shards_per_node (1000), where index creation is REJECTED and ingest stops with no error |
 | `VectorDeadLetters` | warning | ingest | &#123;&#123; $value &#125;&#125; events dead-lettered via &#123;&#123; $labels.component_id &#125;&#125; in 15m — a producer or transform is failing |
 | `TenantEnrichmentMissRateJumped` | warning | ingest | Tenant enrichment miss rate on &#123;&#123; $labels.topic &#125;&#125; jumped to &#123;&#123; $value \| humanizePercentage &#125;&#125; above its 6h baseline |
 | `TenantAttributionLaneMissing` | warning | ingest | The tenant-attribution counter is gone — enrichment-miss alerting is BLIND (check vector-router's tenant_attribution_metric transform) |
+| `IngestSenderAddressMasked` | warning | ingest | &#123;&#123; $labels.topic &#125;&#125;: devices' sender addresses are being lost to the Docker bridge gateway — their events cannot be attributed to a device or tenant |
+| `SyslogBadFramesRising` | warning | ingest | Syslog frames the platform cannot read are rising (&#123;&#123; $labels.reason &#125;&#125;) |
 | `VectorQuarantineSealFailures` | critical | ingest | quarantine seal stage &#123;&#123; $labels.component_id &#125;&#125; is failing — unattributable events are being DROPPED (fail-closed, INV-F11-06); check the router's sealing key delivery and the vector-router error log |
 | `QuarantineGrowthAbnormal` | warning | ingest | quarantine intake over the last hour is far above its 6h baseline — tenant attribution is failing at scale (stale/empty device_tenant.csv, or a fleet of unknown senders); triage via GET /api/quarantine |
 | `QuarantineAttributionStalled` | warning | ingest | the oldest quarantined event has been unattributed for over 7 days — assign its device to a tenant and POST /api/quarantine/reattribute before retention deletes it |
@@ -171,6 +194,10 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `DiskHeadroomLow` | warning | host | Only &#123;&#123; $value \| humanizePercentage &#125;&#125; free on the shared store filesystem — act now, not at flood stage |
 | `DiskWillFillIn24h` | critical | host | Shared filesystem trending to FULL within 24h — OpenSearch flood stage (95%) sets every index read-only and stops ingest |
 | `DiskFloodStageImminent` | critical | host | Under &#123;&#123; $value \| humanizePercentage &#125;&#125; free — OpenSearch flood stage is at 5%. Every index goes read-only and ingestion stops SILENTLY. |
+| `ExperienceAvailabilityBelowBudget` | warning |  | Experience target &#123;&#123; $labels.target &#125;&#125; (&#123;&#123; $labels.kind &#125;&#125;) is at &#123;&#123; $value \| printf \"%.2f\" &#125;&#125;% availability, under its budget |
+| `ExperienceLatencyOverBudget` | warning |  | Experience target &#123;&#123; $labels.target &#125;&#125; (&#123;&#123; $labels.kind &#125;&#125;) p95 is &#123;&#123; $value \| printf \"%.0f\" &#125;&#125; ms, over its declared budget |
+| `ExperiencePathUnstable` | warning |  | The measured path to experience target &#123;&#123; $labels.target &#125;&#125; changed &#123;&#123; $value &#125;&#125; times in 30m |
+| `ExperienceProberNotReporting` | warning |  | No experience measurement has arrived for 15m, though this tenant was being measured today |
 | `CorrelationRcaLagBudgetWarning` | warning | correlation | RCA pipeline is ~&#123;&#123; $value &#125;&#125; events behind (≈1+ min of incident-detection staleness at the measured ~1k evt/s drain rate) |
 | `CorrelationRcaLagBudgetBreached` | critical | correlation | RCA staleness SLO breached: correlation is &#123;&#123; $value &#125;&#125; events behind (≥5 min at ~1k evt/s). Storage stays current; RCA does not. |
 | `VMSlowInsertRatioHigh` | warning | metrics | VictoriaMetrics slow-insert ratio &#123;&#123; $value \| humanizePercentage &#125;&#125; (&gt;5% for 15m) — active series exceed the memory fast path |
@@ -183,15 +210,39 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `CorrelationEventLoopStalling` | warning | correlation | Correlation event loop stalled &#123;&#123; $value &#125;&#125; time(s) in 15m on &#123;&#123; $labels.instance &#125;&#125; — check corr_loop_lag_max_ms for the worst drift |
 | `CorrelationRebalanceChurn` | warning | correlation | Correlation rebalance churn on &#123;&#123; $labels.instance &#125;&#125;: &#123;&#123; $value &#125;&#125; revoke-hook &#123;&#123; $labels.outcome &#125;&#125; outcomes in 30m |
 | `CorrelationWindowStaysCold` | warning | correlation | Correlation replica &#123;&#123; $labels.instance &#125;&#125; has stayed in cold_window for 30m — RCA for its tenants is persistently thin |
-| `OpenSearchClusterRed` | critical | storage | OpenSearch cluster status is &#123;&#123; $labels.status_text &#125;&#125; — primary shard(s) unavailable, log/event writes are failing |
+| `OpenSearchClusterRed` | critical | storage | OpenSearch cluster status is RED (&#123;&#123; $value &#125;&#125;) — primary shard(s) unavailable, log/event writes are failing |
 | `CorrelationConsumerDead` | critical | correlation | Correlation engine is NOT consuming: the netops-correlation consumer group has ZERO members — RCA has stopped and the containers all read healthy |
 | `CorrelationLagGrowing` | critical | correlation | Correlation lag is GROWING (+&#123;&#123; $value &#125;&#125; in 10m) while the consumer group still has members — the engine is joined but not draining |
 | `RouterConsumerDead` | critical | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; has ZERO consumers — vector-router is not draining it; logs/flows/traps on that lane are accumulating on the bus and reaching no store |
 | `RouterConsumerLagGrowing` | critical | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; lag is GROWING (+&#123;&#123; $value &#125;&#125; in 10m) with a consumer still joined — vector-router is joined but not draining this lane |
+| `RouterConsumerWedged` | critical | bus | Router lane &#123;&#123; $labels.consumergroup &#125;&#125; partition &#123;&#123; $labels.topic &#125;&#125;/&#123;&#123; $labels.partition &#125;&#125; is JOINED but NOT CONSUMING — records keep arriving, nothing has been committed for 15 minutes, &#123;&#123; $value &#125;&#125; unread |
 | `IngestPipelineSilent` | critical | ingest | Ingest funnel is SILENT: vector-aggregator emitted zero events in 15m while the collectors can still reach devices — telemetry is being produced and is not arriving |
+| `NMSIngestSilent` | critical | ingest | NMS ingest is SILENT: &#123;&#123; $value &#125;&#125; controller integration(s) that delivered before have delivered nothing for 3 poll intervals (at least 15m) |
+| `MonitoredSourcesSilent` | critical | ingest | Every monitored device is SILENT: none can be polled and no syslog or trap has arrived from any device for 30m |
 | `ClickHouseWritesRejected` | critical | clickhouse | ClickHouse REJECTED &#123;&#123; $value &#125;&#125; write batch(es) in 15m — analytics rows are being refused, not retried |
 | `AlertingHeartbeat` | info | platform | vmalert is evaluating rules and its notifier is delivering them (synthetic heartbeat — not an incident, never routed to a human) |
 | `AlertDeliveryBroken` | critical | platform | ALERT DELIVERY IS BROKEN: no AlertingHeartbeat has reached the api webhook for over 15m — every other alert in this stack is going nowhere |
+| `PlatformAlertsReachNobody` | critical | platform | PLATFORM ALERTS REACH NOBODY: no channel receives page-tier platform alerts (Platform → Platform alerts), or the saved settings cannot be read — the stack's own pages go nowhere |
 | `CorrConsumerNotRunning` | critical | correlation | Correlation engine reports its REQUIRED subscription is NOT live (corr_consumer_running == 0) — the engine is up and consuming nothing |
 | `CorrConsumerRestartLoop` | critical | correlation | Correlation consumer is in a RESTART LOOP: &#123;&#123; $value &#125;&#125; supervision rounds ended in failure in 10m on &#123;&#123; $labels.instance &#125;&#125; |
 | `CorrEvidenceLaneNotGrounded` | warning | correlation | Evidence lane &#123;&#123; $labels.topic &#125;&#125; is NOT grounded (reason: &#123;&#123; $labels.reason &#125;&#125;) — correlation is running without it |
+| `CorrRequiredLaneUnauthorized` | warning | correlation | Correlation cannot subscribe to REQUIRED lane &#123;&#123; $labels.topic &#125;&#125; (reason: &#123;&#123; $labels.reason &#125;&#125;) — this one lane is blocking the ENTIRE subscription |
+| `OpenSearchSnapshotNotRestorable` | warning | storage | Snapshot repository &#123;&#123; $labels.repo &#125;&#125; is NOT restorable — the search tier's backups cannot be restored from |
+| `OpenSearchSnapshotRestorabilityStale` | warning | storage | Restorability of snapshot repository &#123;&#123; $labels.repo &#125;&#125; has not been re-proven in over 36h — the green verdict is stale, not current |
+| `OpenSearchSnapshotProbeDisabled` | warning | storage | The restore probe for snapshot repository &#123;&#123; $labels.repo &#125;&#125; is DISABLED — nothing is proving the backups can be restored |
+| `BackupRestoreDrillFailed` | warning | storage | The last bundle restore drill FAILED — the backup artifact does not restore |
+| `BackupRestoreDrillMissed` | warning | storage | No bundle restore drill has run in over 7 days — the restore proof is stale, not current |
+| `SecurityEpisodeStateErrors` | warning | security | The security lane could not read or save its finding-episode state — correlation is not being told about new or changed security findings |
+| `SecurityLaneTransitionsStalled` | warning | security | The security lane is publishing verdicts but neither telling correlation about changes nor recognising unchanged findings — change tracking has stopped |
+| `IrisUnsupportedClaimRateHigh` | warning | ai | Iris grounding guards are removing unsupported content from more than 20% of answers |
+| `IrisProviderUsageInvisible` | warning | ai | Most Iris model calls report no token usage — AI spend is not visible |
+| `IrisScorecardNotSampling` | warning | ai | The Iris scorecard has not sampled the correlation store in over 30 minutes |
+| `IrisToolEvidenceDropped` | warning | ai | Iris tool &#123;&#123; $labels.tool &#125;&#125; is dropping more than 10% of its results |
+| `CredentialRotationIncomplete` | warning | platform | vmauth still accepts the PREVIOUS credential &#123;&#123; $labels.username &#125;&#125; more than an hour into a rotation |
+| `ParseLaneStuckUnparsed` | warning | ingest | the &#123;&#123; $labels.lane &#125;&#125; lane has been almost entirely unparsed for over an hour (&#123;&#123; $value \| humanizePercentage &#125;&#125;) |
+| `ParseUnparsedShareRose` | warning | ingest | the unparsed share of the &#123;&#123; $labels.lane &#125;&#125; lane rose sharply against its previous 6 hours |
+| `EngineIgnoredHighSeverityLinesRose` | warning | ingest | far more lines that state a high severity are reaching nothing in the correlation engine than over the last 6 hours |
+| `FlowExporterWithoutInterfaceNames` | warning | ingest | &#123;&#123; $value &#125;&#125; flow exporter(s) have sent flows for 2 hours with no interface name |
+| `TrapSourceUnattributedRatioHigh` | warning | ingest | &#123;&#123; $value \| humanizePercentage &#125;&#125; of SNMP traps reach no device |
+| `TrapTitleFallbackRatioRising` | warning | ingest | &#123;&#123; $value \| humanizePercentage &#125;&#125; of SNMP traps have no readable title, up from their usual share |
+| `NMSInterfaceBridgeEmpty` | warning | ingest | the controller answers its interface lists, but none of them reached the interface bridge |

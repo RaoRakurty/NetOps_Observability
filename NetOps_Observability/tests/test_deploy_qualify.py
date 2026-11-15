@@ -823,3 +823,112 @@ def test_q2c_is_documented_and_reads_the_broker_not_vector() -> None:
     assert "vector_kafka_consumer_lag" not in block
     assert "kafka_consumergroup_current_offset" in block
     assert "kafka_topic_partition_current_offset" in block
+
+
+# --- Q11: monitored sources reporting (2026-11-15) -------------------------
+#
+# The lab gateway was down for 24 h on 2026-11-14: no device telemetry arrived
+# on any lane and this gate still said QUALIFIED, because every other check
+# proves the pipeline CAN move data, not that data is arriving. These tests run
+# the shipped judge (sources_judge) on the shapes that matter.
+
+NOW = 1794725000  # 2026-11-15 06:43 UTC
+
+
+def _sources(dev: str, *lanes: str, window: str = "15") -> tuple[str, str]:
+    src = _script()
+    start = src.index("# fmt_utc: epoch seconds")
+    end = src.index("# q11_lane: one lane's spec")
+    helpers = ["set -euo pipefail"]
+    for name in ("is_num() {", "num_gt() {"):
+        helpers.append(next(l for l in src.splitlines() if l.startswith(name)))
+    body = "\n".join(helpers) + "\n" + src[start:end]
+    args = " ".join(f'"{a}"' for a in (str(NOW), window, dev, *lanes))
+    out = _run_bash(body + f"\nsources_judge {args}")
+    verdict, _, detail = out.partition("\t")
+    return verdict, detail
+
+
+def test_q11_devices_reporting_passes() -> None:
+    verdict, detail = _sources("8", f"polling|1|{NOW - 30}", f"syslog|1|{NOW - 60}",
+                               f"traps|1|{NOW - 120}", f"flows|1|{NOW - 60}")
+    assert verdict == "PASS", detail
+    assert "polling, syslog, traps, flows" in detail
+    assert "quiet lanes" not in detail
+
+
+def test_q11_one_lane_is_enough_and_the_quiet_ones_are_named() -> None:
+    # A device that only sends syslog is reporting; the gate must not demand
+    # every lane, but it must still say which ones are quiet.
+    verdict, detail = _sources("3", f"polling|0|{NOW - 7200}", f"syslog|1|{NOW - 60}",
+                               "traps|0|")
+    assert verdict == "PASS", detail
+    assert "on: syslog" in detail
+    assert "polling silent since" in detail and "2h 0m ago" in detail
+    assert "traps: nothing in the last 48 h" in detail
+
+
+def test_q11_everything_silent_at_once_fails_and_points_at_the_path() -> None:
+    # The 2026-11-14 shape: every lane stopped within the same minute a day ago.
+    stop = NOW - 87000
+    verdict, detail = _sources("8", f"polling|0|{stop}", f"syslog|0|{stop + 20}",
+                               f"traps|0|{stop + 40}", f"flows|0|{stop}")
+    assert verdict == "FAIL", detail
+    assert "8 monitored device(s)" in detail and "last 15m" in detail
+    assert "every lane stopped at the same time" in detail
+    assert "gateway, route, firewall" in detail and "not the pipeline" in detail
+    assert "1d 0h ago" in detail
+
+
+def test_q11_lanes_dying_at_different_times_fail_without_the_path_hint() -> None:
+    # Syslog died yesterday, polling an hour ago: that is not one path going
+    # away, so the gate must not guess "gateway".
+    verdict, detail = _sources("4", f"polling|0|{NOW - 3600}", f"syslog|0|{NOW - 90000}")
+    assert verdict == "FAIL", detail
+    assert "every lane stopped" not in detail
+
+
+def test_q11_no_devices_is_not_a_failure() -> None:
+    verdict, detail = _sources("0", "polling|0|", "syslog|0|")
+    assert verdict == "NODEV", detail
+    assert "fresh install" in detail
+
+
+def test_q11_an_unreadable_store_is_unanswered_not_passed_or_failed() -> None:
+    verdict, detail = _sources("8", "polling|?|", "syslog|?|", "traps|?|")
+    assert verdict == "SKIP", detail
+    assert "could be read" in detail
+    verdict, detail = _sources("netops_monitored_devices_total: query transport failed",
+                               f"syslog|1|{NOW}")
+    assert verdict == "SKIP", detail
+    assert "could not be read" in detail
+
+
+def test_q11_an_unreadable_lane_is_never_counted_as_silent() -> None:
+    verdict, detail = _sources("8", f"polling|0|{NOW - 600}", "flows|?|")
+    assert verdict == "FAIL", detail
+    assert "could not read: flows" in detail
+    assert "flows silent" not in detail
+
+
+def test_q11_is_required_and_no_devices_is_only_advisory() -> None:
+    src = _script()
+    block = src[src.index('Q11_LABEL="Q11'):src.index("# --- Q8 (ADVISORY)")]
+    assert 'PASS)  record PASS REQUIRED "$Q11_LABEL"' in block
+    assert 'FAIL)  record FAIL REQUIRED "$Q11_LABEL"' in block
+    assert 'NODEV) record SKIP ADVISORY "$Q11_LABEL"' in block
+    assert 'record SKIP REQUIRED "$Q11_LABEL" "$VICTORIA_SKIP_REASON"' in block
+    usage = src[src.index("usage() {"):src.index("TIMEOUT_SEC=300")]
+    assert "Q11 the MONITORED DEVICES are reporting" in usage
+    assert "DQ_SOURCES_WINDOW" in usage
+
+
+def test_q11_reads_lanes_where_data_enters_not_where_it_is_replayed() -> None:
+    # A consumer draining a backlog must never look like fresh device traffic,
+    # so the lanes read the aggregator's sources and goflow2's producer offsets.
+    src = _script()
+    block = src[src.index("probe_q11() {"):src.index("# --- Q8 (ADVISORY)")]
+    assert 'component_id=\\"syslog_in\\"' in block
+    assert 'component_id=\\"trap_in\\"' in block
+    assert 'topic="netops.flows.raw"' in block
+    assert "collector_targets_reachable" in block
