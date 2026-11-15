@@ -70,6 +70,17 @@ type Scope interface {
 	ProviderMapped(ctx context.Context, providerID string) (bool, error)
 }
 
+// CheckScope is the OPTIONAL validator seam for tracker 337 N-B5: a scoped
+// caller's own Digital Experience checks. A Scope without it keeps every
+// gated metric refused for a workspace user, exactly as before.
+type CheckScope interface {
+	// OwnsChecks reports whether the caller owns a check for EVERY key (a
+	// probe_target id with its "probe:" prefix stripped: a host, name or check
+	// id). With no keys it reports whether the caller owns any check at all.
+	// Another workspace's check answers false, like one that does not exist.
+	OwnsChecks(ctx context.Context, keys []string) (bool, error)
+}
+
 // metricGroupable mirrors plan.GroupableMetricDims (a test pins the two equal;
 // validate cannot import plan).
 var metricGroupable = map[string]bool{"site": true, "device": true, "provider": true}
@@ -357,9 +368,33 @@ func (c *checker) metric() {
 		return
 	}
 	if m.Scope == "gated:N-B5" && !c.sc.CrossTenant() {
-		// Never an empty result: that would read as "no loss".
-		c.fail("metric", CodeScopeUnavailable, q.Metric, "this measurement is not yet visible to a workspace-scoped user")
-		return
+		// N-B5: the platform's own probe series have no workspace owner, but a
+		// workspace that declared its own checks measures the same thing. When
+		// every target the question names is one of the caller's OWN checks,
+		// read those instead — the catalog loader guarantees the equivalent has
+		// this metric's unit, entity types and aggregations. A platform target
+		// the workspace does not check itself (8.8.8.8) stays unavailable.
+		eq, ok := c.cat.Metric(m.TenantEquivalent)
+		owned := false
+		if cs, isCS := c.sc.(CheckScope); isCS && ok && m.TenantEquivalent != "" {
+			var keys []string
+			for _, r := range q.Refs {
+				if r.Type == "probe_target" {
+					keys = append(keys, r.ID[strings.IndexByte(r.ID, ':')+1:])
+				}
+			}
+			var err error
+			if owned, err = cs.OwnsChecks(c.ctx, keys); err != nil {
+				c.fail("metric", CodeScopeUnavailable, q.Metric, "your workspace's checks could not be read")
+				return
+			}
+		}
+		if !owned {
+			// Never an empty result: that would read as "no loss".
+			c.fail("metric", CodeScopeUnavailable, q.Metric, "this measurement is not yet visible to a workspace-scoped user")
+			return
+		}
+		q.Metric, m = eq.Name, eq
 	}
 	if q.Agg == "" {
 		q.Agg = m.DefaultAgg

@@ -2943,6 +2943,128 @@ func (h *nlqScope) MetricRange(ctx context.Context, e mql.Expr, from, to time.Ti
 }
 
 func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]plan.Sample, bool, error) {
+	return h.instantWith(ctx, e, at, maxSeries, h.s.metricsScopeFiltersFor(h.claims))
+}
+
+// TenantMetricRange / TenantMetricInstant are plan.TenantLabeledScope (tracker
+// 337 N-B5): the workspace's own Digital Experience check series, read through
+// the tenant-LABEL filter those series carry — the device filter above would
+// match none of them and answer "no data".
+func (h *nlqScope) TenantMetricRange(ctx context.Context, e mql.Expr, from, to time.Time, step time.Duration, maxSeries int) ([]plan.Series, bool, error) {
+	return h.s.vmRangeSeries(ctx, e.String(), from, to, step, h.checkFilters(), maxSeries)
+}
+
+func (h *nlqScope) TenantMetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]plan.Sample, bool, error) {
+	return h.instantWith(ctx, e, at, maxSeries, h.checkFilters())
+}
+
+// checkFilters scopes a check-series read. A workspace caller reads only its
+// own `tenant`-labeled series (dem.TenantFilter fails closed to a match-nothing
+// selector); a workspace hidden from this operator reads nothing; the Global
+// view reads every workspace's checks except the tenants hidden from it.
+func (h *nlqScope) checkFilters() []string {
+	tenant, cross := principalTenant(h.claims)
+	exclude, deny := h.s.operatorTelemetryRestriction(h.claims, tenant, cross)
+	switch {
+	case deny:
+		return dem.TenantFilter("", false)
+	case !cross:
+		return dem.TenantFilter(tenant, false)
+	case len(exclude) > 0:
+		return []string{`{tenant!~"` + regexAlternation(exclude) + `"}`}
+	}
+	return nil
+}
+
+// ProbeTargets is plan.TenantLabeledScope: the caller's OWN declared checks a
+// key names (host, name or id). Only a single workspace owns checks, so the
+// Global view and a hidden workspace own none here.
+func (h *nlqScope) ProbeTargets(ctx context.Context, keys []string) ([]plan.ProbeTargetRef, error) {
+	targets, err := h.ownChecks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []plan.ProbeTargetRef
+	for _, t := range targets {
+		if len(keys) == 0 || checkMatchesAny(t, keys) {
+			out = append(out, plan.ProbeTargetRef{ID: t.ID, Name: t.Name, Host: checkHost(t)})
+		}
+	}
+	return out, nil
+}
+
+// OwnsChecks is validate.CheckScope: true when the caller owns a check for
+// every key (or, with no keys, owns any check).
+func (h *nlqScope) OwnsChecks(ctx context.Context, keys []string) (bool, error) {
+	targets, err := h.ownChecks(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(keys) == 0 {
+		return len(targets) > 0, nil
+	}
+	for _, k := range keys {
+		found := false
+		for _, t := range targets {
+			if checkMatchesAny(t, []string{k}) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// ownChecks lists the caller's workspace checks. The store is tenant-keyed and
+// each row's tenant is re-checked as defence in depth.
+func (h *nlqScope) ownChecks(ctx context.Context) ([]dem.Target, error) {
+	tenant, cross := principalTenant(h.claims)
+	if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) || h.s.demTargets == nil {
+		return nil, nil
+	}
+	if _, deny := h.s.operatorTelemetryRestriction(h.claims, tenant, cross); deny {
+		return nil, nil
+	}
+	all, err := h.s.demTargets.List(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0:0]
+	for _, t := range all {
+		if strings.EqualFold(t.TenantID, tenant) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// checkHost is the destination a check measures, as a probe_target names it:
+// the host of an http(s) URL, else the host part of host[:port].
+func checkHost(t dem.Target) string {
+	h := strings.TrimSpace(t.Host)
+	if u, err := url.Parse(h); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return host
+	}
+	return h
+}
+
+func checkMatchesAny(t dem.Target, keys []string) bool {
+	host := checkHost(t)
+	for _, k := range keys {
+		if k != "" && (strings.EqualFold(k, host) || strings.EqualFold(k, t.Name) || k == t.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *nlqScope) instantWith(ctx context.Context, e mql.Expr, at time.Time, maxSeries int, filters []string) ([]plan.Sample, bool, error) {
 	query := e.String()
 	if !at.IsZero() {
 		// vmInstantScoped evaluates "now"; an explicit evaluation time is sent
@@ -2956,7 +3078,7 @@ func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, 
 			query = shifted.String()
 		}
 	}
-	raw, err := h.s.vmInstantScoped(ctx, query, h.s.metricsScopeFiltersFor(h.claims))
+	raw, err := h.s.vmInstantScoped(ctx, query, filters)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3351,7 +3473,13 @@ func (h *nlqScope) Visible(ctx context.Context, ref nlqast.EntityRef) (bool, err
 		}
 		return err == nil, err
 	case "probe_target":
-		return cross, nil // probe series are unscoped until N-B5 (the metric is gated too)
+		// The Global view may name any probe destination (the platform probe
+		// series are its own). A workspace user may name only its OWN checks
+		// (N-B5) — another workspace's check reads as one that does not exist.
+		if cross {
+			return true, nil
+		}
+		return h.OwnsChecks(ctx, []string{id})
 	case "provider":
 		// A carrier is named by the caller's own alias or by a catalog seed
 		// (public carrier names — naming one reveals nothing about anyone).

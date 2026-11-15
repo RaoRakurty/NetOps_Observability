@@ -1494,7 +1494,8 @@
      "file": "src/backend/collectors/stamp.go",
      "contains": "probe_rtt_ms{dst=%q"
     }
-   ]
+   ],
+   "tenant_equivalent": "dem_probe_latency_ms"
   },
   {
    "name": "probe_loss_pct",
@@ -1541,7 +1542,8 @@
      "contains": "probe_loss_pct{dst=%q"
     }
    ],
-   "default_threshold": 1.0
+   "default_threshold": 1.0,
+   "tenant_equivalent": "dem_probe_loss_pct"
   },
   {
    "name": "probe_pdv_ms",
@@ -1627,6 +1629,94 @@
      "contains": "probe_owd_ms{dst=%q"
     }
    ]
+  },
+  {
+   "name": "dem_probe_latency_ms",
+   "description": "Round-trip time measured by the workspace's own Digital Experience checks (reached only as the workspace equivalent of probe_rtt_ms)",
+   "unit": "ms",
+   "aliases": [],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "labels": {
+    "probe_target": "target"
+   },
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "tenant_labeled",
+   "physical_metrics": [
+    "dem_probe_latency_ms"
+   ],
+   "aggregations": [
+    "p95",
+    "avg",
+    "max"
+   ],
+   "default_agg": "p95",
+   "emitters": [
+    {
+     "file": "src/backend/internal/dem/stats.go",
+     "contains": "MetricLatencyMs       = \"dem_probe_latency_ms\""
+    },
+    {
+     "file": "src/backend/collectors/dem.go",
+     "contains": "dem.MetricLatencyMs, lb, o.res.rttMs"
+    }
+   ]
+  },
+  {
+   "name": "dem_probe_loss_pct",
+   "description": "Packet loss measured by the workspace's own Digital Experience checks (reached only as the workspace equivalent of probe_loss_pct)",
+   "unit": "percent",
+   "aliases": [],
+   "entity_types": [
+    "probe_target"
+   ],
+   "backend": "victoriametrics",
+   "labels": {
+    "probe_target": "target"
+   },
+   "operators": [
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "between",
+    "above_baseline",
+    "increased_by"
+   ],
+   "baseline_ok": true,
+   "fanout_hint": 1,
+   "scope": "tenant_labeled",
+   "physical_metrics": [
+    "dem_probe_loss_pct"
+   ],
+   "aggregations": [
+    "avg",
+    "max"
+   ],
+   "default_agg": "avg",
+   "emitters": [
+    {
+     "file": "src/backend/internal/dem/stats.go",
+     "contains": "MetricLossPct         = \"dem_probe_loss_pct\""
+    },
+    {
+     "file": "src/backend/collectors/dem.go",
+     "contains": "dem.MetricLossPct, lb, loss"
+    }
+   ],
+   "default_threshold": 1.0
   }
  ],
  "dimensions": [

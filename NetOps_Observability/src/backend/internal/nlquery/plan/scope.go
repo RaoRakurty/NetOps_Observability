@@ -77,6 +77,27 @@ type ReachabilityScope interface {
 	DeviceReachability(ctx context.Context, ids []string) (map[string]string, error)
 }
 
+// TenantLabeledScope is the OPTIONAL Scope seam for catalog "tenant_labeled"
+// metrics (tracker 337 N-B5): series the owning workspace's prober stamps with
+// a `tenant` label and no device label — the Digital Experience checks. The
+// root binds both reads to the caller's tenant-label filter (fail-closed: a
+// caller with no usable tenant reads a match-nothing selector), so the planner
+// never widens or narrows ownership; it only narrows WHICH of the caller's own
+// checks. A Scope without it cannot answer these metrics, and says so.
+type TenantLabeledScope interface {
+	TenantMetricRange(ctx context.Context, e mql.Expr, from, to time.Time, step time.Duration, maxSeries int) ([]Series, bool, error)
+	TenantMetricInstant(ctx context.Context, e mql.Expr, at time.Time, maxSeries int) ([]Sample, bool, error)
+	// ProbeTargets returns the caller's OWN declared checks that each key
+	// names (a key matches a check's host, name or id, case-insensitively);
+	// nil keys = every check the caller owns. Another workspace's check is
+	// never returned — it is indistinguishable from one that does not exist.
+	ProbeTargets(ctx context.Context, keys []string) ([]ProbeTargetRef, error)
+}
+
+// ProbeTargetRef is one of the caller's declared checks; ID is the value the
+// series carry in their `target` label.
+type ProbeTargetRef struct{ ID, Name, Host string }
+
 // CircuitFilter selects visible circuits, with DeviceFilter's semantics:
 // AND across fields, OR within one, empty = unconstrained.
 type CircuitFilter struct {
