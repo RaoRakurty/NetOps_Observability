@@ -19,10 +19,21 @@ import { useMemo, useState } from "react";
 import DataTable, { type Column } from "../components/DataTable";
 import { fmtDateTime, parseTs } from "../lib/time";
 import { cellText, highlightFor, rowId, type PresentationPlan, type ResultSet, type Row } from "./presentation";
-import { automationText, beforeAfterShort, beforeOnsetText, changeSourceText, isPerIncidentRow, relationText, str } from "./changes";
+import {
+  automationText,
+  beforeAfterShort,
+  beforeOnsetText,
+  changeSourceText,
+  changeTypeText,
+  diffableChangeId,
+  isPerIncidentRow,
+  relationText,
+  str,
+} from "./changes";
 import { accentForHighlight } from "./IrisTimeline";
 import { SafeLink } from "./links";
 import ChangeDrawer from "./ChangeDrawer";
+import ChangeDiff from "../pages/experience/ChangeDiff";
 
 type Keyed = { key: string; row: Row };
 
@@ -99,7 +110,13 @@ export default function ChangeTable({
     cols.push(
       { key: "actor", header: "Actor", sortable: true, text: ({ row }) => str(row, "actor"), render: ({ row }) => textCell(row.actor) },
       { key: "source", header: "Source", text: ({ row }) => changeSourceText(row), render: ({ row }) => changeSourceText(row) },
-      { key: "type", header: "Change type", sortable: true, text: ({ row }) => str(row, "type"), render: ({ row }) => textCell(row.type) },
+      {
+        key: "type",
+        header: "Change type",
+        sortable: true,
+        text: ({ row }) => changeTypeText(row),
+        render: ({ row }) => changeTypeText(row) || <span className="iris-muted">Not recorded</span>,
+      },
       {
         key: "site",
         header: "Site",
@@ -151,6 +168,7 @@ export default function ChangeTable({
   }
 
   const height = (n: number) => Math.min(40 + n * 28, 380);
+  const singleDiffId = !perIncident && rows.length === 1 ? diffableChangeId(rows[0]) : "";
 
   return (
     <>
@@ -186,6 +204,14 @@ export default function ChangeTable({
           onRowClick={(k) => setOpen(k.row)}
           empty="No changes in this window."
         />
+      )}
+      {/* One change ("Show exactly what he changed"): what it did, read from
+          the change ledger under the caller's own scope, right in the answer. */}
+      {singleDiffId && (
+        <section aria-label="What this change did">
+          <h4 className="iris-h">What changed</h4>
+          <ChangeDiff id={singleDiffId} initiallyOpen />
+        </section>
       )}
       {open && <ChangeDrawer row={open} result={result} onClose={() => setOpen(null)} />}
     </>
