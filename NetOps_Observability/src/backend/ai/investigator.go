@@ -580,6 +580,10 @@ func (o *Orchestrator) Investigate(ctx context.Context, p Principal, question st
 	} else {
 		tr.Status = InvestigationStatusInconclusive
 	}
+	// Gate 1 of Iris's approval-gated writes (N-I4): only a CONCLUDED
+	// investigation on a resolved case may propose one, and a proposal only
+	// waits for a different person — nothing is sent here.
+	o.proposeFromInvestigation(ctx, p, tr, &ans)
 	return finish(ans)
 }
 

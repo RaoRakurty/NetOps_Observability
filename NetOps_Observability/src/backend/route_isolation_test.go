@@ -126,6 +126,12 @@ var routeIsolationLedger = map[string]string{
 	// walk is ignored — iris_learning_isolation_test.go.
 	"/api/ai/learning":  "scoped",
 	"/api/ai/learning/": "scoped",
+	// Iris approval-gated writes (N-I4): requests and settings are the token
+	// workspace's; a foreign id → 404 for every verb; an as_tenant walk is
+	// ignored; the all-tenants view must choose a workspace; the note goes only
+	// to the case's own linked ticket — iris_actions_isolation_test.go.
+	"/api/ai/actions":  "scoped",
+	"/api/ai/actions/": "scoped",
 	// Source authority (N-F6): the order is the token tenant's (RLS
 	// iris_source_authority + store tenant key), no id in the path, a Global view
 	// must choose a workspace — source_authority_isolation_test.go.
