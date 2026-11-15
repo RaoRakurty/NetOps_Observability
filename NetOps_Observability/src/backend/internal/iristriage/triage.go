@@ -191,6 +191,9 @@ type Candidate struct {
 	Kind      string `json:"correction_kind,omitempty"` // the operator's correction kind
 	Note      string `json:"note,omitempty"`            // the operator's note, clipped
 	Corrected string `json:"corrected_query_hash,omitempty"`
+	// Pooled marks a question from a colleague who opted in to sharing their
+	// Iris questions with the workspace's eval set (N-H3). Never names them.
+	Pooled bool `json:"pooled,omitempty"`
 }
 
 // CandidateFile is the export: a header that says it must be reviewed, and

@@ -153,6 +153,10 @@ var routeIsolationLedger = map[string]string{
 	// no text). iris_triage_isolation_test.go.
 	"/api/ai/triage":  "scoped",
 	"/api/ai/triage/": "scoped",
+	// Iris eval consent (N-H3): the caller's OWN opt-in to pooling, keyed by
+	// (tenant, principal) from the token (iris_eval_consent, FORCE-RLS); no
+	// body field may name another person or tenant. iris_eval_consent_test.go.
+	"/api/ai/eval-consent": "selfScoped",
 	// Investigation hypotheses (N-B3): held under the decision id in the
 	// asker's tenant from the token (irishypo store keyed by tenant first);
 	// another tenant, an as_tenant walk and a malformed id all get 404; the

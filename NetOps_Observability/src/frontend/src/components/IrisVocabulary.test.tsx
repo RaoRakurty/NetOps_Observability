@@ -24,6 +24,8 @@ const editIrisChip = vi.fn();
 // Step 6 (the miss-triage panel, #241) loads on mount; without this mock it
 // throws and its own error alert is what findByRole("alert") finds first.
 const irisTriage = vi.fn();
+// Step 4's sharing choice (N-H3) loads on mount too.
+const irisEvalConsent = vi.fn();
 vi.mock("../services/api", () => ({
   api: {
     irisAliases: (...a: unknown[]) => irisAliases(...a),
@@ -39,6 +41,7 @@ vi.mock("../services/api", () => ({
     correctIrisQuery: (...a: unknown[]) => correctIrisQuery(...a),
     editIrisChip: (...a: unknown[]) => editIrisChip(...a),
     irisTriage: (...a: unknown[]) => irisTriage(...a),
+    irisEvalConsent: (...a: unknown[]) => irisEvalConsent(...a),
   },
 }));
 
@@ -55,6 +58,8 @@ beforeEach(() => {
   aiDecisions.mockReset();
   irisTriage.mockReset();
   irisTriage.mockResolvedValue({ scope: "tenant", window: "the last 30 days", classes: [] });
+  irisEvalConsent.mockReset();
+  irisEvalConsent.mockResolvedValue({ consented: false });
   aiDecisions.mockResolvedValue({ decisions: [], scope: "tenant", event_types: [] });
   irisAliases.mockResolvedValue({ aliases: [{ entity_type: "device", entity_id: "device:fw-hq-01", alias: "HQ firewall" }], max: 2000 });
 });

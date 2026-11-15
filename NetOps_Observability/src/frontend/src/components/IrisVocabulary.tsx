@@ -27,6 +27,7 @@ import IrisMissTriage from "../iris/IrisMissTriage";
 import IrisChatOps from "../iris/IrisChatOps";
 import IrisTriggers from "../iris/IrisTriggers";
 import IrisActions from "../iris/IrisActions";
+import IrisEvalConsent from "../iris/IrisEvalConsent";
 import DecisionLedger from "../iris/DecisionLedger";
 
 // The entity kinds an alias can point at (catalog entities minus incidents and
@@ -515,6 +516,7 @@ export default function IrisVocabulary() {
       <div style={stepHead}>4. Recent questions</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Your last questions and what Iris made of them. Mark any that went wrong.</p>
       <RecentQuestions refreshKey={asked} />
+      <IrisEvalConsent />
 
       <div style={stepHead}>5. How Iris decided</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Every Iris answer, step by step: the plan, each policy check and tool run, and the model that answered. Workspace admins only.</p>
