@@ -9,7 +9,11 @@ vi.mock("../../services/api", () => ({ api: { changeDiff: (...a: unknown[]) => c
 
 import ChangeDiff from "./ChangeDiff";
 
-beforeEach(() => changeDiff.mockReset());
+// Braces matter: a function RETURNED from beforeEach is run as a teardown, and
+// mockReset() returns the mock — which would call it once more after the test.
+beforeEach(() => {
+  changeDiff.mockReset();
+});
 afterEach(() => cleanup());
 
 describe("ChangeDiff", () => {
@@ -44,5 +48,23 @@ describe("ChangeDiff", () => {
     fireEvent.click(screen.getByText("What changed"));
     const alert = await screen.findByRole("alert");
     expect(alert).not.toHaveTextContent("172.18.0.9");
+  });
+
+  it("reads once on arrival when opened by Iris, and the button still hides it", async () => {
+    changeDiff.mockResolvedValue({ change_id: "c4", kind: "values", before: "a", after: "b" });
+    render(<ChangeDiff id="c4" initiallyOpen />);
+    expect(await screen.findByText("a → b")).toBeInTheDocument();
+    expect(changeDiff).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText("Hide"));
+    expect(screen.queryByText("a → b")).toBeNull();
+    fireEvent.click(screen.getByText("What changed"));
+    expect(screen.getByText("a → b")).toBeInTheDocument();
+    expect(changeDiff).toHaveBeenCalledTimes(1); // no second read
+  });
+
+  it("says another workspace's change (404) is not in yours, never a diff", async () => {
+    changeDiff.mockRejectedValue(new Error("404 Not Found: not found"));
+    render(<ChangeDiff id="chg-b" initiallyOpen />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("This change is not in your workspace, or it no longer exists.");
   });
 });
