@@ -2372,6 +2372,25 @@ export interface ChangeDiffResponse {
   has_diff?: boolean;
 }
 
+/** GET /api/changes/{id} — one change-ledger record (internal/changeapi View). */
+export interface ChangeRecord {
+  id: string;
+  type: string;
+  event_at: string;
+  actor?: string;
+  automation?: boolean;
+  object: string;
+  object_kind?: string;
+  site?: string;
+  app?: string;
+  summary: string;
+  source_system: string;
+  ticket_ref?: string;
+  has_diff: boolean;
+  before?: string;
+  after?: string;
+}
+
 export interface IrisAlias {
   entity_type: string;
   entity_id: string;
@@ -8582,6 +8601,8 @@ export const api = {
   // a configuration change as the redacted unified diff of its two captured
   // versions, any other change as its redacted before/after.
   changeDiff: (id: string) => request<ChangeDiffResponse>(`/api/changes/${encodeURIComponent(id)}/diff`),
+  /** One ledger change (redacted values). Another tenant's id answers 404. */
+  change: (id: string) => request<ChangeRecord>(`/api/changes/${encodeURIComponent(id)}`),
   demChanges: (opts: DemChangeQuery = {}) =>
     request<DemChangesResponse>(`/api/dem/changes${demChangeParams(opts)}`),
   /** Record a change event. The owning tenant is stamped from the token. */
