@@ -114,6 +114,7 @@ import (
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
 	"netops/backend/internal/featureflags"
+	"netops/backend/internal/irisaction"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisglossary"
 	"netops/backend/internal/irislearning"
@@ -463,6 +464,11 @@ type server struct {
 	irisTriggers          iristrigger.Store
 	irisTriggerJobs       chan irisTriggerJob
 	irisTriggerModelCheck func(context.Context, jwtClaims) bool
+	// irisActions is Iris's approval gate for writes (tracker 337 N-I4): a
+	// note on the incident's ITSM ticket and a finding saved to investigation
+	// memory, each run only after a DIFFERENT person approves. nil on a
+	// file-backend deployment (the routes answer 503, Iris proposes nothing).
+	irisActions *irisaction.Service
 	// srcAuthority is the per-tenant source-authority order (tracker 337
 	// N-F6); nil on a file-backend deployment (Iris uses the platform
 	// default; changes answer 503).
@@ -1580,15 +1586,16 @@ func newServer() *server {
 	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)
 	srv.irisPending = ai.NewPendingInvestigations() // concluded-but-unjudged buffer (in memory, bounded, never persisted)
 	// IRIS-MEMORY-END
-	srv.applications = newApplicationStore()      // Application Identification registry (#81 P0)
-	srv.appCatalog = newAppCatalogHolder()        // Application Identification IP→app resolver (#81 P1)
-	srv.ngfw = newNgfwAppResolver()               // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
-	srv.appOverrides = newAppCatalogStore()       // Application Identification operator-defined overrides (#81 P1c)
-	srv.cloud = newCloudStore()                   // Cloud App Observability inventory (#81 P3A)
-	srv.bizServices = newBusinessServiceStore()   // Business Service mapping + manual overrides (migration 0024)
-	srv.cloudApp = newCloudAppResolver(srv.cloud) // Cloud identity-map → appid bridge (#81 P3F+1)
-	srv.pathGraph = newPathGraphStore()           // Service Path Graph storage (contract v1); ingester starts in main()
-	srv.remotePaths = newRemotePathStore()        // remote-vantage path pushes (the LAN vantage's transport)
+	srv.irisActions = srv.newIrisActions(newIrisActionStore()) // Iris approval-gated writes (N-I4); nil without Postgres
+	srv.applications = newApplicationStore()                   // Application Identification registry (#81 P0)
+	srv.appCatalog = newAppCatalogHolder()                     // Application Identification IP→app resolver (#81 P1)
+	srv.ngfw = newNgfwAppResolver()                            // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
+	srv.appOverrides = newAppCatalogStore()                    // Application Identification operator-defined overrides (#81 P1c)
+	srv.cloud = newCloudStore()                                // Cloud App Observability inventory (#81 P3A)
+	srv.bizServices = newBusinessServiceStore()                // Business Service mapping + manual overrides (migration 0024)
+	srv.cloudApp = newCloudAppResolver(srv.cloud)              // Cloud identity-map → appid bridge (#81 P3F+1)
+	srv.pathGraph = newPathGraphStore()                        // Service Path Graph storage (contract v1); ingester starts in main()
+	srv.remotePaths = newRemotePathStore()                     // remote-vantage path pushes (the LAN vantage's transport)
 	if n, errs := srv.appCatalog.Reload(); srv.appCatalog.FeedsDir() != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.FeedsDir(), len(errs))
 	}
@@ -4229,6 +4236,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/learning/", s.handleAILearning)                            // /refresh · /{id} · /{id}/{adopt,approve,dismiss}
 	mux.HandleFunc("/api/ai/investigation-triggers", s.handleAIInvestigationTriggers)  // triggered investigations (N-I2): settings, triggers, runs
 	mux.HandleFunc("/api/ai/investigation-triggers/", s.handleAIInvestigationTriggers) // /settings · /runs · /{id}
+	mux.HandleFunc("/api/ai/actions", s.handleAIActions)                               // Iris approval-gated writes (N-I4): the workspace's requests + settings
+	mux.HandleFunc("/api/ai/actions/", s.handleAIActions)                              // /settings · /{id} · /{id}/{approve,reject} — a different person decides
 	mux.HandleFunc("/api/ai/entities/resolve", s.handleAIEntityResolve)                // Iris NL: resolution ladder (N-C2)
 	mux.HandleFunc("/api/ai/query/compile", s.handleAIQueryCompile)                    // Iris NL: question → validated query (N-C5)
 	mux.HandleFunc("/api/ai/query/execute", s.handleAIQueryExecute)                    // Iris NL: validated query → ResultSet (N-C5)

@@ -15,6 +15,7 @@ import (
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
 	"netops/backend/internal/entitlement"
+	"netops/backend/internal/irisaction"
 )
 
 // ---- the AI add-on gate (owner 2026-11-12/13) ----------------------------------
@@ -102,6 +103,42 @@ func (s *server) aiNetProbeGate(claims jwtClaims) ai.NetProbeGate {
 		return off("this workspace has not turned active probes on (Iris settings)")
 	}
 	return ai.NetProbeGate{Allow: true}
+}
+
+// aiActionsSwitchOn is the console-only "Iris actions" kill switch (N-I4).
+func (s *server) aiActionsSwitchOn() bool { return s.features.Enabled(aientitlement.SwitchActions) }
+
+// aiActionEnv is the policy environment for Iris's approval-gated writes in
+// one workspace, read NOW (a switch turned off after a proposal stops its
+// approval): the platform half — the AI add-on, models and investigations on
+// AND the actions kill switch on — and the workspace's own settings.
+func (s *server) aiActionEnv(tenant string) irisaction.Env {
+	env := irisaction.Env{Settings: s.aiActionSettings(tenant)}
+	switch {
+	case s == nil:
+		env.PlatformReason = "Iris actions are not available"
+	case !s.aiInvestigationsPlatformOn():
+		env.PlatformReason = "AI investigations are off on this installation, so Iris proposes no action"
+	case !s.aiActionsSwitchOn():
+		env.PlatformReason = "Iris actions are turned off on this installation (Features page: Iris actions)"
+	default:
+		env.Platform = true
+	}
+	return env
+}
+
+// aiActionSettings reads a workspace's own action settings; unknown kinds in
+// the stored record are dropped (fail closed).
+func (s *server) aiActionSettings(tenant string) irisaction.Settings {
+	if s == nil || s.aiTenantCfg == nil {
+		return irisaction.Settings{Kinds: []irisaction.Kind{}}
+	}
+	a := s.aiTenantCfg.ActionsFor(tenant)
+	out := irisaction.Settings{Enabled: a.Enabled, DryRunOnly: a.DryRunOnly}
+	for _, k := range a.Kinds {
+		out.Kinds = append(out.Kinds, irisaction.Kind(k))
+	}
+	return out.Normalized()
 }
 
 // errProbesAckRequired refuses turning active probes on without the explicit

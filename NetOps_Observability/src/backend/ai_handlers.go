@@ -27,6 +27,7 @@ import (
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/incident"
 	"netops/backend/internal/incidentfp"
+	"netops/backend/internal/irisaction"
 	"netops/backend/internal/iriscache"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irishypo"
@@ -421,6 +422,9 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		// investigation's incident or device (N-F2), from the token's tenant.
 		InvestigateAllowed: s.agentLoopEligible(claims),
 		RunbooksFor:        s.aiRunbooksFor(claims),
+		// Iris's approval-gated writes (N-I4): proposed only at the end of a
+		// concluded investigation, each waiting for a different person.
+		ProposeActions: s.aiProposeActions(claims),
 		// Production scorecard (tracker 337 N-A3): counts, enums and durations
 		// only — nothing tenant- or entity-identifying crosses this seam.
 		Score: s.aiScoreSink(),
@@ -4822,6 +4826,304 @@ func (s *server) irisLearningInputs(ctx context.Context, tenant string) (irislea
 		in.Aliases = s.nlqAliases.List(tenant, false)
 	}
 	return in, nil
+}
+
+// ---- Iris approval-gated writes (tracker 337 N-I4) ---------------------------
+//
+// /api/ai/actions serves the workspace's requests and its own settings; the
+// proposal step runs at the end of a concluded investigation (ai.ProposeActions).
+// Two kinds only — a note on the case's linked ITSM ticket and Iris's finding
+// saved to investigation memory — each run only after a DIFFERENT person
+// approves the exact payload. Device writes are not a kind. Gates: the AI
+// add-on + investigations (ai.investigate), the console kill switch
+// IRIS_AI_ACTIONS, the workspace's own toggle and kind allowlist.
+
+// newIrisActionStore: Postgres (RLS) or nothing — an approval queue that
+// silently vanished on a restart would lose who approved what.
+func newIrisActionStore() irisaction.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return irisaction.NewPGStore(ps.DB())
+	}
+	return nil
+}
+
+// newIrisActions builds the gate over a store and registers the two executors.
+// A nil store disables the feature (the routes answer 503, nothing is proposed).
+func (s *server) newIrisActions(st irisaction.Store) *irisaction.Service {
+	if st == nil {
+		return nil
+	}
+	svc := irisaction.NewService(st)
+	if err := irisaction.Register[irisaction.ITSMNote](svc, irisaction.KindITSMNote, newIrisTicketNoteExec(s)); err != nil {
+		logError("ai.actions", "ticket-note executor not registered", errf(err))
+	}
+	if err := irisaction.Register[irisaction.InvestigationNote](svc, irisaction.KindInvestigationNote, irisMemoryNoteExec{srv: s}); err != nil {
+		logError("ai.actions", "investigation-note executor not registered", errf(err))
+	}
+	return svc
+}
+
+// irisMemoryNoteExec is the investigation_note executor: Iris's concluded
+// finding written into the case's investigation memory, outcome "unverified"
+// until an operator rates it. It lands only after a different person
+// approved it — so a running investigation can never read back its own
+// not-yet-verified conclusion as settled fact.
+type irisMemoryNoteExec struct{ srv *server }
+
+func (e irisMemoryNoteExec) Describe(p irisaction.InvestigationNote) (string, string) {
+	return "Save Iris's finding for this case to investigation memory", p.Verdict
+}
+
+func (e irisMemoryNoteExec) DryRun(context.Context, string, irisaction.InvestigationNote) irisaction.DryRun {
+	if e.srv == nil || e.srv.irisMemory == nil {
+		return irisaction.DryRun{Description: "Investigation memory is not available on this deployment.", Problem: "nowhere to save it"}
+	}
+	return irisaction.DryRun{OK: true,
+		Description: "Saves one finding for this case. Later investigations read it as prior context, marked unverified until someone rates it — never as current state."}
+}
+
+func (e irisMemoryNoteExec) Execute(ctx context.Context, tenant string, p irisaction.InvestigationNote, _ string) (irisaction.Result, error) {
+	if e.srv == nil || e.srv.irisMemory == nil {
+		return irisaction.Result{}, errors.New("investigation memory is not available on this deployment")
+	}
+	now := time.Now().UTC()
+	row := ai.InvestigationRow{
+		TenantID: tenant, CorrelationID: p.CorrelationID, Skills: p.Skills,
+		Verdict: p.Verdict, Citations: p.Citations, Outcome: ai.OutcomeUnknown,
+		CreatedAt: now, ResolvedAt: now,
+	}
+	if err := e.srv.irisMemory.Record(ctx, row); err != nil {
+		return irisaction.Result{}, fmt.Errorf("the finding was not saved: %w", err)
+	}
+	return irisaction.Result{Message: "finding saved to investigation memory"}, nil
+}
+
+// irisActionWorkspace is the caller's single workspace, or "" when the
+// principal has none in scope (the platform owner's all-tenants view).
+func irisActionWorkspace(claims jwtClaims) string {
+	tenant, cross := principalTenant(claims)
+	if cross || tenant == "" || tenant == "*" || strings.EqualFold(tenant, TenantGlobal) {
+		return ""
+	}
+	return tenant
+}
+
+// aiProposeActions is the investigation's proposal step for this caller (gate
+// 1). It returns nil when actions cannot be proposed at all, so the engine
+// skips the step without a card.
+func (s *server) aiProposeActions(claims jwtClaims) ai.ProposeActionsFunc {
+	if s == nil || s.irisActions == nil {
+		return nil
+	}
+	return func(ctx context.Context, _ ai.Principal, seed ai.ActionSeed) []ai.ActionProposal {
+		tenant := irisActionWorkspace(claims)
+		if tenant == "" {
+			return nil
+		}
+		env := s.aiActionEnv(tenant)
+		if !env.Platform || !env.Settings.Enabled {
+			return nil // off: no card, nothing proposed
+		}
+		rec := aidecision.FromContext(ctx)
+		cites := make([]string, 0, len(seed.Citations))
+		for _, c := range seed.Citations {
+			cites = append(cites, c.ID)
+		}
+		var out []ai.ActionProposal
+		if env.Settings.Allows(irisaction.KindITSMNote) {
+			if p, ok, why := s.irisTicketNotePayload(ctx, tenant, seed); ok {
+				out = append(out, s.irisProposeOne(ctx, claims, tenant, env, p, cites, rec))
+			} else if why != "" {
+				out = append(out, ai.ActionProposal{Kind: string(irisaction.KindITSMNote),
+					Label: irisaction.KindLabel(irisaction.KindITSMNote), Status: "not_proposed", Note: why})
+			}
+		}
+		if env.Settings.Allows(irisaction.KindInvestigationNote) {
+			if verdict := strings.TrimSpace(ai.OneLine(seed.Text)); verdict != "" {
+				p := irisaction.InvestigationNote{
+					CorrelationID: seed.Target.CorrelationID,
+					Verdict:       clampRunes(verdict, irisaction.MaxVerdictChars),
+					Skills:        seed.Skills,
+					Citations:     cites,
+				}
+				if len(p.Skills) > irisaction.MaxSkills {
+					p.Skills = p.Skills[:irisaction.MaxSkills]
+				}
+				if len(p.Citations) > irisaction.MaxCitations {
+					p.Citations = p.Citations[:irisaction.MaxCitations]
+				}
+				out = append(out, s.irisProposeOne(ctx, claims, tenant, env, p, cites, rec))
+			}
+		}
+		return out
+	}
+}
+
+// irisProposeOne stores one proposal and renders its card; the decision
+// ledger records ACTION_REQUESTED and POLICY_EVALUATED (hashes only).
+func (s *server) irisProposeOne(ctx context.Context, claims jwtClaims, tenant string, env irisaction.Env, p irisaction.Payload,
+	cites []string, rec *aidecision.Recorder) ai.ActionProposal {
+	k := irisaction.KindOf(p)
+	card := ai.ActionProposal{Kind: string(k), Label: irisaction.KindLabel(k)}
+	out, err := s.irisActions.Propose(ctx, tenant, env, irisaction.Proposal{
+		Payload: p, ProposedBy: claims.Sub, DecisionID: rec.DecisionID(), Citations: cites,
+	})
+	tool := irisaction.ToolName(k)
+	if raw, encErr := irisaction.EncodePayload(p); encErr == nil {
+		rec.Add(aidecision.Entry{EventType: aidecision.ActionRequested, Tool: tool,
+			IncidentRef: irisActionCorr(p), ArgsSHA256: aidecision.SHA256Hex(raw)})
+	} else {
+		logWarn("ai.actions", "action payload not hashable", map[string]any{"kind": string(k), "error": encErr.Error()})
+	}
+	rec.Add(aidecision.Entry{EventType: aidecision.PolicyEvaluated, Tool: tool, Outcome: string(out.Decision)})
+	if err != nil {
+		logWarn("ai.actions", "action not proposed", map[string]any{"tenant": tenant, "kind": string(k), "error": err.Error()})
+		card.Status, card.Policy, card.Note = "not_proposed", string(out.Decision), irisActionRefusal(err, out.Reason)
+		return card
+	}
+	r := out.Request
+	card.ID, card.Summary, card.Policy, card.Note = r.ID, r.Summary, string(r.Policy), out.Reason
+	card.Status = string(r.Status)
+	if out.Existing {
+		card.Status = "existing"
+	}
+	if s.audit != nil && !out.Existing {
+		s.audit.Record(AuditEvent{Actor: claims.Sub, Tenant: tenant, Method: "PROPOSE", Path: "/api/ai/actions",
+			Status: http.StatusOK, Decision: "allow",
+			Detail: map[string]any{"action": "ai.action.propose", "kind": string(k), "request": r.ID, "status": string(r.Status),
+				"policy": string(r.Policy), "proposed_from": r.Citations, "by": "iris"}})
+	}
+	return card
+}
+
+func irisActionCorr(p irisaction.Payload) string {
+	switch v := p.(type) {
+	case irisaction.ITSMNote:
+		return v.CorrelationID
+	case irisaction.InvestigationNote:
+		return v.CorrelationID
+	}
+	return ""
+}
+
+// irisActionRefusal is the operator's words for why a proposal was not stored.
+func irisActionRefusal(err error, reason string) string {
+	switch {
+	case errors.Is(err, irisaction.ErrDenied):
+		return reason
+	case errors.Is(err, irisaction.ErrTooManyOpen):
+		return "this workspace already has the most actions waiting for a decision; decide some first"
+	case errors.Is(err, irisaction.ErrInvalid):
+		return "Iris could not build a valid action from this investigation"
+	}
+	return "the action could not be stored"
+}
+
+// handleAIActions serves /api/ai/actions and its sub-routes.
+func (s *server) handleAIActions(w http.ResponseWriter, r *http.Request) {
+	if s.irisActions == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("Iris actions need the Postgres platform store on this deployment"))
+		return
+	}
+	s.irisActionsAPI().Handler(w, r)
+}
+
+func (s *server) irisActionsAPI() irisaction.Deps {
+	return irisaction.Deps{
+		Service: s.irisActions,
+		Authorize: func(w http.ResponseWriter, r *http.Request, level irisaction.Level) (irisaction.Caller, bool) {
+			mod, perm := "alerts", LevelRead
+			switch level {
+			case irisaction.LevelDecide:
+				perm = LevelWrite
+			case irisaction.LevelManage:
+				mod, perm = "administration", LevelAdmin
+			}
+			claims, ok := s.requirePerm(w, r, mod, perm)
+			if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Investigate) {
+				return irisaction.Caller{}, false
+			}
+			tenant := irisActionWorkspace(claims)
+			if tenant == "" {
+				writeError(w, http.StatusBadRequest, errors.New("Iris actions belong to one workspace — choose a workspace first"))
+				return irisaction.Caller{}, false
+			}
+			return irisaction.Caller{Tenant: tenant, Sub: claims.Sub, Person: !strings.HasPrefix(claims.Sub, "apikey:")}, true
+		},
+		Env:      func(_ *http.Request, tenant string) irisaction.Env { return s.aiActionEnv(tenant) },
+		Settings: s.aiActionSettings,
+		SaveSettings: func(_ *http.Request, c irisaction.Caller, st irisaction.Settings) error {
+			if s.aiTenantCfg == nil {
+				return errors.New("no AI tenant config store")
+			}
+			kinds := make([]string, 0, len(st.Kinds))
+			for _, k := range st.Kinds {
+				kinds = append(kinds, string(k))
+			}
+			_, err := s.aiTenantCfg.SetActions(c.Tenant, ai.ActionSettings{Enabled: st.Enabled, Kinds: kinds, DryRunOnly: st.DryRunOnly})
+			return err
+		},
+		Audit: func(r *http.Request, c irisaction.Caller, action, decision string, req *irisaction.Request, detail map[string]any) {
+			if s.audit == nil {
+				return
+			}
+			d := map[string]any{"action": "ai.action." + action}
+			for k, v := range detail {
+				d[k] = v
+			}
+			if req != nil {
+				d["request"], d["kind"], d["proposed_from"] = req.ID, string(req.Kind), req.Citations
+			}
+			status := http.StatusOK
+			if decision != "allow" {
+				status = http.StatusForbidden
+			}
+			s.audit.Record(AuditEvent{Actor: c.Sub, Tenant: c.Tenant, Method: r.Method, Path: r.URL.Path,
+				Status: status, Decision: decision, Remote: auditClientIP(r), Detail: d})
+		},
+		Ledger: s.irisActionLedger,
+	}
+}
+
+// irisActionLedger records an approval and its execution as one decision
+// (surface "action"): APPROVAL_RECEIVED, EXECUTION_STARTED and
+// VERIFICATION_COMPLETED with the payload and result HASHES only.
+func (s *server) irisActionLedger(r *http.Request, c irisaction.Caller, req irisaction.Request) {
+	if s.aiDecisions == nil {
+		return
+	}
+	rec, err := aidecision.NewRecorder(c.Sub, aidecision.SurfaceAction)
+	if err != nil {
+		logError("ai.ledger", "action decision not started", errf(err))
+		return
+	}
+	tool := irisaction.ToolName(req.Kind)
+	args := aidecision.SHA256Hex(req.Payload)
+	rec.Add(aidecision.Entry{EventType: aidecision.ApprovalReceived, Tool: tool, IncidentRef: req.CorrelationID, ArgsSHA256: args, Outcome: "approved"})
+	rec.Add(aidecision.Entry{EventType: aidecision.ExecutionStarted, Tool: tool, IncidentRef: req.CorrelationID, ArgsSHA256: args})
+	verify := aidecision.Entry{EventType: aidecision.VerificationCompleted, Tool: tool, IncidentRef: req.CorrelationID, Outcome: string(req.Status)}
+	if req.Result != nil {
+		b, err := json.Marshal(req.Result)
+		if err != nil {
+			logWarn("ai.ledger", "action result not hashable", errf(err))
+		} else {
+			verify.ResultSHA256 = aidecision.SHA256Hex(b)
+		}
+	}
+	rec.Add(verify)
+	// The caller's workspace was resolved by Authorize (one workspace, never
+	// the all-tenants scope); append under it, detached from the request's
+	// cancellation like every other decision.
+	s.aiDecisionMetrics.Dropped(rec.Dropped())
+	entries := rec.Entries()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), aiDecisionAppendTimeout)
+	defer cancel()
+	if err := s.aiDecisions.Append(ctx, c.Tenant, entries); err != nil {
+		s.aiDecisionMetrics.Failed()
+		logError("ai.ledger", "action decision append failed", map[string]any{"tenant": c.Tenant, "entries": len(entries), "error": err.Error()})
+		return
+	}
+	s.aiDecisionMetrics.Appended(len(entries))
 }
 
 // ── triggered investigations (tracker 337 N-I2, design of record D16) ──────

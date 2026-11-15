@@ -100,6 +100,10 @@ type Answer struct {
 	// recommend.go): each cites this answer's evidence and is labelled
 	// "No action has been executed." Built by Ask from NextActions.
 	Recommendations []Recommendation `json:"recommendations,omitempty"`
+	// ActionProposals are the writes Iris PROPOSED at the end of a concluded
+	// investigation (N-I4): each waits for someone other than the person Iris
+	// answered. Nothing on this list has been sent.
+	ActionProposals []ActionProposal `json:"action_proposals,omitempty"`
 	MissingEvidence []string         `json:"missing_evidence,omitempty"` // clean operational bullets
 	ModeBadges      []string         `json:"mode_badges,omitempty"`      // e.g. ["Low evidence"] — status/provider live elsewhere
 	EvidenceOnly    bool             `json:"evidence_only,omitempty"`    // true → deterministic (no LLM) answer

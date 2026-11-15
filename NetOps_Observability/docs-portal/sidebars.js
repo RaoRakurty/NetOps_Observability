@@ -281,6 +281,7 @@ const sidebars = {
         'administration/iris-mcp',
         'administration/iris-chat',
         'administration/iris-learning',
+        'administration/iris-actions',
         'administration/licence',
         'administration/debug-the-pipeline-cli',
         'administration/review-quarantined-telemetry',

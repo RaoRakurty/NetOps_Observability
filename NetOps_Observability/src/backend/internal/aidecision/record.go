@@ -90,9 +90,10 @@ const (
 	SurfaceAsk     = "ask"     // POST /api/ai/ask (and the data arm / grounded engine it fans into)
 	SurfaceCopilot = "copilot" // POST /api/copilot/chat — the model-driven agent loop (N-A8)
 	SurfaceMCP     = "mcp"     // POST /api/ai/mcp — an external AI client's tools/call (N-I5)
+	SurfaceAction  = "action"  // POST /api/ai/actions/{id}/approve — a person approved an Iris write (N-I4)
 )
 
-var surfaces = map[string]bool{SurfaceAsk: true, SurfaceCopilot: true, SurfaceMCP: true}
+var surfaces = map[string]bool{SurfaceAsk: true, SurfaceCopilot: true, SurfaceMCP: true, SurfaceAction: true}
 
 // MaxLatencyMS bounds a recorded tool latency (one hour): a larger value is a
 // clock error, not a measurement.

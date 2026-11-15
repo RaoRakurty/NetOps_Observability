@@ -40,11 +40,15 @@ type TenantConfig struct {
 	// a short test from Correlix's collector to its own devices or declared
 	// probes. Default off; a workspace admin (or the platform owner) turns it
 	// on with an explicit acknowledgement.
-	ProbeTools  bool   `json:"probe_tools,omitempty"`
-	MaxCalls    int    `json:"max_calls,omitempty"`    // guardrail override: lookups per question (0 → platform default, clamp 1-8)
-	DailyTokens int    `json:"daily_tokens,omitempty"` // guardrail override: tokens/day (0 → platform default)
-	Provider    string `json:"provider,omitempty"`     // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
-	Model       string `json:"model,omitempty"`        // BYO model override ("" → provider default)
+	ProbeTools bool `json:"probe_tools,omitempty"`
+	// Actions are the workspace's OWN settings for Iris's approval-gated
+	// writes (N-I4). Default off with no kinds allowed; a workspace admin
+	// turns them on with an explicit acknowledgement.
+	Actions     ActionSettings `json:"actions,omitempty"`
+	MaxCalls    int            `json:"max_calls,omitempty"`    // guardrail override: lookups per question (0 → platform default, clamp 1-8)
+	DailyTokens int            `json:"daily_tokens,omitempty"` // guardrail override: tokens/day (0 → platform default)
+	Provider    string         `json:"provider,omitempty"`     // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
+	Model       string         `json:"model,omitempty"`        // BYO model override ("" → provider default)
 	// ModelFast / ModelStrong are this tenant's OPTIONAL §10 model-router
 	// overrides, and they ride the tenant's OWN key exactly as Model does: they
 	// take effect only on the BYO path, so a tenant can never steer the
@@ -415,6 +419,41 @@ func (s *TenantConfigStore) SetProbeTools(tenant string, on bool) (TenantConfig,
 // ProbeToolsEnabled reports a workspace's active-probe opt-in.
 func (s *TenantConfigStore) ProbeToolsEnabled(tenant string) bool {
 	return s.Get(tenant).ProbeTools
+}
+
+// ActionSettings is a workspace's own settings for Iris's approval-gated
+// writes (N-I4): on/off, the kinds it allows (default none) and dry-run-only.
+// The kinds are irisaction.Kind values; this package stores them as strings so
+// it does not import the gate.
+type ActionSettings struct {
+	Enabled    bool     `json:"enabled,omitempty"`
+	Kinds      []string `json:"kinds,omitempty"`
+	DryRunOnly bool     `json:"dry_run_only,omitempty"`
+}
+
+// SetActions records a workspace's action settings. The caller has already
+// authorized the write, validated the kinds and checked the acknowledgement.
+func (s *TenantConfigStore) SetActions(tenant string, a ActionSettings) (TenantConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, had := s.cfgs[tenant]
+	c := prev
+	c.TenantID = tenant
+	a.Kinds = append([]string(nil), a.Kinds...)
+	c.Actions = a
+	s.cfgs[tenant] = c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
+}
+
+// ActionsFor returns a workspace's action settings (zero value: off).
+func (s *TenantConfigStore) ActionsFor(tenant string) ActionSettings {
+	a := s.Get(tenant).Actions
+	a.Kinds = append([]string(nil), a.Kinds...)
+	return a
 }
 
 // maxCallsFor resolves the per-question lookup cap for a tenant: its override

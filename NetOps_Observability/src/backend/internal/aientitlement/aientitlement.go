@@ -262,6 +262,12 @@ const (
 	// from Correlix's own collector to a target a workspace owns (N-I3). It
 	// needs investigations on, and each workspace still opts in.
 	SwitchProbes = "IRIS_AI_PROBES"
+	// SwitchActions is the kill switch for Iris's approval-gated WRITES
+	// (N-I4): a note on the incident's ITSM ticket and a finding saved to
+	// investigation memory, each approved by a different person. Off by
+	// default; it needs investigations on, and each workspace still opts in
+	// with its own kind allowlist. Device writes are not an action at all.
+	SwitchActions = "IRIS_AI_ACTIONS"
 )
 
 // IrisOn is the platform Iris switch with its historical semantics: ON by

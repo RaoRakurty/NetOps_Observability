@@ -34,6 +34,7 @@ import (
 
 	"netops/backend/ai"
 	"netops/backend/internal/aientitlement"
+	"netops/backend/internal/irisaction"
 	"netops/backend/internal/irisconvo"
 	"netops/backend/internal/irisgate"
 	"netops/backend/internal/irislearning"
@@ -78,6 +79,8 @@ var aiRouteEntitlements = map[string]aientitlement.Entitlement{
 	"/api/ai/runbooks/":            aientitlement.RunbookAuthor,
 	"/api/ai/learning":             aientitlement.ContextAuthor, // learning loop (N-F5); adopting also needs the target's own
 	"/api/ai/learning/":            aientitlement.ContextAuthor,
+	"/api/ai/actions":              aientitlement.Investigate, // approval-gated writes (N-I4); + IRIS_AI_ACTIONS switch, workspace toggle
+	"/api/ai/actions/":             aientitlement.Investigate,
 	"/api/ai/entities/resolve":     aientitlement.NLQuery,
 	"/api/ai/query/compile":        aientitlement.NLQuery,
 	"/api/ai/query/execute":        aientitlement.NLQuery,
@@ -236,6 +239,9 @@ var aiRouteProbes = []aiProbe{
 	{"/api/ai/learning", http.MethodGet, "/api/ai/learning", "", aientitlement.ContextAuthor},
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/refresh", "", aientitlement.ContextAuthor},
 	{"/api/ai/learning/", http.MethodPost, "/api/ai/learning/" + probeID + "/adopt", `{}`, aientitlement.ContextAuthor},
+	{"/api/ai/actions", http.MethodGet, "/api/ai/actions", "", aientitlement.Investigate},
+	{"/api/ai/actions/", http.MethodPost, "/api/ai/actions/" + probeID + "/approve", `{}`, aientitlement.Investigate},
+	{"/api/ai/actions/", http.MethodPut, "/api/ai/actions/settings", `{"enabled":false}`, aientitlement.Investigate},
 	{"/api/ai/hypotheses/", http.MethodGet, "/api/ai/hypotheses/" + probeID, "", aientitlement.Investigate},
 	{"/api/ai/investigations", http.MethodGet, "/api/ai/investigations", "", aientitlement.Investigate},
 	{"/api/ai/investigations/", http.MethodGet, "/api/ai/investigations/" + probeID, "", aientitlement.Investigate},
@@ -283,6 +289,7 @@ func aiEntFixture(t *testing.T) (*server, http.Handler, jwtClaims, jwtClaims) {
 	s.nlqQueryLog = irisquerylog.NewMemStore()
 	s.irisLearning = irislearning.NewMemStore()
 	s.irisTriggers = iristrigger.NewMemStore()
+	s.irisActions = s.newIrisActions(irisaction.NewMemStore())
 	s.aiTenantCfg = newAITenantConfigStore(t.TempDir()+"/ai_tenant_config.json", nil)
 	s.copilotCfg = newCopilotConfigStore(t.TempDir()+"/copilot_config.json", nil) // no key: no provider is ever called
 	mux := http.NewServeMux()

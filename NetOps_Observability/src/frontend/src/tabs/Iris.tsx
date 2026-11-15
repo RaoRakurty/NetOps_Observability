@@ -39,6 +39,7 @@ import { withPageContext } from "../iris/pageRoute";
 import { withViewContext } from "../iris/viewContext";
 import { askBound } from "../iris/askBound";
 import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCards";
+import ActionProposalCards from "../iris/ActionProposalCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
 import { investigationsHint, modelsBanner } from "../iris/aiModelsBanner";
@@ -1430,6 +1431,9 @@ function GroundedAnswer({ ans, onCite, onClose, onAsk, onInvestigate }: { ans: A
       {mod?.notes && mod.notes.length > 0 && (
         <div className="op-kv"><span className="op-kv-k">Note</span> {mod.notes.join(" ")}</div>
       )}
+
+      {/* N-I4: writes Iris proposed — waiting for someone else. */}
+      {(ans.action_proposals?.length ?? 0) > 0 && <ActionProposalCards proposals={ans.action_proposals ?? []} />}
 
       {/* Recommended next actions — numbered. */}
       {ans.recommendations && ans.recommendations.length > 0 ? (
