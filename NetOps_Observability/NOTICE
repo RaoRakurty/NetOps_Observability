@@ -237,6 +237,20 @@ of a Correlix bundle with the `sso` profile receive this image and are likewise
 bound by the UBI EULA with respect to it.
 
 --------------------------------------------------------------------------------
+Kubernetes JSON schemas (test fixtures)
+--------------------------------------------------------------------------------
+
+tests/fixtures/kubeconform-schemas/ contains Kubernetes 1.30.0 JSON schemas
+copied unmodified from https://github.com/yannh/kubernetes-json-schema at commit
+f82dcba5de3856cb8b0e1ae87705480528cea81b, used only by the helm chart test so
+it validates offline. "Kubernetes JSON Schema, Copyright (C) 2017 Gareth
+Rushgrove, Copyright (C) 2017 Yanh Hamon", licensed under the Apache License,
+Version 2.0. Generated from the Kubernetes OpenAPI specification (Apache-2.0).
+Not part of any Correlix image; present in the source archive (git archive of
+the repository) as test data only. Provenance and per-file
+sha256 digests: tests/fixtures/kubeconform-schemas/README.md.
+
+--------------------------------------------------------------------------------
 Complete inventory
 --------------------------------------------------------------------------------
 
