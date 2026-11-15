@@ -204,9 +204,33 @@ async function withIncident(page: Page) {
   });
 }
 
+/**
+ * The change ledger (`/api/changes/{id}` and `/diff`, N-D3) on top of the Iris
+ * fake: chg-1042 is this tenant's; any other id is another workspace's and
+ * answers 404, as the server does (change_api_isolation_test.go).
+ */
+async function withChangeLedger(page: Page): Promise<string[]> {
+  const reads: string[] = [];
+  await page.route(/^https?:\/\/[^/]+\/api\/changes\//, async (route: Route) => {
+    const p = new URL(route.request().url()).pathname;
+    reads.push(p);
+    const json = (b: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(b) });
+    if (p === "/api/changes/chg-1042/diff") {
+      return json({ change_id: "chg-1042", kind: "values", before: `pref 100 ${HOSTILE}`, after: "pref 200", has_diff: true });
+    }
+    if (p === "/api/changes/chg-1042") {
+      return json({ id: "chg-1042", type: "NETWORK_CHANGE", event_at: "2026-09-24T14:18:00Z", actor: "jsmith", object: "dfw-edge-1",
+        summary: `WAN policy wan-pref updated ${HOSTILE}`, source_system: "ledger", has_diff: true });
+    }
+    return json({ error: "not found" }, 404);
+  });
+  return reads;
+}
+
 test("N-S1: from an incident, what happened, who changed it, what else they changed — one conversation", async ({ page }) => {
   const fake = await bootIris(page, { answer: s1Answer, tenantConfig: TENANT_CONFIG });
   await withIncident(page);
+  const ledgerReads = await withChangeLedger(page);
   await page.goto("/#/operations/incidents");
 
   // The incident page is where the slice starts: open the incident and ask Iris
@@ -239,21 +263,25 @@ test("N-S1: from an incident, what happened, who changed it, what else they chan
   await expect(grid.getByText("Happened before — not proven cause").first()).toBeVisible();
   await expect(ans.getByText(CHANGED_NOTE)).toBeVisible();
 
-  // "Show exactly what he changed." — the one change, opened from the table.
+  // "Show exactly what he changed." — the one change: what it did is read from
+  // the change ledger (the caller's own) and shown right in the answer.
   await askIris(page, "Show exactly what he changed.");
   await expect(answers(page)).toHaveCount(3);
   ans = lastAnswer(page);
+  const did = ans.getByRole("region", { name: "What this change did" });
+  await expect(did.getByText(`pref 100 ${HOSTILE} → pref 200`)).toBeVisible(); // hostile value as text
+  // The change type reads in words in the table, as in the drawer.
+  await expect(ans.getByRole("grid", { name: "Changes" }).getByRole("gridcell", { name: "Network change" })).toBeVisible();
   await ans.getByRole("grid", { name: "Changes" }).getByRole("gridcell", { name: "Sep 24, 14:18:00 UTC" }).click();
   const drawer = page.getByRole("dialog");
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText(`WAN policy wan-pref updated ${HOSTILE}`)).toBeVisible(); // hostile summary as text
   await expect(drawer.getByText("Happened before — not proven cause")).toBeVisible();
-  // The before/after is not in the answer (tracker 337 gap): the drawer says so
-  // and links to the change record, rather than drawing a diff it does not have.
-  await expect(drawer.getByText("Before/after not included here — open the change record.")).toBeVisible();
+  await expect(drawer.getByRole("region", { name: "What this change did" }).getByText(`pref 100 ${HOSTILE} → pref 200`)).toBeVisible();
   await expect(drawer.getByRole("link", { name: "Open the change record" })).toHaveAttribute(
     "href", "/#/operations/digital-experience/changes?id=chg-1042",
   );
+  expect(ledgerReads.every((p) => p.startsWith("/api/changes/chg-1042"))).toBe(true);
   // Esc closes the drawer only — the conversation stays open.
   await page.keyboard.press("Escape");
   await expect(drawer).toBeHidden();
@@ -293,6 +321,7 @@ test("N-S1: from an incident, what happened, who changed it, what else they chan
 // ---- N-S2: NL analytics refinement -----------------------------------------------
 
 const lossPct = { metric: "circuit_loss_pct", unit: "percent" };
+const CIRCUIT_IF_NOTE = "This is measured per circuit, not per interface; each row names the interface its circuit ends on.";
 const dallas = { type: "site", id: "site:dfw-hq" };
 const comcast = { type: "provider", id: "provider:comcast" };
 const last2h = { kind: "relative", last: "2h" };
@@ -338,13 +367,16 @@ function s2aAnswer(question: string): Json {
     );
   }
   if (q.startsWith("which interfaces")) {
+    // Loss is measured per circuit (no series is keyed by interface); the
+    // planner names on each circuit row the interface it ends on and says so
+    // (plan.nameCircuitInterfaces, TestCompareCircuitsNameTheirInterfaces).
     return dataAnswer(
-      "compare", "Largest change first: dfw-comcast-1 +1.9 points; dfw-comcast-2 +0.4 points.",
+      "compare", "Circuit loss — 2 results: dfw-edge-1 Gi0/0/1 2.2% (+1.9% vs before); dfw-edge-1 Gi0/0/2 0.9% (+0.4% vs before);",
       { ...cmpAst, entities: [dallas, comcast], order_by: [{ field: "delta", dir: "desc" }], limit: 10 },
       { query_type: "compare_windows", ...lossPct, window: win, compare: cmp, rows: [
-        { circuit: "dfw-comcast-1", value: 2.2, previous: 0.3, delta: 1.9 },
-        { circuit: "dfw-comcast-2", value: 0.9, previous: 0.5, delta: 0.4 },
-      ], provenance: { source: "victoriametrics", executed_at: NOW, duration_ms: 46 } },
+        { circuit: "dfw-comcast-1", device: "dfw-edge-1", interface: "Gi0/0/1", value: 2.2, previous: 0.3, delta: 1.9 },
+        { circuit: "dfw-comcast-2", device: "dfw-edge-1", interface: "Gi0/0/2", value: 0.9, previous: 0.5, delta: 0.4 },
+      ], notes: [CIRCUIT_IF_NOTE], provenance: { source: "victoriametrics", executed_at: NOW, duration_ms: 46 } },
       { primary_view: "BAR", secondary_view: "TABLE", title: "Circuit loss: this window against the earlier one" },
     );
   }
@@ -378,12 +410,20 @@ test("N-S2a: Dallas WAN loss, compared with yesterday, only Comcast, which chang
   await askIris(page, "Which interfaces changed most?");
   await expect(answers(page)).toHaveCount(4);
   grid = lastAnswer(page).getByRole("grid", { name: "Answer rows" });
-  // Largest change first — the server's order, kept.
+  // Largest change first — the server's order, kept — and each circuit is
+  // named with the interface it ends on.
   const cells = await grid.getByRole("gridcell").allInnerTexts();
   const first = cells.findIndex((c) => c.includes("dfw-comcast-1"));
   const second = cells.findIndex((c) => c.includes("dfw-comcast-2"));
   expect(first).toBeGreaterThanOrEqual(0);
   expect(second).toBeGreaterThan(first);
+  await expect(grid.getByRole("gridcell", { name: "Gi0/0/1" })).toBeVisible();
+  await expect(grid.getByRole("gridcell", { name: "Gi0/0/2" })).toBeVisible();
+  const iface1 = cells.findIndex((c) => c.includes("Gi0/0/1"));
+  const iface2 = cells.findIndex((c) => c.includes("Gi0/0/2"));
+  expect(iface2).toBeGreaterThan(iface1);
+  // And it says honestly that loss is measured per circuit.
+  await expect(lastAnswer(page).getByText(CIRCUIT_IF_NOTE)).toBeVisible();
 
   expect(fake.started).toEqual(["conv-1"]);
   expect(new Set(fake.asks.map((a) => a.conversation_id))).toEqual(new Set(["conv-1"]));

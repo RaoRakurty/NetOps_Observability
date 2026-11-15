@@ -6,14 +6,24 @@
 // wording, row → drawer, provenance without the physical query, and hostile
 // text/hrefs.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+
+// The change ledger read (/api/changes/{id}/diff) the drawer and a one-change
+// answer make. Another workspace's id answers 404 from the server.
+const changeDiff = vi.fn();
+vi.mock("../services/api", () => ({ api: { changeDiff: (...a: unknown[]) => changeDiff(...a) } }));
+
 import ChangeTable from "./ChangeTable";
 import ChangeDrawer from "./ChangeDrawer";
 import { normalizeResult, validatePlan, type ResultSet } from "./presentation";
-import { automationText, beforeAfterShort, changeSourceText, relationText } from "./changes";
+import { automationText, beforeAfterShort, changeSourceText, changeTitle, changeTypeText, diffableChangeId, relationText } from "./changes";
 import { HOSTILE, baseResult, changeRow } from "../test/irisFixtures";
 
+beforeEach(() => {
+  changeDiff.mockReset();
+  changeDiff.mockResolvedValue({ change_id: "chg-1", kind: "values", before: "hold 90", after: "hold 180" });
+});
 afterEach(cleanup);
 
 function result(over: Record<string, unknown> = {}): ResultSet {
@@ -35,6 +45,24 @@ describe("change wording", () => {
     expect(automationText({ automated: false })).toBe("Manual");
     expect(automationText({ origin: "manual" })).toBe("Manual");
     expect(automationText({})).toBe("Not recorded");
+  });
+
+  it("names the change type in words, the same everywhere", () => {
+    expect(changeTypeText({ type: "NETWORK_CHANGE" })).toBe("Network change");
+    expect(changeTypeText({ type: "ROUTE_CHANGE" })).toBe("Routing change");
+    expect(changeTypeText({ type: "config_change" })).toBe("Config change");
+    expect(changeTypeText({ type: "WIDGET_CHANGE" })).toBe("Widget change"); // unknown: humanized, never raw
+    expect(changeTypeText({ type: "__proto__" })).not.toContain("function");
+    expect(changeTypeText({})).toBe("");
+    expect(changeTitle({ type: "NETWORK_CHANGE", object: "dfw-edge-1" })).toBe("Network change · dfw-edge-1");
+  });
+
+  it("fetches a diff only when the row says one exists and carries none", () => {
+    expect(diffableChangeId({ change_id: "chg-1", has_diff: true })).toBe("chg-1");
+    expect(diffableChangeId({ change_id: "chg-1", has_diff: false })).toBe("");
+    expect(diffableChangeId({ change_id: "chg-1", has_diff: true, before: "a", after: "b" })).toBe("");
+    expect(diffableChangeId({ change_id: "../../admin", has_diff: true })).toBe("");
+    expect(diffableChangeId({ has_diff: true })).toBe("");
   });
 
   it("names the source and summarises before/after", () => {
@@ -85,6 +113,26 @@ describe("ChangeTable", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("shows the change type in words, never the raw ledger code", () => {
+    render(<ChangeTable rows={[changeRow({ type: "NETWORK_CHANGE" }), changeRow({ change_id: "c2", type: "ROUTE_CHANGE" })]} />);
+    expect(screen.getByRole("gridcell", { name: "Network change" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "Routing change" })).toBeInTheDocument();
+    expect(screen.queryByText("NETWORK_CHANGE")).toBeNull();
+  });
+
+  it("shows what a single change did, read from the ledger, right in the answer", async () => {
+    render(<ChangeTable rows={[changeRow({ has_diff: true })]} />);
+    const what = screen.getByRole("region", { name: "What this change did" });
+    expect(await within(what).findByText("hold 90 → hold 180")).toBeInTheDocument();
+    expect(changeDiff).toHaveBeenCalledWith("chg-1");
+  });
+
+  it("reads no diff for a list of several changes", () => {
+    render(<ChangeTable rows={[changeRow({ has_diff: true }), changeRow({ change_id: "c2", has_diff: true })]} />);
+    expect(screen.queryByRole("region", { name: "What this change did" })).toBeNull();
+    expect(changeDiff).not.toHaveBeenCalled();
+  });
+
   it("states an empty list honestly", () => {
     render(<ChangeTable rows={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent("No changes in this window.");
@@ -108,13 +156,36 @@ describe("ChangeDrawer", () => {
     expect(screen.getByRole("table", { name: /side by side/ })).toBeInTheDocument();
   });
 
-  it("says a diff exists elsewhere when only has_diff is set", () => {
+  it("reads the diff from the change ledger when the row only says one exists", async () => {
     render(<ChangeDrawer row={changeRow({ has_diff: true })} onClose={() => {}} />);
-    expect(screen.getByText(/Before\/after not included here/)).toBeInTheDocument();
+    const what = screen.getByRole("region", { name: "What this change did" });
+    expect(await within(what).findByText("hold 90 → hold 180")).toBeInTheDocument();
+    expect(changeDiff).toHaveBeenCalledTimes(1);
+    expect(changeDiff).toHaveBeenCalledWith("chg-1");
+    expect(screen.queryByText(/Before\/after not included here/)).toBeNull();
     expect(screen.getByRole("link", { name: "Open the change record" })).toHaveAttribute(
       "href",
       "/#/operations/digital-experience/changes?id=chg-1",
     );
+  });
+
+  it("says plainly when the change is not the caller's (404), and shows no diff", async () => {
+    changeDiff.mockRejectedValue(new Error("404 Not Found: not found"));
+    render(<ChangeDrawer row={changeRow({ change_id: "chg-other", has_diff: true })} onClose={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("This change is not in your workspace, or it no longer exists.");
+    expect(screen.queryByText(/→/)).toBeNull();
+  });
+
+  it("shows the change type in words, as the table does", () => {
+    render(<ChangeDrawer row={changeRow({ type: "NETWORK_CHANGE" })} onClose={() => {}} />);
+    expect(screen.getAllByText(/Network change/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("NETWORK_CHANGE")).toBeNull();
+  });
+
+  it("never reads the ledger when there is no diff to read", () => {
+    render(<ChangeDrawer row={changeRow({ has_diff: false })} onClose={() => {}} />);
+    expect(screen.getByText("No before/after was recorded for this change.")).toBeInTheDocument();
+    expect(changeDiff).not.toHaveBeenCalled();
   });
 
   it("names the incident a change was found near, in time only", () => {

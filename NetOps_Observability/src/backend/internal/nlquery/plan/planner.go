@@ -509,7 +509,69 @@ func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, 
 		rs.Rows, rs.Truncated = rs.Rows[:n], true
 	}
 	rs.Truncated = rs.Truncated || trunc1 || trunc2
+	if hasLabel(t.labels, "circuit") {
+		if err := nameCircuitInterfaces(ctx, sc, rs); err != nil {
+			return err
+		}
+	}
 	source(rs, "victoriametrics")
+	return nil
+}
+
+func hasLabel(labels []string, want string) bool {
+	for _, l := range labels {
+		if l == want {
+			return true
+		}
+	}
+	return false
+}
+
+// nameCircuitInterfaces puts on each compared circuit row the interface that
+// circuit ends on (catalog relationship circuit → interface, n:1 via
+// wan_circuit_local). Circuit loss, latency, jitter and QoE are measured per
+// CIRCUIT — no series is keyed by interface — so "which interfaces changed
+// most?" is answered by the circuits, each named with its own interface, and
+// a note says so. A circuit whose interface the WAN inventory does not record
+// is counted, never given a guessed one. The lookup goes through the caller's
+// scope, so it can only name circuits the caller can already see.
+func nameCircuitInterfaces(ctx context.Context, sc Scope, rs *ResultSet) error {
+	var ids []string
+	for _, r := range rs.Rows {
+		if id, _ := r["circuit"].(string); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	cs, err := sc.Circuits(ctx, CircuitFilter{IDs: ids})
+	if err != nil {
+		return err
+	}
+	ifOf := map[string]string{}
+	for _, c := range cs {
+		if c.LocalIf != "" {
+			ifOf[c.ID] = c.LocalIf
+		}
+	}
+	missing := 0
+	for _, r := range rs.Rows {
+		id, _ := r["circuit"].(string)
+		if itf := ifOf[id]; itf != "" {
+			r["interface"] = itf
+		} else {
+			missing++
+		}
+	}
+	note := "This is measured per circuit, not per interface; each row names the interface its circuit ends on."
+	switch {
+	case missing == len(ids):
+		note = "This is measured per circuit, not per interface, and the WAN inventory records no interface for these circuits."
+	case missing > 0:
+		note += fmt.Sprintf(" %d circuit%s ha%s no recorded interface.", missing, plural(missing, "", "s"), plural(missing, "s", "ve"))
+	}
+	rs.Notes = append(rs.Notes, note)
 	return nil
 }
 
