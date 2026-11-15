@@ -50,7 +50,7 @@ const (
 	// declared the exporter's rate (tracker 401 (c)); totals are multiplied by
 	// the declared rate — "declared, not reported".
 	SamplingDeclared = "declared"
-	SamplingNoFlows     = "no_flows"
+	SamplingNoFlows  = "no_flows"
 )
 
 // ResponseBasis rides on every response.
@@ -283,7 +283,7 @@ func ParseCoverage(rows []map[string]any) map[CovKey]Coverage {
 		out[CovKey{Str(r["tid"]), Str(r["exporter"])}] = Coverage{
 			Flows: Num(r["fl"]), PrevFlows: Num(r["prev_fl"]), RateReported: Num(r["fl_rr"]), RateDeclared: Num(r["fl_decl"]),
 			Domains: Num(r["doms"]),
-			NoIn: Num(r["fl_no_in"]), NoOut: Num(r["fl_no_out"]),
+			NoIn:    Num(r["fl_no_in"]), NoOut: Num(r["fl_no_out"]),
 			Bytes: Num(r["b_all"]), BytesNoIn: Num(r["b_no_in"]), BytesNoOut: Num(r["b_no_out"]),
 		}
 	}

@@ -129,8 +129,12 @@ func DeclaredExpr(decl map[DeclKey]uint32) string {
 // scaledB / scaledP are a unified row's bytes and packets after sampling:
 // rollup and raw rows already carry the REPORTED rate applied; a record whose
 // exporter reported none is multiplied by the declared rate (1 if none).
-func scaledB(decl map[DeclKey]uint32) string { return "(b * if(rr = 1, 1, " + DeclaredExpr(decl) + "))" }
-func scaledP(decl map[DeclKey]uint32) string { return "(p * if(rr = 1, 1, " + DeclaredExpr(decl) + "))" }
+func scaledB(decl map[DeclKey]uint32) string {
+	return "(b * if(rr = 1, 1, " + DeclaredExpr(decl) + "))"
+}
+func scaledP(decl map[DeclKey]uint32) string {
+	return "(p * if(rr = 1, 1, " + DeclaredExpr(decl) + "))"
+}
 
 // durMsExpr is a raw record's usable flow duration in milliseconds, 0 when
 // none (see the file comment).

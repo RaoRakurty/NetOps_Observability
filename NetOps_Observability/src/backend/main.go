@@ -595,21 +595,21 @@ type server struct {
 	// GET /api/incident-policies reports it, so a tenant can see that its policies
 	// will not fire, instead of policies that silently never ticket.
 	ticketingRunning    atomic.Bool
-	seams               *seam.Store               // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services            *pgServiceStore           // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn           cloudconn.Repo            // multi-tenant cloud-connector framework (pg or in-memory)
-	cloudBroker         *cloudconn.IdentityBroker // cloud identity broker: scoped short-lived provider tokens + vault secret custody
-	workloadIssuer      *workloadIssuer           // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
-	cloudIngestInv      *cloudIngestInventory     // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
-	cloudSourceStatus   *cloudSourceStatusStore   // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology            topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline    timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	incidentTimeMetrics incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	incidentFP          incidentfp.Store          // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
-	rcaResolutions      rcaresolution.Store       // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
+	seams               *seam.Store                      // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services            *pgServiceStore                  // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn           cloudconn.Repo                   // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker         *cloudconn.IdentityBroker        // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer      *workloadIssuer                  // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
+	cloudIngestInv      *cloudIngestInventory            // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
+	cloudSourceStatus   *cloudSourceStatusStore          // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
+	topology            topology.GraphStore              // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline    timeintel.TimelineStore          // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics incidentTimeMetricsStore         // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	incidentFP          incidentfp.Store                 // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
+	rcaResolutions      rcaresolution.Store              // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
 	flowRollup          atomic.Pointer[flowquery.Roller] // per-interface flow rollup (tracker 401 (a)); nil until its worker starts
-	flowSampling        flowsampling.Store        // operator-declared flow sampling per exporter (tracker 401 (c); migration 0077 / file fallback)
-	aiFeedback          ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	flowSampling        flowsampling.Store               // operator-declared flow sampling per exporter (tracker 401 (c); migration 0077 / file fallback)
+	aiFeedback          ai.FeedbackStore                 // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
 	// (migration 0040 / file fallback); irisPending holds a conclusion in memory
@@ -1585,7 +1585,7 @@ func newServer() *server {
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
 	srv.incidentFP = newIncidentFingerprintStore()          // similar-incident fingerprints (N-F4), written through on demand
 	srv.rcaResolutions = newRcaResolutionStore()            // recorded fixes, read by similar-incident recall (N-F4 residue)
-	srv.flowSampling = newFlowSamplingStore()                // declared sampling per exporter (tracker 401 (c))
+	srv.flowSampling = newFlowSamplingStore()               // declared sampling per exporter (tracker 401 (c))
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
 	// IRIS-MEMORY-BEGIN
 	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)

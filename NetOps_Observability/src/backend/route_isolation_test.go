@@ -624,7 +624,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/flows/links/movers": "scoped",
 	// Capacity reads VictoriaMetrics with the forecast lane's boundary
 	// (extra_filters[] + second-pass row filter); flows_capacity_isolation_test.go.
-	"/api/flows/capacity":   "scoped",
+	"/api/flows/capacity": "scoped",
 	// Tracker 401 (c): declared sampling per exporter — tenant data (migration
 	// 0077 FORCE RLS / tenant-keyed file), stamped from the token, foreign
 	// exporter → 404; flows_sampling_isolation_test.go + the PG isolation test.

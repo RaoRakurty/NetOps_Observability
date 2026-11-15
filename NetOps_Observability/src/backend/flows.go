@@ -1849,7 +1849,13 @@ func (s *server) flowSamplingGet(w http.ResponseWriter, r *http.Request) {
 		if cross {
 			e.TenantID = tid
 		} else {
-			e.CanDeclare = s.flowExporterOwned(r.Context(), tenant, exp)
+			owned, err := s.flowExporterOwned(r.Context(), tenant, exp)
+			if err != nil {
+				logError("flows", "declared sampling ownership check failed", map[string]any{"error": err.Error()})
+				writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+				return
+			}
+			e.CanDeclare = owned
 		}
 		body.Exporters = append(body.Exporters, e)
 	}
@@ -1859,20 +1865,25 @@ func (s *server) flowSamplingGet(w http.ResponseWriter, r *http.Request) {
 // flowExporterOwned reports whether the workspace may declare sampling for an
 // exporter: the address is one of its devices' UNAMBIGUOUS addresses, or the
 // workspace holds records stamped to it from that exporter (two tenants behind
-// one exporter address then each declare for their own records).
-func (s *server) flowExporterOwned(ctx context.Context, tenant, exporter string) bool {
+// one exporter address then each declare for their own records). A failed
+// lookup is an error, never "not owned": callers answer 502, so an outage does
+// not read as "this router is not yours".
+func (s *server) flowExporterOwned(ctx context.Context, tenant, exporter string) (bool, error) {
 	for _, a := range s.untaggedClaimForTenant(tenant).Addrs {
 		if a == exporter {
-			return true
+			return true, nil
 		}
 	}
 	rows, err := s.chRowsScope(ctx, tenant, `SELECT count() AS n FROM netops.flows
  WHERE ts >= `+flowquery.TSLit(time.Now().UTC().Add(-7*24*time.Hour))+`
    AND tenant_id = `+chStringLiteral(normTenant(tenant))+` AND sampler_address = `+flowquery.Quote(exporter)+` FORMAT JSON`, "flows:sampling-owner")
-	if err != nil || len(rows) == 0 {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return flowquery.Num(rows[0]["n"]) > 0
+	if len(rows) == 0 {
+		return false, nil // count() always answers one row; none means no records
+	}
+	return flowquery.Num(rows[0]["n"]) > 0, nil
 }
 
 func (s *server) flowSamplingPut(w http.ResponseWriter, r *http.Request) {
@@ -1903,7 +1914,13 @@ func (s *server) flowSamplingPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !s.flowExporterOwned(r.Context(), tenant, d.Exporter) {
+	owned, err := s.flowExporterOwned(r.Context(), tenant, d.Exporter)
+	if err != nil {
+		logError("flows", "declared sampling ownership check failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("query backend unavailable"))
+		return
+	}
+	if !owned {
 		writeError(w, http.StatusNotFound, errors.New("no exporter with that address in your workspace"))
 		return
 	}
