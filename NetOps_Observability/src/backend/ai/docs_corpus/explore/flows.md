@@ -70,8 +70,18 @@ says, how many records the window holds, whether Correlix's own polling traffic
 is shown, and whether the country and network datasets are loaded, with the
 script that loads each one.
 
-Counts are scaled by a device's sampling rate when it reports one and shown as
-received when it does not. Nothing else is estimated.
+Counts are scaled by a device's sampling rate when it reports one. A device
+that samples without reporting its rate reads low; if you know its rate ("1 in
+1000"), enter it under **Declared sampling** in this drawer (needs write access
+to infrastructure, for a router your workspace owns). The link figures then
+multiply only that router's records that carried no rate, and say "declared, not
+reported" beside them. A rate the router reports always wins. Nothing else is
+estimated.
+
+A long flow is spread over the minutes it lasted, ending when Correlix received
+it, so a router with a 30-minute active timeout no longer lands a half-hour of
+traffic in one minute. A router that exports no flow duration (sFlow, NetFlow
+v5) is placed in the minute it arrived. Windows are whole minutes.
 
 Device health lives in **Analytics → Device Monitoring**, and TCP flags and scan
 signals in **Security → Threat Detection**.

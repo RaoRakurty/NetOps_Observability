@@ -197,6 +197,8 @@ export function samplingNote(s?: FlowSampling): string | null {
   switch (s) {
     case "not_reported":
       return "This router does not report its sampling rate, so totals read as if every packet was counted.";
+    case "declared":
+      return "Rate declared by your team, not reported by the router.";
     case "mixed":
       return "Some of these records report a sampling rate and some do not; those that do not read as if every packet was counted.";
     default:

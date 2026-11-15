@@ -308,3 +308,126 @@ tests:
               assert_eq!(.sample_rate, 50)
               assert_eq!(.sampling_status, "not_reported_1to1")
               assert_eq!(.sampling_rate, 0)
+
+  # ── Tracker 401 (b): observation domain and flow start/end, per vendor family ──
+  # goflow2 normalises every family to observation_domain_id + time_flow_*_ns.
+  # The Cisco FNF case is a REAL lab capture (cEdge IPFIX, 2026-11-14: the
+  # exporter sent start == end, so there is no duration to spread); the other
+  # families are doc_claimed (vendor documentation, no capture yet).
+  - name: "flows 401: Cisco FNF IPFIX (lab capture) keeps its domain; start equal to end stores a zero span"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          type: "IPFIX"
+          sampler_address: "192.168.222.101"
+          observation_domain_id: 184549140
+          time_flow_start_ns: 1794583005000000000
+          time_flow_end_ns: 1794583005000000000
+          time_received_ns: 1794583021199829039
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.odid, 184549140)
+              assert_eq!(.flow_start, 1794583005000)
+              assert_eq!(.flow_end, 1794583005000)
+              assert_eq!(.ts, 1794583021199)
+
+  - name: "flows 401: Juniper inline-jflow IPFIX (doc_claimed) keeps a one-minute span in milliseconds"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          type: "IPFIX"
+          sampler_address: "10.20.0.1"
+          observation_domain_id: 524288
+          time_flow_start_ns: 1794583000000000000
+          time_flow_end_ns: 1794583060000000000
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.odid, 524288)
+              assert_eq!(to_int!(.flow_end) - to_int!(.flow_start), 60000)
+
+  - name: "flows 401: Nokia SR OS cflowd v9 (doc_claimed): source id is the domain; a 30-minute active timeout is kept"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          type: "NETFLOW_V9"
+          sampler_address: "10.30.0.1"
+          observation_domain_id: 7
+          time_flow_start_ns: 1794581200000000000
+          time_flow_end_ns: 1794583000000000000
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.flow_type, "netflow")
+              assert_eq!(.odid, 7)
+              assert_eq!(to_int!(.flow_end) - to_int!(.flow_start), 1800000)
+
+  - name: "flows 401: Arista and SONiC sFlow (doc_claimed) send no span and no domain, so neither is stored"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          type: "SFLOW_5"
+          sampler_address: "10.40.0.1"
+          observation_domain_id: 0
+          time_flow_start_ns: 0
+          time_flow_end_ns: 0
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.flow_type, "sflow")
+              assert!(!exists(.odid))
+              assert!(!exists(.flow_start))
+              assert!(!exists(.flow_end))
+
+  - name: "flows 401: a backwards span stores no start or end"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "10.20.0.1"
+          time_flow_start_ns: 1794583060000000000
+          time_flow_end_ns: 1794583000000000000
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.flow_start))
+              assert!(!exists(.flow_end))
+
+  - name: "flows 401: a producer-supplied odid or start and end are never trusted"
+    inputs:
+      - insert_at: flows_decoded
+        type: log
+        log_fields:
+          sampler_address: "10.20.0.1"
+          odid: 99
+          flow_start: 1
+          flow_end: 9999999999999
+          topic: "netops.flows"
+    outputs:
+      - extract_from: flows_decoded
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.odid))
+              assert!(!exists(.flow_start))
+              assert!(!exists(.flow_end))

@@ -991,13 +991,34 @@ transforms:
       # bus lag/replay would misplace flows on the timeline. Inserted as an
       # epoch-ms INTEGER (S4/R1): ClickHouse reads an integer as a scaled UTC
       # Unix timestamp for DateTime64(3), so unlike a zone-less string it can
-      # never be re-interpreted in the server/column timezone. Flow start/end
-      # capture is a schema follow-up (goflow2 time_flow_start/end_ns).
+      # never be re-interpreted in the server/column timezone.
       trcv = to_int(.time_received_ns) ?? 0
       if trcv > 0 {
         # floor() of an already-coalesced int is infallible — VRL rejects a
         # dangling `??` on it (exit 78 at boot, caught in deploy 2026-07-17).
         .ts = to_int(floor(trcv / 1000000))
+      }
+      # Tracker 401 (b): the exporter's observation domain and the flow's
+      # start/end, from goflow2 (observation_domain_id; time_flow_start_ns /
+      # time_flow_end_ns). The domain keeps one exporter's line cards or
+      # monitors apart; only the flow's DURATION is used downstream (the link
+      # views spread a flow over it, anchored on when it was received), so an
+      # exporter clock that is off cannot misplace it. A producer-supplied
+      # value is never trusted: all three are derived here or dropped. A
+      # missing, zero or backwards span stores no start/end (epoch 0 = "no
+      # duration"), which is what sFlow and NetFlow v5 send.
+      del(.odid)
+      del(.flow_start)
+      del(.flow_end)
+      od = to_int(.observation_domain_id) ?? 0
+      if od > 0 && od <= 4294967295 {
+        .odid = od
+      }
+      fs = to_int(.time_flow_start_ns) ?? 0
+      fe = to_int(.time_flow_end_ns) ?? 0
+      if fs > 0 && fe >= fs {
+        .flow_start = to_int(floor(fs / 1000000))
+        .flow_end = to_int(floor(fe / 1000000))
       }
       # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
       # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.

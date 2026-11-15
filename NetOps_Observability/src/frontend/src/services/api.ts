@@ -756,8 +756,14 @@ export type FlowWindowEcho = {
 
 /** measured · partly_exported (reads low by the share given) · not_exported (null). */
 export type FlowExportBasis = "measured" | "partly_exported" | "not_exported";
-export type FlowSampling = "reported" | "not_reported" | "mixed" | "no_flows";
-export type FlowResponseBasis = { flows: number; flows_rate_reported: number; sampling: FlowSampling; bucket_time: string };
+/** declared: no rate reported; a rate your team declared is applied (tracker 401). */
+export type FlowSampling = "reported" | "declared" | "not_reported" | "mixed" | "no_flows";
+export type FlowResponseBasis = { flows: number; flows_rate_reported: number; flows_rate_declared?: number; sampling: FlowSampling; bucket_time: string };
+
+/** Declared sampling (GET /api/flows/sampling, tracker 401). */
+export type FlowSamplingDeclaration = { tenant_id?: string; exporter: string; rate: number; note: string; updated_by: string; updated_at: string };
+export type FlowSamplingExporter = { tenant_id?: string; exporter: string; device_name?: string; flows: number; flows_rate_reported: number; declared_rate?: number; can_declare: boolean };
+export type FlowSamplingResp = { declarations: FlowSamplingDeclaration[]; exporters: FlowSamplingExporter[] };
 
 export type FlowLinkRow = {
   tenant_id?: string;
@@ -782,6 +788,8 @@ export type FlowLinkRow = {
   in_unnamed_pct?: number;
   out_unnamed_pct?: number;
   sampling: FlowSampling;
+  /** Observation domains (line cards, monitors) the router reported this link from. */
+  domains?: number;
 };
 export type FlowLinksResp = { window: FlowWindowEcho; links: FlowLinkRow[]; count: number; basis: FlowResponseBasis };
 
@@ -6903,6 +6911,12 @@ export const api = {
     ),
   flowsCapacity: (win: number | FlowWindowQ, limit = 100, days = 28) =>
     request<FlowCapacityResp>(`/api/flows/capacity?${flowWindowQS(win)}&limit=${limit}&days=${days}`),
+  // Declared sampling per router (tracker 401 (c)).
+  flowsSampling: () => request<FlowSamplingResp>("/api/flows/sampling"),
+  setFlowSampling: (exporter: string, rate: number, note = "") =>
+    request<FlowSamplingDeclaration>("/api/flows/sampling", { method: "PUT", body: JSON.stringify({ exporter, rate, note }) }),
+  removeFlowSampling: (exporter: string) =>
+    request<{ removed: boolean }>(`/api/flows/sampling?exporter=${encodeURIComponent(exporter)}`, { method: "DELETE" }),
 
   // ---- active-verification settings (set B) ---------------------------------
   // Secrets are write-only: the GET never returns credential material.

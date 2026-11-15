@@ -732,6 +732,17 @@
             "sampling_status": {
               "type": "keyword"
             },
+            "odid": {
+              "type": "long"
+            },
+            "flow_start": {
+              "type": "date",
+              "format": "epoch_millis"
+            },
+            "flow_end": {
+              "type": "date",
+              "format": "epoch_millis"
+            },
             "vlan_id": {
               "type": "long"
             },
