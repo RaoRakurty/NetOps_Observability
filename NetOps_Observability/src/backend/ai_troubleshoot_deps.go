@@ -58,6 +58,7 @@ import (
 	"netops/backend/internal/configstore"
 	"netops/backend/internal/dem"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/devbaseline"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/devreach"
 	"netops/backend/internal/entityalias"
@@ -68,6 +69,7 @@ import (
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/owner"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/probetarget"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/rca"
@@ -229,6 +231,10 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// N-F4: similar past incidents, from the caller's own closed history.
 	if s.incidentFP != nil {
 		deps.SimilarIncidents = s.aiSimilarIncidents(claims)
+	}
+	// Iris change assistance: before/after change baselines of one device.
+	if s.deviceBaselines != nil && s.discovery != nil {
+		deps.DeviceBaseline = s.aiDeviceBaseline(r, claims)
 	}
 	// Configuration change history (design item 10). Wired only when config
 	// backup is enabled — the version register and the drift state it reads
@@ -1517,6 +1523,209 @@ func (s *server) aiDeviceState(r *http.Request, claims jwtClaims) func(context.C
 			"device_id": dev.ID, "area": string(area), "commands": len(cmds), "via": "ai_assistant",
 		})
 		aiProjectDeviceState(&rep, run.Devices[0], req.Target)
+		return rep, nil
+	}
+}
+
+// ---- change baselines (Iris change assistance, 2026-11-18) ------------------
+
+// newDeviceBaselineStore picks the baseline register's backend: Postgres
+// (migration 0079, FORCE-RLS) when the app-state store is Postgres, else the
+// file store.
+func newDeviceBaselineStore() devbaseline.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return devbaseline.NewPGStore(ps.DB())
+	}
+	return devbaseline.NewFileStore(envOr("DEVICE_BASELINE_FILE", "/data/device_baselines.json"))
+}
+
+// baselineAPI binds the device page's baseline routes and Iris's baseline
+// seam to this server: the caller's permission, the device resolved under the
+// caller's own scope (§3a — another tenant's device is a 404), and a live read
+// through the closed read-only state battery. nil without a store.
+func (s *server) baselineAPI() *devbaseline.API {
+	if s == nil || s.deviceBaselines == nil || s.discovery == nil {
+		return nil
+	}
+	return &devbaseline.API{Store: s.deviceBaselines, Hooks: devbaseline.Hooks{
+		Authorize: func(w http.ResponseWriter, r *http.Request, live bool) (devbaseline.Caller, bool) {
+			lvl := LevelRead
+			if live {
+				lvl = LevelWrite // a live device read, like the protocol-diagnostics collect path
+			}
+			claims, ok := s.requirePerm(w, r, "infrastructure", lvl)
+			if !ok {
+				return devbaseline.Caller{}, false
+			}
+			return devbaseline.Caller{Subject: claims.Sub}, true
+		},
+		Device: func(r *http.Request, id string) (devbaseline.Device, bool) {
+			claims, ok := userFrom(r.Context())
+			if !ok {
+				return devbaseline.Device{}, false
+			}
+			dev, ok := s.aiLookupDevice(claims, id)
+			if !ok || dev.ID != id {
+				return devbaseline.Device{}, false // the page addresses a device by its id only
+			}
+			return baselineDevice(dev), true
+		},
+		Collect: func(ctx context.Context, r *http.Request, d devbaseline.Device) (devbaseline.Snapshot, string, error) {
+			claims, ok := userFrom(r.Context())
+			if !ok {
+				return devbaseline.Snapshot{}, "", devbaseline.ErrNotFound
+			}
+			dev, ok := s.aiLookupDevice(claims, d.ID)
+			if !ok {
+				return devbaseline.Snapshot{}, "", devbaseline.ErrNotFound
+			}
+			return s.collectBaseline(ctx, r, claims, dev)
+		},
+	}}
+}
+
+func baselineDevice(dev models.Device) devbaseline.Device {
+	return devbaseline.Device{ID: dev.ID, Name: aiFirst(dev.Name, dev.ID), TenantID: deviceTenant(dev)}
+}
+
+// baselineAreas are the battery areas a baseline reads, in order.
+var baselineAreas = []struct {
+	area    protocoldiag.Area
+	section string
+}{
+	{protocoldiag.AreaInterfaces, devbaseline.SectionInterfaces},
+	{protocoldiag.AreaIGP, devbaseline.SectionIGP},
+	{protocoldiag.AreaBGP, devbaseline.SectionBGP},
+	{protocoldiag.AreaUpgrade, devbaseline.SectionUpgrade},
+}
+
+// collectBaseline reads one device for a baseline: the four battery areas
+// through the SAME gates aiDeviceState applies (a known dialect, a wired
+// transport, infrastructure write), plus the overlay sessions Correlix already
+// collected. It runs only read-only battery commands; nothing is changed. A
+// non-empty second result says why nothing was read.
+func (s *server) collectBaseline(ctx context.Context, r *http.Request, claims jwtClaims, dev models.Device) (devbaseline.Snapshot, string, error) {
+	platform := pdPlatformString(dev)
+	dialect, ok := showparse.DialectFromPlatform(platform)
+	if !ok {
+		return devbaseline.Snapshot{}, fmt.Sprintf("platform %q does not resolve to a known CLI dialect — no read-only command is established for it, so no baseline was taken", platform), nil
+	}
+	battery := aiStateBattery()
+	collector := s.aiBatteryCollector(battery)
+	switch {
+	case collector == nil:
+		return devbaseline.Snapshot{}, "live device-state collection is not wired on this deployment — no command was run", nil
+	case !s.roles.Allows(claims.Role, "infrastructure", LevelWrite):
+		return devbaseline.Snapshot{}, "reading live device state needs infrastructure write access, which this account does not have — no command was run", nil
+	}
+	pd := pdDeviceFromDiscovery(dev)
+	reads := make([]devbaseline.Read, 0, len(baselineAreas))
+	ran, readOK := 0, 0
+	for _, a := range baselineAreas {
+		cmds := battery.Battery(a.area, dialect, protocoldiag.Target{})
+		if len(cmds) == 0 {
+			reads = append(reads, devbaseline.Read{Section: a.section, NotRead: "no read-only command is established for this platform"})
+			continue
+		}
+		run, err := collector.RunBattery(ctx, []protocoldiag.Device{pd}, a.area, protocoldiag.Target{})
+		if err != nil || len(run.Devices) == 0 {
+			if err != nil {
+				logWarn("devbaseline", "baseline read failed", map[string]any{"device_id": dev.ID, "area": string(a.area), "error": err.Error()})
+			}
+			reads = append(reads, devbaseline.Read{Section: a.section, NotRead: "the read did not complete"})
+			continue
+		}
+		ran += len(cmds)
+		rd := baselineRead(a.section, run.Devices[0])
+		if rd.NotRead == "" {
+			readOK++
+		}
+		reads = append(reads, rd)
+	}
+	if ran > 0 {
+		// §8: a live capture is audited with the sensitive tag, as every
+		// battery read is.
+		s.pdAudit(r, claims, deviceTenant(dev), "protocol_diagnostics.device_baseline", map[string]any{
+			"device_id": dev.ID, "commands": ran, "via": "device_baseline",
+		})
+	}
+	if readOK == 0 {
+		return devbaseline.Snapshot{}, "none of the device's state could be read — no baseline was taken", nil
+	}
+	var ov *devbaseline.Overlay
+	if st, err := s.aiOverlayState(claims)(ctx, ai.Principal{}, dev.ID); err == nil {
+		ov = baselineOverlay(st)
+	}
+	return devbaseline.Build(reads, ov), "", nil
+}
+
+// baselineRead turns one battery area's outcome into a baseline read. A
+// command that did not run is a skipped parse (that scope is CANNOT COMPARE),
+// never an empty table.
+func baselineRead(section string, st protocoldiag.DeviceState) devbaseline.Read {
+	if st.Status != protocoldiag.DeviceStatusOK && st.Status != protocoldiag.DeviceStatusPartial {
+		return devbaseline.Read{Section: section, NotRead: aiFirst(aiClampLine(st.Note, 200), "the read did not complete")}
+	}
+	res := append([]showparse.Result(nil), st.Parsed...)
+	for _, c := range st.Commands {
+		if c.Err != "" {
+			res = append(res, showparse.Result{CmdID: c.SpecID, Skipped: true, Reason: "the command did not run"})
+		}
+	}
+	return devbaseline.Read{Section: section, Results: res}
+}
+
+// baselineOverlay keeps the overlay counts only when both session tables were
+// read: a half-read overlay would compare as a change.
+func baselineOverlay(st ai.OverlayState) *devbaseline.Overlay {
+	if !st.Read || !st.Member || !st.ControlRead || !st.DataRead {
+		return nil
+	}
+	ov := &devbaseline.Overlay{ControlUp: st.OMPUp, ControlTotal: st.OMPUp + st.OMPNotUp}
+	for _, t := range st.Transports {
+		ov.BFDUp += t.Up
+		ov.BFDTotal += t.Sessions
+	}
+	return ov
+}
+
+// aiDeviceBaseline is Iris's baseline seam: take one now, or compare a fresh
+// read against the device's newest baseline. The device is resolved through
+// the CALLER'S OWN inventory (another tenant's is ai.ErrNotFound).
+func (s *server) aiDeviceBaseline(r *http.Request, claims jwtClaims) func(context.Context, ai.Principal, ai.BaselineRequest) (ai.BaselineReport, error) {
+	api := s.baselineAPI()
+	return func(ctx context.Context, _ ai.Principal, req ai.BaselineRequest) (ai.BaselineReport, error) {
+		dev, ok := s.aiLookupDevice(claims, req.DeviceID)
+		if !ok || api == nil {
+			return ai.BaselineReport{}, ai.ErrNotFound
+		}
+		d := baselineDevice(dev)
+		rep := ai.BaselineReport{DeviceID: dev.ID, DeviceName: d.Name, Op: req.Op}
+		var nw devbaseline.NotWiredError
+		if req.Op == ai.BaselineCompare {
+			diff, err := api.Compare(ctx, r, d, "")
+			switch {
+			case errors.As(err, &nw):
+				rep.NotWired = nw.Reason
+			case errors.Is(err, devbaseline.ErrNotFound):
+				rep.NotWired = "no baseline has been taken of " + d.Name + " yet, so there is nothing to compare with — take one before the change"
+			case err != nil:
+				return ai.BaselineReport{}, err
+			default:
+				rep.BaselineID, rep.BaselineAt, rep.BaselineLabel = diff.Baseline.ID, diff.Baseline.TakenAt, diff.Baseline.Label
+				rep.ReadAt, rep.Lines, rep.Changes = diff.ReadAt, diff.Lines(), len(diff.Changes)
+			}
+			return rep, nil
+		}
+		snap, err := api.Take(ctx, r, devbaseline.Caller{Subject: claims.Sub}, d, strings.TrimSpace(req.Label))
+		switch {
+		case errors.As(err, &nw):
+			rep.NotWired = nw.Reason
+		case err != nil:
+			return ai.BaselineReport{}, err
+		default:
+			rep.BaselineID, rep.BaselineAt, rep.Summary, rep.NotRead = snap.ID, snap.TakenAt, snap.Describe(), snap.NotRead
+		}
 		return rep, nil
 	}
 }
