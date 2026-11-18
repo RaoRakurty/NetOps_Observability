@@ -75,7 +75,10 @@ func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -213,7 +216,10 @@ func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -354,7 +360,10 @@ func (s *server) handleFlowsFanout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -399,7 +408,10 @@ func (s *server) handleFlowsFlags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -435,7 +447,10 @@ func (s *server) handleFlowsCoverage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireFlowsRead(w, r); !ok {
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -526,7 +541,10 @@ func (s *server) handleFlowsGeo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -560,7 +578,10 @@ func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireFlowsRead(w, r); !ok {
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -602,7 +623,10 @@ func (s *server) handleFlowsByType(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireFlowsRead(w, r); !ok {
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -626,8 +650,15 @@ func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireFlowsRead(w, r); !ok {
 		return
 	}
-	since := durationQuery(r, "since", time.Hour)
-	step := durationQuery(r, "step", time.Minute)
+	since, ok := flowSince(w, r)
+	if !ok {
+		return
+	}
+	step, err := flowquery.ParseBucketStep(r.URL.Query().Get("step"), since, time.Minute)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
 		writeEmptyClickHouse(w)
@@ -1338,6 +1369,19 @@ func intQuery(r *http.Request, key string, def, min, max int) (int, error) {
 		return 0, fmt.Errorf("%s must be between %d and %d (got %d)", key, min, max, n)
 	}
 	return n, nil
+}
+
+// flowSince parses the older flow routes' `since` fail-closed (tracker 405):
+// a malformed, non-positive or out-of-range window is a 400, never the one-hour
+// default a client could not tell from "that is all the traffic". Bounds are
+// the Flows page's own (flowquery.DefaultLimits: 5 min – 30 days).
+func flowSince(w http.ResponseWriter, r *http.Request) (time.Duration, bool) {
+	d, err := flowquery.ParseSince(r.URL.Query(), flowquery.DefaultLimits)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return 0, false
+	}
+	return d, true
 }
 
 func durationQuery(r *http.Request, key string, def time.Duration) time.Duration {

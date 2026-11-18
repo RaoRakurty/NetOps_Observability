@@ -87,3 +87,45 @@ func mod(a, b int64) int64 {
 	}
 	return m
 }
+
+// ParseBucketStep reads the older timeseries route's free-form `step` (a Go
+// duration or whole seconds) for a window of span. A step the caller names
+// must be whole seconds, at least one second, no longer than the window, and
+// give at most MaxPoints buckets — an error otherwise, never a substitute
+// (tracker 405). When absent, def is used if it fits those rules, else the
+// automatic step (PickStep) — a missing parameter is not a malformed one.
+func ParseBucketStep(v string, span, def time.Duration) (time.Duration, error) {
+	v = strings.TrimSpace(v)
+	d := def
+	if v == "" && (def < time.Second || buckets(int64(span/time.Second), int64(def/time.Second)) > MaxPoints) {
+		auto, err := PickStep(span, "")
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(auto) * time.Second, nil
+	}
+	if v != "" {
+		if isDigits(v) {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n > int64(span/time.Second) {
+				return 0, errBucketStep
+			}
+			d = time.Duration(n) * time.Second
+		} else {
+			parsed, err := time.ParseDuration(v)
+			if err != nil {
+				return 0, errBucketStep
+			}
+			d = parsed
+		}
+	}
+	if d < time.Second || d%time.Second != 0 || d > span {
+		return 0, errBucketStep
+	}
+	if buckets(int64(span/time.Second), int64(d/time.Second)) > MaxPoints {
+		return 0, errors.New("that step gives too many points for this window; choose a longer step")
+	}
+	return d, nil
+}
+
+var errBucketStep = errors.New("step must be a whole number of seconds (for example 60 or 5m), at least 1s and no longer than the window")

@@ -13,9 +13,9 @@
 // SQL, so no caller-supplied text reaches a statement.
 //
 // Parsing is FAIL-CLOSED: a malformed, out-of-range or contradictory parameter
-// is an error the handler answers with 400. The older routes' durationQuery
-// silently replaces a bad `since` with the default, which makes a request for
-// "the last 45 days" quietly answer for one hour; nothing here does that.
+// is an error the handler answers with 400 — never the default, which would
+// make a request for "the last 45 days" quietly answer for one hour. The older
+// relative-only routes read their window through ParseSince (tracker 405).
 package flowquery
 
 import (
@@ -218,4 +218,28 @@ func (w Window) Echo(now time.Time, retentionDays int) WindowEcho {
 		e.PrevBeforeRetention = w.PrevFrom().Before(horizon)
 	}
 	return e
+}
+
+// ParseSince is the window of the older, relative-only flow routes
+// (/api/flows/top, topn, timeseries, by-proto, by-type, flags, geo, coverage,
+// fanout — tracker 405): `since` alone, a Go duration or whole seconds, the
+// default when absent, and an error — never the default — when it is
+// malformed or outside lim. Those routes always read "the last <since>", so a
+// from/to pair is refused rather than silently ignored.
+func ParseSince(q url.Values, lim Limits) (time.Duration, error) {
+	if strings.TrimSpace(q.Get("from")) != "" || strings.TrimSpace(q.Get("to")) != "" {
+		return 0, errors.New("this route reads the last <since> only; from and to are not accepted")
+	}
+	d := lim.Default
+	if since := strings.TrimSpace(q.Get("since")); since != "" {
+		parsed, err := parseSpan(since)
+		if err != nil {
+			return 0, err
+		}
+		d = parsed
+	}
+	if err := checkSpan(d, lim); err != nil {
+		return 0, err
+	}
+	return d, nil
 }
