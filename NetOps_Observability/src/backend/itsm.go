@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"netops/backend/ai"
 	"netops/backend/internal/irisaction"
@@ -45,6 +47,87 @@ func itsmSystemLabel(system string) string {
 		return "Jira"
 	}
 	return "ServiceNow"
+}
+
+// ---- Iris change-plan review: the read-only change fetch (2026-11-18) -------
+//
+// "is CHG0012345 ready?" reads ONE change record from the CALLER's workspace's
+// own ITSM connection: a single GET through ticketing.ChangeReader. Nothing is
+// written to the ticket and no action is proposed (owner decision 2026-11-18,
+// read-only change assistance). The tenant comes from the token (§3a); a
+// workspace with no connection for the reference's system gets an honest
+// "unavailable", never another workspace's connection.
+
+// irisChangeReader holds the readers; injectable so tests drive it against an
+// httptest-backed instance.
+type irisChangeReader struct {
+	srv     *server
+	readers map[string]ticketing.ChangeReader
+}
+
+// irisChangeReadTimeout bounds one change fetch (§9).
+const irisChangeReadTimeout = 20 * time.Second
+
+func newIrisChangeReader(s *server) *irisChangeReader {
+	return &irisChangeReader{srv: s, readers: map[string]ticketing.ChangeReader{
+		irisaction.SystemServiceNow: ticketing.NewServiceNowAdapter(),
+		irisaction.SystemJira:       ticketing.NewJiraAdapter(),
+	}}
+}
+
+// changeSystemFor is the ITSM system a reference belongs to: a ServiceNow change
+// number, else a Jira key.
+func changeSystemFor(ref string) string {
+	if strings.HasPrefix(ref, "CHG") {
+		return irisaction.SystemServiceNow
+	}
+	return irisaction.SystemJira
+}
+
+// read fetches ref as tenant. ErrNotFound covers an invalid reference, a record
+// that does not exist and one the connection's account cannot see.
+func (c *irisChangeReader) read(ctx context.Context, tenant, ref string) (ai.ChangeTicket, error) {
+	system := changeSystemFor(ref)
+	if !ticketing.ValidChangeNumber(system, ref) {
+		return ai.ChangeTicket{}, ai.ErrNotFound
+	}
+	if c == nil || c.srv == nil || c.srv.itsmCfg == nil || tenant == "" {
+		return ai.ChangeTicket{}, ai.ErrChangeTicketUnavailable
+	}
+	cfg, ok := c.srv.itsmCfg.SystemConfigFor(canonicalCorrTenant(tenant), system)
+	reader := c.readers[system]
+	if !ok || reader == nil {
+		return ai.ChangeTicket{}, ai.ErrChangeTicketUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, irisChangeReadTimeout)
+	defer cancel()
+	ch, found, err := reader.FetchChange(ctx, cfg, ref)
+	switch {
+	case err != nil:
+		return ai.ChangeTicket{}, fmt.Errorf("read %s change %s: %w", itsmSystemLabel(system), ref, err)
+	case !found:
+		return ai.ChangeTicket{}, ai.ErrNotFound
+	}
+	return ai.ChangeTicket{Ref: ref, System: system, Title: ch.Title, Description: ch.Description,
+		ImplementationPlan: ch.ImplementationPlan, BackoutPlan: ch.BackoutPlan, TestPlan: ch.TestPlan,
+		Risk: ch.Risk, State: ch.State, Start: ch.Start, End: ch.End}, nil
+}
+
+// aiChangeTicket is the TroubleshootDeps.ChangeTicket seam. The tenant is the
+// token's, captured here; the ai.Principal argument is not trusted for it.
+func (s *server) aiChangeTicket(claims jwtClaims) func(context.Context, ai.Principal, string) (ai.ChangeTicket, error) {
+	tenant, cross := principalTenant(claims)
+	if cross {
+		tenant = "" // the Global view has no workspace connection to read
+	}
+	reader := newIrisChangeReader(s)
+	return func(ctx context.Context, _ ai.Principal, ref string) (ai.ChangeTicket, error) {
+		ch, err := reader.read(ctx, tenant, ref)
+		if err != nil && !errors.Is(err, ai.ErrNotFound) && !errors.Is(err, ai.ErrChangeTicketUnavailable) {
+			slog.Warn("iris change review: change fetch failed", "system", changeSystemFor(ref), "err", err)
+		}
+		return ch, err
+	}
 }
 
 // Describe renders the summary and the EXACT note the approver approves.

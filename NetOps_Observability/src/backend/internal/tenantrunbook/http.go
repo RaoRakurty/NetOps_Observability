@@ -24,6 +24,8 @@ package tenantrunbook
 //	GET    /api/ai/runbooks/{id}/links         what the runbook is linked to
 //	PUT    /api/ai/runbooks/{id}/links         {link_type, link_key}
 //	DELETE /api/ai/runbooks/{id}/links         {link_type, link_key}
+//	GET    /api/ai/runbooks/templates          built-in upgrade procedures (templates.go)
+//	POST   /api/ai/runbooks/templates/{name}/adopt  {name?} — copy one as a draft
 //
 // §3a: the tenant is the caller's (Authorize), never a request field; a Global
 // (cross-tenant) view has no workspace and is told to choose one. Unknown and
@@ -73,6 +75,9 @@ type Deps struct {
 func (d Deps) Handler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, apiPrefix), "/")
 	parts := strings.Split(rest, "/")
+	if d.templateRoute(w, r, parts) {
+		return
+	}
 	switch {
 	case rest == "":
 		switch r.Method {

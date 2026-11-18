@@ -1053,3 +1053,13 @@ func TestCollectorPanicMetricExposed(t *testing.T) {
 		}
 	}
 }
+
+// The health line labels the reload text with a colon, so a reason that is
+// itself the word "reload" reads "last reload: reload", not "last reload reload".
+func TestAIPlatformLineReloadLabel(t *testing.T) {
+	reason := "reload"
+	line := aiPlatformLine(showparse.PlatformHealth{LastReload: &reason})
+	if !strings.Contains(line, "last reload: reload") || strings.Contains(line, "last reload reload") {
+		t.Fatalf("platform line = %q", line)
+	}
+}

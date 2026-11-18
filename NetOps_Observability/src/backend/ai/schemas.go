@@ -30,7 +30,14 @@ const (
 	ModeSimilarIncidents AnswerMode = "similar_incidents"
 	// ModeDeviceBaseline takes or compares a before/after change baseline of
 	// one device (baseline_answer.go): read-only device reads, OBSERVED diffs.
-	ModeDeviceBaseline        AnswerMode = "device_baseline"
+	ModeDeviceBaseline AnswerMode = "device_baseline"
+	// ModeChangeReview reviews a proposed change plan for readiness (read-only
+	// change assistance, change_review.go): the closed checklist plus what the
+	// caller's own network says about the devices it names.
+	ModeChangeReview AnswerMode = "change_review"
+	// ModeUpgradeProcedure shows a built-in, person-executed upgrade procedure
+	// with its public source (upgrade_answer.go). Iris runs none of its steps.
+	ModeUpgradeProcedure      AnswerMode = "upgrade_procedure"
 	ModeExecutiveSummary      AnswerMode = "executive_summary"
 	ModeProductNavigationHelp AnswerMode = "product_navigation_help"
 	ModeProductAnswer         AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
