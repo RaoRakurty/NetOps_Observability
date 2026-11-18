@@ -213,11 +213,15 @@ func TestChangeReviewFromATicket(t *testing.T) {
 	if ans, _ := o.answerChangeReviewGoverned(context.Background(), tenantA(), "is CHG0012345 ready?"); !strings.Contains(ans.Text, "can't read change tickets") {
 		t.Errorf("unwired: %s", ans.Text)
 	}
-	o.Troubleshoot.ChangeTicket = func(context.Context, Principal, string) (ChangeTicket, error) { return ChangeTicket{}, ErrChangeTicketUnavailable }
+	o.Troubleshoot.ChangeTicket = func(context.Context, Principal, string) (ChangeTicket, error) {
+		return ChangeTicket{}, ErrChangeTicketUnavailable
+	}
 	if ans, _ := o.answerChangeReviewGoverned(context.Background(), tenantA(), "is CHG0012345 ready?"); !strings.Contains(ans.Text, "no ticketing connection") {
 		t.Errorf("unavailable: %s", ans.Text)
 	}
-	o.Troubleshoot.ChangeTicket = func(context.Context, Principal, string) (ChangeTicket, error) { return ChangeTicket{}, errors.New("boom") }
+	o.Troubleshoot.ChangeTicket = func(context.Context, Principal, string) (ChangeTicket, error) {
+		return ChangeTicket{}, errors.New("boom")
+	}
 	if ans, _ := o.answerChangeReviewGoverned(context.Background(), tenantA(), "is CHG0012345 ready?"); !strings.Contains(ans.Text, "did not answer") || strings.Contains(ans.Text, "boom") {
 		t.Errorf("failing: %s", ans.Text)
 	}

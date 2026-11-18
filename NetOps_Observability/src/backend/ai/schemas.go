@@ -27,14 +27,14 @@ const (
 	ModeShiftHandoff             AnswerMode = "shift_handoff"
 	// ModeSimilarIncidents answers "have we seen this before?" from the
 	// caller's own closed incidents (tracker 337 N-F4, similar_answer.go).
-	ModeSimilarIncidents      AnswerMode = "similar_incidents"
+	ModeSimilarIncidents AnswerMode = "similar_incidents"
 	// ModeChangeReview reviews a proposed change plan for readiness (read-only
 	// change assistance, change_review.go): the closed checklist plus what the
 	// caller's own network says about the devices it names.
 	ModeChangeReview AnswerMode = "change_review"
 	// ModeUpgradeProcedure shows a built-in, person-executed upgrade procedure
 	// with its public source (upgrade_answer.go). Iris runs none of its steps.
-	ModeUpgradeProcedure AnswerMode = "upgrade_procedure"
+	ModeUpgradeProcedure      AnswerMode = "upgrade_procedure"
 	ModeExecutiveSummary      AnswerMode = "executive_summary"
 	ModeProductNavigationHelp AnswerMode = "product_navigation_help"
 	ModeProductAnswer         AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge

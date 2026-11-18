@@ -121,7 +121,7 @@ func TestAdoptRefusals(t *testing.T) {
 		{"alice", "/templates/no-such-procedure/adopt", "", http.StatusNotFound},
 		{"alice", "/templates/" + name + "/adopt", `{"name":"Bad Name"}`, http.StatusBadRequest},
 		{"alice", "/templates/" + name + "/adopt", `{"tenant":"t-b"}`, http.StatusBadRequest}, // no tenant in a body
-		{"alice", "/templates", "", http.StatusMethodNotAllowed},                           // POST to the list
+		{"alice", "/templates", "", http.StatusMethodNotAllowed},                              // POST to the list
 	}
 	for _, c := range cases {
 		method := http.MethodPost
