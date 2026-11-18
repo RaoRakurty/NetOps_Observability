@@ -61,6 +61,8 @@ func TestUpgradeProcedureNeverGuesses(t *testing.T) {
 	}
 }
 
+// The dialect comes from the vendor registry (the one vendor vocabulary); a
+// profile with no procedure (IOS XR, classic IOS) picks none.
 func TestDeviceDialect(t *testing.T) {
 	for _, c := range []struct {
 		d    DeviceRef
@@ -68,12 +70,22 @@ func TestDeviceDialect(t *testing.T) {
 	}{
 		{DeviceRef{Vendor: "Juniper Networks"}, "juniper/junos"},
 		{DeviceRef{Vendor: "Arista"}, "arista/eos"},
-		{DeviceRef{Vendor: "Cisco", Platform: "Nexus 9300"}, "cisco/nx-os"},
-		{DeviceRef{Vendor: "Cisco", Platform: "Catalyst 9300"}, "cisco/ios_xe"},
-		{DeviceRef{Vendor: "Cisco", Platform: "ASR 9000 IOS-XR"}, ""},
+		{DeviceRef{Vendor: "Cisco", Platform: "ASR 9000 IOS-XR"}, "cisco/ios_xr"},
+		{DeviceRef{Platform: "Mystery OS"}, ""},
 	} {
 		if got := deviceDialect(c.d); got != c.want {
 			t.Errorf("%+v → %q, want %q", c.d, got, c.want)
 		}
+	}
+}
+
+// A device whose platform label names the family ("Catalyst 9300") gets that
+// family's procedure even when the registry only knows it as Cisco.
+func TestUpgradeProcedureFromThePlatformLabel(t *testing.T) {
+	o := reviewOrch(t, &reviewCalls{})
+	ans, _ := o.answerUpgradeProcedure(context.Background(), tenantA(), "how do I upgrade edge-1",
+		Plan{Entities: map[string]string{"device": "edge-1"}}, nil)
+	if !strings.Contains(ans.Title, "IOS XE") || !strings.Contains(ans.Text, "edge-1 runs Cisco") {
+		t.Fatalf("the platform label did not pick the procedure: %q\n%s", ans.Title, ans.Text)
 	}
 }

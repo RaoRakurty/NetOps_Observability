@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"netops/backend/internal/upgrademop"
+	"netops/backend/internal/vendorprofile"
 )
 
 // answerUpgradeProcedure answers ModeUpgradeProcedure.
@@ -28,14 +29,17 @@ func (o *Orchestrator) answerUpgradeProcedure(ctx context.Context, p Principal, 
 		Title: "Upgrade procedure", Citations: []Citation{}, ModeBadges: []string{"Procedure", "Read-only"},
 		EvidenceOnly: true}
 
-	dialect, device := "", ""
+	// The device's own platform label (e.g. "Catalyst 9300") is matched like the
+	// question's words, and its vendor profile id as the fallback.
+	dialect, device, cueText := "", "", question
 	if ref := strings.TrimSpace(plan.Entities["device"]); ref != "" && o.Troubleshoot.ResolveDevice != nil {
 		if d, err := o.Troubleshoot.ResolveDevice(ctx, p, ref); err == nil && d.ID != "" {
 			device = firstNonEmpty(d.Name, ref)
 			dialect = deviceDialect(d)
+			cueText = question + "\n" + d.Platform
 		}
 	}
-	tpl, ok := upgrademop.Match(question, dialect)
+	tpl, ok := upgrademop.Match(cueText, dialect)
 	if !ok {
 		var b strings.Builder
 		b.WriteString("Iris has step-by-step upgrade procedures for these platforms — say which one you are upgrading:\n")
@@ -79,20 +83,13 @@ func (o *Orchestrator) answerUpgradeProcedure(ctx context.Context, p Principal, 
 	return base, nil
 }
 
-// deviceDialect maps a resolved device's vendor and platform to a show-command
-// dialect id ("" = unknown).
+// deviceDialect maps a resolved device's vendor and platform onto a vendor
+// profile id ("cisco/ios_xe", "juniper/junos", …) through the vendor registry —
+// the one vendor vocabulary — or "" when no profile claims the label.
 func deviceDialect(d DeviceRef) string {
-	v, pl := strings.ToLower(d.Vendor), strings.ToLower(d.Platform)
-	switch {
-	case strings.Contains(v, "juniper") || strings.Contains(pl, "junos"):
-		return "juniper/junos"
-	case strings.Contains(v, "arista") || strings.Contains(pl, "eos"):
-		return "arista/eos"
-	case strings.Contains(pl, "nx-os") || strings.Contains(pl, "nxos") || strings.Contains(pl, "nexus"):
-		return "cisco/nx-os"
-	case strings.Contains(pl, "ios-xe") || strings.Contains(pl, "ios xe") || strings.Contains(pl, "iosxe") ||
-		strings.Contains(pl, "catalyst") || strings.Contains(pl, "c8000") || strings.Contains(pl, "isr4"):
-		return "cisco/ios_xe"
+	label := strings.TrimSpace(d.Vendor + " " + d.Platform)
+	if p, ok := vendorprofile.Default().ProfileForPlatformText(label); ok {
+		return p.ID
 	}
 	return ""
 }
