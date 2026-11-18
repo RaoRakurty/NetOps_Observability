@@ -184,7 +184,12 @@ jobs:
             exit 1
           fi
           # shellcheck disable=SC2086 # one import path per word, by design
-          go test -race -timeout 60m $pkgs
+          # -count=1: never reuse a cached PASS. Tests here read files outside the Go
+          # module (src/config rules, docs, catalog), which Go's test cache does not
+          # track, so a restored cache once reported a broken package as `(cached)`
+          # (internal/alertwebhook, #271 -> #276). The build cache is kept; only
+          # test results are recomputed.
+          go test -race -count=1 -timeout 60m $pkgs
       # NOTE: live fuzzing (`-fuzz -fuzztime`) is intentionally NOT a blocking
       # per-PR gate — its worker-coordination times out flakily on 2-core runners
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
@@ -324,7 +329,8 @@ jobs:
         # Also runs every Fuzz* target against its SEED corpus deterministically
         # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
         # parsers' regression coverage is here — no flaky live fuzzing needed.
-        run: go test -timeout 20m ./...
+        # -count=1: see the -race job — never reuse a cached test PASS.
+        run: go test -count=1 -timeout 20m ./...
       - name: save the Go build cache (push to main only)
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

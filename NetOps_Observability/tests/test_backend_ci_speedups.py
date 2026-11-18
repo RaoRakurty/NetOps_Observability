@@ -76,7 +76,7 @@ def test_race_pkgs_excludes_exactly_the_root_and_nothing_else(backend):
     run = _run(backend["test-race-pkgs"], "go test -race")
     assert "set -euo pipefail" in run
     assert "go list ./... | grep -vx 'netops/backend'" in run
-    assert re.search(r"^\s*go test -race -timeout 60m \$pkgs$", run, re.MULTILINE)
+    assert re.search(r"^\s*go test -race -count=1 -timeout 60m \$pkgs$", run, re.MULTILINE)
     assert "-run" not in run and "-short" not in run
     # an empty list is a failure, not a no-op run
     assert '[ -z "$pkgs" ]' in run and "exit 1" in run
@@ -303,3 +303,28 @@ def test_install_legs_cache_npm_for_both_lockfiles(install):
                         "NetOps_Observability/docs-portal/package-lock.json"}, jid
         for dep in deps:
             assert (REPO / dep).is_file(), dep
+
+
+def test_no_backend_go_test_step_can_reuse_a_cached_pass():
+    """A restored GOCACHE must never stand in for a PASS.
+
+    Go's test cache does not notice files a test reads from outside the Go module
+    (src/config rules, docs, telemetry catalog), so a cached result once hid a
+    broken package (internal/alertwebhook reported `(cached)` on #271, fixed by
+    #276). Every `go test` that executes tests must carry -count=1, or -shuffle,
+    which Go never caches. `-list` only enumerates tests, so it is exempt.
+    """
+    text = (WORKFLOWS / "backend-ci.yml").read_text()
+    offenders = []
+    for line in text.splitlines():
+        cmd = line.strip()
+        if cmd.startswith("#") or "go test" not in cmd:
+            continue
+        if not cmd.startswith(("go test", "run: go test")):
+            continue
+        if " -list " in cmd:
+            continue
+        if "-count=1" in cmd or "-shuffle" in cmd:
+            continue
+        offenders.append(cmd)
+    assert offenders == [], f"go test steps that may reuse a cached PASS: {offenders}"
