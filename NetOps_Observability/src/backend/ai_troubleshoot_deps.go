@@ -1767,6 +1767,18 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 		if v, rank := aiPlatformClock(*res.Platform); v != "" {
 			add("clock", v, rank)
 		}
+	case res.Upgrade != nil:
+		if !push("device", aiUpgradeLine(*res.Upgrade)) {
+			return
+		}
+		if v, rank := aiUpgradeFS(*res.Upgrade); v != "" {
+			add("upgrade_fs", v, rank)
+		}
+		if v, rank := aiUpgradeRedundancy(*res.Upgrade); v != "" {
+			add("upgrade_redundancy", v, rank)
+		}
+	case res.RouteSummary != nil:
+		push("device", aiRouteSummaryLine(*res.RouteSummary))
 	case len(res.Logs) > 0:
 		// Log lines are the device's own words: quoted, never mined for a
 		// machine fact (a `state:` signal must come from a TYPED field).
@@ -2143,6 +2155,108 @@ func aiMACLine(m showparse.MACEntry) string {
 	return aiJoinParts("mac "+aiFirst(m.MAC, "(unnamed)"), parts)
 }
 
+// aiUpgradeLowFreeBytes is the boot-filesystem free space below which an
+// upgrade is flagged as short of room: 2 GiB, about what a current IOS-XE image
+// plus its install-mode expansion needs. It is a fixed line, not the target
+// image's real size — the skill tells the operator to check that size.
+const aiUpgradeLowFreeBytes = 2 << 30
+
+// aiUpgradeLine renders one upgrade-readiness read. Each part comes only from
+// a field the device printed.
+func aiUpgradeLine(u showparse.UpgradeFacts) string {
+	var parts []string
+	if u.BootVariable != nil {
+		if v := strings.TrimSpace(*u.BootVariable); v == "" {
+			parts = append(parts, "boot variable not set (the device boots its default image)")
+		} else {
+			parts = append(parts, "boot variable "+aiClampLine(v, 120))
+		}
+	}
+	if v := aiStr(u.ConfigRegister); v != "" {
+		parts = append(parts, "configuration register "+v)
+	}
+	if total, ok := aiInt64(u.FSTotalBytes); ok {
+		free, _ := aiInt64(u.FSFreeBytes) // FSFreeBytes is always set together with FSTotalBytes by the parser
+		parts = append(parts, fmt.Sprintf("%s %s free of %s", aiFirst(aiStr(u.FileSystem), "boot filesystem"), aiBytes(free), aiBytes(total)))
+	}
+	if v := aiStr(u.RedundancyHardware); v != "" {
+		parts = append(parts, "redundancy hardware "+v)
+	}
+	if v := aiStr(u.RedundancyMode); v != "" {
+		parts = append(parts, "operating redundancy "+v)
+	}
+	if v := aiStr(u.PeerState); v != "" {
+		parts = append(parts, "peer processor "+v)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
+}
+
+// aiUpgradeFS is the free-space fact: low under aiUpgradeLowFreeBytes, ok at or
+// above it, nothing when the device did not print the figure.
+func aiUpgradeFS(u showparse.UpgradeFacts) (string, int) {
+	free, ok := aiInt64(u.FSFreeBytes)
+	if !ok {
+		return "", 0
+	}
+	if free < aiUpgradeLowFreeBytes {
+		return "low", 2
+	}
+	return "ok", 1
+}
+
+// aiUpgradeRedundancy is the redundancy fact: simplex when the device names a
+// single control processor (Simplex hardware, a non-redundant mode or a
+// disabled peer), redundant when it names a redundancy mode, nothing when it
+// said neither.
+func aiUpgradeRedundancy(u showparse.UpgradeFacts) (string, int) {
+	hw := strings.ToLower(aiStr(u.RedundancyHardware))
+	mode := strings.ToLower(aiStr(u.RedundancyMode))
+	peer := strings.ToLower(aiStr(u.PeerState))
+	switch {
+	case hw == "" && mode == "" && peer == "":
+		return "", 0
+	case hw == "simplex", strings.Contains(mode, "non-redundant"), peer == "disabled":
+		return "simplex", 2
+	case mode != "":
+		return "redundant", 1
+	default:
+		return "", 0
+	}
+}
+
+// aiRouteSummaryLine renders a routing-table size, sources in a stable order.
+func aiRouteSummaryLine(rs showparse.RouteSummary) string {
+	srcs := make([]string, 0, len(rs.BySource))
+	for k := range rs.BySource {
+		srcs = append(srcs, k)
+	}
+	sort.Strings(srcs)
+	parts := make([]string, 0, len(srcs))
+	for _, k := range srcs {
+		parts = append(parts, fmt.Sprintf("%s %d", aiClampLine(k, 40), rs.BySource[k]))
+	}
+	line := fmt.Sprintf("routing table holds %d routes", rs.Total)
+	if len(parts) > 0 {
+		line += " (" + strings.Join(parts, ", ") + ")"
+	}
+	return line
+}
+
+// aiBytes renders a byte count in GiB or MiB, as an operator reads it.
+func aiBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(n)/float64(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/float64(1<<20))
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
+
 func aiPlatformLine(h showparse.PlatformHealth) string {
 	var parts []string
 	if v, ok := aiFloat(h.CPUPercent); ok {
@@ -2173,6 +2287,9 @@ func aiPlatformLine(h showparse.PlatformHealth) string {
 	}
 	if v := aiStr(h.Version); v != "" {
 		parts = append(parts, "version "+aiClampLine(v, 60))
+	}
+	if v := aiStr(h.BootImage); v != "" {
+		parts = append(parts, "booted from "+aiClampLine(v, 120))
 	}
 	for _, group := range []struct {
 		label string

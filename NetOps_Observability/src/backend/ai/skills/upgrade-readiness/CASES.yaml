@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+#
+# Behavioural cases for upgrade-readiness. Dialect + contract: skill_cases.go.
+
+case: a device that cannot be read live gives no readiness verdict and leaves its own log as the evidence
+question: is edge-1 ready to upgrade
+ui:
+  - correlation_id=case-upg-notwired
+  - device=edge-1
+signals:
+  - state:collect=not_wired
+notes:
+  - live device state could not be read on this deployment — no command was run
+evidence:
+  - finding
+expect_chain:
+  - upgrade-readiness entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: could not be read live
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - live device state could not be read on this deployment
+expect_never:
+  - platform-health
+expect_select: upgrade-readiness
+
+---
+
+case: a device that reloaded today has that explained before any upgrade is planned
+question: pre-upgrade check on edge-1
+ui:
+  - correlation_id=case-upg-reload
+  - device=edge-1
+signals:
+  - state:reload=recent
+  - state:upgrade_fs=ok
+evidence:
+  - finding
+  - device
+expect_chain:
+  - upgrade-readiness entry
+  - platform-health rule
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: came up within the last day
+expect_verdict:
+  - quote
+  - rate
+expect_never:
+  - ntp-clock
+
+---
+
+case: a healthy device with room and a single control processor takes no hop and gets a verdict
+question: upgrade readiness for edge-1
+ui:
+  - correlation_id=case-upg-calm
+  - device=edge-1
+signals:
+  - state:platform=ok
+  - state:upgrade_fs=ok
+  - state:upgrade_redundancy=simplex
+  - state:reload=earlier
+evidence:
+  - finding
+  - device
+expect_chain:
+  - upgrade-readiness entry
+expect_selected: none
+expect_verdict:
+  - READY
+  - CANNOT TELL
+  - no change has been made
+expect_never:
+  - platform-health
+  - log-confirmation
+expect_select: upgrade-readiness
+
+---
+
+case: a boot filesystem short of room is a verdict reason, not a hop
+question: before upgrading edge-1 check it is ready
+ui:
+  - correlation_id=case-upg-lowfs
+  - device=edge-1
+signals:
+  - state:platform=ok
+  - state:upgrade_fs=low
+  - state:upgrade_redundancy=redundant
+evidence:
+  - finding
+  - device
+expect_chain:
+  - upgrade-readiness entry
+expect_selected: none
+expect_verdict:
+  - NOT READY
+  - free space
+expect_never:
+  - platform-health
+  - log-confirmation
+
+---
+
+case: a platform with no established read-only command gives no readiness verdict and says why
+question: is vedge-1 ready for an upgrade
+ui:
+  - correlation_id=case-upg-unsupported
+  - device=vedge-1
+signals:
+  - state:collect=unsupported
+notes:
+  - platform does not resolve to a known CLI dialect — no read-only command is established for it
+evidence:
+  - finding
+expect_chain:
+  - upgrade-readiness entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no read-only command is established
+expect_verdict:
+  - quote
+  - rate
+expect_notes:
+  - no read-only command is established
+expect_never:
+  - platform-health

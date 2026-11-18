@@ -209,6 +209,48 @@ type PlatformHealth struct {
 	// ClockOffsetMs is the clock offset in milliseconds, as the device printed
 	// it (sign preserved).
 	ClockOffsetMs *float64
+	// BootImage is the image the device says it booted ("System image file
+	// is …"), verbatim without the quotes. On IOS-XE in install mode this is
+	// packages.conf, not a .bin bundle.
+	BootImage *string
+}
+
+// UpgradeFacts is what an upgrade-readiness read established about a device:
+// where it boots from, how much room its boot filesystem has, and whether a
+// second control processor could carry it through the upgrade. Each field is
+// set only by a read that printed it; nil is "this read did not say".
+type UpgradeFacts struct {
+	// BootVariable is the BOOT variable verbatim. A non-nil empty string means
+	// the device printed that the variable does not exist (normal for an
+	// IOS-XE router in install mode), which is a different fact from nil.
+	BootVariable *string
+	// ConfigRegister is the configuration register verbatim (0x2102, …).
+	ConfigRegister *string
+	// FileSystem is the filesystem the free-space figures belong to
+	// ("bootflash:").
+	FileSystem *string
+	// FSTotalBytes / FSFreeBytes are that filesystem's size and free space.
+	FSTotalBytes *int64
+	FSFreeBytes  *int64
+	// RedundancyHardware is the hardware redundancy mode verbatim ("Simplex",
+	// "Duplex").
+	RedundancyHardware *string
+	// RedundancyMode is the operating redundancy mode verbatim
+	// ("Non-redundant", "SSO", …).
+	RedundancyMode *string
+	// PeerState is the peer control processor's state as the device named it
+	// ("DISABLED", …), when it named one.
+	PeerState *string
+}
+
+// RouteSummary is a routing table's size: the total route count the device
+// reported and the count per route source (connected, static, bgp, …).
+type RouteSummary struct {
+	// Total is networks plus subnets on the device's Total line.
+	Total int64
+	// BySource is networks plus subnets per route source, excluding the
+	// device's own "internal" bookkeeping row.
+	BySource map[string]int64
 }
 
 // LogLine is one parsed device log-buffer line.

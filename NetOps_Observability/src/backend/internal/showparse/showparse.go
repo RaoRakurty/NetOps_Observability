@@ -149,6 +149,20 @@ const (
 	// Batch 3). Raw evidence only until real output is captured.
 	CmdFHRPBrief   = "fhrp-brief"
 	CmdLACPMembers = "lacp-members"
+	// CmdUpgradeVersion is the software version and boot image read of an
+	// upgrade-readiness check — the same `show version` as CmdPlatformUptime,
+	// carried in the upgrade area so one state read answers every readiness
+	// question. CmdBootVars is the boot-variable read, CmdFileSystem the boot
+	// filesystem's size and free space, and CmdRedundancy the control-processor
+	// redundancy read. CmdRouteSummary is the routing table's size per route
+	// source, read for a before/after change baseline. New parsers exist only
+	// for the IOS-XE output captured on a real device (2026-11-18); every other
+	// dialect's output is raw evidence.
+	CmdUpgradeVersion = "upgrade-version"
+	CmdBootVars       = "upgrade-boot"
+	CmdFileSystem     = "upgrade-fs"
+	CmdRedundancy     = "upgrade-redundancy"
+	CmdRouteSummary   = "route-summary"
 	// CmdLogs is the bounded device log-buffer read.
 	CmdLogs = "logs"
 )
@@ -162,6 +176,7 @@ func Commands() []string {
 		CmdPlatformCPU, CmdPlatformMemory, CmdPlatformEnv, CmdPlatformUptime,
 		CmdPlatformClock,
 		CmdEVPNPeers, CmdEVPNVNI, CmdFHRPBrief, CmdLACPMembers,
+		CmdUpgradeVersion, CmdBootVars, CmdFileSystem, CmdRedundancy, CmdRouteSummary,
 		CmdLogs,
 	}
 }
@@ -211,6 +226,10 @@ type Result struct {
 	Logs         []LogLine
 	// Platform is nil unless a platform-health parser populated it.
 	Platform *PlatformHealth
+	// Upgrade is nil unless an upgrade-readiness parser populated it.
+	Upgrade *UpgradeFacts
+	// RouteSummary is nil unless a route-summary parser populated it.
+	RouteSummary *RouteSummary
 }
 
 // maxGaps bounds how many parse gaps one Result carries (§9 — every list is
@@ -238,6 +257,12 @@ func (r Result) Rows() int {
 	n := len(r.Interfaces) + len(r.IGPNeighbors) + len(r.BGPPeers) +
 		len(r.Routes) + len(r.ARP) + len(r.MAC) + len(r.Logs)
 	if r.Platform != nil {
+		n++
+	}
+	if r.Upgrade != nil {
+		n++
+	}
+	if r.RouteSummary != nil {
 		n++
 	}
 	return n
@@ -274,6 +299,7 @@ func NewLibrary() *Library {
 	registerL2Parsers(l)
 	registerPlatformParsers(l)
 	registerClockParsers(l)
+	registerUpgradeParsers(l)
 	registerLogParsers(l)
 	return l
 }

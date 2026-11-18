@@ -275,6 +275,17 @@ func parseVersionUptime(lines []string) Result {
 				found = true
 			}
 		}
+		if ph.BootImage == nil {
+			// `System image file is "bootflash:packages.conf"` (captured,
+			// IOS-XE 17.3.2). Quotes stripped; an empty or oversized value is
+			// not recorded.
+			if v, ok := strings.CutPrefix(t, "System image file is "); ok {
+				if img := strings.Trim(trim(v), `"`); img != "" && len(img) <= 200 {
+					ph.BootImage = strPtr(img)
+					found = true
+				}
+			}
+		}
 		if ph.Version == nil {
 			if v, ok := valueAfter(t, ", Version "); ok && v != "" {
 				// The `v != ""` guard already stops the " x" sentinel becoming
