@@ -757,6 +757,10 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 		return o.answerSimilar(ctx, p, plan, disc)
 	case ModeDeviceBaseline:
 		return o.answerBaseline(ctx, p, question, plan, uiContext, disc)
+	case ModeChangeReview:
+		return o.answerChangeReviewGoverned(ctx, p, question)
+	case ModeUpgradeProcedure:
+		return o.answerUpgradeProcedure(ctx, p, question, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:

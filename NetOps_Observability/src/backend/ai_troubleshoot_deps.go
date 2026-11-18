@@ -235,6 +235,7 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	// Iris change assistance: before/after change baselines of one device.
 	if s.deviceBaselines != nil && s.discovery != nil {
 		deps.DeviceBaseline = s.aiDeviceBaseline(r, claims)
+		deps.DeviceBaselineAt = s.aiDeviceBaselineAt(claims)
 	}
 	// Configuration change history (design item 10). Wired only when config
 	// backup is enabled — the version register and the drift state it reads
@@ -242,6 +243,12 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	if s.configBackup != nil && s.configDrift != nil {
 		deps.RecentChanges = s.aiRecentChanges(claims)
 		deps.ConfigDiff = s.aiConfigDiff(r, claims)
+	}
+	// Read-only change assistance (2026-11-18): one change record from the
+	// caller's own ITSM connection, for Iris's change-plan review. Wired only when
+	// the ITSM configuration store exists.
+	if s.itsmCfg != nil {
+		deps.ChangeTicket = s.aiChangeTicket(claims)
 	}
 	// The NL query compiler (tracker 337 N-C5): interpret-only, and only for a
 	// caller who could run the same question on /api/ai/query/compile.
@@ -1727,6 +1734,28 @@ func (s *server) aiDeviceBaseline(r *http.Request, claims jwtClaims) func(contex
 			rep.BaselineID, rep.BaselineAt, rep.Summary, rep.NotRead = snap.ID, snap.TakenAt, snap.Describe(), snap.NotRead
 		}
 		return rep, nil
+	}
+}
+
+// aiDeviceBaselineAt tells a change review when the newest pre-change
+// baseline of one device was taken. The device is re-resolved through the
+// caller's own inventory (another workspace's id reads as "no such device"),
+// and the register is read in that device's tenant — the same tenant the
+// device page's Take wrote it under (baselineDevice).
+func (s *server) aiDeviceBaselineAt(claims jwtClaims) func(context.Context, ai.Principal, string) (time.Time, bool, error) {
+	return func(ctx context.Context, _ ai.Principal, deviceID string) (time.Time, bool, error) {
+		dev, ok := s.aiLookupDevice(claims, deviceID)
+		if !ok || s.deviceBaselines == nil {
+			return time.Time{}, false, ai.ErrNotFound
+		}
+		list, err := s.deviceBaselines.List(ctx, deviceTenant(dev), dev.ID)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("device baselines: %w", err)
+		}
+		if len(list) == 0 {
+			return time.Time{}, false, nil
+		}
+		return list[0].TakenAt, true, nil // List is newest first
 	}
 }
 
