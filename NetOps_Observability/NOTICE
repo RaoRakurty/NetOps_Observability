@@ -97,6 +97,19 @@ worksheet or template is reproduced. The synthetic-probe read behind
 dns-resolution, and the EVPN and redundancy command rows (documentation-only,
 no parser until output is captured on a real device), are this project's own.
 
+Change assistance (2026-11-18), same pin, same terms:
+
+  Skills  : pyats-config-mgmt (pre-change baseline, post-change verification,
+            rollback readiness), jev-change-review (plan completeness),
+            aruba-cx-system (ISSU planning checks), pyats-health-check
+            (version and image)  -> upgrade-readiness, the device baseline
+
+Only the read-only ideas are re-expressed: take a baseline before a change,
+verify against it afterwards, and check readiness before an upgrade. NetClaw's
+configuration-deployment step is NOT taken — nothing in this project changes a
+device. The upgrade command rows, the parsers (built from output captured on a
+real IOS-XE device) and the baseline store and diff are this project's own.
+
 Read-only change assistance (2026-11-18), same pin, same terms:
 
   Skills  : jev-change-review, servicenow-change-workflow

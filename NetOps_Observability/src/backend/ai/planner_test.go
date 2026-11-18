@@ -71,6 +71,8 @@ func plannerOrch(llm LLMClient) *Orchestrator {
 		Scope: &ScopeFacts{TenantID: "t-a"}, ModelFirst: true,
 		Troubleshoot: TroubleshootDeps{SimilarIncidents: func(context.Context, Principal, string, string) (SimilarIncidents, error) {
 			return SimilarIncidents{Verdict: "no_similar_incident", Caveat: "Similar is not the same cause."}, nil
+		}, DeviceBaseline: func(_ context.Context, _ Principal, req BaselineRequest) (BaselineReport, error) {
+			return BaselineReport{DeviceID: req.DeviceID, Op: req.Op, NotWired: "no live transport in this harness"}, nil
 		}}}
 }
 
@@ -448,7 +450,10 @@ var expectedArm = map[string]string{
 	// No AI investigations on this harness: the troubleshooting arm answers
 	// (and, with no skills, the model), saying what a full investigation needs.
 	PlanRouteInvestigate: ArmModel,
-	PlanRouteOutOfScope:  ArmCapability,
+	// Upgrade readiness runs a compiled method; with no skills on this harness
+	// the model answers.
+	PlanRouteUpgrade:    ArmModel,
+	PlanRouteOutOfScope: ArmCapability,
 }
 
 // Routing fidelity over the whole corpus with a stub model that returns each

@@ -7043,6 +7043,20 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .cfg-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .cfg-note { margin: 0; }
 .cfg-bad { color: var(--bad); }
+/* Device page — Change check (before/after baseline). NOC standard: 14px+. */
+.chg-panel { font-size: 14px; }
+.chg-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.chg-step { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.chg-step-h { font-weight: 600; font-size: 14px; }
+.chg-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.chg-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; min-width: 200px; }
+.chg-status { margin: 0; min-height: 1.4em; font-size: 14px; }
+.chg-lines { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.chg-bad { color: var(--bad); }
+.chg-muted { color: var(--muted); }
+.chg-empty { margin: 0; font-size: 14px; }
+.chg-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.chg-table th, .chg-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .cfg-sha { text-align: left; font-weight: 500; white-space: nowrap; }
 .cfg-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .cfg-actions .btn { padding: 2px 8px; font-size: 12.5px; }

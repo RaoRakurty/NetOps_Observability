@@ -4159,6 +4159,31 @@ export function configDriftParams(q: ConfigDriftQuery = {}): string {
 // The whole family is dormant unless the backend flag is on; a 404/501 is the
 // "not enabled" answer, not a failure.
 
+/** A before/after change baseline of one device (Iris change assistance).
+ *  Read with read-only show commands only; nothing on the device changes. */
+export type DeviceBaselineSummary = {
+  id: string;
+  device_id: string;
+  device_name: string;
+  taken_at: string;
+  taken_by: string;
+  label?: string;
+  interfaces: number;
+  neighbors: number;
+  not_read: number;
+};
+export type DeviceBaselineList = { device_id: string; items: DeviceBaselineSummary[]; keep: number };
+export type DeviceBaselineChange = { kind: string; subject: string; before: string; after: string };
+/** The comparison of a fresh read with a baseline: OBSERVED lines, worst first. */
+export type DeviceBaselineDiff = {
+  baseline: DeviceBaselineSummary;
+  read_at: string;
+  changes: DeviceBaselineChange[];
+  unchanged: number;
+  cannot_compare: string[];
+  lines: string[];
+};
+
 /** Lifecycle of one capture. "expired" = the retention window closed and the
  *  file is gone — an honest state, never rendered as a successful download. */
 export type PcapStatus = "running" | "done" | "failed" | "expired";
@@ -8521,6 +8546,22 @@ export const api = {
     return res.text();
   },
 
+  // ---------- Change baselines (Iris change assistance) ---------------------
+  // Listing needs infrastructure:read; taking and comparing are LIVE device
+  // reads (read-only show commands) and need infrastructure:write. 409 = the
+  // device could not be read (the reason is in the body); nothing is stored.
+  deviceBaselines: (deviceId: string) =>
+    request<DeviceBaselineList>(`/api/devices/${encodeURIComponent(deviceId)}/baselines`),
+  deviceBaselineTake: (deviceId: string, label: string) =>
+    request<DeviceBaselineSummary>(`/api/devices/${encodeURIComponent(deviceId)}/baselines`, {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    }),
+  deviceBaselineCompare: (deviceId: string, baselineId?: string) =>
+    request<DeviceBaselineDiff>(`/api/devices/${encodeURIComponent(deviceId)}/baselines/compare`, {
+      method: "POST",
+      body: JSON.stringify(baselineId ? { baseline_id: baselineId } : {}),
+    }),
   // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
   // Reads need infrastructure:read; start, download and delete need
   // infrastructure:write. The device id and capture id are path-encoded at

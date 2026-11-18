@@ -316,6 +316,12 @@ type TroubleshootDeps struct {
 	// the documented threshold. ErrNotFound for a case the caller cannot see.
 	// nil = find_similar_incidents is not registered.
 	SimilarIncidents func(ctx context.Context, p Principal, correlationID, window string) (SimilarIncidents, error)
+	// DeviceBaseline takes or compares a before/after change baseline of ONE
+	// device the caller can see (baseline_answer.go). It reads the device with
+	// the read-only state battery only — it never changes a device — and stores
+	// a baseline in the device's own tenant. ErrNotFound for a device the
+	// caller cannot see. nil = change baselines are not wired here.
+	DeviceBaseline func(ctx context.Context, p Principal, req BaselineRequest) (BaselineReport, error)
 
 	// ── the Iris RCA contract (tracker 337 N-B1) ───────────────────────────
 

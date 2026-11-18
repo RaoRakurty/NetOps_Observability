@@ -28,6 +28,9 @@ const (
 	// ModeSimilarIncidents answers "have we seen this before?" from the
 	// caller's own closed incidents (tracker 337 N-F4, similar_answer.go).
 	ModeSimilarIncidents AnswerMode = "similar_incidents"
+	// ModeDeviceBaseline takes or compares a before/after change baseline of
+	// one device (baseline_answer.go): read-only device reads, OBSERVED diffs.
+	ModeDeviceBaseline AnswerMode = "device_baseline"
 	// ModeChangeReview reviews a proposed change plan for readiness (read-only
 	// change assistance, change_review.go): the closed checklist plus what the
 	// caller's own network says about the devices it names.

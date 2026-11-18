@@ -89,6 +89,9 @@ const (
 	PlanRouteHandoff      = "shift_handoff"
 	PlanRouteTimeRange    = "time_range"
 	PlanRouteSimilar      = "similar_incidents"
+	PlanRouteUpgrade      = "upgrade_readiness"
+	PlanRouteBaseline     = "baseline_take"
+	PlanRouteCompare      = "baseline_compare"
 	PlanRouteInvestigate  = "investigate"
 	PlanRoutePlaybook     = "playbook"
 	PlanRouteModule       = "module"
@@ -97,8 +100,8 @@ const (
 	PlanRoutePageHelp     = "page_help"
 	PlanRouteOutOfScope   = "out_of_scope"
 	// Read-only change assistance (owner decision 2026-11-18).
-	PlanRouteChangeReview = "change_review"
-	PlanRouteUpgrade      = "upgrade_procedure"
+	PlanRouteChangeReview     = "change_review"
+	PlanRouteUpgradeProcedure = "upgrade_procedure"
 )
 
 // plannerRoute is one catalogue line: the id the model replies with and the
@@ -123,10 +126,13 @@ var plannerRoutes = []plannerRoute{
 	{PlanRouteProblem, "explain one specific problem or incident the operator names by its id (a P-number or a UUID)"},
 	{PlanRouteHandoff, "a shift handoff or pass-down summary for the incoming shift"},
 	{PlanRouteSimilar, "whether an incident has happened before: a repeat or recurrence, earlier cases like it, how often it happens, what it looked like or what was done about it last time (the one they name or have open, else the top incident)"},
+	{PlanRouteUpgrade, "whether a device is ready for a software upgrade: a pre-upgrade or readiness check before upgrading it (current version, boot image, free space, redundancy, health, open incidents) — a read-only check that never upgrades anything"},
+	{PlanRouteBaseline, "take or record a before-change baseline (snapshot) of one device's state — interfaces, routing neighbours, route counts, version — to compare against after a change or maintenance"},
+	{PlanRouteCompare, "compare one device's state now with the baseline taken before a change: what came back, what did not, which counts changed (post-change or post-upgrade verification)"},
 	{PlanRouteInvestigate, "the operator asks Iris to INVESTIGATE end to end: dig into an incident, a device or a site and work out what is going on across several checks, the way an engineer would (a full investigation, not one symptom check, a data listing or an explanation of a known incident)"},
 	{PlanRouteTimeRange, "what happened in a PAST window (last night, yesterday, over the weekend, the last few hours)"},
 	{PlanRouteChangeReview, "the operator wants a PROPOSED change reviewed before it is carried out: a change plan, maintenance plan or change ticket (such as CHG0012345) checked for readiness — scope, pre-checks, success checks, rollback, maintenance window, risk to the devices it touches"},
-	{PlanRouteUpgrade, "the operator asks how to upgrade a device's software or operating system, or wants the upgrade steps or procedure for a vendor or platform (IOS XE, NX-OS, Junos, EOS and so on)"},
+	{PlanRouteUpgradeProcedure, "the operator asks how to upgrade a device's software or operating system, or wants the upgrade steps or procedure for a vendor or platform (IOS XE, NX-OS, Junos, EOS and so on)"},
 	{PlanRoutePlaybook, "general guidance on how to troubleshoot a technology or protocol, not about a live device of theirs"},
 	{PlanRouteModule, "a summary of one data module — name it on a MODULE line"},
 	{PlanRouteProduct, "a question about Correlix itself: what a concept or term means, what a screen or column shows, how to set up, configure or use a feature"},
@@ -525,6 +531,10 @@ func planForRoute(route string, ent map[string]string) (Plan, bool) {
 	case PlanRouteHandoff:
 		return Plan{Intent: "shift_handoff", Modules: []string{"event_management"}, Mode: ModeShiftHandoff,
 			Entities: ent, Freshness: FreshnessLive}, true
+	case PlanRouteBaseline:
+		return baselinePlan("baseline_take", ent), true
+	case PlanRouteCompare:
+		return baselinePlan("baseline_compare", ent), true
 	case PlanRouteSimilar:
 		return Plan{Intent: "similar_incidents", Modules: []string{"correlations_rca"}, Mode: ModeSimilarIncidents,
 			Entities: ent, Freshness: FreshnessHistorical, Tools: []string{"find_similar_incidents"}}, true
@@ -604,6 +614,11 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 			}
 		}
 		return o.answerPlanned(ctx, p, question, uiContext, PlannerChoice{Route: PlanRouteNetwork})
+	case PlanRouteUpgrade:
+		// Upgrade readiness is a compiled method: the troubleshooting arm runs
+		// it (read-only gathers, a READY / NOT READY / CANNOT TELL verdict).
+		return o.answerPlanned(ctx, p, question, uiContext,
+			PlannerChoice{Route: PlanRouteTroubleshoot, Skill: upgradeReadinessSkill, Terms: ch.Terms})
 	case PlanRouteInvestigate:
 		if !o.InvestigateAllowed {
 			// No full investigation for this caller: the troubleshooting arm
@@ -673,7 +688,7 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 		o.routed(ArmClassic, ModeChangeReview)
 		ans, err := o.answerChangeReviewGoverned(ctx, p, question)
 		return stampPlanned(ans), true, err
-	case PlanRouteUpgrade:
+	case PlanRouteUpgradeProcedure:
 		o.routed(ArmClassic, ModeUpgradeProcedure)
 		ans, err := o.answerUpgradeProcedure(ctx, p, question, plan, nil)
 		return stampPlanned(ans), true, err

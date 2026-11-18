@@ -64,7 +64,7 @@ const (
 // internal/protocoldiag, and a tool argument vocabulary that could drift with a
 // library is not a closed vocabulary. TestDeviceStateAreasMatchTheBattery in the
 // root package pins the two together.
-var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "logs"}
+var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "upgrade", "logs"}
 
 var stateAreas = func() map[string]bool {
 	m := make(map[string]bool, len(stateAreaOrder))
@@ -94,7 +94,7 @@ func stateRowCap(area string) int {
 		return MaxStateRowsRoutes
 	case "l2":
 		return MaxStateRowsL2
-	case "platform", "evpn", "redundancy":
+	case "platform", "evpn", "redundancy", "upgrade":
 		return MaxStateRowsPlatform
 	case "logs":
 		return MaxStateRowsLogs
@@ -139,6 +139,7 @@ var stateTargetRules = map[string]stateTargetRule{
 	"platform":   stateTargetNone,
 	"evpn":       stateTargetNone,
 	"redundancy": stateTargetNone,
+	"upgrade":    stateTargetNone,
 	"logs":       stateTargetNone,
 }
 
