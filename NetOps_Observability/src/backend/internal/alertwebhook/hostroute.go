@@ -194,7 +194,7 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
 // conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
-// TWELVE, because one condition is implemented by several per-engine/per-lane
+// THIRTEEN, because one condition is implemented by several per-engine/per-lane
 // rules whose first response differs — the rules are the same condition seen
 // from a different vantage point, not extra conditions:
 //
@@ -209,12 +209,17 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 //	                                   upstream vectordotdev/vector#22006)
 //	      CorrConsumerNotRunning     the engine's OWN corr_consumer_running gauge
 //	      CorrConsumerRestartLoop    a supervision loop that never stays up
-//	(2) ingest silent when it should not be    — 2 rules
+//	(2) ingest silent when it should not be    — 3 rules
 //	      IngestPipelineSilent       the vector-aggregator funnel (SNMP-guarded)
 //	      NMSIngestSilent            the NMS controller lane (owner D4,
 //	                                   2026-10-24): an integration that has
 //	                                   delivered before went silent past
 //	                                   max(3 x interval, 15m)
+//	      MonitoredSourcesSilent     the DEVICES themselves: inventoried
+//	                                   devices that a collector reached in the
+//	                                   last 7 days send nothing on any lane
+//	                                   (the 2026-11-14 lab-gateway outage,
+//	                                   #271; same condition, not a fifth)
 //	(3) storage refusing writes                — 1 rule: ClickHouseWritesRejected
 //	(4) the alerting path broken               — 2 rules
 //	      AlertDeliveryBroken        the front half: no heartbeat reached the
@@ -231,7 +236,7 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 // `tier: page` rule at all. Both claims are pinned mechanically by
 // TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
 // fails the build rather than rotting the next time a rule is added.
-const pageRuleCount = 12
+const pageRuleCount = 13
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.
