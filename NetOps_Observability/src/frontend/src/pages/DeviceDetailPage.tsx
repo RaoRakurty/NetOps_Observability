@@ -11,6 +11,7 @@ import InterfacePerformance from "./InterfacePerformance";
 import DeviceNeighbors from "./DeviceNeighbors";
 import DeviceConfigPanel from "./config/DeviceConfigPanel";
 import DevicePcapPanel from "./capture/DevicePcapPanel";
+import DeviceChangeCheck from "./change/DeviceChangeCheck";
 import VrfInterfaces from "./device/VrfInterfaces";
 import ControllerOverview, { controllerOf, controllerOnly } from "./device/ControllerOverview";
 import { vrfTerm } from "../lib/vendorTerms";
@@ -37,7 +38,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   "cloud-gw": { label: "Cloud GW", color: "#f59e0b" }, generic: { label: "Generic", color: "var(--muted)" },
 };
 
-type Tab = "overview" | "interfaces" | "vrf" | "routing" | "config" | "capture";
+type Tab = "overview" | "interfaces" | "vrf" | "routing" | "config" | "capture" | "change";
 
 export default function DeviceDetailPage({ device, onClose }: { device: Device; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -96,7 +97,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
 
         {/* Tabs */}
         <div className="ddp-tabs" role="tablist">
-          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Neighbors"], ["config", "Config"], ["capture", "Capture"]] as [Tab, string][]).map(([id, label]) => (
+          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Neighbors"], ["config", "Config"], ["capture", "Capture"], ["change", "Change"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
@@ -142,6 +143,9 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
           {/* On-demand, bounded packet capture (FEATURE_PACKET_CAPTURE).
               Renders its own "not enabled" card when the flag is off. */}
           {tab === "capture" && <DevicePcapPanel device={d} />}
+          {/* Before/after change check: a baseline taken with read-only show
+              commands, compared after the change (Iris change assistance). */}
+          {tab === "change" && <DeviceChangeCheck device={d} />}
         </div>
       </div>
     </div>

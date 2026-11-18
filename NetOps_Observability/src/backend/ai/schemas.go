@@ -27,7 +27,10 @@ const (
 	ModeShiftHandoff             AnswerMode = "shift_handoff"
 	// ModeSimilarIncidents answers "have we seen this before?" from the
 	// caller's own closed incidents (tracker 337 N-F4, similar_answer.go).
-	ModeSimilarIncidents      AnswerMode = "similar_incidents"
+	ModeSimilarIncidents AnswerMode = "similar_incidents"
+	// ModeDeviceBaseline takes or compares a before/after change baseline of
+	// one device (baseline_answer.go): read-only device reads, OBSERVED diffs.
+	ModeDeviceBaseline        AnswerMode = "device_baseline"
 	ModeExecutiveSummary      AnswerMode = "executive_summary"
 	ModeProductNavigationHelp AnswerMode = "product_navigation_help"
 	ModeProductAnswer         AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge

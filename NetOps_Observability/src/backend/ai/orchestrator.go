@@ -359,6 +359,11 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "product_question", Modules: []string{"product_navigation"},
 			Mode: ModeProductAnswer, Entities: ent, Freshness: FreshnessConfig,
 		}
+	case classifyBaseline(q) != "":
+		// "take a baseline of edge-1 before the change" / "compare edge-1 with
+		// its baseline" → Iris change assistance (baseline_answer.go): read-only
+		// device reads and an OBSERVED diff, never a device change.
+		return baselinePlan(classifyBaseline(q), ent)
 	case reStyleFeedback.MatchString(q) && len(q) < 80:
 		// Pure style feedback → compact current-state re-briefing (brief mode).
 		ent["style"] = "brief"
@@ -750,6 +755,8 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 		return o.answerTimeRange(ctx, p, question, plan, disc)
 	case ModeSimilarIncidents:
 		return o.answerSimilar(ctx, p, plan, disc)
+	case ModeDeviceBaseline:
+		return o.answerBaseline(ctx, p, question, plan, uiContext, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:

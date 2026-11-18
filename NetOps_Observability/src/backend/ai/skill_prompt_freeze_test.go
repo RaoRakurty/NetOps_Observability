@@ -124,6 +124,8 @@ var frozenCompiledPrompts = map[string]string{
 	"qos-congestion":            "54c4919165eaf15f57992eb8edc6f4db36e9a6cdccda7f86a9c810d3553fabe3",
 	"security-exposure-context": "3cc62a68a7c412b0cad5f0141246327e4365be51aea598e80384cccdc8a47f49",
 	"stp-topology":              "d9a17b77b338c54b8664365feee1481e8537d227592c33e8f9045b02e6030c75",
+	// Change assistance (2026-11-18): a new method; no existing prompt moved.
+	"upgrade-readiness": "6df78efe856866379ee8e5b646ed48fa49c70667d83edfa4d1b263ced2162030",
 }
 
 func TestCompiledSkillPromptBytesAreFrozen(t *testing.T) {
