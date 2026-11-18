@@ -794,6 +794,21 @@ func TestParse_BriefTables(t *testing.T) {
 			t.Error("an unassigned interface must have a nil IPv4, not the literal 'unassigned'")
 		}
 	})
+	t.Run("cisco trailing transport text is not a row", func(t *testing.T) {
+		// A capture whose last row has an SSH client's close message glued on:
+		// its Protocol column is no longer up/down, so the row is skipped
+		// instead of recording "closed." as the interface's status.
+		in := ciscoIPIntBrief + "GigabitEthernet4       unassigned      YES unset  administratively down downConnection to 192.0.2.1 closed.\n"
+		res := mustParse(t, CmdInterfaceBrief, DialectCiscoIOSXE, in)
+		if len(res.Interfaces) != 3 {
+			t.Fatalf("got %d rows, want 3 (the glued row skipped)", len(res.Interfaces))
+		}
+		for _, i := range res.Interfaces {
+			if i.Oper == nil || (!strings.EqualFold(*i.Oper, "up") && !strings.EqualFold(*i.Oper, "down")) {
+				t.Errorf("%s: Oper = %v, want up/down", i.Name, i.Oper)
+			}
+		}
+	})
 	t.Run("nxos", func(t *testing.T) {
 		res := mustParse(t, CmdInterfaceBrief, DialectCiscoNXOS, nxosIPIntBrief)
 		if len(res.Interfaces) != 2 {

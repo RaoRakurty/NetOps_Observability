@@ -2492,7 +2492,7 @@ func aiPlatformLine(h showparse.PlatformHealth) string {
 		parts = append(parts, "uptime "+v)
 	}
 	if v := aiStr(h.LastReload); v != "" {
-		parts = append(parts, "last reload "+aiClampLine(v, 80))
+		parts = append(parts, "last reload: "+aiClampLine(v, 80)) // "last reload: reload", never "last reload reload"
 	}
 	if v := aiStr(h.Version); v != "" {
 		parts = append(parts, "version "+aiClampLine(v, 60))
