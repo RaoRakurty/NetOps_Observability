@@ -463,6 +463,15 @@ var skillStateFacets = map[string]map[string]bool{
 	// A probe that has not run yet declares nothing: unmeasured is never passing.
 	"probe": {"passing": true, "partial": true, "failing": true, "none": true},
 	"dns":   {"resolving": true, "timeout": true, "nxdomain": true, "failing": true, "none": true},
+	// Change assistance (2026-11-18), read by the state battery's upgrade area:
+	//   upgrade_fs          the boot filesystem's free space: low under 2 GiB
+	//                       (about what an IOS-XE image and its expansion need),
+	//                       ok at or above it
+	//   upgrade_redundancy  simplex when the device names a single control
+	//                       processor, redundant when it names a redundancy mode
+	// A device that printed neither figure declares nothing.
+	"upgrade_fs":         {"ok": true, "low": true},
+	"upgrade_redundancy": {"redundant": true, "simplex": true},
 }
 
 // skillStateFacetTool names the tool that declares a facet, for the facets the
@@ -716,6 +725,16 @@ func stateConditionHuman(facet, value string) string {
 		default:
 			return "no DNS probe is configured"
 		}
+	case "upgrade_fs":
+		if value == "low" {
+			return "the boot filesystem has less than 2 GiB free"
+		}
+		return "the boot filesystem has at least 2 GiB free"
+	case "upgrade_redundancy":
+		if value == "simplex" {
+			return "the device has a single control processor, so an upgrade takes it out of service"
+		}
+		return "the device reports a redundant control processor"
 	case "platform":
 		switch value {
 		case "cpu_high":

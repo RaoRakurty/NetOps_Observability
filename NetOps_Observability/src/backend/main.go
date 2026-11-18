@@ -77,6 +77,7 @@ import (
 	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
 	// DATA-PROTECTION-END
+	"netops/backend/internal/devbaseline"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/discoveryscope"
@@ -611,6 +612,7 @@ type server struct {
 	incidentTimeMetrics incidentTimeMetricsStore         // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	incidentFP          incidentfp.Store                 // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
 	rcaResolutions      rcaresolution.Store              // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
+	deviceBaselines     devbaseline.Store                // before/after change baselines per device (Iris change assistance; migration 0079 / file fallback)
 	flowRollup          atomic.Pointer[flowquery.Roller] // per-interface flow rollup (tracker 401 (a)); nil until its worker starts
 	flowSampling        flowsampling.Store               // operator-declared flow sampling per exporter (tracker 401 (c); migration 0078 / file fallback)
 	aiFeedback          ai.FeedbackStore                 // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
@@ -1590,6 +1592,7 @@ func newServer() *server {
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
 	srv.incidentFP = newIncidentFingerprintStore()          // similar-incident fingerprints (N-F4), written through on demand
 	srv.rcaResolutions = newRcaResolutionStore()            // recorded fixes, read by similar-incident recall (N-F4 residue)
+	srv.deviceBaselines = newDeviceBaselineStore()          // before/after change baselines (Iris change assistance)
 	srv.flowSampling = newFlowSamplingStore()               // declared sampling per exporter (tracker 401 (c))
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
 	// IRIS-MEMORY-BEGIN
@@ -4847,6 +4850,14 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceSite(w, r)
 		return
 	}
+	// DEVICE-BASELINE-BEGIN — before/after change baselines
+	// (/api/devices/{id}/baselines…, internal/devbaseline). Dispatched here so
+	// it inherits the /api/devices/ tenant classification; read-only device
+	// reads only.
+	if s.baselineAPI().ServeDeviceSubroute(w, r) {
+		return
+	}
+	// DEVICE-BASELINE-END
 	// MONITORING-BEGIN — read-only monitoring status:
 	// /api/devices/{id}/monitoring (GET). Dispatched here rather than registered on the mux for the same
 	// reason the config-backup subtree is: it lives under /api/devices/ and

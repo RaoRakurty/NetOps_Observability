@@ -69,6 +69,11 @@ const (
 	// AreaRedundancy is first-hop redundancy (HSRP / VRRP) and link
 	// aggregation (LACP) membership (NetClaw ingestion Batch 3). doc_claimed.
 	AreaRedundancy Area = "redundancy"
+	// AreaUpgrade is what an upgrade-readiness check and a before/after change
+	// baseline read beyond the version: the boot variable, the boot
+	// filesystem's free space, control-processor redundancy and the routing
+	// table's size. Read-only throughout — nothing here changes a device.
+	AreaUpgrade Area = "upgrade"
 	// AreaLogs is the bounded device log buffer.
 	AreaLogs Area = "logs"
 )
@@ -85,7 +90,7 @@ var ErrUnknownArea = errors.New("protocoldiag: unknown state-battery area")
 
 // Areas returns every battery area in a stable, deterministic order.
 func Areas() []Area {
-	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaEVPN, AreaRedundancy, AreaLogs}
+	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaEVPN, AreaRedundancy, AreaUpgrade, AreaLogs}
 }
 
 // ValidArea reports whether a is a defined battery area.
@@ -672,6 +677,73 @@ func defaultBatterySpecs() []BatterySpec {
 				showparse.DialectJunos:      "show lacp interfaces",
 				showparse.DialectNokiaSROS:  "show lag",
 				showparse.DialectHuaweiVRP:  "display eth-trunk",
+			}),
+
+		// ── upgrade ─────────────────────────────────────────────────────────
+		// Change assistance (2026-11-18). Fidelity per template: every IOS-XE
+		// row is CAPTURED (a real 17.3.2 edge; its parser is built from that
+		// output). Every other row is doc_claimed — the vendor's own command
+		// reference names it, no output has been captured here, so its result
+		// reaches the operator as raw evidence, never parsed. Deliberate gaps:
+		// the boot variable on Junos (no single boot-variable read — the
+		// snapshot and boot device are separate commands), and the filesystem
+		// free space on NX-OS, SR OS and VRP (their free-space reads are `dir`,
+		// which is not a read-only lead token this battery accepts).
+		bs(showparse.CmdUpgradeVersion, AreaUpgrade,
+			"software version and the image the device booted (the starting point the target version is compared against)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show version", // captured
+				showparse.DialectCiscoIOS:   "show version",
+				showparse.DialectCiscoIOSXR: "show version",
+				showparse.DialectCiscoNXOS:  "show version",
+				showparse.DialectAristaEOS:  "show version",
+				showparse.DialectJunos:      "show version",
+				showparse.DialectNokiaSROS:  "show version",
+				showparse.DialectHuaweiVRP:  "display version",
+			}),
+		bs(showparse.CmdBootVars, AreaUpgrade,
+			"boot variable and configuration register: where the device will boot from after a reload (an upgrade that does not change it boots the old image)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show bootvar", // captured
+				showparse.DialectCiscoIOS:   "show bootvar",
+				showparse.DialectCiscoNXOS:  "show boot",
+				showparse.DialectCiscoIOSXR: "show install active summary",
+				showparse.DialectAristaEOS:  "show boot-config",
+				showparse.DialectNokiaSROS:  "show bof",
+				showparse.DialectHuaweiVRP:  "display startup",
+			}),
+		bs(showparse.CmdFileSystem, AreaUpgrade,
+			"boot filesystem size and free space (a new image needs room on the filesystem the device boots from)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show file systems", // captured
+				showparse.DialectCiscoIOS:   "show file systems",
+				showparse.DialectCiscoIOSXR: "show filesystem",
+				showparse.DialectAristaEOS:  "show file systems",
+				showparse.DialectJunos:      "show system storage",
+			}),
+		bs(showparse.CmdRedundancy, AreaUpgrade,
+			"control-processor redundancy: whether a standby could carry traffic while the active one is upgraded",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show redundancy", // captured
+				showparse.DialectCiscoIOS:   "show redundancy",
+				showparse.DialectCiscoIOSXR: "show redundancy",
+				showparse.DialectCiscoNXOS:  "show system redundancy status",
+				showparse.DialectAristaEOS:  "show redundancy status",
+				showparse.DialectJunos:      "show system switchover",
+				showparse.DialectNokiaSROS:  "show redundancy synchronization",
+				showparse.DialectHuaweiVRP:  "display switchover state",
+			}),
+		bs(showparse.CmdRouteSummary, AreaUpgrade,
+			"routing-table size per route source (the before/after count that shows whether every route came back)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show ip route summary", // captured
+				showparse.DialectCiscoIOS:   "show ip route summary",
+				showparse.DialectCiscoIOSXR: "show route summary",
+				showparse.DialectCiscoNXOS:  "show ip route summary",
+				showparse.DialectAristaEOS:  "show ip route summary",
+				showparse.DialectJunos:      "show route summary",
+				showparse.DialectNokiaSROS:  "show router route-table summary",
+				showparse.DialectHuaweiVRP:  "display ip routing-table statistics",
 			}),
 
 		// ── logs ────────────────────────────────────────────────────────────
