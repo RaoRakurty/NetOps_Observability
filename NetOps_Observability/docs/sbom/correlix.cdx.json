@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:79636b7b-f0f6-5572-8d53-2ad1acb99818",
+  "serialNumber": "urn:uuid:e751b919-dee0-5675-a080-d951fb886d3b",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-10T23:01:26+00:00",
+    "timestamp": "2026-11-15T05:25:07+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.11.10-gf035bfe4#correlix",
+      "bom-ref": "correlix@2026.11.15-gdbc81fef#correlix",
       "name": "correlix",
-      "version": "2026.11.10-gf035bfe4",
+      "version": "2026.11.15-gdbc81fef",
       "description": "Correlix \u2014 correlix dependency inventory"
     },
     "properties": [
@@ -10341,10 +10341,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/%40playwright/test@1.60.0",
+      "bom-ref": "pkg:npm/%40playwright/test@1.65.1",
       "name": "@playwright/test",
-      "version": "1.60.0",
-      "purl": "pkg:npm/%40playwright/test@1.60.0",
+      "version": "1.65.1",
+      "purl": "pkg:npm/%40playwright/test@1.65.1",
       "scope": "optional",
       "properties": [
         {
@@ -10356,10 +10356,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "3bbd726486c087f3f10cc3469ecdfb1870487eb564115ca7f805f221ae5d3937dbe3fc4dbd1595f95bff34c6cd0ad38307fa4eeef2e517639398c54b866afb02"
+          "content": "cbe3422119b62ef638b255155af1a1d67ba327c445fe1122b08b2ada6b543e07500b82fbd356eae61646321ae97978c00afc2f3bdb63e5d26a86f33a4cff656f"
         }
       ]
     },
@@ -21757,30 +21764,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/fsevents@2.3.2",
-      "name": "fsevents",
-      "version": "2.3.2",
-      "purl": "pkg:npm/fsevents@2.3.2",
-      "scope": "optional",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "npm-frontend"
-        },
-        {
-          "name": "correlix:dev",
-          "value": "true"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "c62a8c411e3101e1d3b81f6e5a6f9f1517083a02813223813fe7978b24fb8ec8150aad5b915ca0b74d28012a3007b11db6938769a3e02adf35d8ff5a6fe0c328"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:npm/fsevents@2.3.3",
       "name": "fsevents",
       "version": "2.3.3",
@@ -30251,10 +30234,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/playwright-core@1.60.0",
+      "bom-ref": "pkg:npm/playwright-core@1.65.1",
       "name": "playwright-core",
-      "version": "1.60.0",
-      "purl": "pkg:npm/playwright-core@1.60.0",
+      "version": "1.65.1",
+      "purl": "pkg:npm/playwright-core@1.65.1",
       "scope": "optional",
       "properties": [
         {
@@ -30266,19 +30249,26 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "f5b5bacef5ff9b49446e04ca27a629a4e2b1f07dd538f04c382161da2ad714e4f805b1e0af1e613e3c0960b4f8d0bbbee2ab43dfaa8a73f1e7e7a4ad516e7b20"
+          "content": "86a3e9cfb6e548c3f1595768784d728814b35ec2a254e77693e9230af994cb00f618f3b60ddf477dc5a7abd34dd061db3590c5819f497c116bf97e7f04ba34ab"
         }
       ]
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/playwright@1.60.0",
+      "bom-ref": "pkg:npm/playwright@1.65.1",
       "name": "playwright",
-      "version": "1.60.0",
-      "purl": "pkg:npm/playwright@1.60.0",
+      "version": "1.65.1",
+      "purl": "pkg:npm/playwright@1.65.1",
       "scope": "optional",
       "properties": [
         {
@@ -30290,10 +30280,17 @@
           "value": "true"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "86178776890cf1c76a09bd25704decfb34f8b785bebef8e91b1b199439e291aaf3c7cb52ccc79b87752216d82ac05c274e78d841cb32305f1e8b69823bfb6978"
+          "content": "bc9d45ba83ab37038a1d421512f4adde34f52fec238c3a7087022cb4ab5fbd387c5c81b8146e1b205baf35d3318bcd4b19f02152051995e54568e2d8e1121453"
         }
       ]
     },
