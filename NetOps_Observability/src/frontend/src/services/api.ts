@@ -2369,6 +2369,17 @@ export interface RunbookLink {
   created_by: string;
   created_at: string;
 }
+/** A built-in vendor upgrade procedure a workspace can adopt as its own draft. */
+export interface RunbookTemplate {
+  name: string;
+  vendor: string;
+  family: string;
+  title: string;
+  applies_to: string;
+  source: { title: string; url: string; version: string; read: string };
+  steps: string[];
+  checks: string[];
+}
 
 // ---- change ledger API (N-D3) ----
 export interface ChangeConfigDiff {
@@ -7394,6 +7405,13 @@ export const api = {
     verb: "submit" | "withdraw" | "approve" | "reject" | "rollback" | "retire",
     body: { version?: number; body_sha256?: string; to_version?: number; reason?: string } = {},
   ) => request<Runbook>(`/api/ai/runbooks/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: JSON.stringify(body) }),
+  runbookTemplates: () => request<{ templates: RunbookTemplate[] }>("/api/ai/runbooks/templates"),
+  // Adopt = copy a built-in procedure as a DRAFT; it still needs a second admin's approval.
+  runbookAdopt: (template: string, name?: string) =>
+    request<Runbook>(`/api/ai/runbooks/templates/${encodeURIComponent(template)}/adopt`, {
+      method: "POST",
+      body: JSON.stringify(name ? { name } : {}),
+    }),
   runbookLinks: (id: string) => request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`),
   runbookLink: (id: string, link_type: RunbookLinkType, link_key: string, remove = false) =>
     request<{ links: RunbookLink[] }>(`/api/ai/runbooks/${encodeURIComponent(id)}/links`, {

@@ -32,6 +32,8 @@ Give it a **name** — lower-case letters, digits and hyphens, up to 48 characte
 - **The method (SKILL.md)**, up to 16 KB. The page starts you with a working example. The header says when the method applies (`when_to_use`), which tools it may use (`tools`), what it reads first (`gather`), what to look for, and its `decisions` — the next methods it may hand off to and the verdicts it may give. An `applies_when:` line can limit it to devices Correlix has discovered with a given role, vendor or protocol.
 - **Its test cases (CASES.yaml)**, up to 32 KB and 40 cases — for a troubleshooting method only. Each case is a question with fixed evidence, and says what Iris must do (the hand-offs, the verdict) and what it must never do (a method or tool it must not use).
 
+**Or start from a vendor procedure.** Under **Vendor procedures**, Correlix lists its built-in software-upgrade procedures for Cisco IOS XE (install mode), Cisco NX-OS, Juniper Junos and Arista EOS. Each is written from the vendor's public upgrade guide, which it names with the version read. **Show steps** lists them: every step says the engineer performs it, and names the read-only `show` command Iris can run to confirm it. **Adopt as draft** copies one into your workspace as a draft procedure. From there it is yours to edit, and it goes through the same check, review and approval as any runbook. Adopting approves nothing. Iris never runs an upgrade step. Ask Iris "how do I upgrade a Catalyst 9300?" to see a procedure without adopting it.
+
 Iris refuses a runbook, and says which rule it broke, if it names a tool that is not on the read-only list, if a hand-off points at a method that does not exist, or if any text line breaks the same rules as [Network Context](network-context.md) (role prefixes, links, e-mail addresses, control characters). A workspace holds up to 30 runbooks.
 
 ### 2. Check it and send it for review
@@ -84,6 +86,11 @@ curl -s -X POST -H "Authorization: Bearer $OTHER_TOKEN" -H 'Content-Type: applic
 
 # After an upgrade: re-run an approved runbook's cases
 curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/runbooks/$ID/reprove
+
+# The built-in vendor procedures, and adopting one as a draft (optional new name)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/runbooks/templates
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"core-upgrade"}' http://localhost:8000/api/ai/runbooks/templates/upgrade-cisco-iosxe-install/adopt
 ```
 
 | Response | Meaning |

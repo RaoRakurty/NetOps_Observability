@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Output caps. Each is applied here even when the source also caps, because the
@@ -344,6 +345,20 @@ type TroubleshootDeps struct {
 	// nil = config backup is not enabled here, and `get_config_diff` is then not
 	// registered at all.
 	ConfigDiff func(ctx context.Context, p Principal, req ConfigDiffRequest) (ConfigDiffReport, error)
+
+	// ── read-only change assistance (owner decision 2026-11-18) ────────────
+
+	// ChangeTicket reads ONE change record the operator names by its reference,
+	// from the CALLER's workspace's own ITSM connection, read-only (one GET).
+	// ErrNotFound: no such record, or the connection's account cannot see it;
+	// ErrChangeTicketUnavailable: no connection holds that system. Every text
+	// field is customer-written data. nil = not wired (a review asks for the
+	// plan to be pasted instead).
+	ChangeTicket func(ctx context.Context, p Principal, ref string) (ChangeTicket, error)
+	// DeviceBaselineAt reports when the newest pre-change baseline of ONE device
+	// (already resolved through the caller's inventory) was taken; ok=false when
+	// there is none. nil = no baseline store here, and a review says to take one.
+	DeviceBaselineAt func(ctx context.Context, p Principal, deviceID string) (at time.Time, ok bool, err error)
 
 	// ── the NL query compiler (tracker 337 N-C5) ───────────────────────────
 

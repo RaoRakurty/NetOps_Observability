@@ -761,7 +761,10 @@ func parseSROSPortDetail(lines []string) Result {
 
 // parseCiscoIPIntBrief parses `show ip interface brief` (IOS/IOS-XE) and
 // `show ipv4 interface brief` (IOS-XR). The OK?/Method columns are the shape
-// key: a row without a literal YES/NO there is not this table.
+// key: a row without a literal YES/NO there is not this table. The Protocol
+// column is the closed up/down pair on every Cisco OS: a row ending in
+// anything else is not a table row (e.g. a transport's "Connection to … closed."
+// glued onto the last line) and is skipped rather than recorded as a status.
 func parseCiscoIPIntBrief(lines []string) Result {
 	var res Result
 	for _, ln := range lines {
@@ -770,6 +773,9 @@ func parseCiscoIPIntBrief(lines []string) Result {
 			continue
 		}
 		if !strings.EqualFold(fs[2], "YES") && !strings.EqualFold(fs[2], "NO") {
+			continue
+		}
+		if !strings.EqualFold(fs[len(fs)-1], "up") && !strings.EqualFold(fs[len(fs)-1], "down") {
 			continue
 		}
 		st := InterfaceState{Name: fs[0]}
