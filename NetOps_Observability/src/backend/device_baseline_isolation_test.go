@@ -178,6 +178,44 @@ func TestDeviceBaselineIrisSeamIsolation(t *testing.T) {
 	}
 }
 
+// The change review's "was a baseline taken?" seam: the caller's own device
+// reports its newest baseline's time; another tenant's device (even one that
+// HAS a baseline) is ai.ErrNotFound, never "none" and never its time.
+func TestDeviceBaselineAtSeamIsolation(t *testing.T) {
+	s := baselineServer(t)
+	baselineSeed(t, s, "globex", "globex-core")
+	r := req(http.MethodPost, "/api/ai/ask", "", acme())
+	at := s.aiTroubleshootDeps(r, acme()).DeviceBaselineAt
+	if at == nil {
+		t.Fatal("DeviceBaselineAt is not wired although the store exists")
+	}
+	p := ai.Principal{Tenant: "acme"}
+	for _, ref := range []string{"globex-core", "shared-dns", "nope"} {
+		if when, ok, err := at(context.Background(), p, ref); !errors.Is(err, ai.ErrNotFound) || ok || !when.IsZero() {
+			t.Errorf("acme → %s: (%v, %v, %v), want ErrNotFound", ref, when, ok, err)
+		}
+	}
+	if _, ok, err := at(context.Background(), p, "acme-core"); err != nil || ok {
+		t.Fatalf("own device with no baseline: ok=%v err=%v, want ok=false", ok, err)
+	}
+	older := baselineSeed(t, s, "acme", "acme-core")
+	newer, err := s.deviceBaselines.Put(context.Background(), "acme", devbaseline.Snapshot{
+		TenantID: "acme", DeviceID: "acme-core", DeviceName: "acme-core", TakenBy: "seed@acme",
+		TakenAt: older.TakenAt.Add(2 * time.Hour), Neighbors: []devbaseline.Neighbor{}, NotRead: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	when, ok, err := at(context.Background(), p, "acme-core")
+	if err != nil || !ok || !when.Equal(newer.TakenAt) {
+		t.Fatalf("own device: (%v, %v, %v), want the newest baseline %v", when, ok, err, newer.TakenAt)
+	}
+	s.deviceBaselines = nil
+	if s.aiTroubleshootDeps(r, acme()).DeviceBaselineAt != nil {
+		t.Error("DeviceBaselineAt is wired without a store")
+	}
+}
+
 // A command that failed inside a partial read is CANNOT COMPARE, never an empty
 // table; a failed area carries its reason; a half-read overlay is dropped.
 func TestBaselineReadProjection(t *testing.T) {

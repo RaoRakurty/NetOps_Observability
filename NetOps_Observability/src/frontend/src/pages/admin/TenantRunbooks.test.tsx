@@ -21,6 +21,8 @@ const runbookRecheck = vi.fn();
 const runbookAct = vi.fn();
 const runbookLinks = vi.fn();
 const runbookLink = vi.fn();
+const runbookTemplates = vi.fn();
+const runbookAdopt = vi.fn();
 
 vi.mock("../../services/api", () => ({
   api: {
@@ -33,6 +35,8 @@ vi.mock("../../services/api", () => ({
     runbookAct: (...a: unknown[]) => runbookAct(...a),
     runbookLinks: (...a: unknown[]) => runbookLinks(...a),
     runbookLink: (...a: unknown[]) => runbookLink(...a),
+    runbookTemplates: (...a: unknown[]) => runbookTemplates(...a),
+    runbookAdopt: (...a: unknown[]) => runbookAdopt(...a),
   },
 }));
 
@@ -75,6 +79,8 @@ beforeEach(() => {
   runbookAct.mockResolvedValue({});
   runbookCreate.mockResolvedValue({});
   runbookLinks.mockResolvedValue({ links: [] });
+  runbookTemplates.mockResolvedValue({ templates: [] });
+  runbookAdopt.mockResolvedValue({});
 });
 afterEach(cleanup);
 
@@ -130,6 +136,36 @@ describe("TenantRunbooks", () => {
     fireEvent.click(buttons[0]);
     await waitFor(() => expect(runbookRecheck).toHaveBeenCalledWith("f"));
     await screen.findByText("Its cases pass again. Iris runs it.");
+  });
+
+  it("adopts a vendor procedure as a draft and shows its steps and source as text", async () => {
+    serve([]);
+    runbookTemplates.mockResolvedValue({
+      templates: [
+        {
+          name: "upgrade-arista-eos",
+          vendor: "Arista",
+          family: "EOS",
+          title: "Arista EOS software upgrade",
+          applies_to: "Arista switches running EOS",
+          source: { title: "EOS manual", url: "https://www.arista.com/en/um-eos/x", version: "4.37.0F", read: "2026-11-18" },
+          steps: ["Performed by the engineer: <b>save</b> the configuration. Iris can confirm it read-only with: show version"],
+          checks: ["show version"],
+        },
+      ],
+    });
+    const { container } = render(<TenantRunbooks />);
+    const box = await screen.findByTestId("rbk-templates");
+    expect(box.textContent).toContain("https://www.arista.com/en/um-eos/x");
+    expect(box.querySelector("a")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show steps" }));
+    const steps = await screen.findByTestId("rbk-template-steps-upgrade-arista-eos");
+    expect(steps.textContent).toContain("<b>save</b>");
+    expect(container.querySelector("b")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Adopt as draft" }));
+    await waitFor(() => expect(runbookAdopt).toHaveBeenCalledWith("upgrade-arista-eos"));
+    await screen.findByText(/Draft saved from the Arista EOS procedure/);
+    expect(runbookAct).not.toHaveBeenCalled(); // adopting never approves
   });
 
   it("refuses a name the server would refuse before sending anything", async () => {
