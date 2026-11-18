@@ -750,6 +750,10 @@ func (o *Orchestrator) answerClassic(ctx context.Context, p Principal, question 
 		return o.answerTimeRange(ctx, p, question, plan, disc)
 	case ModeSimilarIncidents:
 		return o.answerSimilar(ctx, p, plan, disc)
+	case ModeChangeReview:
+		return o.answerChangeReviewGoverned(ctx, p, question)
+	case ModeUpgradeProcedure:
+		return o.answerUpgradeProcedure(ctx, p, question, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeProductAnswer:

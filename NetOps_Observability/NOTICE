@@ -97,6 +97,21 @@ worksheet or template is reproduced. The synthetic-probe read behind
 dns-resolution, and the EVPN and redundancy command rows (documentation-only,
 no parser until output is captured on a real device), are this project's own.
 
+Read-only change assistance (2026-11-18), same pin, same terms:
+
+  Skills  : jev-change-review, servicenow-change-workflow
+                                  -> Iris change-plan review
+                                     (src/backend/ai/change_review.go)
+
+Only the idea of reviewing a change plan against a fixed checklist before it is
+scheduled is re-expressed, in this project's own words. The checklist, its
+wording, the evidence it reads (the caller's own inventory, incidents, change
+history and topology) and the read-only ITSM fetch are this project's own;
+nothing is pushed to a device or written to a ticket. The built-in upgrade
+procedures (src/backend/internal/upgrademop) are written from the vendors'
+public documentation, each citing its source; no vendor text, image name or
+download location is reproduced.
+
 --------------------------------------------------------------------------------
 elkjs — Eclipse Public License 2.0
 --------------------------------------------------------------------------------

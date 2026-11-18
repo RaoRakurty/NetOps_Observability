@@ -28,6 +28,7 @@ import {
   RunbookLink,
   RunbookLinkType,
   RunbookList,
+  RunbookTemplate,
   RunbookVersion,
 } from "../../services/api";
 import { fmtDateTime } from "../../lib/time";
@@ -208,6 +209,7 @@ export default function TenantRunbooks() {
                 onSave={(r) => run(() => api.runbookCreate(r), "Draft saved. Check it, then send it for review.")}
               />
             )}
+            {data && <ProcedureTemplates busy={busy} run={run} />}
           </div>
         </li>
         <li className="disc-step">
@@ -267,6 +269,67 @@ export default function TenantRunbooks() {
 }
 
 type Run = (what: () => Promise<unknown>, done: string | ((out: unknown) => string)) => Promise<void>;
+
+/**
+ * Built-in vendor upgrade procedures. Adopting one copies it into this workspace
+ * as a DRAFT procedure: it goes through the same check, submit and second-admin
+ * approval as one written by hand. Iris shows a procedure step by step and runs
+ * only its read-only checks; the engineer performs every change.
+ */
+function ProcedureTemplates({ busy, run }: { busy: boolean; run: Run }) {
+  const [list, setList] = useState<RunbookTemplate[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .runbookTemplates()
+      .then((r) => live && setList(r.templates ?? []))
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (failed) return <p className="disc-text">Vendor procedures could not be loaded.</p>;
+  if (!list || list.length === 0) return null;
+  return (
+    <section className="rbk-templates" aria-label="Vendor upgrade procedures" data-testid="rbk-templates">
+      <h4 className="disc-step-title">Vendor procedures</h4>
+      <ul className="rbk-status">
+        {list.map((t) => (
+          <li key={t.name}>
+            <strong>{t.title}</strong> — {t.applies_to}
+            <div className="disc-text">
+              Source: {t.source.title} ({t.source.version}) {t.source.url}
+            </div>
+            <button type="button" className="btn btn-sm" onClick={() => setOpen(open === t.name ? null : t.name)}>
+              {open === t.name ? "Hide steps" : "Show steps"}
+            </button>{" "}
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() =>
+                run(() => api.runbookAdopt(t.name), `Draft saved from the ${t.vendor} ${t.family} procedure. Check it, then send it for review.`)
+              }
+            >
+              Adopt as draft
+            </button>
+            {open === t.name && (
+              <ol data-testid={`rbk-template-steps-${t.name}`}>
+                {t.steps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 function ByteCount({ text, limit }: { text: string; limit: number }) {
   const n = bytes(text);

@@ -237,6 +237,12 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.RecentChanges = s.aiRecentChanges(claims)
 		deps.ConfigDiff = s.aiConfigDiff(r, claims)
 	}
+	// Read-only change assistance (2026-11-18): one change record from the
+	// caller's own ITSM connection, for Iris's change-plan review. Wired only when
+	// the ITSM configuration store exists.
+	if s.itsmCfg != nil {
+		deps.ChangeTicket = s.aiChangeTicket(claims)
+	}
 	// The NL query compiler (tracker 337 N-C5): interpret-only, and only for a
 	// caller who could run the same question on /api/ai/query/compile.
 	deps.CompileQuery = s.aiCompileQuery(r, claims)

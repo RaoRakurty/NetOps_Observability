@@ -96,6 +96,9 @@ const (
 	PlanRouteNavigation   = "navigation"
 	PlanRoutePageHelp     = "page_help"
 	PlanRouteOutOfScope   = "out_of_scope"
+	// Read-only change assistance (owner decision 2026-11-18).
+	PlanRouteChangeReview = "change_review"
+	PlanRouteUpgrade      = "upgrade_procedure"
 )
 
 // plannerRoute is one catalogue line: the id the model replies with and the
@@ -122,6 +125,8 @@ var plannerRoutes = []plannerRoute{
 	{PlanRouteSimilar, "whether an incident has happened before: a repeat or recurrence, earlier cases like it, how often it happens, what it looked like or what was done about it last time (the one they name or have open, else the top incident)"},
 	{PlanRouteInvestigate, "the operator asks Iris to INVESTIGATE end to end: dig into an incident, a device or a site and work out what is going on across several checks, the way an engineer would (a full investigation, not one symptom check, a data listing or an explanation of a known incident)"},
 	{PlanRouteTimeRange, "what happened in a PAST window (last night, yesterday, over the weekend, the last few hours)"},
+	{PlanRouteChangeReview, "the operator wants a PROPOSED change reviewed before it is carried out: a change plan, maintenance plan or change ticket (such as CHG0012345) checked for readiness — scope, pre-checks, success checks, rollback, maintenance window, risk to the devices it touches"},
+	{PlanRouteUpgrade, "the operator asks how to upgrade a device's software or operating system, or wants the upgrade steps or procedure for a vendor or platform (IOS XE, NX-OS, Junos, EOS and so on)"},
 	{PlanRoutePlaybook, "general guidance on how to troubleshoot a technology or protocol, not about a live device of theirs"},
 	{PlanRouteModule, "a summary of one data module — name it on a MODULE line"},
 	{PlanRouteProduct, "a question about Correlix itself: what a concept or term means, what a screen or column shows, how to set up, configure or use a feature"},
@@ -664,6 +669,14 @@ func (o *Orchestrator) answerPlanned(ctx context.Context, p Principal, question 
 			ans.Disclaimers = append(ans.Disclaimers, readAsNote(ch.Terms))
 			return stampPlanned(ans), true, err
 		}
+	case PlanRouteChangeReview:
+		o.routed(ArmClassic, ModeChangeReview)
+		ans, err := o.answerChangeReviewGoverned(ctx, p, question)
+		return stampPlanned(ans), true, err
+	case PlanRouteUpgrade:
+		o.routed(ArmClassic, ModeUpgradeProcedure)
+		ans, err := o.answerUpgradeProcedure(ctx, p, question, plan, nil)
+		return stampPlanned(ans), true, err
 	case PlanRouteOutOfScope:
 		o.routed(ArmCapability, ModeUnavailable)
 		ans := o.answerCapability(Plan{Intent: "capability", Modules: []string{}, Mode: ModeUnavailable, Entities: ent})

@@ -33,6 +33,9 @@ const (
 	// (internal/rcaresolution). Its basis is that resolution's citation only —
 	// a similarity alone never makes a recommendation.
 	RecFromResolution = "similar_resolution"
+	// RecFromChangeReview: the gaps a change-plan review found (change_review.go),
+	// grounded in the plan and in what the caller's own network says.
+	RecFromChangeReview = "change_review"
 )
 
 // Card bounds.
@@ -69,6 +72,8 @@ func recOrigin(m AnswerMode) string {
 		return RecFromPlaybook
 	case ModeSimilarIncidents:
 		return RecFromResolution
+	case ModeChangeReview:
+		return RecFromChangeReview
 	}
 	return ""
 }

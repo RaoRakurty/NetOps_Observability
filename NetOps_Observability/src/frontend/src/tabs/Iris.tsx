@@ -174,6 +174,7 @@ const INTENT_BADGE: Record<string, string> = {
   app_identification_summary: "Apps", integration_health_summary: "Integrations",
   cloud_app_summary: "Cloud", network_kb: "Playbook", shift_handoff: "Reports",
   time_range_summary: "History", similar_incidents: "History", product_navigation: "Navigation", help: "Help",
+  change_review: "Change", upgrade_procedure: "Procedure",
 };
 
 // isCapabilityMiss reports the grounded engine's honest "I could not place that
