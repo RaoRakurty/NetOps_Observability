@@ -249,7 +249,24 @@ def test_polls_continue_while_engine_digests_backlog(monkeypatch):
         monkeypatch.setattr(main, "AIOKafkaConsumer", Scripted)
         consume_task = asyncio.create_task(main.consume())
         engine_task = asyncio.create_task(main.engine_cycle())
-        await asyncio.wait_for(engine_task, timeout=10.0)
+        try:
+            await asyncio.wait_for(asyncio.shield(engine_task), timeout=10.0)
+        except TimeoutError:
+            # Seen twice on CI (2026-11-14, 2026-11-19), never locally, even under
+            # CPU stress: the one-shot cycle did not return in 10 s. Dump WHERE
+            # every task is parked so the next occurrence names the await that
+            # hung (the Evidence drain, the executor hop, or the consumer) —
+            # tracker row "poll-cadence one-shot cycle hang".
+            report = [f"markers (last 12 of {len(markers)}): {markers[-12:]}"]
+            for t in asyncio.all_tasks():
+                frames = t.get_stack(limit=8)
+                where = " <- ".join(f"{f.f_code.co_name}:{f.f_lineno}" for f in reversed(frames)) or "(no frame)"
+                report.append(f"task {t.get_name()} done={t.done()}: {where}")
+            report.append(f"evidence queue: {getattr(main, '_EVIDENCE_QUEUE', None)!r} "
+                          f"idle={getattr(main._EVIDENCE_QUEUE, 'idle', lambda: None)() if main._EVIDENCE_QUEUE else None}")
+            await _cancel(consume_task)
+            engine_task.cancel()
+            raise AssertionError("one-shot engine_cycle hung > 10 s:\n" + "\n".join(report)) from None
         await _cancel(consume_task)
         return markers
 
