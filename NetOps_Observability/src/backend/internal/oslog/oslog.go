@@ -27,12 +27,34 @@ import (
 // below is then refused automatically instead of opening a new door.
 const SecFindingsIndexBase = "netops-secfindings"
 
+// SyslogIndexBase is the device-syslog family. SyslogRoutineIndexBase is its
+// routine management-session sibling (tracker 410): the router writes the
+// internal/logroutine class there instead, under its own shorter retention,
+// with the SAME field contract — so every syslog read names BOTH families, and
+// logroutine.Clause (read-time) stays the one authority on what is hidden.
+// SyslogRollupIndexBase holds the per-minute roll-ups of that class (one
+// document per tenant, device, source, user and minute), which keep the count
+// and the identity after the originals expire; they are NOT log lines, so no
+// log search names them — only the routine counters do (RollupIndexPattern).
+//
+// Each base is ONE dash-free token on purpose: `netops-syslog-*` must never
+// glob-match a sibling family, and a tenant segment may itself contain "-"
+// (IndexTenantSeg), so `netops-syslog-routine-*` would collide with the main
+// syslog of a tenant named "routine-x".
+const SyslogIndexBase = "netops-syslog"
+
+// SyslogRoutineIndexBase — see SyslogIndexBase.
+const SyslogRoutineIndexBase = "netops-syslogroutine"
+
+// SyslogRollupIndexBase — see SyslogIndexBase.
+const SyslogRollupIndexBase = "netops-syslogrollup"
+
 func IndexBase(signal string) string {
 	switch strings.ToLower(signal) {
 	case "applogs", "app":
 		return "netops-applogs"
 	case "syslog":
-		return "netops-syslog"
+		return SyslogIndexBase
 	case "snmptrap", "trap", "traps":
 		return "netops-snmptrap"
 	case "flows", "netflow", "flow":
@@ -127,21 +149,37 @@ func TenantIndexPattern(signal, tenant string, cross bool) string {
 	// happily as it matches a log index. Log search reads LOG indices, so a
 	// signal that names no log family reads the log families, never everything.
 	if base == CatchAllIndexBase {
-		bases := []string{"netops-syslog", "netops-snmptrap"}
-		parts := make([]string, 0, len(bases)*2)
-		for _, b := range bases {
-			if cross {
-				parts = append(parts, b+"-*")
-			} else {
-				parts = append(parts, b+"-"+IndexTenantSeg(tenant)+"-*", b+"-untagged-*")
-			}
+		return familyPattern([]string{SyslogIndexBase, SyslogRoutineIndexBase, "netops-snmptrap"}, tenant, cross)
+	}
+	if base == SyslogIndexBase {
+		// Tracker 410: the routine sibling holds the same kind of record under
+		// a shorter window, so a syslog read covers both families.
+		return familyPattern([]string{SyslogIndexBase, SyslogRoutineIndexBase}, tenant, cross)
+	}
+	return familyPattern([]string{base}, tenant, cross)
+}
+
+// familyPattern renders the caller's pattern over several index families:
+// every tenant's indices for the cross-tenant owner, otherwise the caller's own
+// segment plus the shared untagged indices of each family.
+func familyPattern(bases []string, tenant string, cross bool) string {
+	parts := make([]string, 0, len(bases)*2)
+	for _, b := range bases {
+		if cross {
+			parts = append(parts, b+"-*")
+		} else {
+			parts = append(parts, b+"-"+IndexTenantSeg(tenant)+"-*", b+"-untagged-*")
 		}
-		return strings.Join(parts, ",")
 	}
-	if cross {
-		return base + "-*"
-	}
-	return base + "-" + IndexTenantSeg(tenant) + "-*," + base + "-untagged-*"
+	return strings.Join(parts, ",")
+}
+
+// RollupIndexPattern is the routine roll-up family's pattern for a caller —
+// the same tenant rule as every log family (own + untagged for a scoped
+// caller, every tenant for the cross-tenant owner), never another tenant's
+// indices.
+func RollupIndexPattern(tenant string, cross bool) string {
+	return familyPattern([]string{SyslogRollupIndexBase}, tenant, cross)
 }
 
 // scopedLogFamilies are the log index families a tenant-scoped caller reads:
@@ -150,7 +188,7 @@ func TenantIndexPattern(signal, tenant string, cross bool) string {
 // gated door (secapi). Every family here must satisfy the device-identity
 // contract (see deviceIdentityFields); ScopedLogFamilies is what that contract
 // test iterates, so adding a family here enrols it automatically.
-var scopedLogFamilies = []string{"netops-syslog", "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
+var scopedLogFamilies = []string{SyslogIndexBase, SyslogRoutineIndexBase, SyslogRollupIndexBase, "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
 
 // ScopedLogFamilies returns a copy of the tenant-readable log families.
 func ScopedLogFamilies() []string { return append([]string(nil), scopedLogFamilies...) }

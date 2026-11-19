@@ -161,6 +161,32 @@ def test_live_lanes_never_get_indices_all(roles):
         )
 
 
+def test_api_writes_routine_rollups_and_no_live_lane(roles):
+    """Tracker 410: the api's routinerollup job writes netops-syslogrollup-*
+    and NOTHING else new — the routine ORIGINALS it counts from are a live lane
+    the router writes, and the api must never be able to write those."""
+    patterns = _api_patterns(roles)
+    rollup = patterns.get("netops-syslogrollup-*", set())
+    assert {"crud", "create_index"} <= rollup, (
+        f"netops_api needs crud + create_index on netops-syslogrollup-* to write the roll-ups, has {sorted(rollup)}")
+    assert "indices_all" not in rollup
+    for pat, actions in patterns.items():
+        if pat.startswith("netops-syslogroutine") or pat.startswith("netops-syslog-"):
+            assert not ({"crud", "write", "indices_all"} & actions), (
+                f"netops_api may write {pat}: a live syslog lane is router-written only")
+
+
+def test_router_writes_the_routine_originals(roles):
+    """Tracker 410: a router sink lane the writer role does not name 403s on
+    indices:admin/create and Vector DROPS the batch silently."""
+    pats = []
+    for block in roles["netops_writer"]["index_permissions"]:
+        pats.extend(block["index_patterns"])
+    assert "netops-syslogroutine-*" in pats, pats
+    assert "netops-syslogrollup-*" not in pats, (
+        "roll-ups are written by the api from the stored originals, never by the router")
+
+
 def test_restore_targets_are_confined_to_disposable_namespaces(roles):
     """`indices_all` is acceptable ONLY where no live telemetry can live."""
     patterns = _api_patterns(roles)

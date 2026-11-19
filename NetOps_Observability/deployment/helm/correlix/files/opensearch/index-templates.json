@@ -202,7 +202,8 @@
     "netops-syslog": {
       "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed. Tracker 387 trap semantics: correlation_key, event_id and transition_id are declared with the trap lane's names and types, so the event panel's Timeline can query both lanes by one key; platform and device_type likewise. Tracker 387 syslog event model (the trap lane's names): title, the typed audit fields, metrics (typed, with basis, every pack metric declared) and the enrichment provenance are declared; `guidance` is pack text, stored not indexed.",
       "index_patterns": [
-        "netops-syslog-*"
+        "netops-syslog-*",
+        "netops-syslogroutine-*"
       ],
       "template": {
         "settings": {
@@ -653,7 +654,8 @@
             }
           }
         }
-      }
+      },
+      "_comment_routine_family": "Tracker 410 (owner 2026-11-19): routine management-session ORIGINALS (internal/logroutine class, ~92 % of stored syslog) are written by the router to netops-syslogroutine-<tenant>-<date> with the SAME field contract as netops-syslog-* (this template), and kept by their own ISM policy (netops-syslogroutine-retention, OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS, default 96 h so every record lives >= 72 h on a daily index). The family base is one dash-free token on purpose: `netops-syslog-*` must not glob-match it (a tenant segment may contain `-`, so `netops-syslog-routine-*` would collide with a tenant named `routine-x`). Their per-minute counts survive in netops-syslogrollup-*."
     },
     "netops-flows": {
       "index_patterns": [
@@ -1702,6 +1704,83 @@
             "cx_restored_at": {
               "type": "date",
               "format": "strict_date_optional_time||epoch_millis"
+            }
+          }
+        }
+      }
+    },
+    "netops-syslogrollup": {
+      "_comment": "Tracker 410 (owner 2026-11-19): one document per (tenant, device, source, user, minute) of routine management-session syslog \u2014 first_seen / last_seen / occurrence_count plus the identity (D2 rule 2; D7 usernames), written by the api's routinerollup job from the stored originals with _id = sha256(key) so a re-run upserts instead of duplicating. Kept for the FULL syslog retention (netops-retention); the originals expire after the routine window. host / hostname / source_ip are the device-identity fields TenantFilter matches untagged documents on (oslog.deviceIdentityFields), so a tenant scope reads its own roll-ups exactly as it reads its own syslog. dynamic:false: nothing undeclared is ever mapped.",
+      "index_patterns": [
+        "netops-syslogrollup-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "timestamp": {
+              "type": "date"
+            },
+            "minute": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "first_seen": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "last_seen": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "occurrence_count": {
+              "type": "long"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "hostname": {
+              "type": "keyword"
+            },
+            "source_ip": {
+              "type": "keyword"
+            },
+            "device_id": {
+              "type": "keyword"
+            },
+            "audit_source": {
+              "type": "keyword"
+            },
+            "audit_user": {
+              "type": "keyword"
+            },
+            "event_category": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "rollup_v": {
+              "type": "keyword"
             }
           }
         }

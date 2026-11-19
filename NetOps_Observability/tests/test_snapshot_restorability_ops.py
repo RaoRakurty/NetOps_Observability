@@ -1035,3 +1035,57 @@ def test_syslog_is_under_the_retention_policy():
     src = APPLY_ISM.read_text()
     assert '"netops-syslog-*"' in src.split("PATTERNS=")[1].split("\n")[0], (
         "device syslog carries usernames and must stay under netops-retention (D7)")
+
+
+# ---------------------------------------------------------------------------
+# Tracker 410 (owner 2026-11-19): routine management-session syslog ORIGINALS
+# (netops-syslogroutine-*) get their own window, >= 72 h per record; their
+# per-minute roll-ups (netops-syslogrollup-*) keep the full window so the count
+# and the identity outlive the originals (D2 rule 2, D7).
+
+def test_syslog_rollups_are_under_the_retention_policy():
+    line = APPLY_ISM.read_text().split("PATTERNS=")[1].split("\n")[0]
+    assert '"netops-syslogrollup-*"' in line, (
+        "the routine roll-ups carry usernames and the only surviving count: "
+        "they must stay under netops-retention (D2, D7)")
+
+
+def test_routine_originals_are_not_under_the_shared_window():
+    src = APPLY_ISM.read_text()
+    line = src.split("PATTERNS=")[1].split("\n")[0]
+    add = src.split("ADD_PATTERNS=")[1].split("\n")[0]
+    assert "netops-syslogroutine-" not in line and "netops-syslogroutine-" not in add, (
+        "routine originals have their OWN policy; listing them under netops-retention "
+        "too would race two ISM templates over one index")
+
+
+def _routine_policy_put(calls):
+    puts = [c for c in calls
+            if "/_plugins/_ism/policies/netops-syslogroutine-retention" in c[1] and c[0] == "PUT"]
+    assert len(puts) == 1, f"exactly one routine policy write expected: {puts}"
+    return puts[0][2]
+
+
+def test_routine_policy_defaults_to_96h_so_every_record_lives_72h(tmp_path):
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"))
+    body = _routine_policy_put(calls)
+    assert '"min_index_age": "96h"' in body, body
+    assert '"index_patterns": ["netops-syslogroutine-*"]' in body, body
+    assert "netops-syslogroutine-* deletes after 96h" in r.stdout, r.stdout + r.stderr
+
+
+def test_routine_window_honours_a_longer_setting(tmp_path):
+    r, calls = _run_apply_ism(tmp_path, _sm_get("true"),
+                              extra_env={"OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS": "120"})
+    assert '"min_index_age": "120h"' in _routine_policy_put(calls)
+    assert "OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS" not in r.stderr, r.stderr
+
+
+def test_routine_window_under_72h_or_malformed_is_refused_loudly(tmp_path):
+    for bad, why in (("48", "under the 72 h"), ("3d", "not a whole number"), ("-5", "not a whole number")):
+        sub = tmp_path / bad
+        sub.mkdir()
+        r, calls = _run_apply_ism(sub, _sm_get("true"),
+                                  extra_env={"OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS": bad})
+        assert '"min_index_age": "96h"' in _routine_policy_put(calls), bad
+        assert why in r.stderr, (bad, r.stderr)

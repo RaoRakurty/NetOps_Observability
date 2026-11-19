@@ -300,7 +300,8 @@ func TestUnrecognizedNamesOnlyTheCallersIndices(t *testing.T) {
 	}
 
 	want := oslog.TenantIndexPattern("syslog", "acme", false)
-	if want != "netops-syslog-acme-*,netops-syslog-untagged-*" {
+	// Tracker 410: the routine sibling family is part of every syslog read.
+	if want != "netops-syslog-acme-*,netops-syslog-untagged-*,netops-syslogroutine-acme-*,netops-syslogroutine-untagged-*" {
 		t.Fatalf("oslog contract changed under this test: %q", want)
 	}
 	if len(h.os.paths) == 0 {
@@ -374,8 +375,9 @@ func TestUnrecognizedPlatformOwnerReadsEveryTenant(t *testing.T) {
 		t.Fatalf("platform owner mined %d shapes, want 1 (%s)", len(page.Items), page.Note)
 	}
 	for _, p := range h.os.paths {
-		if !strings.HasPrefix(p, "/netops-syslog-*/_search") {
-			t.Fatalf("platform pattern = %q, want /netops-syslog-*/_search…", p)
+		// Tracker 410: both syslog families, so coverage keeps its denominator.
+		if !strings.HasPrefix(p, "/netops-syslog-*,netops-syslogroutine-*/_search") {
+			t.Fatalf("platform pattern = %q, want /netops-syslog-*,netops-syslogroutine-*/_search…", p)
 		}
 	}
 	for _, b := range h.os.bodies {

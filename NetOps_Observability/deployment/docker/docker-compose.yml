@@ -936,6 +936,11 @@ services:
       # window — re-attribution may need longer than the log default, but
       # retention is never unbounded (INV-F11-09).
       QUARANTINE_RETENTION_DAYS: ${QUARANTINE_RETENTION_DAYS:-30}
+      # Tracker 410: routine management-session syslog ORIGINALS
+      # (netops-syslogroutine-*) are kept this many HOURS; their per-minute
+      # roll-ups keep the full log window. 96 h keeps every record >= 72 h
+      # (owner decision 2026-11-19) on a daily index — see apply-ism.sh.
+      OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS: ${OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS:-96}
       # F-07: replica posture. 0 on the single-node appliance (a replica can
       # never be assigned there and pins the cluster yellow forever — F-53's
       # root cause); >= 1 on any real multi-node cluster, where 0 replicas plus

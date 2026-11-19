@@ -190,6 +190,10 @@ spec:
             # window: re-attribution may need longer than the log default, but
             # retention is never unbounded.
             - {name: QUARANTINE_RETENTION_DAYS, value: {{ .Values.opensearch.quarantineRetentionDays | quote }}}
+            # Routine management-session syslog originals: hours kept (their
+            # per-minute roll-ups keep the full window). 96 keeps every record
+            # at least 72 h on a daily index (tracker 410).
+            - {name: OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS, value: {{ .Values.opensearch.routineSyslogRetentionHours | quote }}}
             # 0 replicas on a single node (a replica can never be assigned and
             # pins the cluster yellow forever); >=1 on a real multi-node
             # cluster, where 0 replicas plus no snapshots means one corrupt

@@ -97,7 +97,10 @@ func idpStartFakeOS(t *testing.T) *idpFakeOS {
 			var hits []map[string]any
 			index := strings.TrimPrefix(strings.TrimSuffix(path, "/_search"), "/")
 			for i, name := range strings.Split(index, ",") {
-				if strings.Contains(name, "untagged") {
+				// The routine family (tracker 410) is named by every syslog read
+				// too; it is EMPTY in this fixture, so the row counts below stay
+				// one per tenant syslog index.
+				if strings.Contains(name, "untagged") || strings.Contains(name, "syslogroutine") {
 					continue
 				}
 				hits = append(hits, map[string]any{

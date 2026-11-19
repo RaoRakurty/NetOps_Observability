@@ -31,8 +31,31 @@ SNAP_KEEP="${OPENSEARCH_SNAPSHOT_KEEP:-14}"
 # security-auditlog-*: the security plugin's own audit trail (SEC-008.1) rolls
 # a DAILY index like every lane above and is managed by no other policy —
 # without retention it is unbounded growth on the disk-fill path (F-53 class).
-PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-secfindings-*","netops-deadletter-*","security-auditlog-*"]'
-ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-secfindings-*,netops-deadletter-*,security-auditlog-*'
+# netops-syslogrollup-*: tracker 410 (owner 2026-11-19) — the per-minute
+# roll-ups of routine management-session syslog keep the FULL telemetry window,
+# so the count and the identity (D2 rule 2, D7) outlive the originals. The
+# originals (netops-syslogroutine-*) are deliberately NOT here: they have their
+# own, shorter policy below (netops-syslogroutine-retention).
+PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-syslogrollup-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-secfindings-*","netops-deadletter-*","security-auditlog-*"]'
+ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-syslogrollup-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-secfindings-*,netops-deadletter-*,security-auditlog-*'
+
+# Tracker 410: the routine-session ORIGINALS' window, in HOURS. The owner's
+# decision is "raw routine records are kept 72 h". ISM's min_index_age counts
+# from the DAILY index's creation (its first write, ~00:00 UTC), so a 72 h age
+# keeps a record written at 23:59 for only ~48 h. 96 h is the smallest whole
+# value that keeps EVERY record at least 72 h on a daily index — the default.
+# A value under 72 would break the decision, so it is refused (loudly) and the
+# default used instead; a non-integer likewise.
+ROUTINE_HOURS="${OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS:-96}"
+case "$ROUTINE_HOURS" in
+  ''|*[!0-9]*)
+    echo "ism: WARNING OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS=${ROUTINE_HOURS} is not a whole number of hours — using 96" >&2
+    ROUTINE_HOURS=96 ;;
+esac
+if [ "$ROUTINE_HOURS" -lt 72 ]; then
+  echo "ism: WARNING OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS=${ROUTINE_HOURS} is under the 72 h the owner decided for routine originals — using 96" >&2
+  ROUTINE_HOURS=96
+fi
 
 # §8: OPENSEARCH_URL may still carry the bootstrap credential as URL userinfo
 # (the legacy form, honoured for one release — see the file-backed block
@@ -505,6 +528,49 @@ esac
 curl -s -X POST "$OS/_plugins/_ism/add/netops-quarantine-*" \
   -H 'Content-Type: application/json' -d '{"policy_id":"netops-quarantine-retention"}' >/dev/null 2>&1 || true
 echo "ism: quarantine retention applied — netops-quarantine-* deletes after ${QDAYS}d."
+
+# ---------------------------------------------------------------------------
+# Tracker 410 — routine management-session ORIGINALS (netops-syslogroutine-*)
+# get their own, shorter window (ROUTINE_HOURS, validated above). Their counts
+# and identities survive in netops-syslogrollup-* under the shared policy, so
+# expiring the originals drops no record silently (D2). Same seq_no dance as
+# above: a bare PUT on an existing policy 409s and keeps the OLD window.
+echo "ism: installing routine-syslog retention policy (delete after ${ROUTINE_HOURS}h) ..."
+RSEQ=$(os_curl -s "$OS/_plugins/_ism/policies/netops-syslogroutine-retention" |
+      sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+RPTERM=$(os_curl -s "$OS/_plugins/_ism/policies/netops-syslogroutine-retention" |
+      sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+if [ -n "${RSEQ:-}" ] && [ -n "${RPTERM:-}" ]; then
+  RPUT_URL="$OS/_plugins/_ism/policies/netops-syslogroutine-retention?if_seq_no=${RSEQ}&if_primary_term=${RPTERM}"
+  echo "ism: routine-syslog policy exists (seq_no=$RSEQ) — updating in place"
+else
+  RPUT_URL="$OS/_plugins/_ism/policies/netops-syslogroutine-retention"
+fi
+RPOLICY_RESP=$(os_curl -s -X PUT "$RPUT_URL" \
+  -H 'Content-Type: application/json' -d @- <<JSON
+{
+  "policy": {
+    "description": "Tracker 410: delete routine management-session syslog originals after ${ROUTINE_HOURS} hours (their per-minute roll-ups keep the full window).",
+    "default_state": "hot",
+    "states": [
+      { "name": "hot", "actions": [],
+        "transitions": [ { "state_name": "delete", "conditions": { "min_index_age": "${ROUTINE_HOURS}h" } } ] },
+      { "name": "delete", "actions": [ { "delete": {} } ], "transitions": [] }
+    ],
+    "ism_template": [ { "index_patterns": ["netops-syslogroutine-*"], "priority": 5 } ]
+  }
+}
+JSON
+)
+case "$RPOLICY_RESP" in
+  *'"_id":"netops-syslogroutine-retention"'*) echo "ism: routine-syslog policy written." ;;
+  *) echo "ism: WARNING routine-syslog policy PUT did not take: $RPOLICY_RESP" >&2 ;;
+esac
+# Best-effort, like the attach calls above: on a fresh stack there is no
+# matching index yet, and new ones adopt the policy via its ism_template.
+curl -s -X POST "$OS/_plugins/_ism/add/netops-syslogroutine-*" \
+  -H 'Content-Type: application/json' -d '{"policy_id":"netops-syslogroutine-retention"}' >/dev/null 2>&1 || true
+echo "ism: routine-syslog retention applied — netops-syslogroutine-* deletes after ${ROUTINE_HOURS}h."
 
 # ---------------------------------------------------------------------------
 # F-59 — SNAPSHOTS. `GET _snapshot` returned `{}` on the live stack: no
