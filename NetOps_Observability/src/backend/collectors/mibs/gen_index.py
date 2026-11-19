@@ -337,6 +337,13 @@ NETSNMP_ROOTS = (
     # them from one release would mislabel another release's values. They stay
     # honestly numeric until a capture says which layout a device sends.
     "1.3.6.1.4.1.9.9.1002.0",
+    # Tracker 415 (Iris device facts: "is this protocol configured here?").
+    # BGP4-MIB (RFC 4273) is SMIv1-grammar, so pysmi contributed only part of
+    # it; the net-snmp pass compiles the whole subtree, incl. the bgpLocalAs
+    # scalar {bgp 2}. OSPFV3-MIB (RFC 5643) was in no compiled module at all;
+    # its general group carries ospfv3AdminStatus, the v3 half of "OSPF is off".
+    "1.3.6.1.2.1.15",
+    "1.3.6.1.2.1.191",
 )
 _TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
 #: `snmptranslate -Td` block header: `MODULE-NAME::nodeName` alone on a line.
@@ -451,6 +458,18 @@ FETCH_PINS: dict[str, dict] = {
     "RFC-1215": {
         "sha256": "dbd38e3a42cb0b391e9dafa606a5ee11ff2dcdd4c6781cb42ae1cd6185bcc4e2",
         "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/RFC-1215",),
+    },
+    # Tracker 415: OSPFV3-MIB (RFC 5643) and the OSPF-MIB (RFC 4750) it imports
+    # its textual conventions from (Metric, BigMetric, Status, HelloRange,
+    # DesignatedRouterPriority). IETF Code Components, pinned to the same
+    # LibreNMS commit as tracker 377.
+    "OSPF-MIB": {
+        "sha256": "b50dc552cf1d3ec9a7060a4a4e6bae81ccbd09e12b9356dae348a45312704e03",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/OSPF-MIB",),
+    },
+    "OSPFV3-MIB": {
+        "sha256": "d40d505ae1b5c263ca7597c9bd4515531f9a1589071d2d96cf0ff172f3c6dfb0",
+        "urls": ("https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/OSPFV3-MIB",),
     },
     "RSTP-MIB": {
         "sha256": "235203e6c465bad9bee34b6c5ad34d5e61a83e37ca0162a694417c2c87bb8409",

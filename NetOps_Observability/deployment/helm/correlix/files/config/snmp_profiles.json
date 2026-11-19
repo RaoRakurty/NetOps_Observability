@@ -39,7 +39,12 @@
       { "name": "device_ospf_area",           "oid": "1.3.6.1.2.1.14.2.1.10", "table": true, "index_label": "area" },
       { "name": "device_ospf_spf_runs_total", "oid": "1.3.6.1.2.1.14.2.1.4",  "table": true, "index_label": "area" },
       { "name": "device_ospf_if_hello_seconds", "oid": "1.3.6.1.2.1.14.7.1.9",  "table": true },
-      { "name": "device_ospf_if_dead_seconds",  "oid": "1.3.6.1.2.1.14.7.1.10", "table": true }
+      { "name": "device_ospf_if_dead_seconds",  "oid": "1.3.6.1.2.1.14.7.1.10", "table": true },
+      { "_comment": "PROTOCOL ADMIN STATE (tracker 415). Scalars, one GET each: only a GET that answers proves the MIB is instantiated, so these let Iris establish 'protocol off here' (OSPF only with BOTH v2 and v3 disabled, plus no neighbour rows). noSuchObject emits nothing = unknown. OIDs index-resolved; doc_claimed (no OSPF/IS-IS SNMP speaker on this deployment). bgpLocalAs is seen-only: 0 = no BGP is vendor convention.",
+        "name": "device_ospf_admin_state",    "oid": "1.3.6.1.2.1.14.1.2" },
+      { "name": "device_ospfv3_admin_state",  "oid": "1.3.6.1.2.1.191.1.1.2" },
+      { "name": "device_isis_admin_state",    "oid": "1.3.6.1.2.1.138.1.1.1.8" },
+      { "name": "device_bgp_local_as",        "oid": "1.3.6.1.2.1.15.2" }
     ]
   },
   {

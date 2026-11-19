@@ -250,6 +250,10 @@ describe("text helpers", () => {
   it("entityLabel skips measures", () => {
     expect(entityLabel({ site: "DFW", device: "r1", value: 3 })).toBe("DFW · r1");
     expect(entityLabel({ value: 3 })).toBe("All");
+    // N-H6: the seasonal columns are measures / notes, never the entity name.
+    expect(
+      entityLabel({ device: "r1", value: 90, expected: 40, z: 6.2, baseline: "its usual level for this time of week (4 of 4 weeks used)" }),
+    ).toBe("r1");
   });
 
   it("sourceLabels maps known tags and hides unknown ones behind a generic name", () => {

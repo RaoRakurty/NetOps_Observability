@@ -775,3 +775,70 @@ func TestIngestKeepsAStaleDevicesLastAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A device whose address the owner's scan no longer covers (the range was
+// narrowed, or moved to another owner's scope) is an ORPHAN: it was never
+// measured again, so before this fix it accrued nothing and was reported live
+// forever beside the copy the new scope found (lab, 2026-11-19: every edge
+// moved from the platform scope to a tenant scope on 11-11 and kept a live
+// platform twin for 8 days). Now it turns stale after staleAfterMisses
+// completed sweeps and is pruned after pruneAfterStale — even when nothing in
+// its partition answers, because an uncovered address has no sweep to be
+// silent in.
+func TestOrphanedByScopeChangeTurnsStaleAndPrunes(t *testing.T) {
+	kv := newPrefixMemKV()
+	seedStore(t, kv)
+	r := newScanRig(t, kv)
+	if err := r.src.Restore(context.Background(), r.store); err != nil {
+		t.Fatal(err)
+	}
+	r.live.set(threeAlive)
+	// Narrow the scan to .1 only: .2 and .3 are now uncovered, though they
+	// would still answer if probed.
+	r.cfg.Store(ptrSettings(platformSettings(true, []string{"10.66.0.1/32"}, testCreds)))
+	for i := 1; i < staleAfterMisses; i++ {
+		devs := byAddr(r.sweep(t))
+		if devs["10.66.0.2"].DiscoveryStale {
+			t.Fatalf("orphan stale after %d sweeps, want %d", i, staleAfterMisses)
+		}
+	}
+	devs := byAddr(r.sweep(t))
+	if !devs["10.66.0.2"].DiscoveryStale || !devs["10.66.0.3"].DiscoveryStale {
+		t.Fatalf("uncovered devices must turn stale: %+v", devs)
+	}
+	if devs["10.66.0.1"].DiscoveryStale {
+		t.Fatal("the still-covered, answering device was marked stale")
+	}
+	// Past the prune period, with NOTHING answering in the partition: the
+	// orphans go; the covered device (silent now) only stays stale.
+	r.live.set(nil)
+	r.clock.advance(pruneAfterStale + time.Hour)
+	devs = byAddr(r.sweep(t))
+	if _, ok := devs["10.66.0.2"]; ok {
+		t.Fatal("an orphan stale past the prune period was kept")
+	}
+	if _, ok := devs["10.66.0.1"]; !ok {
+		t.Fatal("a covered device was pruned by an all-silent sweep")
+	}
+}
+
+// A refused scope (its ranges are not known this poll) never orphans its
+// owner's devices: being unable to read the scope is not evidence they left.
+func TestRefusedScopeOrphansNothing(t *testing.T) {
+	kv := newPrefixMemKV()
+	seedStore(t, kv)
+	r := newScanRig(t, kv)
+	if err := r.src.Restore(context.Background(), r.store); err != nil {
+		t.Fatal(err)
+	}
+	r.cfg.Store(ptrSettings(platformSettings(true, []string{"10.66.0.0/29"}, nil))) // no credentials → refused
+	for i := 0; i < staleAfterMisses+2; i++ {
+		r.clock.advance(ScanCooldown + time.Second)
+		devs, _ := r.src.Poll(context.Background())
+		for _, d := range devs {
+			if d.DiscoveryStale {
+				t.Fatalf("a refused scope made %s stale", d.Address)
+			}
+		}
+	}
+}
