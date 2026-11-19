@@ -134,6 +134,7 @@ import (
 	"netops/backend/internal/quarantine"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/registrystatus"
+	"netops/backend/internal/routinerollup"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
@@ -618,6 +619,9 @@ type server struct {
 	seasonalRoll        atomic.Pointer[seriesroll.Roller] // hourly metric roll-up behind Iris's seasonal baselines (N-H6 PR 2); nil unless FEATURE_SEASONAL_ROLLUP
 	flowSampling        flowsampling.Store                // operator-declared flow sampling per exporter (tracker 401 (c); migration 0078 / file fallback)
 	aiFeedback          ai.FeedbackStore                  // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	// routineRollupMetrics: the routine-syslog roll-up's counters (tracker 410),
+	// rendered on /metrics from cached state; nil-safe.
+	routineRollupMetrics *routinerollup.Metrics
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
 	// (migration 0040 / file fallback); irisPending holds a conclusion in memory
@@ -3184,6 +3188,10 @@ func Run() {
 	srv.workers.start("iface-names-export", func() { srv.runIfaceNamesExport(ctx) })
 	// Tracker 401 (a): the per-interface flow rollup the link views read.
 	srv.workers.start("flow-iface-rollup", func() { srv.runFlowIfaceRollup(ctx) })
+	// Tracker 410: per-minute roll-ups of routine management-session syslog,
+	// folded from the stored originals before their short window expires.
+	srv.routineRollupMetrics = routinerollup.NewMetrics()
+	srv.workers.start("routine-syslog-rollup", func() { srv.runRoutineRollup(ctx) })
 	// The SNMP trap receiver's interface-address rung and ifIndex names
 	// (tracker 387 PR 13c', 13c).
 	srv.workers.start("trap-addr-index", func() { srv.runTrapAddressIndex(ctx) })
@@ -5169,6 +5177,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// look the same, which is the presentation bug this was filed about.
 	s.storageMeter.Metrics().Write(w)
 	// STORAGE-MEASUREMENT-END
+	// Tracker 410: the routine-syslog roll-up (nil-safe; cached state only).
+	s.routineRollupMetrics.Write(w)
 	// AI-SCORECARD-BEGIN
 	s.aiScore.Write(w)
 	s.nlqQueryLogMetrics.Write(w)                                // Iris query capture + corrections (N-C8); nil-safe
