@@ -334,6 +334,9 @@ opensearch:
   replicaCount: 0
   logRetentionDays: "14"
   quarantineRetentionDays: "30"
+  # Tracker 410: routine management-session syslog originals, in hours (>= 72;
+  # 96 keeps every record >= 72 h on a daily index).
+  routineSyslogRetentionHours: "96"
   snapshotKeep: "14"
   persistence:
     size: 100Gi

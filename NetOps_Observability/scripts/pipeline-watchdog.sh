@@ -54,8 +54,13 @@ esac; done
 log(){ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 
 # Streams to watch: "name kafka_topic os_index_glob"
+# syslog spans two families (tracker 410): the router writes routine
+# management-session records to netops-syslogroutine-*, so on a quiet estate
+# EVERY new syslog document can land there — the main family alone would read
+# stale while the lane is healthy. The glob is comma-joined, no spaces (the
+# line is split on whitespace).
 STREAMS=(
-  "syslog   netops.syslog   netops-syslog-*"
+  "syslog   netops.syslog   netops-syslog-*,netops-syslogroutine-*"
   "flows    netops.flows    netops-flows-*"
   "applogs  netops.applogs  netops-applogs-*"
   "snmptrap netops.snmptrap netops-snmptrap-*"

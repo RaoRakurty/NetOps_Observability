@@ -99,9 +99,15 @@ func pcTestServer(t *testing.T) *server {
 
 // pcPatternFor is the syslog index pattern a scoped tenant must name — and the
 // ONLY one it may name.
+// pcPatternFor is the scoped syslog pattern, written out: since tracker 410 a
+// syslog read names the routine sibling family too, so parser coverage keeps
+// the SAME denominator it had before routine records moved to their own family.
 func pcPatternFor(tenant string) string {
-	return "netops-syslog-" + tenant + "-*,netops-syslog-untagged-*"
+	return "netops-syslog-" + tenant + "-*,netops-syslog-untagged-*,netops-syslogroutine-" + tenant + "-*,netops-syslogroutine-untagged-*"
 }
+
+// pcCrossPattern is the platform owner's syslog pattern (both families).
+const pcCrossPattern = "netops-syslog-*,netops-syslogroutine-*"
 
 func TestParserCovUnrecognizedIsOwnTenantOnly(t *testing.T) {
 	fake := pcStartFakeOS(t)
@@ -180,7 +186,7 @@ func TestParserCovUnrecognizedIsCrossTenantOnlyForThePlatformOwner(t *testing.T)
 		t.Fatal("no OpenSearch query was issued")
 	}
 	for _, c := range calls {
-		if c.Index != "netops-syslog-*" {
+		if c.Index != pcCrossPattern {
 			t.Fatalf("platform owner named %q, want the cross-tenant pattern", c.Index)
 		}
 		if strings.Contains(c.Body, `"term":{"tenant_id"`) {
@@ -210,7 +216,7 @@ func TestParserCovUnrecognizedEachTenantSeesOnlyItsOwn(t *testing.T) {
 	if !seen[pcPatternFor("acme")] || !seen[pcPatternFor("globex")] {
 		t.Fatalf("each tenant must name its OWN pattern; saw %v", seen)
 	}
-	if seen["netops-syslog-*"] {
+	if seen[pcCrossPattern] || seen["netops-syslog-*"] {
 		t.Fatal("TENANT LEAK: a scoped caller issued the cross-tenant pattern")
 	}
 }

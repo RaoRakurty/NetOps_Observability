@@ -123,6 +123,16 @@ netops_api:
       allowed_actions:
         - "crud"
         - "create_index"
+    # Tracker 410: the api's routinerollup job writes the per-minute roll-ups
+    # of routine management-session syslog (one document per tenant, device,
+    # source, user and minute; _id = sha256 of that key, so a re-run upserts).
+    # Its own family ONLY — the api still never writes a live lane, including
+    # the netops-syslogroutine-* originals it reads the counts from.
+    - index_patterns: ["netops-syslogrollup-*"]
+      allowed_actions:
+        - "crud"
+        - "create_index"
+        - "indices:admin/mapping/put"
     # F-11: the quarantine workflow — list metadata (read comes with the
     # netops-* block above), tombstone after re-attribution (delete). The api
     # never writes quarantine docs; only the router's sink does.
@@ -153,6 +163,12 @@ netops_writer:
         - "netops-applogs-*"
         - "netops-platformlogs-*"
         - "netops-syslog-*"
+        # Tracker 410: routine management-session syslog originals, split
+        # from netops-syslog-* by the router (its own shorter ISM window).
+        # Absent here, every routine batch 403s on indices:admin/create and
+        # Vector DROPS it — the deploy order is this role (securityadmin)
+        # BEFORE the router's split is switched on.
+        - "netops-syslogroutine-*"
         - "netops-snmptrap-*"
         - "netops-cloudlogs-*"
         - "netops-flows-*"

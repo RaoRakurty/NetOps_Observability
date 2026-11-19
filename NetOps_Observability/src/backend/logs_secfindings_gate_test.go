@@ -229,9 +229,10 @@ func TestLogSearchStillServesTheRealLogSignals(t *testing.T) {
 		{"syslog", acme(), "netops-syslog-acme-*"},
 		{"flows", acme(), "netops-flows-acme-*"},
 		{"cloud", acme(), "netops-cloudlogs-acme-*"},
-		// "all" is an explicit union of the two LOG bases, never a wildcard, so
-		// it cannot reach the findings family by accident either.
-		{"", acme(), "netops-syslog-acme-*,netops-syslog-untagged-*,netops-snmptrap-acme-*,netops-snmptrap-untagged-*"},
+		// "all" is an explicit union of the LOG bases (syslog, its routine
+		// sibling — tracker 410 — and traps), never a wildcard, so it cannot
+		// reach the findings family by accident either.
+		{"", acme(), "netops-syslog-acme-*,netops-syslog-untagged-*,netops-syslogroutine-acme-*,netops-syslogroutine-untagged-*,netops-snmptrap-acme-*,netops-snmptrap-untagged-*"},
 		{"applogs", superA(), "netops-applogs-*"},
 	}
 	for _, tc := range cases {

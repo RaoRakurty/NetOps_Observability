@@ -40,7 +40,8 @@ func TestTenantIndexPattern(t *testing.T) {
 	if got := oslog.TenantIndexPattern("applogs", "acme", false); got != "netops-applogs-acme-*,netops-applogs-untagged-*" {
 		t.Errorf("scoped applogs = %q", got)
 	}
-	if got := oslog.TenantIndexPattern("syslog", "acme", false); got != "netops-syslog-acme-*,netops-syslog-untagged-*" {
+	// Tracker 410: a syslog read names the routine sibling family too.
+	if got := oslog.TenantIndexPattern("syslog", "acme", false); got != "netops-syslog-acme-*,netops-syslog-untagged-*,netops-syslogroutine-acme-*,netops-syslogroutine-untagged-*" {
 		t.Errorf("scoped syslog = %q", got)
 	}
 	if got := oslog.TenantIndexPattern("flows", "globex", false); got != "netops-flows-globex-*,netops-flows-untagged-*" {
@@ -49,6 +50,67 @@ func TestTenantIndexPattern(t *testing.T) {
 	// A scoped tenant's pattern must never name another tenant's index.
 	if pat := oslog.TenantIndexPattern("syslog", "acme", false); containsSub(pat, "globex") {
 		t.Errorf("acme pattern leaked another tenant: %q", pat)
+	}
+}
+
+// TestRoutineSyslogFamiliesAreTenantScoped — tracker 410, §3a. The routine
+// originals and their roll-ups follow the same per-tenant naming as every log
+// family: a scoped tenant names only its own + the untagged indices, the
+// platform owner every tenant's. And the dash-free base is what keeps a tenant
+// whose id STARTS with "routine-" from colliding: tenant "routine-x"'s main
+// syslog is netops-syslog-routine-x-*, which neither tenant "x"'s pattern nor
+// the routine family's glob can match.
+func TestRoutineSyslogFamiliesAreTenantScoped(t *testing.T) {
+	if got := oslog.TenantIndexPattern("syslog", "acme", true); got != "netops-syslog-*,netops-syslogroutine-*" {
+		t.Errorf("platform syslog = %q", got)
+	}
+	all := oslog.TenantIndexPattern("", "acme", false)
+	for _, want := range []string{"netops-syslogroutine-acme-*", "netops-syslogroutine-untagged-*", "netops-snmptrap-acme-*"} {
+		if !containsSub(all, want) {
+			t.Errorf("scoped all-signals pattern %q missing %q", all, want)
+		}
+	}
+	if got := oslog.RollupIndexPattern("acme", false); got != "netops-syslogrollup-acme-*,netops-syslogrollup-untagged-*" {
+		t.Errorf("scoped rollup = %q", got)
+	}
+	if got := oslog.RollupIndexPattern("acme", true); got != "netops-syslogrollup-*" {
+		t.Errorf("platform rollup = %q", got)
+	}
+	for _, pat := range []string{oslog.TenantIndexPattern("syslog", "acme", false), all, oslog.RollupIndexPattern("acme", false)} {
+		if containsSub(pat, "globex") {
+			t.Errorf("acme pattern leaked another tenant: %q", pat)
+		}
+	}
+	// Roll-ups are counters, not log lines: no log search names them.
+	for _, sig := range []string{"", "all", "syslog", "trap", "flows"} {
+		if p := oslog.TenantIndexPattern(sig, "acme", true); containsSub(p, "syslogrollup") {
+			t.Errorf("log search for %q names the roll-up family: %q", sig, p)
+		}
+	}
+	// The collision the dash-free base prevents.
+	globMatch := func(pattern, index string) bool {
+		for _, p := range strings.Split(pattern, ",") {
+			if prefix, ok := strings.CutSuffix(p, "*"); ok && strings.HasPrefix(index, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	routineXMain := "netops-syslog-" + oslog.IndexTenantSeg("routine-x") + "-2026.11.19"
+	if globMatch(oslog.TenantIndexPattern("syslog", "x", false), routineXMain) {
+		t.Errorf("tenant x's syslog pattern reads tenant routine-x's index %q", routineXMain)
+	}
+	if globMatch(oslog.SyslogRoutineIndexBase+"-*", routineXMain) {
+		t.Errorf("the routine family glob matches tenant routine-x's main syslog %q (its 96 h policy would delete it)", routineXMain)
+	}
+	if globMatch(oslog.SyslogIndexBase+"-*", oslog.SyslogRoutineIndexBase+"-acme-2026.11.19") {
+		t.Error("netops-syslog-* glob-matches the routine family: the two ISM policies would race over one index")
+	}
+	if seg, ok := indexTenantSegment(oslog.SyslogRoutineIndexBase + "-acme-corp-2026.11.19"); !ok || seg != "acme-corp" {
+		t.Errorf("storage attribution of a routine index = %q %v, want acme-corp", seg, ok)
+	}
+	if seg, ok := indexTenantSegment(oslog.SyslogRollupIndexBase + "-untagged-2026.11.19"); !ok || seg != "untagged" {
+		t.Errorf("storage attribution of a rollup index = %q %v, want untagged", seg, ok)
 	}
 }
 

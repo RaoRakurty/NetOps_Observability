@@ -71,6 +71,12 @@ func (f *storageFakeStores) openSearch(_ context.Context, path string, out any) 
 		{"index": "netops-syslog-" + f.tenantA + "-2026.09.06", "store.size": "1000", "docs.count": "10"},
 		{"index": "netops-syslog-" + f.tenantB + "-2026.09.06", "store.size": "999999", "docs.count": "99"},
 		{"index": "netops-syslog-untagged-2026.09.06", "store.size": "300", "docs.count": "3"},
+		// Tracker 410: the routine originals and their roll-ups are per-tenant
+		// families like syslog — A's count toward A, B's never do.
+		{"index": "netops-syslogroutine-" + f.tenantA + "-2026.09.06", "store.size": "500", "docs.count": "50"},
+		{"index": "netops-syslogroutine-" + f.tenantB + "-2026.09.06", "store.size": "777777", "docs.count": "77"},
+		{"index": "netops-syslogrollup-" + f.tenantA + "-2026.09.06", "store.size": "40", "docs.count": "4"},
+		{"index": "netops-syslogrollup-" + f.tenantB + "-2026.09.06", "store.size": "666666", "docs.count": "66"},
 	}
 	blob, err := json.Marshal(rows)
 	if err != nil {
@@ -190,9 +196,9 @@ func TestStorageMeasuredCrossOrgIsolation(t *testing.T) {
 	}
 	// A's total must be its own bytes plus the shared untagged lane, and can
 	// never include B's 999999/888888.
-	if v.TotalMeasuredBytes != 1000+300+2000 {
-		t.Fatalf("A's total = %d, want %d (own OpenSearch + untagged + own ClickHouse)",
-			v.TotalMeasuredBytes, 1000+300+2000)
+	if v.TotalMeasuredBytes != 1000+300+500+40+2000 {
+		t.Fatalf("A's total = %d, want %d (own syslog + untagged + own routine + own roll-ups + own ClickHouse)",
+			v.TotalMeasuredBytes, 1000+300+500+40+2000)
 	}
 
 	// ── the narrowing happened at the STORAGE layer, before the query ────────
@@ -328,6 +334,11 @@ func TestIndexTenantSegmentMatchesTheNamingIngestWrites(t *testing.T) {
 		// The date is %Y.%m.%d — dots, never hyphens — so a tenant segment may
 		// itself contain hyphens without swallowing part of the date.
 		{"netops-syslog-acme-eu-west-2026.09.06", "acme-eu-west", true},
+		// Tracker 410: the dash-free routine families attribute like syslog —
+		// and a tenant whose id begins "routine-" keeps its OWN main syslog.
+		{"netops-syslogroutine-acme-2026.09.06", "acme", true},
+		{"netops-syslogrollup-acme-eu-west-2026.09.06", "acme-eu-west", true},
+		{"netops-syslog-routine-x-2026.09.06", "routine-x", true},
 		// Platform-owned lanes: no tenant segment, so no attribution.
 		{"netops-quarantine-2026.09.06", "", false},
 		{"netops-deadletter-2026.09.06", "", false},
