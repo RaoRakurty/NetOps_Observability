@@ -1384,16 +1384,20 @@ func flowSince(w http.ResponseWriter, r *http.Request) (time.Duration, bool) {
 	return d, true
 }
 
-func durationQuery(r *http.Request, key string, def time.Duration) time.Duration {
-	v := r.URL.Query().Get(key)
+// durationQuery reads a relative window parameter (a Go duration such as 24h):
+// def when absent, and an error — never def — when it is malformed,
+// non-positive or longer than 30 days (tracker 428, the same fail-closed rule
+// as intQuery and flowquery.ParseSince). Handlers answer the error with 400.
+func durationQuery(r *http.Request, key string, def time.Duration) (time.Duration, error) {
+	v := strings.TrimSpace(r.URL.Query().Get(key))
 	if v == "" {
-		return def
+		return def, nil
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= 0 || d > 30*24*time.Hour {
-		return def
+		return 0, fmt.Errorf("%s must be a duration such as 24h, more than zero and at most 720h (30 days)", key)
 	}
-	return d
+	return d, nil
 }
 
 // parseIntStrict parses a decimal integer and rejects ANY trailing garbage.

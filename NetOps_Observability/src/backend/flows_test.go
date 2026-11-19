@@ -86,26 +86,30 @@ func TestIntQuery(t *testing.T) {
 	}
 }
 
-// durationQuery rejects non-positive, unparseable, and absurdly-large values,
-// falling back to the default in each case.
+// durationQuery is fail-closed (tracker 428): the default only when the
+// parameter is absent; a non-positive, unparseable or over-30-day value is an
+// error, never the default.
 func TestDurationQuery(t *testing.T) {
 	def := time.Hour
-	cases := []struct {
+	ok := []struct {
 		raw  string
 		want time.Duration
 	}{
 		{"", def},
 		{"30m", 30 * time.Minute},
 		{"2h", 2 * time.Hour},
-		{"bogus", def},
-		{"-5m", def},   // non-positive
-		{"0s", def},    // non-positive
-		{"9000h", def}, // exceeds 30-day cap
+		{"720h", 720 * time.Hour},
 	}
-	for _, c := range cases {
-		r := httptest.NewRequest(http.MethodGet, "/api/flows?since="+c.raw, nil)
-		if got := durationQuery(r, "since", def); got != c.want {
-			t.Errorf("durationQuery(since=%q) = %v, want %v", c.raw, got, c.want)
+	for _, c := range ok {
+		r := httptest.NewRequest(http.MethodGet, "/api/x?since="+c.raw, nil)
+		if got, err := durationQuery(r, "since", def); err != nil || got != c.want {
+			t.Errorf("durationQuery(since=%q) = (%v, %v), want %v", c.raw, got, err, c.want)
+		}
+	}
+	for _, raw := range []string{"bogus", "-5m", "0s", "721h", "9000h", "604800"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/x?since="+raw, nil)
+		if got, err := durationQuery(r, "since", def); err == nil {
+			t.Errorf("durationQuery(since=%q) = %v, want an error", raw, got)
 		}
 	}
 }

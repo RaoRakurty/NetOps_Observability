@@ -322,7 +322,11 @@ func (s *server) handleUndeterminedFrequency(w http.ResponseWriter, r *http.Requ
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := durationQuery(r, "since", 7*24*time.Hour)
+	since, err := durationQuery(r, "since", 7*24*time.Hour)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	win := intToString(int(since.Seconds()))
 	// Fail closed (F-71/F-74 rule): `?top=abc` used to become 20 and `?top=500`
 	// used to become 200, both behind a 200 the caller read as their answer.

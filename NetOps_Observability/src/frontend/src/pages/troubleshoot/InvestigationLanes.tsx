@@ -167,6 +167,16 @@ export function DemLane({ scope, report }: { scope: LaneScope; report?: LaneStat
   );
 }
 
+/**
+ * The events feed's `from` window in whole hours. The feed answers 400 for a
+ * window over 720h (tracker 428), and a section range can be a custom preset of
+ * any length, so the lanes ask for at most 30 days (and at least one hour).
+ */
+export function feedFromHours(minutes: number): string {
+  const h = Number.isFinite(minutes) ? Math.round(minutes / 60) : 1;
+  return `${Math.min(720, Math.max(1, h))}h`;
+}
+
 // ── What changed ─────────────────────────────────────────────────────────────
 
 export function ChangedLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
@@ -174,7 +184,7 @@ export function ChangedLane({ scope, report }: { scope: LaneScope; report?: Lane
     "changed",
     async () => {
       const params: Record<string, string> = {
-        from: `${Math.max(1, Math.round(scope.minutes / 60))}h`,
+        from: feedFromHours(scope.minutes),
         class: "changes",
         limit: "25",
       };
@@ -345,7 +355,7 @@ export function EventsLane({ scope, report }: { scope: LaneScope; report?: LaneS
     "events",
     async () => {
       const params: Record<string, string> = {
-        from: `${Math.max(1, Math.round(scope.minutes / 60))}h`,
+        from: feedFromHours(scope.minutes),
         limit: "25",
       };
       if (scope.device) params.entity = scope.device;

@@ -842,7 +842,8 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
   coverage, fanout) answer 400 for a bad window or step with no statement sent
   (`TestOlderFlowRoutesRejectABadWindow`), and each scopes its statement to the caller's own devices,
   ignores `as_tenant` into another tenant and sends nothing for a deviceless tenant
-  (`flows_legacy_isolation_test.go`); three non-flow routes still fail open: tracker 428.
+  (`flows_legacy_isolation_test.go`); so do the events feed, undetermined-frequency and Iris feedback stats
+  (`duration_params_test.go`).
 - Capacity reads VictoriaMetrics with the forecast lane's boundary (extra_filters[] on every read,
   second-pass row filter, deny-all, 501 on Prometheus) over a hostile fake; the known-p95 case is exact
   (`flows_capacity_isolation_test.go`); the fit is pinned (`TestFitForecast*`). The Overview
