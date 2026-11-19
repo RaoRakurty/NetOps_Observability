@@ -189,6 +189,19 @@ func (f DeviceFacts) Seen(key string) []string {
 	return out
 }
 
+// Absent returns the values of a multi-valued key that were READ and
+// established not there, sorted.
+func (f DeviceFacts) Absent(key string) []string {
+	var out []string
+	for kv := range f.absent {
+		if k, v, _ := strings.Cut(kv, "="); k == key {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // factTruth is the three-state outcome of one fact condition.
 type factTruth int
 
@@ -299,6 +312,17 @@ func factLabel(key, value string) string {
 	return value
 }
 
+// igpOnly reports whether every alternative of an adjacency value is an IGP
+// (ospf / isis) — the values whose absence comes from an admin-state scalar.
+func igpOnly(value string) bool {
+	for _, a := range strings.Split(value, factValueAlt) {
+		if a != "ospf" && a != "isis" {
+			return false
+		}
+	}
+	return true
+}
+
 func factLabels(key, value string) string {
 	alts := strings.Split(value, factValueAlt)
 	out := make([]string, 0, len(alts))
@@ -320,6 +344,12 @@ func factHuman(c SkillCondition, t factTruth, device string, f DeviceFacts) stri
 		case factHolds:
 			return want + " adjacency evidence is discovered on " + device
 		case factFails:
+			if igpOnly(c.Value) {
+				// The only way an IGP is established absent (tracker 415): the
+				// MIB's own admin state says off and the device has no
+				// neighbour rows — OSPF only with both v2 and v3 off.
+				return device + " reports " + want + " administratively disabled and has no " + want + " neighbours"
+			}
 			return "no " + want + " adjacency is discovered on " + device
 		}
 		return "whether " + device + " runs " + want + " could not be established from what Correlix has discovered"
