@@ -136,6 +136,12 @@ jobs:
 
       # The full stack + the golang/node build layers need more than the ~14 GB
       # the runner image leaves free on /.
+      - name: Docker Hub login (authenticated pulls; optional)
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: free runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -285,6 +291,12 @@ jobs:
       CX_UID: '1234'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Docker Hub login (authenticated pulls; optional)
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: free runner disk
         run: |
@@ -445,6 +457,12 @@ jobs:
       STABILITY_WINDOW_S: '60'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Docker Hub login (authenticated pulls; optional)
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: self-heal helpers — ruff, shellcheck, unit tests (before the expensive boot)
         working-directory: NetOps_Observability

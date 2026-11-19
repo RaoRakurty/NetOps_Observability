@@ -136,6 +136,12 @@ jobs:
           # make-installer.sh versions the bundle from `git describe`.
           fetch-depth: 0
 
+      - name: Docker Hub login (authenticated pulls; optional)
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build the inherited-layer regression image
         id: regr
         working-directory: NetOps_Observability/tests/fixtures/oci-regression
