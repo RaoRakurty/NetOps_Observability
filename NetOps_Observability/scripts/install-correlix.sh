@@ -762,8 +762,8 @@ preflight() {
     esac
   fi
   local cpus; cpus=$(nproc 2>/dev/null || echo 0)
-  if [ "$cpus" -lt 2 ]; then die "This host has $cpus vCPU; Correlix needs at least 2 (4 recommended)."
-  elif [ "$cpus" -lt 4 ]; then warn "$cpus vCPU — fine for evaluation; 4 vCPU recommended."
+  if [ "$cpus" -lt 2 ]; then die "This host has $cpus vCPU; Correlix needs at least 2 to start (8 for production)."
+  elif [ "$cpus" -lt 8 ]; then warn "$cpus vCPU — fine for evaluation; production needs 8 vCPU (scripts/resource_planner.py)."
   else ok "cpu: $cpus vCPU"; fi
   command -v python3 >/dev/null || die "python3 is missing." \
     "Prepare the host first:  sudo ./prepare-host.sh"
@@ -804,9 +804,11 @@ preflight() {
   mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
   mem_gb=$((mem_kb / 1024 / 1024))
   if [ "$mem_gb" -lt 6 ]; then
-    die "This host has ${mem_gb} GB RAM; Correlix needs at least 8 GB (16 GB recommended)."
-  elif [ "$mem_gb" -lt 15 ]; then
-    warn "${mem_gb} GB RAM detected — fine for evaluation; 16 GB is recommended for production."
+    die "This host has ${mem_gb} GB RAM; Correlix needs at least 6 GB to start (32 GB for production)."
+  elif [ "$mem_gb" -lt 24 ]; then
+    # 24 GiB is resource_planner.py's evaluation/production line (AUTO_PROFILE_GIB):
+    # below it the stack runs the oversubscribed evaluation profile.
+    warn "${mem_gb} GB RAM detected — the evaluation profile; production needs 32 GB (scripts/resource_planner.py)."
   else
     ok "memory: ${mem_gb} GB"
   fi
@@ -819,7 +821,7 @@ preflight() {
   free_gb=$(df -BG --output=avail "$droot" 2>/dev/null | tail -1 | tr -dc '0-9')
   free_gb=${free_gb:-0}
   if [ "$free_gb" -lt 20 ]; then
-    die "Only ${free_gb} GB free disk for Docker; Correlix needs at least 40 GB (100 GB recommended)."
+    die "Only ${free_gb} GB free disk for Docker; Correlix needs at least 20 GB to start (100 GB recommended)."
   elif [ "$free_gb" -lt 40 ]; then
     warn "${free_gb} GB free disk — enough to start an evaluation; 100 GB is recommended."
   else
