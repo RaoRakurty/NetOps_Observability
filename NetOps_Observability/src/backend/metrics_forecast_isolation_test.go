@@ -66,28 +66,40 @@ func (f *forecastVMRecorder) extraFilters(t *testing.T) []string {
 
 func startForecastVM(t *testing.T, rec *forecastVMRecorder) {
 	t.Helper()
-	// Two full weeks of 6h points so the trend is a real forecast, not
+	// The forecast is the Capacity fit (tracker 407): instant reads rank the
+	// interfaces (24 h p95 in/out, speed), then a range read gives each UTC
+	// day's p95. Fourteen rising days so the answer is a real forecast, not
 	// "building_baseline"; the values matter less than the labels.
-	series := func(dev, name string) string {
-		var b strings.Builder
-		b.WriteString(`{"metric":{"device":"` + dev + `","index":"1","ifName":"Gi0/1","hostname":"` + name + `"},"values":[`)
-		const start = 1_700_000_000
-		for i := 0; i < 120; i++ { // 120 × 6h = 30 days
-			if i > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString(`[` + intToString(start+i*21600) + `,"0.5"]`)
-		}
-		b.WriteString(`]}`)
-		return b.String()
+	labels := func(dev, name string) string {
+		return `{"device":"` + dev + `","index":"1","ifName":"Gi0/1","hostname":"` + name + `"}`
 	}
+	devs := [][2]string{{"dev-a", "leaf-a"}, {"dev-b", "leaf-b"}, {"dev-plat", "leaf-plat"}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.add(r.URL.String())
+		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"result":[` +
-			series("dev-a", "leaf-a") + `,` +
-			series("dev-b", "leaf-b") + `,` +
-			series("dev-plat", "leaf-plat") + `]}}`))
+		var parts []string
+		if strings.HasSuffix(r.URL.Path, "/query_range") {
+			for _, d := range devs {
+				var vals []string
+				if strings.Contains(q, "device_if_in_octets") {
+					for i := 0; i < 14; i++ { // 50, 51, … 63 % of 100 Mb/s
+						vals = append(vals, `[`+intToString(1_794_000_000+i*86400)+`,"`+intToString((50+i)*1_000_000)+`"]`)
+					}
+				}
+				parts = append(parts, `{"metric":`+labels(d[0], d[1])+`,"values":[`+strings.Join(vals, ",")+`]}`)
+			}
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[` + strings.Join(parts, ",") + `]}}`))
+			return
+		}
+		val := "25000000"
+		if strings.Contains(q, "device_if_speed") {
+			val = "100000000"
+		}
+		for _, d := range devs {
+			parts = append(parts, `{"metric":`+labels(d[0], d[1])+`,"value":[1794549600,"`+val+`"]}`)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[` + strings.Join(parts, ",") + `]}}`))
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("VICTORIA_URL", srv.URL)

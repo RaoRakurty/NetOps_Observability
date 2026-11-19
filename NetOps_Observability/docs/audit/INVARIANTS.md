@@ -845,11 +845,16 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
   (`flows_legacy_isolation_test.go`); three non-flow routes still fail open: tracker 428.
 - Capacity reads VictoriaMetrics with the forecast lane's boundary (extra_filters[] on every read,
   second-pass row filter, deny-all, 501 on Prometheus) over a hostile fake; the known-p95 case is exact
-  (`flows_capacity_isolation_test.go`); the fit is pinned (`TestFitForecast*`).
+  (`flows_capacity_isolation_test.go`); the fit is pinned (`TestFitForecast*`). The Overview
+  forecast (`/api/metrics/forecast`) is the same fit projected onto its shape, "current" = the fitted
+  last day (`TestForecastRowOfIsTheCapacityFit`), over the same hostile fake
+  (`metrics_forecast_isolation_test.go`).
 
 **BUILT, not proven:**
 - Scan cost at fleet scale: links scans raw flows over twice the window; not measured on the rig
-  (tracker 407; rollups are tracker 401).
+  (rollups are tracker 401). The daily-p95 forecast read is bounded (the Overview's busiest 100
+  interfaces, the Capacity tab's displayed rows) and measured on the lab only: 152 interfaces with two
+  days of history, 53–81 ms against 25–29 ms for the old 6-hour read (2026-11-18).
 - The vManage-sourced interface series carry no `index`, so their capacity rows key by name and get
   no forecast (the daily read keys by index).
 - Lab sampling is unreported, so lab flow totals read as 1:1; capacity does not depend on it.
