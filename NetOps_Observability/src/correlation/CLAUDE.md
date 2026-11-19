@@ -227,6 +227,19 @@ the window filters (e.g. M:8157-8161).
 - Two-sided CUSUM: H=4σ, K=0.5σ, at least 20 baseline samples; clears after 3 samples
   with |z|<1σ.
 - Severity from peak z: <5 warn, ≥5 high, ≥8 crit (producers.py:77-82).
+- **Seasonal SHADOW (N-H6 step 4, flag `CORR_SEASONAL_SHADOW`, default OFF, 2026-11-19).**
+  Owner ruling: "the correlation engine's truest intention shouldn't be diverted." A side
+  channel beside this stage (`seasonal_shadow.py`, hooked in `main.feed_episode_detector`
+  right after `DETECTOR.observe`): each metric sample is scored against the tenant's hourly
+  roll-up profile (`netops.series_hourly`, read at `tenant_scope=<tenant>` by a background
+  task; the Go `internal/nlquery/seasonal` maths, parity-pinned), and each episode the
+  detector OPENS is counted as `seasonal_confirms` / `seasonal_quiet` / `no_baseline`
+  (`corr_seasonal_shadow_onsets_total`, /healthz `seasonal_shadow`). **Nothing reads it
+  back:** no Signal, attrs, corr_signals row, archive slice, hash, template, verdict or
+  object changes, ON or OFF — it deliberately writes no attrs, because attrs are persisted,
+  replayed and 4 KiB-capped (an added key could truncate a clause key). No decision module
+  imports it (test-guarded). Not in the engine hash and no constant moved: ENGINE_SEMVER does
+  not move. Acting on it (step 5) needs a fresh owner ruling.
 - Syslog, trap and controller records are point signals.
 - Cumulative counters (octets/errors/discards/fcs, BGP FSM transitions) become a
   per-second rate per (tenant, entity, metric, collection_path) BEFORE the detector

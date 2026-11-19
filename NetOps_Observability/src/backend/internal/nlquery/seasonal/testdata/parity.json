@@ -1,0 +1,436 @@
+{
+  "_comment": "Seasonal-baseline parity: internal/nlquery/seasonal (Go) and src/correlation/seasonal_shadow.py (Python) must both reproduce every `want` exactly (|diff| < 1e-9). Generated from the Python twin; checked by both test suites.",
+  "now": "2026-11-19T10:00:00Z",
+  "cases": [
+    {
+      "name": "tier A, four weeks",
+      "unit": "percent",
+      "floor": 0.5,
+      "x": 140.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 100,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 110,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 90,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 105,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "daily": [
+        {
+          "offset_hours": 24,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 48,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 72,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 96,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 120,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 144,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 168,
+          "value": 80,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "want": {
+        "tier": "hour_of_week",
+        "centre": 102.5,
+        "scale": 7.412999999999999,
+        "used": 4,
+        "considered": 4,
+        "excluded": 0,
+        "history_days": 28,
+        "z": 5.058680696074465
+      }
+    },
+    {
+      "name": "tier A, one excluded for maintenance, three left",
+      "unit": "percent",
+      "floor": 0.5,
+      "x": 101.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 100,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 999,
+          "present": true,
+          "excluded": true
+        },
+        {
+          "offset_hours": 504,
+          "value": 104,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 98,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "daily": [],
+      "want": {
+        "tier": "hour_of_week",
+        "centre": 100.0,
+        "scale": 5.0,
+        "used": 3,
+        "considered": 4,
+        "excluded": 1,
+        "history_days": 28,
+        "z": 0.2
+      }
+    },
+    {
+      "name": "tier B, two weeks but six days",
+      "unit": "bps",
+      "floor": 1000.0,
+      "x": 2500000.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 1000000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 1200000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        }
+      ],
+      "daily": [
+        {
+          "offset_hours": 24,
+          "value": 1000000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 48,
+          "value": 1100000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 72,
+          "value": 900000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 96,
+          "value": 1050000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 120,
+          "value": 950000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 144,
+          "value": 1200000.0,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 168,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        }
+      ],
+      "want": {
+        "tier": "hour_of_day",
+        "centre": 1025000.0,
+        "scale": 111195.0,
+        "used": 6,
+        "considered": 7,
+        "excluded": 0,
+        "history_days": 21,
+        "z": 13.264984936373038
+      }
+    },
+    {
+      "name": "tier C, not enough history",
+      "unit": "percent",
+      "floor": 0.5,
+      "x": 50.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 40,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        }
+      ],
+      "daily": [
+        {
+          "offset_hours": 24,
+          "value": 41,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 48,
+          "value": 39,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 72,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 96,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 120,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 144,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        },
+        {
+          "offset_hours": 168,
+          "value": 0,
+          "present": false,
+          "excluded": false
+        }
+      ],
+      "want": {
+        "tier": "none",
+        "centre": 0.0,
+        "scale": 0.0,
+        "used": 0,
+        "considered": 0,
+        "excluded": 0,
+        "history_days": 7,
+        "z": null
+      }
+    },
+    {
+      "name": "flat series floors the scale at 5 percent of centre",
+      "unit": "percent",
+      "floor": 0.5,
+      "x": 51.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 50,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 50,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 50,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 50,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "daily": [],
+      "want": {
+        "tier": "hour_of_week",
+        "centre": 50.0,
+        "scale": 2.5,
+        "used": 4,
+        "considered": 4,
+        "excluded": 0,
+        "history_days": 28,
+        "z": 0.4
+      }
+    },
+    {
+      "name": "small bps values floor at 1000",
+      "unit": "bps",
+      "floor": 1000.0,
+      "x": 2600.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 200,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 210,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 190,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 205,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "daily": [],
+      "want": {
+        "tier": "hour_of_week",
+        "centre": 202.5,
+        "scale": 1000.0,
+        "used": 4,
+        "considered": 4,
+        "excluded": 0,
+        "history_days": 28,
+        "z": 2.3975
+      }
+    },
+    {
+      "name": "negative z below the usual level",
+      "unit": "per_second",
+      "floor": 1.0,
+      "x": 0.0,
+      "weekly": [
+        {
+          "offset_hours": 168,
+          "value": 30,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 336,
+          "value": 28,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 504,
+          "value": 33,
+          "present": true,
+          "excluded": false
+        },
+        {
+          "offset_hours": 672,
+          "value": 31,
+          "present": true,
+          "excluded": false
+        }
+      ],
+      "daily": [],
+      "want": {
+        "tier": "hour_of_week",
+        "centre": 30.5,
+        "scale": 2.2239,
+        "used": 4,
+        "considered": 4,
+        "excluded": 0,
+        "history_days": 28,
+        "z": -13.714645442690768
+      }
+    }
+  ]
+}
