@@ -1990,6 +1990,7 @@ services:
       #    ("is 40 ms normal for a Tuesday 9am?", path_health_baselines.go).
       FEATURE_SVC_FLOW_ROLLUP: ${FEATURE_SVC_FLOW_ROLLUP:-false}
       FEATURE_PATH_BASELINES: ${FEATURE_PATH_BASELINES:-false}
+      FEATURE_SEASONAL_ROLLUP: ${FEATURE_SEASONAL_ROLLUP:-false}
       # Seam inventory bootstrap: periodic suggestion loop that seeds the seam
       # inventory (a P1-required input to grounding). Postgres-only and ON by
       # default; set =false to stop the loop.

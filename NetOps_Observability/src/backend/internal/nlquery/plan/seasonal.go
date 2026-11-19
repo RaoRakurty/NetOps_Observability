@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ import (
 // seasonalProfiles reads e at every reference offset before `to` and fits a
 // profile for each entity key in keys. win is the answer's window length (a
 // reference is excluded when maintenance covered any part of it).
-func seasonalProfiles(ctx context.Context, sc Scope, t template, e mql.Expr, to time.Time, win time.Duration, unit string, keys map[string]map[string]string, rs *ResultSet) (map[string]seasonal.Profile, error) {
+func seasonalProfiles(ctx context.Context, sc Scope, metric string, t template, e mql.Expr, to time.Time, win time.Duration, unit string, keys map[string]map[string]string, rs *ResultSet) (map[string]seasonal.Profile, error) {
 	// One instant read per distinct offset: the 7th day back IS the first
 	// week back, and is read once.
 	cache := map[time.Duration]map[string]float64{}
@@ -72,6 +73,7 @@ func seasonalProfiles(ctx context.Context, sc Scope, t template, e mql.Expr, to 
 		return nil, err
 	}
 	rs.Provenance.Physical = append(rs.Provenance.Physical, fmt.Sprintf("%s @ -1..%dw, -1..%dd (seasonal reference)", e.String(), seasonal.MaxWeeks, seasonal.MaxDays))
+	fillFromRollup(ctx, sc, metric, win, weekly, rs)
 
 	covered := maintenanceCoverer(ctx, sc, rs)
 	floor := seasonal.UnitFloor(unit)
@@ -91,6 +93,83 @@ func seasonalProfiles(ctx context.Context, sc Scope, t template, e mql.Expr, to 
 		out[k] = seasonal.Fit(to, w, d, floor)
 	}
 	return out, nil
+}
+
+// rollupMaxWindow is the longest answer window an hourly median may stand in
+// for: beyond two hours the roll-up's one-hour figure is no longer the same
+// quantity as the window's own value.
+const rollupMaxWindow = 2 * time.Hour
+
+// fillFromRollup fills weekly references the metric store no longer holds
+// (older than its retention) from the hourly roll-up, when the deployment has
+// one (SeasonalStore) and the answer window is short enough for an hourly
+// median to stand in. The roll-up read is the caller's own (the Scope's
+// tenant scope); a failed read fills nothing and says so.
+func fillFromRollup(ctx context.Context, sc Scope, metric string, win time.Duration, weekly map[string][]seasonal.Ref, rs *ResultSet) {
+	st, ok := sc.(SeasonalStore)
+	if !ok || win > rollupMaxWindow {
+		return
+	}
+	hourOf := func(at time.Time) time.Time { return at.Add(-win / 2).UTC().Truncate(time.Hour) }
+	var keys []string
+	hourSet := map[int64]time.Time{}
+	for k, refs := range weekly {
+		missing := false
+		for _, r := range refs {
+			if !r.Present {
+				missing = true
+				h := hourOf(r.At)
+				hourSet[h.Unix()] = h
+			}
+		}
+		if missing {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	sort.Strings(keys)
+	hours := make([]time.Time, 0, len(hourSet))
+	for _, h := range hourSet {
+		hours = append(hours, h)
+	}
+	sort.Slice(hours, func(i, j int) bool { return hours[i].Before(hours[j]) })
+	got, err := st.SeasonalHours(ctx, metric, keys, hours)
+	if err != nil {
+		rs.Notes = append(rs.Notes, "The hourly roll-up could not be read, so earlier weeks the metric store no longer keeps were not used.")
+		return
+	}
+	filled := 0
+	for _, k := range keys {
+		for i, r := range weekly[k] {
+			if r.Present {
+				continue
+			}
+			if v, ok := got[k][hourOf(r.At).Unix()]; ok && !math.IsNaN(v) && !math.IsInf(v, 0) {
+				weekly[k][i].Value, weekly[k][i].Present = v, true
+				filled++
+			}
+		}
+	}
+	if filled > 0 {
+		rs.Provenance.Physical = append(rs.Provenance.Physical, fmt.Sprintf("netops.series_hourly p50 (%d earlier-week references)", filled))
+		rs.Notes = append(rs.Notes, fmt.Sprintf("%d earlier-week reference%s came from the hourly roll-up (an hourly median), because the metric store no longer keeps %s.", filled, pluralS(filled), itThem(filled)))
+	}
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func itThem(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // exclude marks a reference whose window a maintenance window covered at its
@@ -193,7 +272,7 @@ func (p Planner) aboveBaseline(ctx context.Context, sc Scope, q *ast.AST, t temp
 		source(rs, "victoriametrics")
 		return nil
 	}
-	prof, err := seasonalProfiles(ctx, sc, t, e, to, c.win, unit, keys, rs)
+	prof, err := seasonalProfiles(ctx, sc, q.Metric, t, e, to, c.win, unit, keys, rs)
 	if err != nil {
 		return err
 	}

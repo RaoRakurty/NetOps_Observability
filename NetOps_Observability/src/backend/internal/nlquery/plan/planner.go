@@ -622,7 +622,7 @@ func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, 
 	// for this time of week (or day) — the same windowed value read at the
 	// same hour in earlier weeks and days, through the same scoped reads.
 	if len(keys) > 0 {
-		prof, err := seasonalProfiles(ctx, sc, t, e, rs.Window.To, c.win, unit, keyLabels, rs)
+		prof, err := seasonalProfiles(ctx, sc, q.Metric, t, e, rs.Window.To, c.win, unit, keyLabels, rs)
 		if err != nil {
 			return err
 		}

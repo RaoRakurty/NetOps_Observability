@@ -89,6 +89,9 @@ type chRetentionDays struct {
 	// Fixed, deliberately: no knob, because shortening it below the refresh
 	// cadence would blank live names, and lengthening it keeps dead ones.
 	IfaceNames int
+	// SeriesHourly is netops.series_hourly (tracker 337 N-H6): fixed, like
+	// IfaceNames — a roll-up the seasonal profile needs nine weeks of.
+	SeriesHourly int
 }
 
 // chRetentionDefaults mirrors deployment/docker/clickhouse/init.sql. Keep the
@@ -115,6 +118,7 @@ func chRetentionDefaults() chRetentionDays {
 		ExperienceEvents: 30,
 		BusinessEvents:   400,
 		IfaceNames:       8,
+		SeriesHourly:     63,
 	}
 }
 
@@ -157,6 +161,7 @@ func RetentionConfig() chRetentionDays {
 		ExperienceEvents: knob("CH_EXPERIENCE_EVENT_RETENTION_DAYS", d.ExperienceEvents),
 		BusinessEvents:   knob("CH_BUSINESS_EVENT_RETENTION_DAYS", d.BusinessEvents),
 		IfaceNames:       d.IfaceNames,
+		SeriesHourly:     d.SeriesHourly,
 	}
 }
 
@@ -180,6 +185,8 @@ func chRetentionTables() []chRetentionTable {
 		// Tracker 401 (a): the per-interface rollup ages with the records it is
 		// built from (the owner kept flow retention unchanged, 2026-10-18).
 		{"flow_iface_1m", "recv_minute", func(d chRetentionDays) int { return d.Flows }},
+		// Tracker 337 N-H6: the seasonal roll-up (fixed nine weeks).
+		{"series_hourly", "hour", func(d chRetentionDays) int { return d.SeriesHourly }},
 		{"findings", "toDateTime(ts)", func(d chRetentionDays) int { return d.Findings }},
 		{"tunnels", "toDateTime(ts)", func(d chRetentionDays) int { return d.Tunnels }},
 		{"corr_signals", "toDateTime(ts)", func(d chRetentionDays) int { return d.CorrSignals }},

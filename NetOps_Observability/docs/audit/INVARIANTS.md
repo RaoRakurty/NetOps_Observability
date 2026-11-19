@@ -869,7 +869,9 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
 | A maintenance window leaves a reference out only for a device of its OWN tenant (workspace user and cross-tenant operator); an unreadable window list excludes nothing and says so | ✅ | **BUILD** — `TestSeasonalMaintenanceIsPerDeviceTenantForAnOperator`, `TestMaintenanceReferencesAreLeftOutAndCounted`; `MaintenanceCoverer` pinned in `TestNLQScopeMethodsCallTheirChokepoints` |
 | The tier is honest: hour-of-week only with ≥ 3 earlier weeks, hour-of-day (worded "for this time of day", never a weekday) only with ≥ 5 earlier days, otherwise "not enough history" and the flat 7-day p95 | ✅ | **BUILD** — `internal/nlquery/seasonal` table tests, `TestTierBSaysTimeOfDayNeverAWeekday`, `TestAboveBaselineJudgesEachEntityByItsOwnTier` |
 | Weekly false-positive reduction on real traffic | ❌ **not proven** | The lab has ~6 days of history since the 2026-11-13 wipe: tier A arrives about 2026-12-04. |
-| References deeper than VictoriaMetrics retention (30 d default) | ❌ **not built** | PR 2 (`netops.series_hourly` roll-up). |
+| References deeper than VictoriaMetrics retention come only from the caller's own roll-up rows (read at its tenant scope under a STRICT row policy), only for the entities and hours the answer needs, only for windows ≤ 2 h | ✅ | **BUILD** — `TestSeasonalHoursReadAtTheCallersScope`, `TestRollupIsAskedOnlyAboutTheAnswersEntities`, `TestRollupIsNotUsedForLongWindows`; `SeasonalHours` pinned in `TestNLQScopeMethodsCallTheirChokepoints`; `series_hourly` in `TestCorrRowPoliciesStrict` |
+| Every roll-up row carries its device's inventory owner: an unowned or ambiguous (two-tenant) device is skipped and counted, never written untagged | ✅ | **BUILD** — `TestSeasonalRollOwnerIndexRefusesAmbiguousNames`, `TestRollHourStampsTheDeviceOwnerAndSkipsTheUnowned`, `TestSeriesHourlyContract` (no `tenant_id` default) |
+| Roll-up cost at 1K–10K devices | ❌ **not measured** | Lab ≈ 150 interfaces; needs the scale rig. |
 
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 

@@ -76,6 +76,12 @@ func TestScaleFloors(t *testing.T) {
 	if p.Scale != 0.5 {
 		t.Fatalf("flat zero scale = %v, want the unit floor 0.5", p.Scale)
 	}
+	// Every unit the catalog's baseline_ok metrics use has a real floor.
+	for _, u := range []string{"bps", "percent", "per_second", "prefixes", "ms", "score"} {
+		if UnitFloor(u) < 0.5 {
+			t.Errorf("unit %q has no operational floor (%v)", u, UnitFloor(u))
+		}
+	}
 	// MAD wins when it is larger: values 10,20,30,40 → median 25, MAD 10.
 	p = Fit(now, refs(WeekOffsets(), 10, 20, 30, 40), nil, 0)
 	if math.Abs(p.Scale-MADScale*10) > 1e-9 {
