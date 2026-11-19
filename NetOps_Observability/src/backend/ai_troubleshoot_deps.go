@@ -2237,6 +2237,20 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 			add("bgp_peer", v, rank)
 		}
 		aiNoteFilterMiss(push, filter, matched, len(res.BGPPeers), "BGP neighbour")
+	case len(res.IPsecSAs) > 0:
+		matched := 0
+		for _, sa := range res.IPsecSAs {
+			if !aiStateMatches(filter, sa.Peer, sa.RemoteEndpoint, sa.Interface) {
+				continue
+			}
+			matched++
+			if !push("device", aiIPsecLine(sa)) {
+				continue
+			}
+			v, rank := aiIPsecState(sa)
+			add("ipsec_sa", v, rank)
+		}
+		aiNoteFilterMiss(push, filter, matched, len(res.IPsecSAs), "IPsec SA")
 	case len(res.Routes) > 0:
 		for _, rt := range res.Routes {
 			if push("device", aiRouteLine(rt)) {
@@ -2313,6 +2327,56 @@ func aiProjectParsed(res showparse.Result, command, filter string, push func(kin
 			push("device", "`"+aiFirst(command, res.CmdID)+"` returned no rows — "+aiClampLine(reason, 200))
 		}
 	}
+}
+
+// aiIPsecLine renders one protected flow from its typed fields. Counters are
+// what the SA has carried since it came up — said so, because one read cannot
+// show what it is carrying now.
+func aiIPsecLine(sa showparse.IPsecSA) string {
+	peer := sa.Peer
+	if sa.PeerPort != nil {
+		peer += fmt.Sprintf(" port %d", *sa.PeerPort)
+	}
+	dir := func(n int, status string) string {
+		if n == 0 {
+			return "no SA"
+		}
+		return aiFirst(status, "listed, status not reported")
+	}
+	parts := []string{
+		"inbound " + dir(sa.InboundESP, sa.InboundStatus),
+		"outbound " + dir(sa.OutboundESP, sa.OutboundStatus),
+	}
+	if sa.PktsEncaps != nil && sa.PktsDecaps != nil {
+		parts = append(parts, fmt.Sprintf("%d packets sent and %d received since the SA came up", *sa.PktsEncaps, *sa.PktsDecaps))
+	}
+	if sa.SendErrors != nil && sa.RecvErrors != nil {
+		parts = append(parts, fmt.Sprintf("%d send / %d receive errors", *sa.SendErrors, *sa.RecvErrors))
+	}
+	head := "IPsec SA to " + aiClampLine(peer, 80)
+	if sa.Interface != "" {
+		head += " on " + aiClampLine(sa.Interface, 40)
+	}
+	return aiJoinParts(head, parts)
+}
+
+// aiIPsecState derives `state:ipsec_sa` for one flow (vocabulary in
+// ai/skill.go). Worst first: a direction with no active SA, then a flow that
+// carried traffic one way only, then counted errors.
+func aiIPsecState(sa showparse.IPsecSA) (string, int) {
+	active := func(n int, st string) bool {
+		return n > 0 && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(st)), "ACTIVE")
+	}
+	if !active(sa.InboundESP, sa.InboundStatus) || !active(sa.OutboundESP, sa.OutboundStatus) {
+		return "inactive", 3
+	}
+	if sa.PktsEncaps != nil && sa.PktsDecaps != nil && (*sa.PktsEncaps == 0) != (*sa.PktsDecaps == 0) {
+		return "one_way", 3
+	}
+	if (sa.SendErrors != nil && *sa.SendErrors > 0) || (sa.RecvErrors != nil && *sa.RecvErrors > 0) {
+		return "errors", 2
+	}
+	return "active", 1
 }
 
 // aiStateMatches applies the caller's optional row filter. An EMPTY filter

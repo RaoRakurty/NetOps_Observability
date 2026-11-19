@@ -466,6 +466,14 @@ func TestRunBattery_UnsupportedArea(t *testing.T) {
 			// SR OS reads VXLAN per service id; the battery takes no subject.
 			showparse.DialectNokiaSROS: "SR OS VXLAN reads are per service id",
 		},
+		AreaVPN: {
+			// NX-OS switches carry no IPsec data plane to read.
+			showparse.DialectCiscoNXOS: "no IPsec data plane on NX-OS",
+			// EOS and SR OS IPsec reads are per tunnel / service and have not
+			// been verified here — a gap, not a guessed command (tracker 420).
+			showparse.DialectAristaEOS: "EOS IPsec read not verified",
+			showparse.DialectNokiaSROS: "SR OS IPsec reads are per service",
+		},
 	}
 	full := DefaultStateBattery()
 	tgt := Target{Interface: "GigabitEthernet0/0", Prefix: "10.0.0.0/8", Address: "10.0.0.2"}
