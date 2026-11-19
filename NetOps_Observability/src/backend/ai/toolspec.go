@@ -272,12 +272,12 @@ var toolMetas = map[string]toolMeta{
 	},
 	// ── IRIS Phase A4: show-first device state + BGP operations reads ──
 	"get_device_state": {
-		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime), evpn (VXLAN VTEP peers and VNIs), redundancy (HSRP/VRRP groups, LACP bundles) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
+		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime), evpn (VXLAN VTEP peers and VNIs), redundancy (HSRP/VRRP groups, LACP bundles), vpn (IPsec SAs per peer: active each way, packets and errors carried; IKE phase 1), upgrade (boot variable, free space, redundancy, route-table size) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
 		label:       "Device state",
 		args: []toolArgSpec{
 			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
-			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, evpn, redundancy, logs.", required: true},
-			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform, evpn, redundancy and logs take no target.", required: false},
+			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, evpn, redundancy, vpn, upgrade, logs.", required: true},
+			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2), a peer address (vpn). platform, evpn, redundancy, upgrade and logs take no target.", required: false},
 		},
 	},
 	"get_bgp_watchlist": {

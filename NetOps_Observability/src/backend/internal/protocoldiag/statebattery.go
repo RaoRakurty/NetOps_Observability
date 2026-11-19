@@ -69,6 +69,11 @@ const (
 	// AreaRedundancy is first-hop redundancy (HSRP / VRRP) and link
 	// aggregation (LACP) membership (NetClaw ingestion Batch 3). doc_claimed.
 	AreaRedundancy Area = "redundancy"
+	// AreaVPN is the IPsec security associations and the IKE (phase 1) state
+	// (tracker 420 (a)): whether each protected flow is up and what it has
+	// carried in each direction. The IOS-XE IPsec read is CAPTURED (a real
+	// 17.3.2 SD-WAN edge, 2026-11-19); every other row is doc_claimed.
+	AreaVPN Area = "vpn"
 	// AreaUpgrade is what an upgrade-readiness check and a before/after change
 	// baseline read beyond the version: the boot variable, the boot
 	// filesystem's free space, control-processor redundancy and the routing
@@ -90,7 +95,7 @@ var ErrUnknownArea = errors.New("protocoldiag: unknown state-battery area")
 
 // Areas returns every battery area in a stable, deterministic order.
 func Areas() []Area {
-	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaEVPN, AreaRedundancy, AreaUpgrade, AreaLogs}
+	return []Area{AreaInterfaces, AreaIGP, AreaBGP, AreaRoutes, AreaL2, AreaPlatform, AreaEVPN, AreaRedundancy, AreaVPN, AreaUpgrade, AreaLogs}
 }
 
 // ValidArea reports whether a is a defined battery area.
@@ -677,6 +682,34 @@ func defaultBatterySpecs() []BatterySpec {
 				showparse.DialectJunos:      "show lacp interfaces",
 				showparse.DialectNokiaSROS:  "show lag",
 				showparse.DialectHuaweiVRP:  "display eth-trunk",
+			}),
+
+		// ── vpn ─────────────────────────────────────────────────────────────
+		// Tracker 420 (a), 2026-11-19. The IOS-XE IPsec row is CAPTURED (a real
+		// 17.3.2 SD-WAN edge; its parser is built from that output). The IKE
+		// row on IOS-XE was captured too but printed nothing — the SD-WAN edge
+		// keys its tunnels through the controllers — so it has no parser. Every
+		// other row is doc_claimed: the vendor's documented read, output raw
+		// evidence until captured. Deliberate gaps: NX-OS (no IPsec data plane),
+		// Arista EOS and Nokia SR OS (their IPsec reads are per tunnel or
+		// service and have not been verified here).
+		bs(showparse.CmdIPsecSA, AreaVPN,
+			"IPsec security associations: each protected flow's peer, whether its inbound and outbound SAs are active, and the packets and errors it has carried each way (an SA that sends but never receives is up and passing nothing back)",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show crypto ipsec sa", // captured
+				showparse.DialectCiscoIOS:   "show crypto ipsec sa",
+				showparse.DialectCiscoIOSXR: "show crypto ipsec sa",
+				showparse.DialectJunos:      "show security ipsec security-associations",
+				showparse.DialectHuaweiVRP:  "display ipsec sa",
+			}),
+		bs(showparse.CmdIKESA, AreaVPN,
+			"IKE (phase 1) security associations: whether the key exchange with each peer is established — phase 1 up with no IPsec SA is a phase 2 (proposal or selector) problem",
+			map[showparse.Dialect]string{
+				showparse.DialectCiscoIOSXE: "show crypto ikev2 sa", // captured (empty on an SD-WAN edge)
+				showparse.DialectCiscoIOS:   "show crypto ikev2 sa",
+				showparse.DialectCiscoIOSXR: "show crypto ikev2 sa",
+				showparse.DialectJunos:      "show security ike security-associations",
+				showparse.DialectHuaweiVRP:  "display ike sa",
 			}),
 
 		// ── upgrade ─────────────────────────────────────────────────────────

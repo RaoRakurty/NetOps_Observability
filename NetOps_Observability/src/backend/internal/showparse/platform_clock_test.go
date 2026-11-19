@@ -12,7 +12,6 @@ package showparse
 // trailing columns, the line order — is what the device printed.
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -92,15 +91,26 @@ func TestParseIOSXENTPStatus_Captured(t *testing.T) {
 	}
 }
 
-// TestParseIOSXENTPStatus_UnsynchronizedShape covers the one sentence the lab
-// could not produce (every lab edge was synchronized on 2026-11-13). The line
-// is Cisco's documented unsynchronized form, built on the captured layout — it
-// is labelled here as documentation-derived, not as a capture.
-func TestParseIOSXENTPStatus_UnsynchronizedShape(t *testing.T) {
-	raw := strings.Replace(capturedIOSXENTPStatus,
-		"Clock is synchronized, stratum 6, reference is 192.0.2.10",
-		"Clock is unsynchronized, stratum 16, no reference clock", 1)
-	res, err := NewLibrary().Parse(CmdPlatformClock, DialectCiscoIOSXE, raw)
+// capturedIOSXENTPUnsynced is `show ntp status` from a real IOS XE 17.3.2
+// SD-WAN edge whose only NTP server had been unreachable for ~12 hours (lab,
+// 2026-11-19). Verbatim, including the epoch reference time and "never
+// updated" — nothing in it names an identity.
+const capturedIOSXENTPUnsynced = `
+Clock is unsynchronized, stratum 16, no reference clock
+nominal freq is 250.0000 Hz, actual freq is 250.0000 Hz, precision is 2**10
+ntp uptime is 4299900 (1/100 of seconds), resolution is 4000
+reference time is 00000000.00000000 (18:00:00.000 CDT Thu Dec 31 1899)
+clock offset is 0.0000 msec, root delay is 0.00 msec
+root dispersion is 631.70 msec, peer dispersion is 0.00 msec
+loopfilter state is 'FSET' (Drift set from file), drift is 0.000000000 s/s
+system poll interval is 64, never updated.`
+
+// TestParseIOSXENTPStatus_UnsynchronizedCaptured replaces the documentation-
+// derived unsynchronized case (tracker 419): the sentence is now a capture.
+// The device's "clock offset is 0.0000 msec" is NOT a measurement without a
+// reference, so it must not reach the operator as "offset 0 ms".
+func TestParseIOSXENTPStatus_UnsynchronizedCaptured(t *testing.T) {
+	res, err := NewLibrary().Parse(CmdPlatformClock, DialectCiscoIOSXE, capturedIOSXENTPUnsynced)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +123,9 @@ func TestParseIOSXENTPStatus_UnsynchronizedShape(t *testing.T) {
 	}
 	if ph.ClockReference != nil {
 		t.Errorf("no reference clock must leave ClockReference nil, got %q", *ph.ClockReference)
+	}
+	if ph.ClockOffsetMs != nil {
+		t.Errorf("an unsynchronized clock's printed offset must be dropped, got %v", *ph.ClockOffsetMs)
 	}
 }
 
