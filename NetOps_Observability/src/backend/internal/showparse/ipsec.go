@@ -95,7 +95,7 @@ func parseIOSXEIPsecSA(lines []string) Result {
 			cur.PktsDecaps = ipsecCount(t, "#pkts decaps:")
 		case strings.HasPrefix(lower, "#send errors"):
 			cur.SendErrors = ipsecCount(t, "#send errors")
-			if i := strings.Index(lower, "#recv errors"); i >= 0 {
+			if i := strings.Index(t, "#recv errors"); i >= 0 { // exact device case: never an offset from the folded copy
 				cur.RecvErrors = ipsecCount(t[i:], "#recv errors")
 			}
 		case strings.HasPrefix(lower, "local crypto endpt.:"):
@@ -135,8 +135,10 @@ func parseIOSXEIPsecSA(lines []string) Result {
 }
 
 // ipsecCount reads the integer right after marker ("#pkts encaps: 92145,").
+// The marker is matched in the device's own (lower) case on the original
+// line, so the offset slices the string it was measured on.
 func ipsecCount(t, marker string) *int64 {
-	i := strings.Index(strings.ToLower(t), strings.ToLower(marker))
+	i := strings.Index(t, marker)
 	if i < 0 {
 		return nil
 	}
