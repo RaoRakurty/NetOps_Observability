@@ -12,10 +12,14 @@ flag), `cross_module`, and `response_modes`.
 
 ## Registered modules
 
+22 modules (`ai/registry.go`):
+
 `command_center`, `event_management`, `correlations_rca`, `topology`,
 `cloud_app_observability` (future, `ENABLE_CLOUD_APP_OBS`), `app_identification`,
-`telemetry`, `flow_analytics`, `itsm`, `reports`, `integrations`, `tenant_admin`,
-`audit`, `product_navigation`, `network_expert_kb`.
+`wireless`, `telemetry`, `flow_analytics`, `itsm`, `reports`, `integrations`,
+`tenant_admin`, `audit`, `network_expert_kb`, `protocol_diagnostics`,
+`security_posture`, `device_state`, `bgp_operations`, `config_changes`,
+`documentation`, `product_navigation`.
 
 ## Availability gate
 

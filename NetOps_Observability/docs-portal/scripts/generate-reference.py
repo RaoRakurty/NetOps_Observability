@@ -184,8 +184,8 @@ FLAG_NOTES = {
     "ENABLE_VENDOR_DETECTION": "Identify vendor and OS from sysObjectID.",
     "FEATURE_ACTIVE_PROBE": "Send STAMP active-measurement probes.",
     "FEATURE_ACTIVE_VERIFICATION": "Verify a recovery before closing a case.",
-    "FEATURE_AI": "Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Administration → Features.",
-    "FEATURE_AI_TOOLS": "No longer a switch: read once on upgrade to keep AI investigations on. Administration → Features decides.",
+    "FEATURE_AI": "Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Platform → Configuration → Features.",
+    "FEATURE_AI_TOOLS": "No longer a switch: read once on upgrade to keep AI investigations on. Platform → Configuration → Features decides.",
     "FEATURE_BGP_ALERTS": "Evaluate the BGP watchlist and raise routing alerts.",
     "FEATURE_BGP_BOGON_FEED": "Add the Team Cymru full-bogons feed to the "
                               "embedded IANA special-purpose blocks.",
@@ -237,9 +237,14 @@ def gen_flags(flags, defaults) -> str:
            "page_type: reference",
            "sidebar_position: 30", "---", "", BANNER, "",
            "# Feature flags", "",
-           "Correlix reads every optional capability from an environment "
-           "variable. Set them in `deployment/docker/.env` and restart the "
-           "affected service.", "",
+           "Correlix reads every optional capability from a switch. The "
+           "switches a platform administrator may change are on "
+           "**Platform → Configuration → Features** "
+           "([Turn Correlix features on and off](/administration/features)): "
+           "a value saved there wins over the install value listed below, "
+           "which is only the starting point. Never edit configuration files "
+           "to change one. The **Iris AI** switches (`IRIS_*`) can be set on "
+           "that page only; no install value turns them on.", "",
            "Two rules hold for all of them:", "",
            "- A flag is read as the exact string `true`. Any other value, "
            "including `TRUE` and `1`, leaves the feature off.",

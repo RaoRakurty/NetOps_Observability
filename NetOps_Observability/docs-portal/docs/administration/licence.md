@@ -27,6 +27,15 @@ Contact Correlix with the deployment's device count and the capabilities you nee
 
 A licence file carries exactly five things: the entitled features, the ceilings, the customer, the expiry with its grace period, and the support entitlement. It carries no price, no currency and no tier cost. What a tier costs is a commercial term that lives in the order form, and the product never reads it. See [Pricing](/reference/pricing) for the figures.
 
+**The Iris AI add-on (`iris_model`).** Model-backed Iris — answers written by
+your AI provider, model chat and AI investigations — is the Iris AI add-on.
+Enterprise includes it; a Team or Community licence carries it only as a
+purchased add-on line. Without it Iris still answers from Correlix's own data in
+every edition. With it, a platform administrator still turns model-backed Iris
+on under **Platform → Configuration → Features** (see
+[Set up Iris](/iris-ai/setup)). See [Licensing](/reference/licensing#what-is-commercial)
+for the full entitlement list.
+
 A trial is the same mechanism: a Team or Enterprise file with a short expiry date — 30 days from issue, 7 days of grace, marked as an evaluation licence so the page can say so. No card, and it works offline like any other licence.
 
 ### Install the licence on the Licence page {#install-on-the-page}

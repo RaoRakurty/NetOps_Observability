@@ -26,8 +26,24 @@ answer mode by the model tier it needs and whether the verifier applies.
 | current_state / module_health | fast | yes | yes |
 | investigation_plan (KB) / navigation / shift_handoff / time_range / incident_list | deterministic | no | no |
 
-Most answer modes are **deterministic** — built from tools/KB/registry, no
-provider call at all — which is why the copilot works key-free. The chosen tier
+Most answer modes are **deterministic** — built from tools/KB/registry — which is
+why the copilot works key-free. **Model-first routing (2026-11-13):** with the AI
+add-on on (`iris_model` + the **Iris AI models** switch), one fast-tier planner
+call (`ai/planner.go`, 5 s bound) first reads each NEW question and picks which
+arm answers it from a closed, server-written catalogue (an exact-match cache keeps
+a repeated question off the model); the deterministic arms are what it selects.
+With the add-on off, or the planner unavailable or invalid, the deterministic
+router decides exactly as before. So "deterministic" in the table means the
+answer is built without a narrative call; with the add-on on, the routing itself
+costs one fast call per new question.
+
+**Per-model fallback and breaker (2026-11-12):** every provider call is
+classified into a closed outcome class (`ai/provider_outcome.go`: timeout, auth,
+model_not_found, rate_limited, …); a failing model trips a per-model breaker
+and strike count, the call falls back to the provider's other configured
+model(s), and a ready deterministic answer is narrated only inside a short
+per-stage budget — otherwise the evidence answer is shown with a one-line
+footer (`FallbackNoteFor`). The chosen tier
 is recorded in the audit line. Per-tier providers (a fast model vs. a strong one)
 plug into the single `LLMClient` seam without touching the orchestrator; today
 they resolve through one provider chain + the evidence-only fallback.
