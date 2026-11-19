@@ -149,3 +149,42 @@ def test_kill_switch_sends_everything_to_the_main_family(tmp_path):
     run = _run(tmp_path, _suite(cases, force="main"), ["SYSLOG_ROUTINE_SPLIT=off"])
     assert run.final.returncode == 0, f"vector test failed:\n{run.report()}"
     assert run.output.count("... passed") == len(cases), run.output
+
+
+# ── the kill switches must actually reach the containers ─────────────────────
+# They were read (router vector.yaml, api logs.go) but passed by no compose
+# `environment:` and no Helm template, so "set SYSLOG_ROUTINE_SPLIT=off" in the
+# runbook changed nothing (docs audit 2026-11-19). These pin the passthrough.
+COMPOSE = ROOT / "deployment" / "docker" / "docker-compose.yml"
+HELM = ROOT / "deployment" / "helm" / "correlix"
+
+
+def _compose_env(service: str) -> dict:
+    svc = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"][service]
+    env = svc.get("environment") or {}
+    if isinstance(env, list):
+        env = dict(e.split("=", 1) for e in env)
+    return env
+
+
+def test_compose_passes_the_routine_split_switch_to_the_router():
+    assert _compose_env("vector-router").get("SYSLOG_ROUTINE_SPLIT") == "${SYSLOG_ROUTINE_SPLIT:-on}"
+
+
+def test_compose_passes_the_rollup_switch_to_the_api():
+    assert _compose_env("api").get("ROUTINE_SYSLOG_ROLLUP") == "${ROUTINE_SYSLOG_ROLLUP:-on}"
+
+
+def test_helm_carries_both_switches_with_on_defaults():
+    values = yaml.safe_load((HELM / "values.yaml").read_text(encoding="utf-8"))
+    assert values["vectorRouter"]["routineSplit"] == "on"
+    assert values["api"]["routineSyslogRollup"] == "on"
+    pipeline = (HELM / "templates" / "pipeline.yaml").read_text(encoding="utf-8")
+    core = (HELM / "templates" / "core.yaml").read_text(encoding="utf-8")
+    assert re.search(r"name: SYSLOG_ROUTINE_SPLIT, value: \{\{ \.Values\.vectorRouter\.routineSplit", pipeline)
+    assert re.search(r"name: ROUTINE_SYSLOG_ROLLUP, value: \{\{ \.Values\.api\.routineSyslogRollup", core)
+
+
+def test_the_api_reads_the_rollup_switch_it_is_given():
+    logs_go = (ROOT / "src" / "backend" / "logs.go").read_text(encoding="utf-8")
+    assert 'envOr("ROUTINE_SYSLOG_ROLLUP", "on")' in logs_go

@@ -21,7 +21,7 @@ describe("modelsBanner", () => {
     expect(b.text).toMatch(/Enterprise includes it/);
   });
   it("tells a platform admin where the switch is, and anyone else who can turn it on", () => {
-    expect(modelsBanner(st("off"), true)!.text).toMatch(/Administration → Features/);
+    expect(modelsBanner(st("off"), true)!.text).toMatch(/Platform → Features/);
     expect(modelsBanner(st("off"), false)!.text).toMatch(/platform administrator can turn them on/);
   });
 });

@@ -37,8 +37,9 @@ flow records in the window.
 | **Trend** | In plus out over the window, from the interface counters. |
 
 Select a row to open the link: traffic in and out over time, its top talkers,
-the services on it (by port), and the problems in the window that name the
-device. **Who is talking here** opens the next tab already filtered to the link.
+the services on it (by port), the problems in the window that name the
+device, and **What changed** — the talkers, services or applications that moved
+most on this link against the window before. **Who is talking here** opens the next tab already filtered to the link.
 
 ## Who is talking
 
@@ -57,11 +58,22 @@ says so. The **Application** chip narrows those two lists by name.
 
 ## Capacity
 
-Per-link utilisation over the window: the average and the peak of the
-five-minute rate, in percent of the link speed, for the busier direction and for
-each direction. Links are sorted by their peak and grouped by site or by device.
-Only links that report a speed are listed. The 95th percentile, the headroom
-left and the days until a link reaches 90 % are not computed yet.
+Per-link headroom over the window, read from the interface counters (exact,
+and kept 30 days), not from flow records. For each link, grouped by site or by
+device:
+
+| Column | What it means |
+|---|---|
+| **Speed** | The link speed the device reports. |
+| **95th percentile** | The busier direction's rate with the busiest 5 % of five-minute samples set aside, so one burst does not read as a full link. |
+| **Peak** | The highest five-minute rate. |
+| **Headroom** | The speed minus the 95th percentile. |
+| **Reaches 90%** | When the link is on course to reach 90 %: a straight line through each complete day's 95th percentile. Given only with 14 days of history and a steady trend; otherwise it says why not. |
+
+A link whose device reports no speed (or an implausible one) is still listed
+with its throughput, but gets no percentage, headroom or forecast, and the page
+says so. Select a row to open that link in **Right now**. The Overview page's
+capacity outlook uses the same calculation, so the two always agree.
 
 ## About this data
 

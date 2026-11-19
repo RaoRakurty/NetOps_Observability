@@ -88,17 +88,29 @@ events to ClickHouse (flows go to OpenSearch as well). It does **not** consume
 
 ### Storage tier
 
-* **OpenSearch** — hot search, in rolling daily `netops-*` indices. Templates are
-  in `deployment/docker/opensearch/index-templates.json`; the installer and
-  `scripts/update.sh` apply them through `scripts/bootstrap-opensearch.sh`, and
-  `scripts/deploy-qualify.sh` verifies them. **OpenSearch Dashboards** is
+* **OpenSearch** — hot search, in rolling daily per-tenant `netops-*` indices.
+  Templates are in `deployment/docker/opensearch/index-templates.json`; the
+  installer and `scripts/update.sh` apply them through
+  `scripts/bootstrap-opensearch.sh` (a plain `scripts/deploy.sh` does NOT), and
+  `scripts/deploy-qualify.sh` verifies them (B4). Retention is ISM
+  (`apply-ism.sh`, the `opensearch-init` one-shot): `OPENSEARCH_LOG_RETENTION_DAYS`
+  (14) for the log families, except routine management-session syslog
+  (tracker 410): its originals go to `netops-syslogroutine-*` for
+  `OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` (96 h), and the api's roll-up job
+  keeps one document per device, source address, user and minute in
+  `netops-syslogrollup-*` for the full window. **OpenSearch Dashboards** is
   optional (profile `osd`), served under `/search/`.
 * **VictoriaMetrics** — time series for SNMP and telemetry, and the query API the
   alert rules run against (`vmalert`).
-* **ClickHouse** — OLAP. `netops.flows` (default TTL 7 days,
-  `deployment/docker/clickhouse/init.sql`), the correlation tables (below), and
-  the path, application, wireless and experience tables. Row policies enforce
-  tenant isolation.
+* **ClickHouse** — OLAP. `netops.flows` (default TTL 7 days, knob
+  `CH_FLOWS_RETENTION_DAYS`, `deployment/docker/clickhouse/init.sql`) and its
+  per-interface one-minute roll-up `netops.flow_iface_1m` (written by the api's
+  flowquery Roller — no materialized view; same TTL as flows; tracker 401), the
+  correlation tables (below), the path, application, wireless and experience
+  tables, and `netops.series_hourly` (hourly metric roll-up behind Iris's
+  seasonal baselines, 63 days, `FEATURE_SEASONAL_ROLLUP`). New tables converge on
+  api boot (`internal/chschema`), so an existing install needs no manual DDL.
+  Row policies enforce tenant isolation.
 * **PostgreSQL** — relational app state, under FORCE-RLS `tenant_iso` policies.
   The installer writes `STORE_BACKEND` explicitly; Postgres is the default for
   fresh installs, and the file backend remains for compatibility.
@@ -135,7 +147,7 @@ IO, clock or randomness, and `main.py` is the impure shell around it.
 5. **Objects.** Connected components become versioned correlation objects with a
    stable identity and an `open`, `closed` or `merged` lifecycle.
 6. **Scoring (the rank).** `scoring.py` ranks competing hypotheses from a
-   declarative signature catalog (`catalog.py`: 149 templates, 103 enabled) using
+   declarative signature catalog (`catalog.py`: 151 templates, 105 enabled) using
    a structure gate, clause coverage and a discriminator penalty that promotes the
    competing template. It reports the top 4 plus forced and contradicted
    competitors. Below the 0.3 floor the result is `undetermined`, with the
@@ -177,7 +189,7 @@ the caller's tenant. The main route families:
 | `/api/devices`, `/api/collectors` | device inventory and collector pool |
 | `/api/alerts`, `/api/rules` | alert engine |
 | `/api/logs/*` | OpenSearch |
-| `/api/flows/*` | ClickHouse `netops.flows` |
+| `/api/flows/*` | ClickHouse: `/api/flows/links` and `/api/flows/links/series` read the per-interface roll-up `netops.flow_iface_1m` plus raw `netops.flows` for minutes not rolled yet (`internal/flowquery/source.go`); every other flow route reads `netops.flows`; `/api/flows/capacity` reads the interface counters in VictoriaMetrics |
 | `/api/ai/*`, `/api/copilot/chat` | Iris (see below) |
 | `/api/graphql` | a fixed schema with its own parser, permission-checked (`graphql.go`) |
 

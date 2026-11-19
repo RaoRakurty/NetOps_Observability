@@ -731,14 +731,13 @@ groups:
           runbook: "docs/runbooks/devices-silent.md"
 
       # ------------------------------------------------------------------
-      # PAGE 3: STORAGE REFUSING WRITES — the ClickHouse half.
+      # PAGE 3: STORAGE REFUSING WRITES — the ClickHouse half (and, below,
+      # the OpenSearch half: OpenSearchWritesRefused).
       #
-      # The OpenSearch half is already covered and stays where it is:
-      # OpenSearchClusterRed (above), OpenSearchFloodStageBlock and
-      # OpenSearchDocumentsRejected (rules.yaml). Nothing read the ClickHouse
-      # write path: netops_clickhouse_write_outcomes_total{outcome="rejected"}
-      # is emitted by the api and had NO rule at all. A rejected batch is not a
-      # retry — those rows are gone from the OLAP store unless replayed.
+      # Nothing read the ClickHouse write path:
+      # netops_clickhouse_write_outcomes_total{outcome="rejected"} is emitted by
+      # the api and had NO rule at all. A rejected batch is not a retry — those
+      # rows are gone from the OLAP store unless replayed.
       # ------------------------------------------------------------------
       - alert: ClickHouseWritesRejected
         expr: increase(netops_clickhouse_write_outcomes_total{outcome="rejected"}[15m]) > 0
@@ -756,6 +755,54 @@ groups:
             alongside this, and see CorrSignalRowsQuarantined for the
             correlation-engine equivalent on its own write path.
           runbook: "docs/runbooks/engine-not-consuming.md"
+
+      # ------------------------------------------------------------------
+      # PAGE 3, the OpenSearch half (docs audit 2026-11-19): the OpenSearch
+      # write-refusal rules — OpenSearchFloodStageBlock and
+      # OpenSearchDocumentsRejected in rules.yaml — carry no `tier: page`, so
+      # an OpenSearch store refusing writes only ever reached the warning
+      # digest, although "storage refusing writes" is one of the four page
+      # CONDITIONS (root CLAUDE.md, Monitoring). The lab lived this: a disk at
+      # 98% put OpenSearch into flood stage and backed up the router. This is
+      # the same condition from the OpenSearch side, NOT a fifth condition. It
+      # reuses the two rules.yaml expressions (the same false-positive guards:
+      # the flood branch needs the disk under 5% AND the write path suffering
+      # it; the rejection branch needs a Vector sink to have actually discarded
+      # documents, so OpenSearch's own ISM 409s cannot page), lives here so it
+      # keeps firing when the api is down, and holds 5m to ride out a
+      # one-scrape blip. The warning-tier rules stay, for their detail.
+      # ------------------------------------------------------------------
+      - alert: OpenSearchWritesRefused
+        expr: |
+          (
+            (min(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+                 / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}) < 0.05)
+            and on()
+            (sum(delta(opensearch_indexing_doc_status{code="4xx"}[5m])) > 0
+             or on() sum(delta(opensearch_indexing_doc_status{code="2xx"}[5m])) == 0)
+          )
+          or on()
+          (
+            sum(delta(opensearch_indexing_doc_status{code="4xx"}[15m])) > 0
+            and on()
+            sum(increase(vector_component_discarded_events_total{component_id=~"opensearch.*",intentional="false"}[15m])) > 0
+          )
+        for: 5m
+        labels: { severity: critical, layer: storage, tier: page }
+        annotations:
+          summary: "OpenSearch is REFUSING writes — flood-stage read-only block or documents rejected by the store"
+          description: >-
+            Either the shared disk is under OpenSearch's 5% flood-stage
+            watermark and bulk writes are being refused (every index is
+            read-only-allow-delete; evidence is DELAYED in Kafka, 72h), or a
+            Vector OpenSearch sink discarded documents the store rejected
+            (permanent loss for those documents). OpenSearchFloodStageBlock
+            and OpenSearchDocumentsRejected say which. Flood stage: free disk
+            first (never shrink Kafka retention), then clear the block with
+            PUT netops-*/_settings {"index.blocks.read_only_allow_delete": null}.
+            Rejections: check the lane's index template (mapping conflict or
+            field limit).
+          runbook: "docs/runbooks/storage-and-volume-operations.md"
 
       # ------------------------------------------------------------------
       # PAGE 4: THE ALERTING CHAIN ITSELF — a dead-man's switch on delivery.

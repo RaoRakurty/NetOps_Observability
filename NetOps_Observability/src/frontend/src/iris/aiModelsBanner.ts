@@ -29,7 +29,7 @@ export function modelsBanner(m: AIModelsState | undefined, isPlatformAdmin: bool
   return {
     tone: "info",
     text: isPlatformAdmin
-      ? `${lead} AI models are off. Turn on "Iris AI models" under Administration → Features.`
+      ? `${lead} AI models are off. Turn on "Iris AI models" under Platform → Features.`
       : `${lead} AI models are off. Your platform administrator can turn them on.`,
   };
 }
@@ -52,7 +52,7 @@ export function modelsOffNote(reason: string | undefined): string {
 export function investigationsHint(m: AIModelsState | undefined): string | null {
   if (!m) return null;
   if (m.state === "unlicensed") return "AI investigations need the Iris AI add-on on your license.";
-  if (!m.models_on) return 'Turn on "Iris AI models" under Administration → Features first.';
-  if (!m.investigations_on) return 'Turn on "AI investigations" under Administration → Features, then tick the workspaces below.';
+  if (!m.models_on) return 'Turn on "Iris AI models" under Platform → Features first.';
+  if (!m.investigations_on) return 'Turn on "AI investigations" under Platform → Features, then tick the workspaces below.';
   return null;
 }

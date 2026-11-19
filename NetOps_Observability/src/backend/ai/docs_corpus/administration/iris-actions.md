@@ -17,7 +17,7 @@ Iris proposes only at the end of an investigation that **concluded** with suppor
 
 ## Before you begin
 
-- The **Iris actions (approval needed)** switch must be on under **Administration → Features**. A platform administrator turns it on; it is off by default.
+- The **Iris actions (approval needed)** switch must be on under **Platform → Configuration → Features**. A platform administrator turns it on; it is off by default.
 - AI investigations must be on for the installation and for your workspace.
 - A workspace administrator turns actions on for the workspace and chooses which kinds Iris may propose (none by default).
 

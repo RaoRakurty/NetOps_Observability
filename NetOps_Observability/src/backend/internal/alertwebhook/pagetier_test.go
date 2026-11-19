@@ -116,6 +116,7 @@ func TestPageRuleNamesAreTheFourApprovedConditions(t *testing.T) {
 		"NMSIngestSilent":          "2. ingest silent when it should not be",
 		"MonitoredSourcesSilent":   "2. ingest silent when it should not be",
 		"ClickHouseWritesRejected": "3. storage refusing writes",
+		"OpenSearchWritesRefused":  "3. storage refusing writes",
 		"AlertDeliveryBroken":      "4. the alerting heartbeat missing",
 		// The same condition from the far end (review 2026-11-11): the
 		// receiver is fed, but no channel receives pages — the alerting path

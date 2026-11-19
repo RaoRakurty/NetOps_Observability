@@ -216,7 +216,7 @@ Defects that report found, confirmed against the code:
 - **Arista is mislabelled.** Real agents such as `Rib` are not in the Arista app list, so `Rib: %BGP-3-NOTIFICATION` is labelled Cisco. Inventory-driven vendor (PR 12) fixes this.
 - **Indexed MIBs have silent gaps.** `ARISTA-MLAG-MIB`, `TIMETRA-PORT-MIB` and `TIMETRA-VRTR-MIB` contribute 0 nodes, and `BFD-STD-MIB` and `CISCO-BFD-MIB` are absent.
 - **SONiC:** no vendor profile; it reports the net-snmp enterprise number. Upstream ships no traps today (the report cites an unmerged PR), so SONiC relies on polling, syslog and sFlow. Its rsyslog template puts the severity word where syslog-ng expects the program name.
-- **Flows:** an exporter that samples but reports no rate, reportedly including Nokia SR OS cflowd, reads as 1:1. PR 5's `sampling_status` should later say "vendor known to sample, none reported".
+- **Flows:** an exporter that samples but reports no rate, reportedly including Nokia SR OS cflowd, reads as 1:1 unless an operator DECLARES its rate (tracker 401 (c), 2026-11-15: `/api/flows/sampling`, migration 0078, Flows → About this data). The page says when totals are 1:1.
 
 Order after PR 8's mechanism lands: syslog envelope (PR 10), Nokia SR OS, Cisco IOS-XR and missing Cisco MIBs, Juniper, Arista, SONiC, Extreme EXOS, then AOS-CX, Comware, Dell OS10, VOSS, then the third wave. Nokia SR OS goes first because its event tables were verified from vendor documentation.
 
@@ -298,7 +298,7 @@ Defects being fixed: all row text is monospaced at 11.5–12.5px, below the floo
 
 ### How the decisions change the plan
 
-- **PR 11 (D2, rule 2):** deduplication is at read time over a stable key, so every stored audit document survives. The Logs page groups repeats with first seen, last seen and count.
+- **PR 11 (D2, rule 2):** deduplication is at read time over a stable key, so every stored audit document survives. The Logs page groups repeats with first seen, last seen and count. **Superseded for routine management sessions by tracker 410 (owner 2026-11-19):** their originals are kept at least 72 h (`netops-syslogroutine-*`, 96 h default) and only their per-minute roll-ups (first/last seen, count, device, source address, user) survive the full window — rule 2 still holds through the roll-up's count and identity.
 - **PR 8/9 (D3, rule 1):** a typed rule's catalogue severity decides whether a lone event can open an object. Only qualifying critical events carry `crit`; lower ones reach the engine below the open floor, where they can still join a component.
 - **PR 7 (D4):** `FETCH_PINS` URLs name a commit, not a branch. The licence question is resolved in that PR's report: `cisco-mibs` shows no licence file, so nothing is redistributed until it is settled.
 - **New PR 15 (D5):** keep the original syslog payload as a stored, unindexed field after the capture in PR 10, and document the forensic limit in the operator docs. PR 10 delivers the field: `message_original` on every syslog frame, accepted at about +11.5% mean JSON per document on the lab (808 to 901 bytes over 3,825 frames). Still owed: the operator docs.

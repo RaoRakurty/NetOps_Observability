@@ -59,9 +59,13 @@ open ──────────────► closed / merged ────�
 | Replay signal archive | CH `corr_signals_archive` | **45d** | `CORR_RETENTION_ARCHIVE_DAYS` (prod 90) | Parquet export | 693 MiB |
 | Live signal window | CH `corr_signals` | 30d | fixed | — (derived) | 78 MiB |
 | Findings | CH `findings` | 90d | fixed TTL | none yet | 22 MiB |
-| Flows | CH `flows` | 7d | fixed TTL | none (raw firehose) | 140 MiB |
+| Flows | CH `flows` | 7d | `CH_FLOWS_RETENTION_DAYS` (knob since this map was written) | none (raw firehose) | 140 MiB |
+| Flows per-interface roll-up (tracker 401, 2026-11-15) | CH `flow_iface_1m` | follows flows | `CH_FLOWS_RETENTION_DAYS` | none | — |
+| Seasonal metric roll-up (N-H6, 2026-11-19) | CH `series_hourly` | 63d | fixed (nine weeks) | none | — |
 | Path/tunnel history | CH `path_*`, `tunnels` | 90d | fixed TTL | none | ~33 MiB |
 | Logs | OpenSearch `netops-*` | **14d** (ISM auto-delete) | `OPENSEARCH_LOG_RETENTION_DAYS` | none (Export-all UI for ad-hoc) | — |
+| Routine management-session syslog originals (tracker 410, 2026-11-19) | OpenSearch `netops-syslogroutine-*` | **96h** (never under 72h) | `OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` | none | — |
+| Routine-session per-minute roll-ups | OpenSearch `netops-syslogrollup-*` | **14d** (with the logs) | `OPENSEARCH_LOG_RETENTION_DAYS` | none | — |
 | Metrics | VictoriaMetrics | **30d** | `VICTORIA_RETENTION` | none | — |
 | Event bus | Kafka `netops.*` | 72h / 512MB — transit, not a store (#96e) | `BUS_RETENTION_MS/BYTES` | n/a | — |
 | Incidents, timelines, time-metrics | PG | **unbounded** | none | n/a | ~35 MB |

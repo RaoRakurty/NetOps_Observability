@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for OpenSearchWritesRefused (rules-scale-slo.yaml,
+# engine-liveness group) — the OpenSearch half of page condition 3, "storage
+# refusing writes" (docs audit 2026-11-19: the OpenSearch write-refusal rules
+# in rules.yaml carried no `tier: page`, so a flood-stage block only reached
+# the warning digest). Each branch must FIRE on its real shape and the rule
+# must stay SILENT on the look-alikes that would get a page muted:
+#   * OpenSearch's own ISM / optimistic-lock 409s (a 4xx trickle, ~0.8/min on a
+#     healthy cluster) with no Vector discard and plenty of disk -> no page;
+#   * a full-ish disk (6% free) with the write path healthy -> no page (the
+#     DiskFloodStageImminent warning owns "it is coming").
+# Run by scripts/preflight-configs.sh (promtool test rules).
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Flood stage: 4.5% free on / while per-document 4xx climbs (a per-item
+  #    429 cluster_block_exception lands in the 4xx bucket) -> page.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "3704409292x30"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x30"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0+2000x30"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "610001x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OpenSearchWritesRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: storage
+              tier: page
+            exp_annotations:
+              summary: "OpenSearch is REFUSING writes \u2014 flood-stage read-only block or documents rejected by the store"
+              description: "Either the shared disk is under OpenSearch's 5% flood-stage watermark and bulk writes are being refused (every index is read-only-allow-delete; evidence is DELAYED in Kafka, 72h), or a Vector OpenSearch sink discarded documents the store rejected (permanent loss for those documents). OpenSearchFloodStageBlock and OpenSearchDocumentsRejected say which. Flood stage: free disk first (never shrink Kafka retention), then clear the block with PUT netops-*/_settings {\"index.blocks.read_only_allow_delete\": null}. Rejections: check the lane's index template (mapping conflict or field limit)."
+              runbook: "docs/runbooks/storage-and-volume-operations.md"
+
+  # 2) Rejections: per-document 4xx AND a Vector OpenSearch sink discarding
+  #    unintentionally (the 1127-document mapping-conflict shape), plenty of
+  #    disk -> page.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "11811160064x30"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x30"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0+50x30"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "0+900x30"
+      - series: 'vector_component_discarded_events_total{component_id="opensearch_syslog",intentional="false",instance="vector-router:9598"}'
+        values: "0+10x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OpenSearchWritesRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: storage
+              tier: page
+            exp_annotations:
+              summary: "OpenSearch is REFUSING writes \u2014 flood-stage read-only block or documents rejected by the store"
+              description: "Either the shared disk is under OpenSearch's 5% flood-stage watermark and bulk writes are being refused (every index is read-only-allow-delete; evidence is DELAYED in Kafka, 72h), or a Vector OpenSearch sink discarded documents the store rejected (permanent loss for those documents). OpenSearchFloodStageBlock and OpenSearchDocumentsRejected say which. Flood stage: free disk first (never shrink Kafka retention), then clear the block with PUT netops-*/_settings {\"index.blocks.read_only_allow_delete\": null}. Rejections: check the lane's index template (mapping conflict or field limit)."
+              runbook: "docs/runbooks/storage-and-volume-operations.md"
+
+  # 3) ISM 409 trickle, no Vector discard, 14% free -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "11811160064x30"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x30"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0+1x30"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "0+900x30"
+      - series: 'vector_component_discarded_events_total{component_id="opensearch_syslog",intentional="false",instance="vector-router:9598"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OpenSearchWritesRefused
+        exp_alerts: []
+
+  # 4) Disk at 6% free (over the 5% watermark), writes healthy -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "4960687226x30"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x30"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0x30"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "0+900x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OpenSearchWritesRefused
+        exp_alerts: []

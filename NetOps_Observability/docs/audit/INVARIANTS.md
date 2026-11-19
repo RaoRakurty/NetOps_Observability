@@ -701,6 +701,7 @@ Device syslog carries usernames, retained on purpose for security attribution. T
 | Routine management-session originals (`netops-syslogroutine-*`, tracker 410) live at least 72 h under their own ISM policy; their per-minute roll-ups (`netops-syslogrollup-*`, count + identity incl. `audit_user`) are under `netops-retention` | ✅ | **BUILD** — `test_routine_policy_defaults_to_96h_so_every_record_lives_72h`, `test_routine_window_under_72h_or_malformed_is_refused_loudly`, `test_syslog_rollups_are_under_the_retention_policy`, `test_routine_originals_are_not_under_the_shared_window`. Not yet observed on a live cluster |
 | Every syslog read covers both families through the one chokepoint; a tenant names only its own + untagged routine indices; a tenant id starting `routine-` cannot collide | ✅ | **BUILD** — `TestRoutineSyslogFamiliesAreTenantScoped`, `TestRoutineSyslogLogsScopeIsTheCallersOwn`, `TestRoutineSyslogForeignDocNeverReachesIrisLogSearch` |
 | The router's write-time split and the Go rule agree on every fixture case; the split never moves a non-routine record; kill switch restores the old routing | ✅ | **BUILD** — `TestStaticRoutineMatchesTheSharedFixture`, `TestStaticRoutineIsASubsetOfClause`, `tests/test_syslog_routine_split.py` (generated `vector test` suites over the shipped router) |
+| The kill switches actually reach the containers: `SYSLOG_ROUTINE_SPLIT` (vector-router) and `ROUTINE_SYSLOG_ROLLUP` (api) are passed by compose (`${…:-on}`) and Helm (`vectorRouter.routineSplit`, `api.routineSyslogRollup`) | ✅ | **BUILD** — `test_compose_passes_the_routine_split_switch_to_the_router`, `test_compose_passes_the_rollup_switch_to_the_api`, `test_helm_carries_both_switches_with_on_defaults` (2026-11-19; before that both were read but passed by no compose/Helm env, so the switch was proven by `vector test` only and unreachable in a deployment) |
 | The roll-up never writes one tenant's sessions into another's roll-ups and is idempotent | ✅ | **BUILD** — `internal/routinerollup` tests (`TestTwoTenantsAreNeverMixed`, mismatched-tenant skip, `TestReRollUpsertsTheSameDocuments`), `TestRoutineRollupStoreEndToEnd` against a fake OpenSearch. **RUNTIME (lab, 2026-11-19)**: roll-ups are written per tenant segment (18,877 live documents in the first hours); schema v1 compressed only 3.5–6:1 (the key held the ephemeral client port) and re-rolled 15 minutes every tick; v2 keys the address without the port — **60:1** measured on the live routine index (55,442 originals → 926 keys) — and rolls each settled minute once (`TestAuditSourceIsKeyedWithoutThePort`, `TestEachSettledMinuteIsRolledOnce`, `TestReaderCountsTheWrittenRollupVersion`) |
 | A routine count over a long window stays whole after the originals expire, and reads only the caller's roll-ups | ✅ | **BUILD** — `TestLogsSearchCountsOlderRoutineSessionsFromTheCallersOwnRollups`, `TestIrisSearchLogsSaysHowManyOlderRoutineSessionsAreCounted`. Roll-ups cannot answer a text search or a severity filter — said in the answer |
 | A role with `explore:read` and no security need cannot read usernames | ❌ **not enforced** | Every built-in role except Ingest holds `explore:read`. Narrowing that is an owner decision (a role-model change) |
@@ -812,6 +813,15 @@ observed.
 **NOT COVERED:** the trap receiver has no test yet for a trap sent from the sibling's interface address
 (tracker 396 b). Customers cannot write their own ranges until collector tier C3 (D1).
 
+**Orphaned by a scope change (2026-11-19, PROVEN by tests):** a remembered device whose owner still
+has a turned-on scope, but whose address no turned-on scope of that owner covers any more (a range
+narrowed or moved to another owner), accrues a miss per completed sweep, turns stale after 3 and is
+pruned 7 days after it went stale, without the all-silent-partition guard
+(`TestOrphanedByScopeChangeTurnsStaleAndPrunes`, which fails without the fix). A refused scope orphans
+nothing (`TestRefusedScopeOrphansNothing`); an owner with no turned-on scope keeps its memory. Before
+this, an orphan was reported live forever beside the copy the new scope found (lab: 8 platform twins
+for 8 days). Runbook: `docs/runbooks/tenant-discovery-scope.md` §4.
+
 **Known limits (advisor review 2026-11-10; not fixed):**
 - **One global scan-memory bound.** `maxFound` = 2×MaxScanHosts covers every owner together. New finds are
   admitted in (tenant, address) order, and the restore keeps the most recently answered records first. So
@@ -857,13 +867,15 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
   (`metrics_forecast_isolation_test.go`).
 
 **BUILT, not proven:**
-- Scan cost at fleet scale: links scans raw flows over twice the window; not measured on the rig
-  (rollups are tracker 401). The daily-p95 forecast read is bounded (the Overview's busiest 100
+- Scan cost at fleet scale: the link views read the per-interface roll-up `netops.flow_iface_1m`
+  for rolled minutes and raw flows only for the unrolled tail (tracker 401 (a), §29); not measured on
+  the rig. The daily-p95 forecast read is bounded (the Overview's busiest 100
   interfaces, the Capacity tab's displayed rows) and measured on the lab only: 152 interfaces with two
   days of history, 53–81 ms against 25–29 ms for the old 6-hour read (2026-11-18).
 - The vManage-sourced interface series carry no `index`, so their capacity rows key by name and get
   no forecast (the daily read keys by index).
-- Lab sampling is unreported, so lab flow totals read as 1:1; capacity does not depend on it.
+- Lab exporters report no sampling rate and none is declared (tracker 401 (c), §29), so lab flow
+  totals read as 1:1 and the page says so; capacity does not depend on it.
 
 ## 28. Iris seasonal baselines (tracker 337 N-H6 PR 1, 2026-11-19)
 
@@ -880,6 +892,25 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
 | The engine's seasonal SHADOW (N-H6 step 4, `CORR_SEASONAL_SHADOW`) never diverts a decision: the episode lane emits byte-identical corr_signals rows, window signals, return values and detector state with it OFF and ON-and-scoring; no decision module imports it and main.py only feeds and reports it | ✅ | **BUILD** — `test_the_episode_lane_is_identical_with_the_shadow_off_and_on` (routine weekly peak, genuine anomaly, no history, octets/s → bits/s), `test_a_shadow_that_raises_never_reaches_the_episode_lane`, `test_no_decision_module_imports_the_shadow_and_the_shadow_imports_none`, `test_main_only_feeds_and_reports_the_shadow` (`src/correlation/test_seasonal_shadow_n_h6.py`) |
 | The shadow's maths equals Iris's (Go) exactly, and its profile read is the tenant's own (tenant_scope=<tenant>, STRICT row policy; no tenant text in the SQL) | ✅ | **BUILD** — `TestParityWithTheEngineShadow` (Go) + `test_maths_reproduces_the_go_parity_fixture` (Python) over one fixture; `test_a_tenants_profile_never_serves_another_tenants_same_named_series`, `test_the_profile_read_runs_at_the_tenants_own_scope` |
 | The shadow's counts on real traffic (how many opened episodes a seasonal reading calls usual) | ❌ **not measured** | Needs the lab with `CORR_SEASONAL_SHADOW=1` and ≥ 3 weeks of roll-ups (tier A from ~2026-12-04); the owner's step-5 decision reads them. |
+
+## 29. Flows per-interface roll-up, observation domains, duration spread, declared sampling (tracker 401 (a)–(c), 2026-11-15)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| The link figures are computed over ONE row shape, from the roll-up for rolled minutes and from raw flows for the rest — never both for the same record | ✅ | **BUILD** — `TestSourceSplitsReceivedMinutesBetweenRollupAndRaw`, `TestWindowMinutesNeverOverlap` (`internal/flowquery/source_test.go`); **INTEGRATION** (`-tags integration`, real ClickHouse) — `TestIntegrationRollupEqualsRaw` |
+| The roll-up keeps each row's tenant and never merges tenants; the Roller reconciles the last 6 h and re-rolls only minutes that differ | ✅ | **BUILD** — `TestRollupInsertKeepsTheRowsTenantAndSplitsExactly`, `TestReconcileRerollsOnlyMinutesThatDiffer`, `TestRollerFailureKeepsTheInterval`; **INTEGRATION** — `TestIntegrationRollupNeverMergesTenants` |
+| A router's observation domains (ODID) stay apart, and a long flow is spread over the minutes it lasted | ✅ | **INTEGRATION** — `TestIntegrationObservationDomainsStayApart`, `TestIntegrationLongFlowIsSpreadAcrossMinutes` |
+| A declared sampling rate (`/api/flows/sampling`, migration 0078) scales only its owner's records; list and writes are own-workspace, stamped from the token | ✅ | **BUILD** — `TestFlowsSamplingListIsOwnWorkspaceOnly`, `TestFlowsSamplingWritesAreStampedAndScoped`, `TestFlowsDeclaredRateReachesOnlyItsOwner`, `TestSamplingOfDeclared`; **PG** — `TestFlowSamplingRLSIsolationPG`; **INTEGRATION** — `TestIntegrationDeclaredSamplingOnlyForTheOwner` |
+| A record reaching ClickHouse more than 6 h after its minute was rolled is counted | ❌ **not covered** | It is read low from the roll-up until a manual re-roll (tracker 401 residue) |
+| Juniper / Nokia / Arista / SONiC ODID and duration fields | ❌ **doc_claimed** | Only the Cisco FNF IPFIX shape is a real capture |
+
+## 30. The page tier — exactly four conditions, fourteen rules (2026-11-19)
+
+| Invariant | Status | Proof |
+|---|---|---|
+| Every page rule is in `rules-scale-slo.yaml` (vmalert-only, so it fires with the api down), maps to one of the four conditions, and the count matches the code comment | ✅ | **BUILD** — `TestPageTierRuleCountMatchesTheComment` (`pageRuleCount = 14`), `TestEngineRulesFileCarriesNoPageTier`, `TestPageRuleNamesAreTheFourApprovedConditions` (`internal/alertwebhook/pagetier_test.go`) |
+| Condition 2 has a third vantage — the devices themselves: inventoried devices a collector reached in the last 7 days send nothing on any lane (`MonitoredSourcesSilent`, #271) | ✅ | **BUILD** — `rules-tests/monitored-sources-silent.test.yaml` (promtool); **DEPLOY GATE** — `deploy-qualify.sh` Q11 (required); **RUNTIME** — fired correctly for the 2026-11-14 lab-gateway outage |
+| Condition 3 covers BOTH stores: ClickHouse rejecting batches (`ClickHouseWritesRejected`) and OpenSearch refusing writes — the flood-stage read-only block or documents a Vector sink discarded as rejected (`OpenSearchWritesRefused`). Before 2026-11-19 no OpenSearch rule carried `tier: page`, so a flood-stage block only reached the warning digest | ✅ | **BUILD** — `rules-tests/opensearch-writes-refused.test.yaml` (fires on the flood shape and on confirmed rejections; silent on OpenSearch's own ISM 409 trickle and on a 6%-free disk with healthy writes), `correlation-consumer-liveness.test.yaml` §11 (ClickHouse) |
 
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
