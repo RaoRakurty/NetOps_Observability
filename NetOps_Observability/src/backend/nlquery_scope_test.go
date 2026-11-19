@@ -71,6 +71,10 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		// "which devices are down": the liveness read carries the caller's
 		// metric scope filter, exactly like the inventory page's.
 		"DeviceReachability": {"h.s.metricsScopeFiltersFor(h.claims)"},
+		// N-H6: the seasonal maintenance exclusion reads the caller's own
+		// windows through the store's tenant scope, over the caller's own
+		// devices, and matches a window only to its device's own tenant.
+		"MaintenanceCoverer": {"principalTenant(h.claims)", "h.s.maintWindows.List(ctx, tenant, cross)", "h.s.visibleDevicesFor(h.claims)", "deviceTenant(d)"},
 	}
 	for method, needles := range want {
 		if src[method] == "" {

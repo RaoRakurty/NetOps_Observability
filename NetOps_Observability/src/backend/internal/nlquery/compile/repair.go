@@ -42,6 +42,8 @@ var grammarWords = []string{
 	"above", "below", "under", "over", "exceeds", "exceed", "greater", "higher", "lower", "least", "less",
 	"percent", "milliseconds", "millisecond", "confidence", "grouped", "group", "broken", "break", "each",
 	"unusual", "abnormal", "normal", "baseline", "anomalous", "elevated", "high", "losing", "dropping",
+	// seasonal baselines (N-H6): "usual / typical / expected for this time of week"
+	"usual", "typical", "expected",
 	"flapping", "packets", "seeing", "established", "idle", "average", "mean", "maximum", "peak", "minimum",
 	"total", "most", "best", "worst", "busiest", "highest", "lowest", "rank", "ranked", "recent", "latest",
 	"engineers", "engineer", "people", "users", "admins", "admin", "persons", "person", "made", "make", "done",

@@ -77,6 +77,15 @@ type ReachabilityScope interface {
 	DeviceReachability(ctx context.Context, ids []string) (map[string]string, error)
 }
 
+// MaintenanceScope is an optional Scope (tracker 337 N-H6): the caller's own
+// declared maintenance windows as a predicate — whether one covered a device
+// at an instant — so a seasonal reference taken during planned work is left
+// out of the baseline and counted. A deployment without it simply excludes
+// nothing. The predicate must consult only windows the caller may see.
+type MaintenanceScope interface {
+	MaintenanceCoverer(ctx context.Context) (func(device string, at time.Time) bool, error)
+}
+
 // TenantLabeledScope is the OPTIONAL Scope seam for catalog "tenant_labeled"
 // metrics (tracker 337 N-B5): series the owning workspace's prober stamps with
 // a `tenant` label and no device label — the Digital Experience checks. The
