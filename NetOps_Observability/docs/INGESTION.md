@@ -279,6 +279,18 @@ index (`netops-syslog-<tenant>-YYYY.MM.DD`, `netops-snmptrap-…`,
 `netops-flows-…`, see `deployment/docker/vector-router/vector.yaml`). Nothing
 the correlation engine declines to read is discarded; it is **search-only**.
 
+**Routine management sessions** (tracker 410, owner 2026-11-19) — SNMP polls
+and the controllers' NETCONF/SSH session steps, the `internal/logroutine`
+class — go to `netops-syslogroutine-<tenant>-YYYY.MM.DD` instead, with the
+same fields, kept at least 72 h (`OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS`,
+default 96). The api folds them into per-minute roll-ups
+(`netops-syslogrollup-<tenant>-…`: first/last seen, count, device, source and
+user) kept for the full log window. Every syslog read covers both families;
+the Logs page and Iris still hide the class by default and count it, older
+than a day from the roll-ups. `SYSLOG_ROUTINE_SPLIT=off` on the router keeps
+everything in `netops-syslog-*`. The correlation engine reads Kafka, so its
+`management_audit` input is unchanged. Runbook: `docs/runbooks/routine-syslog.md`.
+
 The correlation engine reads the same bus but admits far less. A raw syslog
 line becomes correlation evidence (a *Signal*) only when one of two things is
 true — `src/correlation/producers.py`:

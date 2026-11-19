@@ -96,7 +96,42 @@ hosting spec can refuse the configuration with evidence)*
 A capacity claim without one of these labels is unbacked. Never promote a
 lower tier's number into a higher tier's sentence.
 
-## 4. The negative results are KEPT — engineering documentation, not marketing
+## 4. Log storage — routine management sessions (tracker 410)
+
+On a controller-managed estate most stored syslog is routine management
+sessions: measured on the lab 2026-11-12, 777,576 of 842,229 syslog records
+(92 %), about 148 of 160 MB a day for 8 edges — roughly **18 MB per device per
+day**. Since tracker 410 those records are kept raw for
+`OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` (default 96 h, so every record at
+least 72 h) instead of the full log window, and only their per-minute roll-ups
+(one document per device, source, user and minute) are kept for the window.
+
+| per 1,000 devices | before tracker 410 | after |
+|---|---|---|
+| routine originals | ~18 GB/day × 14 days ≈ **250 GB** | ~18 GB/day × 4 days ≈ **72 GB** (96 h default; 54 GB at 72 h) |
+| routine roll-ups | — | **NOT yet a saving — see below**; size for them at the originals' daily volume until tracker 410 (d)/(e) ship |
+| other syslog | unchanged | unchanged |
+
+**Measured on the lab, 2026-11-19 (first hours after deploy):** the roll-ups
+compress far less than designed. The roll-up key includes `audit_source`, which
+the packs write as `<address>:<port>`, and every routine session arrives from a
+new ephemeral client port (`127.0.0.1:<port>` for the local ConfD/SNMP
+sessions, about 6 records each) — so nearly every session is its own roll-up
+document: one hour held 55,401 originals and 15,980 roll-up keys (**3.5:1**;
+~6:1 over the first hours). On top of that, each tick re-upserts the last 15
+closed minutes, leaving ~7 deleted versions per live roll-up until segment
+merges (18,877 live, 126,010 deleted, 837 B per live document). Net: the
+roll-up family currently costs about as much disk as the originals it
+summarises, and the "< 1 GB/day" estimate this section first carried was
+wrong. Keying on the source ADDRESS without the port measures **59:1** on the
+same hour (941 keys); with that and a roll-once-then-reconcile schedule the
+roll-ups would be roughly 0.25 GB/day per 1,000 devices (~3.5 GB over 14 days)
+— an estimate from that ratio and the originals' 182 B/document, to be
+re-measured when the fix ships. The routine share itself varies with how often
+the controller and monitoring systems poll each device (the lab's rate rose to
+~55,000 routine records per hour for 4 polled edges on 2026-11-19).
+
+## 5. The negative results are KEPT — engineering documentation, not marketing
 
 The 5K and 10K results (INCOMPLETE runs, the cohort-cost wall bracketed to
 (3,500, 5,000] devices at storm density, the saturation-cascade order) are
