@@ -195,7 +195,10 @@ def test_no_template_makes_a_credential_searchable(secret):
 
 def test_every_opensearch_sink_strips_the_kafka_metadata():
     sinks = _os_sinks(_router())
-    assert len(sinks) == 8, f"new OpenSearch sink? review its metadata: {sorted(sinks)}"
+    # 9 since tracker 410: opensearch_syslog_routine (routine management-session
+    # syslog to netops-syslogroutine-*) — reviewed: same except_fields as
+    # opensearch_syslog, keeps cx_event_id and the tenant fields.
+    assert len(sinks) == 9, f"new OpenSearch sink? review its metadata: {sorted(sinks)}"
     for name, sink in sinks.items():
         strip = set(sink.get("encoding", {}).get("except_fields", []))
         missing = KAFKA_METADATA - strip
