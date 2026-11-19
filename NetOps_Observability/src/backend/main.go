@@ -3310,7 +3310,9 @@ func Run() {
 	// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
 	// baselines (path_health_baselines.go, internal/seriesroll). Opt-in.
 	if os.Getenv("FEATURE_SEASONAL_ROLLUP") == "true" {
-		srv.startSeasonalRollup(ctx)
+		if run := srv.seasonalRollupRunner(ctx); run != nil {
+			workers.start("seasonal-rollup", run) // drained at shutdown: an hour's write is not abandoned
+		}
 	}
 
 	mux := http.NewServeMux()

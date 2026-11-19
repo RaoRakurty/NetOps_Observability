@@ -568,23 +568,28 @@ func seasonalRollOwnerIndex(devs []models.Device) map[string]string {
 	return idx
 }
 
-// startSeasonalRollup wires the roll-up (FEATURE_SEASONAL_ROLLUP).
-func (s *server) startSeasonalRollup(ctx context.Context) {
+// seasonalRollupRunner builds the roll-up (FEATURE_SEASONAL_ROLLUP) and
+// returns its loop for Run() to start on the shutdown drain group — so a
+// SIGTERM waits for an hour's write instead of abandoning it. nil = not
+// started (no ClickHouse, or no metric to roll up), said in the log.
+func (s *server) seasonalRollupRunner(ctx context.Context) func() {
 	if envOr("CLICKHOUSE_URL", "") == "" {
 		log.Printf("seasonal-rollup: FEATURE_SEASONAL_ROLLUP set but CLICKHOUSE_URL is empty — roll-up not started")
-		return
+		return nil
 	}
 	roller, err := seriesroll.New(seriesroll.Config{Metrics: seasonalRollMetrics()}, seasonalRollVM{s}, seasonalRollStore{}, newSeasonalRollOwners(s))
 	if err != nil {
 		log.Printf("seasonal-rollup: not started: %v", err)
-		return
+		return nil
 	}
 	s.seasonalRoll.Store(roller)
 	interval := envDurationSeconds("SEASONAL_ROLLUP_INTERVAL", 900)
 	logInfo("seasonal-rollup", "hourly metric roll-up enabled", map[string]any{"interval": interval.String(), "metrics": len(seasonalRollMetrics())})
-	go roller.Run(ctx, interval, func(err error) {
-		logWarn("seasonal-rollup", "hour not written", map[string]any{"error": err.Error()})
-	})
+	return func() {
+		roller.Run(ctx, interval, func(err error) {
+			logWarn("seasonal-rollup", "hour not written", map[string]any{"error": err.Error()})
+		})
+	}
 }
 
 // writeSeasonalRollupMetrics exposes the roll-up's counters on /metrics (§10:
