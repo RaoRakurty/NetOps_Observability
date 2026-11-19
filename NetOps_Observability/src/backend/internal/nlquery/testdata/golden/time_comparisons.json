@@ -387,6 +387,59 @@
         "vs yesterday?",
         "how does that compare to yesterday"
       ]
+    },
+    {
+      "id": "time_comparisons-008",
+      "category": "time_comparisons",
+      "question": "Is CPU on dfw-edge-1 normal for this time of week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "compare",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "compare_windows",
+          "target": "device",
+          "metric": "cpu_util_pct",
+          "aggregation": "avg",
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ],
+          "time_range": {
+            "kind": "relative",
+            "last": "1h"
+          },
+          "compare_to": {
+            "kind": "relative",
+            "last": "1h",
+            "offset": "7d"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "comparison",
+          "must_include_refs": [
+            "device:dfw-edge-1"
+          ]
+        }
+      },
+      "paraphrases": [
+        "is dfw-edge-1 cpu usual for this time of week",
+        "dfw-edge-1 cpu: is that normal for this time of day?",
+        "is the cpu on dfw edge 1 typical for the time"
+      ]
     }
   ]
 }

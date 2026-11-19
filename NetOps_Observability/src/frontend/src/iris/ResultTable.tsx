@@ -10,7 +10,7 @@
 import { useMemo } from "react";
 import DataTable, { type Column } from "../components/DataTable";
 import { fmtDateTime, parseTs } from "../lib/time";
-import { cellText, fmtNumber, humanize, lookup, MEASURE_FIELDS, rowId, type Row } from "./presentation";
+import { cellText, fmtNumber, humanize, lookup, MEASURE_FIELDS, rowId, UNITLESS_FIELDS, type Row } from "./presentation";
 import { SafeLink } from "./links";
 
 const MAX_COLS = 12;
@@ -44,7 +44,7 @@ export function columnsFor(rows: Row[], preferred?: string[]): string[] {
 
 function renderCell(field: string, v: unknown, unit: string) {
   if (MEASURE_FIELDS.has(field)) {
-    const n = fmtNumber(v, field === "count" ? "" : unit);
+    const n = fmtNumber(v, UNITLESS_FIELDS.has(field) ? "" : unit);
     return n ?? <span className="iris-muted">Not measured</span>;
   }
   if (TIME_FIELDS.has(field) && typeof v === "string" && parseTs(v)) return fmtDateTime(v);
