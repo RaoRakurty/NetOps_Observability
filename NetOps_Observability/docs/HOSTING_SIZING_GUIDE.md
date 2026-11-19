@@ -96,7 +96,28 @@ hosting spec can refuse the configuration with evidence)*
 A capacity claim without one of these labels is unbacked. Never promote a
 lower tier's number into a higher tier's sentence.
 
-## 4. The negative results are KEPT — engineering documentation, not marketing
+## 4. Log storage — routine management sessions (tracker 410)
+
+On a controller-managed estate most stored syslog is routine management
+sessions: measured on the lab 2026-11-12, 777,576 of 842,229 syslog records
+(92 %), about 148 of 160 MB a day for 8 edges — roughly **18 MB per device per
+day**. Since tracker 410 those records are kept raw for
+`OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` (default 96 h, so every record at
+least 72 h) instead of the full log window, and only their per-minute roll-ups
+(one document per device, source, user and minute) are kept for the window.
+
+| per 1,000 devices | before tracker 410 | after |
+|---|---|---|
+| routine originals | ~18 GB/day × 14 days ≈ **250 GB** | ~18 GB/day × 4 days ≈ **72 GB** (96 h default; 54 GB at 72 h) |
+| routine roll-ups | — | **estimate** < 1 GB/day × 14 days; not yet measured on the lab |
+| other syslog | unchanged | unchanged |
+
+The roll-up figure is an engineering estimate until it is measured on the lab
+(one document per poll stream per minute instead of one per request); treat it
+as UNMEASURED in any sizing statement. The routine share itself varies with how
+often the controller and monitoring systems poll each device.
+
+## 5. The negative results are KEPT — engineering documentation, not marketing
 
 The 5K and 10K results (INCOMPLETE runs, the cohort-cost wall bracketed to
 (3,500, 5,000] devices at storm density, the saturation-cascade order) are
