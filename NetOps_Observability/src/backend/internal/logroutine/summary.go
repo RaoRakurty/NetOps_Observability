@@ -66,13 +66,23 @@ func AggSince(src Sources, cut time.Time) map[string]any {
 	}}}
 }
 
+// RollupSchemaVersion is the roll-up key version readers count
+// (routinerollup.SchemaVersion; a test pins the two equal). "2" keys
+// audit_source without its ephemeral port (tracker 410 (d)).
+const RollupSchemaVersion = "2"
+
 // RollupSumBody sums occurrence_count over the roll-ups whose minute is in
 // [from, to), under the caller's scope filters (tenant filter, device
 // narrowing) and exclusions.
 func RollupSumBody(from, to time.Time, filters, mustNot []any) map[string]any {
-	f := append([]any{map[string]any{"range": map[string]any{"timestamp": map[string]any{
-		"gte": from.UTC().Format(time.RFC3339), "lt": to.UTC().Format(time.RFC3339),
-	}}}}, filters...)
+	f := append([]any{
+		map[string]any{"range": map[string]any{"timestamp": map[string]any{
+			"gte": from.UTC().Format(time.RFC3339), "lt": to.UTC().Format(time.RFC3339),
+		}}},
+		// Only roll-ups of the current key: an older version's documents for the
+		// same minutes are superseded, and counting both would double the total.
+		map[string]any{"term": map[string]any{"rollup_v": RollupSchemaVersion}},
+	}, filters...)
 	q := map[string]any{"filter": f}
 	if len(mustNot) > 0 {
 		q["must_not"] = mustNot

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/logroutine"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,21 @@ type fakeStore struct {
 	failOn   string
 }
 
+// queryRange finds the timestamp range in a query, whether it is the query
+// itself or one clause of a bool filter.
+func queryRange(body map[string]any) map[string]any {
+	q := body["query"].(map[string]any)
+	if r, ok := q["range"].(map[string]any); ok {
+		return r["timestamp"].(map[string]any)
+	}
+	for _, c := range q["bool"].(map[string]any)["filter"].([]any) {
+		if r, ok := c.(map[string]any)["range"].(map[string]any); ok {
+			return r["timestamp"].(map[string]any)
+		}
+	}
+	panic("no timestamp range in query")
+}
+
 func newFake() *fakeStore {
 	return &fakeStore{pages: map[string][]string{}, served: map[string]int{}, counts: map[string]int64{}, sums: map[string]int64{}}
 }
@@ -53,7 +69,7 @@ func (f *fakeStore) Search(_ context.Context, index string, body map[string]any)
 	if f.failOn != "" && strings.Contains(index, f.failOn) {
 		return nil, errors.New("opensearch unavailable")
 	}
-	rng := body["query"].(map[string]any)["range"].(map[string]any)["timestamp"].(map[string]any)
+	rng := queryRange(body)
 	hour := rng["gte"].(string)
 	switch {
 	case body["aggs"] != nil && strings.Contains(string(b), `"composite"`):
@@ -63,7 +79,10 @@ func (f *fakeStore) Search(_ context.Context, index string, body map[string]any)
 			return []byte(f.pages[index][i]), nil
 		}
 		return []byte(`{"aggregations":{"k":{"buckets":[]}}}`), nil
-	case body["aggs"] != nil: // rolled sum
+	case body["aggs"] != nil: // rolled sum: only roll-ups of the current key count
+		if !strings.Contains(string(b), `"rollup_v":"`+SchemaVersion+`"`) {
+			return nil, errors.New("a rolled sum must filter on the current rollup_v")
+		}
 		return []byte(fmt.Sprintf(`{"aggregations":{"n":{"value":%d}}}`, f.sums[index+"|"+hour])), nil
 	default: // count
 		return []byte(fmt.Sprintf(`{"hits":{"total":{"value":%d}}}`, f.counts[index+"|"+hour])), nil
@@ -309,27 +328,78 @@ func TestTwoTenantsAreNeverMixed(t *testing.T) {
 
 // A record that arrives late (after its minute was first rolled) is folded in
 // by the next tick's lookback: the same document, the higher count.
-func TestLateArrivalUpsertsTheHigherCount(t *testing.T) {
+// Tracker 410 (e): each settled minute is rolled ONCE. A second tick in the
+// same minute aggregates nothing (the old 15-minute re-roll rewrote every
+// roll-up ~7 times); the window ends Settle before the current minute; a late
+// record is the hourly reconcile's (TestReconcileReRollsOnlyHoursThatDisagree).
+func TestEachSettledMinuteIsRolledOnce(t *testing.T) {
 	f := newFake()
 	idx := "netops-syslogroutine-acme-2026.11.19"
 	f.indices = []string{idx}
-	m := now.Truncate(time.Minute).Add(-5 * time.Minute)
-	f.pages[idx] = []string{page("", bucketJSON("acme", "edge-1", "u", m, 10))}
+	f.pages[idx] = []string{page("", bucketJSON("acme", "edge-1", "u", now.Truncate(time.Minute).Add(-5*time.Minute), 10))}
 	j := newJob(f)
 	if err := j.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	f.pages[idx] = append(f.pages[idx], page("", bucketJSON("acme", "edge-1", "u", m, 12)))
+	composites := func() (n int, last string) {
+		for _, s := range f.searches {
+			if strings.Contains(s, `"composite"`) && strings.HasPrefix(s, idx+" ") {
+				n, last = n+1, s
+			}
+		}
+		return n, last
+	}
+	n1, first := composites()
+	if n1 == 0 {
+		t.Fatal("the first tick rolled nothing")
+	}
+	wantTo := now.UTC().Truncate(time.Minute).Add(-2 * time.Minute).Format(time.RFC3339)
+	if !strings.Contains(first, `"lt":"`+wantTo+`"`) {
+		t.Errorf("the window must end Settle (2m) before the current minute (%s): %s", wantTo, first)
+	}
 	if err := j.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	m1, d1 := parseBulk(t, f.bulks[0])
-	m2, d2 := parseBulk(t, f.bulks[1])
-	if m1[0]["_id"] != m2[0]["_id"] {
-		t.Fatal("the late re-roll wrote a new document instead of upserting the minute's")
+	if n2, _ := composites(); n2 != n1 {
+		t.Errorf("a second tick in the same minute re-rolled: %d composite searches, want %d", n2, n1)
 	}
-	if d1[0]["occurrence_count"] != float64(10) || d2[0]["occurrence_count"] != float64(12) {
-		t.Errorf("counts %v → %v, want 10 → 12", d1[0]["occurrence_count"], d2[0]["occurrence_count"])
+}
+
+// Tracker 410 (d): audit_source is keyed WITHOUT the ephemeral client port —
+// the composite uses the painless script, and its Go twin strips exactly what
+// the script strips.
+func TestAuditSourceIsKeyedWithoutThePort(t *testing.T) {
+	b, _ := json.Marshal(CompositeBody(now.Add(-time.Hour), now, 10, nil))
+	s := string(b)
+	if !strings.Contains(s, `"audit_source":{"terms":{"missing_bucket":true,"script"`) || strings.Contains(s, `"field":"audit_source"`) {
+		t.Fatalf("audit_source must be a script source, never the raw field: %s", s)
+	}
+	for in, want := range map[string]string{
+		"127.0.0.1:37606":      "127.0.0.1",
+		"192.0.2.10":           "192.0.2.10",
+		"[2001:db8::1]:830":    "[2001:db8::1]",
+		"[2001:db8::1]":        "[2001:db8::1]",
+		"2001:db8::1":          "2001:db8::1", // unbracketed v6: last group is not a port
+		"vmanage.example:2022": "vmanage.example",
+		"host:abc":             "host:abc",
+		"host:":                "host:",
+		":22":                  ":22",
+		"":                     "",
+	} {
+		if got := StripAuditSourcePort(in); got != want {
+			t.Errorf("StripAuditSourcePort(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The readers' version and the writer's must agree, or every count is 0.
+func TestReaderCountsTheWrittenRollupVersion(t *testing.T) {
+	if logroutine.RollupSchemaVersion != SchemaVersion {
+		t.Fatalf("logroutine.RollupSchemaVersion=%q, routinerollup.SchemaVersion=%q", logroutine.RollupSchemaVersion, SchemaVersion)
+	}
+	b, _ := json.Marshal(logroutine.RollupSumBody(now.Add(-time.Hour), now, nil, nil))
+	if !strings.Contains(string(b), `"rollup_v":"`+SchemaVersion+`"`) {
+		t.Fatalf("the reader must count only the current roll-up version: %s", b)
 	}
 }
 
@@ -366,7 +436,7 @@ func TestReconcileReRollsOnlyHoursThatDisagree(t *testing.T) {
 	}
 	var rerolled []string
 	for _, s := range f.searches {
-		if strings.Contains(s, "composite") && strings.Contains(s, `"lt":"2026-11-19T`) && !strings.Contains(s, `"gte":"2026-11-19T10:15:00Z"`) {
+		if strings.Contains(s, "composite") && strings.Contains(s, `"lt":"2026-11-19T`) && !strings.Contains(s, `"gte":"2026-11-19T10:13:00Z"`) {
 			rerolled = append(rerolled, s)
 		}
 	}

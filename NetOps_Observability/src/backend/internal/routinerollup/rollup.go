@@ -52,8 +52,12 @@ import (
 const (
 	OriginalsBase = "netops-syslogroutine"
 	RollupBase    = "netops-syslogrollup"
-	// SchemaVersion stamps every roll-up document (rollup_v).
-	SchemaVersion = "1"
+	// SchemaVersion stamps every roll-up document (rollup_v). "2" (tracker 410
+	// (d)): audit_source is keyed WITHOUT its ephemeral client port. Readers and
+	// the reconcile sum count only the current version, so the v1 documents
+	// (one per session, not per source) are ignored and their hours re-rolled.
+	// logroutine.RollupSchemaVersion must equal this (pinned by a test).
+	SchemaVersion = "2"
 )
 
 // Store is the OpenSearch surface the job needs.
@@ -68,7 +72,8 @@ type Store interface {
 
 // Config bounds the job. Zero values take the defaults below.
 type Config struct {
-	Lookback         time.Duration // closed minutes re-rolled every tick
+	Lookback         time.Duration // catch-up reach of the first tick after a start
+	Settle           time.Duration // a minute is rolled once it closed this long ago
 	ReconcileEvery   time.Duration // how often closed hours are recounted
 	ReconcileHorizon time.Duration // how far back the recount reaches (< the originals' life)
 	PageSize         int           // composite buckets per page
@@ -78,6 +83,9 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.Lookback <= 0 {
 		c.Lookback = 15 * time.Minute
+	}
+	if c.Settle <= 0 {
+		c.Settle = 2 * time.Minute
 	}
 	if c.ReconcileEvery <= 0 {
 		c.ReconcileEvery = time.Hour
@@ -106,6 +114,12 @@ type Job struct {
 	mu            sync.Mutex
 	lastReconcile time.Time
 	pagesLeft     int
+	// rolledTo is the end of the last window every index was rolled through.
+	// Each minute is rolled ONCE (tracker 410 (e): re-rolling a 15-minute
+	// lookback every tick rewrote each roll-up ~7 times, so the index held
+	// ~6 deleted documents per live one). A record that lands after its minute
+	// was rolled is the hourly reconcile's to fix.
+	rolledTo time.Time
 }
 
 // errPageCap ends a tick early when its page budget is spent: the rest is
@@ -232,8 +246,14 @@ func segFor(tenant string) string {
 func (j *Job) Tick(ctx context.Context) error {
 	cfg := j.Config.withDefaults()
 	now := j.now()
-	to := now.UTC().Truncate(time.Minute) // closed minutes only
+	closed := now.UTC().Truncate(time.Minute) // closed minutes only
+	to := closed.Add(-cfg.Settle)             // ...that have had time to arrive
 	from := to.Add(-cfg.Lookback)
+	j.mu.Lock()
+	if !j.rolledTo.IsZero() && j.rolledTo.After(from) {
+		from = j.rolledTo
+	}
+	j.mu.Unlock()
 	indices, err := j.Store.Indices(ctx, OriginalsBase+"-*")
 	if err != nil {
 		return fmt.Errorf("list routine indices: %w", err)
@@ -242,17 +262,25 @@ func (j *Job) Tick(ctx context.Context) error {
 	j.pagesLeft = cfg.MaxPages
 	j.mu.Unlock()
 	for _, idx := range indices {
+		if !from.Before(to) {
+			break // nothing newly settled since the last tick
+		}
 		if !overlaps(idx, from, to) {
 			continue
 		}
 		if err := j.rollWindow(ctx, idx, from, to); err != nil {
 			if errors.Is(err, errPageCap) {
 				j.Metrics.deferral()
-				return nil
+				return nil // rolledTo not advanced: the window is rolled again
 			}
 			return err
 		}
 	}
+	j.mu.Lock()
+	if to.After(j.rolledTo) {
+		j.rolledTo = to
+	}
+	j.mu.Unlock()
 	j.mu.Lock()
 	due := j.lastReconcile.IsZero() || now.Sub(j.lastReconcile) >= cfg.ReconcileEvery
 	j.mu.Unlock()
@@ -347,7 +375,10 @@ func (j *Job) count(ctx context.Context, index string, from, to time.Time) (int6
 // [from, to). A roll-up index that does not exist yet sums to 0.
 func (j *Job) rolledSum(ctx context.Context, index string, from, to time.Time) (int64, error) {
 	raw, err := j.Store.Search(ctx, index, map[string]any{
-		"size": 0, "query": rangeQuery("timestamp", from, to),
+		"size": 0, "query": map[string]any{"bool": map[string]any{"filter": []any{
+			rangeQuery("timestamp", from, to),
+			map[string]any{"term": map[string]any{"rollup_v": SchemaVersion}}, // only the current key
+		}}},
 		"aggs": map[string]any{"n": map[string]any{"sum": map[string]any{"field": "occurrence_count"}}},
 	})
 	if err != nil {
@@ -375,6 +406,15 @@ func parseSum(raw []byte) (int64, error) {
 func CompositeBody(from, to time.Time, size int, after map[string]any) map[string]any {
 	sources := make([]any, 0, len(keyFields)+1)
 	for _, f := range keyFields {
+		if f == "audit_source" {
+			// Keyed WITHOUT the ephemeral client port (tracker 410 (d)): the packs
+			// write `{src}[:{port}]` and every vManage/ConfD session comes from a
+			// new port, so a port-keyed bucket held one session, not one source.
+			sources = append(sources, map[string]any{f: map[string]any{"terms": map[string]any{
+				"script": map[string]any{"lang": "painless", "source": auditSourceAddrScript}, "missing_bucket": true,
+			}}})
+			continue
+		}
 		sources = append(sources, map[string]any{f: map[string]any{"terms": map[string]any{"field": f, "missing_bucket": true}}})
 	}
 	sources = append(sources, map[string]any{"minute": map[string]any{"date_histogram": map[string]any{
@@ -394,6 +434,40 @@ func CompositeBody(from, to time.Time, size int, after map[string]any) map[strin
 			},
 		}},
 	}
+}
+
+// auditSourceAddrScript strips a trailing ":<digits>" port from audit_source
+// when what precedes it is an IPv4 address/hostname (no ':') or a bracketed
+// IPv6 address ("[2001:db8::1]:830" -> "[2001:db8::1]"). An unbracketed IPv6
+// value is kept whole: its last group cannot be told from a port. The result
+// is what logroutine.addrMatch's exact terms match, so the read clause still
+// selects the roll-ups. StripAuditSourcePort is its Go twin (tests pin both).
+const auditSourceAddrScript = `if (doc['audit_source'].size() == 0) { return null; }
+String s = doc['audit_source'].value;
+int i = s.lastIndexOf(':');
+if (i <= 0 || i == s.length() - 1) { return s; }
+for (int k = i + 1; k < s.length(); k++) { if (!Character.isDigit(s.charAt(k))) { return s; } }
+String h = s.substring(0, i);
+if (h.endsWith(']') || h.indexOf(':') < 0) { return h; }
+return s;`
+
+// StripAuditSourcePort is auditSourceAddrScript in Go, for the tests and for
+// any Go-side reader that must derive the same key.
+func StripAuditSourcePort(s string) string {
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i == len(s)-1 {
+		return s
+	}
+	for _, r := range s[i+1:] {
+		if r < '0' || r > '9' {
+			return s
+		}
+	}
+	h := s[:i]
+	if strings.HasSuffix(h, "]") || !strings.Contains(h, ":") {
+		return h
+	}
+	return s
 }
 
 type compositeResp struct {
