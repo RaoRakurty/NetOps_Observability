@@ -1327,7 +1327,7 @@ export type UndeterminedCluster = {
 export type UndeterminedFeed = { window: string; total_undetermined: number; clusters: UndeterminedCluster[] };
 export type ForecastRow = {
   device: string; interface: string; current_util_pct: number; slope_per_day_pct: number;
-  days_to_90: number; status: "saturated" | "trending" | "stable" | "building_baseline"; history_days: number;
+  days_to_90: number; status: "saturated" | "trending" | "unsteady" | "stable" | "building_baseline"; history_days: number;
 };
 export type ForecastResp = { class: string; interfaces: ForecastRow[]; count: number; min_days: number };
 

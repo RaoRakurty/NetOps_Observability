@@ -3,14 +3,22 @@
 
 package backend
 
-// Capacity forecast (#69 panel 10) — days-to-90% utilization per interface from a
-// linear trend over VM range data. Honest: < 14 days of history ⇒ "building
-// baseline" (no forecast), flat/declining ⇒ "stable" (not a fake countdown).
-// Computed in Go over /api/v1/query_range; no new storage.
+// Capacity forecast (#69 panel 10) — days-to-90% utilization per interface.
+// Since tracker 407 it is the SAME fit as the Flows page's Capacity tab
+// (/api/flows/capacity): each complete UTC day's p95 of the busier direction,
+// a least-squares line through those days, "current" read off the fitted last
+// day (never one raw point), ≥ 14 days and R² ≥ 0.5 (flowquery.FitForecast /
+// DailyUtil). The two screens cannot disagree about one interface.
 //
 //   GET /api/metrics/forecast?class=wan_util&days=28
 //
-// Pure trend math (linFit / daysToThreshold) is unit-tested; the VM fetch wraps it.
+// The daily-p95 read costs more per series than the old 6-hour points (lab,
+// 2026-11-18, 152 interfaces, two days of history: 53–81 ms against 25–29 ms),
+// so — like the Capacity tab — it is bounded: the interfaces are ranked by
+// their last-24-hour p95 utilisation (instant reads) and only the busiest
+// forecastCandidates are fitted, by one range query per direction bounded to
+// their devices. The response shape is unchanged; "unsteady" (a rising line too
+// noisy to date, R² < 0.5) is the one status added.
 
 import (
 	"context"
@@ -32,8 +40,8 @@ import (
 	"netops/backend/internal/nlquery/plan"
 )
 
-const forecastThreshold = 0.90 // 90% utilization line
-const forecastMinDays = 14.0   // need ≥ this much history to forecast
+// forecastCandidates is how many interfaces, busiest first, get a fit.
+const forecastCandidates = 100
 
 // ---- tenant isolation (CLAUDE.md §3a) ---------------------------------------
 //
@@ -117,47 +125,13 @@ func (sc forecastScope) permits(lbl map[string]string) bool {
 	return true
 }
 
-// linFit returns the least-squares slope (per x-unit) over points [(x,y)…] and the
-// last y. ok=false when there are < 2 points or x has no spread.
-func linFit(pts [][2]float64) (slope, last float64, ok bool) {
-	n := float64(len(pts))
-	if n < 2 {
-		return 0, 0, false
-	}
-	var sx, sy, sxx, sxy float64
-	for _, p := range pts {
-		sx += p[0]
-		sy += p[1]
-		sxx += p[0] * p[0]
-		sxy += p[0] * p[1]
-	}
-	denom := n*sxx - sx*sx
-	if denom == 0 {
-		return 0, pts[len(pts)-1][1], false
-	}
-	slope = (n*sxy - sx*sy) / denom
-	return slope, pts[len(pts)-1][1], true
-}
-
-// daysToThreshold: how long until `current` reaches `threshold` at slopePerDay.
-// -1 = not trending up (flat/declining); 0 = already at/over threshold.
-func daysToThreshold(threshold, current, slopePerDay float64) float64 {
-	if current >= threshold {
-		return 0
-	}
-	if slopePerDay <= 0 {
-		return -1
-	}
-	return (threshold - current) / slopePerDay
-}
-
 type forecastRow struct {
 	Device      string  `json:"device"`
 	Interface   string  `json:"interface"`
 	CurrentUtil float64 `json:"current_util_pct"`
 	SlopePerDay float64 `json:"slope_per_day_pct"`
-	DaysTo90    float64 `json:"days_to_90"` // -1 = stable, 0 = already saturated
-	Status      string  `json:"status"`     // saturated | trending | stable | building_baseline
+	DaysTo90    float64 `json:"days_to_90"` // -1 = no date, 0 = already saturated
+	Status      string  `json:"status"`     // saturated | trending | unsteady | stable | building_baseline
 	HistoryDays float64 `json:"history_days"`
 }
 
@@ -247,123 +221,135 @@ func (s *server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errDays)
 		return
 	}
-	days := float64(daysN)
-	end := time.Now().Unix()
-	start := end - int64(days*86400)
-	step := int64(6 * 3600) // 6h
-	ctx := r.Context()
-	// Utilization fraction per interface, trended on the worse of the two
-	// directions. in/out series share identical labels, so a single `or` query
-	// would return in-only (set-union, left-precedence) — NOT the max; we fetch
-	// both and take a pointwise max in Go.
-	inUtil := `rate(device_if_in_octets[1h])*8 / ((device_if_speed > 0)*1000000)`
-	outUtil := `rate(device_if_out_octets[1h])*8 / ((device_if_speed > 0)*1000000)`
-	inS, inLabels, err := s.vmRange(ctx, inUtil, start, end, step, scope.filters)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+	body := map[string]any{"class": "wan_util", "interfaces": []forecastRow{}, "count": 0, "min_days": flowquery.ForecastMinDays}
+	if scope.denyAll {
+		writeJSON(w, http.StatusOK, body)
 		return
 	}
-	outS, outLabels, _ := s.vmRange(ctx, outUtil, start, end, step, scope.filters) // best-effort second direction
-
-	labels := map[string]map[string]string{}
-	byTs := map[string]map[float64]float64{}
-	mergeMax := func(src map[string][][2]float64, lbls map[string]map[string]string) {
-		for key, pts := range src {
-			if labels[key] == nil {
-				labels[key] = lbls[key]
-			}
-			m := byTs[key]
-			if m == nil {
-				m = map[float64]float64{}
-				byTs[key] = m
-			}
-			for _, p := range pts {
-				if v, seen := m[p[0]]; !seen || p[1] > v {
-					m[p[0]] = p[1]
-				}
-			}
-		}
+	ctx := r.Context()
+	cands, err := s.forecastCandidateRows(ctx, scope)
+	if err != nil {
+		logError("metrics", "forecast candidate read failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusBadGateway, errors.New("metrics backend unavailable"))
+		return
 	}
-	mergeMax(inS, inLabels)
-	mergeMax(outS, outLabels)
-
-	series := map[string][][2]float64{}
-	for key, m := range byTs {
-		pts := make([][2]float64, 0, len(m))
-		for ts, v := range m {
-			pts = append(pts, [2]float64{ts, v})
-		}
-		sort.Slice(pts, func(i, j int) bool { return pts[i][0] < pts[j][0] })
-		series[key] = pts
+	if !s.attachCapacityForecasts(ctx, cands, daysN, time.Now(), scope) {
+		writeError(w, http.StatusBadGateway, errors.New("metrics backend unavailable"))
+		return
 	}
-	rows := make([]forecastRow, 0, len(series))
-	for key, pts := range series {
-		if len(pts) < 2 {
-			continue
-		}
-		t0 := pts[0][0]
-		xy := make([][2]float64, 0, len(pts))
-		for _, p := range pts {
-			xy = append(xy, [2]float64{(p[0] - t0) / 86400.0, p[1]}) // x in days
-		}
-		historyDays := (pts[len(pts)-1][0] - t0) / 86400.0
-		slopePerDay, last, ok := linFit(xy)
-		// Guard implausible utilization: a fraction far outside 0..1 means the
-		// interface's ifSpeed metadata is wrong/zero (we'd otherwise surface a raw
-		// bps number like 1073807616%). Drop it rather than show garbage.
-		if last < 0 || last > 2.0 {
-			continue
-		}
-		lbl := labels[key]
-		// Second isolation pass (§3a): never emit a row for a device the caller
-		// cannot see, whatever the upstream returned.
-		if !scope.permits(lbl) {
-			continue
-		}
-		iface := lbl["ifName"]
-		if iface == "" {
-			iface = lbl["index"]
-		}
-		row := forecastRow{
-			Device: lbl["device"], Interface: iface,
-			CurrentUtil: round1(last * 100), SlopePerDay: round2(slopePerDay * 100),
-			HistoryDays: round1(historyDays),
-		}
-		switch {
-		case historyDays < forecastMinDays || !ok:
-			row.Status = "building_baseline"
-			row.DaysTo90 = -1
-		default:
-			d := daysToThreshold(forecastThreshold, last, slopePerDay)
-			row.DaysTo90 = round1(d)
-			switch {
-			case d == 0:
-				row.Status = "saturated"
-			case d < 0 || d > 365:
-				// flat/declining OR a trickle so slow it's beyond a year — not a
-				// meaningful countdown ("not expected"), don't show a huge day count.
-				row.Status = "stable"
-				row.DaysTo90 = -1
-			default:
-				row.Status = "trending"
-			}
-		}
-		rows = append(rows, row)
+	rows := make([]forecastRow, 0, len(cands))
+	for _, c := range cands {
+		rows = append(rows, forecastRowOf(c))
 	}
-	// worst-first: saturated, then soonest-to-90, then stable/building last
+	// worst-first: saturated, then soonest-to-90, then unsteady/stable/building
 	sort.SliceStable(rows, func(i, j int) bool {
 		return forecastRank(rows[i]) < forecastRank(rows[j])
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"class": "wan_util", "interfaces": rows, "count": len(rows), "min_days": forecastMinDays})
+	body["interfaces"], body["count"] = rows, len(rows)
+	writeJSON(w, http.StatusOK, body)
 }
 
-// forecastRank orders rows worst-first: saturated (0) < trending-soonest < stable < building.
+// forecastCandidateRows ranks the caller's interfaces by their last-24-hour
+// p95 utilisation — the Capacity tab's instant reads, at the caller's boundary
+// with the second isolation pass (capacitySamples) — and keeps the busiest
+// forecastCandidates that report a plausible speed (no speed, no percentage,
+// no forecast: the old read skipped them too).
+func (s *server) forecastCandidateRows(ctx context.Context, scope forecastScope) ([]flowquery.CapacityRow, error) {
+	const day = int64(86400)
+	figs := map[string]*flowquery.IfFigures{}
+	fig := func(k flowquery.IfKey) *flowquery.IfFigures {
+		f := figs[k.String()]
+		if f == nil {
+			f = &flowquery.IfFigures{Key: k}
+			figs[k.String()] = f
+		}
+		return f
+	}
+	reads := []struct {
+		expr string
+		put  func(f *flowquery.IfFigures, v float64)
+	}{
+		{flowquery.P95BpsQuery("in", day, 0), func(f *flowquery.IfFigures, v float64) { f.P95In = &v }},
+		{flowquery.P95BpsQuery("out", day, 0), func(f *flowquery.IfFigures, v float64) { f.P95Out = &v }},
+	}
+	for _, rd := range reads {
+		keys, vals, err := s.capacitySamples(ctx, rd.expr, scope)
+		if err != nil {
+			return nil, err
+		}
+		for ks, k := range keys {
+			rd.put(fig(k), vals[ks])
+		}
+	}
+	keys, vals, err := s.capacitySamples(ctx, flowquery.SpeedBpsQuery(0), scope)
+	if err != nil {
+		return nil, err
+	}
+	for ks := range keys {
+		if f := figs[ks]; f != nil {
+			v := vals[ks]
+			f.Speed = &v
+		}
+	}
+	rows := make([]flowquery.CapacityRow, 0, len(figs))
+	for _, f := range figs {
+		if row := flowquery.BuildCapacityRow(*f); row.SpeedBasis == flowquery.SpeedReported && row.IfIndex != "" {
+			rows = append(rows, row)
+		}
+	}
+	flowquery.SortCapacity(rows)
+	if len(rows) > forecastCandidates {
+		rows = rows[:forecastCandidates]
+	}
+	return rows, nil
+}
+
+// forecastRowOf projects a Capacity row's fit onto the Overview panel's
+// response shape. "current" is the fitted last day when there is a fit, else
+// the last 24 hours' p95 utilisation.
+func forecastRowOf(c flowquery.CapacityRow) forecastRow {
+	f := c.Forecast
+	row := forecastRow{Device: c.DeviceID, Interface: c.IfName, DaysTo90: -1, HistoryDays: float64(f.HistoryDays)}
+	if row.Interface == "" {
+		row.Interface = c.IfIndex
+	}
+	switch {
+	case f.FittedPct != nil:
+		row.CurrentUtil = *f.FittedPct
+	case c.P95Pct != nil:
+		row.CurrentUtil = *c.P95Pct
+	}
+	if f.SlopePctPerDay != nil {
+		row.SlopePerDay = *f.SlopePctPerDay
+	}
+	switch f.Status {
+	case flowquery.ForecastAtOrOver:
+		row.Status, row.DaysTo90 = "saturated", 0
+	case flowquery.ForecastRising:
+		row.Status = "trending"
+		if f.DaysTo90 != nil {
+			row.DaysTo90 = *f.DaysTo90
+		}
+	case flowquery.ForecastUnsteady:
+		row.Status = "unsteady"
+	case flowquery.ForecastFlat:
+		row.Status = "stable"
+	default: // not enough history (or no speed, which candidates exclude)
+		row.Status = "building_baseline"
+	}
+	return row
+}
+
+// forecastRank orders rows worst-first: saturated < trending-soonest < unsteady
+// < stable < building.
 func forecastRank(r forecastRow) float64 {
 	switch r.Status {
 	case "saturated":
 		return -1
 	case "trending":
 		return r.DaysTo90 // soonest first
+	case "unsteady":
+		return 5e5
 	case "stable":
 		return 1e6
 	default: // building_baseline

@@ -319,7 +319,7 @@ function ImpactSummary() {
 }
 
 // ── Panel 10 — Capacity Outlook ─────────────────────────────────────────────
-function CapacityOutlook() {
+export function CapacityOutlook() {
   const { data, err } = usePoll(() => api.metricsForecast());
   if (err) return <Panel title="Capacity outlook" state="degraded" />;
   const rows = data?.interfaces ?? [];
@@ -327,9 +327,16 @@ function CapacityOutlook() {
   const trending = rows.filter((r) => r.status === "trending" || r.status === "saturated");
   if (trending.length === 0) {
     const building = rows.filter((r) => r.status === "building_baseline").length;
+    // "unsteady": rising, but too unevenly to put a date on the 90 % crossing.
+    const unsteady = rows.filter((r) => r.status === "unsteady").length;
+    const plural = (n: number) => `${n} interface${n === 1 ? "" : "s"}`;
     return <Panel title="Capacity outlook" state="inactive"
-      note={building > 0 ? "Building baseline" : "All interfaces stable"}
-      hint={building > 0 ? `Needs ${data!.min_days} days of history — ${building} interface${building === 1 ? "" : "s"} still learning their trend.` : "No interfaces trending toward saturation."} />;
+      note={building > 0 ? "Building baseline" : unsteady > 0 ? "No steady trend" : "All interfaces stable"}
+      hint={building > 0
+        ? `Needs ${data!.min_days} days of history — ${plural(building)} still learning their trend.`
+        : unsteady > 0
+          ? `${plural(unsteady)} rising too unevenly to date a 90% crossing.`
+          : "No interfaces trending toward saturation."} />;
   }
   return (
     <Panel title="Capacity outlook" to="analytics/interface-performance">
