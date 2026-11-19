@@ -1,6 +1,7 @@
 # NetOps_Observability — Current Work Tracker
 
-**Reconciled 2026-10-10** (against `main` @ `bec09573`). This file lists what is OPEN. Shipped work is not
+**Last full reconciliation 2026-10-10** (against `main` @ `bec09573`); rows are edited as work ships (last
+edit 2026-11-19). This file lists what is OPEN. Shipped work is not
 re-listed here — `git log` is the record of what landed, and
 `docs/audit/INVARIANTS.md` is the record of what is *proven* versus merely built.
 

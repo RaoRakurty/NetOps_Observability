@@ -48,9 +48,11 @@ Three things make this practical here rather than aspirational:
    could bypass RLS. Nobody has argued these are wrong.
 2. **A validation hook already exists at every point the check needs to run.**
    `scripts/preflight-configs.sh` performs fresh-load validation of every
-   config-driven service in throwaway containers and is already wired into
-   `.github/workflows/config-preflight.yml` (CI gate), the optional pre-push
-   hook, and `install.py` before `docker compose up`. Its header documents
+   config-driven service in throwaway containers and is wired into CI as the
+   `integrity` job of `.github/workflows/fresh-install-integrity.yml`
+   (correction 2026-11-19: there is no `config-preflight.yml`, and neither the
+   pre-push hook nor `install.py` calls it — see `RELEASE_CHECKLIST.md` §2.7;
+   the point stands that the hook exists, but it runs in CI only). Its header documents
    exactly the failure class this ADR generalizes: *"a committed config that the
    running service tolerates in memory but that FAILS a fresh load — so a restart
    or a clean install silently brings up a broken pipeline."* The security

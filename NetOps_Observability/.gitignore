@@ -61,6 +61,10 @@ deployment/docker/cloud-logs/
 deployment/docker/.env.plan.bak
 # secret-bearing .env safety copies (e.g. .env.bak-wave from the enforce wave)
 deployment/docker/.env.bak-*
+# ...and hand-made copies without the leading dot (env.bak-<reason>, seen on the
+# lab 2026-11-19) — a `git add -A` would otherwise stage ~36 credential keys.
+deployment/docker/env.bak*
+deployment/docker/*.env.bak*
 scripts/bundle-autoupdate.log
 scripts/bundle-autoupdate.build.log
 scripts/.stack-watchdog.restarts

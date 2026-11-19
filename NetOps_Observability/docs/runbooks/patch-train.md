@@ -311,10 +311,14 @@ scripts/deploy-qualify.sh
 echo "exit=$?"
 ```
 
-Runs the bootstraps (Kafka ACL matrix · `kafka-init` topics · OpenSearch ISM · router-lane
-writability), then proves the engines actually work: correlation joined its consumer group, every
-`netops-router-*` group has a live member, lag is draining, both Vector tiers are emitting, no
-bootstrap-class Kafka errors, API answering, OpenSearch not RED.
+Runs the bootstraps (B1 Kafka ACL matrix · B2 `kafka-init` topics · B3 OpenSearch ISM · B4 a
+read-only audit that every router lane is writable — role grant + template present), then proves
+the engines actually work: Q1 correlation joined its consumer group and Q1b every required lane is
+subscribable, Q2 every `netops-router-*` group has a live member and Q2c the groups are actually
+committing offsets, Q3 lag is draining, Q4/Q5 both Vector tiers are emitting, Q6 no
+bootstrap-class Kafka errors, Q7 the API answers, and Q11 every monitored device is reporting on
+polling, syslog, traps and flows. It does **not** apply the index templates or the OpenSearch
+security config — `update.sh` does (see `docs/runbooks/deploy.md`).
 
 | Exit | Meaning | Do |
 |---|---|---|
@@ -328,8 +332,10 @@ bootstrap-class Kafka errors, API answering, OpenSearch not RED.
 ### C7. Rollback
 
 ```bash
-docker compose -f deployment/docker/docker-compose.yml down
+(cd deployment/docker && docker compose down)   # NOT `-f docker-compose.yml`: that drops the
+                                                # TLS/overlay files COMPOSE_FILE in .env names
 git -C /path/to/deployed checkout <previous-good-sha>
+python3 scripts/install.py --custody-rollback   # only when going back past 2026-11-09
 scripts/update.sh --no-backup     # a backup was already taken on the way in
 scripts/deploy-qualify.sh         # must exit 0 before you walk away
 ```

@@ -308,12 +308,12 @@ Kubernetes equivalent yet.)
 
 ## Bootstraps
 
-Three jobs run as `post-install,post-upgrade` Helm hooks, in weight order. All
+Four jobs run as `post-install,post-upgrade` Helm hooks, in weight order. All
 are idempotent.
 
 | Weight | Job | What it does | Default |
 |---|---|---|---|
-| 0 | `kafka-init` | Pre-creates the 21 canonical `netops.*` topics at `env.BUS_PARTITIONS`. Broker auto-create is **off**, so a producer to a missing topic fails loud instead of minting a lane nobody retains or consumes. Increase-only. | on |
+| 0 | `kafka-init` | Pre-creates the 22 canonical `netops.*` topics at `env.BUS_PARTITIONS`. Broker auto-create is **off**, so a producer to a missing topic fails loud instead of minting a lane nobody retains or consumes. Increase-only. | on |
 | 5 | `kafka-acls` | The SEC-007 per-identity ACL matrix. **Only meaningful on an authorizing broker**, i.e. with TLS. Against a plaintext broker it is a no-op that looks like coverage. | off |
 | 10 | `opensearch-init` | ISM retention policy + snapshot repository and policy. The #1 disk-fill protection for a long run. | on |
 | 15 | `opensearch-security-init` | Security-plugin users/roles/mappings. Needs `tls.enabled` and a `correlix-opensearch-security` ConfigMap you create from `deployment/docker/opensearch/security/`. | off |
@@ -478,6 +478,13 @@ Stated here rather than left to be discovered.
     closed, not before.
 
 ---
+11. **The OpenSearch index templates are not applied.** On compose,
+   `scripts/bootstrap-opensearch.sh` (run by `install.py` and `update.sh`)
+   applies every template in `index-templates.json` — including the per-lane
+   families the router writes. No Helm hook does this yet; run the script (or
+   the equivalent `PUT _index_template` calls) against the cluster after every
+   install or upgrade that adds a lane, or the router's writes land with dynamic
+   mappings.
 
 ## Uninstall
 
