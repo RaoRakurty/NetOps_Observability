@@ -68,6 +68,11 @@ func PlatformSpecs() []Spec {
 		{Env: "FEATURE_BMP", Label: "BMP listener", Group: routing, Apply: restart, Help: "Receive BGP Monitoring Protocol sessions from routers."},
 		{Env: "FEATURE_PATH_GRAPH", Label: "Path graph", Group: routing, Apply: restart, Help: "Build the forwarding-path graph from path measurements."},
 		{Env: "FEATURE_PATH_BASELINES", Label: "Path baselines", Group: routing, Apply: restart, Help: "Learn normal latency and loss per path."},
+		// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
+		// baselines (internal/seriesroll). Off, Iris still compares with the
+		// last four weeks the metric store keeps.
+		{Env: "FEATURE_SEASONAL_ROLLUP", Label: "Seasonal baselines history", Group: iris, Apply: restart,
+			Help: "Keep an hourly summary of device and circuit metrics for nine weeks, so Iris can say whether a value is usual for this time of week beyond what the metric store keeps. Uses ClickHouse disk."},
 
 		{Env: "FEATURE_CONFIG_BACKUP", Label: "Configuration backup", Group: access, Apply: restart, Risky: true, Help: "Log in to devices to back up their configuration and detect drift."},
 		{Env: "FEATURE_DEVICE_SSH", Label: "SSH to devices", Group: access, Apply: live, Risky: true, Help: "Open an SSH session to a device from the browser."},

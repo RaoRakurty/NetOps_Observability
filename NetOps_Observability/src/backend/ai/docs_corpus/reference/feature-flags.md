@@ -62,6 +62,7 @@ Two rules hold for all of them:
 | `FEATURE_PROTOCOL_DIAG_COLLECT` | `false` | Run a diagnostic command bundle against a live device over SSH. |
 | `FEATURE_RCA_TICKETING` | `false` | Open a ticket automatically from an RCA case. |
 | `FEATURE_SEALED_FIELDS` | `not set` | Seal reversible secrets at rest under the tenant key. |
+| `FEATURE_SEASONAL_ROLLUP` | `false` | Keep nine weeks of hourly metric summaries for Iris seasonal baselines. |
 | `FEATURE_SECURITY_LANE` | `false` | Run the security producer lane and scans. |
 | `FEATURE_SERVICENOW_NOTIFICATIONS` | `false` | File ServiceNow incidents. |
 | `FEATURE_SLACK_NOTIFICATIONS` | `false` | Post to Slack. |

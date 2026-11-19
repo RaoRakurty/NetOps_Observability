@@ -75,6 +75,9 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		// windows through the store's tenant scope, over the caller's own
 		// devices, and matches a window only to its device's own tenant.
 		"MaintenanceCoverer": {"principalTenant(h.claims)", "h.s.maintWindows.List(ctx, tenant, cross)", "h.s.visibleDevicesFor(h.claims)", "deviceTenant(d)"},
+		// N-H6 PR 2: the hourly roll-up read runs at the caller's tenant scope
+		// (STRICT row policy) with the operator restriction's exclusion.
+		"SeasonalHours": {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
 	}
 	for method, needles := range want {
 		if src[method] == "" {

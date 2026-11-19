@@ -183,8 +183,10 @@ func UnitFloor(unit string) float64 {
 		return 1
 	case "s", "seconds":
 		return 0.001
-	case "pps", "packets/s", "count", "errors", "per_second", "/s":
+	case "pps", "packets/s", "count", "errors", "per_second", "/s", "prefixes":
 		return 1
+	case "score":
+		return 0.5
 	}
 	return 1e-9
 }

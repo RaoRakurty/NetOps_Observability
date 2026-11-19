@@ -3629,6 +3629,64 @@ func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, 
 	return h.instantWith(ctx, e, at, maxSeries, h.s.metricsScopeFiltersFor(h.claims))
 }
 
+// nlqSeasonalMetricRe admits a catalog metric name into the roll-up read.
+var nlqSeasonalMetricRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// nlqSeasonalMaxHours bounds one roll-up read's hour list (the planner asks
+// for at most seasonal.MaxWeeks distinct hours).
+const nlqSeasonalMaxHours = 16
+
+// SeasonalHours is plan.SeasonalStore (tracker 337 N-H6 PR 2): the hourly
+// roll-up's medians for the caller's OWN series, read at the caller's
+// ClickHouse tenant scope (the STRICT row policy returns only its tenant's
+// rows, or every tenant's to a cross-tenant caller) with the operator
+// restriction's exclusion. Metric names are allowlist-shaped, keys and hours
+// are bounded and every value reaches the SQL as a literal.
+func (h *nlqScope) SeasonalHours(ctx context.Context, metric string, keys []string, hours []time.Time) (map[string]map[int64]float64, error) {
+	if !nlqSeasonalMetricRe.MatchString(metric) || len(keys) == 0 || len(hours) == 0 {
+		return nil, nil
+	}
+	if len(keys) > plan.MaxMatchValues {
+		keys = keys[:plan.MaxMatchValues]
+	}
+	if len(hours) > nlqSeasonalMaxHours {
+		hours = hours[:nlqSeasonalMaxHours]
+	}
+	hs := make([]string, len(hours))
+	for i, t := range hours {
+		hs[i] = "toDateTime(" + strconv.FormatInt(t.UTC().Truncate(time.Hour).Unix(), 10) + ")"
+	}
+	cond := ""
+	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
+		cond = " AND " + c
+	}
+	sql := `SELECT entity_key, toUnixTimestamp(hour) AS h, p50
+  FROM netops.series_hourly FINAL
+ WHERE metric = ` + chStringLiteral(metric) + `
+   AND hour IN (` + strings.Join(hs, ", ") + `)
+   AND entity_key IN (` + sqlInList(keys) + `)` + cond + `
+ FORMAT JSON`
+	rows, err := h.s.chRowsScope(ctx, h.s.chTenantScopeFor(h.claims), sql, "api:iris-seasonal")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[int64]float64{}
+	for _, row := range rows {
+		k, _ := row["entity_key"].(string)
+		hv, okH := row["h"]
+		pv, okV := row["p50"]
+		if k == "" || !okH || !okV || hv == nil || pv == nil {
+			continue
+		}
+		hour, p50 := int64(asFloat(hv)), asFloat(pv)
+		if out[k] == nil {
+			out[k] = map[int64]float64{}
+		}
+		out[k][hour] = p50
+	}
+	return out, nil
+}
+
 // MaintenanceCoverer is plan.MaintenanceScope (tracker 337 N-H6): the caller's
 // own declared maintenance windows, read ONCE per answer through the store's
 // tenant scope, as a predicate over the devices the caller can see. A window
