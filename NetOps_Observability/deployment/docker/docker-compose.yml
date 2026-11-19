@@ -758,6 +758,10 @@ services:
       # no sink is back-pressured. The container exits 75 and restarts; the
       # lane resumes from its last committed offset.
       CX_LANE_WATCH: "1"
+      # Tracker 410 kill switch: anything but "on" sends ALL syslog to the main
+      # netops-syslog-* family (vector.yaml syslog_store_route). Rollback knob;
+      # keep the routine read patterns for >= 72 h after flipping it.
+      SYSLOG_ROUTINE_SPLIT: ${SYSLOG_ROUTINE_SPLIT:-on}
     volumes:
       - ./vector-router:/etc/vector/conf:ro
       # F-10: the shared enrichment-reload wrapper lives in ./vector — mounted
@@ -1997,6 +2001,9 @@ services:
       FEATURE_SVC_FLOW_ROLLUP: ${FEATURE_SVC_FLOW_ROLLUP:-false}
       FEATURE_PATH_BASELINES: ${FEATURE_PATH_BASELINES:-false}
       FEATURE_SEASONAL_ROLLUP: ${FEATURE_SEASONAL_ROLLUP:-false}
+      # Tracker 410: the routine-syslog roll-up job (internal/routinerollup).
+      # "off" stops it — a D2 gap: routine originals then expire uncounted.
+      ROUTINE_SYSLOG_ROLLUP: ${ROUTINE_SYSLOG_ROLLUP:-on}
       # Seam inventory bootstrap: periodic suggestion loop that seeds the seam
       # inventory (a P1-required input to grounding). Postgres-only and ON by
       # default; set =false to stop the loop.

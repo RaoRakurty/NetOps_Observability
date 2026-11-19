@@ -1,78 +1,72 @@
 # Analytics layer (ClickHouse)
 
-ClickHouse is the OLAP store for flow analytics, long-term trend
-analysis, capacity planning, and correlation-engine findings. It sits
-next to OpenSearch — they overlap on flow data on purpose: OpenSearch
-is the right tool for "show me flows touching 10.0.0.5 in the last
-hour" (ad-hoc, hit-by-hit), ClickHouse is the right tool for "what's
-the daily aggregate egress per BGP AS over the last quarter".
+> Reviewed against the code 2026-11-19. Schema of record:
+> `deployment/docker/clickhouse/init.sql` (fresh installs) plus the
+> converge-on-boot statements in `src/backend/internal/chschema` (existing
+> installs pick up new tables when the api starts — no manual DDL). Retention
+> knobs: `internal/chschema/ch_retention.go`; the full map is
+> `docs/design/data-retention-map.md`.
 
-## Schema
+ClickHouse is the OLAP store: raw flows and their per-interface roll-up, the
+correlation engine's tables, and the path, application, wireless, experience,
+cloud-cost and seasonal-baseline tables. It sits next to OpenSearch, which
+holds the searchable flow documents; ClickHouse answers the aggregate
+questions ("busiest links", "top talkers over a day").
 
-`deployment/docker/clickhouse/init.sql` creates three tables on first
-container start.
+## Tenant isolation
 
-### `netops.flows` — raw flow stream
+Every tenant-scoped table carries `tenant_id` and a row policy. A read sets the
+caller's `tenant_scope` (`__all__` only for a cross-tenant principal or a
+background job); the policy, not the caller's SQL, decides what is visible.
+STRICT tables (for example `series_hourly`) show a row only to its own tenant.
 
-One row per NetFlow / IPFIX / sFlow record. Partitioned by day, ordered
-by `(ts, sampler_address, src_addr, dst_addr)`, TTL 90 days.
+## Key tables
 
-```sql
--- Top 10 src/dst pairs by bytes in the last hour
-SELECT src_addr, dst_addr,
-       sum(bytes * sampling_rate) AS bytes_total
-  FROM netops.flows
- WHERE ts >= now() - INTERVAL 1 HOUR
- GROUP BY src_addr, dst_addr
- ORDER BY bytes_total DESC
- LIMIT 10;
-```
+| Table | What | Retention |
+|---|---|---|
+| `netops.flows` | One row per NetFlow / IPFIX / sFlow record, written by vector-router. Partitioned by `(tenant_id, day)`, ordered by `(ts, sampler_address, src_addr, dst_addr)`; carries ODID and flow start/end (tracker 401) | 7 days (`CH_FLOWS_RETENTION_DAYS`) |
+| `netops.flow_iface_1m` | Per-interface one-minute roll-up of flows, written by the api's flowquery Roller (it reconciles the last 6 h). Read by `/api/flows/links` and `/api/flows/links/series` | follows flows |
+| `netops.findings` | Legacy correlation findings (`/api/findings`) | see the retention map |
+| `netops.corr_*` | The correlation engine's signals, objects and current state (`/api/correlations`) | see the retention map |
+| `netops.series_hourly` | Hourly p10/p50/p90 of the baseline-eligible metric series, behind Iris's seasonal answers (`FEATURE_SEASONAL_ROLLUP`) | 63 days |
 
-### `netops.flows_hourly` — materialized rollup
+`SHOW TABLES FROM netops` lists the rest (paths, applications, wireless,
+experience, cloud costs, …).
 
-Populated automatically by ClickHouse as new rows land in `flows`.
-Powers the "Top Talkers (last 24h)" dashboard widget without scanning
-the raw table.
-
-### `netops.findings` — correlation engine output
-
-One row per anomaly / correlation / RCA finding emitted by the Python
-service. The Findings tab in the dashboard reads from here.
+**No materialized view may read `netops.flows`.** The tenant row policy is
+evaluated on every insert into an MV source, in the inserting connection's
+context, where `tenant_scope` is unset — the insert errors and ingestion
+breaks. Roll-ups are written by the api instead (`flow_iface_1m`, the service
+roll-up), never by an MV (`init.sql`, the removed `flows_hourly`).
 
 ## API endpoints
 
-The Go API surfaces a small set of fixed queries so the SPA never
-issues raw SQL. Add new endpoints in `src/backend/flows.go`.
+The SPA never issues raw SQL: the api runs fixed, parameterised statements.
 
-| Endpoint                       | Returns                                     |
-|--------------------------------|---------------------------------------------|
-| `/api/flows/top`               | Top talker pairs (src, dst, bytes, packets) |
-| `/api/flows/by-proto`          | Bytes/packets/flows grouped by IP proto     |
-| `/api/flows/timeseries`        | Time-bucketed bytes/packets                 |
-| `/api/findings`                | Correlation findings (filterable severity)  |
-
-All accept `?since=1h` / `?since=24h` / `?limit=N`.
+* Link views (`internal/flowquery`): `/api/flows/links`, `/api/flows/links/series`,
+  `/api/flows/links/movers`, `/api/flows/apps`, `/api/flows/services`,
+  `/api/flows/capacity` (capacity reads VictoriaMetrics interface counters, not
+  ClickHouse), `/api/flows/sampling`.
+* Older routes (`flows.go`): `/api/flows/top`, `topn`, `timeseries`, `by-proto`,
+  `by-type`, `flags`, `geo`, `coverage`, `fanout`. They take `since` (a Go
+  duration or seconds, 5 min – 30 days) and answer **400** for a malformed or
+  out-of-range window rather than substituting a default (tracker 405).
+* `/api/findings`.
 
 ## Querying directly
 
-ClickHouse's HTTP interface is reachable from inside the network:
-
 ```
-docker compose exec clickhouse clickhouse-client --query "SELECT count() FROM netops.flows"
-docker compose exec clickhouse clickhouse-client --query "SHOW TABLES FROM netops"
+docker compose exec clickhouse clickhouse-client \
+  --query "SELECT count() FROM netops.flows SETTINGS tenant_scope='__all__'"
 ```
 
-The self-monitoring add-on's console (Stack → Self-Monitoring in the UI)
-has a provisioned ClickHouse datasource — `Explore` → pick ClickHouse →
-write SQL.
+Without `tenant_scope` the row policies show nothing. The self-monitoring
+console (Stack → Self-Monitoring) has a provisioned ClickHouse datasource.
 
 ## Operational notes
 
-* **TTL.** The TTL clauses delete rows older than 90 days automatically.
-  Adjust per data class (`ALTER TABLE netops.flows MODIFY TTL ts +
-  INTERVAL 180 DAY`) if you need longer retention.
-* **Partitioning.** Daily partitions on `flows` mean a single partition
-  is the unit of TTL drop and the smallest unit of efficient query
-  filter. Don't `WHERE` on `bytes` if you can `WHERE` on `ts`.
-* **Backups.** Use `clickhouse-backup` (third-party but well-supported)
-  or just snapshot `data/clickhouse/` while the service is stopped.
+* **Retention.** Daily partitions with `ttl_only_drop_parts = 1`: expiry drops
+  whole parts. Change retention with the knobs in `ch_retention.go` (applied on
+  api boot), not with a hand `ALTER TABLE … MODIFY TTL`.
+* **Partitioning.** Filter on `ts` (and `tenant_id`) first.
+* **Backups.** See `docs/runbooks/storage-and-volume-operations.md`.

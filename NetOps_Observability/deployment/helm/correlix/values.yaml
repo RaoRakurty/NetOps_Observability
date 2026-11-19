@@ -431,6 +431,9 @@ api:
     tag: "0.9.0-rc1"
     digest: ""
   goMemLimit: 460MiB
+  # Tracker 410: the routine-syslog roll-up job. "off" stops it — a D2 gap:
+  # routine originals then expire uncounted.
+  routineSyslogRollup: "on"
   # Edge listeners. Both are opt-in features in the api; the Services and
   # NetworkPolicy holes only render when the matching flag is on.
   snmpTraps:
@@ -514,6 +517,10 @@ vectorRouter:
   resources:
     requests: {cpu: 500m, memory: 512Mi}
     limits:   {cpu: "2",  memory: 512Mi}
+  # Tracker 410 kill switch: anything but "on" sends ALL syslog to the main
+  # netops-syslog-* family. Rollback knob; keep the routine read patterns for
+  # >= 72 h after flipping it.
+  routineSplit: "on"
 
 syslogNg:
   enabled: true
