@@ -207,6 +207,7 @@ from scoring import (
     fidelity_weighting_stats,
     template_scoring_metric_lines,
 )
+from seasonal_shadow import SeasonalShadow
 from series_admission import unit_contradicts
 from series_budget import derive_max_series
 from signals import (
@@ -864,6 +865,14 @@ SERIES_EVICT_LOG_EVERY_S = 60.0
 
 CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() != "false"
 DETECTOR = EpisodeDetector()
+# N-H6 step 4 (owner 2026-11-19: "the correlation engine's truest intention
+# shouldn't be diverted"): the seasonal SHADOW score, a side channel beside
+# stage [2]. CORR_SEASONAL_SHADOW, default OFF. It reads each sample and each
+# episode the detector emits and only COUNTS what the seasonal reading would
+# have said (seasonal_shadow.py); nothing in the engine reads it back, and it
+# writes no Signal, attrs, row, hash or object — ON or OFF.
+SEASONAL_SHADOW = SeasonalShadow()
+_SHADOW_TASKS: set[asyncio.Task] = set()
 # A4 proactive-check plane (proactive.py) — the heartbeat conditions the engine
 # flagged only as TRANSITIONS: a peer stuck below ESTABLISHED, an adjacency that
 # dropped and never re-formed, a device pinned at its CPU/memory ceiling. Module
@@ -8386,6 +8395,9 @@ async def feed_episode_detector(
     else:
         ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown",
                               source=series_source, bucket_s=series_bucket_s())
+    if SEASONAL_SHADOW.enabled:
+        # Side channel only: reads (sample, ev) and never touches either.
+        _seasonal_shadow(tenant, entity_id, metric, event_ts, value, ev)
     if ev is None:
         return False  # still baselining / within hysteresis — no episode this sample
     try:
@@ -8420,6 +8432,33 @@ async def feed_episode_detector(
     log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
              ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
     return True  # an episode signal was emitted this sample
+
+
+def _seasonal_shadow(tenant: str, entity_id: str, metric: str, event_ts: datetime,
+                     value: float, ev) -> None:
+    """N-H6 step 4: score one sample in the seasonal SHADOW and, when the
+    detector just opened an episode, count what the seasonal reading said. A
+    tenant profile that must be (re)loaded is fetched by a background task at
+    that tenant's scope. Never raises, never mutates `ev`, and nothing the
+    engine decides with reads its result (seasonal_shadow.py)."""
+    try:
+        need = SEASONAL_SHADOW.observe(tenant, entity_id, metric, event_ts, value,
+                                       onset=ev is not None and ev.phase == "onset")
+    except Exception:  # noqa: BLE001 — the shadow must never reach the episode lane
+        SEASONAL_SHADOW.errors += 1
+        return
+    if need is None:
+        return
+    query = getattr(ch, "query_scoped", None)
+    if query is None or not SEASONAL_SHADOW.claim(*need):
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(SEASONAL_SHADOW.refresh(need[0], need[1], query))
+    except RuntimeError:  # no running loop (sync caller): release the claim
+        SEASONAL_SHADOW.release(*need)
+        return
+    _SHADOW_TASKS.add(task)
+    task.add_done_callback(_SHADOW_TASKS.discard)
 
 
 def score(tenant: str, device: str, metric: str, value: float) -> float | None:
@@ -8968,6 +9007,20 @@ class CH:
         )
         if r.status_code >= 300:
             raise HTTPException(status_code=502, detail=r.text)
+        return r.json().get("data", [])
+
+    async def query_scoped(self, sql: str, tenant: str) -> list[dict]:
+        """A read at ONE tenant's scope (N-H6 step 4, the seasonal shadow's
+        profile read): tenant_scope=<tenant>, so the table's row policy — STRICT
+        on netops.series_hourly — decides what is visible, never this caller's
+        SQL. Raises on a failed read; the caller counts it. The response body is
+        never logged (it is customer telemetry)."""
+        r = await self.client.post(
+            self.base, params={"default_format": "JSON", "tenant_scope": tenant},
+            content=sql, auth=self.auth,
+        )
+        if r.status_code >= 300:
+            raise RuntimeError(f"clickhouse scoped read failed status={r.status_code}")
         return r.json().get("data", [])
 
     async def close(self) -> None:
@@ -15769,6 +15822,9 @@ def _metrics_text(health: dict | None = None) -> str:
             for outcome in ("raw_seen", "persisted", "damped"):
                 lines.append(
                     f'corr_tenant_writes_window{{tenant_id="{t}",outcome="{outcome}"}} {row[outcome]}')
+    # N-H6 step 4: the seasonal shadow's coverage and onset comparison (counted
+    # only; CORR_SEASONAL_SHADOW). Closed label sets.
+    lines += SEASONAL_SHADOW.metrics_lines()
     return "\n".join(lines) + "\n"
 
 
@@ -16131,6 +16187,10 @@ def _health_payload() -> dict:
         # the last `promotion_window` ADMITTED lines. `parser_rev` +
         # `rules_hash` say WHICH rule corpus produced the signals in flight.
         "parser": parser_stats(),
+        # N-H6 step 4: the seasonal shadow (CORR_SEASONAL_SHADOW) — coverage by
+        # tier and what it said about each episode the detector opened. Counted
+        # only; nothing the engine decides with reads it.
+        "seasonal_shadow": SEASONAL_SHADOW.health(),
         # A4 heartbeat plane: the check table (what each check IS, and whether
         # it is still shadow) beside its counters, so the shadow rate can be
         # read against the check that produced it without a second lookup.

@@ -2108,6 +2108,9 @@ WATCHDOG_NTFY_TOPIC=
 # that, e.g. while the broker still lacks a Read ACL on a class topic.
 #CORR_SYSLOG_TOPIC=netops.syslog
 #CORR_FIDELITY_WEIGHTING=0
+# CORR_SEASONAL_SHADOW counts what a seasonal baseline would have said about
+# each episode the engine opened; it never changes a decision (default off).
+#CORR_SEASONAL_SHADOW=0
 
 # Device-side ingestion ports (host-side, mapped into the syslog-ng /
 # goflow2 containers). Use standard ports (514, 2055, 4739, 6343) on

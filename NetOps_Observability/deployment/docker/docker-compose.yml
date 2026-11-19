@@ -1556,6 +1556,12 @@ services:
       # A7: weigh evidence by parser/source fidelity tier. Default OFF — the
       # engine scores exactly as it does today until this is turned on.
       CORR_FIDELITY_WEIGHTING: ${CORR_FIDELITY_WEIGHTING:-0}
+      # N-H6 step 4: the seasonal SHADOW score beside stage [2]. Default OFF.
+      # ON, it only COUNTS what a seasonal (hour-of-week/day) reading would have
+      # said about each episode the detector opened — nothing the engine decides
+      # with reads it (owner 2026-11-19). Needs FEATURE_SEASONAL_ROLLUP on the
+      # api for profiles; without it every sample is tier C and counted as such.
+      CORR_SEASONAL_SHADOW: ${CORR_SEASONAL_SHADOW:-0}
       # T2b: which evidence-CLASS topics the generic intake subscribes to.
       # DELIBERATELY a bare pass-through, NOT ${VAR:-default}: for this one
       # variable "unset" and "empty" are different contracts — unset means
