@@ -24,11 +24,15 @@ usernames (D2, D7) for the full window.
   `syslog_store_route.routine`) applies the address-free rules of
   `internal/logroutine`: SNMP polls and in-session steps (NETCONF RPCs,
   session-group lines, SSH session open/close), inside `management_audit`,
-  never with a failure word. `SYSLOG_ROUTINE_SPLIT=off` sends everything to the
-  main family.
+  never with a failure word. `SYSLOG_ROUTINE_SPLIT` (vector-router; compose
+  `${SYSLOG_ROUTINE_SPLIT:-on}`, Helm `vectorRouter.routineSplit`) set to
+  anything but `on` sends everything to the main family — the rollback knob;
+  keep the routine read patterns for at least 72 h after flipping it.
 - **At read time** the Logs page, export, the severity tiles and Iris hide the
-  full routine class (including the address rules) over both families, and
-  count it. The read rule is the only one that decides what is hidden; the
+  full routine class (including the address rules) over both families. The Logs
+  search and Iris also COUNT what they left out ("N routine sessions hidden");
+  export and the severity tiles only leave it out, so their totals match the
+  rows shown. The read rule is the only one that decides what is hidden; the
   write rule only decides retention.
 
 ## The roll-up job
@@ -39,8 +43,9 @@ minute ONCE, after a 2-minute settle (roll-up schema v2: one document per
 device, source ADDRESS without its ephemeral port, user and minute) — and recounts each closed hour of the last
 48 h once an hour, re-rolling any hour whose roll-up sum differs from its
 originals. Each roll-up document's id is the hash of its key, so a re-run
-upserts. `ROUTINE_SYSLOG_ROLLUP=off` stops it (a D2 gap: originals then expire
-with no count kept).
+upserts. `ROUTINE_SYSLOG_ROLLUP=off` (api; compose
+`${ROUTINE_SYSLOG_ROLLUP:-on}`, Helm `api.routineSyslogRollup`) stops it (a D2
+gap: originals then expire with no count kept).
 
 Metrics: `netops_routine_rollup_runs_total{result}`,
 `netops_routine_rollup_documents_written_total`,
@@ -68,7 +73,22 @@ oldest originals start expiring uncounted.
 
 ## Deploy order
 
-The router's split needs the templates, the ISM policy and the writer role in
-the cluster first: run `opensearch-init` and `opensearch-security-init` (both
-run by `scripts/deploy.sh`/`deploy-qualify.sh`) before the new vector-router.
-`scripts/bootstrap-opensearch.sh --verify` reports an uncovered sink lane.
+The router's split needs the writer role, the ISM policy and the index
+templates in the cluster first. `scripts/deploy.sh` runs NONE of these
+bootstraps, and `deploy-qualify.sh` runs only `opensearch-init` (B3, the ISM
+policies) plus a read-only verify (B4). On an existing install, in this order:
+
+1. `opensearch-security-init` — securityadmin; `netops_writer` gains
+   `netops-syslogroutine-*` / `netops-syslogrollup-*` (deploy it as a service:
+   `scripts/deploy.sh opensearch-security-init`).
+2. `opensearch-init` — the ISM policies incl. `netops-syslogroutine-retention`
+   (`scripts/deploy.sh opensearch-init`).
+3. `scripts/bootstrap-opensearch.sh` — the index templates (incl.
+   `netops-syslogrollup`) and the mapping sync of today's indices. install.py
+   and update.sh run it; a plain deploy does not.
+4. The api, then `scripts/deploy-qualify.sh` — B4 must report every router lane
+   covered and every template present.
+5. Only then the vector-router that writes the new family.
+
+`scripts/bootstrap-opensearch.sh --verify` reports an uncovered sink lane or a
+missing template.

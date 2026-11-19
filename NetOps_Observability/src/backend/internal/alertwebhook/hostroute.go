@@ -194,7 +194,7 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 //
 // The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
 // conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
-// THIRTEEN, because one condition is implemented by several per-engine/per-lane
+// FOURTEEN, because one condition is implemented by several per-engine/per-lane
 // rules whose first response differs — the rules are the same condition seen
 // from a different vantage point, not extra conditions:
 //
@@ -220,7 +220,13 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 //	                                   last 7 days send nothing on any lane
 //	                                   (the 2026-11-14 lab-gateway outage,
 //	                                   #271; same condition, not a fifth)
-//	(3) storage refusing writes                — 1 rule: ClickHouseWritesRejected
+//	(3) storage refusing writes                — 2 rules
+//	      ClickHouseWritesRejected   the api's ClickHouse writer recorded a
+//	                                   rejected (terminal) batch
+//	      OpenSearchWritesRefused    OpenSearch in flood stage refusing bulk
+//	                                   writes, or documents a Vector sink
+//	                                   discarded as rejected (docs audit
+//	                                   2026-11-19; same condition, not a fifth)
 //	(4) the alerting path broken               — 2 rules
 //	      AlertDeliveryBroken        the front half: no heartbeat reached the
 //	                                   receiver (vmalert -> notifier -> api)
@@ -236,7 +242,7 @@ func (s staticRouter) Targets(string) []HostTarget { return []HostTarget{s.t} }
 // `tier: page` rule at all. Both claims are pinned mechanically by
 // TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
 // fails the build rather than rotting the next time a rule is added.
-const pageRuleCount = 13
+const pageRuleCount = 14
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.

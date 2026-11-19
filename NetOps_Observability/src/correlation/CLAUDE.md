@@ -44,14 +44,16 @@ Size caps (S:37, S:52-55): strings 256/128/512, tokens ≤32, attrs ≤4 KiB.
 
 | topic | handler | source / modality | observer · collection_path |
 |---|---|---|---|
-| netops.metrics | handle_metric M:12389 | metric / device_telemetry; CUSUM episodes `if_/bgp_/igp_state_/device_resource_/cloud_resource_anomaly` | device id · `snmp_poll` |
-| netops.syslog | handle_syslog M:13190 | syslog / control_plane or device_telemetry per rule (parser_rules.py) | event hostname · direct |
-| netops.snmptrap | handle_snmptrap M:12728 | trap / control_plane (CPU/memory threshold rows: device_telemetry, the modality of the episode they land beside) | device · direct |
-| netops.probes (+DEM) | handle_probe M:12661 | probe / active_probe; authority classified M:12597 | vantage |
-| netops.flows | handle_flow M:13346 | flow / passive_flow; CUSUM → `flow_volume_anomaly` | sampler · `flow_export` |
-| netops.controller_events | M:12796 → controller_events.py:120 | controller / **management_plane** | `<source_system>:<integration_id>` · `via_controller` (no instance suffix) |
-| cloud · app.edge · verification · app identities · wireless | M:12995 · 13088 · 12817 · 13048 · 12841/12920 | cloud (via_cloud_api) · app-edge · active_verification · APP_IDENTITY (enrichment only, never a node, E:471-474) | — |
-| netops.security · netops.bgp | handle_evidence_event M:13120 | evidence classes (S:1092-1150) | platform evaluator |
+| netops.metrics | handle_metric M:12709 | metric / device_telemetry; CUSUM episodes `if_/bgp_/igp_state_/device_resource_/cloud_resource_anomaly` | device id · `snmp_poll` |
+| netops.syslog | handle_syslog M:13597 | syslog / control_plane or device_telemetry per rule (parser_rules.py) | event hostname · direct |
+| netops.snmptrap | handle_snmptrap M:13088 | trap / control_plane (CPU/memory threshold rows: device_telemetry, the modality of the episode they land beside) | device · direct |
+| netops.probes (+DEM) | handle_probe M:13021 | probe / active_probe; authority classified M:12957 | vantage |
+| netops.flows | handle_flow M:13759 | flow / passive_flow; CUSUM → `flow_volume_anomaly` | sampler · `flow_export` |
+| netops.controller_events | M:13176 → controller_events.py:120 | controller / **management_plane** | `<source_system>:<integration_id>` · `via_controller` (no instance suffix) |
+| cloud · app.edge · verification · app identities · wireless | M:13402 · 13495 · 13224 · 13455 · 13248/13327 | cloud (via_cloud_api) · app-edge · active_verification · APP_IDENTITY (enrichment only, never a node, E:471-474) | — |
+| netops.security · netops.bgp | handle_evidence_event M:13527 | evidence classes (S:1092-1150) | platform evaluator |
+
+Line refs in this table were re-verified on 2026-11-19 (`grep -n "def handle_" main.py`). Other `M:` refs in this file are as of when they were written; `main.py` grows, so find the symbol before relying on a line number.
 
 **Security evidence clears (owner D2, 2026-11-11).** The security class
 (`signals.EVIDENCE_CLASSES["security"]`) registers `security_posture_clear`,

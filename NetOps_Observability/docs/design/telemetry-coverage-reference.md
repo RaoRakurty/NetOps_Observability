@@ -367,7 +367,7 @@ block note, the API type doc, and the UI's own caveat line under the table.
 MIB index** (`src/backend/collectors/mibs/index/oididx.json`, which carries
 OSPF-MIB), per the § E.1 anti-fabrication rule — none is transcribed from a
 vendor page. What is missing is the other half: **this deployment has no
-OSPF-speaking SNMP device**, so not one of these five has ever returned a row.
+OSPF-speaking SNMP device**, so not one of these nine has ever returned a row.
 They are correct-by-index and unproven-by-device, which is exactly what
 `doc_claimed` means.
 
