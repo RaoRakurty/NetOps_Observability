@@ -235,7 +235,7 @@ func TestSkillNotApplicableNeverGathers(t *testing.T) {
 	if !strings.Contains(ans.Chain[0].Reason, "does not apply") {
 		t.Fatalf("the first hop must say why it was rerouted: %q", ans.Chain[0].Reason)
 	}
-	if p := lastPrompt(llm); !strings.Contains(p, "no OSPF adjacency is discovered on edge-1") {
+	if p := lastPrompt(llm); !strings.Contains(p, "edge-1 reports OSPF administratively disabled and has no OSPF neighbours") {
 		t.Fatalf("the operator was never told why the OSPF method did not run; prompt:\n%s", p)
 	}
 	refused := false

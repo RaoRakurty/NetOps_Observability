@@ -551,13 +551,24 @@ export function cellText(v: unknown): string | null {
   }
 }
 
-/** The entity dimensions of a metric row (everything that is not a measure). */
-export const MEASURE_FIELDS = new Set(["value", "previous", "delta", "count"]);
+/**
+ * The measures of a metric row. `expected` is the seasonal baseline's usual
+ * level and `z` its robust deviation (tracker 337 N-H6); `z` and `count` carry
+ * no unit.
+ */
+export const MEASURE_FIELDS = new Set(["value", "previous", "delta", "count", "expected", "z"]);
 
+/** Unitless measures (shown as plain numbers, never in the metric's unit). */
+export const UNITLESS_FIELDS = new Set(["count", "z"]);
+
+/** Text annotations of a row — never part of its entity name (N-H6 `baseline`). */
+export const NOTE_FIELDS = new Set(["baseline"]);
+
+/** The entity dimensions of a metric row (everything that is not a measure or a note). */
 export function entityLabel(e: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(e)) {
-    if (MEASURE_FIELDS.has(k)) continue;
+    if (MEASURE_FIELDS.has(k) || NOTE_FIELDS.has(k)) continue;
     if (typeof v === "string" && v !== "") parts.push(v);
   }
   return parts.length > 0 ? parts.join(" · ") : "All";

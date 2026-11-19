@@ -73,7 +73,10 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 		if !strings.Contains(s, "ROW POLICY") {
 			continue
 		}
-		strict := strings.Contains(s, "ON netops.corr_") || strings.Contains(s, "ON netops.path_")
+		// N-H6 PR 2: the seasonal roll-up joins the strict family — every row
+		// is stamped with its device's owner; none is shared untagged.
+		strict := strings.Contains(s, "ON netops.corr_") || strings.Contains(s, "ON netops.path_") ||
+			strings.Contains(s, "ON netops.series_hourly")
 		if !strict {
 			continue
 		}
@@ -99,6 +102,7 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 		// also self-heals via atomic OR REPLACE.
 		"corr_current", "corr_tenant_write_amp", "corr_path_edges",
 		"path_observations", "path_hops",
+		"series_hourly",
 	} {
 		want := "CREATE ROW POLICY OR REPLACE tenant_iso_" + table + " ON netops." + table
 		found := false

@@ -172,3 +172,18 @@ which is announced on stderr — see `README.md`, "No network".
 
 Update: drop the module + its IMPORTS closure here, re-run `make mib-index`.
 If the module is not redistributable, add it to `FETCH_PINS` instead.
+
+### Tracker 415: OSPFv3 and the BGP4-MIB subtree (2026-11-19)
+
+Iris skill applicability needs the MIB's own "this protocol is off" answer per
+device (`ospfAdminStat`, `ospfv3AdminStatus`, `isisSysAdminState`) and the BGP
+process marker (`bgpLocalAs`). `OSPFV3-MIB` (RFC 5643) was in no compiled module,
+and pysmi contributed only part of the SMIv1 `BGP4-MIB`; the net-snmp pass now
+compiles `1.3.6.1.2.1.191` and `1.3.6.1.2.1.15`. Both modules are IETF Code
+Components, pinned (not vendored) to the tracker 377 LibreNMS commit; `OSPF-MIB` is
+pinned only because `OSPFV3-MIB` imports its textual conventions.
+
+| Module | URL | sha256 |
+|--------|-----|--------|
+| `OSPFV3-MIB` (RFC 5643) | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/OSPFV3-MIB | `d40d505ae1b5c263ca7597c9bd4515531f9a1589071d2d96cf0ff172f3c6dfb0` |
+| `OSPF-MIB` (RFC 4750) | https://raw.githubusercontent.com/librenms/librenms/a7de98cfe060297622f64c4bffa5f8c5f9d8a8e5/mibs/OSPF-MIB | `b50dc552cf1d3ec9a7060a4a4e6bae81ccbd09e12b9356dae348a45312704e03` |

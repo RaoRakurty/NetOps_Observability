@@ -42,6 +42,19 @@ describe("ResultTable", () => {
     expect(screen.getByText("12.5 ms")).toBeInTheDocument();
   });
 
+  it("formats the seasonal columns: expected in the unit, z unitless, baseline as text (N-H6)", () => {
+    render(
+      <ResultTable
+        rows={[{ device: "r1", value: 90, expected: 40, z: 6.25, baseline: "its usual level for this time of week (4 of 4 weeks used)" }]}
+        columns={["device", "value", "expected", "z", "baseline"]}
+        unit="%"
+      />,
+    );
+    expect(screen.getByText("40 %")).toBeInTheDocument();
+    expect(screen.getByText("6.25")).toBeInTheDocument();
+    expect(screen.getByText("its usual level for this time of week (4 of 4 weeks used)")).toBeInTheDocument();
+  });
+
   it("reports row clicks", () => {
     const onRowClick = vi.fn();
     render(<ResultTable rows={[{ device: "r1", value: 1 }]} onRowClick={onRowClick} />);
