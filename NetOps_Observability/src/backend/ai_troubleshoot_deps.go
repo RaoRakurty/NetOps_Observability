@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -64,11 +65,13 @@ import (
 	"netops/backend/internal/devreach"
 	"netops/backend/internal/entityalias"
 	"netops/backend/internal/irisglossary"
+	"netops/backend/internal/lanepresence"
 	nlqast "netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/oslog"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/probetarget"
@@ -371,7 +374,8 @@ func (s *server) aiDeviceFacts(claims jwtClaims) func(context.Context, ai.Princi
 			}
 		}
 		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID],
-			protoNeighbors: s.aiProtocolNeighbors(tctx, dev, s.metricsScopeFiltersFor(claims))}
+			protoNeighbors: s.aiProtocolNeighbors(tctx, dev, s.metricsScopeFiltersFor(claims)),
+			lanes:          s.aiLanePresence(tctx, claims, dev)}
 		if snap := s.sdwanOverlay.Load(); snap != nil {
 			in.overlayRead = true
 			if f, ok := snap.devFacts[dev.ID]; ok {
@@ -396,6 +400,99 @@ type deviceFactInputs struct {
 	// NOT an absence — a walk of an unimplemented MIB and an empty table look
 	// the same (tracker 415).
 	protoNeighbors map[string]bool
+	// lanes: "syslog" / "trap" / "flow" → the device was seen sending on that
+	// lane within lanepresence.Window. Seen only (tracker 415 (c)).
+	lanes map[string]bool
+}
+
+// aiLanePresence reads whether ONE of the caller's devices was seen sending
+// syslog, SNMP traps or flows in the last lanepresence.Window, through the SAME
+// boundary the Logs and Flows pages use: the caller's own index pattern and
+// per-document tenant filter (own stamped documents + untagged ones its
+// unambiguous identities claim, tracker 370), the operator-visibility
+// restriction (deny → nothing is read; Global-view exclusions ride as
+// must_not / NOT IN), and for flows the caller's ClickHouse scope plus its flow
+// tenant clause. The three reads run concurrently and are cut at ctx's
+// deadline; a lane that failed, timed out or found nothing stays UNKNOWN.
+func (s *server) aiLanePresence(ctx context.Context, claims jwtClaims, dev models.Device) map[string]bool {
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return nil
+	}
+	ld := lanepresence.Device{ID: dev.ID, Name: dev.Name, Address: dev.Address}
+	claim, _ := s.untaggedClaimFor(claims)
+	tf := oslog.TenantFilter(tenant, cross, claim.Keys, claim.Addrs)
+	var mustNot []any
+	if len(exclude) > 0 {
+		mustNot = append(mustNot, map[string]any{"terms": map[string]any{"tenant_id": exclude}})
+	}
+	now := time.Now()
+	type seen struct {
+		lane string
+		ok   bool
+	}
+	results := make(chan seen, 3)
+	jobs := 0
+	for _, lg := range [...][2]string{{"syslog", "syslog"}, {"trap", "snmptrap"}} {
+		body, ok := lanepresence.LogQuery(ld, now, lanepresence.Window, tf, mustNot)
+		if !ok {
+			continue
+		}
+		jobs++
+		go func(lane, signal string, body map[string]any) {
+			results <- seen{lane, aiLogHit(oslog.TenantIndexPattern(signal, tenant, cross), body)}
+		}(lg[0], lg[1], body)
+	}
+	if clause, empty := s.flowTenantClauseFor(claims); !empty {
+		if cond := s.tenantIDExcludeCondFor(claims, "tenant_id"); cond != "" {
+			clause += " AND " + cond
+		}
+		if sql, ok := lanepresence.FlowSQL(ld, lanepresence.Window, clause); ok {
+			jobs++
+			scope := s.chTenantScopeFor(claims)
+			go func() {
+				rows, err := s.chRowsScope(ctx, scope, sql, "api:iris-device-facts")
+				results <- seen{"flow", err == nil && len(rows) > 0}
+			}()
+		}
+	}
+	out := map[string]bool{}
+	for i := 0; i < jobs; i++ {
+		select {
+		case r := <-results:
+			if r.ok {
+				out[r.lane] = true
+			}
+		case <-ctx.Done():
+			return out
+		}
+	}
+	return out
+}
+
+// aiLogHit runs one presence query (lanepresence.LogQuery) and reports whether
+// it counted a document. Any failure reads as "not seen" (unknown).
+func aiLogHit(index string, body map[string]any) bool {
+	resp, err := openSearch("POST", "/"+index+"/_search", body)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	var out struct {
+		Hits struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return false
+	}
+	return out.Hits.Total.Value > 0
 }
 
 // aiFactNeighborSeries are the neighbour-table series that prove a protocol is
@@ -511,6 +608,12 @@ func deriveDeviceFacts(in deviceFactInputs) ai.DeviceFacts {
 	}
 	if in.externalBGP > 0 {
 		f.Observe(ai.FactAdjacency, "bgp", true)
+	}
+	// Telemetry lanes the device was seen sending on: seen only.
+	for _, lane := range []string{"syslog", "trap", "flow"} {
+		if in.lanes[lane] {
+			f.Observe(ai.FactTelemetry, lane, true)
+		}
 	}
 	// Neighbour rows the device itself reports (any state, any VRF): seen only.
 	for _, proto := range []string{"ospf", "isis", "bgp"} {
