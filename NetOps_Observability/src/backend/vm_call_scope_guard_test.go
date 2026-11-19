@@ -38,7 +38,7 @@ import (
 // added when the read genuinely has no principal to scope to.
 var vmUnscopedAllowlist = map[string]string{
 	"main.go":                  "the storage and telemetry meters: vm_data_size_bytes / vm_rows_inserted_total are VictoriaMetrics' own self-metrics, read on the platform path only",
-	"path_health_baselines.go": "the precompute ticker: a background job with no caller, whose rows are written untagged and read back bounded to the caller's own paths",
+	"path_health_baselines.go": "the precompute ticker: a background job with no caller, whose rows are written untagged and read back bounded to the caller's own paths; and the seasonal roll-up (N-H6 PR 2), another caller-less job, whose every row is stamped with its device's inventory owner (unowned series skipped) under a STRICT row policy",
 }
 
 // vmReadHelpers are the entry points that actually reach VictoriaMetrics.

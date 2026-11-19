@@ -1117,6 +1117,39 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_flow_iface_1m ON netops.flow_iface_1m
     TO ALL;
 
 -- ---------------------------------------------------------------------------
+-- netops.series_hourly — hourly roll-up of the metric series Iris's seasonal
+-- baselines read (tracker 337 N-H6 PR 2). MIRRORED IN
+-- src/backend/internal/chschema/series_hourly_schema.go (converged on every API
+-- boot). Written by the seasonal roll-up worker (internal/seriesroll) with the
+-- device's inventory owner as tenant_id — never '' (an unowned series is
+-- skipped and counted) — under a STRICT row policy. A re-rolled hour replaces
+-- (ReplacingMergeTree, read with FINAL). Nine weeks: the four-week profile with
+-- room to spare.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.series_hourly
+(
+    tenant_id   LowCardinality(String),
+    metric      LowCardinality(String),
+    entity_key  String,
+    hour        DateTime,
+    p10         Float64,
+    p50         Float64,
+    p90         Float64,
+    n           UInt32,
+    version     UInt64
+)
+ENGINE = ReplacingMergeTree(version)
+PARTITION BY (tenant_id, toYYYYMM(hour))
+ORDER BY (tenant_id, metric, entity_key, hour)
+TTL hour + INTERVAL 63 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE ROW POLICY OR REPLACE tenant_iso_series_hourly ON netops.series_hourly
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
 -- Wireless per-client event tier (#128 Phase 1, docs/Wireslessdesign.md §20).
 --
 -- MIRRORED IN src/backend/wireless_schema.go — the API converges these same

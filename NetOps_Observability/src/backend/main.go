@@ -99,6 +99,7 @@ import (
 	"netops/backend/internal/flowquery"
 	"netops/backend/internal/flowsampling"
 	"netops/backend/internal/loginguard"
+	"netops/backend/internal/seriesroll"
 	// METERING-BEGIN — usage metering (tracker 258). A SEPARATE data contract
 	// from the licence: entitlement answers "what may this customer do", this
 	// answers "what did they use". Deleting this import, the METERING marker
@@ -600,22 +601,23 @@ type server struct {
 	// GET /api/incident-policies reports it, so a tenant can see that its policies
 	// will not fire, instead of policies that silently never ticket.
 	ticketingRunning    atomic.Bool
-	seams               *seam.Store                      // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services            *pgServiceStore                  // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn           cloudconn.Repo                   // multi-tenant cloud-connector framework (pg or in-memory)
-	cloudBroker         *cloudconn.IdentityBroker        // cloud identity broker: scoped short-lived provider tokens + vault secret custody
-	workloadIssuer      *workloadIssuer                  // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
-	cloudIngestInv      *cloudIngestInventory            // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
-	cloudSourceStatus   *cloudSourceStatusStore          // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology            topology.GraphStore              // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline    timeintel.TimelineStore          // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	incidentTimeMetrics incidentTimeMetricsStore         // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	incidentFP          incidentfp.Store                 // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
-	rcaResolutions      rcaresolution.Store              // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
-	deviceBaselines     devbaseline.Store                // before/after change baselines per device (Iris change assistance; migration 0079 / file fallback)
-	flowRollup          atomic.Pointer[flowquery.Roller] // per-interface flow rollup (tracker 401 (a)); nil until its worker starts
-	flowSampling        flowsampling.Store               // operator-declared flow sampling per exporter (tracker 401 (c); migration 0078 / file fallback)
-	aiFeedback          ai.FeedbackStore                 // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	seams               *seam.Store                       // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services            *pgServiceStore                   // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn           cloudconn.Repo                    // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker         *cloudconn.IdentityBroker         // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer      *workloadIssuer                   // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
+	cloudIngestInv      *cloudIngestInventory             // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
+	cloudSourceStatus   *cloudSourceStatusStore           // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
+	topology            topology.GraphStore               // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline    timeintel.TimelineStore           // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics incidentTimeMetricsStore          // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	incidentFP          incidentfp.Store                  // similar-incident fingerprints (tracker 337 N-F4; pg or in-memory)
+	rcaResolutions      rcaresolution.Store               // how operators recorded a case was fixed (N-F4 residue; migration 0071 / file fallback)
+	deviceBaselines     devbaseline.Store                 // before/after change baselines per device (Iris change assistance; migration 0079 / file fallback)
+	flowRollup          atomic.Pointer[flowquery.Roller]  // per-interface flow rollup (tracker 401 (a)); nil until its worker starts
+	seasonalRoll        atomic.Pointer[seriesroll.Roller] // hourly metric roll-up behind Iris's seasonal baselines (N-H6 PR 2); nil unless FEATURE_SEASONAL_ROLLUP
+	flowSampling        flowsampling.Store                // operator-declared flow sampling per exporter (tracker 401 (c); migration 0078 / file fallback)
+	aiFeedback          ai.FeedbackStore                  // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
 	// irisMemory is the tenant-scoped store of CONCLUDED investigations
 	// (migration 0040 / file fallback); irisPending holds a conclusion in memory
@@ -3305,6 +3307,13 @@ func Run() {
 	if os.Getenv("FEATURE_PATH_BASELINES") == "true" {
 		srv.startPathBaselinePrecompute(ctx)
 	}
+	// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
+	// baselines (path_health_baselines.go, internal/seriesroll). Opt-in.
+	if os.Getenv("FEATURE_SEASONAL_ROLLUP") == "true" {
+		if run := srv.seasonalRollupRunner(ctx); run != nil {
+			workers.start("seasonal-rollup", run) // drained at shutdown: an hour's write is not abandoned
+		}
+	}
 
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -5078,6 +5087,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	// Tracker 367 layer 1: legacy URL-userinfo credentials still in use, and
 	// whether each file-backed backend credential holds a value.
 	writeBackendCredentialMetrics(w)
+	s.writeSeasonalRollupMetrics(w)
 
 	// Registry storage posture (tracker 245). A registry whose storage cannot
 	// serve is invisible from the outside — the API answers honestly, but only

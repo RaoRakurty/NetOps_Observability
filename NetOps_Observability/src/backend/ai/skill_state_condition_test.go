@@ -178,9 +178,11 @@ func TestEmbeddedSkillsStateRulesAreGatherable(t *testing.T) {
 	}
 }
 
-// Show-first: every skill that reads device state must read it in its FIRST
-// couple of steps, and the RCA verdict is the only thing allowed to come first
-// (the engine's conclusion is the documented starting point).
+// Show-first: every skill that reads device state must read it FIRST — before
+// any other evidence — and the RCA verdict is the only other step allowed to
+// come before it (the engine's conclusion is the documented starting point).
+// Several consecutive state reads (two areas of the same device, e.g. the
+// interfaces beneath a tunnel and its IPsec SAs) still read state first.
 func TestEmbeddedSkillsGatherStateFirst(t *testing.T) {
 	set, err := LoadSkills()
 	if err != nil {
@@ -192,11 +194,13 @@ func TestEmbeddedSkillsGatherStateFirst(t *testing.T) {
 			if g.Tool != "get_device_state" {
 				continue
 			}
-			if i > 1 {
-				t.Errorf("%s gathers device state at step %d — show-first means step 1 (or step 2 behind get_rca_verdict)", name, i+1)
-			}
-			if i == 1 && sk.Gather[0].Tool != "get_rca_verdict" {
-				t.Errorf("%s puts %q before the state read; only get_rca_verdict may precede it", name, sk.Gather[0].Tool)
+			for j := 0; j < i; j++ {
+				prev := sk.Gather[j].Tool
+				if prev == "get_device_state" || (j == 0 && prev == "get_rca_verdict") {
+					continue
+				}
+				t.Errorf("%s gathers device state at step %d after %q — show-first means state reads come first (only get_rca_verdict may precede them)", name, i+1, prev)
+				break
 			}
 			if area := g.Args["area"]; !stateAreas[area] {
 				t.Errorf("%s gathers device state for area %q, which is not in the closed vocabulary", name, area)

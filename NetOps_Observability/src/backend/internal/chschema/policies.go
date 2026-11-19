@@ -131,6 +131,10 @@ func ConvergeStmts(extra ...[]string) []string {
 	// Tracker 401 (a): the per-interface flow rollup (flow_iface_schema.go,
 	// LENIENT policy like flows). Same converge-on-boot contract.
 	stmts = append(stmts, FlowIfaceSchemaDDL()...)
+	// Tracker 337 N-H6 PR 2: the hourly metric roll-up behind Iris's seasonal
+	// baselines (series_hourly_schema.go, STRICT policy). Same converge-on-boot
+	// contract; init.sql carries identical DDL for fresh installs.
+	stmts = append(stmts, SeriesHourlySchemaDDL()...)
 	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.

@@ -45,7 +45,8 @@ GNMI_OWNED: dict[str, str] = {
     "device_bgp_pfx_in": "per-AFI accepted-prefix count; BGP4-MIB is IPv4-only and "
                          "BGP4V2-MIB is draft (no usable SNMP source) — gNMI owns it "
                          "(gnmic.yaml ownership gate; telemetry-coverage-reference.md).",
-    "device_isis_adj_state": "IS-IS adjacency on-change; no IS-IS MIB is collected — "
+    "device_isis_adj_state": "IS-IS adjacency on-change; no IS-IS adjacency MIB object is "
+                             "collected (only the isisSysAdminState marker, tracker 415) — "
                              "gNMI is the sole, priority source (gnmic.yaml ownership gate).",
     # --- IGP depth, frontend-wave #11 (telemetry-coverage-reference.md § F) ---
     # The SNMP profile polls NO ISIS-MIB object at all, so the whole IS-IS family
