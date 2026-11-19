@@ -1456,11 +1456,53 @@ transforms:
   # operator-only index and everything else to the normal per-lane stores.
   # STATIC on purpose: routes carry no secrets, so plaintext deployments are
   # unaffected (without the generated stage nothing ever matches the route).
+  # Tracker 410 (owner 2026-11-19): ROUTINE management-session records (the
+  # internal/logroutine class, ~92 % of stored syslog on a managed estate) are
+  # written to their own family, netops-syslogroutine-*, under a shorter ISM
+  # window (apply-ism.sh netops-syslogroutine-retention, >= 72 h per record);
+  # the api's routinerollup job keeps their per-minute counts for the full
+  # window. Being a route OUTPUT, a routine record does not reach
+  # `_unmatched`, so opensearch_syslog never stores it twice.
+  #
+  # The condition is the ADDRESS-FREE half of internal/logroutine.Clause —
+  # RulePoll and RuleSessionDetail, both inside management_audit, never with a
+  # failure word in event_type / audit_action. The two address rules
+  # (monitoring and controller sources) need the api's per-tenant address
+  # lists and stay read-time only: such a record stays in the main family and
+  # is still hidden at read time. Read-time Clause remains the ONE authority
+  # on what the Logs page hides, so a write-time misclassification can change
+  # a record's retention, never what an operator sees. Parity with the Go
+  # rule is pinned by internal/logroutine/static_test.go and the router's
+  # VRL unit tests over the SAME fixture (tests/fixtures/logroutine/static.json).
+  #
+  # SYSLOG_ROUTINE_SPLIT (default "on") is the kill switch: anything else and
+  # every syslog record goes to netops-syslog-* exactly as before. Interpolated
+  # when the config loads, so the switch costs nothing per event. A quarantine
+  # envelope is never routine (it carries no readable fields).
   syslog_store_route:
     type: route
     inputs: [syslog_rules]
     route:
       quarantine: 'to_bool(.cx_quarantine) ?? false'
+      routine: |-
+        "${SYSLOG_ROUTINE_SPLIT:-on}" == "on" &&
+        !(to_bool(.cx_quarantine) ?? false) &&
+        (to_string(.event_category) ?? "") == "management_audit" &&
+        {
+          et = to_string(.event_type) ?? ""
+          via = downcase(to_string(.audit_via) ?? "")
+          act = downcase(to_string(.audit_action) ?? "")
+          etl = downcase(et)
+          poll = via == "snmp" || starts_with(etl, "snmp_")
+          detail = includes(["audit_session_groups", "audit_session_terminated", "netconf_rpc",
+                             "netconf_notification", "ssh_session_opened", "ssh_session_closed"], et) ||
+                   starts_with(et, "netconf_action_")
+          failed = false
+          for_each(["fail", "deni", "reject", "refus", "invalid"]) -> |_i, w| {
+            if contains(etl, w) || contains(act, w) { failed = true }
+          }
+          (poll || detail) && !failed
+        }
   snmptrap_store_route:
     type: route
     inputs: [snmptrap_rules]
@@ -2168,6 +2210,49 @@ sinks:
       # replays on recovery. Pinned explicitly (these ARE Vector's defaults)
       # so that a future edit to `drop_newest` is a test failure
       # (tests/test_ingest_contract.py) instead of a silent return to s10.
+      type: memory
+      max_events: 500
+      when_full: block
+
+  # Tracker 410: routine management-session syslog → its own family, under its
+  # own ISM window (netops-syslogroutine-retention). Every setting mirrors
+  # opensearch_syslog for the SAME reasons, documented there: cx_event_id
+  # upserts on retry (F-18), request_retry_partial so a storage block delays
+  # instead of drops (#209), the bounded retry envelope, the 324 in-flight
+  # ceiling, and a memory buffer that blocks back onto the uncommitted Kafka
+  # offset. svc_router must hold netops-syslogroutine-* in netops_writer
+  # (roles.yml) BEFORE this sink receives anything — otherwise every batch
+  # 403s on indices:admin/create and is dropped (scripts/bootstrap-opensearch.sh
+  # --verify reports it). This sink counts toward the router's memory budget
+  # (tests/test_vector_sink_memory_budget.py).
+  opensearch_syslog_routine:
+    type: elasticsearch
+    inputs: [syslog_store_route.routine]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    healthcheck: false             # write-only identity: see opensearch_syslog
+    mode: bulk
+    id_key: cx_event_id
+    bulk:
+      index: "netops-syslogroutine-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    encoding:
+      except_fields: [topic, partition, offset, headers, source_type]
+    request_retry_partial: true
+    batch:
+      max_events: 500
+      max_bytes: 1048576
+    request:
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+      adaptive_concurrency:
+        max_concurrency_limit: 4
+    buffer:
       type: memory
       max_events: 500
       when_full: block

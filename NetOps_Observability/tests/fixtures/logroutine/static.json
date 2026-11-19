@@ -1,0 +1,22 @@
+{
+  "_comment": "Tracker 410: the write-time routine split, ONE fixture for both halves. internal/logroutine/static_test.go runs every case through logroutine.StaticRoutine (the Go twin of the address-free half of logroutine.Clause), and tests/test_syslog_routine_split.py generates a `vector test` suite from the SAME cases and runs it against the shipped router (syslog_store_route.routine vs ._unmatched). A case that disagrees between Go and VRL fails one of the two. `routine` is the expected write-time class; the address rules (monitoring / controller sources) are deliberately NOT applied at write time, so a controller's sshd login stays in the main family (and is still hidden at read time).",
+  "cases": [
+    {"name": "snmp poll by interface", "record": {"event_category": "management_audit", "event_type": "audit_session_opened", "audit_via": "snmp"}, "routine": true},
+    {"name": "snmp poll by interface, upper case", "record": {"event_category": "management_audit", "event_type": "audit_session_opened", "audit_via": "SNMP"}, "routine": true},
+    {"name": "snmp event type prefix", "record": {"event_category": "management_audit", "event_type": "snmp_get_request"}, "routine": true},
+    {"name": "netconf rpc in session", "record": {"event_category": "management_audit", "event_type": "netconf_rpc", "audit_via": "netconf"}, "routine": true},
+    {"name": "templated netconf action", "record": {"event_category": "management_audit", "event_type": "netconf_action_get-config"}, "routine": true},
+    {"name": "ssh session opened", "record": {"event_category": "management_audit", "event_type": "ssh_session_opened"}, "routine": true},
+    {"name": "confd session groups", "record": {"event_category": "management_audit", "event_type": "audit_session_groups"}, "routine": true},
+    {"name": "confd session terminated", "record": {"event_category": "management_audit", "event_type": "audit_session_terminated"}, "routine": true},
+    {"name": "controller sshd login needs the address rule", "record": {"event_category": "management_audit", "event_type": "ssh_login_accepted", "audit_source": "10.1.1.1:22"}, "routine": false},
+    {"name": "a person on the cli", "record": {"event_category": "management_audit", "event_type": "audit_session_opened", "audit_via": "cli"}, "routine": false},
+    {"name": "security category is never routine", "record": {"event_category": "security_audit", "event_type": "snmp_get_request", "audit_via": "snmp"}, "routine": false},
+    {"name": "no category", "record": {"event_type": "netconf_rpc"}, "routine": false},
+    {"name": "failure word in the event type", "record": {"event_category": "management_audit", "event_type": "snmp_auth_failure", "audit_via": "snmp"}, "routine": false},
+    {"name": "failure word in the action", "record": {"event_category": "management_audit", "event_type": "netconf_rpc", "audit_action": "Request Denied"}, "routine": false},
+    {"name": "rejected session", "record": {"event_category": "management_audit", "event_type": "ssh_session_opened", "audit_action": "rejected"}, "routine": false},
+    {"name": "event type match is exact (keyword terms)", "record": {"event_category": "management_audit", "event_type": "NETCONF_RPC"}, "routine": false},
+    {"name": "plain config change", "record": {"event_category": "config_change", "event_type": "config_committed", "audit_via": "cli"}, "routine": false}
+  ]
+}
