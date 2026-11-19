@@ -1015,12 +1015,17 @@ func (s *server) handleAIFeedbackStats(w http.ResponseWriter, r *http.Request) {
 	if !ok || !s.requireAIEntitlement(w, claims, aientitlement.Chat) {
 		return
 	}
+	sinceD, err := durationQuery(r, "since", 30*24*time.Hour)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err) // malformed is a 400 even with no store
+		return
+	}
 	if s.aiFeedback == nil {
 		writeJSON(w, http.StatusOK, ai.FeedbackStats{ByIntent: map[string]*ai.UpDownCounts{}})
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	since := int(durationQuery(r, "since", 30*24*time.Hour).Seconds())
+	since := int(sinceD.Seconds())
 	st, err := s.aiFeedback.Stats(r.Context(), tenant, cross, since)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

@@ -152,7 +152,11 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	since := durationQuery(r, "from", 24*time.Hour)
+	since, err := durationQuery(r, "from", 24*time.Hour)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	limit, errLimit := intQuery(r, "limit", 100, 1, 500)
 	if errLimit != nil {
 		writeError(w, http.StatusBadRequest, errLimit)

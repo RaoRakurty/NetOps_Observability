@@ -466,3 +466,14 @@ describe("the evidence card leads with one plain sentence", () => {
     expect(LANE_TITLE.dem).toBe("User experience");
   });
 });
+
+describe("feedFromHours (tracker 428)", () => {
+  it("asks the events feed for whole hours between 1h and 720h", async () => {
+    const { feedFromHours } = await import("./InvestigationLanes");
+    expect(feedFromHours(15)).toBe("1h");
+    expect(feedFromHours(360)).toBe("6h");
+    expect(feedFromHours(10080)).toBe("168h");
+    expect(feedFromHours(90 * 1440)).toBe("720h");
+    expect(feedFromHours(Number.NaN)).toBe("1h");
+  });
+});
