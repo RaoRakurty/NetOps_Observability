@@ -436,6 +436,13 @@ var skillStateFacets = map[string]map[string]bool{
 	// clock: NTP synchronization as the device reports it; offset_high is a
 	// synchronized clock more than 100 ms off its reference.
 	"clock": {"synced": true, "unsynced": true, "offset_high": true},
+	// ipsec_sa (tracker 420 (a)), per protected flow of the vpn area's IPsec SA
+	// read: active (both directions have an active ESP SA, no errors, traffic
+	// both ways), one_way (it has sent but never received, or the reverse —
+	// up and passing nothing back), errors (send/receive errors counted),
+	// inactive (a direction lists no ESP SA, or its status is not ACTIVE).
+	// Counters are cumulative since the SA came up.
+	"ipsec_sa": {"active": true, "one_way": true, "errors": true, "inactive": true},
 	// NetClaw ingestion Batch 2 (2026-11-13). These facets are declared by the
 	// WAN reads, not by the state battery (skillStateFacetTool says which):
 	//   overlay_ctl  the edge's OMP sessions to its controllers (control plane)
@@ -643,6 +650,17 @@ func stateConditionHuman(facet, value string) string {
 			return "the device's clock is synchronized but more than 100 ms off its reference"
 		default:
 			return "the device's clock is synchronized"
+		}
+	case "ipsec_sa":
+		switch value {
+		case "inactive":
+			return "an IPsec flow on the device has no active security association in one direction"
+		case "one_way":
+			return "an IPsec flow on the device has carried traffic in one direction only — up and passing nothing back"
+		case "errors":
+			return "an IPsec flow on the device has counted send or receive errors"
+		default:
+			return "every IPsec flow read on the device is active both ways"
 		}
 	case "overlay_ctl":
 		switch value {

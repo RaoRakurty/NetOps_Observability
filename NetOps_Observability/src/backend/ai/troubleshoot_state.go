@@ -64,7 +64,7 @@ const (
 // internal/protocoldiag, and a tool argument vocabulary that could drift with a
 // library is not a closed vocabulary. TestDeviceStateAreasMatchTheBattery in the
 // root package pins the two together.
-var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "upgrade", "logs"}
+var stateAreaOrder = []string{"interfaces", "igp", "bgp", "routes", "l2", "platform", "evpn", "redundancy", "vpn", "upgrade", "logs"}
 
 var stateAreas = func() map[string]bool {
 	m := make(map[string]bool, len(stateAreaOrder))
@@ -96,6 +96,8 @@ func stateRowCap(area string) int {
 		return MaxStateRowsL2
 	case "platform", "evpn", "redundancy", "upgrade":
 		return MaxStateRowsPlatform
+	case "vpn":
+		return MaxStateRowsBGP // one row per peer, like a BGP summary
 	case "logs":
 		return MaxStateRowsLogs
 	default:
@@ -129,6 +131,7 @@ const (
 //	platform    none      CPU/memory/environment/uptime take no subject.
 //	evpn        none      VTEP peers and VNIs of the whole switch.
 //	redundancy  none      every HSRP/VRRP group and LACP bundle on the device.
+//	vpn         optional  a peer address; used to NARROW the rendered SA rows.
 //	logs        none      the buffer read is bounded by a constant, not an arg.
 var stateTargetRules = map[string]stateTargetRule{
 	"interfaces": stateTargetOptional,
@@ -139,6 +142,7 @@ var stateTargetRules = map[string]stateTargetRule{
 	"platform":   stateTargetNone,
 	"evpn":       stateTargetNone,
 	"redundancy": stateTargetNone,
+	"vpn":        stateTargetOptional,
 	"upgrade":    stateTargetNone,
 	"logs":       stateTargetNone,
 }

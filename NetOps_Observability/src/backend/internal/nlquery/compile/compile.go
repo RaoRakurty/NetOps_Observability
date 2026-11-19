@@ -455,6 +455,16 @@ func (c Compiler) stateMetric(text string) ([]catalog.AliasHit, string) {
 
 var compareScratchRe = regexp.MustCompile(`\bcompare\b.*\b(?:with|to|vs|versus|against)\s+(yesterday|last week)\b|\b(?:vs\.?|versus)\s+(yesterday|last week)\b|\bthan (?:the same time )?(yesterday|last week)\b|\bcompare to (yesterday|last week)\b|\bchanged (?:the )?most\b.*\bsince (yesterday|last week)\b|\bcompare\b.*\b(this week)\b.*\b(last week)\b`)
 
+// seasonalNormRe is a question about a value's usual level for the time
+// (N-H6): "normal for this time of week", "usual for this time of day",
+// "typical for the time". Weekday names are deliberately not matched: a
+// weekday is a date to the time parser, and a time-of-day baseline must never
+// be worded as one.
+var seasonalNormRe = regexp.MustCompile(`\b(?:normal|usual|typical|expected)\s+for\s+(?:this|the)\s+time(?:\s+of\s+(?:the\s+)?(?:day|week))?\b`)
+
+// seasonalTimeRe is the "for this time of day / week" phrase itself.
+var seasonalTimeRe = regexp.MustCompile(`\bfor\s+(?:this|the)\s+time(?:\s+of\s+(?:the\s+)?(?:day|week))?\b`)
+
 // compareTargetRe is just the earlier window a comparison is made against.
 // ("changed most … since yesterday" compares against yesterday, too).
 var compareTargetRe = regexp.MustCompile(`\b(?:with|to|vs\.?|versus|against|than(?: the same time)?)\s+(?:yesterday|last week)\b|\bchanged (?:the )?most\b.*\b(since\s+(?:yesterday|last week))\b`)
@@ -462,9 +472,24 @@ var compareTargetRe = regexp.MustCompile(`\b(?:with|to|vs\.?|versus|against|than
 // compareFromScratch turns a metric question that compares against an
 // earlier window into compare_windows — the SAME window length shifted back.
 func (s *state) compareFromScratch(q *ast.AST) {
+	// "for this time of week / day" is answered by the seasonal reference
+	// (N-H6) every compare_windows and above_baseline answer carries; on an
+	// "unusual … for this time of week" question it is part of the baseline
+	// the predicate already reads, so it is explained, not left over.
+	s.e.re(seasonalTimeRe, s.text)
 	m := compareScratchRe.FindStringSubmatch(s.text)
 	if m == nil {
-		return
+		// "is cpu on edge-1 normal for this time of week": the current window
+		// against the same window a week ago, every row also set against its
+		// usual level for this time of week.
+		sn := seasonalNormRe.FindString(s.text)
+		if sn == "" {
+			return
+		}
+		if q.Type == ast.MetricFilter && q.Predicate != nil && q.Predicate.Op == "above_baseline" {
+			return // "unusual for this time of week" stays the baseline filter
+		}
+		m = []string{sn, "last week"}
 	}
 	s.e.phrase(m[0])
 	which := ""

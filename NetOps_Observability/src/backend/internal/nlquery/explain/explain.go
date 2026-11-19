@@ -90,7 +90,7 @@ func Explain(cat *catalog.Catalog, q *ast.AST, name Namer) Explanation {
 		add(FacetWindow, "Time window: "+win+".")
 	}
 	if q.CompareTo != nil {
-		add(FacetCompare, "Compared with: "+x.window(*q.CompareTo)+".")
+		add(FacetCompare, "Compared with: "+x.window(*q.CompareTo)+". Each result is also set against its usual level for this time of week (or of day, while fewer than 3 earlier weeks exist).")
 	}
 	add(FacetGrouping, x.grouping(q.Target, q.GroupBy))
 	add(FacetOrder, x.order(q.Target, q.OrderBy))
@@ -342,7 +342,9 @@ func (x explainer) condition(q *ast.AST) string {
 	case "between":
 		return fmt.Sprintf("Keeps only results where %s is between %s and %s.", m, num(p.Value, unit), num(p.Value2, unit))
 	case "above_baseline":
-		return fmt.Sprintf("Keeps only results where %s is above its usual level (the 95th percentile of the previous 7 days).", m)
+		// N-H6: the planner judges each result by the best baseline its
+		// history supports, and each row says which one it got.
+		return fmt.Sprintf("Keeps only results where %s is above its usual level: for this time of week when at least 3 earlier weeks exist, for this time of day when at least 5 earlier days do, otherwise the 95th percentile of the previous 7 days.", m)
 	case "increased_by":
 		return fmt.Sprintf("Keeps only results where %s rose by more than %s compared with the window just before.", m, num(p.Value, unit))
 	}
