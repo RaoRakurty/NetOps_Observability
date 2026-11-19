@@ -170,11 +170,14 @@ Production layout:
   happened.
 - **Every datastore states its retention**: CH TTLs (init.sql, with
   `ttl_only_drop_parts=1` so daily-partitioned expiry is a free part drop),
-  OpenSearch ISM (14d), VictoriaMetrics `-retentionPeriod=30d`, Kafka
-  broker-wide bounds `BUS_RETENTION_MS` (72h) + `BUS_RETENTION_BYTES`
-  (512MB) set via `.env` on the broker itself (per-topic overrides still
-  win), Prometheus `--storage.tsdb.retention`. A store without retention
-  is a future outage. The Kafka data dir is `data/kafka/` (uid 1000);
+  OpenSearch ISM (14d for the log families; routine management-session
+  originals in `netops-syslogroutine-*` 96 h, `OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS`),
+  VictoriaMetrics `-retentionPeriod=30d`, Kafka broker-wide bounds
+  `BUS_RETENTION_MS` (72h) + `BUS_RETENTION_BYTES` (512MB) set via `.env` on the
+  broker itself (per-topic overrides still win — never shrink them in a disk
+  crisis). Prometheus is not part of the stack (its image is used only as
+  `promtool` by `scripts/preflight-configs.sh`). A store without retention is a
+  future outage. The Kafka data dir is `data/kafka/` (uid 1000);
   `data/redpanda/` is legacy on upgraded installs and can be removed.
 
 ### 2.3 Watermarks and automation (defense in depth)
@@ -183,8 +186,11 @@ Production layout:
 |---|---|---|
 | stack-watchdog (1m cron) | disk ≥85% | ntfy phone alert (transition-edged) |
 | stack-watchdog | disk ≥90% | auto `docker builder prune` emergency valve |
+| host-hygiene.sh (10m cron) | disk ≥85% (`HYGIENE_TRIGGER_PCT`) | tier 1: `go clean -cache`, npm + pip caches, builder cache →2GB + dangling images, container json-logs >512 MB truncated, dev leftovers (golangci-lint docker cache, worktree caches, stale agent scratch) |
+| host-hygiene.sh | disk ≥92% (`HYGIENE_CRITICAL_PCT`) | tier 2: ALL builder cache, images unused by any container and older than 72h, anonymous volumes |
+| host-hygiene.sh | disk back under 90% (`HYGIENE_FLOOD_CLEAR_PCT`) | HEAL: clears OpenSearch `read_only_allow_delete` blocks a full disk left behind, and alerts |
 | docker-hygiene.sh (weekly cron) | always | builder cache →2GB, unused images >1wk, anonymous volumes |
-| OpenSearch | 95% flood stage | **indices go read-only silently** — the cliff all of the above exists to prevent; recovery: free disk, then `PUT netops-*/_settings {"index.blocks.read_only_allow_delete": null}` |
+| OpenSearch | 95% flood stage | **indices go read-only** (vmalert `OpenSearchFloodStageBlock` fires) — the cliff all of the above exists to prevent; recovery: free disk, then host-hygiene's HEAL clears the blocks, or by hand `PUT netops-*/_settings {"index.blocks.read_only_allow_delete": null}` |
 
 Install the weekly hygiene cron (one-liner, also in the script header):
 

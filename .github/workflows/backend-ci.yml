@@ -1,10 +1,11 @@
 name: backend-ci
 
 # Security + correctness gate for the Go API (CLAUDE.md §12). Blocking jobs must
-# stay green to merge. The crypto/trust code (tlsconfig, internalca) is held to a
-# stricter bar than the rest of the tree: staticcheck + gosec are MERGE-BLOCKING
-# for those packages, and run repo-wide as non-blocking triage until the existing
-# backlog is burned down (then flip `full-lint` to blocking).
+# stay green to merge. The crypto/trust code (tlsconfig, internalca, sealing) is
+# held to a stricter bar: standalone staticcheck + gosec are MERGE-BLOCKING for
+# those packages, and repo-wide golangci-lint (`full-lint`, which bundles
+# staticcheck + gosec) has been BLOCKING since the backlog reached zero
+# (2026-06-04).
 #
 # Go is pinned to a patched toolchain (go1.26.11): govulncheck flagged a batch of
 # stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same

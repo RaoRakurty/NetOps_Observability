@@ -12,12 +12,17 @@ instructions in `README.txt` (plain text), plus `OPERATIONS.md`,
 
 ## 1. What you need
 
-| | Evaluation | Production (recommended) |
+| | Evaluation (`demo` profile) | Smallest production (`small`, ≤200 devices) |
 |---|---|---|
-| CPU | 2 vCPU | 4 vCPU |
-| RAM | 8 GB | 16 GB |
-| Disk | 40 GB | 100 GB+ |
+| CPU | 2 vCPU minimum, 4 recommended | 8 vCPU |
+| RAM | 8 GB (anything under 24 GB is sized as evaluation) | 32 GB |
+| Disk | 40 GB free, 100 GB recommended | ~1.5 TB SSD at default retention |
 | OS | Ubuntu 22.04+ / Debian 12, x86_64 | same |
+
+Larger estates (medium / large) and how the profile is picked from the host's
+RAM are in `docs/DEPLOY_LINUX.md` §1 and `docs/RESOURCE_SIZING.md`
+(`scripts/resource_planner.py` is the single source of truth: <24 GiB → demo,
+<48 → small, <96 → medium, else large).
 
 You need `sudo` on that server. You do **not** need Docker beforehand —
 `prepare-host.sh` installs it.

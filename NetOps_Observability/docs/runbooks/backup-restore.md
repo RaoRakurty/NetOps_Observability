@@ -40,9 +40,18 @@ Registered by `opensearch-init` at install: a filesystem snapshot repository
   RPO (up to 7 days lost vs 1). If space is tight, lower `OPENSEARCH_SNAPSHOT_KEEP`,
   don't reduce frequency.
 - **Verify:**
+  OpenSearch's 9200 is not published on the host, and a TLS install needs the
+  admin client certificate. Query it from a throwaway container on the stack's
+  network (from the project root):
   ```
-  curl -s localhost:9200/_snapshot/netops-fs/_all | jq '.snapshots[-1] | {snapshot,state,end}'
+  docker run --rm --user "$(id -u):$(id -g)" --network netops_netops \
+    -v "$PWD/data/tls/admin:/certs:ro" curlimages/curl:8.10.1 -sS \
+    --cacert /certs/ca.pem --cert /certs/admin.crt --key /certs/admin.key \
+    "https://opensearch:9200/_snapshot/netops-fs/_all" \
+    | jq '.snapshots[-1] | {snapshot,state,end}'
   ```
+  (On the plaintext baseline: the same container with `http://opensearch:9200`
+  and no certificate flags.)
   The `netops-fs` repository dir MUST be writable by uid 1000 (the opensearch
   user). If registration fails with `access_denied`, chown it:
   ```
