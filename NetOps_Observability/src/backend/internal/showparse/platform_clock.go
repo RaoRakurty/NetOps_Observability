@@ -95,6 +95,13 @@ func parseIOSXENTPStatus(lines []string) Result {
 			}
 		}
 	}
+	// An unsynchronized clock has no reference to be offset FROM: IOS-XE still
+	// prints "clock offset is 0.0000 msec" (captured, cEdge 17.3.2,
+	// 2026-11-19), which is not a measurement. Reporting it would read as
+	// "offset 0 ms — fine"; the offset is kept only for a synchronized clock.
+	if ph.ClockSynced != nil && !*ph.ClockSynced {
+		ph.ClockOffsetMs = nil
+	}
 	if !found {
 		return res
 	}

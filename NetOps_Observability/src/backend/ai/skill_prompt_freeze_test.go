@@ -108,7 +108,7 @@ var frozenCompiledPrompts = map[string]string{
 	"interface-down":     "96436f11aba529fb5d8a0868f2af84ae47c56c4cc2dc919b1abb74fe8f5a179c",
 	"l3-reachability":    "78b4cfc9b2d0c3ac91477183751d71da32d974db4c8a054499ff875a7d93cb30",
 	"sdwan-overlay":      "74bb99497a7bc0d54ec34b9a0ba9467ce5498028581b173a197da4882b5b1984",
-	"tunnel-vpn":         "26662dd45178388787a70f67ad4928870fc0394202d4bd350dabdecc8c39341b",
+	"tunnel-vpn":         "5f5caee7370b7402372e82fd5ff1d5aed2b96cbf75b36b6d6bb23724c45e0ab6",
 	"isis-adjacency":     "5e02ba9d2675f8db9b14eecaa06b8836726707fd3192e7c10bf2310bd28d88ac",
 	"log-confirmation":   "81e1b3fdaef74db289ffb7704b324c6be4f796d4b5f5bf48288799db50311cc3",
 	"mac-flap":           "d024d3d407bdf4cbffe7fd0358aea232290a65fb777c962dddd47b5b5d7b61e7",

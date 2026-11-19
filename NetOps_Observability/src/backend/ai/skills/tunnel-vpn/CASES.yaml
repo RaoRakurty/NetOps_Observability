@@ -107,3 +107,56 @@ expect_notes:
 expect_never:
   - sdwan-overlay
   - l3-reachability
+
+---
+
+case: an IPsec flow with no active SA in one direction sends the investigation to the device's negotiation messages
+question: ipsec tunnel to the hub not passing traffic on edge-1
+ui:
+  - correlation_id=case-tun-sa-inactive
+  - device=edge-1
+signals:
+  - state:tunnel=up
+  - state:tunnel_type=ipsec
+  - state:if_oper=up
+  - state:ipsec_sa=inactive
+evidence:
+  - finding
+expect_chain:
+  - tunnel-vpn entry
+  - log-confirmation rule
+expect_selected: rule
+expect_reason: no active SA in one direction
+expect_verdict:
+  - first and last occurrence
+expect_never:
+  - sdwan-overlay
+  - interface-down
+expect_select: tunnel-vpn
+
+---
+
+case: an IPsec flow that sent but never received sends the investigation to far-end reachability
+question: vpn up but nothing coming back on edge-1
+ui:
+  - correlation_id=case-tun-sa-oneway
+  - device=edge-1
+signals:
+  - state:tunnel=up
+  - state:tunnel_type=ipsec
+  - state:if_oper=up
+  - state:ipsec_sa=one_way
+evidence:
+  - finding
+expect_chain:
+  - tunnel-vpn entry
+  - l3-reachability rule
+expect_selected: rule
+expect_reason: sent traffic but never received any back
+expect_verdict:
+  - next hop
+expect_never:
+  - sdwan-overlay
+  - interface-down
+expect_select: tunnel-vpn
+
