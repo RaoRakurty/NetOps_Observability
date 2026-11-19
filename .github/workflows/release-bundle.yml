@@ -110,6 +110,12 @@ jobs:
       # package is the tagged commit itself, not a branch head that happens to be
       # close to it. Refuses when HEAD is not an exact tag, or carries a different
       # tag than the ref that triggered the run.
+      - name: Docker Hub login (authenticated pulls; optional)
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Confirm the build commit is the tag
         if: startsWith(github.ref, 'refs/tags/')
         env:
