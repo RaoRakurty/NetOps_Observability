@@ -317,8 +317,11 @@ def test_the_real_pins_are_well_formed_and_https():
     tracker_387 = {"VIPTELA-GLOBAL", "VIPTELA-TRAPS", "CISCO-SDWAN-BFD-MIB", "CISCO-SDWAN-OMP-MIB",
                    "CISCO-SDWAN-SECURITY-MIB", "BFD-STD-MIB", "BFD-TC-STD-MIB", "IANA-BFD-TC-STD-MIB",
                    "DIFFSERV-MIB", "DIFFSERV-DSCP-TC", "INTEGRATED-SERVICES-MIB"}
+    # 2026-11-19 (tracker 415): OSPFV3-MIB and the OSPF-MIB it imports, IETF
+    # Code Components, same LibreNMS commit as tracker 377.
+    tracker_415 = {"OSPF-MIB", "OSPFV3-MIB"}
     assert set(gen.FETCH_PINS) == {"ARISTA-SMI-MIB", "ARISTA-BRIDGE-EXT-MIB", "CISCO-BGP4-MIB", "CISCO-SMI",
-                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"} | tracker_377 | tracker_387, (
+                                   "BGP4-MIB", "INET-ADDRESS-MIB", "SNMP-FRAMEWORK-MIB"} | tracker_377 | tracker_387 | tracker_415, (
         "the fetch table is the licence boundary — adding to it is a licence "
         "decision, so it is pinned here deliberately")
     for mod, pin in gen.FETCH_PINS.items():
@@ -404,7 +407,7 @@ def test_every_tracker_387_url_names_a_commit_not_a_branch():
 def test_the_sources_file_lists_every_pin_it_owes():
     with open(os.path.join(gen.VENDORED, "SOURCES.md"), encoding="utf-8") as fh:
         text = fh.read()
-    for mod in ("VIPTELA-TRAPS", "CISCO-SDWAN-SECURITY-MIB", "BFD-STD-MIB"):
+    for mod in ("VIPTELA-TRAPS", "CISCO-SDWAN-SECURITY-MIB", "BFD-STD-MIB", "OSPFV3-MIB", "OSPF-MIB"):
         assert gen.FETCH_PINS[mod]["sha256"] in text, mod
         assert gen.FETCH_PINS[mod]["urls"][0] in text, mod
 
