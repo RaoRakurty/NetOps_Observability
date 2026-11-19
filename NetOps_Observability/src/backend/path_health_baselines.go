@@ -54,9 +54,13 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/seriesroll"
+	"netops/backend/models"
 	"netops/backend/pathgraph"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -441,4 +445,166 @@ func trimRightSlash(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// ── Seasonal roll-up (tracker 337 N-H6 PR 2) ─────────────────────────────────
+//
+// The second baseline precompute in this file, for the same reason the first
+// lives here: a background job with no caller (FEATURE_SEASONAL_ROLLUP). Once
+// per closed hour it reads each eligible metric's p10/p50/p90 and count from
+// VictoriaMetrics — fleet-wide, because there is no principal — and writes
+// netops.series_hourly with EVERY row stamped by its device's inventory owner:
+// an unowned or ambiguous device is skipped and counted, never written
+// untagged (the table's row policy is STRICT). internal/seriesroll owns the
+// bounds and counters; this is only its VictoriaMetrics, ClickHouse and
+// inventory adapters.
+
+// seasonalRollMetrics are the device-owned catalog metrics whose series the
+// roll-up keeps. Each expression and its key labels are the planner's own
+// template for that metric (internal/nlquery/plan/templates.go), so a stored
+// row's entity key is the key the seasonal reference looks up. Probe series
+// (keyed by destination, no device) and the workspace check series (tenant
+// labelled) have no device owner and are not rolled up.
+func seasonalRollMetrics() []seriesroll.Metric {
+	dev := []string{"device"}
+	ifl := []string{"device", "ifName"}
+	cir := []string{"circuit", "local_device"}
+	return []seriesroll.Metric{
+		{Name: "cpu_util_pct", Expr: "avg by (device) (device_cpu_percent)", Labels: dev},
+		{Name: "mem_util_pct", Expr: "device_mem_percent", Labels: dev},
+		{Name: "if_in_bps", Expr: "rate(device_if_in_octets[5m]) * 8", Labels: ifl},
+		{Name: "if_out_bps", Expr: "rate(device_if_out_octets[5m]) * 8", Labels: ifl},
+		{Name: "if_in_errors", Expr: "rate(device_if_in_errors[5m])", Labels: ifl},
+		{Name: "if_out_errors", Expr: "rate(device_if_out_errors[5m])", Labels: ifl},
+		{Name: "if_in_discards", Expr: "rate(device_if_in_discards[5m])", Labels: ifl},
+		{Name: "if_out_discards", Expr: "rate(device_if_out_discards[5m])", Labels: ifl},
+		{Name: "circuit_loss_pct", Expr: "circuit_loss_pct", Labels: cir},
+		{Name: "circuit_latency_ms", Expr: "circuit_latency_ms", Labels: cir},
+		{Name: "circuit_jitter_ms", Expr: "circuit_jitter_ms", Labels: cir},
+		{Name: "circuit_qoe", Expr: "circuit_qoe", Labels: cir},
+	}
+}
+
+// seasonalRollVM is the roll-up's VictoriaMetrics read: the platform's unscoped
+// door (this file is on vmUnscopedAllowlist for exactly this job).
+type seasonalRollVM struct{ s *server }
+
+func (v seasonalRollVM) Query(ctx context.Context, query string) ([]seriesroll.Sample, error) {
+	samples, err := v.s.vmInstantUnscoped(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]seriesroll.Sample, len(samples))
+	for i, sm := range samples {
+		out[i] = seriesroll.Sample{Labels: sm.Labels, Value: sm.Value}
+	}
+	return out, nil
+}
+
+// seasonalRollStore writes one hour's rows (ReplacingMergeTree(version): a re-roll
+// of the hour replaces).
+type seasonalRollStore struct{}
+
+func (seasonalRollStore) Insert(ctx context.Context, rows []seriesroll.Row) error {
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, map[string]any{
+			"tenant_id": r.Tenant, "metric": r.Metric, "entity_key": r.EntityKey, "hour": r.Hour.Unix(),
+			"p10": r.P10, "p50": r.P50, "p90": r.P90, "n": r.N, "version": r.Version,
+		})
+	}
+	body, err := jsonEachRow("netops.series_hourly", out)
+	if err != nil {
+		return err
+	}
+	return chWorkerExec(ctx, body)
+}
+
+// seasonalRollOwners answers a series' device label with the device's inventory
+// owner, from a snapshot refreshed at most every seasonalRollOwnersTTL. A label
+// that names devices of TWO different owners (the same name in two tenants)
+// is ambiguous and owned by nobody — the series is skipped, never guessed.
+type seasonalRollOwners struct {
+	s     *server
+	mu    sync.Mutex
+	at    time.Time
+	owner map[string]string
+}
+
+const seasonalRollOwnersTTL = 5 * time.Minute
+
+func newSeasonalRollOwners(s *server) *seasonalRollOwners { return &seasonalRollOwners{s: s} }
+
+func (o *seasonalRollOwners) Owner(device string) (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.owner == nil || time.Since(o.at) > seasonalRollOwnersTTL {
+		o.owner = seasonalRollOwnerIndex(o.s.discovery.Devices())
+		o.at = time.Now()
+	}
+	t, ok := o.owner[device]
+	return t, ok && t != ""
+}
+
+// seasonalRollOwnerIndex maps each device id and name to its owner tenant; a key
+// two owners share maps to "" (ambiguous).
+func seasonalRollOwnerIndex(devs []models.Device) map[string]string {
+	idx := map[string]string{}
+	put := func(k, t string) {
+		if k == "" {
+			return
+		}
+		if prev, seen := idx[k]; seen && prev != t {
+			idx[k] = ""
+			return
+		}
+		idx[k] = t
+	}
+	for _, d := range devs {
+		t := deviceTenant(d)
+		put(d.ID, t)
+		put(strings.TrimSpace(d.Name), t)
+	}
+	return idx
+}
+
+// startSeasonalRollup wires the roll-up (FEATURE_SEASONAL_ROLLUP).
+func (s *server) startSeasonalRollup(ctx context.Context) {
+	if envOr("CLICKHOUSE_URL", "") == "" {
+		log.Printf("seasonal-rollup: FEATURE_SEASONAL_ROLLUP set but CLICKHOUSE_URL is empty — roll-up not started")
+		return
+	}
+	roller, err := seriesroll.New(seriesroll.Config{Metrics: seasonalRollMetrics()}, seasonalRollVM{s}, seasonalRollStore{}, newSeasonalRollOwners(s))
+	if err != nil {
+		log.Printf("seasonal-rollup: not started: %v", err)
+		return
+	}
+	s.seasonalRoll.Store(roller)
+	interval := envDurationSeconds("SEASONAL_ROLLUP_INTERVAL", 900)
+	logInfo("seasonal-rollup", "hourly metric roll-up enabled", map[string]any{"interval": interval.String(), "metrics": len(seasonalRollMetrics())})
+	go roller.Run(ctx, interval, func(err error) {
+		logWarn("seasonal-rollup", "hour not written", map[string]any{"error": err.Error()})
+	})
+}
+
+// writeSeasonalRollupMetrics exposes the roll-up's counters on /metrics (§10:
+// every skip and failure is observable).
+func (s *server) writeSeasonalRollupMetrics(w io.Writer) {
+	r := s.seasonalRoll.Load()
+	if r == nil {
+		return
+	}
+	for _, m := range []struct {
+		name, help string
+		v          int64
+	}{
+		{"netops_seasonal_rollup_hours_total", "Hours the seasonal roll-up wrote.", r.Stats.Hours.Load()},
+		{"netops_seasonal_rollup_rows_total", "Rows the seasonal roll-up wrote.", r.Stats.Rows.Load()},
+		{"netops_seasonal_rollup_unowned_total", "Series skipped because their device has no (or an ambiguous) inventory owner.", r.Stats.Unowned.Load()},
+		{"netops_seasonal_rollup_cap_dropped_total", "Series dropped past the per-hour series cap.", r.Stats.CapDropped.Load()},
+		{"netops_seasonal_rollup_vm_errors_total", "Metric reads that failed (that metric skipped for the hour).", r.Stats.VMErrors.Load()},
+		{"netops_seasonal_rollup_store_errors_total", "Hour writes to ClickHouse that failed.", r.Stats.StoreErrors.Load()},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", m.name, m.help, m.name, m.name, m.v)
+	}
 }

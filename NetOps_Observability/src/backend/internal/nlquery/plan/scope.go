@@ -86,6 +86,15 @@ type MaintenanceScope interface {
 	MaintenanceCoverer(ctx context.Context) (func(device string, at time.Time) bool, error)
 }
 
+// SeasonalStore is an optional Scope (tracker 337 N-H6 PR 2): the hourly
+// roll-up (netops.series_hourly) the seasonal reference falls back to when the
+// metric store no longer holds an earlier week. It returns, for the caller's
+// OWN series only, each entity key's hourly median (p50) at each requested
+// hour (unix seconds). An entity or hour with no row is simply absent.
+type SeasonalStore interface {
+	SeasonalHours(ctx context.Context, metric string, keys []string, hours []time.Time) (map[string]map[int64]float64, error)
+}
+
 // TenantLabeledScope is the OPTIONAL Scope seam for catalog "tenant_labeled"
 // metrics (tracker 337 N-B5): series the owning workspace's prober stamps with
 // a `tenant` label and no device label — the Digital Experience checks. The

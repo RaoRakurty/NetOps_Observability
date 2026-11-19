@@ -205,6 +205,7 @@ FLAG_NOTES = {
     "FEATURE_PACKET_CAPTURE": "Run bounded on-device packet captures.",
     "FEATURE_PAGERDUTY_NOTIFICATIONS": "Page through PagerDuty.",
     "FEATURE_PATH_BASELINES": "Baseline path latency and loss.",
+    "FEATURE_SEASONAL_ROLLUP": "Keep nine weeks of hourly metric summaries for Iris seasonal baselines.",
     "FEATURE_PATH_GRAPH": "Resolve hop-by-hop path graphs.",
     "FEATURE_PORT_DOM": "Read optical transceiver diagnostics.",
     "FEATURE_PROCESSORS": "Expose the ingest processor admin surface.",
