@@ -149,6 +149,12 @@ const (
 	// Batch 3). Raw evidence only until real output is captured.
 	CmdFHRPBrief   = "fhrp-brief"
 	CmdLACPMembers = "lacp-members"
+	// CmdIPsecSA is the IPsec security-association read and CmdIKESA the IKE
+	// (phase 1) read (tracker 420 (a)). The IOS-XE IPsec parser is built from
+	// real captured output; IKE has no parser (no lab device runs IKE — the
+	// SD-WAN edges key through the controllers), so its output is raw evidence.
+	CmdIPsecSA = "ipsec-sa"
+	CmdIKESA   = "ike-sa"
 	// CmdUpgradeVersion is the software version and boot image read of an
 	// upgrade-readiness check — the same `show version` as CmdPlatformUptime,
 	// carried in the upgrade area so one state read answers every readiness
@@ -176,6 +182,7 @@ func Commands() []string {
 		CmdPlatformCPU, CmdPlatformMemory, CmdPlatformEnv, CmdPlatformUptime,
 		CmdPlatformClock,
 		CmdEVPNPeers, CmdEVPNVNI, CmdFHRPBrief, CmdLACPMembers,
+		CmdIPsecSA, CmdIKESA,
 		CmdUpgradeVersion, CmdBootVars, CmdFileSystem, CmdRedundancy, CmdRouteSummary,
 		CmdLogs,
 	}
@@ -230,6 +237,8 @@ type Result struct {
 	Upgrade *UpgradeFacts
 	// RouteSummary is nil unless a route-summary parser populated it.
 	RouteSummary *RouteSummary
+	// IPsecSAs are the protected flows of an IPsec SA read.
+	IPsecSAs []IPsecSA
 }
 
 // maxGaps bounds how many parse gaps one Result carries (§9 — every list is
@@ -255,7 +264,7 @@ func (r *Result) addGap(note string) {
 // Rows reports how many typed rows of any kind the result carries.
 func (r Result) Rows() int {
 	n := len(r.Interfaces) + len(r.IGPNeighbors) + len(r.BGPPeers) +
-		len(r.Routes) + len(r.ARP) + len(r.MAC) + len(r.Logs)
+		len(r.Routes) + len(r.ARP) + len(r.MAC) + len(r.Logs) + len(r.IPsecSAs)
 	if r.Platform != nil {
 		n++
 	}
@@ -299,6 +308,7 @@ func NewLibrary() *Library {
 	registerL2Parsers(l)
 	registerPlatformParsers(l)
 	registerClockParsers(l)
+	registerIPsecParsers(l)
 	registerUpgradeParsers(l)
 	registerLogParsers(l)
 	return l

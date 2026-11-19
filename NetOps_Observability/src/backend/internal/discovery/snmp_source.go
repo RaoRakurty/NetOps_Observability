@@ -776,10 +776,28 @@ feed:
 		cancelled = true // cancelled after the last address was handed out: probes were cut short
 	}
 
+	// ORPHANS: a remembered device whose owner still runs discovery, but whose
+	// address no turned-on scope of that owner covers any more (the range was
+	// narrowed, or moved to another owner's scope). Out of range, it would
+	// otherwise accrue nothing and be reported as live forever. A tenant with a
+	// refused scope this poll is skipped — its ranges are not known, so its
+	// devices are not provably uncovered.
+	refusedBy := map[string]bool{}
+	for _, r := range runs {
+		if r.err != nil {
+			refusedBy[r.scope.TenantID] = true
+		}
+	}
 	s.mu.Lock()
+	orphaned := map[FoundKey]bool{}
+	for k := range s.found {
+		if !inRange[k] && reportedTenant(s.reported, k.TenantID) && !refusedBy[k.TenantID] {
+			orphaned[k] = true
+		}
+	}
 	s.applyAnswersLocked(answers, now)
 	if !cancelled {
-		s.ageLocked(answers, inRange, now)
+		s.ageLocked(answers, inRange, orphaned, now)
 		for _, r := range runs {
 			if st, ok := s.scopes[r.scope.ID]; ok && r.err == nil {
 				st.lastSweep = now
@@ -915,14 +933,18 @@ func (s *SNMPSource) applyAnswersLocked(answers map[FoundKey]probeAnswer, now ti
 // past pruneAfterStale are pruned — but only when the sweep had at least one
 // answer IN THAT DEVICE'S PARTITION (one customer's all-silent scan is that
 // customer's outage, whatever the other scopes heard). Out-of-range devices
-// were not measured and accrue nothing. Caller holds mu.
-func (s *SNMPSource) ageLocked(answers map[FoundKey]probeAnswer, inRange map[FoundKey]bool, now time.Time) {
+// were not measured and accrue nothing — EXCEPT orphans (no turned-on scope of
+// their owner covers them any more): they accrue a miss per completed sweep and
+// are pruned once stale for pruneAfterStale without the all-silent guard, which
+// protects an OUTAGE, and an uncovered address has no sweep to be silent in.
+// Caller holds mu.
+func (s *SNMPSource) ageLocked(answers map[FoundKey]probeAnswer, inRange, orphaned map[FoundKey]bool, now time.Time) {
 	answeredIn := map[string]int{}
 	for k := range answers {
 		answeredIn[k.TenantID]++
 	}
 	for k, e := range s.found {
-		if _, ok := answers[k]; ok || !inRange[k] {
+		if _, ok := answers[k]; ok || (!inRange[k] && !orphaned[k]) {
 			continue
 		}
 		e.misses++
@@ -935,7 +957,7 @@ func (s *SNMPSource) ageLocked(answers map[FoundKey]probeAnswer, inRange map[Fou
 		if e.staleSince.IsZero() || now.Sub(e.staleSince) < pruneAfterStale {
 			continue
 		}
-		if answeredIn[k.TenantID] == 0 {
+		if answeredIn[k.TenantID] == 0 && !orphaned[k] {
 			continue // an all-silent partition prunes nothing
 		}
 		delete(s.found, k)
@@ -1126,4 +1148,10 @@ func (s *SNMPSource) snapshot() []models.Device {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.snapshotLocked()
+}
+
+// reportedTenant reports whether the tenant's partition has a turned-on scope
+// this poll (reported nil = the restore at Start, when every partition counts).
+func reportedTenant(reported map[string]bool, tenant string) bool {
+	return reported == nil || reported[tenant]
 }

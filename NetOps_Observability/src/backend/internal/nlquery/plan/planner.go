@@ -484,7 +484,18 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 			rs.Series = append(rs.Series, OutSeries{Entity: entityOf(t.labels, s.Labels), Points: s.Points})
 		}
 		rs.Truncated = trunc
-	case ast.MetricTopK, ast.MetricFilter:
+	case ast.MetricFilter:
+		if q.Predicate != nil && q.Predicate.Op == "above_baseline" {
+			// N-H6: judged per entity against its seasonal profile, the
+			// flat 7-day p95 standing in where history is too short.
+			if err := p.aboveBaseline(ctx, sc, q, t, c, res, rs, step, m.Unit); err != nil {
+				return err
+			}
+			res.nameChecks(rs)
+			return p.applyGrouping(ctx, sc, q, rs)
+		}
+		fallthrough
+	case ast.MetricTopK:
 		e, err := aggregate(t, c, q.Agg, step)
 		if err != nil {
 			return err
@@ -508,7 +519,7 @@ func (p Planner) metric(ctx context.Context, sc Scope, q *ast.AST, rs *ResultSet
 		rs.Rows, rs.Truncated = samplesToRows(t.labels, samples, res, "value"), trunc
 		sortRows(rs.Rows, "value", q.Type == ast.MetricTopK || orderDesc(q))
 	case ast.CompareWindows:
-		if err := p.compare(ctx, sc, q, t, c, res, rs, step); err != nil {
+		if err := p.compare(ctx, sc, q, t, c, res, rs, step, m.Unit); err != nil {
 			return err
 		}
 		res.nameChecks(rs)
@@ -564,7 +575,7 @@ func (p Planner) predicate(t template, c tctx, e mql.Expr, pr *ast.Predicate, st
 // compare evaluates the SAME windowed value at the end of each window and
 // ranks entities by the absolute change — computed here, from two scoped
 // instant reads, so the delta is exactly what the two windows show.
-func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, c tctx, res resolved, rs *ResultSet, step time.Duration) error {
+func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, c tctx, res resolved, rs *ResultSet, step time.Duration, unit string) error {
 	e, err := aggregate(t, c, q.Agg, step)
 	if err != nil {
 		return err
@@ -588,6 +599,8 @@ func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, 
 	for _, s := range then {
 		prev[entityKey(t.labels, s.Labels)] = s.Value
 	}
+	var keys []string
+	keyLabels := map[string]map[string]string{}
 	for _, s := range now {
 		if !res.keep(s.Labels) {
 			continue
@@ -597,11 +610,25 @@ func (p Planner) compare(ctx context.Context, sc Scope, q *ast.AST, t template, 
 			row[k] = v
 		}
 		row["value"] = s.Value
-		if pv, ok := prev[entityKey(t.labels, s.Labels)]; ok {
+		k := entityKey(t.labels, s.Labels)
+		if pv, ok := prev[k]; ok {
 			row["previous"] = pv
 			row["delta"] = s.Value - pv
 		}
 		rs.Rows = append(rs.Rows, row)
+		keys, keyLabels[k] = append(keys, k), s.Labels
+	}
+	// N-H6: each row also says how its value sits against its usual level
+	// for this time of week (or day) — the same windowed value read at the
+	// same hour in earlier weeks and days, through the same scoped reads.
+	if len(keys) > 0 {
+		prof, err := seasonalProfiles(ctx, sc, q.Metric, t, e, rs.Window.To, c.win, unit, keyLabels, rs)
+		if err != nil {
+			return err
+		}
+		if note := seasonalNote(annotateSeasonal(rs.Rows, keys, prof), ""); note != "" {
+			rs.Notes = append(rs.Notes, note)
+		}
 	}
 	sort.SliceStable(rs.Rows, func(i, j int) bool { return absDelta(rs.Rows[i]) > absDelta(rs.Rows[j]) })
 	if n := q.LimitOr(10); len(rs.Rows) > n {
