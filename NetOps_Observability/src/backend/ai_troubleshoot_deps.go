@@ -373,9 +373,10 @@ func (s *server) aiDeviceFacts(claims jwtClaims) func(context.Context, ai.Princi
 				break
 			}
 		}
+		pe := s.aiProtocolEvidence(tctx, dev, s.metricsScopeFiltersFor(claims))
 		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID],
-			protoNeighbors: s.aiProtocolNeighbors(tctx, dev, s.metricsScopeFiltersFor(claims)),
-			lanes:          s.aiLanePresence(tctx, claims, dev)}
+			protoNeighbors: pe.neighbors, protoNeighborsRead: pe.neighborsRead, protoAdmin: pe.admin, bgpLocalAS: pe.bgpLocalAS,
+			lanes: s.aiLanePresence(tctx, claims, dev)}
 		if snap := s.sdwanOverlay.Load(); snap != nil {
 			in.overlayRead = true
 			if f, ok := snap.devFacts[dev.ID]; ok {
@@ -400,6 +401,17 @@ type deviceFactInputs struct {
 	// NOT an absence — a walk of an unimplemented MIB and an empty table look
 	// the same (tracker 415).
 	protoNeighbors map[string]bool
+	// protoNeighborsRead: proto → the neighbour read for this device ANSWERED
+	// (rows or none). Only with it does "no rows" count toward an absence.
+	protoNeighborsRead map[string]bool
+	// protoAdmin: "ospf" / "ospfv3" / "isis" → the protocol's fresh admin-state
+	// scalar (ospfAdminStat / ospfv3AdminStatus: enabled(1) disabled(2);
+	// isisSysAdminState: on(1) off(2)). Absent key = the device did not answer
+	// the GET, or the marker is stale — unknown, never "off".
+	protoAdmin map[string]int
+	// bgpLocalAS: the device reports a non-zero bgpLocalAs — a BGP process
+	// exists. Seen only: "0 means no BGP" is vendor convention, not RFC 4273.
+	bgpLocalAS bool
 	// lanes: "syslog" / "trap" / "flow" → the device was seen sending on that
 	// lane within lanepresence.Window. Seen only (tracker 415 (c)).
 	lanes map[string]bool
@@ -505,13 +517,32 @@ var aiFactNeighborSeries = [...][2]string{
 	{"bgp", "device_bgp_peer_state"},
 }
 
-// aiProtocolNeighbors reads, at the caller's boundary (filters = the caller's
-// extra_filters[]; never nil for a scoped principal), whether ONE device
-// reports neighbour rows per protocol in the last 15 minutes. The device is
-// matched by id or name (the gNMI lanes label by target name); an identity
-// that is not a plain token is left out rather than escaped. A failed read
-// leaves the protocol unseen (unknown), never absent.
-func (s *server) aiProtocolNeighbors(ctx context.Context, dev models.Device, filters []string) map[string]bool {
+// protoEvidence is what one device's own protocol series say (tracker 415).
+type protoEvidence struct {
+	neighbors     map[string]bool // proto → at least one neighbour row
+	neighborsRead map[string]bool // proto → the neighbour read answered
+	admin         map[string]int  // "ospf" / "ospfv3" / "isis" → 1 enabled, 2 disabled
+	bgpLocalAS    bool            // bgpLocalAs > 0
+}
+
+// aiFactAdminSeries are the admin-state scalars (generic SNMP profile, one GET
+// each): only a GET that answers proves the MIB is instantiated, so these are
+// what can establish "the protocol is off here".
+var aiFactAdminSeries = [...][2]string{
+	{"ospf", "device_ospf_admin_state"},
+	{"ospfv3", "device_ospfv3_admin_state"},
+	{"isis", "device_isis_admin_state"},
+	{"bgpas", "device_bgp_local_as"},
+}
+
+// aiProtocolEvidence reads, at the caller's boundary (filters = the caller's
+// extra_filters[]; never nil for a scoped principal), ONE device's neighbour
+// rows per protocol and its admin-state scalars, each fresh within 15 minutes.
+// The device is matched by id or name (the gNMI lanes label by target name);
+// an identity that is not a plain token is left out rather than escaped. A
+// failed read leaves its protocol unknown — never absent.
+func (s *server) aiProtocolEvidence(ctx context.Context, dev models.Device, filters []string) protoEvidence {
+	pe := protoEvidence{neighbors: map[string]bool{}, neighborsRead: map[string]bool{}, admin: map[string]int{}}
 	var ids []string
 	for _, id := range []string{dev.ID, dev.Name} {
 		if aiFactToken(id) && !slices.Contains(ids, id) {
@@ -519,10 +550,9 @@ func (s *server) aiProtocolNeighbors(ctx context.Context, dev models.Device, fil
 		}
 	}
 	if len(ids) == 0 {
-		return nil
+		return pe
 	}
 	sel := `{device=~"` + strings.ReplaceAll(strings.Join(ids, "|"), ".", `\\.`) + `"}`
-	out := map[string]bool{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, ps := range aiFactNeighborSeries {
@@ -533,17 +563,45 @@ func (s *server) aiProtocolNeighbors(ctx context.Context, dev models.Device, fil
 			if !ok {
 				return
 			}
+			mu.Lock()
+			defer mu.Unlock()
+			pe.neighborsRead[proto] = true
 			for dv, n := range got {
 				if n > 0 && slices.Contains(ids, dv) {
-					mu.Lock()
-					out[proto] = true
-					mu.Unlock()
+					pe.neighbors[proto] = true
 				}
 			}
 		}(ps[0], ps[1])
 	}
+	for _, as := range aiFactAdminSeries {
+		wg.Add(1)
+		go func(key, metric string) {
+			defer wg.Done()
+			got, ok := s.qVecByScoped(ctx, `max by (device) (last_over_time(`+metric+sel+`[15m]))`, "device", filters)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for dv, v := range got {
+				if !slices.Contains(ids, dv) {
+					continue
+				}
+				if key == "bgpas" {
+					pe.bgpLocalAS = pe.bgpLocalAS || v > 0
+					continue
+				}
+				switch {
+				case v == 1:
+					pe.admin[key] = 1 // enabled wins over another identity's disabled
+				case v == 2 && pe.admin[key] != 1:
+					pe.admin[key] = 2
+				}
+			}
+		}(as[0], as[1])
+	}
 	wg.Wait()
-	return out
+	return pe
 }
 
 // aiFactToken admits a device identity into a PromQL regex selector only when
@@ -615,11 +673,33 @@ func deriveDeviceFacts(in deviceFactInputs) ai.DeviceFacts {
 			f.Observe(ai.FactTelemetry, lane, true)
 		}
 	}
-	// Neighbour rows the device itself reports (any state, any VRF): seen only.
+	// Neighbour rows the device itself reports (any state, any VRF): seen.
 	for _, proto := range []string{"ospf", "isis", "bgp"} {
 		if in.protoNeighbors[proto] {
 			f.Observe(ai.FactAdjacency, proto, true)
 		}
+	}
+	// Admin-state scalars (tracker 415). Enabled is seen; a non-zero local AS
+	// is a BGP process (seen only).
+	if in.protoAdmin["ospf"] == 1 || in.protoAdmin["ospfv3"] == 1 {
+		f.Observe(ai.FactAdjacency, "ospf", true)
+	}
+	if in.protoAdmin["isis"] == 1 {
+		f.Observe(ai.FactAdjacency, "isis", true)
+	}
+	if in.bgpLocalAS {
+		f.Observe(ai.FactAdjacency, "bgp", true)
+	}
+	// ABSENT only when the MIB itself says off, the marker is fresh, and the
+	// neighbour read answered with no rows. OSPF needs BOTH versions off
+	// (owner 2026-11-19: never conclude "no OSPF" from OSPFv2 alone — a v3-only
+	// router reports ospfAdminStat disabled). Any missing piece → unknown.
+	noRows := func(proto string) bool { return in.protoNeighborsRead[proto] && !in.protoNeighbors[proto] }
+	if in.protoAdmin["isis"] == 2 && noRows("isis") {
+		f.Observe(ai.FactAdjacency, "isis", false)
+	}
+	if in.protoAdmin["ospf"] == 2 && in.protoAdmin["ospfv3"] == 2 && noRows("ospf") {
+		f.Observe(ai.FactAdjacency, "ospf", false)
 	}
 	// The SD-WAN overlay: when the snapshot was read, a device with no overlay
 	// peers is established NOT to be an overlay member; BFD is observed when its
