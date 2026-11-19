@@ -12,6 +12,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,6 +147,15 @@ func TestDeriveDeviceFacts(t *testing.T) {
 	if factHolds(nb, ai.FactAdjacency, "isis") {
 		t.Fatal("no IS-IS rows must leave IS-IS unknown")
 	}
+	// Telemetry lanes seen (tracker 415 (c)): observed; an unseen lane stays
+	// unknown — silence is not "not configured".
+	ln := deriveDeviceFacts(deviceFactInputs{dev: models.Device{ID: "z"}, lanes: map[string]bool{"syslog": true, "flow": true}})
+	if got := strings.Join(ln.Seen(ai.FactTelemetry), ","); got != "flow,syslog" {
+		t.Fatalf("lanes: telemetry seen = %s, want flow,syslog", got)
+	}
+	if factHolds(ln, ai.FactTelemetry, "trap") {
+		t.Fatal("an unseen trap lane must stay unknown")
+	}
 	// Overlay member with sessions → overlay and bfd observed.
 	member := deriveDeviceFacts(deviceFactInputs{dev: dev, overlayRead: true, overlay: &collectors.OverlayDeviceFacts{
 		DeviceID: "r1", Peers: []collectors.OverlayPeer{{SystemIP: "1.1.1.1", ColorPairs: []collectors.OverlayColorPairs{{LocalColor: "mpls", Sessions: 2, Up: 2}}}},
@@ -180,6 +190,8 @@ func TestEverySkillAppliesWhenIsDerivable(t *testing.T) {
 	}}))
 	note(deriveDeviceFacts(deviceFactInputs{dev: models.Device{ID: "g", Address: "10.0.0.2", Labels: map[string]string{"gnmi": "true"}}}))
 	note(deriveDeviceFacts(deviceFactInputs{dev: models.Device{ID: "c", Address: "10.0.0.3", Source: devmon.SourceController}}))
+	// Telemetry lanes the device was seen sending on (tracker 415 (c)).
+	note(deriveDeviceFacts(deviceFactInputs{dev: dev, lanes: map[string]bool{"syslog": true, "trap": true, "flow": true}}))
 
 	set, err := ai.LoadSkills()
 	if err != nil {
@@ -267,5 +279,79 @@ func TestIrisDeviceFactsNeighbourRowsAreTheCallersOwn(t *testing.T) {
 		if strings.Contains(fl, "globex") {
 			t.Errorf("acme's boundary names globex: %s", fl)
 		}
+	}
+}
+
+// §3a for the telemetry-lane read (tracker 415 (c)). HOSTILE fakes: OpenSearch
+// and ClickHouse answer "seen" to every query whatever it asks, so the outcome
+// cannot prove isolation — the requests must. Every log read targets the
+// caller's own index pattern, carries the caller's tenant filter and matches
+// only the caller's device; the flow read runs at the caller's ClickHouse scope
+// with its own clause and names only the device's own exporter address.
+func TestIrisDeviceFactsLanesAreTheCallersOwn(t *testing.T) {
+	var mu sync.Mutex
+	var osPaths, osBodies, chSQL, chScopes []string
+	osrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		osPaths, osBodies = append(osPaths, r.URL.Path), append(osBodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"hits":{"total":{"value":1,"relation":"eq"},"hits":[]}}`))
+	}))
+	defer osrv.Close()
+	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		chSQL, chScopes = append(chSQL, string(b)+r.URL.Query().Get("query")), append(chScopes, r.URL.Query().Get("tenant_scope"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"meta":[{"name":"hit","type":"UInt8"}],"data":[{"hit":1}],"rows":1}`))
+	}))
+	defer ch.Close()
+	t.Setenv("OPENSEARCH_URL", osrv.URL)
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	t.Setenv("CLICKHOUSE_PASSWORD", "")
+
+	s := netTopoServer(t)
+	acmeDev, _ := s.discovery.Get("acme-e0")
+	globexDev, _ := s.discovery.Get("globex-e0")
+	f, err := deviceFactsOf(t, s, acme(), "acme-e0")
+	if err != nil {
+		t.Fatalf("own device: %v", err)
+	}
+	for _, lane := range []string{"syslog", "trap", "flow"} {
+		if !factHolds(f, ai.FactTelemetry, lane) {
+			t.Errorf("lane %s not observed: %v", lane, f.Seen(ai.FactTelemetry))
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(osPaths) != 2 || len(chSQL) == 0 {
+		t.Fatalf("expected 2 log reads and a flow read, got %d / %d", len(osPaths), len(chSQL))
+	}
+	for i, p := range osPaths {
+		if !strings.Contains(p, "acme") || strings.Contains(p, "globex") || strings.Contains(p, "netops-*") {
+			t.Errorf("log read %d targets %q — not acme's own index pattern", i, p)
+		}
+		body := osBodies[i]
+		if !strings.Contains(body, `"tenant_id":"acme"`) {
+			t.Errorf("log read %d carries no acme tenant filter: %s", i, body)
+		}
+		if !strings.Contains(body, `"acme-e0"`) || strings.Contains(body, "globex") || strings.Contains(body, globexDev.Address) {
+			t.Errorf("log read %d does not match only acme-e0: %s", i, body)
+		}
+	}
+	var flowSQL string
+	for i, q := range chSQL {
+		if strings.Contains(q, "sampler_address = '") {
+			flowSQL = q
+			if chScopes[i] != "acme" {
+				t.Errorf("the flow read ran at tenant_scope %q, want acme", chScopes[i])
+			}
+		}
+	}
+	if !strings.Contains(flowSQL, "sampler_address = '"+acmeDev.Address+"'") || strings.Contains(flowSQL, "'"+globexDev.Address+"'") {
+		t.Errorf("the flow read is not bounded to acme-e0's exporter:\n%s", flowSQL)
 	}
 }
