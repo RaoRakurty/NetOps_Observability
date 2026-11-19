@@ -144,6 +144,11 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("deployment/docker/syslog-ng/*", ("correlation",)),
     # Frontend; a dependency change can break the image the boot test builds.
     ("src/frontend/*", ("frontend",)), ("docs-portal/*", ("frontend",)),
+    # The customer docs are embedded in the api as Iris's product-question corpus
+    # (src/backend/ai/docs_corpus, kept byte-identical by
+    # scripts/sync-docs-corpus.sh): TestDocsCorpusMatchesPortal is a BACKEND test,
+    # so a portal edit without the sync must fail on its PR, not first on main.
+    ("docs-portal/docs/*", ("backend",)),
     ("src/frontend/package*.json", (BOOT,)), ("docs-portal/package*.json", (BOOT,)),
     # Config read by both the in-API engine and vmalert.
     ("src/config/*", ("backend", BOOT)),

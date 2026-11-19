@@ -860,7 +860,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
                   </label>
                   {/* Read-only MCP (N-I5): an outside AI assistant may use Iris's lookups with a workspace API key. */}
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
-                    title={mcpFeature ? "Let an outside AI assistant use Iris's read-only lookups with an API key that has the iris:mcp scope" : "Turn on Iris over MCP under Administration → Features first"}>
+                    title={mcpFeature ? "Let an outside AI assistant use Iris's read-only lookups with an API key that has the iris:mcp scope" : "Turn on Iris over MCP under Platform → Features first"}>
                     <input type="checkbox" data-testid="iris-mcp-toggle" checked={!!row.mcp_enabled} disabled={!mcpFeature}
                       onChange={(e) => setAccess(row, { mcp_enabled: e.target.checked })} /> MCP
                   </label>

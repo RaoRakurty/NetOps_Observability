@@ -51,14 +51,21 @@ Ask Correlix (UI / slash bar)
 
 ## What's built vs. contracted
 
-- **Built:** gateway, module registry (15 modules), policy engine, governed tool
-  registry (RCA + flow + telemetry + app-id + integrations + ITSM-enrichment),
-  evidence bundle, response-quality layer, provider abstraction + mock, `/status`
-  & `/explain` & module routes, **Network Expert KB**, **slash commands**.
-- **Contracted (later phases):** RAG embeddings (KB is keyword-scored today),
-  verifier model + unsupported-claim detector, persisted conversations + feedback
-  loop, write-capable (still draft-only) actions behind the P6 action gate, and an
-  external read-only MCP server (P7).
+- **Built:** gateway, module registry (22 modules), policy engine (read, read-only
+  device sessions, and gated active probes — see `guardrails.md`), the governed
+  tool registry (45 tools — see `tool-registry.md`), evidence bundle,
+  response-quality layer and grounding verifier, provider abstraction with
+  per-model fallback and breaker, model-first planner (AI add-on on), compiled
+  skills and bounded chaining, the read-only Investigator and triggered
+  investigations, server-side conversations (`internal/irisconvo` — references for follow-ups, never prose), feedback and
+  the controlled learning loop, tenant runbooks/MOPs, workspace-knowledge
+  retrieval, approval-gated actions (`internal/irisaction`: an ITSM note or a
+  memory entry, run only after a different person approves), the read-only MCP
+  gateway (`internal/irismcp`), ChatOps (Slack/Teams), **Network Expert KB** and
+  **slash commands**.
+- **Contracted (later phases):** RAG embeddings (retrieval is BM25-scored today),
+  and anything that changes a device — which stays out of scope (owner decision
+  2026-11-18: change help is read-only).
 
 See `module-registry.md`, `tool-registry.md`, `network-expert-kb.md`,
 `guardrails.md`, `provider-routing.md`, and the how-to guides.

@@ -9,7 +9,7 @@ sidebar_position: 40
 
 # Built-in alert rules
 
-Correlix ships 201 alert rules and evaluates them continuously against the metric store. They are defined in `src/config/rules.yaml` (device and interface conditions) and `src/config/rules-scale-slo.yaml` (platform self-health). Edit either file and restart `vmalert` to change them.
+Correlix ships 202 alert rules and evaluates them continuously against the metric store. They are defined in `src/config/rules.yaml` (device and interface conditions) and `src/config/rules-scale-slo.yaml` (platform self-health). Edit either file and restart `vmalert` to change them.
 
 ## Delivery tiers
 
@@ -246,3 +246,4 @@ These are the conditions that wake somebody up. Each one means telemetry is bein
 | `TrapSourceUnattributedRatioHigh` | warning | ingest | &#123;&#123; $value \| humanizePercentage &#125;&#125; of SNMP traps reach no device |
 | `TrapTitleFallbackRatioRising` | warning | ingest | &#123;&#123; $value \| humanizePercentage &#125;&#125; of SNMP traps have no readable title, up from their usual share |
 | `NMSInterfaceBridgeEmpty` | warning | ingest | the controller answers its interface lists, but none of them reached the interface bridge |
+| `RoutineSyslogRollupStale` | warning | storage | the routine-syslog roll-up is not rolling — routine session counts will be lost when their originals expire |

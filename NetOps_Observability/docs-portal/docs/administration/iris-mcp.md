@@ -34,7 +34,7 @@ Each lookup is offered only when this installation has it **and** the key's perm
 ## Before you begin
 
 - **Licence:** the `ai.mcp` capability (every tier carries it today).
-- **Platform switch:** a platform administrator turns on **Iris over MCP (read-only)** under **Administration → Features** and acknowledges that answers will leave Correlix for the assistant. Until then the endpoint does not exist (404).
+- **Platform switch:** a platform administrator turns on **Iris over MCP (read-only)** under **Platform → Configuration → Features** and acknowledges that answers will leave Correlix for the assistant. Until then the endpoint does not exist (404).
 - **Workspace opt-in:** the platform administrator ticks **MCP** for the workspace under **Iris settings → Workspace access**. A workspace that has not opted in is refused (403).
 - **An API key:** a workspace administrator mints a key under **Administration → API Access** with the **`iris:mcp`** scope, plus the read scopes for what the assistant should see (for example `read:*`). `read:*` alone does **not** include MCP, and a key with `admin:*` is refused — mint a separate, read-only key for the assistant.
 
@@ -42,7 +42,7 @@ Each lookup is offered only when this installation has it **and** the key's perm
 
 ### 1. Turn MCP on for the platform
 
-**Administration → Features → Iris → Iris over MCP (read-only)**, then confirm the acknowledgement.
+**Platform → Configuration → Features → Iris AI → Iris over MCP (read-only)**, then confirm the acknowledgement.
 
 ### 2. Turn MCP on for the workspace
 

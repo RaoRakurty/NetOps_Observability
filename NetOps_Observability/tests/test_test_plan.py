@@ -150,6 +150,8 @@ ALL = set(tp.CI_GROUPS)
     # lockfiles
     ([P + "src/frontend/package-lock.json"], {"frontend", "install-boot"}),
     ([P + "docs-portal/package-lock.json"], {"frontend", "install-boot"}),
+    # a customer-doc page is also Iris's embedded corpus: the backend drift test runs
+    ([P + "docs-portal/docs/iris-ai/overview.md"], {"frontend", "backend"}),
     ([P + "src/correlation/requirements.txt"], {"correlation", "install-boot"}),
     # Dockerfiles → their component + install-boot
     ([P + "deployment/docker/Dockerfile.backend"], {"backend", "install-boot"}),

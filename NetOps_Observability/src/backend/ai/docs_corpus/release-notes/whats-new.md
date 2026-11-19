@@ -13,6 +13,8 @@ that controls it where one exists.
 
 | Month | Headline |
 |---|---|
+| [November 2026](/release-notes/2026-11) | Iris understands any phrasing (the Iris AI add-on), 25 troubleshooting methods applied to your discovered network, investigations, read-only change assistance, seasonal answers, Slack/Teams and MCP; Flows link and capacity views; lean storage for routine syslog. |
+| [October 2026](/release-notes/2026-10) | Devices from your SD-WAN controller and deeper vManage data, the redesigned Administration area, Iris opens docked, certificate renewal without restarts, tenant-isolation fixes. |
 | [September 2026](/release-notes/2026-09) | The Security section, BGP depth and the BMP receiver, the symptom-first Investigation surface, protocol diagnostics with live collect, IGP depth, Iris skills and chaining, configuration backup and drift, packet capture. |
 | [August 2026](/release-notes/2026-08) | TLS and mTLS on every internal hop, the Transport Security page, the eight-section navigation, the graphical installer, GUI-configurable identity providers, the BGP Operations page. |
 | [July 2026](/release-notes/2026-07) | The canonical incident report, seam ownership on every case, alert episodes and maintenance windows, real SNMP discovery, cloud observability, the appliance installer, Iris. |

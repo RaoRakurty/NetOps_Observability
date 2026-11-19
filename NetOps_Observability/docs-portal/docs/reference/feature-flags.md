@@ -9,7 +9,7 @@ sidebar_position: 30
 
 # Feature flags
 
-Correlix reads every optional capability from an environment variable. Set them in `deployment/docker/.env` and restart the affected service.
+Correlix reads every optional capability from a switch. The switches a platform administrator may change are on **Platform → Configuration → Features** ([Turn Correlix features on and off](/administration/features)): a value saved there wins over the install value listed below, which is only the starting point. Never edit configuration files to change one. The **Iris AI** switches (`IRIS_*`) can be set on that page only; no install value turns them on.
 
 Two rules hold for all of them:
 
@@ -34,8 +34,8 @@ Two rules hold for all of them:
 | `ENABLE_VRF_COLLECTION` | `true` | Read routing instances (VRF, VPN, routing-instance, VPRN) and their interfaces over SNMP. |
 | `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes. |
 | `FEATURE_ACTIVE_VERIFICATION` | `false` | Verify a recovery before closing a case. |
-| `FEATURE_AI` | `(empty)` | Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Administration → Features. |
-| `FEATURE_AI_TOOLS` | `false` | No longer a switch: read once on upgrade to keep AI investigations on. Administration → Features decides. |
+| `FEATURE_AI` | `(empty)` | Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Platform → Configuration → Features. |
+| `FEATURE_AI_TOOLS` | `false` | No longer a switch: read once on upgrade to keep AI investigations on. Platform → Configuration → Features decides. |
 | `FEATURE_BGP_ALERTS` | `false` | Evaluate the BGP watchlist and raise routing alerts. |
 | `FEATURE_BGP_BOGON_FEED` | `false` | Add the Team Cymru full-bogons feed to the embedded IANA special-purpose blocks. |
 | `FEATURE_BGP_LIVE_FEED` | `false` | Keep a bounded per-tenant ring of live BGP updates. |
