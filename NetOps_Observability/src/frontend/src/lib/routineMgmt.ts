@@ -39,20 +39,51 @@ export function routineReason(matched: readonly string[] | null | undefined): st
   return null;
 }
 
-/** What a search answer says about the class (absent on stores that hold none). */
-export type RoutineSummary = { included: boolean; count: number };
+/**
+ * What a search answer says about the class (absent on stores that hold none).
+ *
+ * Tracker 410: routine originals are kept raw for about three days; older ones
+ * survive as per-minute counts. `count` is the records the search matched;
+ * `summarised` the sessions older than a day that only those counts still hold
+ * (so the two never overlap). `summarised_note` says why the older part could
+ * not be counted: "text_query" (counts carry no message text to search) or
+ * "unavailable" (the counts could not be read).
+ */
+export type RoutineSummary = {
+  included: boolean;
+  count: number;
+  summarised?: number;
+  summarised_note?: "text_query" | "unavailable" | string;
+};
 
 export const ROUTINE_TOGGLE_LABEL = "Show routine management sessions";
 
 const fmt = (x: number) => x.toLocaleString("en-US");
 const sessions = (x: number) => `${fmt(x)} routine management ${x === 1 ? "session" : "sessions"}`;
 
+/**
+ * The part of the note about sessions older than a day, which are kept as
+ * per-minute counts (tracker 410). Empty when the search window needs none.
+ */
+function olderNote(summary: RoutineSummary): string {
+  const n = Math.max(0, Math.floor(Number(summary.summarised) || 0));
+  switch (summary.summarised_note) {
+    case "text_query":
+      return " Sessions older than a day are kept only as per-minute counts, which a text search cannot match.";
+    case "unavailable":
+      return " Sessions older than a day are kept as per-minute counts, which could not be read just now.";
+  }
+  if (n === 0) return "";
+  return ` Another ${sessions(n)} older than a day ${n === 1 ? "is" : "are"} kept as per-minute counts.`;
+}
+
 /** The sentence beside the toggle. Empty when the answer carries no summary. */
 export function routineNote(summary: RoutineSummary | null | undefined): string {
   if (!summary) return "";
   const x = Math.max(0, Math.floor(Number(summary.count) || 0));
-  if (x === 0) return "No routine management sessions match this search.";
-  return summary.included ? `Includes ${sessions(x)}.` : `${sessions(x)} hidden.`;
+  const older = olderNote(summary);
+  if (x === 0) return `No routine management sessions match this search.${older}`;
+  return (summary.included ? `Includes ${sessions(x)}.` : `${sessions(x)} hidden.`) + older;
 }
 
 /** The viewer's choice, remembered in this browser only. */

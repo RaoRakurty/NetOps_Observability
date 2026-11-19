@@ -39,6 +39,20 @@ describe("routineNote: what the toggle says", () => {
     expect(routineNote({ included: false, count: 1 })).toBe("1 routine management session hidden.");
     expect(routineNote({ included: true, count: 10617 })).toBe("Includes 10,617 routine management sessions.");
     expect(routineNote({ included: true, count: 0 })).toBe("No routine management sessions match this search.");
+  });
+  // Tracker 410: sessions older than a day survive as per-minute counts.
+  it("adds the sessions only the per-minute counts still hold", () => {
+    expect(routineNote({ included: false, count: 10, summarised: 5000 })).toBe(
+      "10 routine management sessions hidden. Another 5,000 routine management sessions older than a day are kept as per-minute counts.");
+    expect(routineNote({ included: true, count: 0, summarised: 1 })).toBe(
+      "No routine management sessions match this search. Another 1 routine management session older than a day is kept as per-minute counts.");
+    expect(routineNote({ included: false, count: 3, summarised: 0 })).toBe("3 routine management sessions hidden.");
+  });
+  it("says why the older part is not counted", () => {
+    expect(routineNote({ included: false, count: 2, summarised: 0, summarised_note: "text_query" })).toBe(
+      "2 routine management sessions hidden. Sessions older than a day are kept only as per-minute counts, which a text search cannot match.");
+    expect(routineNote({ included: false, count: 2, summarised_note: "unavailable" })).toBe(
+      "2 routine management sessions hidden. Sessions older than a day are kept as per-minute counts, which could not be read just now.");
     expect(routineNote(null)).toBe("");
     expect(routineNote({ included: false, count: Number.NaN })).toBe("No routine management sessions match this search.");
   });

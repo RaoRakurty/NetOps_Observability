@@ -559,7 +559,10 @@ export type OSResponse = {
   sampling?: LogSampling;
   // Routine management sessions (owner 2026-11-11): whether the answer shows
   // them and how many match the query. Absent on stores that hold none (flows).
-  routine_mgmt?: { included: boolean; count: number };
+  // Tracker 410: `summarised` counts sessions older than a day that only their
+  // per-minute roll-ups still hold; `summarised_note` says why that part was
+  // not counted ("text_query" | "unavailable").
+  routine_mgmt?: { included: boolean; count: number; summarised?: number; summarised_note?: string };
 };
 
 export type LogSearchOpts = {

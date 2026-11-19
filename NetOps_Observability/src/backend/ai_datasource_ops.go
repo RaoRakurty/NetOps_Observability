@@ -138,20 +138,37 @@ type syslogOut struct {
 	routine        int
 	routineCounted bool
 	includeRoutine bool
+	// summarised / summarisedNote: routine sessions older than RollupCut,
+	// counted from their per-minute roll-ups (tracker 410), or why not.
+	summarised     int
+	summarisedNote string
 }
 
 // routineNote is what an answer says about the routine management sessions;
 // withHint adds how to read them (the tool path only).
 func (o syslogOut) routineNote(withHint bool) []string {
+	var out []string
 	switch {
 	case !o.routineCounted || o.routine == 0:
-		return nil
 	case o.includeRoutine:
-		return []string{fmt.Sprintf("includes %d routine management-session lines (monitoring polls and controller sessions)", o.routine)}
+		out = []string{fmt.Sprintf("includes %d routine management-session lines (monitoring polls and controller sessions)", o.routine)}
 	case withHint:
-		return []string{fmt.Sprintf("left out %d routine management-session lines (monitoring polls and controller sessions); search again with include_routine=true to read them", o.routine)}
+		out = []string{fmt.Sprintf("left out %d routine management-session lines (monitoring polls and controller sessions); search again with include_routine=true to read them", o.routine)}
+	default:
+		out = []string{fmt.Sprintf("left out %d routine management-session lines (monitoring polls and controller sessions)", o.routine)}
 	}
-	return []string{fmt.Sprintf("left out %d routine management-session lines (monitoring polls and controller sessions)", o.routine)}
+	if !o.routineCounted {
+		return out
+	}
+	switch {
+	case o.summarisedNote == logroutine.NoteTextQuery:
+		out = append(out, "routine sessions older than a day are kept only as per-minute counts, which a text search cannot match")
+	case o.summarisedNote == logroutine.NoteUnavailable:
+		out = append(out, "routine sessions older than a day are kept as per-minute counts, which could not be read just now")
+	case o.summarised > 0:
+		out = append(out, fmt.Sprintf("another %d routine management sessions older than a day are kept only as per-minute counts (their lines have expired)", o.summarised))
+	}
+	return out
 }
 
 // logTopicEventTypes maps each closed log topic (nlquery ast.LogTopics) to the
@@ -191,10 +208,14 @@ func (d aiDataSource) syslogSearch(p ai.Principal, sp syslogSpec) (syslogOut, er
 	if f := oslog.TenantFilter(p.Tenant, p.Cross, claim.Keys, claim.Addrs); f != nil {
 		filters = append(filters, f)
 	}
+	// narrow collects the device-narrowing clauses alone: the routine roll-ups
+	// (tracker 410) carry device_id / host / hostname, so the older routine
+	// count is narrowed by exactly the same clauses.
+	var narrow []any
 	// Optional device narrowing — a filter clause, never string-built into the
 	// query text (the device name is model-supplied data).
 	if sp.deviceText != "" {
-		filters = append(filters, map[string]any{"bool": map[string]any{
+		narrow = append(narrow, map[string]any{"bool": map[string]any{
 			"should": []any{
 				map[string]any{"match": map[string]any{"host": sp.deviceText}},
 				map[string]any{"match": map[string]any{"hostname": sp.deviceText}},
@@ -214,8 +235,9 @@ func (d aiDataSource) syslogSearch(p ai.Principal, sp syslogSpec) (syslogOut, er
 				map[string]any{"terms": map[string]any{"host": sp.deviceNames}},
 				map[string]any{"terms": map[string]any{"hostname": sp.deviceNames}})
 		}
-		filters = append(filters, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
+		narrow = append(narrow, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
 	}
+	filters = append(filters, narrow...)
 	if len(sp.severities) > 0 {
 		filters = append(filters, map[string]any{"terms": map[string]any{"normalized_severity": sp.severities}})
 	}
@@ -260,7 +282,7 @@ func (d aiDataSource) syslogSearch(p ai.Principal, sp syslogSpec) (syslogOut, er
 	out := syslogOut{includeRoutine: sp.includeRoutine, routineCounted: !deny}
 	if out.routineCounted {
 		src := d.srv.routineSourcesCtx(d.ctx, d.claims)
-		body["aggs"] = map[string]any{logroutine.AggName: logroutine.Agg(src)}
+		body["aggs"] = map[string]any{logroutine.AggName: logroutine.AggSince(src, time.Now().UTC().Add(-logroutine.RollupCut))}
 		if !sp.includeRoutine {
 			body["post_filter"] = logroutine.Exclusion(src)
 		}
@@ -296,6 +318,13 @@ func (d aiDataSource) syslogSearch(p ai.Principal, sp syslogSpec) (syslogOut, er
 	}
 	if out.routineCounted {
 		out.routine = raw.Aggregations[logroutine.AggName].DocCount
+		// Tracker 410: sessions older than RollupCut are counted from their
+		// roll-ups, which carry no severity or event type — so a read that
+		// filters by either does not get that part (it would over-count).
+		if len(sp.severities) == 0 && len(sp.topics) == 0 {
+			older, note := d.srv.routineSummarised(d.ctx, d.claims, sp.start, sp.end, sp.query, narrow)
+			out.summarised, out.summarisedNote = int(older), note
+		}
 	}
 	// A read of device syslog on the caller's behalf, audited like the human one:
 	// who, what was asked and how many lines it got, never a line.

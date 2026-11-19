@@ -405,7 +405,9 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	routine := routineApplies(req.Signal) && !denyAll
 	if routine {
 		src := s.routineSources(r, claims)
-		body["aggs"] = map[string]any{logroutine.AggName: logroutine.Agg(src)}
+		// Tracker 410: routine-family originals older than RollupCut are counted
+		// from their roll-ups instead (routineSummarised below), never twice.
+		body["aggs"] = map[string]any{logroutine.AggName: logroutine.AggSince(src, time.Now().UTC().Add(-logroutine.RollupCut))}
 		if req.IncludeRoutineMgmt {
 			boolQuery["should"] = []any{logroutine.Clause(src)}
 		} else {
@@ -453,7 +455,10 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if routine {
-		if raw, err = logroutine.Inject(raw, req.IncludeRoutineMgmt); err != nil {
+		older, note := s.routineSummarised(r.Context(), claims, start, end, req.Query, nil)
+		if raw, err = logroutine.InjectSummary(raw, logroutine.Summary{
+			Included: req.IncludeRoutineMgmt, Summarised: older, SummarisedNote: note,
+		}); err != nil {
 			logError("logs", "search response could not carry the routine-session count", map[string]any{"err": err.Error()})
 			writeError(w, http.StatusBadGateway, errors.New("log search returned a response that could not be read"))
 			return
@@ -735,6 +740,58 @@ func (s routineRollupStore) Search(ctx context.Context, index string, body map[s
 
 func (s routineRollupStore) Bulk(ctx context.Context, ndjson []byte) ([]byte, error) {
 	return s.do(ctx, http.MethodPost, "/_bulk", "application/x-ndjson", ndjson)
+}
+
+// routineSummarised is the older part of a routine count (tracker 410): the
+// sessions in [start, end) older than logroutine.RollupCut, read from the
+// caller's OWN roll-ups — the same tenant rule as every log read (the caller's
+// roll-up index pattern, the per-document tenant filter with its untagged
+// claim, the operator restriction). Roll-ups carry no message text, so a
+// search with a text query gets NoteTextQuery instead of a number; a read that
+// fails gets NoteUnavailable, logged. A window wholly inside the originals'
+// counted part needs nothing.
+//
+// extra are the caller's device-narrowing clauses (on device_id / host /
+// hostname, which the roll-ups carry); a caller whose search narrows by
+// anything a roll-up does not carry must not ask for this count.
+func (s *server) routineSummarised(ctx context.Context, claims jwtClaims, start, end time.Time, queryText string, extra []any) (int64, string) {
+	from, to, ok := logroutine.SummarisedWindow(start, end, time.Now().UTC())
+	if !ok {
+		return 0, ""
+	}
+	if q := strings.TrimSpace(queryText); q != "" && q != "*" {
+		return 0, logroutine.NoteTextQuery
+	}
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return 0, ""
+	}
+	var filters, mustNot []any
+	claim, _ := s.untaggedClaimFor(claims)
+	if f := oslog.TenantFilter(tenant, cross, claim.Keys, claim.Addrs); f != nil {
+		filters = append(filters, f)
+	}
+	filters = append(filters, extra...)
+	if len(exclude) > 0 {
+		mustNot = append(mustNot, map[string]any{"terms": map[string]any{"tenant_id": exclude}})
+	}
+	b, err := json.Marshal(logroutine.RollupSumBody(from, to, filters, mustNot))
+	if err != nil {
+		return 0, logroutine.NoteUnavailable
+	}
+	raw, err := routineRollupStore{}.do(ctx, http.MethodPost,
+		"/"+oslog.RollupIndexPattern(tenant, cross)+"/_search?ignore_unavailable=true&allow_no_indices=true", "application/json", b)
+	if err != nil {
+		logWarn("logs", "routine roll-up count unavailable — the older routine sessions are not counted in this answer", map[string]any{"error": err.Error()})
+		return 0, logroutine.NoteUnavailable
+	}
+	n, err := logroutine.ParseRollupSum(raw)
+	if err != nil {
+		logWarn("logs", "routine roll-up count unreadable", map[string]any{"error": err.Error()})
+		return 0, logroutine.NoteUnavailable
+	}
+	return n, ""
 }
 
 // runRoutineRollup keeps netops-syslogrollup-* (tracker 410) until ctx ends.
