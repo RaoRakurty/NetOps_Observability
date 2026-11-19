@@ -217,9 +217,11 @@ the worked call sequence the A4 tool follows).
 **State battery.** A SECOND closed table beside the 15-issue catalog's, never a
 widening of it: `matchTemplate` now takes a `tokenGrammar`, so the battery can add
 `{addr}` and Huawei's `vpn-instance` qualifier without loosening the catalog by a
-token (`TestStateBattery_CatalogTableUnaffected`). 14 specs across 7 areas
-(`interfaces` · `igp` · `bgp` · `routes` · `l2` · `platform` · `logs`) × 8
-dialects = 103 authored (spec, dialect) templates; 578 rendered forms are proven
+token (`TestStateBattery_CatalogTableUnaffected`). At this design's time: 14
+specs across 7 areas (`interfaces` · `igp` · `bgp` · `routes` · `l2` ·
+`platform` · `logs`) × 8 dialects — the battery has since grown to 11 areas
+(`evpn`, `redundancy`, `vpn`, `upgrade` added; `internal/protocoldiag/statebattery.go`
+`Areas()` is the list of record) = 103 authored (spec, dialect) templates; 578 rendered forms are proven
 read-only AND admitted by their own table, and `show running-config` is refused on
 every dialect. Dialects are **vendorprofile profile ids** (`cisco/ios`,
 `cisco/ios_xe`, `cisco/nx-os`, `cisco/ios_xr`, `juniper/junos`, `nokia/sros`,
@@ -392,9 +394,11 @@ traceroute from customer devices):
   → `app-edge-5xx` (the network is exonerated); a changed hop sequence → the
   log, to pin the route change. Ownership hand-offs stay human-authored choices.
 - No new parsers: the reads come from collectors, and `l3-reachability` uses the
-  existing route / ARP parsers. Not built, recorded in tracker 420: an IKE /
-  IPsec SA battery area (no lab device terminates classic IPsec — SD-WAN edges
-  key through OMP), ARP parsers for IOS-XR / Junos / VRP, and DTLS control
+  existing route / ARP parsers. The IPsec SA battery area shipped since
+  (2026-11-19, area `vpn`: `show crypto ipsec sa` parsed on IOS-XE from a real
+  SD-WAN edge capture; the IKE row runs but has no parser — no lab device runs
+  IKE). Still not built, recorded in tracker 420: ARP parsers for IOS-XR / Junos
+  / VRP, and DTLS control
   connections to vManage / vBond (stored per controller entity in
   `controller_state_current`, not yet mapped to inventory devices).
 

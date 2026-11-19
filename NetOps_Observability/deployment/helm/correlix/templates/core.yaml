@@ -64,6 +64,8 @@ spec:
           env:
             - {name: LISTEN_ADDR, value: ":8080"}
             - {name: GOMEMLIMIT, value: {{ .Values.api.goMemLimit | quote }}}
+            # Tracker 410: the routine-syslog roll-up job (internal/routinerollup).
+            - {name: ROUTINE_SYSLOG_ROLLUP, value: {{ .Values.api.routineSyslogRollup | default "on" | quote }}}
             # ── app-state store (tracker 245: postgres is the default) ──
             - {name: STORE_BACKEND, value: {{ .Values.store.backend | quote }}}
             {{- if and (eq .Values.store.backend "postgres") .Values.store.databaseUrlFromSecret }}

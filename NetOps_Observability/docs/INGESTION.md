@@ -1,15 +1,15 @@
 # Ingestion guide
 
-> **Staleness note (2026-07-22):** the closing "Where this is going" section of
-> this document describes Kafka and OpenSearch as future work. They shipped
-> long ago (#97 / the OpenSearch migration); Loki and Promtail are gone. The
-> ingest topology below is current; the roadmap section at the end is kept only
-> as a record of the original plan and is marked accordingly.
+> **Reviewed against the code 2026-11-19.** The closing "Where this is going"
+> section is a record of the original plan (Kafka and OpenSearch shipped; Loki
+> and Promtail are gone). Everything else describes the current topology.
 
-Everything coming *into* the platform from network devices flows through
-two containers: **Vector** (Syslog + Docker container logs) and
-**goflow2** (NetFlow / IPFIX / sFlow). Both produce onto the Kafka bus. The
-architecture follows the reference Collection / Ingestion Layer pattern.
+Everything coming *into* the platform from network devices crosses an edge
+container first: **syslog-ng** for syslog (it forwards to the
+**vector-aggregator**, which also reads the containers' own logs, SNMP traps
+and the HTTP ingest sources) and **goflow2** for NetFlow / IPFIX / sFlow. Both
+paths produce onto the Kafka bus. The architecture follows the reference
+Collection / Ingestion Layer pattern.
 
 ```
    Routers / Switches / Firewalls
@@ -18,21 +18,27 @@ architecture follows the reference Collection / Ingestion Layer pattern.
         514         2055        6343    (ports on the Docker host)
          │           │           │
          ▼           ▼           ▼
-       ┌──────┐   ┌─────────────────┐
-       │Vector│   │    goflow2      │
-       │      │   │ (decodes flow   │
-       │      │   │  protocols      │
-       │      │   │  to JSON)       │
-       └──┬───┘   └────────┬────────┘
-          │                │ kafka:// (native transport)
-          │                │
-          ▼                ▼
+   ┌──────────┐   ┌─────────────────┐
+   │syslog-ng │   │    goflow2      │
+   │  (edge)  │   │ (decodes flow   │
+   └────┬─────┘   │  protocols      │
+        ▼         │  to JSON)       │
+   ┌──────────┐   └────────┬────────┘
+   │ vector-  │            │ kafka:// (native transport)
+   │aggregator│            │
+   └────┬─────┘            │
+        ▼                  ▼
        ┌─────────────────────────┐
        │   Kafka  netops.*       │  applogs · syslog · flows · snmptrap ·
        └────────────┬────────────┘  cloudlogs · cloudcosts · deadletter · …
                     ▼
-              vector-router  ──►  OpenSearch · ClickHouse · VictoriaMetrics
+              vector-router  ──►  OpenSearch · ClickHouse (and the re-keyed
+                                  netops.flows topic)
 ```
+
+The router writes OpenSearch, ClickHouse and Kafka only. Metrics reach
+VictoriaMetrics on their own path (the collectors, vmagent scrapes, the
+aggregator's remote-write), never through the router.
 
 **goflow2 uses its native `kafka://` transport (F-49, 2026-07-22).** It used to
 write flow JSON to stdout, which Vector read back through `docker_logs` and
@@ -63,7 +69,7 @@ inject events carrying a forged `tenant_id` into any tenant's index.
 
 | Protocol            | Container port | Host port (env)         | Standard |
 |---------------------|---------------:|-------------------------|---------:|
-| Syslog UDP/TCP      |           5514 | `SYSLOG_PORT` (5514)    |      514 |
+| Syslog UDP/TCP      |   5514 and 514 | `SYSLOG_PORT` (5514) + 514, always |      514 |
 | NetFlow v5/v9       |           2055 | `NETFLOW_PORT` (2055)   |     2055 |
 | IPFIX               |           4739 | `IPFIX_PORT` (4739)     |     4739 |
 | sFlow               |           6343 | `SFLOW_PORT` (6343)     |     6343 |
@@ -73,15 +79,12 @@ BMP is **opt-in and default-off**: nothing binds 11019 unless `FEATURE_BMP=true`
 (the in-container bind address is `BMP_LISTEN`, default `:11019`). See
 "BMP — live BGP feed" below.
 
-Linux with rootful Docker can bind 514 directly:
-
-```
-SYSLOG_PORT=514 docker compose up -d
-```
-
-On Docker Desktop / rootless / macOS, stick to 5514 and configure the
-devices accordingly, or front the host with iptables / pf to redirect
-514 → 5514.
+syslog-ng is published on **both** `SYSLOG_PORT` (default 5514) and the
+standard 514 (UDP and TCP), host port equal to container port (tracker 373), so
+a device configured with the default `logging host <nms> 514` needs no change.
+Do not set `SYSLOG_PORT=514`: 514 is already published and the two mappings
+would collide. On Docker Desktop / rootless / macOS, where 514 cannot be bound,
+point the devices at 5514.
 
 ## Device configuration examples
 
@@ -246,28 +249,27 @@ exit
 
 After devices start sending traffic:
 
+The log API is OpenSearch-backed and authenticated (send your session cookie
+or an API key). Routes: `GET|POST /api/logs/search`, `/api/logs/indices`,
+`/api/logs/retention`, `/api/logs/severity-counts`, `/api/logs/export`.
+Search parameters: `query` (OpenSearch query-string syntax), `from` / `to`,
+`signal` (`syslog`, `snmptrap`, `flows`; empty = syslog + traps), `size`,
+`offset`, and `include_routine_mgmt=true` to show routine management sessions.
+
 ```
-# Syslog should show up in Loki under job=syslog
-curl -G 'http://localhost:8000/api/logs/search' \
-  --data-urlencode 'query={job="syslog"}' \
-  --data-urlencode 'limit=20' | jq
+# Recent syslog from one device
+curl -G 'http://localhost:8000/api/logs/search' -H "Authorization: Bearer $KEY" \
+  --data-urlencode 'signal=syslog' --data-urlencode 'query=host:core-router-01' \
+  --data-urlencode 'size=20' | jq
 
-# NetFlow records under job=netflow
-curl -G 'http://localhost:8000/api/logs/search' \
-  --data-urlencode 'query={job="netflow"}' \
-  --data-urlencode 'limit=20' | jq
-
-# What hosts are sending Syslog?
-curl http://localhost:8000/api/logs/labels | jq
+# Flow records to TCP/22
+curl -G 'http://localhost:8000/api/logs/search' -H "Authorization: Bearer $KEY" \
+  --data-urlencode 'signal=flows' --data-urlencode 'query=dst_port:22' \
+  --data-urlencode 'size=20' | jq
 ```
 
-In the dashboard, the **Logs** tab takes the same LogQL queries:
-
-```logql
-{job="syslog"} |= "BGP-3-NOTIFICATION"
-{job="netflow"} | json | dst_port=22         # SSH flows
-{job="syslog", host="core-router-01"} | json
-```
+In the dashboard, the **Logs** tab takes the same query syntax (for example
+`message:"BGP-3-NOTIFICATION"`), and **Flows** is the place for traffic.
 
 ## What reaches correlation
 
@@ -286,9 +288,11 @@ same fields, kept at least 72 h (`OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS`,
 default 96). The api folds them into per-minute roll-ups
 (`netops-syslogrollup-<tenant>-…`: first/last seen, count, device, source and
 user) kept for the full log window. Every syslog read covers both families;
-the Logs page and Iris still hide the class by default and count it, older
-than a day from the roll-ups. `SYSLOG_ROUTINE_SPLIT=off` on the router keeps
-everything in `netops-syslog-*`. The correlation engine reads Kafka, so its
+the Logs page, export, the severity tiles and Iris hide the class by default,
+and the Logs search and Iris count what they hid (older than a day from the
+roll-ups). `SYSLOG_ROUTINE_SPLIT` set to anything but `on` on the router
+(compose / Helm `vectorRouter.routineSplit`) keeps everything in
+`netops-syslog-*`. The correlation engine reads Kafka, so its
 `management_audit` input is unchanged. Runbook: `docs/runbooks/routine-syslog.md`.
 
 The correlation engine reads the same bus but admits far less. A raw syslog
@@ -324,8 +328,8 @@ control topic), and the correlation engine still reads `netops.syslog` and still
 applies its own screen; the only visible change is the additive `cx_admission`
 field, which is what lets the screen's coverage be measured against real traffic
 before anything depends on it. Pointing the engine at the pre-screened topic is
-one environment variable (`CORR_SYSLOG_TOPIC`, to be added by the engine owner)
-— and it is **not** a default until a release-qualify leg has run: the engine
+one environment variable (`CORR_SYSLOG_TOPIC`, which the engine reads — default
+`netops.syslog`, `src/correlation/main.py`) — and it is **not** a default until a release-qualify leg has run: the engine
 would then never see the rejected 94 %, so a screen defect that today costs
 microseconds would cost evidence. A `vector test` suite proves case by case that
 the VRL admits exactly what `syslog_promotable` admits, and CI fails if the
@@ -426,21 +430,25 @@ these constraints first:
 ## Operational notes
 
 * **UDP loss.** Syslog over UDP and NetFlow are unreliable by design.
-  Vector buffers incoming syslog; if the device link is lossy or the host
-  is loaded you'll see gaps. For Syslog, prefer TCP (`@@host:port` in
+  syslog-ng spools to a persistent disk buffer before the aggregator; if the
+  device link is lossy or the host is loaded you'll still see gaps on UDP. For Syslog, prefer TCP (`@@host:port` in
   rsyslog) when the device supports it.
 
 * **High flow rates.** goflow2 in a single container is fine for tens of
   thousands of flows/sec. Beyond that, run multiple goflow2 instances
   behind a load balancer (or skip ahead to the Kafka phase).
 
-* **Sampling.** NetFlow exporters typically subsample. The `sampling_rate`
-  field is preserved in the JSON; aggregations should multiply by it to
-  estimate the un-sampled volume.
+* **Sampling.** NetFlow exporters typically subsample. The record's
+  `sampling_rate` is used when the exporter reports it; when it does not, an
+  operator can DECLARE the exporter's rate (`/api/flows/sampling`, Flows →
+  About this data; tracker 401 (c), migration 0078) and the flow totals scale
+  by it. A record with neither is counted 1:1 and the page says so.
 
-* **Vector backpressure.** If Loki falls behind, Vector will reject new
-  syslog packets at the UDP socket level. Watch `vector_buffer_*` and
-  `vector_events_received_total` in VictoriaMetrics (self-scrape).
+* **Back-pressure.** If OpenSearch or ClickHouse stops accepting writes, the
+  router's sinks back-pressure into Kafka (72 h retention), which is delay,
+  not loss — until the retry envelope or retention runs out. Watch
+  `VectorSinkBufferFilling`, `OpenSearchFloodStageBlock` and the
+  `OpenSearchWritesRefused` page.
 
 ## What is kept of each syslog line, and the forensic limit
 
@@ -448,7 +456,7 @@ Correlix keeps each syslog line twice in the same record: once parsed and once a
 
 | What | Where | How long |
 |---|---|---|
-| The parsed record: vendor, event type, summary, device, site, user, source and the rest | Logs, searchable | `OPENSEARCH_LOG_RETENTION_DAYS`, 14 days by default. Older indices are deleted |
+| The parsed record: vendor, event type, summary, device, site, user, source and the rest | Logs, searchable | `OPENSEARCH_LOG_RETENTION_DAYS`, 14 days by default. Older indices are deleted. **Routine management sessions** (tracker 410) are the exception: their originals live in `netops-syslogroutine-*` for `OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` (96 h by default, never under 72 h), after which only their per-minute roll-ups remain for the 14 days |
 | The frame as syslog-ng received it, before any parsing (`message_original`) | The same record. You can read it in the record panel and in exports, but you can't search on it, because it is stored without an index | The same as the record |
 | The raw event on the bus, for replay | Kafka | `BUS_RETENTION_MS` (72 hours by default) or `BUS_RETENTION_BYTES` per partition (512 MiB by default), whichever runs out first. At a high log rate the bytes limit wins, and replay covers less than 72 hours |
 

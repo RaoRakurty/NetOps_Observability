@@ -85,8 +85,15 @@ Saving starts a sweep. The usual 60-second cooldown between sweeps still applies
 ## 4. Retire the platform copy (D3: by hand)
 
 1. Network Scan (the platform scan): remove the 8 addresses from its ranges and save.
-   This step alone does not retire anything. A device outside the ranges is not
-   measured, so it never ages out.
+   This step alone retires them only slowly. A remembered device whose owner still
+   has a turned-on scan, but whose address no turned-on scan of that owner covers any
+   more, is an ORPHAN (`internal/discovery/snmp_source.go`, 2026-11-19): it accrues a
+   miss on every completed sweep, turns stale after 3, and is pruned 7 days after it
+   went stale. Two exceptions keep the memory: an owner whose scan was refused this
+   poll (its ranges are unknown, so nothing of it is orphaned), and an owner with NO
+   turned-on scan left (turning discovery off is not evidence a device left; its
+   devices are simply not reported). So step 2 is still the way to retire the
+   platform copies now.
 2. In the **Provider view**, delete each of the 8 platform rows with
    `DELETE /api/devices/{platform id}`. The delete leaves a tombstone stamped with the
    platform as owner. A customer scan device can only be suppressed by a tombstone of

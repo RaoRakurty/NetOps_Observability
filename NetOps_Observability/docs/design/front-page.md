@@ -96,8 +96,8 @@ API (Go, tenant-scoped, RLS): `GET/POST /api/services`,
 
 ## 3. Flow→service attribution pipeline
 
-Decision (owner): attribution is **materialized at insert time in ClickHouse**, not
-query-time joins and not Vector enrichment (reload/versioning semantics in Vector
+Decision (owner): attribution is **materialized in ClickHouse** (a 1-minute roll-up
+written as flows arrive), not query-time joins and not Vector enrichment (reload/versioning semantics in Vector
 are murky; CH dictionaries are explicit and versioned).
 
 ### 3.1 Mechanism
@@ -105,7 +105,8 @@ are murky; CH dictionaries are explicit and versioned).
 ```
 PG service_selectors ──(Go API flattens active versions)──▶ CH svc_selector_rules
                                                                   │ (dictionary source)
-netops.flows insert ──▶ MV mv_flow_attribution ──(dict lookups)──▶ svc_flow_rollup_1m
+netops.flows (closed minutes) ──▶ Go svc_rollup_worker ──(dict lookups)──▶ svc_flow_rollup_1m
+                                    (NO materialized view on netops.flows — hard rule)
 ```
 
 - The Go API **flattens** the active selector set into `netops.svc_selector_rules`
@@ -113,8 +114,14 @@ netops.flows insert ──▶ MV mv_flow_attribution ──(dict lookups)──�
   on every selector change — same publish pattern as `device_tenant.csv` enrichment.
   Two CH dictionaries over it: `svc_by_prefix` (`ip_trie` layout) and `svc_by_port`
   (flat), TTL-refreshed + explicitly reloaded by the API after publish.
-- A **materialized view** on the flows table computes attribution per inserted row
-  and writes a 1-minute **rollup** (panels need aggregates, not raw flows):
+- **AS BUILT (supersedes the original MV design):** a scheduled Go worker
+  (`svc_rollup_worker.go`, `FEATURE_SVC_FLOW_ROLLUP`) scans CLOSED minutes per
+  tenant and writes the 1-minute **rollup** (panels need aggregates, not raw flows);
+  the audited selector backfill (`svc_backfill.go`) re-attributes history. **No
+  materialized view may read `netops.flows`** — its tenant row policy is evaluated
+  on every insert in the inserting connection's context, where `tenant_scope` is
+  unset, so an MV insert errors and breaks ingestion (`internal/chschema/svc_rollup_schema.go`,
+  the removed `flows_hourly`). The table:
 
 ```sql
 CREATE TABLE svc_flow_rollup_1m (
