@@ -47,8 +47,34 @@ are idempotent; all are safe to re-run on a healthy stack.
 | 1 | **Kafka ACL matrix** | `deployment/docker/kafka/apply-acls.sh` — per-principal topic/group ACLs (SEC-007) | piped into the running broker: `docker compose exec -T kafka bash -s < deployment/docker/kafka/apply-acls.sh` | plaintext broker (no authorizer) or an external broker — then it is the broker owner's job |
 | 2 | **Kafka topics** | the canonical topic list, partitions, retention | one-shot: `docker compose --profile embedded-bus up kafka-init` | external broker |
 | 3 | **OpenSearch security config** | `opensearch/security/{internal_users,roles,roles_mapping}.yml` → users, **roles**, mappings | one-shot: `docker compose --profile security up opensearch-security-init` | non-TLS / pre-SEC-008 installs |
-| 4 | **Index templates** | `opensearch/index-templates.json` → the per-lane field contract | `bash scripts/bootstrap-opensearch.sh` | never — always run it |
-| 5 | **ISM + snapshots** | retention policy patterns, replica posture, snapshot repo + SM policy, the `security-auditlog` template | one-shot: `docker compose up opensearch-init` (runs `opensearch/apply-ism.sh`) | never — always run it |
+| 4 | **ISM + snapshots** | retention policy patterns, replica posture, snapshot repo + SM policy, the `security-auditlog` template | one-shot: `docker compose up opensearch-init` (runs `opensearch/apply-ism.sh`) | never — always run it |
+| 5 | **Index templates** | `opensearch/index-templates.json` → the per-lane field contract (and a mapping sync of today's indices) | `bash scripts/bootstrap-opensearch.sh` | never — always run it |
+
+This is the order `install.py` and `update.sh` use: `compose up` runs the
+one-shots of the active profiles (`opensearch-security-init` with TLS — the
+`security` profile — then `opensearch-init`, and `kafka-init` with the embedded
+bus), and the template bootstrap (`bootstrap-opensearch.sh`, the installer's
+`bootstrap-os` stage) runs after the stack is up.
+
+**`scripts/deploy.sh` runs none of these.** It rebuilds and recreates the
+services you name (default `frontend api`), runs `install.py --migrate-env` and
+recreates services whose mounted config changed — nothing else. After a
+`deploy.sh` that changes a lane, run the bootstraps yourself, in the order
+above, and for a **new OpenSearch family** deploy the api before the router that
+writes it:
+
+```
+scripts/deploy.sh opensearch-security-init     # roles: netops_writer must grant the new pattern
+scripts/deploy.sh opensearch-init              # ISM for the new family
+bash scripts/bootstrap-opensearch.sh           # the template
+scripts/deploy.sh api                          # readers of the new family
+scripts/deploy-qualify.sh                      # B4 proves every router lane is writable
+scripts/deploy.sh vector-router                # only now start writing it
+```
+
+A router that writes a family before its role grant and template exist has its
+batches refused (`indices:admin/create`) and dropped. See
+`docs/runbooks/deploy.md`.
 
 `scripts/deploy-qualify.sh` runs 1, 2, 5 (as B1/B2/B3) and then **audits** 3+4
 read-only as **B4**. `scripts/install.py` and `scripts/update.sh` run 4 by

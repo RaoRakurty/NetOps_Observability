@@ -25,7 +25,7 @@ Every operation takes one of two credentials in the `Authorization` header:
 | Credential | Header | Obtained from |
 |---|---|---|
 | Access token (JWT) | `Authorization: Bearer <jwt>` | `POST /api/auth/login` |
-| API key | `Authorization: Bearer ntk_…` or `X-API-Key: ntk_…` | **Administration → People & access → API Access** |
+| API key | `Authorization: Bearer ntk_…` or `X-API-Key: ntk_…` | **Administration → API Access** |
 
 A request without a credential is refused with `401` and the body `{"error":"missing bearer token"}`.
 
@@ -267,7 +267,7 @@ A request without a credential is refused with `401` and the body `{"error":"mis
 
 | Method | Path | What it does |
 |---|---|---|
-| `GET` | `/api/admin/parser/stats` | Parser rule corpus, per-rule hit counts, promotion rate and ingest pre-filter split, summed across the correlation replicas (platform admin) |
+| `GET` | `/api/admin/parser/stats` | Parser rule corpus, per-rule hit counts, promotion rate, ingest pre-filter split and the per-vendor coverage scorecard, summed across the correlation replicas (platform admin) |
 | `GET` | `/api/debug/loglevel` | Report each module's runtime log level and its armed auto-revert time — a LIVE reading for the switch this process owns, the last change requested through this api for the others, and the honest reason for a module that cannot be switched at runtime at all (platform admin) |
 | `PUT` | `/api/debug/loglevel` | Raise one module to debug for a BOUNDED window (hard cap 30 minutes) with an auto-revert armed in the module's own process; a module with no runtime switch answers applied:false and says why, never a faked success (platform admin) |
 | `GET` | `/api/debug/parsemarker` | Report whether the parser decision-trace filter is armed and when it auto-disarms (platform admin) |
@@ -281,6 +281,7 @@ A request without a credential is refused with `401` and the body `{"error":"mis
 | `GET` | `/api/debug/trace/&#123;marker&#125;` | Poll a trace's per-stage status: seen \| not_seen \| not_observable (with the reason) for the bus, the three stores, correlation and the api (platform admin) |
 | `GET` | `/api/flows/top` | Top talkers (NetFlow/ClickHouse) |
 | `POST` | `/api/logs/search` | Search logs (OpenSearch) |
+| `GET` | `/api/logs/severity-counts` | How many records of each stored severity match a log search (?signal=, ?query=, ?from=, ?to=), counted by the store over the same tenant-scoped surface the search reads. Returns &#123;signal, total, counts:[&#123;field, value, count&#125;], unrated, other&#125;: a record with both severity and level counts once by severity, one with neither is unrated, words past the per-field limit are in other, so the parts add up to total |
 | `GET` | `/api/metrics/query` | Instant PromQL query |
 | `GET` | `/api/metrics/query_range` | Range PromQL query |
 | `GET` | `/api/telemetry/unrecognized` | Mined templates of the caller's log lines the parser would not admit (days, limit, lane) |

@@ -1090,7 +1090,10 @@ def test_h5_prune_removes_signature_sidecar_with_artifact(tmp_path):
 def test_m26_env_backups_are_gitignored():
     """.env.rotate.bak (secret rotation) and .env.plan.bak (replan) carry the
     full pre-rotation secret set; deployment/docker/.env* must cover them."""
-    for name in (".env", ".env.rotate.bak", ".env.plan.bak"):
+    for name in (".env", ".env.rotate.bak", ".env.plan.bak",
+                 # hand-made safety copies without the leading dot (lab,
+                 # 2026-11-19): env.bak-<reason> held the full credential set
+                 "env.bak-seasonal", "env.bak", "deploy.env.bak"):
         r = subprocess.run(
             ["git", "check-ignore", "-q", f"deployment/docker/{name}"],
             cwd=ROOT, capture_output=True, text=True)

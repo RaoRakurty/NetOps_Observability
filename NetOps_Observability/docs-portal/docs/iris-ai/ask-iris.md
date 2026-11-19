@@ -30,8 +30,12 @@ of an answer to know what a claim rests on.
 | The investigation workspace | The **Iris co-pilot** lane, **Ask Iris** | The same read of the open case, or of the symptom you selected, with the missing evidence named. |
 | Anywhere | The **Iris AI** button at the foot of the sidebar, or **Open Copilot** from the command palette | A free conversation carrying the same grounding. |
 
-The drawer opens as an overlay by default and can be docked beside the page with
-the split-screen control in its header. The choice is remembered.
+The drawer opens docked beside the page by default. The control in its header
+switches it to a floating overlay and back, and the choice is remembered.
+
+Iris already knows the incident or device on your screen: a question asked from
+an RCA case or a device page is bound to that case or device, re-checked against
+what you are allowed to see.
 
 ### Step 2 - Use a slash command for a fixed question
 
@@ -88,7 +92,28 @@ An answer card carries, in order and only where the backend supplied it:
 7. **Disclaimers**, including the note that the answer came from the grounded
    engine when no provider is configured.
 
-### Step 4 - Rate the answer
+While a longer answer is being prepared, a live progress list shows each step as
+it runs (resolving the subject, reading evidence, checking the engine's verdict)
+so you are never left with a spinner and no explanation.
+
+### Step 4 - Go deeper, or correct the question
+
+- **Investigate this fully.** Under a troubleshooting answer, this runs the
+  read-only Investigator on the same subject: it starts from the correlation
+  engine's verdict, runs your workspace's approved runbooks for that incident or
+  device, then bounded method passes, and shows each step it took. It needs the
+  AI investigations entitlement. See [Investigations](/iris-ai/investigations).
+- **That's not what I meant.** If Iris answered about the wrong device, time or
+  metric, say what was wrong from a short list, add a note, and optionally
+  re-phrase the question. Corrections are kept for review; they do not change
+  how Iris answers the next question on their own.
+- **Proposed actions.** A concluded investigation may propose one of two
+  actions: adding a note to the case's already-linked ITSM ticket, or saving
+  its finding to investigation memory. A proposal does nothing until a
+  **different person** approves it on the Iris actions page. See
+  [Approve Iris actions](/administration/iris-actions).
+
+### Step 5 - Rate the answer
 
 Select the thumb under the card at **Was this helpful?**. The rating records the
 thumb and the question category, never your text or the retrieved data. A rating
@@ -98,8 +123,11 @@ on a concluded investigation is also what writes it to investigation memory. See
 ## What you see
 
 A grounded answer names its method, cites its evidence, and states its gaps.
-Nothing is executed on your behalf: every Iris tool is read-only, and the draft
-commands produce text only.
+Iris never changes a device's configuration, and draft commands such as `/itsm`
+produce text only. Two things go beyond reading, and both are off until an
+administrator turns them on: active probes (tests sent from Correlix's own
+collector, as authored method steps) and approved actions (written only after a
+second person approves).
 
 ## Related
 

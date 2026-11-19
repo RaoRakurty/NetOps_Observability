@@ -1,6 +1,6 @@
 ---
 title: Set up Iris
-description: Check the feature flags, grant workspaces access, add an optional provider key, and verify what the panel header reports.
+description: Turn on the Iris AI switches, grant workspaces access, connect an AI provider, and verify what the panel header reports.
 page_type: task
 sidebar_position: 2
 ---
@@ -16,7 +16,6 @@ model-written narratives on top of the same governed evidence.
 - **Platform administrator** for the platform settings and the per-workspace
   access list. A tenant administrator sees only their own workspace settings and
   cannot open the platform form.
-- Host access to `deployment/docker/.env` for the feature flags.
 - A decision on data egress. Without a key nothing leaves the host. With a key,
   questions and a redacted evidence summary go to that provider.
 
@@ -31,7 +30,7 @@ includes it; Team and Community add it as a separate line).
 
 On a licensed install, a platform administrator turns them on:
 
-1. Open **Administration → Features**, section **Iris AI**.
+1. Open **Platform → Configuration → Features**, section **Iris AI**.
 2. Turn on **Iris AI models**. Confirm that questions, and the evidence Iris
    gathers, may go to your configured AI provider.
 3. To let the model run read-only lookups, also turn on **AI investigations**,
@@ -47,11 +46,17 @@ API); it is unset by default, which leaves Iris on.
 
 ### Step 2 - Grant workspaces access
 
-1. Open Iris from the sidebar and select the gear, **Assistant settings**.
-2. Under **Workspace access**, each workspace has two checkboxes:
-   **Assistant** (may use Iris at all) and **Investigations** (may run governed,
-   read-only lookups before answering). Assistant is enabled by default;
-   investigations are not.
+1. Open Iris from the sidebar and select the **AI models** button in the panel
+   header.
+2. Under **Workspace access**, each workspace has four checkboxes:
+   - **Assistant** — may use Iris at all (on by default).
+   - **Investigations** — may run governed, read-only lookups before answering
+     (off by default; needs **AI investigations** on the Features page).
+   - **MCP** — an external AI assistant may use Iris's read-only lookups with
+     this workspace's API key (needs **Iris over MCP** on the Features page).
+   - **Active probes** — Iris's methods may send a short test from Correlix to
+     this workspace's own targets (needs **Investigations** and **Iris active
+     probes** on the Features page).
 3. Set the per-workspace guardrails beside them: lookups per question (1 to 8,
    platform default 4) and AI tokens per day. A blank field means the platform
    default.
@@ -59,11 +64,14 @@ API); it is unset by default, which leaves Iris on.
 Answers are always scoped to the workspace's own data. A cross-tenant platform
 principal is never gated here.
 
-### Step 3 - Add a provider key (optional)
+### Step 3 - Connect an AI provider (optional)
 
 **Platform key.** In the same settings form, choose a provider tile
-(**Anthropic**, **OpenAI** or **Gemini**), pick or type a model, paste the key
-and select **Save**. The key badge reads **not set**, **configured** when it was
+(**Gemini** is pre-selected; **OpenAI** and **Anthropic** are the others), paste
+the key, and select **Test** to check it answers. Three models are filled in
+with the provider's recommended choices, and you can change each one:
+**Default model**, **Model for quick answers** and **Model for deep
+investigations**. Then select **Save**. The key badge reads **not set**, **configured** when it was
 saved in the console, or **via environment** when the deployment supplies it. An
 environment key wins, and the field is disabled while one is present.
 
@@ -86,12 +94,10 @@ grounded answers, slash commands and skills all work without a provider.
 ### Step 4 - Verify
 
 1. Open Iris. Read the line under the title in the panel header:
-   - The provider and model, for example `Claude · claude-sonnet-4-6`, when a
-     platform key is live.
-   - `your key` on a workspace that supplied its own, or `Platform AI service`
-     when it rides the platform key.
-   - `Grounded engine · key-free` when no usable key is configured. Grounded
-     answers still work.
+   - The model family that answers — **Gemini**, **GPT** or **Claude** — when a
+     usable key (the platform's or the workspace's own) is configured.
+   - **Built-in** when no usable key is configured. Answers from your network
+     data still work.
 2. Ask a grounded question, for example `/status`, and confirm the card returns
    counts and citations.
 
@@ -108,8 +114,8 @@ is never ambiguous.
 |---|---|---|
 | `FEATURE_AI` | Turns Iris off entirely when `false`. Wins over `FEATURE_COPILOT`. | unset, which leaves Iris on |
 | `FEATURE_COPILOT` | Legacy form of `FEATURE_AI`, honoured when `FEATURE_AI` is unset. It no longer gates model chat. | `true` in compose |
-| `FEATURE_AI_TOOLS` | No longer a switch. Read once on upgrade to keep an install that ran AI investigations running them; then **Administration → Features → AI investigations** decides. | `false` |
-| `COPILOT_PROVIDER` / `COPILOT_MODEL` | Provider and model when nothing is stored. | `anthropic` / `claude-sonnet-4-6` |
+| `FEATURE_AI_TOOLS` | No longer a switch. Read once on upgrade to keep an install that ran AI investigations running them; then **Platform → Configuration → Features → AI investigations** decides. | `false` |
+| `COPILOT_PROVIDER` / `COPILOT_MODEL` | Provider and model when nothing is stored in the console. | `gemini` / the provider's recommended model |
 | `COPILOT_API_KEY` | Key for the configured provider. | unset |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Per-provider keys; each one with a key joins the fallback chain. | unset |
 | `COPILOT_PROVIDER_CHAIN` | Fallback order for provider-backed answers. | `openai,gemini,anthropic` |

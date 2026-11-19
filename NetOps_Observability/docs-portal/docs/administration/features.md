@@ -18,8 +18,8 @@ administrators do not.
 ## 1. Choose a feature
 
 Features are grouped: **Collection**, **Discovery**, **Routing**,
-**Configuration and device access**, **Integrations and automation** and
-**Analytics**. Each line says what the feature does, and where its current value
+**Configuration and device access**, **Integrations and automation**,
+**Analytics** and **Iris AI**. Each line says what the feature does, and where its current value
 came from:
 
 - **Set at install** — the value the installer chose.
@@ -32,8 +32,24 @@ Use the switch. The change is saved at once and written to the audit log.
 
 Features that reach into your network or out of Correlix — SSH to devices,
 configuration backup, diagnostic commands, packet capture, wireless actions,
-ticket updates from your ITSM tool, the UniFi controller — ask you to confirm
-before they turn **on**. Turning any feature **off** never asks.
+ticket updates from your ITSM tool, the UniFi controller, and every **Iris AI**
+switch — ask you to confirm before they turn **on**. Turning any feature
+**off** never asks.
+
+### The Iris AI switches
+
+| Switch | What it allows | Needs |
+|---|---|---|
+| **Iris AI models** | Iris sends questions and the evidence it gathered to your configured AI provider for written answers and chat. Off, Iris answers from Correlix data alone. | the Iris AI add-on |
+| **AI investigations** | The AI model runs read-only lookups across your network data. Each workspace still opts in. | the add-on, Iris AI models |
+| **Iris active probes** | Iris's methods may send a short test (3 pings, one traceroute, one DNS lookup or one web request) from this Correlix server to a workspace's own devices or declared probes — never from a customer device. Each workspace opts in. | the add-on, AI investigations |
+| **Iris actions (approval needed)** | Iris may propose a note for an incident's ITSM ticket or save its finding to investigation memory; nothing happens until someone other than the person Iris answered approves it. Never a device change. | the add-on, AI investigations |
+| **Iris over MCP (read-only)** | An external AI assistant may use Iris's read-only lookups with a workspace API key. Data leaves Correlix for that assistant. | — |
+| **Iris in Slack and Teams** | People may ask Iris from Slack or Microsoft Teams; each linked chat account is approved by an administrator. | — |
+
+These switches are set **on this page only** — no install setting or
+configuration file can turn them on — and they start off. A switch that needs
+the Iris AI add-on cannot be turned on without it; the page says why.
 
 ## 3. Restart if asked
 

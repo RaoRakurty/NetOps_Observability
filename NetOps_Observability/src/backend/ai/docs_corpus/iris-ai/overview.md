@@ -14,29 +14,51 @@ gap. This section is for the operator who asks it questions and for the
 administrator who turns it on.
 
 Open it from the button pinned at the foot of the left sidebar, labelled **Iris
-AI**. It opens as a slide-over that you can float over the page or dock beside
-it.
+AI**. It opens docked beside the page; you can switch it to a floating overlay.
 
 | Page | What it gives you |
 |---|---|
-| [Set up Iris](/iris-ai/setup) | The flags, the per-tenant entitlement, and the optional provider key. |
-| [Investigate an incident with Iris](/iris-ai/ask-iris) | Asking, slash commands, and how to read an answer. |
-| [Iris skills and chaining](/iris-ai/skills) | The 13 compiled-in methods, and how one hands off to the next. |
+| [Set up Iris](/iris-ai/setup) | The switches, the AI add-on, the per-workspace settings and the AI provider. |
+| [Investigate an incident with Iris](/iris-ai/ask-iris) | Asking, slash commands, how to read an answer, and how to go deeper. |
+| [Iris skills and chaining](/iris-ai/skills) | The 25 compiled-in methods, where each applies, and how one hands off to the next. |
+| [Investigations](/iris-ai/investigations) | The read-only Investigator, triggered and scheduled investigations, and active probes. |
+| [Change assistance](/iris-ai/change-assistance) | Change-plan review, upgrade readiness, upgrade procedures and device baselines — all read-only. |
+| [Seasonal answers](/iris-ai/seasonal-answers) | "Is this normal for this time of week?" — how Iris compares with the same hour in earlier weeks. |
+| [Fixes and similar incidents](/iris-ai/resolutions) | Recording how a case was fixed, and "last time this was fixed by…". |
+| [Teach Iris your names](/iris-ai/iris-settings) | Names and aliases, questions Iris could not answer, and how it decided. |
 | [Investigation memory](/iris-ai/memory) | What Iris remembers, when, and why it is never a rule. |
+
+Administrators also have:
+
+| Page | What it gives you |
+|---|---|
+| [Network context](/administration/network-context) | Facts about your network that Iris may use. |
+| [Runbooks and MOPs](/administration/iris-runbooks) | Your own reviewed methods, and the built-in upgrade procedures. |
+| [Iris learning](/administration/iris-learning) | Proposed facts and runbooks drawn from recorded fixes, adopted only by people. |
+| [Iris actions](/administration/iris-actions) | Approving the two actions Iris may propose. |
+| [Iris in Slack and Teams](/administration/iris-chat) | Asking Iris from chat. |
+| [Iris over MCP](/administration/iris-mcp) | Read-only Iris for an external AI assistant. |
 
 ## How Iris answers
 
-Two paths, and Iris always picks one that works.
+Iris works in two modes, depending on whether model-backed Iris is turned on.
+Model-backed Iris needs the **`iris_model` licence add-on** (included with
+Enterprise) and the **Iris AI models** switch on the Features page; this applies
+whether Iris uses the platform's AI provider or a workspace's own key.
 
-- **Grounded, no provider key needed.** Questions about your network are
-  answered by a deterministic engine that reads your tenant's data through
-  governed read-only tools and returns a structured, cited card. Navigation,
-  product questions, shift hand-offs, incident lists and time-range summaries
-  never call a model at all.
-- **Provider-backed narrative.** With an AI provider key configured, the
-  reasoning-heavy answers (an RCA explanation, a troubleshooting finding, a
-  current-state summary) get a model-written narrative over the same governed
-  evidence. Those are exactly the answers the grounding verifier runs on.
+- **Evidence-only (no AI provider).** Every question is answered from your
+  workspace's data by Correlix itself: the question's wording picks the answer
+  path, and the answer is a structured, cited card. Nothing is sent to an AI
+  provider.
+- **Model-backed.** One quick model call reads each new question, however it is
+  phrased, and picks which answer path handles it from a closed list the server
+  writes; a repeated question is answered from a cache. The reasoning-heavy
+  answers (an RCA explanation, a troubleshooting finding, a current-state
+  summary) also get a model-written narrative over the same evidence, and those
+  are exactly the answers the grounding verifier checks. A slow or failing
+  model never holds an answer back: Iris tries another configured model, and
+  otherwise shows the evidence answer with a one-line note saying why (for
+  example, "Model narrative timed out; showing the evidence answer.").
 
 Answers cite documentation as `/docs/<slug>#<anchor>` and open the page in the
 in-app Help drawer, so a product answer lands on the page that says it.
@@ -63,8 +85,14 @@ are enforced in code, not requested in a prompt.
   bracketed evidence id the model produced that is not in the evidence bundle,
   before the answer is shown. It is a guardrail in code, so the model cannot
   talk its way past it.
-- **Every tool is read-only.** Iris never changes anything. Draft-style
-  commands produce text only, and nothing is sent or written on your behalf.
+- **Iris never changes a device.** No configuration, image or command is ever
+  pushed to a device; change help (reviews, upgrade procedures, baselines) is
+  read-only. Draft-style commands produce text only. Two things go beyond
+  reading, both off until a platform administrator turns them on and each
+  workspace opts in: **active probes** (a short test sent from Correlix's own
+  collector, run only as an authored method step) and **approved actions** (an
+  ITSM ticket note or a memory entry, written only after a second person
+  approves).
 
 ## Related
 

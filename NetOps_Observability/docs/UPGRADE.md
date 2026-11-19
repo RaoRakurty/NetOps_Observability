@@ -16,13 +16,18 @@ That's it for 95% of upgrades. Read on for the rest.
 
 ## What `update.sh` does
 
-1. **Snapshots `data/` + `.env`** into `/var/backups/netops/pre-upgrade-<timestamp>.tar.zst`. This is your rollback point.
-2. **Validates the new scaffold** — fails fast if required files are missing.
-3. **Reconciles your `.env`** with the latest installer template. Existing values are never touched; only missing variables are appended (with random passwords generated for any new secret). This is the installer's own migration, `python3 scripts/install.py --migrate-env` (since 2026-11-11; `scripts/deploy.sh` runs it too): it backs `.env` up to `deployment/docker/.env.pre-migrate-<UTC stamp>` (mode 0600, newest 10 kept) before writing, prints the names of the keys it added and never a value, refuses a truncated `.env` instead of minting new store credentials into it, and stops the upgrade with the containers untouched on any error. Running it again changes nothing.
-4. **Pulls pinned images** (`postgres:16-alpine`, `opensearch:2.16.0`, etc.) in case any were repinned.
-5. **Rebuilds the local images** — the `api`, `frontend`, and `correlation` services are built from your source tree.
-6. **Recreates containers** — `docker compose up -d --remove-orphans`. Services whose image or env didn't change keep running. Services that *did* change get rolled.
-7. **Re-applies OpenSearch index templates** in case any were updated.
+In the order `scripts/update.sh` runs them:
+
+1. **Validates the new scaffold** — fails fast if required files are missing (no `.env` or docker needed).
+2. **Reconciles your `.env`** with the latest installer template — `python3 scripts/install.py --migrate-env` (since 2026-11-11; `scripts/deploy.sh` runs it too). Existing values are never touched; only missing variables are appended (with random passwords generated for any new secret). It backs `.env` up to `deployment/docker/.env.pre-migrate-<UTC stamp>` (mode 0600, newest 10 kept) before writing, prints the names of the keys it added and never a value, refuses a truncated `.env` instead of minting new store credentials into it, and stops the upgrade with the containers untouched on any error. Running it again changes nothing.
+3. **Renders the service credential files** under `data/secrets` from `.env` (the same renderer `install.py` uses), moves any credential still in an old-form `.env`, and brings TLS key custody up to date. This must happen before `compose up`.
+4. **Snapshots `data/` + `.env`** into `/var/backups/netops/pre-upgrade-<timestamp>.tar.zst` — your rollback point. (It runs after the `.env` migration; the migration keeps its own `.env` backup.)
+5. **Pulls pinned images** in case any were repinned.
+6. **Rebuilds the local images** (`api`, `frontend`, `correlation`) from your source tree.
+7. **Recreates containers** — fingerprints the mounted config first, then `docker compose up -d --remove-orphans`. Services whose image or env changed are rolled. `up -d` also runs the one-shot bootstraps of the active profiles: `opensearch-security-init` (TLS installs — the `security` profile), `opensearch-init` (ISM) and `kafka-init` (topics).
+8. **Recreates services whose mounted config changed** — compose does not restart a service when only a bind-mounted config file changed; `update.sh` compares the fingerprints and recreates those, so nothing keeps running on an old config.
+9. **Applies the OpenSearch index templates** — `scripts/bootstrap-opensearch.sh` (and syncs today's indices' mappings). Required on every upgrade that adds a storage lane.
+10. **Removes superseded image layers** (`docker image prune -f`, dangling only).
 
 You can skip individual steps with `--no-backup` / `--no-build` if you know what you're doing.
 
@@ -30,13 +35,13 @@ You can skip individual steps with `--no-backup` / `--no-build` if you know what
 
 A few things sit outside Docker and need manual attention:
 
-**ClickHouse schema changes.** `clickhouse/init.sql` only runs the first time the container starts (when `data/clickhouse/` is empty). If the upgrade adds a new table or column, apply it manually:
+**ClickHouse schema changes.** `clickhouse/init.sql` only runs the first time the container starts (when `data/clickhouse/` is empty). For a running install the **api converges the schema on every start** (`internal/chschema.ConvergeStmts`, applied from `clickhouse_policies.go`): row policies, additive columns and the tables added since (for example `flow_iface_1m`, `series_hourly`, `iface_names`, the cloud-cost store) are created idempotently, so an upgrade normally needs nothing by hand. Only for an object that is in `init.sql` but not in that list do you apply the file yourself:
 
 ```bash
 docker compose exec -T clickhouse clickhouse-client < deployment/docker/clickhouse/init.sql
 ```
 
-The `CREATE TABLE IF NOT EXISTS` and `CREATE MATERIALIZED VIEW IF NOT EXISTS` patterns mean re-running is idempotent — existing tables aren't touched.
+The `CREATE TABLE IF NOT EXISTS` pattern means re-running is idempotent — existing tables aren't touched. (There are no materialized views on `netops.flows` any more: `flows_hourly` was dropped and the converge list removes it; roll-ups are written by the api.)
 
 **Tenant at-rest partitioning (#20 Phase 3).** Fresh installs get `PARTITION BY (tenant_id, …)` from `init.sql`, but **existing** `flows`/`findings`/`tunnels` tables keep their old date-only partition key until you rebuild them. Run the idempotent migration (data preserved via `EXCHANGE TABLES`; safe to re-run — it skips already-migrated tables):
 
@@ -46,17 +51,24 @@ docker compose exec -T clickhouse sh -s < deployment/docker/clickhouse/migrate-t
 
 > **Transition note (OpenSearch):** after Phase 3, telemetry is written to per-tenant indices (`netops-{signal}-{tenant}-{date}`, untagged → `…-untagged-…`). **Scoped tenants cannot read pre-Phase-3 `netops-{signal}-{date}` indices** (no tenant segment); the platform owner still sees them via `netops-{signal}-*`, and they age out within the ISM retention window (≤30d). No action needed — it self-heals as old indices roll off.
 
-**Postgres schema changes.** Same story if/when we add tables there. The scaffold currently doesn't use Postgres for app state (the user store is JSON-backed), so there's nothing yet.
+**Postgres schema changes.** New installs use `STORE_BACKEND=postgres` (see the
+store-backend section below); the api applies its own migrations at start, each
+with a rollback file. An install that is still on `STORE_BACKEND=file` keeps the
+JSON stores under `data/api/` — there is nothing to apply there.
 
-**User store format changes.** `data/api/users.json` is read on every API start. If the User struct grows fields, old entries get zero-valued defaults — no migration needed. If a field is removed, the old field is ignored. If a field is renamed (rare), you'd need a one-shot migration.
+**User store format changes.** On the file backend `data/api/users.json` is read on every API start: a new field gets its zero value, a removed one is ignored. On Postgres the users live in the database and the api migrations handle it.
 
 **The bootstrap admin.** Only seeded on first start with an empty user store. Upgrades never overwrite passwords. If you forgot the admin password and need a reset:
 
 ```bash
-docker compose stop api
-# edit data/api/users.json, remove the user(s)
-docker compose start api    # api re-seeds from ADMIN_INITIAL_PASSWORD in .env
+# File backend only (STORE_BACKEND=file):
+bash scripts/reset-admin.sh   # removes users.json; the api re-seeds the admin
+                              # from ADMIN_INITIAL_PASSWORD in .env
 ```
+
+`scripts/reset-admin.sh` handles the file store only. On the Postgres backend the
+users are in the database: recover through another platform administrator (or
+SSO) rather than editing files.
 
 ## Redpanda → Apache Kafka (2026-07)
 
@@ -100,11 +112,16 @@ cat pg.sql | docker compose exec -T postgres psql -U $DB_USER
 The pre-upgrade backup tarball restores everything:
 
 ```bash
+cd /opt/netops/NetOps_Observability/deployment/docker && docker compose down
 cd /opt/netops/NetOps_Observability
-docker compose down
+python3 scripts/install.py --custody-rollback   # only when going back past 2026-11-09
 bash scripts/restore.sh /var/backups/netops/pre-upgrade-2026-05-27-141500.tar.zst
-docker compose up -d
+cd deployment/docker && docker compose up -d
 ```
+
+`--custody-rollback` reverses the 2026-11-09 TLS key-custody change (group-
+readable keys) for a release that predates it; `update.sh` prints the same
+rollback recipe at the end of every run.
 
 `restore.sh` puts `data/` back, restores `.env`, and lays the configs back in place. The next `up -d` is the rollback.
 
@@ -262,4 +279,16 @@ curl -fs http://localhost:8000/admin/version
 docker compose logs --tail=50 api           # any startup errors?
 ```
 
-If `/admin/health` returns 200 and `docker compose ps` is clean, the upgrade landed. Sign back into the dashboard with your existing admin credentials.
+A 200 from `/admin/health` and a clean `docker compose ps` prove containers are
+running — not that anything is doing work (on 2026-09-02 the correlation engine
+consumed nothing for three hours with every healthcheck green). **The proof is**
+
+```bash
+scripts/deploy-qualify.sh
+```
+
+which re-runs the idempotent bootstraps and then checks that the engines and
+router lanes are consuming, the api serves, every router lane is writable and
+every monitored source is reporting (checks B1–B4, Q1–Q11). The upgrade landed
+when it prints `QUALIFIED`. Then sign back into the dashboard with your existing
+admin credentials.

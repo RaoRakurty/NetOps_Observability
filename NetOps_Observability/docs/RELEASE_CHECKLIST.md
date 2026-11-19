@@ -77,19 +77,26 @@ every check through a stub that passes, fails, or is missing, and parses Decisio
 
 ## 1. Code gates — must be green on the release commit
 
-All of these run on every PR and push. None needs a human unless it fails.
+They run on pull requests and on pushes to `main` (PR workflows trigger on
+`pull_request` and on `push` to `main` only). On a PR the planner
+(`scripts/test-plan.py --ci-groups`) may skip a group whose paths the diff does
+not touch; every non-PR event — push to `main`, a tag, the release gate — runs the
+full set, and `ci-gate (<workflow>)` fails on a selected job that failed, was
+cancelled or was skipped. Every `go test` step runs with `-count=1` (a cached pass
+is never a pass). None needs a human unless it fails.
 
 | | Gate | Workflow · job | State |
 |---|---|---|---|
-| 1.1 | gofmt, `go build`, `go vet`, `go vet -tags=pgintegration`, `go test`, `go test -race` | `backend-ci` · `build · vet · test · race` | 🟢 AUTOMATED |
+| 1.1 | gofmt, `go build`, `go vet`, `go vet -tags=pgintegration`, `go test`, `go test -race` (root package split into 4 shards; a plain parallel `go test` beside it) | `backend-ci` · `build · vet · test · race` (aggregator over `gofmt · build · vet · go test -race (every package but the root)`, `go test -race (root package, shard N of 4)`) and `go test (plain, parallel)` | 🟢 AUTOMATED |
 | 1.2 | **Offline vendor build** — `GOFLAGS=-mod=vendor GOPROXY=off go build/vet/test-compile`, cold module cache | `backend-ci` · `offline vendor build (blocking)` | 🟢 AUTOMATED *(new — CLAUDE.md §6 gate 2, previously asserted but never proven)* |
 | 1.3 | Postgres integration + the full RLS / tenant-isolation corpus against a live DB as a `NOBYPASSRLS` role | `backend-ci` · `Postgres integration (blocking)` | 🟢 AUTOMATED |
+| 1.3a | **ClickHouse integration** — the link-level flow statements against the pinned ClickHouse image (`-tags=integration`), incl. two tenants on one exporter never summed by the row policy alone | `backend-ci` · `ClickHouse integration (blocking)` | 🟢 AUTOMATED |
 | 1.4 | `govulncheck` | `backend-ci` · `govulncheck (blocking)` | 🟢 AUTOMATED |
 | 1.5 | staticcheck + gosec + golangci-lint on the crypto/trust packages. The gosec step asserts gosec's own `Files:` count is non-zero: `gosec -quiet` **exits 0 after failing to load every package** (proved 2026-09-13), so exit 0 alone was not evidence of a scan | `backend-ci` · `staticcheck + gosec …` | 🟢 AUTOMATED |
 | 1.6 | golangci-lint repo-wide | `backend-ci` · `golangci-lint (repo-wide, blocking)` | 🟢 AUTOMATED |
 | 1.7 | `pytest` (whole suite — also the signature-catalogue fixture gate and the golden-replay gate) | `correlation-ci` · `pytest (blocking)` | 🟢 AUTOMATED |
 | 1.8 | ruff · bandit · mypy · **pip-audit** | `correlation-ci` · `ruff · bandit · mypy · pip-audit (blocking)` | 🟢 AUTOMATED |
-| 1.9 | `tsc -b && vite build` | `frontend-ci` · `tsc -b && vite build (blocking)` | 🟢 AUTOMATED |
+| 1.9 | `tsc -b && vite build`, then the **vitest** unit suite (`npx vitest run`, in CI since 2026-11-14) | `frontend-ci` · `tsc -b && vite build (blocking)` | 🟢 AUTOMATED |
 | 1.10 | `npm audit --audit-level=high` | `frontend-ci` · `npm audit (blocking)` | 🟢 AUTOMATED |
 | 1.11 | Playwright E2E in headless Chromium against the real SPA | `frontend-ci` · `Playwright E2E (blocking)` | 🟢 AUTOMATED |
 | 1.12 | Panel↔metric contract — no dashboard panel wired to a metric nothing emits | `frontend-ci` · `panel↔metric contract (blocking)` | 🟢 AUTOMATED |

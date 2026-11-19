@@ -117,8 +117,11 @@ of them passed (it runs `scripts/ci/ci_gate.py` over its `needs`). So the name i
 the ruleset is unchanged and still blocks a merge on any gofmt, build, vet or
 -race failure. Do **not** add the shard checks to the ruleset: their names carry
 the shard index and would change with the shard count; the aggregator already
-holds them. `ci-gate (backend-ci)` checks them as well, but it is not in the
-ruleset, which is exactly why the aggregator keeps the required name.
+holds them. `ci-gate (backend-ci)` checks them as well and fails on any selected
+job that failed, but `ci-gate (backend-ci)` itself is not named in the ruleset —
+which is exactly why the aggregator keeps the required name. ("Enforced through
+`ci-gate`" below means: a failure there turns `ci-gate` red; it blocks a merge
+only where `ci-gate` is itself a required check.)
 
 ### 1.2 Optional in the ruleset — mandatory in the tag gate
 
@@ -331,22 +334,15 @@ version of the same drift class.
 
 ## 6. Related security follow-ups (not done here)
 
-- **Secrets in git history.** `deployment/docker/.env` is no longer tracked and is
-  gitignored (commit `6c02200`), **but it remains in history** (e.g. `4f37c7b`), so
-  its secrets are still readable via `git show <rev>:.../.env`. Remediate by:
-  1. **Rotating** every secret it held. Do this regardless.
-     `python3 scripts/install.py --rotate-app-secrets` covers everything that can
-     be rotated on a running install (application secrets + the store credentials
-     it reconciles against the live store and verifies); the handful that are
-     seeded into a store on first boot must be rotated in that product and copied
-     back into `.env`. Both halves are in
-     **`docs/runbooks/secret-rotation.md`** — do not reach for a bare
-     `--reset-env`, which refuses on a started install precisely because
-     regenerating those values would brick it (audit FUNC-HIGH-1).
-  2. Optionally **scrubbing history** with `git filter-repo` / BFG (⚠️ destructive —
-     rewrites SHAs, needs a force-push and coordination with every clone).
-  A **secret-scan CI gate** (e.g. `gitleaks`) is recommended to catch the next leak
-  before it merges.
+- ~~**Secrets in git history.**~~ **Not a leak (verified 2026-11-19).**
+  `deployment/docker/.env` was tracked in exactly two commits (`4f37c7b`, removed
+  in `6c02200`, 2026-05-30) and both hold only the scaffold's **placeholder
+  comment** — no secret was ever committed (`git show 4f37c7b:NetOps_Observability/deployment/docker/.env`).
+  Nothing to rotate or scrub on its account. Rotation itself is
+  `python3 scripts/install.py --rotate-app-secrets` + `docs/runbooks/secret-rotation.md`.
+  The secret-scan gate this item recommended is live: `supply-chain` ·
+  `gitleaks secret scan` is **blocking** on every PR. Local `.env` backups
+  (`.env.*`, `env.bak-*`) are git-ignored so they cannot be staged.
 - ~~**Container image CVE scanning** (trivy/grype) and **SBOM** are not yet wired.~~
   **Done (corrected 2026-09-04, was stale).** All three shipped: `supply-chain` ·
   `Trivy filesystem scan (blocking)` and `gitleaks secret scan (blocking, full
@@ -361,3 +357,19 @@ version of the same drift class.
   waits only on the owner creating `CORRELIX_DIST_SIGNING_KEY`. Neither has
   ever executed: no `v*` tag exists yet. See `docs/RELEASE_CHECKLIST.md`
   §4.8/§4.9/§4.16.
+
+## 7. CI secrets
+
+| Secret | Used by | Required? |
+|---|---|---|
+| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | `.github/actions/dockerhub-login` in the jobs that pull public images (install-boot ×3, miniladder, release-bundle, oci-compliance, ch-integration, ingest-contract) | **Optional.** Without them a run pulls anonymously and logs a notice; it never fails on a missing credential. With them, pulls are authenticated and escape Docker Hub's shared anonymous rate limit (`toomanyrequests`). |
+
+Set them under **GitHub → repository Settings → Secrets and variables →
+Actions → New repository secret**, one secret each, with exactly those names:
+`DOCKERHUB_USERNAME` = the Docker Hub account name (not the e-mail),
+`DOCKERHUB_TOKEN` = a Docker Hub **personal access token** with *Public Repo
+Read-only* scope (Docker Hub → Account settings → Personal access tokens →
+Generate; the value starts `dckr_pat_` and is shown once). A run proves it
+worked when the job log shows `Login Succeeded`; `credentials are not available`
+means the secrets are missing or misnamed. Fork and Dependabot runs never see
+them, by design.

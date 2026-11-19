@@ -1,11 +1,15 @@
 # The Agent Loop (P2) — model-driven tool use, bounded and governed
 
 **Status:** shipped 2026-07-02 (intelligence plan P2, `docs/design/research/iris-ai-intelligence-plan.md` §3.c–3.d, §4).
-**Flag:** `FEATURE_AI_TOOLS=true` (off by default). Rollout: platform-owner/cross-tenant
-principals always; tenant users when their tenant carries the **per-tenant "AI
-Investigations" entitlement** (P4a, `ai_tenant_config.go` — set by the platform owner in
-assistant settings → Workspace access, or `PUT /api/ai/tenants/{id}`).
-`AI_TOOLS_ALL_TENANTS=true` remains as a global override that entitles every tenant at once.
+**Gate (2026-11-13, owner decisions 2026-11-12/13):** `FEATURE_AI_TOOLS` is no longer
+read as a switch — the upgrade seed reads it once to keep an install that already ran the
+loop running it (`internal/featureflags/specs.go`). The loop now needs the `iris_model`
+licence add-on (Enterprise includes it), the console-only Features switches **Iris AI
+models** and **AI investigations** (`IRIS_AI_MODELS`, `IRIS_AI_INVESTIGATIONS`, risky,
+default off, never settable from `.env`), and the tenant's **Investigations** opt-in
+(assistant settings → Workspace access, or `PUT /api/ai/tenants/{id}`). Cross-tenant
+principals are not tenant-gated. `AI_TOOLS_ALL_TENANTS=true` remains as a global
+override that entitles every tenant at once.
 
 ## Per-tenant AI (P4a, shipped 2026-07-02)
 

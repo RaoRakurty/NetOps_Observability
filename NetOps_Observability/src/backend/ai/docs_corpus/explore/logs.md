@@ -26,6 +26,16 @@ Firing alerts are not on this page. They have their own page, **Operations → A
 2. The top-bar range picker sets the window. See [The global time range](/explore/overview#the-global-time-range).
 3. Choose a page size.
 
+**Routine management sessions are hidden by default.** Monitoring systems and
+SD-WAN controllers open sessions on every device all day (SNMP polls, NETCONF
+and SSH sessions), and on a managed network they are most of the syslog. The
+page leaves them out and says how many it left out, for example *1,240 routine
+management sessions hidden.* Tick **Show routine management sessions** to
+include them. Security records, failures and a person's own logins are never
+treated as routine. Sessions older than a day are counted from per-minute
+summaries (see Retention below), so the count stays right after the individual
+records have aged out; free-text search cannot look inside those summaries.
+
 **Firewall** is a convenience filter over the syslog store. It narrows to records a firewall vendor parser produced, or that carry the vendor-neutral application contract, so it works across vendors rather than matching a vendor name.
 
 ### Step 2 - Read the retention floor before you read the results
@@ -102,7 +112,7 @@ Device logs name the people who signed in to the device, for example `Accepted p
 | Tenant isolation | Your own tenant's logs, plus untagged logs from your own devices. The Provider scope also reads untagged logs from platform devices and unknown senders. |
 | Audit trail | Each search, export and download is recorded with who, the query and the row count, and never the log lines. Search text that looks like a credential is masked. Find these in the audit trail as `LOG_READ`, `EXPORT`, `EXPORT_DONE` and `EXPORT_DOWNLOAD`. |
 | Iris | Iris needs the same permission. Usernames are masked before a log line reaches the model, and each Iris log search is recorded as `LOG_READ`. |
-| Retention | Log indices are deleted after `OPENSEARCH_LOG_RETENTION_DAYS` days, 14 by default. Daily snapshots contain them too, so a deleted index can remain in a snapshot for up to `OPENSEARCH_SNAPSHOT_KEEP` more days, 14 by default. |
+| Retention | Log indices are deleted after `OPENSEARCH_LOG_RETENTION_DAYS` days, 14 by default. Routine management sessions are the exception: the individual records are kept for `OPENSEARCH_ROUTINE_SYSLOG_RETENTION_HOURS` hours (96 by default, so every record is kept at least 72 hours), and a per-minute summary of them — device, source, user and how many — is kept for the full log retention. Daily snapshots contain them too, so a deleted index can remain in a snapshot for up to `OPENSEARCH_SNAPSHOT_KEEP` more days, 14 by default. |
 
 The raw search console at `/search` is for the platform owner only. Entry is recorded as `CONSOLE`, at most once a minute. The queries run there are not in this trail, because the console talks to the search store directly.
 

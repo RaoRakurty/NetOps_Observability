@@ -27,6 +27,16 @@ The row is written when an operator rates the answer:
 | Thumbs down | `wrong` | operator marked wrong |
 | No rating within 30 minutes | nothing is written | the conclusion is forgotten |
 
+Two other paths also write a row, always with the outcome **unknown** (not
+verified by a rating):
+
+- **An approved Iris action.** When a concluded investigation proposes saving
+  its finding to memory and a different person approves it on the
+  [Iris actions](/administration/iris-actions) page.
+- **A TAC escalation.** Sending a case to TAC records the escalation's verdict
+  and citations against that incident, so a later investigation can see that it
+  was escalated.
+
 A wrong memory is kept on purpose. Knowing that a past conclusion was rejected
 is more useful than forgetting it, provided the outcome is always stated with
 it.
