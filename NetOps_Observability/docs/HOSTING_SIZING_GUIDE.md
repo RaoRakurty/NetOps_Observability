@@ -109,25 +109,21 @@ least 72 h) instead of the full log window, and only their per-minute roll-ups
 | per 1,000 devices | before tracker 410 | after |
 |---|---|---|
 | routine originals | ~18 GB/day × 14 days ≈ **250 GB** | ~18 GB/day × 4 days ≈ **72 GB** (96 h default; 54 GB at 72 h) |
-| routine roll-ups | — | **NOT yet a saving — see below**; size for them at the originals' daily volume until tracker 410 (d)/(e) ship |
+| routine roll-ups | — | ~0.25 GB/day ≈ **3.5 GB** over 14 days (estimate from the measured 60:1 — re-measure on a real estate; see below) |
 | other syslog | unchanged | unchanged |
 
-**Measured on the lab, 2026-11-19 (first hours after deploy):** the roll-ups
-compress far less than designed. The roll-up key includes `audit_source`, which
-the packs write as `<address>:<port>`, and every routine session arrives from a
-new ephemeral client port (`127.0.0.1:<port>` for the local ConfD/SNMP
-sessions, about 6 records each) — so nearly every session is its own roll-up
-document: one hour held 55,401 originals and 15,980 roll-up keys (**3.5:1**;
-~6:1 over the first hours). On top of that, each tick re-upserts the last 15
-closed minutes, leaving ~7 deleted versions per live roll-up until segment
-merges (18,877 live, 126,010 deleted, 837 B per live document). Net: the
-roll-up family currently costs about as much disk as the originals it
-summarises, and the "< 1 GB/day" estimate this section first carried was
-wrong. Keying on the source ADDRESS without the port measures **59:1** on the
-same hour (941 keys); with that and a roll-once-then-reconcile schedule the
-roll-ups would be roughly 0.25 GB/day per 1,000 devices (~3.5 GB over 14 days)
-— an estimate from that ratio and the originals' 182 B/document, to be
-re-measured when the fix ships. The routine share itself varies with how often
+**Measured on the lab, 2026-11-19.** The first roll-up schema keyed
+`audit_source` WITH its ephemeral client port (`<address>:<port>`; every
+routine session arrives from a new port), so nearly every session was its own
+roll-up document — 3.5:1 over one hour (55,401 originals → 15,980 keys) — and
+each tick re-rolled the last 15 minutes, leaving ~7 deleted versions per live
+roll-up; the roll-ups cost about as much disk as the originals. Roll-up schema
+v2 (tracker 410 (d)/(e)) keys the source ADDRESS without the port and rolls
+each settled minute once (late records go to the hourly reconcile): the same
+aggregation over the live routine index measured **60:1** (55,442 originals →
+926 keys). From that ratio and the originals' 182 B/document the roll-ups come
+to roughly 0.25 GB/day per 1,000 devices (~3.5 GB over 14 days) — an estimate
+to re-measure on a real estate after a full day of v2 roll-ups. The routine share itself varies with how often
 the controller and monitoring systems poll each device (the lab's rate rose to
 ~55,000 routine records per hour for 4 polled edges on 2026-11-19).
 

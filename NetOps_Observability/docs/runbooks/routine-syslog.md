@@ -34,8 +34,9 @@ usernames (D2, D7) for the full window.
 ## The roll-up job
 
 The api's `routine-syslog-rollup` worker folds closed minutes of
-`netops-syslogroutine-*` into `netops-syslogrollup-*` every minute, re-rolling
-the last 15 minutes for late arrivals, and recounts each closed hour of the last
+`netops-syslogroutine-*` into `netops-syslogrollup-*` every minute — each
+minute ONCE, after a 2-minute settle (roll-up schema v2: one document per
+device, source ADDRESS without its ephemeral port, user and minute) — and recounts each closed hour of the last
 48 h once an hour, re-rolling any hour whose roll-up sum differs from its
 originals. Each roll-up document's id is the hash of its key, so a re-run
 upserts. `ROUTINE_SYSLOG_ROLLUP=off` stops it (a D2 gap: originals then expire
