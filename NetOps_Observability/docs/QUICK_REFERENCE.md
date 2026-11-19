@@ -11,18 +11,26 @@ docker compose ps                 # status
 docker compose logs -f            # tail everything
 docker compose logs -f api        # tail just the API
 docker compose restart api        # restart one service
-docker compose down               # stop, keep volumes
-docker compose down -v            # stop and wipe volumes
+docker compose down               # stop (all state stays on disk)
 ```
+
+State lives in **bind mounts under `data/`**, not named volumes, so
+`docker compose down -v` does not wipe it (and must not be relied on to). Never
+`rm -rf` `data/opensearch-snapshots` (the backup repository). Use `scripts/deploy.sh` (see `docs/runbooks/deploy.md`) to
+rebuild and recreate services rather than a bare `up -d --build`, and prove the
+result with `scripts/deploy-qualify.sh`.
 
 ## Health checks
 
 ```
-curl -fs http://localhost:8000/admin/health | jq
-curl -fs http://localhost:8000/api/devices | jq
-curl -fs http://localhost:8000/api/collectors | jq
-curl -fs http://localhost:8000/admin/version
+curl -fs http://localhost:8000/admin/health | jq      # public
+curl -fs http://localhost:8000/admin/version          # public
 ```
+
+With TLS (the interactive default) use `https://<host>` — `:8000` is then
+loopback-only. Every `/api/*` route needs a Bearer token
+(`POST /api/auth/login`); `/admin/health` and `/admin/version` are the public
+probes.
 
 ## Rotating secrets
 
@@ -62,6 +70,8 @@ every healthcheck green. Start here:
   engines are actually consuming instead of trusting exit code 0.
 
 ## Adding a device manually
+
+With a Bearer token (`-H "Authorization: Bearer $TOKEN"`):
 
 ```
 curl -X POST http://localhost:8000/api/devices \
@@ -107,17 +117,21 @@ Legacy env-based setup still works as a fallback:
 
 ## Configuring SNMP discovery range
 
-Edit `SNMP_CIDR_RANGES` in `.env`. Multiple ranges are comma-separated.
-Default is `10.0.0.0/8` — narrow it before scanning production. The live scan
-scope is set in **Administration → Discovery → Network Scan**
-(`#/admin/discovery`). Discovery has no community of its own: it tries the
-platform-owned profiles in **Administration → Discovery → SNMP Profiles**,
-and `SNMP_COMMUNITY` is not used by the sweep.
+Set it in the UI: **Administration → Discovery → Network Scan**
+(`#/admin/discovery`). Discovery is off until you scope and enable it. It has no
+community of its own: it tries the platform-owned profiles in **Administration →
+Discovery → SNMP Profiles**; `SNMP_COMMUNITY` is not used by the sweep.
+`ENABLE_SNMP_DISCOVERY` / `SNMP_CIDR_RANGES` in `.env` are only the bootstrap
+default when nothing has been saved in the UI (the installer writes discovery off
+with no range).
 
 ## Configuring alert channels
 
-All channels are off by default. Flip the `FEATURE_*` flag in `.env`,
-fill in the credentials, and `docker compose up -d` to apply.
+Configure channels in the UI: **Administration → Notifications** (stored
+encrypted; no restart). All channels are off by default. The `FEATURE_*` and
+credential lines below are the legacy `.env` wiring: they only **seed** the
+stored configuration on the very first boot, when nothing has been saved yet —
+after that the Notifications page is the one place to change them.
 
 ### Slack
 
@@ -190,9 +204,10 @@ CLOUD_INGEST_METRICS_PORT=9109
 
 ## Optional modules
 
-All three flags are `false` by default and the modules are inert until flipped
-(full preconditions in `docs/DEPLOY_LINUX.md` §5c). Edit
-`deployment/docker/.env`, then `docker compose up -d api`.
+All three are off by default and the modules are inert until switched on
+(full preconditions in `docs/DEPLOY_LINUX.md` §5c). Switch them on the
+**Features** page (Platform → Configuration → Features); a saved switch wins over
+`.env`, and a restart-class switch says so on the page.
 
 | Env var | Default | What it does |
 |---------|---------|--------------|
@@ -237,12 +252,12 @@ curl -X DELETE .../api/correlations/<id>/rca-promotion
 
 ## Receiving device telemetry
 
-Vector and goflow2 listen for device-side traffic on these host ports
-(adjustable via `.env`):
+syslog-ng (syslog), the trap receiver and goflow2 (flows) listen for
+device-side traffic on these host ports:
 
 | Protocol | Default host port | Env var |
 |----------|------------------:|---------|
-| Syslog UDP/TCP | 5514 | `SYSLOG_PORT` |
+| Syslog UDP/TCP | 5514 **and** 514 | `SYSLOG_PORT` (the 514 mapping is always published) |
 | NetFlow v5/v9  | 2055 | `NETFLOW_PORT` |
 | IPFIX          | 4739 | `IPFIX_PORT` |
 | sFlow          | 6343 | `SFLOW_PORT` |
@@ -251,49 +266,34 @@ Set the device's collector address to the Docker host's IP and these
 ports. Cisco / Juniper / Arista / rsyslog config snippets are in
 `docs/INGESTION.md`.
 
-Once flowing, you'll see streams in the Logs tab tagged
-`job=syslog` and `job=netflow`. From the CLI:
-
-```
-curl -G 'http://localhost:8000/api/logs/search' \
-  --data-urlencode 'query={job="syslog"}' \
-  --data-urlencode 'limit=20' | jq
-```
+Once flowing, syslog and traps appear in the **Logs** tab and flows on the
+**Flows** page. `scripts/deploy-qualify.sh` check Q11 proves each monitored
+source is reporting on polling, syslog, traps and flows.
 
 ## Searching logs
 
-The Logs tab in the dashboard runs LogQL queries through Loki. Examples:
+The **Logs** tab searches device syslog and SNMP traps stored in OpenSearch,
+scoped to your workspace. Routine management sessions (controller and monitoring
+polls) are left out by default and counted; tick **Show routine management
+sessions** to include them.
 
-```logql
-# Everything from the API container in the last 15 min
-{compose_service="api"}
-
-# Just errors
-{compose_service="api"} |= "error"
-
-# Parse the API's JSON logs and filter by structured level
-{compose_service="api"} | json | level="error"
-
-# Anything mentioning a specific device
-{compose_project="netops"} |~ "device_id=\"router-01\""
-```
-
-From the CLI:
+From the CLI (Bearer token required):
 
 ```
 curl -G 'http://localhost:8000/api/logs/search' \
-  --data-urlencode 'query={compose_service="api"} |= "error"' \
-  --data-urlencode 'start=2026-05-27T10:00:00Z' \
-  --data-urlencode 'end=2026-05-27T11:00:00Z' \
-  --data-urlencode 'limit=200' | jq
+  -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'query=severity:error AND host:router-01' \
+  --data-urlencode 'signal=syslog' \
+  --data-urlencode 'from=2026-11-19T10:00:00Z' \
+  --data-urlencode 'to=2026-11-19T11:00:00Z' \
+  --data-urlencode 'size=200' | jq
 ```
 
-Or hit Loki's labels endpoint directly to see what's indexed:
-
-```
-curl http://localhost:8000/api/logs/labels | jq
-curl http://localhost:8000/loki/loki/api/v1/labels | jq
-```
+Parameters: `query` (search text), `signal` (`syslog`, `traps`, …), `from` /
+`to` (RFC 3339), `size`, `offset`, `include_routine_mgmt=true|false`. `POST` with
+the same fields as JSON also works. Related routes: `/api/logs/indices`,
+`/api/logs/retention`, `/api/logs/severity-counts`, `/api/logs/export`. There is
+no Loki — it was removed from the stack.
 
 ## Troubleshooting
 

@@ -2,14 +2,12 @@ name: frontend-ci
 
 # CI gate for the React/TypeScript dashboard. The project's `build` script is
 # `tsc -b && vite build`, so a build IS the type-check + bundle gate — a type
-# error or broken import fails it. Mirrors the other services' tiered approach:
-#   - `build` is BLOCKING (validated green locally).
-#   - `audit` is NON-blocking triage (npm dependency CVEs) — the frontend analog
-#     of backend govulncheck / correlation pip-audit. Flip off continue-on-error
-#     once the advisories are resolved.
-#
-# No eslint/test config exists in the project yet; this gate intentionally tracks
-# the tooling that's actually present (tsc + vite) rather than inventing config.
+# error or broken import fails it. All jobs are BLOCKING:
+#   - `build`: tsc + vite, then the vitest unit suite (in CI since 2026-11-14).
+#   - `audit`: `npm audit --audit-level=high` — the frontend analog of backend
+#     govulncheck / correlation pip-audit.
+#   - `e2e`: Playwright against the built SPA.
+#   - the panel↔metric contract.
 
 on:
   workflow_dispatch:   # manual re-run on a branch head (e.g. after a fix that did not touch this workflow's paths)

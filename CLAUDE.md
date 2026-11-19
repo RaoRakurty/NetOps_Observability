@@ -48,9 +48,16 @@ Standard per-language invocations apply (`go build ./...`, `npm run build`,
 ```bash
 cd NetOps_Observability
 # Requires Docker + Compose v2 plugin; the installer rejects legacy docker-compose.
-python3 scripts/install.py              # builds .env + brings stack up on :8000
-python3 scripts/install.py --reset-env  # rotate all secrets
+python3 scripts/install.py              # builds .env + brings the stack up
+python3 scripts/install.py --rotate-app-secrets  # rotate what can be rotated safely now
+python3 scripts/install.py --reset-env  # rotate secrets: wholesale before first start;
+                                        # on a started install, in place — and it REFUSES
+                                        # (changing nothing) for any secret it cannot rotate
 ```
+An interactive install asks one question, TLS/mTLS (default **yes**): the
+dashboard is then on 443, `:8000` is loopback-only and the OpenSearch security
+plugin is on. An unattended run without `--tls=yes` keeps the declared-plaintext
+baseline on `:8000` (`resolve_tls_choice` in `install.py`).
 
 ### Conventions & gotchas
 - **Backend defaults to the standard library; third-party Go modules are
@@ -60,14 +67,22 @@ python3 scripts/install.py --reset-env  # rotate all secrets
   offline-buildable, pinned, and reviewed. Everything else stays stdlib.
 - `data/` and `deployment/docker/.env` are gitignored (generated at install).
   History audit (2026-06-12): `.env` was briefly tracked (until `6c02200`,
-  2026-06-07) but **only ever as a secret-free placeholder comment** — no
+  2026-05-30) but **only ever as a secret-free placeholder comment** — no
   credential has ever been committed (verified across all history + gitleaks
   full-history scan). No rotation or history rewrite needed on its account.
-- Security defaults are scaffold-grade: OpenSearch security plugin disabled,
-  copilot off unless `FEATURE_COPILOT=true` + `COPILOT_API_KEY`, SNMP discovery
-  defaults to `10.0.0.0/8` (narrow before pointing at a real network).
-- Feature flags are env-driven (`ENABLE_SNMP_DISCOVERY`, `ENABLE_GNMI_COLLECTION`,
-  `FEATURE_SLACK_NOTIFICATIONS`, etc.) — see `newServer()` in `main.go`.
+- Security defaults: the OpenSearch security plugin is ON with TLS (the
+  interactive default) and off only on the declared-plaintext baseline. Iris
+  answers from evidence by default; model-backed Iris needs the `iris_model`
+  licence add-on (Enterprise includes it) AND the console-only `IRIS_AI_MODELS`
+  switch — no `.env` line can set it, and `FEATURE_COPILOT` no longer gates
+  anything. SNMP discovery is opt-in: the installer writes
+  `ENABLE_SNMP_DISCOVERY=false` with no range (the compose file's `10.0.0.0/8` is
+  only a fallback for a hand-made `.env`); scope it in the UI before enabling.
+- Feature flags: the switchable set is the platform-admin **Features page**
+  (Platform → Configuration → Features), defined in
+  `src/backend/internal/featureflags/specs.go`; a saved switch wins over `.env`,
+  and console-only switches cannot be set from `.env` at all. Customers never
+  edit `.env`.
 
 ### Monitoring
 Three layers, and **each must work without the other two** — that requirement
@@ -94,8 +109,10 @@ inventory of what "doing its job" actually means.
    receiver just stamps `netops_alert_webhook_heartbeat_timestamp_seconds`,
    which is the only end-to-end proof that the delivery chain works.
 3. **`scripts/stack-watchdog.sh`** — external cron watchdog (every 1m), the only
-   layer that survives the whole stack dying. Checks every compose service
-   running/healthy + probes `:8000` + api liveness, and (2026-09-02) queries
+   layer that survives the whole stack dying. Checks a FIXED list of compose
+   services running/healthy (`EXPECTED_SERVICES`, overridable with
+   `WATCHDOG_SERVICES`; the default does not include gnmic, vmauth, secrets-seal,
+   cloud-ingest, keycloak or gotenberg) + probes `:8000` + api liveness, and (2026-09-02) queries
    VictoriaMetrics directly for **consumer-group membership** (correlation and
    every `netops-router-*` lane) and the **alert-delivery heartbeat** —
    `ENGINE_CONSUMER_CHECK=0` disables that block. Pings healthchecks.io
@@ -107,7 +124,11 @@ inventory of what "doing its job" actually means.
 
 `scripts/deploy-qualify.sh` runs the bootstraps (Kafka ACLs, `kafka-init`,
 `opensearch-init`) after a `compose up` and then *proves* the engines are
-consuming. `docker compose up` exiting 0 is not evidence of anything.
+consuming. `docker compose up` exiting 0 is not evidence of anything. It does NOT
+apply the OpenSearch index templates (`scripts/bootstrap-opensearch.sh`, run by
+`install.py` and `update.sh`) or the security config (`opensearch-security-init`),
+and `scripts/deploy.sh` runs no bootstrap at all — see `docs/runbooks/deploy.md`
+for the order a new OpenSearch family needs.
 
 ### Known gotcha (fixed)
 - OpenSearch rejects docs whose fields contain dots it reads as object paths.
@@ -149,6 +170,11 @@ Any violation = INVALID OUTPUT.
 /plugins    → isolated plugin implementations
 /config     → configuration only
 ```
+
+This is the TARGET layout. Today `src/backend` has `cmd/` and `internal/` but no
+`pkg/`, `plugins/` or `config/`, and most code is still in the root package —
+capped at 208 non-test files (`package_growth_guard_test.go`), so new code goes
+under `internal/` and root wiring goes into existing files.
 
 ---
 
@@ -367,9 +393,13 @@ real Postgres, which carries part of the §3a RLS/isolation corpus; `govulncheck
 `sealing`) only; and **repo-wide `golangci-lint`, which bundles staticcheck +
 gosec** for the rest of the tree — so a standalone repo-wide staticcheck/gosec
 run is NOT the gate and will report findings CI does not. Frontend adds
-`npm run build`, the vitest unit suite (`npx vitest run`) and Playwright
-`npm run e2e`; the correlation engine has its own
-pytest suite. Run the gate from `src/backend` (the gate module).
+`npm run build`, the vitest unit suite (`npx vitest run`), `npm audit` (high+) and
+Playwright `npm run e2e`; the correlation engine has its own pytest suite. Run the
+gate from `src/backend` (the gate module). The backend workflow also carries
+`gofmt`, the root package's `-race` split into 4 shards, a plain parallel
+`go test` (every `go test` step runs with `-count=1`: a cached pass is never a
+pass), an **offline vendor build**, and a **ClickHouse integration** leg
+(`-tags=integration` against a real ClickHouse) beside the Postgres one.
 
 ---
 
@@ -402,7 +432,7 @@ that intersect with our code and are mitigatable at dev time:
 
 - **LLM01 Prompt Injection** — the **system prompt is server-controlled**; never
   let a client override it or inject a `system`-role turn. Sanitize/normalize
-  the message list server-side (`sanitizeCopilotMessages`). Treat all model
+  the message list server-side (`ai.SanitizeMessages`). Treat all model
   output as untrusted: a "valid" input can still be malicious.
 - **LLM02 Insecure Output Handling** — never execute or `dangerouslySetInnerHTML`
   model output. The SPA renders assistant text as **escaped React text** only.
@@ -548,9 +578,10 @@ waste, so CI round-trips are rare.
   `CGO_ENABLED=0`, so the detector cannot build; CI runs it with `CGO_ENABLED=1`.
   Never report a local run as race-clean.
 - **`golangci-lint` is the repo-wide lint gate and it bundles staticcheck + gosec**
-  (plus errcheck/noctx/errorlint). Run it in docker with `GOTOOLCHAIN=local` and
-  `-mod=vendor` from `src/backend`: the local binary is built with an older Go and
-  refuses a `go 1.26` module. Standalone `staticcheck`/`gosec` gate only
+  (plus errcheck/noctx/errorlint). Run it the way the pre-push hook does —
+  `scripts/ci-backend-guard.sh` (docker, `GOFLAGS=-mod=vendor`,
+  `GOTOOLCHAIN=auto` with the host module cache mounted) from `src/backend`: a
+  locally installed binary built with an older Go refuses a `go 1.26` module. Standalone `staticcheck`/`gosec` gate only
   `./tlsconfig/... ./internalca/... ./sealing/...`, and the tree's `//nolint` /
   `// #nosec` suppressions are golangci's, so a standalone repo-wide run is not
   the gate and will report findings CI does not.
@@ -566,6 +597,13 @@ waste, so CI round-trips are rare.
   applies. Don't burn a full local suite to land a comment.
 - Never run `scripts/stack-watchdog.sh --test` to save time or to "check"; it
   pages the owner's phone.
+- **`scripts/host-hygiene.sh` runs from cron every 10 min.** While `/` is at
+  ≥ 85 % it reclaims dev caches — `~/.cache/go-build` (`go clean -cache`), npm,
+  pip and `~/.cache/golangci-lint-docker` — and escalates at ≥ 92 %. A long gate
+  that uses the shared caches can fail mid-run with missing-file errors; run long
+  gates and pushes with private caches
+  (`GOCACHE=<scratch>/gocache XDG_CACHE_HOME=<scratch>/xdg git push …`; the lint
+  guard honours `XDG_CACHE_HOME`).
 
 ### Size the effort to the risk (`scripts/test-plan.py`)
 `python3 scripts/test-plan.py` reads the diff against `origin/main` and prints the
@@ -575,8 +613,12 @@ run and `-race` to CI) · **high-risk** (full local gate + pgintegration + §3a 
 whatever the size — auth, tenant, migrations, crypto/trust, the LLM boundary,
 dependencies, Dockerfiles, workflows). An unknown path is `code`, an unreadable
 diff `high-risk`: the script may shrink the LOCAL plan, never the merge gate.
-The pre-push hook runs `--run-fast` (SBOM, notices, digest lock, toolchain pins,
-~2 s) and BLOCKS on a stale generated artifact.
+The pre-push hook (`scripts/git-hooks/pre-push`) runs `scripts/ci-backend-guard.sh`
+(build, vet, repo-wide golangci-lint) when the push touches Go backend files, then
+`--run-fast` (SBOM, notices, digest lock, toolchain pins, ~2 s), and BLOCKS on
+either. It does **not** check SPDX headers — run
+`python3 scripts/spdx-headers.py --check` before pushing a new file (CI's
+licensing gate fails on a missing header).
 
 ### CI execution model (2026-10-17)
 - **One run per PR.** PR workflows trigger on `pull_request` (no paths filter, so

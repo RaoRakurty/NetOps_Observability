@@ -74,8 +74,9 @@ sudo sysctl --system
 
 | Port  | Proto    | What                                    |
 |------:|----------|-----------------------------------------|
-| 8000  | TCP      | Dashboard (HTTP — front with HTTPS LB)  |
-| 514   | UDP/TCP  | Syslog from devices                     |
+| 443   | TCP      | Dashboard (HTTPS — TLS install, the interactive default) |
+| 8000  | TCP      | Dashboard on the plaintext baseline only (loopback-only with TLS) |
+| 5514 and 514 | UDP/TCP | Syslog from devices (both are published) |
 | 2055  | UDP      | NetFlow v5/v9                           |
 | 4739  | UDP      | IPFIX                                   |
 | 6343  | UDP      | sFlow                                   |
@@ -83,7 +84,9 @@ sudo sysctl --system
 UFW example:
 
 ```bash
-sudo ufw allow 8000/tcp
+sudo ufw allow 443/tcp          # TLS install (8000/tcp only on the plaintext baseline)
+sudo ufw allow 5514/udp
+sudo ufw allow 5514/tcp
 sudo ufw allow 514/udp
 sudo ufw allow 514/tcp
 sudo ufw allow 2055/udp
@@ -91,8 +94,9 @@ sudo ufw allow 4739/udp
 sudo ufw allow 6343/udp
 ```
 
-If you want devices to send to the standard 514 port instead of 5514,
-set `SYSLOG_PORT=514` in `.env` before the first `docker compose up`.
+Both 5514 (`SYSLOG_PORT`, the default) and the standard 514 are published,
+so devices configured with `logging host <nms>` on 514 reach the collector
+without per-device changes.
 
 ## 5. Run the installer
 
@@ -104,19 +108,24 @@ python3 scripts/install.py
 The installer:
 
 * Verifies Docker + Compose v2 are available.
+* Asks one question: TLS/mTLS (default **yes**). With TLS it mints the
+  internal CA and service certificates, serves the dashboard on 443 (`:8000`
+  loopback-only) and turns the OpenSearch security plugin on. `--tls=yes` /
+  `--tls=no` answers it unattended; an unattended run without the flag keeps
+  the plaintext baseline.
 * Validates the scaffold.
 * Generates random secrets in `deployment/docker/.env` (mode 0600).
 * Creates `data/*` directories.
-* Builds and starts the stack.
+* Builds and starts the stack, then runs the bootstraps — Kafka topics and
+  ACLs, the OpenSearch security config and ISM, and the index templates
+  (`bootstrap-opensearch.sh`, the `bootstrap-os` stage). You do not run them
+  by hand.
 
 Note the admin password printed at the end — that's also written to
 `.env` as `ADMIN_INITIAL_PASSWORD`.
 
-After the first start, run the OpenSearch index-template bootstrap:
-
-```bash
-scripts/bootstrap-opensearch.sh
-```
+Then prove the install with `scripts/deploy-qualify.sh` (it must print
+`QUALIFIED`).
 
 ## 5b. Measuring time-to-first-value
 
@@ -183,8 +192,9 @@ matching evidence (see `docs/runbooks/support-bundle.md`).
 
 Three api-side modules ship dormant. Each is gated by one flag, and with the
 flag off nothing is constructed, scheduled or routed — no worker, no route,
-no metric series. Uncomment the block you want in
-`deployment/docker/.env`, then `docker compose up -d api` to apply.
+no metric series. Switch the module on the **Features** page (Platform →
+Configuration → Features); a restart-class switch tells you to restart the api
+there. Customers never edit `.env`.
 
 | Module | Flag | Also needs |
 |--------|------|------------|
@@ -264,43 +274,29 @@ The unit calls `docker compose up -d --remove-orphans` at boot and
 
 ## 7. HTTPS
 
-The scaffold serves plain HTTP on :8000. **Do not expose that publicly.**
-Two recommended patterns:
+Answer **yes** to the installer's TLS question (or pass `--tls=yes`): nginx
+then serves the dashboard on 443 with the installer's certificate, every
+service talks over the internal mTLS mesh, and `:8000` is bound to loopback
+only. To use your own certificate for the dashboard, or a cloud load balancer
+in front, see `docs/runbooks/tls-mtls.md`.
 
-### A. Cloud load balancer in front (preferred)
-
-AWS ALB / GCP HTTPS LB / Azure Application Gateway — terminate TLS,
-forward to the host on :8000. The simplest path; no cert management on
-the host.
-
-### B. Caddy in front (single-host)
-
-```bash
-sudo apt install -y caddy
-sudo tee /etc/caddy/Caddyfile <<'EOF'
-netops.example.com {
-    reverse_proxy localhost:8000
-}
-EOF
-sudo systemctl reload caddy
-```
-
-Caddy auto-provisions Let's Encrypt certs and renews them.
-
-### C. nginx + certbot
-
-Replace `/opt/netops/NetOps_Observability/deployment/docker/nginx/default.conf`
-with a TLS-aware config and bind-mount your certs into the nginx
-container. The repository's nginx is intentionally minimal because we
-expect terminators in front.
+The plaintext baseline (an unattended install without `--tls=yes`) serves
+HTTP on :8000 — evaluation only. **Do not expose it publicly**; if you must
+front it, terminate TLS in a load balancer or reverse proxy that forwards to
+`localhost:8000`.
 
 ## 8. Back up data
 
-The whole `data/` directory is what you back up. Postgres, Redis,
+The whole `data/` directory is what you back up. Postgres, Valkey,
 VictoriaMetrics, OpenSearch, ClickHouse, Kafka, and the user store
-all persist there. `scripts/backup.sh` wraps the right `docker compose
-exec ... pg_dump` / `clickhouse-backup` / file-copy commands; cron
-`backup.sh` nightly and rsync the output off-host.
+all persist there. `scripts/backup.sh` takes the engines' own consistent
+backups — a Postgres `pg_dumpall`, an OpenSearch **snapshot** into the `netops-fs`
+repository, a VictoriaMetrics snapshot, the schema of every ClickHouse table
+(row data comes from the snapshot-consistent `data/` copy) — then copies the
+rest of `data/`, writes a PASS/FAIL `MANIFEST`, and exits non-zero if any part
+failed (`backup.sh --verify <file>` re-checks an archive). Cron `backup.sh`
+nightly and rsync the output off-host; restores are in
+`docs/runbooks/backup-restore.md`.
 
 ```bash
 0 3 * * * /opt/netops/NetOps_Observability/scripts/backup.sh \
@@ -310,8 +306,9 @@ exec ... pg_dump` / `clickhouse-backup` / file-copy commands; cron
 ## 9. Verify
 
 ```bash
-curl -fs http://localhost:8000/admin/health
-curl -fs http://localhost:8000/api/auth/login \
+scripts/deploy-qualify.sh                  # must print QUALIFIED
+curl -fsk https://localhost/admin/health   # TLS install (http://localhost:8000 on the plaintext baseline)
+curl -fsk https://localhost/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<from .env>"}'
 ```
@@ -321,14 +318,14 @@ password.
 
 ## 10. Operational checklist
 
-- [ ] HTTPS terminating in front of nginx
+- [ ] Installed with TLS (`--tls=yes`, the interactive default)
 - [ ] Admin password changed from initial
-- [ ] OpenSearch index templates applied
+- [ ] `scripts/deploy-qualify.sh` prints `QUALIFIED` (bootstraps applied, engines consuming)
 - [ ] Daily backup cron entry
 - [ ] Off-host backup destination configured
 - [ ] System monitoring of the host (CPU, disk, memory) — separate from this stack
 - [ ] Log retention reviewed in compose: `VICTORIA_RETENTION`, ClickHouse TTL, OpenSearch ILM
-- [ ] Network ACL: management ports (8000, 514, 2055, 4739, 6343) restricted to known device ranges
+- [ ] Network ACL: device-facing ports (5514, 514, 2055, 4739, 6343) restricted to known device ranges
 - [ ] `JWT_SECRET` is not the installer-generated default if you've forked the repo
-- [ ] OpenSearch `DISABLE_SECURITY_PLUGIN` flipped to `false` and TLS + auth configured
+- [ ] Not on the plaintext baseline (TLS install: OpenSearch security plugin on, mTLS mesh)
 - [ ] Kafka SASL configured if using an external broker (the embedded broker publishes no host ports)
