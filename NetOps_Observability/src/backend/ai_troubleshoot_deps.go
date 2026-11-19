@@ -43,6 +43,7 @@ import (
 	"net/url"
 	"netops/backend/internal/changeapi"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -369,7 +370,8 @@ func (s *server) aiDeviceFacts(claims jwtClaims) func(context.Context, ai.Princi
 				break
 			}
 		}
-		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID]}
+		in := deviceFactInputs{dev: dev, role: role, links: links, linksRead: lerr == nil, externalBGP: wan.externalBGP[dev.ID],
+			protoNeighbors: s.aiProtocolNeighbors(tctx, dev, s.metricsScopeFiltersFor(claims))}
 		if snap := s.sdwanOverlay.Load(); snap != nil {
 			in.overlayRead = true
 			if f, ok := snap.devFacts[dev.ID]; ok {
@@ -389,6 +391,79 @@ type deviceFactInputs struct {
 	externalBGP int
 	overlayRead bool
 	overlay     *collectors.OverlayDeviceFacts // nil: the device published no overlay facts
+	// protoNeighbors: "ospf" / "isis" / "bgp" → the device reports at least one
+	// neighbour row of that protocol (any state, any VRF). Seen only: no row is
+	// NOT an absence — a walk of an unimplemented MIB and an empty table look
+	// the same (tracker 415).
+	protoNeighbors map[string]bool
+}
+
+// aiFactNeighborSeries are the neighbour-table series that prove a protocol is
+// configured on a device: a row exists for each configured neighbour, whatever
+// its state (SNMP OSPF-MIB ospfNbrState, the IS-IS adjacency lane, BGP peer
+// state from BGP4-MIB, the VRF-peer and gNMI lanes).
+var aiFactNeighborSeries = [...][2]string{
+	{"ospf", "device_ospf_nbr_state"},
+	{"isis", "device_isis_adj_state"},
+	{"bgp", "device_bgp_peer_state"},
+}
+
+// aiProtocolNeighbors reads, at the caller's boundary (filters = the caller's
+// extra_filters[]; never nil for a scoped principal), whether ONE device
+// reports neighbour rows per protocol in the last 15 minutes. The device is
+// matched by id or name (the gNMI lanes label by target name); an identity
+// that is not a plain token is left out rather than escaped. A failed read
+// leaves the protocol unseen (unknown), never absent.
+func (s *server) aiProtocolNeighbors(ctx context.Context, dev models.Device, filters []string) map[string]bool {
+	var ids []string
+	for _, id := range []string{dev.ID, dev.Name} {
+		if aiFactToken(id) && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sel := `{device=~"` + strings.ReplaceAll(strings.Join(ids, "|"), ".", `\\.`) + `"}`
+	out := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ps := range aiFactNeighborSeries {
+		wg.Add(1)
+		go func(proto, metric string) {
+			defer wg.Done()
+			got, ok := s.qVecByScoped(ctx, `count by (device) (last_over_time(`+metric+sel+`[15m]))`, "device", filters)
+			if !ok {
+				return
+			}
+			for dv, n := range got {
+				if n > 0 && slices.Contains(ids, dv) {
+					mu.Lock()
+					out[proto] = true
+					mu.Unlock()
+				}
+			}
+		}(ps[0], ps[1])
+	}
+	wg.Wait()
+	return out
+}
+
+// aiFactToken admits a device identity into a PromQL regex selector only when
+// it is a plain token ([A-Za-z0-9._:-]), so no caller- or device-supplied text
+// can widen the match.
+func aiFactToken(v string) bool {
+	if v == "" || len(v) > 128 {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == ':', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // deriveDeviceFacts is the pure fold behind aiDeviceFacts. Every fact it sets
@@ -436,6 +511,12 @@ func deriveDeviceFacts(in deviceFactInputs) ai.DeviceFacts {
 	}
 	if in.externalBGP > 0 {
 		f.Observe(ai.FactAdjacency, "bgp", true)
+	}
+	// Neighbour rows the device itself reports (any state, any VRF): seen only.
+	for _, proto := range []string{"ospf", "isis", "bgp"} {
+		if in.protoNeighbors[proto] {
+			f.Observe(ai.FactAdjacency, proto, true)
+		}
 	}
 	// The SD-WAN overlay: when the snapshot was read, a device with no overlay
 	// peers is established NOT to be an overlay member; BFD is observed when its

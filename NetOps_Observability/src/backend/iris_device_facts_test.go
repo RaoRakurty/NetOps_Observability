@@ -12,7 +12,10 @@ package backend
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"netops/backend/ai"
@@ -133,6 +136,16 @@ func TestDeriveDeviceFacts(t *testing.T) {
 	if !factHolds(ctl, ai.FactTelemetry, "api") || factHolds(ctl, ai.FactTelemetry, "snmp") {
 		t.Fatalf("controller device telemetry = %v", ctl.Seen(ai.FactTelemetry))
 	}
+	// Neighbour rows the device reports (tracker 415): seen, any VRF — an
+	// iBGP- or VRF-only router with no external peer is still a BGP speaker.
+	// A protocol with no rows stays unknown, never absent.
+	nb := deriveDeviceFacts(deviceFactInputs{dev: dev, protoNeighbors: map[string]bool{"ospf": true, "bgp": true}})
+	if got := strings.Join(nb.Seen(ai.FactAdjacency), ","); got != "bgp,ospf" {
+		t.Fatalf("neighbour rows: adjacency seen = %s, want bgp,ospf", got)
+	}
+	if factHolds(nb, ai.FactAdjacency, "isis") {
+		t.Fatal("no IS-IS rows must leave IS-IS unknown")
+	}
 	// Overlay member with sessions → overlay and bfd observed.
 	member := deriveDeviceFacts(deviceFactInputs{dev: dev, overlayRead: true, overlay: &collectors.OverlayDeviceFacts{
 		DeviceID: "r1", Peers: []collectors.OverlayPeer{{SystemIP: "1.1.1.1", ColorPairs: []collectors.OverlayColorPairs{{LocalColor: "mpls", Sessions: 2, Up: 2}}}},
@@ -190,5 +203,69 @@ func TestEverySkillAppliesWhenIsDerivable(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no compiled applies_when value was checked — the corpus no longer exercises the seam")
+	}
+}
+
+// §3a for the neighbour-row read (tracker 415): a HOSTILE fake VictoriaMetrics
+// answers every query with BOTH tenants' series whatever filters it was sent.
+// acme-e0's facts must come only from acme-e0's own rows, every read must carry
+// the caller's boundary, and the device selector must never name another
+// tenant's device.
+func TestIrisDeviceFactsNeighbourRowsAreTheCallersOwn(t *testing.T) {
+	var mu sync.Mutex
+	var queries, filters []string
+	vm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		mu.Lock()
+		queries = append(queries, q)
+		filters = append(filters, r.URL.Query()["extra_filters[]"]...)
+		mu.Unlock()
+		var rows []string
+		switch {
+		case strings.Contains(q, "device_ospf_nbr_state"):
+			rows = []string{`{"metric":{"device":"acme-e0"},"value":[1,"2"]}`, `{"metric":{"device":"globex-e0"},"value":[1,"3"]}`}
+		case strings.Contains(q, "device_isis_adj_state"), strings.Contains(q, "device_bgp_peer_state"):
+			rows = []string{`{"metric":{"device":"globex-e0"},"value":[1,"4"]}`}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[` + strings.Join(rows, ",") + `]}}`))
+	}))
+	defer vm.Close()
+	t.Setenv("VICTORIA_URL", vm.URL)
+	t.Setenv("METRICS_URL", vm.URL)
+
+	s := netTopoServer(t)
+	f, err := deviceFactsOf(t, s, acme(), "acme-e0")
+	if err != nil {
+		t.Fatalf("own device: %v", err)
+	}
+	if !factHolds(f, ai.FactAdjacency, "ospf") {
+		t.Fatalf("acme-e0 reports OSPF neighbour rows: %v", f.Seen(ai.FactAdjacency))
+	}
+	if factHolds(f, ai.FactAdjacency, "isis") || factHolds(f, ai.FactAdjacency, "bgp") {
+		t.Fatalf("TENANT LEAK: globex-e0's IS-IS/BGP rows changed acme-e0's facts: %v", f.Seen(ai.FactAdjacency))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var nbQueries int
+	for _, q := range queries {
+		if !strings.Contains(q, "_nbr_state") && !strings.Contains(q, "_adj_state") && !strings.Contains(q, "_peer_state{device") {
+			continue
+		}
+		nbQueries++
+		if strings.Contains(q, "globex") {
+			t.Errorf("the neighbour read names another tenant's device: %s", q)
+		}
+	}
+	if nbQueries < 3 {
+		t.Fatalf("expected the three neighbour reads, saw %d in %v", nbQueries, queries)
+	}
+	if len(filters) == 0 {
+		t.Fatal("the neighbour reads carried NO extra_filters[] — an unscoped read")
+	}
+	for _, fl := range filters {
+		if strings.Contains(fl, "globex") {
+			t.Errorf("acme's boundary names globex: %s", fl)
+		}
 	}
 }
