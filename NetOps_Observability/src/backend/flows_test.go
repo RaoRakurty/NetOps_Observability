@@ -564,3 +564,72 @@ func TestHandleFlowsTopNServicePort(t *testing.T) {
 		}
 	}
 }
+
+// Tracker 405: every older flow route answers 400 for a bad window and sends
+// nothing to ClickHouse — never the one-hour default a client could not tell
+// from "that is all the traffic". A good window still reaches ClickHouse with
+// its own span.
+func TestOlderFlowRoutesRejectABadWindow(t *testing.T) {
+	var sqls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		sqls = append(sqls, string(b))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+	t.Setenv("CLICKHOUSE_PASSWORD", "")
+	s := flowsTestServer(t)
+
+	routes := map[string]http.HandlerFunc{
+		"/api/flows/top":        s.handleFlowsTopTalkers,
+		"/api/flows/topn":       s.handleFlowsTopN,
+		"/api/flows/timeseries": s.handleFlowsTimeseries,
+		"/api/flows/by-proto":   s.handleFlowsByProto,
+		"/api/flows/by-type":    s.handleFlowsByType,
+		"/api/flows/flags":      s.handleFlowsFlags,
+		"/api/flows/geo":        s.handleFlowsGeo,
+		"/api/flows/coverage":   s.handleFlowsCoverage,
+		"/api/flows/fanout":     s.handleFlowsFanout,
+	}
+	bad := []string{"since=45d", "since=721h", "since=1m", "since=0s", "since=-1h", "since=abc",
+		"since=1h%3BDROP", "from=1&to=2"}
+	for path, h := range routes {
+		for _, q := range bad {
+			sqls = nil
+			w := httptest.NewRecorder()
+			h(w, req(http.MethodGet, path+"?by=device&"+q, "", superA()))
+			if w.Code != http.StatusBadRequest || len(sqls) != 0 {
+				t.Errorf("%s?%s: status %d, %d statements; want 400 and none", path, q, w.Code, len(sqls))
+			}
+		}
+		sqls = nil
+		w := httptest.NewRecorder()
+		good := path + "?since=2h"
+		if path == "/api/flows/topn" {
+			good += "&by=device" // topn names its dimension
+		}
+		h(w, req(http.MethodGet, good, "", superA()))
+		// geo and coverage probe a dictionary first; the window is in the
+		// last (the data) statement.
+		if w.Code != http.StatusOK || len(sqls) == 0 || !strings.Contains(sqls[len(sqls)-1], "INTERVAL 7200 SECOND") {
+			t.Errorf("%s?since=2h: status %d, SQL %q; want 200 over 7200 s", path, w.Code, sqls)
+		}
+	}
+	// The timeseries step is fail-closed too.
+	for _, q := range []string{"since=1h&step=0", "since=1h&step=500ms", "since=1h&step=2h", "since=1h&step=1s", "since=1h&step=x"} {
+		sqls = nil
+		w := httptest.NewRecorder()
+		s.handleFlowsTimeseries(w, req(http.MethodGet, "/api/flows/timeseries?"+q, "", superA()))
+		if w.Code != http.StatusBadRequest || len(sqls) != 0 {
+			t.Errorf("timeseries?%s: status %d, %d statements; want 400 and none", q, w.Code, len(sqls))
+		}
+	}
+	sqls = nil
+	w := httptest.NewRecorder()
+	s.handleFlowsTimeseries(w, req(http.MethodGet, "/api/flows/timeseries?since=720h", "", superA()))
+	if w.Code != http.StatusOK || len(sqls) == 0 || !strings.Contains(sqls[0], "INTERVAL 21600 SECOND") {
+		t.Errorf("timeseries over 30 d with no step: status %d, SQL %q; want the automatic 6 h step", w.Code, sqls)
+	}
+}

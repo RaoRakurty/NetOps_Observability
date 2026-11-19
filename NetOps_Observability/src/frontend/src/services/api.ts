@@ -707,6 +707,18 @@ export type FlowFilters = {
 
 // flowQS serializes flow filters (and optional direction) into a query-string
 // suffix (leading "&"), skipping empty values. Returns "" when nothing is set.
+/**
+ * The older flow routes (/api/flows/top, topn, timeseries, by-proto, by-type,
+ * flags, geo, coverage, fanout) answer 400 for a window outside 5 min – 30 days
+ * (tracker 405) instead of silently reading one hour. A section range can be a
+ * custom preset of any length, so the window is clamped to the Flows page's own
+ * bounds (flowsModel.ts MIN_WINDOW_S / MAX_WINDOW_S) before it is sent.
+ */
+export function legacyFlowSince(sinceSeconds: number): number {
+  const s = Number.isFinite(sinceSeconds) ? Math.round(sinceSeconds) : 3600;
+  return Math.min(30 * 86_400, Math.max(300, s));
+}
+
 function flowQS(filters?: FlowFilters, direction = ""): string {
   const p: string[] = [];
   if (filters) {
@@ -6735,19 +6747,19 @@ export const api = {
   // folds A↔B conversations into one row.
   topTalkers: (sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters, direction = "") =>
     request<ClickHouseResponse>(
-      `/api/flows/top?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters, direction)}`,
+      `/api/flows/top?since=${legacyFlowSince(sinceSeconds)}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters, direction)}`,
     ),
   // Generic top-N by a single allowlisted dimension (device | in_if | out_if |
   // src_addr | dst_addr | src_as | dst_as | src_port | dst_port | proto).
   flowsTopN: (by: string, sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/topn?by=${by}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/topn?by=${by}&since=${legacyFlowSince(sinceSeconds)}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   // Flow fan-out for threat detection: per-source distinct dst hosts/ports
   // (scan signal). sort=hosts (horizontal) | ports (vertical).
   flowsFanout: (sort: "hosts" | "ports" = "hosts", sinceSeconds = 3600, limit = 15, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/fanout?sort=${sort}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/fanout?sort=${sort}&since=${legacyFlowSince(sinceSeconds)}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   // Batch app-name resolution (#81 P3G): visible IPs → {ip: {app, source,
   // confidence}} through the unified resolver. Unresolved IPs are OMITTED from
@@ -6765,27 +6777,27 @@ export const api = {
   // exact shares. geo_enabled=false ⇒ dictionary not provisioned yet.
   flowsGeo: (dim: "src" | "dst", sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/geo?dim=${dim}&since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/geo?dim=${dim}&since=${legacyFlowSince(sinceSeconds)}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   // TCP traffic by tcp_flags combination (tcpControlBits bitmask); the UI
   // decodes bits to SYN/ACK/FIN/RST… names. Rows: {tcp_flags, bytes_total,
   // packets_total, flows}.
   flowsFlags: (sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/flags?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/flags?since=${legacyFlowSince(sinceSeconds)}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/by-proto?since=${legacyFlowSince(sinceSeconds)}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   // Coverage of the window: what the flow records actually carry (TCP, flags,
   // AS numbers, public addresses) so an empty panel can say WHY it is empty.
   flowsCoverage: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/coverage?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/coverage?since=${legacyFlowSince(sinceSeconds)}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   flowsByType: (sinceSeconds = 3600) =>
-    request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
+    request<ClickHouseResponse>(`/api/flows/by-type?since=${legacyFlowSince(sinceSeconds)}s`),
   // Active-measurement path topology (traceroute).
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
   // LLDP-discovered topology adjacencies (tenant-scoped, deduped). Empty when the
@@ -6854,7 +6866,7 @@ export const api = {
     request<ImportResult>("/api/sot/import", { method: "POST", body: JSON.stringify(body) }),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+      `/api/flows/timeseries?since=${legacyFlowSince(sinceSeconds)}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   tunnels: (limit = 200, status?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });

@@ -400,8 +400,8 @@ export function StreamGraph({ height = 226 }: { height?: number }) {
     const load = async () => {
       try {
         const [ts, proto] = await Promise.all([
-          api.flowsTimeseries({ since: "3600", step: "120" } as never),
-          api.flowsByProto({ since: "3600" } as never),
+          api.flowsTimeseries(3600, 120),
+          api.flowsByProto(3600),
         ]);
         if (!alive) return;
         const protos = (proto.data ?? []).slice(0, 5).map((p: Record<string, unknown>) => String(p.proto ?? "other"));

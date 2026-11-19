@@ -838,7 +838,11 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
   another org ignored; a foreign router's link answers exactly like a missing one
   (`flows_links_isolation_test.go`, `flows_movers_isolation_test.go`).
 - Every malformed window, link, step, direction, `by`, `type` or `traffic` is a 400 before any query
-  (same files). The older flow routes still fail open: tracker 405.
+  (same files). The older relative-only routes (top, topn, timeseries, by-proto, by-type, flags, geo,
+  coverage, fanout) answer 400 for a bad window or step with no statement sent
+  (`TestOlderFlowRoutesRejectABadWindow`), and each scopes its statement to the caller's own devices,
+  ignores `as_tenant` into another tenant and sends nothing for a deviceless tenant
+  (`flows_legacy_isolation_test.go`); three non-flow routes still fail open: tracker 428.
 - Capacity reads VictoriaMetrics with the forecast lane's boundary (extra_filters[] on every read,
   second-pass row filter, deny-all, 501 on Prometheus) over a hostile fake; the known-p95 case is exact
   (`flows_capacity_isolation_test.go`); the fit is pinned (`TestFitForecast*`). The Overview
