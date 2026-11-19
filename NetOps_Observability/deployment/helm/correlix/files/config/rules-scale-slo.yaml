@@ -1658,3 +1658,29 @@ groups:
           summary: "the controller answers its interface lists, but none of them reached the interface bridge"
           description: "Devices known only through their controller have no interface names on flows and traps, and a trap sent from one of their interface addresses names no device. Read netops_nms_iface_bridge_rows by outcome: device_unresolved means the controller's devices match no inventory device of the integration's owner (an integration owned by a tenant while the devices belong to the platform, or the reverse), device_ambiguous means a key matched more than one device."
           runbook: "docs/runbooks/telemetry-names.md#nmsinterfacebridgeempty"
+      - alert: RoutineSyslogRollupStale
+        # Tracker 410: routine management-session syslog ORIGINALS live only
+        # >= 72 h (netops-syslogroutine-retention); their per-minute counts and
+        # identities survive in netops-syslogrollup-* ONLY if the api's
+        # routine-syslog-rollup worker keeps folding them. A worker dead for
+        # more than ~48 h lets originals expire uncounted, which breaks D2.
+        # Two shapes, both from the api's own scrape (a dead api makes these
+        # absent and is ScrapeTargetDown's page, not this warning):
+        #   * it rolled before, but not for over an hour;
+        #   * it has never rolled since boot and every tick in the last 30m failed.
+        # warning tier: a latent D2 risk with two days of margin, not one of
+        # the four page conditions.
+        expr: |
+          (max by (job) (time() - netops_routine_rollup_last_success_timestamp_seconds{job="netops-api"}) > 3600)
+          or
+          (
+            max by (job) (increase(netops_routine_rollup_runs_total{job="netops-api",result="error"}[30m])) > 0
+            unless
+            max by (job) (increase(netops_routine_rollup_runs_total{job="netops-api",result="ok"}[30m])) > 0
+          )
+        for: 15m
+        labels: { severity: warning, tier: warning, layer: storage }
+        annotations:
+          summary: "the routine-syslog roll-up is not rolling — routine session counts will be lost when their originals expire"
+          description: "Routine management-session syslog (monitoring polls, controller NETCONF sessions) is kept raw for only about three days; its per-minute counts and usernames are kept for the full log window only in the netops-syslogrollup roll-ups the api writes. The api has not completed a roll-up tick for over an hour, or every tick in the last 30 minutes failed. Nothing is lost while the originals still exist (the job re-rolls any gap shorter than their window on its own), but after about two days the oldest originals start expiring uncounted. Read the api log for routine-syslog roll-up, and netops_routine_rollup_runs_total by result; the usual causes are OpenSearch refusing the netops_api role on netops-syslogrollup-* (securityadmin not re-run) or OpenSearch being unavailable."
+          runbook: "docs/runbooks/routine-syslog.md"

@@ -24,6 +24,7 @@ import (
 	"netops/backend/internal/logroutine"
 	"netops/backend/internal/logsecrets"
 	"netops/backend/internal/oslog"
+	"netops/backend/internal/routinerollup"
 	// DEBUG-ROUTES-BEGIN
 	"netops/backend/internal/pipedebug"
 	// DEBUG-ROUTES-END
@@ -661,6 +662,97 @@ func openSearch(method, path string, body any) (*http.Response, error) {
 	req.Header.Set("Content-Type", "application/json")
 	client := backendHTTPClient(30 * time.Second)
 	return client.Do(req)
+}
+
+// ── Tracker 410: the routine-syslog roll-up's OpenSearch store ──────────────
+
+// routineRollupMaxBody bounds every response the roll-up reads (§9).
+const routineRollupMaxBody = 8 << 20
+
+// routineRollupStore is internal/routinerollup's Store over the api's
+// OpenSearch client, at the PLATFORM scope: the job is platform plumbing, and
+// every document it writes keeps the tenant its index names. It writes only
+// netops-syslogrollup-* (the one write netops_api holds there, roles.yml).
+type routineRollupStore struct{}
+
+func (routineRollupStore) do(ctx context.Context, method, path, contentType string, body []byte) ([]byte, error) {
+	base := envOr("OPENSEARCH_URL", "http://opensearch:9200")
+	u, err := url.Parse(strings.TrimRight(base, "/") + path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := backendHTTPClient(60 * time.Second).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(io.LimitReader(resp.Body, routineRollupMaxBody))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound && method == http.MethodPost && strings.HasSuffix(path, "/_search") {
+		// A roll-up index that does not exist yet: nothing has been rolled.
+		return []byte(`{"hits":{"total":{"value":0}},"aggregations":{"n":{"value":0}}}`), nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("opensearch %s %s: status %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(out[:min(len(out), 300)])))
+	}
+	return out, nil
+}
+
+func (s routineRollupStore) Indices(ctx context.Context, pattern string) ([]string, error) {
+	raw, err := s.do(ctx, http.MethodGet, "/_cat/indices/"+pattern+"?format=json&h=index&expand_wildcards=open", "application/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Index string `json:"index"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, fmt.Errorf("list %s: %w", pattern, err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Index)
+	}
+	return out, nil
+}
+
+func (s routineRollupStore) Search(ctx context.Context, index string, body map[string]any) ([]byte, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	// ignore_unavailable: a roll-up index that has not been created yet reads
+	// as empty rather than as a failure.
+	return s.do(ctx, http.MethodPost, "/"+index+"/_search?ignore_unavailable=true", "application/json", b)
+}
+
+func (s routineRollupStore) Bulk(ctx context.Context, ndjson []byte) ([]byte, error) {
+	return s.do(ctx, http.MethodPost, "/_bulk", "application/x-ndjson", ndjson)
+}
+
+// runRoutineRollup keeps netops-syslogrollup-* (tracker 410) until ctx ends.
+// ROUTINE_SYSLOG_ROLLUP=off disables it (the originals then simply expire on
+// their window with no count kept — say so loudly, because that is a D2 gap).
+func (s *server) runRoutineRollup(ctx context.Context) {
+	if strings.EqualFold(strings.TrimSpace(envOr("ROUTINE_SYSLOG_ROLLUP", "on")), "off") {
+		logWarn("logs", "routine-syslog roll-up is DISABLED (ROUTINE_SYSLOG_ROLLUP=off): routine originals expire on their short window with no per-minute count kept", nil)
+		return
+	}
+	j := &routinerollup.Job{Store: routineRollupStore{}, Metrics: s.routineRollupMetrics}
+	j.Run(ctx, time.Minute, func(msg string, err error) {
+		if err != nil {
+			logWarn("logs", msg, map[string]any{"error": err.Error()})
+			return
+		}
+		logInfo("logs", msg, nil)
+	})
 }
 
 // parseTimeFlexible accepts RFC3339, Unix seconds, or Unix nanoseconds.

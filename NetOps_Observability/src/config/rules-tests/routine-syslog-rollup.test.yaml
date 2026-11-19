@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for RoutineSyslogRollupStale (tracker 410,
+# rules-scale-slo.yaml). Routine management-session syslog originals live only
+# ~3 days; their per-minute counts survive only if the api's roll-up keeps
+# folding them. The rule must fire on both failure shapes and stay silent on a
+# healthy roll-up and on a fresh boot that is still rolling.
+#
+# TIMEBASE: promtool's clock starts at epoch 0, so time() at eval_time T is T
+# seconds and a last-success value of S reads as (T - S) seconds old.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Healthy: last success keeps advancing (value = the scrape time).
+  - interval: 1m
+    input_series:
+      - series: 'netops_routine_rollup_last_success_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x180"
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="ok"}'
+        values: "0+1x180"
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="error"}'
+        values: "0x180"
+    alert_rule_test:
+      - eval_time: 170m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts: []
+
+  # 2) It rolled at 10m, then stopped succeeding: stale past 1h + 15m for.
+  - interval: 1m
+    input_series:
+      - series: 'netops_routine_rollup_last_success_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x180"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts:
+          - exp_labels:
+              job: netops-api
+              severity: warning
+              tier: warning
+              layer: storage
+            exp_annotations:
+              summary: "the routine-syslog roll-up is not rolling — routine session counts will be lost when their originals expire"
+              description: "Routine management-session syslog (monitoring polls, controller NETCONF sessions) is kept raw for only about three days; its per-minute counts and usernames are kept for the full log window only in the netops-syslogrollup roll-ups the api writes. The api has not completed a roll-up tick for over an hour, or every tick in the last 30 minutes failed. Nothing is lost while the originals still exist (the job re-rolls any gap shorter than their window on its own), but after about two days the oldest originals start expiring uncounted. Read the api log for routine-syslog roll-up, and netops_routine_rollup_runs_total by result; the usual causes are OpenSearch refusing the netops_api role on netops-syslogrollup-* (securityadmin not re-run) or OpenSearch being unavailable."
+              runbook: "docs/runbooks/routine-syslog.md"
+
+  # 3) Never rolled since boot, every tick failing: no last-success series at
+  #    all (absent until the first success), errors climbing.
+  - interval: 1m
+    input_series:
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="error"}'
+        values: "0+1x90"
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="ok"}'
+        values: "0x90"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts:
+          - exp_labels:
+              job: netops-api
+              severity: warning
+              tier: warning
+              layer: storage
+            exp_annotations:
+              summary: "the routine-syslog roll-up is not rolling — routine session counts will be lost when their originals expire"
+              description: "Routine management-session syslog (monitoring polls, controller NETCONF sessions) is kept raw for only about three days; its per-minute counts and usernames are kept for the full log window only in the netops-syslogrollup roll-ups the api writes. The api has not completed a roll-up tick for over an hour, or every tick in the last 30 minutes failed. Nothing is lost while the originals still exist (the job re-rolls any gap shorter than their window on its own), but after about two days the oldest originals start expiring uncounted. Read the api log for routine-syslog roll-up, and netops_routine_rollup_runs_total by result; the usual causes are OpenSearch refusing the netops_api role on netops-syslogrollup-* (securityadmin not re-run) or OpenSearch being unavailable."
+              runbook: "docs/runbooks/routine-syslog.md"
+
+  # 4) Some ticks fail, some succeed (one flaky replica-scrape): not stale.
+  - interval: 1m
+    input_series:
+      - series: 'netops_routine_rollup_last_success_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0+60x120"
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="error"}'
+        values: "0+1x120"
+      - series: 'netops_routine_rollup_runs_total{job="netops-api",instance="api:8080",result="ok"}'
+        values: "0+1x120"
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: RoutineSyslogRollupStale
+        exp_alerts: []
