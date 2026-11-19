@@ -6,6 +6,7 @@ package collectors
 import (
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -365,6 +366,57 @@ func TestGenericProfileCarriesOSPFDepth(t *testing.T) {
 		// would silently withhold the family on every gNMI-capable device.
 		if m.Owner != "" {
 			t.Errorf("%s must stay SNMP-owned, got owner %q", name, m.Owner)
+		}
+	}
+}
+
+// TestGenericProfileCarriesProtocolAdminState pins the tracker 415 scalars:
+// each OID literal checked against the regenerated index (OSPF-MIB, OSPFV3-MIB,
+// ISIS-MIB, BGP4-MIB), each a scalar GET (never a walk: only an answering GET
+// proves the MIB is there), each SNMP-owned (no other transport carries them).
+func TestGenericProfileCarriesProtocolAdminState(t *testing.T) {
+	want := map[string]struct {
+		oid  []int
+		name string
+	}{
+		"device_ospf_admin_state":   {[]int{1, 3, 6, 1, 2, 1, 14, 1, 2}, "ospfAdminStat"},
+		"device_ospfv3_admin_state": {[]int{1, 3, 6, 1, 2, 1, 191, 1, 1, 2}, "ospfv3AdminStatus"},
+		"device_isis_admin_state":   {[]int{1, 3, 6, 1, 2, 1, 138, 1, 1, 1, 8}, "isisSysAdminState"},
+		"device_bgp_local_as":       {[]int{1, 3, 6, 1, 2, 1, 15, 2}, "bgpLocalAs"},
+	}
+	got := map[string]SNMPMetric{}
+	for _, p := range builtinProfiles() {
+		if p.Name != "generic" {
+			continue
+		}
+		for _, m := range p.Metrics {
+			if _, ok := want[m.Name]; ok {
+				got[m.Name] = m
+			}
+		}
+	}
+	for metric, w := range want {
+		m, ok := got[metric]
+		if !ok {
+			t.Errorf("%s missing from the generic profile", metric)
+			continue
+		}
+		if !reflect.DeepEqual(m.OID, w.oid) {
+			t.Errorf("%s OID = %v, want %v", metric, m.OID, w.oid)
+		}
+		if m.Table {
+			t.Errorf("%s must be a scalar GET, not a walk", metric)
+		}
+		if m.Owner != "" {
+			t.Errorf("%s must stay SNMP-owned, got owner %q", metric, m.Owner)
+		}
+		strs := make([]string, len(w.oid))
+		for i, n := range w.oid {
+			strs[i] = strconv.Itoa(n)
+		}
+		node, ok := oidIdx.Nodes[strings.Join(strs, ".")]
+		if !ok || node.Name != w.name || node.Kind != "scalar" {
+			t.Errorf("%s: index says %+v (ok=%v), want scalar %s", metric, node, ok, w.name)
 		}
 	}
 }

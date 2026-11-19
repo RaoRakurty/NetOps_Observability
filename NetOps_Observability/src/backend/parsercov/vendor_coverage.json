@@ -380,8 +380,8 @@
       "lanes": {
         "snmptrap": {
           "fixtures": 16,
-          "mib_nodes": 1564,
-          "mibs": 25,
+          "mib_nodes": 1781,
+          "mibs": 26,
           "rules": {
             "doc_claimed": 6,
             "unrated": 7

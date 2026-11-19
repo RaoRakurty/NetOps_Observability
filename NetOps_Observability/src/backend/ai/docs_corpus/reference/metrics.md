@@ -74,6 +74,10 @@ Every row is SNMP-owned and collected by default, from the generic profile that 
 | `device_ospf_spf_runs_total` | SPF runs per area | SNMP | Yes |
 | `device_ospf_if_hello_seconds` | Hello interval per interface | SNMP | Yes |
 | `device_ospf_if_dead_seconds` | Dead interval per interface | SNMP | Yes |
+| `device_ospf_admin_state` | `ospfAdminStat`: 1 enabled, 2 disabled. A device that does not answer the GET emits nothing. | SNMP | Yes |
+| `device_ospfv3_admin_state` | `ospfv3AdminStatus`: 1 enabled, 2 disabled | SNMP | Yes |
+| `device_isis_admin_state` | `isisSysAdminState`: 1 on, 2 off | SNMP | Yes |
+| `device_bgp_local_as` | `bgpLocalAs`, the local AS number. Some agents answer 0 with no BGP configured. | SNMP | Yes |
 | `device_isis_adj_state` | Adjacency state | gNMI only | No |
 | `device_isis_adj_hold_seconds` | Adjacency hold time | gNMI only | No |
 | `device_isis_lsp_count` | LSPs in the database | gNMI only | No |
