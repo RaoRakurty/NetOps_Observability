@@ -173,6 +173,18 @@ func builtinProfiles() []SNMPProfile {
 				// join device_ospf_if_state, which is labelled the same way.
 				{Name: "device_ospf_if_hello_seconds", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 9}, Table: true}, // ospfIfHelloInterval
 				{Name: "device_ospf_if_dead_seconds", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 10}, Table: true}, // ospfIfRtrDeadInterval
+				// PROTOCOL ADMIN STATE (tracker 415, Iris device facts). One scalar
+				// GET each. Only a GET that ANSWERS proves the MIB is instantiated —
+				// a walk of an unimplemented MIB and an empty table both return
+				// nothing — so these are what lets "this protocol is off here" be
+				// ESTABLISHED instead of guessed. A device that answers
+				// noSuchObject emits no series (snmpGet errors → skipped), which
+				// reads as unknown. OIDs index-resolved (mibs/index/oididx.json).
+				// doc_claimed: no OSPF/IS-IS SNMP speaker on this deployment.
+				{Name: "device_ospf_admin_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 1, 2}},        // ospfAdminStat: enabled(1) disabled(2)
+				{Name: "device_ospfv3_admin_state", OID: []int{1, 3, 6, 1, 2, 1, 191, 1, 1, 2}},  // ospfv3AdminStatus: enabled(1) disabled(2)
+				{Name: "device_isis_admin_state", OID: []int{1, 3, 6, 1, 2, 1, 138, 1, 1, 1, 8}}, // isisSysAdminState: on(1) off(2)
+				{Name: "device_bgp_local_as", OID: []int{1, 3, 6, 1, 2, 1, 15, 2}},               // bgpLocalAs (seen only: 0 = "no BGP" is vendor convention)
 				// POWER-ETHERNET-MIB (RFC 3621) — PoE port status on the SWITCH side,
 				// the port-intelligence lane for powered endpoints (APs, phones,
 				// cameras): deliveringPower vs fault/otherFault localizes an AP outage

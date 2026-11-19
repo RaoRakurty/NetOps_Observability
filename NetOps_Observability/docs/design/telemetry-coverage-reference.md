@@ -358,6 +358,10 @@ block note, the API type doc, and the UI's own caveat line under the table.
 | `device_ospf_spf_runs_total{device,area}` | `ospfSpfRuns` | `1.3.6.1.2.1.14.2.1.4` | **doc_claimed** | as above |
 | `device_ospf_if_hello_seconds{device,index}` | `ospfIfHelloInterval` | `1.3.6.1.2.1.14.7.1.9` | **doc_claimed** | poll a device that answers `ospfIfTable` |
 | `device_ospf_if_dead_seconds{device,index}` | `ospfIfRtrDeadInterval` | `1.3.6.1.2.1.14.7.1.10` | **doc_claimed** | as above |
+| `device_ospf_admin_state{device}` (tracker 415) | `ospfAdminStat` (scalar, enabled(1)/disabled(2)) | `1.3.6.1.2.1.14.1.2` | **doc_claimed** | GET it on an OSPF-speaking SNMP device and on one with OSPF unconfigured; record whether the second answers disabled(2) or noSuchObject (the absent rule needs the former) |
+| `device_ospfv3_admin_state{device}` (tracker 415) | `ospfv3AdminStatus` (OSPFV3-MIB, enabled(1)/disabled(2)) | `1.3.6.1.2.1.191.1.1.2` | **doc_claimed** | as above, on an OSPFv3 speaker |
+| `device_isis_admin_state{device}` (tracker 415) | `isisSysAdminState` (ISIS-MIB, on(1)/off(2)) | `1.3.6.1.2.1.138.1.1.1.8` | **doc_claimed** | as above, on an IS-IS speaker that implements RFC 4444 (many expose a vendor IS-IS MIB instead → unknown) |
+| `device_bgp_local_as{device}` (tracker 415) | `bgpLocalAs` (BGP4-MIB) | `1.3.6.1.2.1.15.2` | **doc_claimed** | GET on a BGP speaker (expect its AS) and a non-speaker; non-zero = a BGP process (seen only — 0 = no BGP is vendor convention, never an absence) |
 
 **Why doc_claimed and not lower.** Every OID was **resolved through the vendored
 MIB index** (`src/backend/collectors/mibs/index/oididx.json`, which carries

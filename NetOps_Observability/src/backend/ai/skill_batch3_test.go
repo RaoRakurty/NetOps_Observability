@@ -65,7 +65,7 @@ func TestOSPFOnAnSDWANEdgeWithNoOSPFIsRerouted(t *testing.T) {
 	if len(ans.Chain) == 0 || ans.Chain[0].Name == "ospf-adjacency" {
 		t.Fatalf("chain must not start at the ruled-out method: %+v", ans.Chain)
 	}
-	if p := lastPrompt(llm); !strings.Contains(p, "no OSPF adjacency is discovered on vedge-51") {
+	if p := lastPrompt(llm); !strings.Contains(p, "vedge-51 reports OSPF administratively disabled and has no OSPF neighbours") {
 		t.Fatalf("the operator was never told why; prompt:\n%s", p)
 	}
 }
