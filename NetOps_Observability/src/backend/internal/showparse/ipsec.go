@@ -148,6 +148,5 @@ func ipsecCount(t, marker string) *int64 {
 	if !ok || n < 0 {
 		return nil
 	}
-	v := int64(n)
-	return &v
+	return &n
 }
