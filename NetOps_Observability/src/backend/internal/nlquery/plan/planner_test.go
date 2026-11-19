@@ -34,6 +34,9 @@ type fakeScope struct {
 	incs       []IncidentRow
 	// circuitRefs answers Circuits by id (the compare interface lookup).
 	circuitRefs []CircuitRef
+	// instantFn, when set, answers instant reads by expression and instant
+	// (the seasonal tests tell the current read from the flat-p95 read).
+	instantFn func(expr string, at time.Time) []Sample
 }
 
 func (f *fakeScope) MetricRange(_ context.Context, e mql.Expr, _, _ time.Time, _ time.Duration, _ int) ([]Series, bool, error) {
@@ -42,6 +45,9 @@ func (f *fakeScope) MetricRange(_ context.Context, e mql.Expr, _, _ time.Time, _
 }
 func (f *fakeScope) MetricInstant(_ context.Context, e mql.Expr, at time.Time, _ int) ([]Sample, bool, error) {
 	f.exprs, f.instants = append(f.exprs, e.String()), append(f.instants, at)
+	if f.instantFn != nil {
+		return f.instantFn(e.String(), at), false, nil
+	}
 	return f.samples[at], false, nil
 }
 func (f *fakeScope) Incidents(_ context.Context, q IncidentQuery) ([]IncidentRow, bool, error) {
@@ -199,11 +205,21 @@ func TestFilterPredicateGolden(t *testing.T) {
 	}
 }
 
+// With no earlier weeks or days (tier C), above_baseline keeps its original
+// rule: the flat 95th percentile of the previous 7 days, offset by the window.
 func TestAboveBaselineUsesAnOffsetSevenDayQuantile(t *testing.T) {
-	sc := &fakeScope{}
+	sc := &fakeScope{samples: map[time.Time][]Sample{
+		now: {{Labels: map[string]string{"device": "edge-1", "ifName": "Gi1"}, Value: 50}},
+	}}
 	run(t, sc, `{"v":1,"query_type":"metric_filter","target":"interface","metric":"if_in_bps","predicate":{"op":"above_baseline"},"entities":[{"type":"device","id":"device:d1"}],"time_range":{"kind":"relative","last":"1h"}}`)
-	if !strings.Contains(sc.exprs[0], "quantile_over_time(0.95, ") || !strings.Contains(sc.exprs[0], "[7d:30s]) offset 1h)") {
-		t.Fatalf("baseline expr = %s", sc.exprs[0])
+	var base string
+	for _, e := range sc.exprs {
+		if strings.Contains(e, "quantile_over_time(0.95, ") {
+			base = e
+		}
+	}
+	if !strings.Contains(base, "[7d:30s]) offset 1h)") {
+		t.Fatalf("baseline expr = %q (all: %v)", base, sc.exprs)
 	}
 }
 
@@ -215,7 +231,8 @@ func TestCompareRanksByAbsoluteChange(t *testing.T) {
 		yest: {{Labels: lbl("edge-1"), Value: 45}, {Labels: lbl("edge-2"), Value: 60}},
 	}}
 	rs := run(t, sc, `{"v":1,"query_type":"compare_windows","target":"device","metric":"cpu_util_pct","time_range":{"kind":"relative","last":"2h"},"compare_to":{"kind":"relative","last":"2h","offset":"1d"}}`)
-	if len(sc.instants) != 2 || !sc.instants[1].Equal(yest) {
+	// Both window ends first; the seasonal references (N-H6) follow.
+	if len(sc.instants) < 2 || !sc.instants[0].Equal(now) || !sc.instants[1].Equal(yest) {
 		t.Fatalf("compare must read both window ends: %v", sc.instants)
 	}
 	if rs.Rows[0]["device"] != "edge-2" || rs.Rows[0]["delta"] != -50.0 || rs.Compare == nil {

@@ -3565,6 +3565,40 @@ func (h *nlqScope) MetricInstant(ctx context.Context, e mql.Expr, at time.Time, 
 	return h.instantWith(ctx, e, at, maxSeries, h.s.metricsScopeFiltersFor(h.claims))
 }
 
+// MaintenanceCoverer is plan.MaintenanceScope (tracker 337 N-H6): the caller's
+// own declared maintenance windows, read ONCE per answer through the store's
+// tenant scope, as a predicate over the devices the caller can see. A window
+// counts for a device only when it belongs to that device's own tenant, so a
+// cross-tenant operator's view never lets tenant A's planned work excuse
+// tenant B's device. No store → nil predicate (nothing excluded).
+func (h *nlqScope) MaintenanceCoverer(ctx context.Context) (func(device string, at time.Time) bool, error) {
+	if h.s.maintWindows == nil {
+		return nil, nil
+	}
+	tenant, cross := principalTenant(h.claims)
+	wins, err := h.s.maintWindows.List(ctx, tenant, cross)
+	if err != nil {
+		return nil, err
+	}
+	owner := map[string]string{}
+	for _, d := range h.s.visibleDevicesFor(h.claims) {
+		owner[d.ID] = deviceTenant(d)
+	}
+	return func(device string, at time.Time) bool {
+		t, ok := owner[device]
+		if !ok {
+			return false
+		}
+		for i := range wins {
+			w := &wins[i]
+			if strings.EqualFold(strings.TrimSpace(w.TenantID), t) && w.Covers(at, device, "", "") {
+				return true
+			}
+		}
+		return false
+	}, nil
+}
+
 // TenantMetricRange / TenantMetricInstant are plan.TenantLabeledScope (tracker
 // 337 N-B5): the workspace's own Digital Experience check series, read through
 // the tenant-LABEL filter those series carry — the device filter above would
