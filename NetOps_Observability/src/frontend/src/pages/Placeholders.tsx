@@ -23,14 +23,14 @@ const DASHBOARD_GROUPS: { title: string; cards: DashboardCard[] }[] = [
       { id: "interface-metric", label: "Interface Metrics", href: "#/analytics/interface-performance", icon: "metrics" },
       { id: "bgp-metric", label: "BGP Metrics", href: "#/analytics/protocols", icon: "topology" },
       { id: "bandwidth", label: "Bandwidth Utilization", href: "#/analytics/device-monitoring", icon: "metrics" },
-      { id: "wan-circuit", label: "WAN Interface Metrics", href: "#/investigate/wan-paths", icon: "stack" },
+      { id: "wan-circuit", label: "WAN circuits", href: "#/investigate/wan-paths", icon: "stack" },
     ],
   },
   {
     title: "Traffic & paths",
     cards: [
       { id: "flows-board", label: "Flow Analytics", href: "#/explore/flows", icon: "flows" },
-      { id: "network-path", label: "Network Path", href: "#/investigate/flowtrace", icon: "explore" },
+      { id: "network-path", label: "Measured paths", href: "#/investigate/flowtrace", icon: "explore" },
       { id: "quality-board", label: "Quality", href: "#/operations/network-health", icon: "monitoring" },
     ],
   },

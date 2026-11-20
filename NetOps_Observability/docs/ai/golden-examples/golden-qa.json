@@ -990,7 +990,7 @@
         ]
       },
       "nav": "investigate/flowtrace",
-      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Flow Trace"
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Measured paths"
     },
     {
       "id": "docs-077",

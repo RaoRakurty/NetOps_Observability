@@ -36,6 +36,32 @@ export function fmtTunnelUptime(s: number): string {
   return `${m}m`;
 }
 
+export interface TunnelKpis {
+  up: number;
+  down: number;
+  /** Rows whose quality (latency/loss) is actually measured. */
+  measured: number;
+  /** Averages over MEASURED rows only; null when none is measured. */
+  avgLatency: number | null;
+  avgLoss: number | null;
+}
+
+// The summary tiles. Latency and loss average only the rows whose quality is
+// measured: an SD-WAN row from the overlay snapshot carries measured:false and
+// zeros, and dividing by every row read a fleet of unmeasured tunnels as a
+// healthy 0 ms / 0 % (Paths redesign P0, 2026-11-20). Up/down still count all.
+export function tunnelKpis(rows: Tunnel[]): TunnelKpis {
+  const m = rows.filter((t) => t.measured !== false);
+  const avg = (f: (t: Tunnel) => number) => (m.length ? m.reduce((n, t) => n + f(t), 0) / m.length : null);
+  return {
+    up: rows.filter((t) => t.status === "up").length,
+    down: rows.filter((t) => t.status === "down").length,
+    measured: m.length,
+    avgLatency: avg((t) => t.latency_ms),
+    avgLoss: avg((t) => t.loss_pct),
+  };
+}
+
 export default function Tunnels() {
   const [rows, setRows] = useState<Tunnel[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -109,14 +135,10 @@ export default function Tunnels() {
       render: (t) => <span className={`badge ${t.status === "up" ? "good" : "bad"}`}>{t.status || "?"}</span> },
   ], []);
 
-  const up = rows.filter((t) => t.status === "up").length;
-  const down = rows.filter((t) => t.status === "down").length;
-  const avgLat = rows.length
-    ? rows.reduce((n, t) => n + t.latency_ms, 0) / rows.length
-    : 0;
-  const avgLoss = rows.length
-    ? rows.reduce((n, t) => n + t.loss_pct, 0) / rows.length
-    : 0;
+  const { up, down, measured, avgLatency: avgLat, avgLoss } = tunnelKpis(rows);
+  const measuredFoot = measured
+    ? `across ${measured} measured tunnel${measured === 1 ? "" : "s"}`
+    : "quality not measured";
 
   return (
     <div className="card">
@@ -134,21 +156,21 @@ export default function Tunnels() {
           <span className="stat-value">{down}</span>
           <span className="stat-foot">{rows.length ? `${down} impaired` : "none reported"}</span>
         </div>
-        <div className={`stat ${rows.length ? (avgLat < 150 ? "s-good" : "s-warn") : "s-muted"}`}>
+        <div className={`stat ${avgLat != null ? (avgLat < 150 ? "s-good" : "s-warn") : "s-muted"}`} data-testid="tunnels-avg-latency">
           <span className="stat-label">Avg latency</span>
           <span className="stat-value">
-            {rows.length ? avgLat.toFixed(0) : "—"}
-            {rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> ms</span> : null}
+            {avgLat != null ? avgLat.toFixed(0) : "—"}
+            {avgLat != null ? <span style={{ fontSize: 20, color: "var(--muted)" }}> ms</span> : null}
           </span>
-          <span className="stat-foot">across tunnels</span>
+          <span className="stat-foot">{measuredFoot}</span>
         </div>
-        <div className={`stat ${rows.length ? (avgLoss < 1 ? "s-good" : "s-warn") : "s-muted"}`}>
+        <div className={`stat ${avgLoss != null ? (avgLoss < 1 ? "s-good" : "s-warn") : "s-muted"}`} data-testid="tunnels-avg-loss">
           <span className="stat-label">Avg loss</span>
           <span className="stat-value">
-            {rows.length ? avgLoss.toFixed(2) : "—"}
-            {rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}
+            {avgLoss != null ? avgLoss.toFixed(2) : "—"}
+            {avgLoss != null ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}
           </span>
-          <span className="stat-foot">packet loss</span>
+          <span className="stat-foot">{measuredFoot}</span>
         </div>
       </div>
 
