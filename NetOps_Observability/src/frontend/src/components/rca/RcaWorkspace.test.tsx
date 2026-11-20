@@ -169,6 +169,22 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
     expect(onExportPdf).toHaveBeenCalledOnce();
   });
 
+  // Paths redesign P0: the RCA opens the same case on Troubleshooting, whose
+  // parser reads `?case=` — and never offers it for an example case or no id.
+  it("links the case to Troubleshooting by its correlation id", () => {
+    renderWS();
+    expect(screen.getByTestId("rca-open-troubleshooting").getAttribute("href"))
+      .toBe(`#/investigate/troubleshooting?case=${CORR_ID}`);
+  });
+
+  it("offers no Troubleshooting link without a case id or on the example case", () => {
+    renderWS(suspectedCase(), "operator", null);
+    expect(screen.queryByTestId("rca-open-troubleshooting")).toBeNull();
+    cleanup();
+    renderWS(EXAMPLE_CASE);
+    expect(screen.queryByTestId("rca-open-troubleshooting")).toBeNull();
+  });
+
   it("clicking Evidence detail requests the view change", () => {
     const { onView } = renderWS();
     // a11y pass: the view switch is a toggle-button group (aria-pressed), not

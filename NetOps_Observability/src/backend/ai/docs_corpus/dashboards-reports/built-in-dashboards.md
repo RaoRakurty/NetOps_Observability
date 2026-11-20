@@ -51,16 +51,16 @@ The state panels are stepped lines. A flat line at the top value is healthy, and
 
 **Analytics → Metric Dashboards → BGP Operations** is the consolidated routing-outage screen: routing status, RPKI, AS paths, churn and ownership in one place. See [BGP operations](/bgp/overview).
 
-### WAN Interface Metrics
+### WAN circuits
 
-Answers whether each WAN circuit is meeting its SLA. The card opens **Investigate → Paths → WAN Paths**, which has its own page: [Measure WAN paths](/infrastructure/wan-interface-metrics).
+Answers whether each WAN circuit is meeting its SLA. The card opens **Investigate → Paths → WAN circuits**, which has its own page: [Measure WAN paths](/infrastructure/wan-interface-metrics).
 
 ## Traffic and paths
 
 | Card | Opens | What it answers |
 |---|---|---|
 | Flow Analytics | **Explore → Flows** | Busy links and who is talking on them. See [Analyse flows](/explore/flows). |
-| Network Path | **Investigate → Paths → Flow Trace** | Where traffic goes and where it degrades. |
+| Measured paths | **Investigate → Paths → Measured paths** | Where traffic goes and where it degrades. |
 | Quality | **Operations → Network Health** | Link-quality measurement. |
 
 ## Health and operations

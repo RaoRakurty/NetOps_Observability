@@ -637,7 +637,7 @@ export default function WanCircuits() {
 
   return (
     <div className="card">
-      <h2>WAN interfaces</h2>
+      <h2>WAN circuits</h2>
       <p className="wan-line" style={{ marginTop: -6, marginBottom: 14 }}>
         One row per WAN interface, and per interface{" "}
         <span className="badge" style={{ verticalAlign: "middle" }}>linked</span> to one.
