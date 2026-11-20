@@ -9,15 +9,18 @@ import { api, PathHealthItem } from "../services/api";
 // bad? compared to what? how confident? who likely owns the fix? what's the
 // evidence? Reused by NetworkPath and the front-page Hot-paths panel.
 
-const STATE_META: Record<string, { label: string; color: string }> = {
-  healthy: { label: "Healthy", color: "#16A34A" },
-  watch: { label: "Watch", color: "#D97706" },
-  degraded: { label: "Degraded", color: "#EA580C" },
-  severe: { label: "Severe", color: "#F43F5E" },
+// Labels only: the hue is the stylesheet's (.ph-card[data-state] → --ph, from
+// the --good/--warn/--bad tokens), so both themes stay in step (Paths redesign
+// P1 — this card used to carry five raw hex colours inline).
+const STATE_LABEL: Record<string, string> = {
+  healthy: "Healthy",
+  watch: "Watch",
+  degraded: "Degraded",
+  severe: "Severe",
   // Nothing could be measured for this path in the window. NOT a band on the
   // same scale — grey, never green, because "we could not ask" must never read
   // as "we asked and it was fine".
-  unknown: { label: "Unknown", color: "#64748B" },
+  unknown: "Unknown",
 };
 const CONF_LABEL: Record<string, string> = {
   low: "Low", medium_low: "Medium-low", medium: "Medium", high: "High",
@@ -35,43 +38,29 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
   // Fall back to UNKNOWN, never healthy: an unrecognised state is a state we
   // do not understand, and defaulting it to green is how a blind lane renders
   // as a clean bill of health.
-  const st = STATE_META[p.health_state] ?? STATE_META.unknown;
-  const badge: React.CSSProperties = {
-    fontSize: 12.5, fontWeight: 600, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
-    color: "#fff", background: st.color, whiteSpace: "nowrap",
-  };
-  const muted: React.CSSProperties = { color: "var(--muted)" };
-  const row = (k: string, v: React.ReactNode) => (
-    <>
-      <span style={muted}>{k}</span>
-      <span style={{ color: "var(--fg)" }}>{v}</span>
-    </>
-  );
+  const state = STATE_LABEL[p.health_state] ? p.health_state : "unknown";
   return (
-    <div style={{
-      border: "1px solid var(--border)", borderLeft: `3px solid ${st.color}`, borderRadius: 8,
-      padding: "10px 12px", background: "var(--panel)", minWidth: 0,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={badge}>{st.label}</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, overflowWrap: "anywhere" }}>{p.dst}</span>
-        <span style={{ ...muted, fontSize: 12.5 }}>· {p.agent}</span>
-        <span style={{ marginLeft: "auto", fontSize: 12.5, ...muted }}>Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
+    <div className="ph-card" data-state={state}>
+      <div className="ph-top">
+        <span className="ph-badge">{STATE_LABEL[state]}</span>
+        <span className="ph-dst">{p.dst}</span>
+        <span className="ph-agent">· {p.agent}</span>
+        <span className="ph-conf">Confidence: <b>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
       </div>
-      <div style={{ fontSize: 13, marginTop: 6, color: "var(--fg)", lineHeight: 1.45 }}>{p.reason}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", fontSize: 12.5, marginTop: 7 }}>
-        {row("Current latency", `${p.current.latency_p95_5m} ms (last 5 min)`)}
-        {row("Typical", `~${p.baseline.latency_p50} ms`)}
-        {row("Bad range", `≥ ${p.baseline.latency_p99} ms`)}
-        {p.current.jitter_p95_5m > 0 && row("Current jitter", `${p.current.jitter_p95_5m} ms`)}
-        {p.current.loss_pct_5m > 0 && row("Packet loss", `${p.current.loss_pct_5m}%`)}
-        {row("Likely owner", FAULT_LABEL[p.likely_fault_domain] ?? p.likely_fault_domain)}
-        {row("Compared with", p.baseline.source_label)}
-      </div>
+      <div className="ph-reason">{p.reason}</div>
+      <dl className="ph-facts">
+        <dt>Current latency</dt><dd>{`${p.current.latency_p95_5m} ms (last 5 min)`}</dd>
+        <dt>Typical</dt><dd>{`~${p.baseline.latency_p50} ms`}</dd>
+        <dt>Bad range</dt><dd>{`≥ ${p.baseline.latency_p99} ms`}</dd>
+        {p.current.jitter_p95_5m > 0 && <><dt>Current jitter</dt><dd>{`${p.current.jitter_p95_5m} ms`}</dd></>}
+        {p.current.loss_pct_5m > 0 && <><dt>Packet loss</dt><dd>{`${p.current.loss_pct_5m}%`}</dd></>}
+        <dt>Likely owner</dt><dd>{FAULT_LABEL[p.likely_fault_domain] ?? p.likely_fault_domain}</dd>
+        <dt>Compared with</dt><dd>{p.baseline.source_label}</dd>
+      </dl>
       {p.evidence && p.evidence.length > 0 && (
-        <details style={{ marginTop: 7 }}>
-          <summary style={{ cursor: "pointer", fontSize: 12.5, color: "var(--accent, #4c8dff)" }}>Evidence ({p.evidence.length})</summary>
-          <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: "var(--fg)" }}>
+        <details className="ph-ev">
+          <summary>Evidence ({p.evidence.length})</summary>
+          <ul>
             {p.evidence.map((e, i) => <li key={i}>{e}</li>)}
           </ul>
         </details>
@@ -111,7 +100,7 @@ export default function PathHealthList({ limit }: { limit?: number }) {
     );
   }
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className="ph-list">
       {rows.map((p) => <PathHealthCard key={p.path_id} p={p} />)}
     </div>
   );

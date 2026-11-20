@@ -636,7 +636,7 @@ export default function WanCircuits() {
   const measured = rows.filter((r) => r.has_latency || r.has_loss).length;
 
   return (
-    <div className="card">
+    <div className="card paths-page">
       <h2>WAN circuits</h2>
       <p className="wan-line" style={{ marginTop: -6, marginBottom: 14 }}>
         One row per WAN interface, and per interface{" "}
@@ -658,12 +658,12 @@ export default function WanCircuits() {
         </div>
         <div className="stat s-muted">
           <span className="stat-label">Throughput</span>
-          <span className="stat-value" style={{ fontSize: 26 }}>{fmtBps(totIn + totOut)}</span>
+          <span className="stat-value">{fmtBps(totIn + totOut)}</span>
           <span className="stat-foot">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)}</span>
         </div>
         <div className={`stat ${rows.length ? (peak < 70 ? "s-good" : peak < 90 ? "s-warn" : "s-bad") : "s-muted"}`}>
           <span className="stat-label">Peak utilization</span>
-          <span className="stat-value">{rows.length ? peak.toFixed(1) : "—"}{rows.length ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}</span>
+          <span className="stat-value">{rows.length ? peak.toFixed(1) : "—"}{rows.length ? <span className="stat-unit"> %</span> : null}</span>
           <span className="stat-foot">busiest interface</span>
         </div>
         <div className={`stat ${down ? "s-bad" : "s-muted"}`}>

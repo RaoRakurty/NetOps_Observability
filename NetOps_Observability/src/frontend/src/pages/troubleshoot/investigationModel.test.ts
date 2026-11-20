@@ -189,6 +189,30 @@ describe("lane classifiers — not_connected vs empty are never collapsed", () =
     expect(ready.rows).toHaveLength(1);
   });
 
+  // Paths redesign P1: the two path lanes read the CASE's device, so a fleet of
+  // paths elsewhere never earns this case a layer. Measured-but-elsewhere is
+  // "empty" — never "not connected", and never "ready".
+  it("DEM and path lanes scope to the case's device", () => {
+    const dem = [pathHealth({ path_id: "a", agent: "Branch-1", dst: "10.0.0.9" }), pathHealth({ path_id: "b", agent: "dc-1", dst: "crm" })];
+    expect(classifyDemLane(dem, "branch-1").rows.map((p) => p.path_id)).toEqual(["a"]);
+    expect(classifyDemLane(dem, "CRM").rows.map((p) => p.path_id)).toEqual(["b"]);
+    const none = classifyDemLane(dem, "core-9");
+    expect(none.state).toBe("empty");
+    expect(none.note).toMatch(/none starts at, ends at or crosses/);
+
+    const tr = [
+      probePath({ dst: "8.8.8.8", hops: [{ ttl: 1, ip: "10.1.1.1", host: "edge-1" }] }),
+      probePath({ dst: "10.2.2.2", hops: [{ ttl: 1, ip: "10.9.9.9" }] }),
+    ];
+    expect(classifyPathLane(tr, "edge-1").rows.map((p) => p.dst)).toEqual(["8.8.8.8"]);
+    expect(classifyPathLane(tr, "10.9.9.9").rows.map((p) => p.dst)).toEqual(["10.2.2.2"]);
+    expect(classifyPathLane(tr, "10.2.2.2").rows.map((p) => p.dst)).toEqual(["10.2.2.2"]);
+    expect(classifyPathLane(tr, "nowhere").state).toBe("empty");
+    expect(classifyPathLane([], "edge-1").state).toBe("not_connected");
+    // Unscoped reads stay fleet-wide.
+    expect(classifyPathLane(tr).rows).toHaveLength(2);
+  });
+
   it("flows: no exporter = not connected; exporter but no conversation = empty", () => {
     const unwired = classifyFlowLane([], []);
     expect(unwired.state).toBe("not_connected");
