@@ -14,6 +14,7 @@ import (
 
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/seasonal"
 )
 
 // Limits (design §3). Exported so the golden corpus and the UI can state them.
@@ -50,6 +51,9 @@ const (
 	DefaultLogWin  = "24h"
 	DefaultLogRows = 20
 	MaxLogRows     = 50
+	// The estate-wide seasonal answer (N-H6 step 3): a short ranked list.
+	DefaultEstateRows = 10
+	MaxEstateRows     = 50
 )
 
 // Scope is what the validator asks of the ROOT, which answers from the
@@ -147,9 +151,13 @@ func (c *checker) run() {
 		c.flowGroup()
 	case q.Type == ast.LogSearch:
 		c.logFilters()
+	case q.Type == ast.SeasonalOutliers:
+		c.estateMetric()
 	}
 	c.refs()
-	if !q.Type.IsInventory() { // the visible inventory has no window
+	// The visible inventory has no window; the estate answer's window is the
+	// roll-up's latest closed hour, never one the question chooses.
+	if !q.Type.IsInventory() && q.Type != ast.SeasonalOutliers {
 		c.times()
 	}
 	c.groupOrder()
@@ -214,7 +222,71 @@ var inventoryTargets = map[string]bool{"device": true, "site": true, "circuit": 
 func queryTypes() []string {
 	return []string{string(ast.MetricSeries), string(ast.MetricTopK), string(ast.MetricFilter), string(ast.CompareWindows),
 		string(ast.ChangeList), string(ast.IncidentList), string(ast.IncidentExplain), string(ast.EntityCount), string(ast.EntityList),
-		string(ast.FlowTop), string(ast.LogSearch)}
+		string(ast.FlowTop), string(ast.LogSearch), string(ast.SeasonalOutliers)}
+}
+
+// estateTargets are the entity types the hourly roll-up keeps series for; an
+// empty target is all of them.
+var estateTargets = map[string]bool{"": true, "device": true, "interface": true, "circuit": true}
+
+// estateMetric admits an optional metric on the estate answer: one the hourly
+// roll-up keeps (seasonal.RolledMetrics), of the target's entity type.
+// One metric filter (eq/in over rolled-up metrics) may stand in for metric
+// when the answer covers several ("unusually busy": inbound and outbound
+// traffic); the two are never combined.
+func (c *checker) estateMetric() {
+	q := c.q
+	check := func(path, name string) {
+		ent, ok := seasonal.RolledMetrics[name]
+		if !ok {
+			c.fail(path, CodeInvalidValue, name, "the seasonal history keeps only some metrics", seasonal.EstateMetrics(q.Target)...)
+			return
+		}
+		if q.Target != "" && ent != q.Target {
+			c.fail(path, CodeInvalidValue, name, name+" describes a "+ent+", not a "+q.Target, seasonal.EstateMetrics(q.Target)...)
+			return
+		}
+		// The same N-B5 gate as every other answer about this metric:
+		// never an empty result, which would read as "nothing unusual".
+		if m, ok := c.cat.Metric(name); ok && m.Scope == "gated:N-B5" && !c.sc.CrossTenant() {
+			c.fail(path, CodeScopeUnavailable, name, "this measurement is not yet visible to a workspace-scoped user")
+		}
+	}
+	if q.Target == "circuit" && q.Metric == "" && len(q.Filters) == 0 && !c.sc.CrossTenant() {
+		c.fail("target", CodeScopeUnavailable, q.Target, "circuit measurements are not yet visible to a workspace-scoped user")
+		return
+	}
+	if q.Metric != "" {
+		check("metric", q.Metric)
+	}
+	switch {
+	case len(q.Filters) == 0:
+		return
+	case len(q.Filters) > 1:
+		c.fail("filters", CodeTooBroad, strconv.Itoa(len(q.Filters)), string(q.Type)+" takes at most one metric filter")
+		return
+	case q.Metric != "":
+		c.fail("filters[0]", CodeForbiddenFieldForType, "", "use metric or a metric filter, not both")
+		return
+	}
+	f := q.Filters[0]
+	if f.Field != ast.FilterMetric {
+		c.fail("filters[0].field", CodeUnknownDimension, f.Field, string(q.Type)+" filters by metric only", ast.FilterMetric)
+		return
+	}
+	if !(f.Op == "eq" && len(f.Values) == 1 || f.Op == "in" && len(f.Values) > 0) || len(f.Values) > len(seasonal.RolledMetrics) {
+		c.fail("filters[0].op", CodeOperatorNotAllowed, f.Op, "use eq with one metric or in with several")
+		return
+	}
+	seen := map[string]bool{}
+	for _, v := range f.Values {
+		if seen[v] {
+			c.fail("filters[0].values", CodeInvalidValue, v, "a metric is listed once")
+			continue
+		}
+		seen[v] = true
+		check("filters[0].values", v)
+	}
 }
 
 // fieldMatrix enforces which fields each query type requires and forbids.
@@ -276,6 +348,38 @@ func (c *checker) fieldMatrix() {
 		forbid(len(q.OrderBy) > 0, "order_by")
 		forbid(q.Type == ast.FlowTop && len(q.Filters) > 0, "filters")
 		forbid(q.Type == ast.LogSearch && len(q.GroupBy) > 0, "group_by")
+		for i, r := range q.Refs {
+			if r.Type != "device" && r.Type != "site" {
+				c.fail(fmt.Sprintf("entities[%d].type", i), CodeRelationshipNotAllowed, r.Type, string(q.Type)+" narrows to devices or sites", "device", "site")
+			}
+		}
+	case q.Type == ast.SeasonalOutliers:
+		// Every rolled-up series of the target type (or of all three), judged
+		// at the roll-up's latest closed hour: nothing else is a parameter.
+		if !estateTargets[q.Target] {
+			c.fail("target", CodeInvalidValue, q.Target, "the seasonal history covers devices, interfaces and circuits", "device", "interface", "circuit")
+		}
+		forbid(q.Agg != "", "aggregation")
+		// No predicate = unusual in either direction; above_baseline = only
+		// series above their usual level ("unusually busy").
+		if q.Predicate != nil && (q.Predicate.Op != "above_baseline" || q.Predicate.Value != 0 || q.Predicate.Value2 != 0) {
+			c.fail("predicate.op", CodeOperatorNotAllowed, q.Predicate.Op, string(q.Type)+" takes only above_baseline, with no value", "above_baseline")
+		}
+		forbid(q.CompareTo != nil, "compare_to")
+		forbid(q.IncidentID != "", "incident_id")
+		forbid(len(q.GroupBy) > 0, "group_by")
+		forbid(len(q.OrderBy) > 0, "order_by")
+		// A plain "last N" window (a model fills time_range by habit) is the
+		// present, which the latest closed hour already is: it is dropped and
+		// said. Any other window asks about a different time and is refused.
+		switch {
+		case q.Time.Kind == "":
+		case q.Time.Kind == ast.TimeRelative && q.Time.Offset == "":
+			c.constrain("time_range", "last "+q.Time.Last, "the latest closed hour", "estate_hour")
+			q.Time = ast.TimeRange{}
+		default:
+			forbid(true, "time_range")
+		}
 		for i, r := range q.Refs {
 			if r.Type != "device" && r.Type != "site" {
 				c.fail(fmt.Sprintf("entities[%d].type", i), CodeRelationshipNotAllowed, r.Type, string(q.Type)+" narrows to devices or sites", "device", "site")
@@ -786,6 +890,8 @@ func (c *checker) limits() {
 		clamp(DefaultFlowTop, MaxFlowTop, "max_topk")
 	case ast.LogSearch:
 		clamp(DefaultLogRows, MaxLogRows, "max_rows")
+	case ast.SeasonalOutliers:
+		clamp(DefaultEstateRows, MaxEstateRows, "max_topk")
 	}
 	if q.Type.IsMetric() {
 		m, _ := c.cat.Metric(q.Metric)

@@ -70,6 +70,7 @@ import (
 	"netops/backend/internal/nlquery/mql"
 	"netops/backend/internal/nlquery/plan"
 	"netops/backend/internal/nlquery/resolve"
+	"netops/backend/internal/nlquery/seasonal"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/oslog"
 	"netops/backend/internal/owner"
@@ -3686,6 +3687,113 @@ func (h *nlqScope) SeasonalHours(ctx context.Context, metric string, keys []stri
 	}
 	return out, nil
 }
+
+// SeasonalEstate is plan.EstateSeasonalScope (tracker 337 N-H6 step 3): the
+// estate-wide "what is abnormal right now for this time of week" read. Two
+// queries, both at the caller's ClickHouse tenant scope (the STRICT row
+// policy) with the operator restriction's exclusion: the latest rolled hour
+// since q.Since among the asked metrics, then every series' median at that
+// hour and at each seasonal reference hour, grouped per series and bounded to
+// q.MaxSeries (+1 to tell a full answer from a cut one). Metric names are
+// allowlist-shaped and bounded, device values are bounded literals.
+func (h *nlqScope) SeasonalEstate(ctx context.Context, q plan.EstateQuery) (plan.EstateRead, error) {
+	var out plan.EstateRead
+	if len(q.Metrics) == 0 || len(q.Metrics) > nlqEstateMaxMetrics || q.MaxSeries <= 0 {
+		return out, nil
+	}
+	maxSeries := q.MaxSeries
+	if maxSeries > plan.MaxEstateSeries {
+		maxSeries = plan.MaxEstateSeries
+	}
+	byPos := map[int][]string{}
+	var names []string
+	for _, m := range q.Metrics {
+		if !nlqSeasonalMetricRe.MatchString(m.Name) || m.DeviceAt < 0 || m.DeviceAt > 1 {
+			return out, fmt.Errorf("seasonal estate: metric %q is not readable", m.Name)
+		}
+		names = append(names, m.Name)
+		byPos[m.DeviceAt] = append(byPos[m.DeviceAt], m.Name)
+	}
+	where := "metric IN (" + sqlInList(names) + ")"
+	if len(q.Devices) > 0 {
+		devs := q.Devices
+		if len(devs) > plan.MaxMatchValues {
+			devs = devs[:plan.MaxMatchValues]
+		}
+		var ors []string
+		for _, pos := range []int{0, 1} {
+			if ms := byPos[pos]; len(ms) > 0 {
+				ors = append(ors, "(metric IN ("+sqlInList(ms)+") AND splitByChar('\\x1F', entity_key)["+strconv.Itoa(pos+1)+"] IN ("+sqlInList(devs)+"))")
+			}
+		}
+		where += " AND (" + strings.Join(ors, " OR ") + ")"
+	}
+	if c := h.s.tenantIDExcludeCondFor(h.claims, "tenant_id"); c != "" {
+		where += " AND " + c
+	}
+	scope := h.s.chTenantScopeFor(h.claims)
+	nowHour := h.Now().Truncate(time.Hour)
+	since := q.Since.UTC().Truncate(time.Hour)
+	latest := `SELECT count() AS n, toUnixTimestamp(max(hour)) AS h
+  FROM netops.series_hourly
+ WHERE ` + where + `
+   AND hour >= toDateTime(` + strconv.FormatInt(since.Unix(), 10) + `)
+   AND hour < toDateTime(` + strconv.FormatInt(nowHour.Unix(), 10) + `)
+ FORMAT JSON`
+	rows, err := h.s.chRowsScope(ctx, scope, latest, "api:iris-seasonal-estate")
+	if err != nil {
+		return out, err
+	}
+	if len(rows) == 0 || asFloat(rows[0]["n"]) <= 0 {
+		return out, nil // nothing rolled up since q.Since
+	}
+	hour := time.Unix(int64(asFloat(rows[0]["h"])), 0).UTC()
+	if hour.Before(since) || !hour.Before(nowHour) {
+		return out, nil
+	}
+	refs := seasonal.RefHours(hour)
+	hs := make([]string, len(refs))
+	for i, t := range refs {
+		hs[i] = "toDateTime(" + strconv.FormatInt(t.Unix(), 10) + ")"
+	}
+	series := `SELECT metric, entity_key, groupArray(toUnixTimestamp(hour)) AS hs, groupArray(p50) AS vs
+  FROM netops.series_hourly FINAL
+ WHERE ` + where + `
+   AND hour IN (` + strings.Join(hs, ", ") + `)
+ GROUP BY metric, entity_key
+HAVING countIf(hour = ` + hs[0] + `) > 0
+ ORDER BY metric, entity_key
+ LIMIT ` + strconv.Itoa(maxSeries+1) + `
+ FORMAT JSON`
+	rows, err = h.s.chRowsScope(ctx, scope, series, "api:iris-seasonal-estate")
+	if err != nil {
+		return out, err
+	}
+	out.Hour = hour
+	for _, row := range rows {
+		if len(out.Series) == maxSeries {
+			out.Truncated = true
+			break
+		}
+		metric, _ := row["metric"].(string)
+		key, _ := row["entity_key"].(string)
+		hv, _ := row["hs"].([]any)
+		vv, _ := row["vs"].([]any)
+		if metric == "" || key == "" || len(hv) != len(vv) || len(hv) == 0 {
+			continue
+		}
+		p50 := make(map[int64]float64, len(hv))
+		for i := range hv {
+			p50[int64(asFloat(hv[i]))] = asFloat(vv[i])
+		}
+		out.Series = append(out.Series, plan.EstateSeries{Metric: metric, EntityKey: key, P50: p50})
+	}
+	return out, nil
+}
+
+// nlqEstateMaxMetrics bounds one estate read's metric list (the roll-up keeps
+// a dozen).
+const nlqEstateMaxMetrics = 32
 
 // MaintenanceCoverer is plan.MaintenanceScope (tracker 337 N-H6): the caller's
 // own declared maintenance windows, read ONCE per answer through the store's

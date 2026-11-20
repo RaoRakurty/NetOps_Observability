@@ -1,0 +1,204 @@
+{
+  "schema": "correlix.nlquery.golden/v1",
+  "category": "seasonal",
+  "cases": [
+    {
+      "id": "seasonal-001",
+      "category": "seasonal",
+      "question": "What's abnormal right now for this time of week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "",
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "anything abnormal for this time of week right now",
+        "what is unusual right now for the time of week"
+      ]
+    },
+    {
+      "id": "seasonal-002",
+      "category": "seasonal",
+      "question": "Which interfaces are unusually busy for this time of day?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "interface",
+          "time_range": {},
+          "filters": [
+            {
+              "field": "metric",
+              "op": "in",
+              "values": [
+                "if_in_bps",
+                "if_out_bps"
+              ]
+            }
+          ],
+          "predicate": {
+            "op": "above_baseline"
+          }
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any interfaces unusually busy for the time of day",
+        "which ports are abnormally busy for this time of day"
+      ]
+    },
+    {
+      "id": "seasonal-003",
+      "category": "seasonal",
+      "question": "Anything unusual compared with a normal Tuesday morning?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "",
+          "time_range": {}
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "is anything abnormal compared to a typical tuesday morning",
+        "anything out of the ordinary compared with a normal weekday morning"
+      ]
+    },
+    {
+      "id": "seasonal-004",
+      "category": "seasonal",
+      "question": "Anything unusual at Austin for this time of week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "entities": [
+          {
+            "input": "Austin",
+            "type": "site",
+            "id": "site:aus-br",
+            "method": "site_store"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "",
+          "time_range": {},
+          "entities": [
+            {
+              "type": "site",
+              "id": "site:aus-br"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "is anything abnormal in austin for the time of week",
+        "anything odd at austin for this time of week"
+      ]
+    },
+    {
+      "id": "seasonal-005",
+      "category": "seasonal",
+      "question": "Which devices have unusual CPU for this time of week?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "device",
+          "time_range": {},
+          "metric": "cpu_util_pct"
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "any devices with abnormal cpu for the time of week",
+        "which routers have unusually high cpu for this time of week"
+      ]
+    },
+    {
+      "id": "seasonal-006",
+      "category": "seasonal",
+      "question": "Is anything unusual on dfw-edge-1 for this time of day?",
+      "context": {
+        "tz": "America/Chicago"
+      },
+      "expect": {
+        "intent": "unusual_now",
+        "entities": [
+          {
+            "input": "dfw-edge-1",
+            "type": "device",
+            "id": "device:dfw-edge-1",
+            "method": "discovery"
+          }
+        ],
+        "ast": {
+          "v": 1,
+          "query_type": "seasonal_outliers",
+          "target": "",
+          "time_range": {},
+          "entities": [
+            {
+              "type": "device",
+              "id": "device:dfw-edge-1"
+            }
+          ]
+        },
+        "alternates": [],
+        "result_semantics": {
+          "kind": "seasonal_rows",
+          "must_include_refs": []
+        }
+      },
+      "paraphrases": [
+        "anything abnormal on dfw-edge-1 for the time of day",
+        "is dfw-edge-1 doing anything strange for this time of day"
+      ]
+    }
+  ]
+}

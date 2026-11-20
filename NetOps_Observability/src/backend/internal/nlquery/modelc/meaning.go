@@ -335,6 +335,8 @@ func questionKinds(cat *catalog.Catalog, text string) namedKinds {
 func consistentKind(k namedKinds, q *ast.AST) bool {
 	metricType := q.Type == ast.MetricSeries || q.Type == ast.MetricTopK || q.Type == ast.MetricFilter || q.Type == ast.CompareWindows
 	switch {
+	case len(k.metrics) > 0 && q.Type == ast.SeasonalOutliers:
+		return k.metrics[q.Metric] || estateFilterNames(q, k.metrics)
 	case len(k.metrics) > 0:
 		return metricType && k.metrics[q.Metric]
 	case k.incident && k.change:
@@ -345,4 +347,20 @@ func consistentKind(k namedKinds, q *ast.AST) bool {
 		return q.Type == ast.ChangeList
 	}
 	return true
+}
+
+// estateFilterNames reports a seasonal_outliers metric filter that reads one
+// of the metrics the question named.
+func estateFilterNames(q *ast.AST, named map[string]bool) bool {
+	for _, f := range q.Filters {
+		if f.Field != ast.FilterMetric {
+			continue
+		}
+		for _, v := range f.Values {
+			if named[v] {
+				return true
+			}
+		}
+	}
+	return false
 }

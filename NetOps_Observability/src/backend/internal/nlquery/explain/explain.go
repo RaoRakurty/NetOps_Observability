@@ -23,6 +23,7 @@ import (
 
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/seasonal"
 	"netops/backend/internal/nlquery/validate"
 )
 
@@ -83,9 +84,16 @@ func Explain(cat *catalog.Catalog, q *ast.AST, name Namer) Explanation {
 	if q.Type != ast.IncidentExplain { // one incident, named below
 		add(FacetEntities, x.refs(q.Refs, q.Target))
 	}
-	add(FacetFilters, x.filters(q.Target, q.Filters))
+	if q.Type == ast.SeasonalOutliers {
+		add(FacetFilters, x.estateMetrics(q.Filters))
+	} else {
+		add(FacetFilters, x.filters(q.Target, q.Filters))
+	}
 	add(FacetCondition, x.condition(q))
 	win := x.window(q.Time)
+	if q.Type == ast.SeasonalOutliers {
+		win = "the latest closed hour the hourly seasonal history holds"
+	}
 	if (q.Type != ast.IncidentExplain && !q.Type.IsInventory()) || q.Time.Kind != "" {
 		add(FacetWindow, "Time window: "+win+".")
 	}
@@ -94,7 +102,7 @@ func Explain(cat *catalog.Catalog, q *ast.AST, name Namer) Explanation {
 	}
 	add(FacetGrouping, x.grouping(q.Target, q.GroupBy))
 	add(FacetOrder, x.order(q.Target, q.OrderBy))
-	if q.Limit > 0 && q.Type != ast.MetricTopK { // a top-k says its k in "what"
+	if q.Limit > 0 && q.Type != ast.MetricTopK && q.Type != ast.SeasonalOutliers { // a top-k says its k in "what"
 		add(FacetLimit, fmt.Sprintf("At most %d result%s.", q.Limit, plural(q.Limit)))
 	}
 	if q.IncidentID != "" {
@@ -139,6 +147,15 @@ func (x explainer) what(q *ast.AST) string {
 		return fmt.Sprintf("Ranks the heaviest conversations by flow traffic and lists the top %d.", q.LimitOr(validate.DefaultFlowTop))
 	case ast.LogSearch:
 		return "Lists the newest device syslog lines matching the severity and topic asked for (routine management sessions left out)."
+	case ast.SeasonalOutliers:
+		what := "series"
+		if q.Target != "" {
+			what = t
+		}
+		if m != "" && q.Metric != "" {
+			what += " by " + m
+		}
+		return fmt.Sprintf("Ranks the %s furthest from their usual level for the time right now — for this time of week when at least 3 earlier weeks exist, for this time of day when at least 5 earlier days do (series with less history are counted, not ranked) — and lists the top %d.", what, q.LimitOr(validate.DefaultEstateRows))
 	}
 	return fmt.Sprintf("A %q query.", string(q.Type))
 }
@@ -319,8 +336,26 @@ func (x explainer) filters(target string, fs []ast.Filter) string {
 var cmpWords = map[string]string{"gt": "is above", "ge": "is at least", "lt": "is below", "le": "is at most",
 	"eq": "equals", "ne": "is not"}
 
+// estateMetrics reads a seasonal_outliers metric filter.
+func (x explainer) estateMetrics(fs []ast.Filter) string {
+	if len(fs) != 1 || fs[0].Field != ast.FilterMetric || len(fs[0].Values) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(fs[0].Values))
+	for _, v := range fs[0].Values {
+		names = append(names, x.metricLabel(v)+" ("+strconv.Quote(v)+")")
+	}
+	return "Only these metrics: " + strings.Join(names, ", ") + "."
+}
+
 func (x explainer) condition(q *ast.AST) string {
 	p := q.Predicate
+	if q.Type == ast.SeasonalOutliers {
+		if p != nil {
+			return fmt.Sprintf("Keeps only series at least %g robust deviations above their usual level.", seasonal.AboveZ)
+		}
+		return fmt.Sprintf("Keeps only series at least %g robust deviations above or below their usual level.", seasonal.AboveZ)
+	}
 	if p == nil {
 		return ""
 	}
