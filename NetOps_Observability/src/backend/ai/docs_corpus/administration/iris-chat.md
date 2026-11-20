@@ -17,7 +17,7 @@ People can ask Iris a question in Slack or Microsoft Teams and get the same answ
 
 ## 1. Connect the chat app
 
-Open **Iris → Settings → step 7, "Iris in Slack and Teams"** as a workspace admin.
+Open **Administration → Iris → AI models**, section **Slack and Teams**, as a workspace admin.
 
 **Slack**
 
@@ -36,7 +36,7 @@ Enter your **Correlix address** (for example `https://correlix.example.com`) so 
 ## 2. Link chat accounts
 
 1. A person asks Iris anything in the chat. Iris replies with a one-time code (valid for 15 minutes).
-2. In Correlix, that person opens **Iris → Settings → step 7** and enters the code under **Link my chat account**.
+2. In Correlix, that person opens **Administration → Iris → AI models → Slack and Teams** and enters the code under **Link my chat account**.
 3. A **different** workspace admin approves the link under **Linked accounts**. Check the chat name matches the person: nobody can approve a link to their own account.
 
 Until the link is approved, Iris answers in the chat only with a reminder. An admin, or the person themselves, can revoke a link at any time.

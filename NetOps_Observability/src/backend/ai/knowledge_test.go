@@ -14,7 +14,7 @@ var kbNow = time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 
 func kbRunbook(id, tenant, name, when string, age time.Duration) KnowledgeDoc {
 	return KnowledgeDoc{ID: id, Layer: LayerRunbook, Tenant: tenant, Source: "tenant_runbook", Authority: AuthorityApproved,
-		Updated: kbNow.Add(-age), Scope: "tenant", Title: name, Text: "when to use: " + when, Label: "approved", Href: "#/admin/iris-runbooks"}
+		Updated: kbNow.Add(-age), Scope: "tenant", Title: name, Text: "when to use: " + when, Label: "approved", Href: "#/admin/iris/knowledge"}
 }
 
 func kbIncident(id, tenant, text string, auth Authority, age time.Duration) KnowledgeDoc {

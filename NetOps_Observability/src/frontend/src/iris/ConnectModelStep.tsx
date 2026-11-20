@@ -17,6 +17,7 @@ import { ConnectModelBanner } from "../components/ConnectModelBanner";
 import { operatorError } from "../lib/errors";
 import {
   PROVIDER_ORDER,
+  announceModelsChanged,
   GEMINI_FREE_TIER_WARNING,
   applyRecommended,
   providerLabel,
@@ -25,7 +26,10 @@ import {
   type ModelFields,
 } from "./connectModel";
 
-export default function ConnectModelStep() {
+// onSaved / onDismiss let the page that hosts the step (Administration → Iris
+// → AI models) re-read the stored settings once a key is saved, or show the
+// full model form when the administrator chooses "Not now".
+export default function ConnectModelStep({ onSaved, onDismiss }: { onSaved?: () => void; onDismiss?: () => void } = {}) {
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
   const [fields, setFields] = useState<ModelFields | null>(null);
   const [key, setKey] = useState("");
@@ -81,6 +85,8 @@ export default function ConnectModelStep() {
       setCfg((c) => ({ ...(c ?? saved), ...saved }));
       setKey("");
       setMessage(saved.key_present ? "Saved. Iris now uses this model." : "Saved, but no key is stored yet.");
+      announceModelsChanged();
+      if (saved.key_present) onSaved?.();
     } catch (e) {
       setMessage(operatorError(e, "The settings could not be saved."));
     } finally {
@@ -147,7 +153,7 @@ export default function ConnectModelStep() {
       </details>
       {message && <p role="alert" style={{ margin: "8px 0 0" }}>{message}</p>}
       <div style={{ marginTop: 10 }}>
-        <button type="button" className="dash-btn" onClick={() => { writeDismissed(); setHidden(true); }}>Not now</button>
+        <button type="button" className="dash-btn" onClick={() => { writeDismissed(); setHidden(true); onDismiss?.(); }}>Not now</button>
       </div>
     </section>
   );

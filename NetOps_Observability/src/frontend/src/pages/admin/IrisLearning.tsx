@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// IrisLearning — Administration → Iris → Learning (tracker 337 N-F5).
+// IrisLearning — Administration → Iris → Learning & review (tracker 337 N-F5).
 //
 // What operators already told Correlix — how incidents were fixed, which
 // entity an answer should have meant, which questions Iris could not answer —

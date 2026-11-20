@@ -28,10 +28,13 @@ AI**. It opens docked beside the page; you can switch it to a floating overlay.
 | [Teach Iris your names](/iris-ai/iris-settings) | Names and aliases, questions Iris could not answer, and how it decided. |
 | [Investigation memory](/iris-ai/memory) | What Iris remembers, when, and why it is never a rule. |
 
-Administrators also have:
+Administrators set all of this up on one page, **Administration → Iris**, with
+four tabs: **AI models**, **Knowledge**, **Learning & review** and
+**Investigations**. The guides:
 
 | Page | What it gives you |
 |---|---|
+| [Set up Iris](/iris-ai/setup) | The model, its key, and which workspaces may use it (the **AI models** tab). |
 | [Network context](/administration/network-context) | Facts about your network that Iris may use. |
 | [Runbooks and MOPs](/administration/iris-runbooks) | Your own reviewed methods, and the built-in upgrade procedures. |
 | [Iris learning](/administration/iris-learning) | Proposed facts and runbooks drawn from recorded fixes, adopted only by people. |

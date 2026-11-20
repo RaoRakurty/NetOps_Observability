@@ -100,7 +100,7 @@ func (s *server) aiNetProbeGate(claims jwtClaims) ai.NetProbeGate {
 	case !s.agentLoopEligible(claims):
 		return off("AI investigations are not turned on for this workspace")
 	case s.aiTenantCfg == nil || !s.aiTenantCfg.ProbeToolsEnabled(tenant):
-		return off("this workspace has not turned active probes on (Iris settings)")
+		return off("this workspace has not turned active probes on (Administration → Iris → AI models)")
 	}
 	return ai.NetProbeGate{Allow: true}
 }

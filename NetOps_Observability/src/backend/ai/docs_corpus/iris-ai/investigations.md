@@ -35,8 +35,8 @@ Under a troubleshooting answer, select **Investigate this fully**, or ask
 
 ## Investigations that start on their own
 
-A workspace administrator can arm an investigation in the Iris panel settings
-(**AI models** → **Iris vocabulary**, step **8. Investigations on their own**):
+A workspace administrator can arm an investigation on
+**Administration → Iris → Investigations**, step **1. Investigations on their own**:
 
 - **On a new incident** that matches a severity, text, site or device role, or
 - **On a schedule**, every 15 minutes to once a day.

@@ -4386,7 +4386,7 @@ func (s *server) handleAIEvalConsent(w http.ResponseWriter, r *http.Request) {
 //  3. the credential — an API key carrying the exact iris:mcp scope, re-read
 //     from the key store so the key's OWN tenant is used (as_tenant and
 //     X-Acting-Tenant never move it), never an admin or platform-realm key;
-//  4. the workspace's MCP opt-in (platform owner, Iris settings).
+//  4. the workspace's MCP opt-in (platform owner, Administration → Iris → AI models).
 
 // mcpToolTitles is the CURATED tool set an MCP client may see, with the title
 // shown to its user. Only CapRead tools: never the device-session probes
@@ -4470,7 +4470,7 @@ func (s *server) handleAIMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, _ := principalTenant(mc)
 	if !s.aiTenantCfg.MCPEnabled(tenant) {
-		writeError(w, http.StatusForbidden, errors.New("MCP is not turned on for this workspace — a platform administrator turns it on under Iris settings → Workspace access"))
+		writeError(w, http.StatusForbidden, errors.New("MCP is not turned on for this workspace — a platform administrator turns it on under Administration → Iris → AI models → Workspace access"))
 		return
 	}
 	// Every read below runs as the KEY's principal, so the request context

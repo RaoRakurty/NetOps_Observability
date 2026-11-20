@@ -83,28 +83,34 @@ async function bootAs(page: Page, user: string, srv: ReturnType<typeof newServer
     }
     return json({});
   });
-  await page.goto("/#/admin/iris-runbooks");
+  // Runbooks are on Administration → Iris → Knowledge (owner 2026-11-19).
+  await page.goto("/#/admin/iris/knowledge");
 }
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
+// Administration → Iris → Knowledge shows Runbooks beside Network context (owner
+// 2026-11-19, "consolidate"), and both cards have Save draft / Approve: every
+// control here is looked up inside the Runbooks card.
+const card = (p: Page) => p.locator(".nctx").filter({ has: p.getByRole("heading", { name: "Runbooks", exact: true }) });
+
 test("one administrator writes and checks, a second approves, and Iris runs it", async ({ page, browser }) => {
   const srv = newServer();
   await bootAs(page, "alice", srv);
-  await page.getByPlaceholder("my-wan-check").fill("my-wan-check");
-  await page.getByLabel("New runbook test cases").fill("case: one\nquestion: our carrier brownout");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await page.getByRole("button", { name: "Run its cases" }).click();
-  await expect(page.getByText("All 2 cases passed. Nothing was changed.")).toBeVisible();
-  await page.getByRole("button", { name: "Send for review" }).click();
-  await expect(page.getByText("Its cases passed. Waiting for another administrator to review it.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  await card(page).getByPlaceholder("my-wan-check").fill("my-wan-check");
+  await card(page).getByLabel("New runbook test cases").fill("case: one\nquestion: our carrier brownout");
+  await card(page).getByRole("button", { name: "Save draft" }).click();
+  await card(page).getByRole("button", { name: "Run its cases" }).click();
+  await expect(card(page).getByText("All 2 cases passed. Nothing was changed.")).toBeVisible();
+  await card(page).getByRole("button", { name: "Send for review" }).click();
+  await expect(card(page).getByText("Its cases passed. Waiting for another administrator to review it.")).toBeVisible();
+  await expect(card(page).getByRole("button", { name: "Approve" })).toHaveCount(0);
 
   const bobPage = await browser.newPage();
   await bootAs(bobPage, "bob", srv);
-  await expect(bobPage.getByText("Proposed")).toBeVisible();
-  await bobPage.getByRole("button", { name: "Approve" }).click();
-  await expect(bobPage.getByTestId("rbk-status")).toContainText("my-wan-check (version 1) — Iris can run it");
+  await expect(card(bobPage).getByText("Proposed")).toBeVisible();
+  await card(bobPage).getByRole("button", { name: "Approve" }).click();
+  await expect(card(bobPage).getByTestId("rbk-status")).toContainText("my-wan-check (version 1) — Iris can run it");
   expect(srv.approvals).toEqual([{ by: "bob", sha: "sha-1" }]);
   await bobPage.close();
 });
@@ -113,12 +119,12 @@ test("failing cases show their problems and nothing is sent", async ({ page }) =
   const srv = newServer();
   srv.failCases = true;
   await bootAs(page, "alice", srv);
-  await page.getByPlaceholder("my-wan-check").fill("my-wan-check");
-  await page.getByLabel("New runbook test cases").fill("case: one");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await page.getByRole("button", { name: "Send for review" }).click();
-  await expect(page.getByTestId("rbk-problems")).toContainText("logs naming the carrier");
-  await expect(page.getByTestId("rbk-problems")).toContainText("the verdict did not hold");
+  await card(page).getByPlaceholder("my-wan-check").fill("my-wan-check");
+  await card(page).getByLabel("New runbook test cases").fill("case: one");
+  await card(page).getByRole("button", { name: "Save draft" }).click();
+  await card(page).getByRole("button", { name: "Send for review" }).click();
+  await expect(card(page).getByTestId("rbk-problems")).toContainText("logs naming the carrier");
+  await expect(card(page).getByTestId("rbk-problems")).toContainText("the verdict did not hold");
   expect(srv.runbooks[0].versions[0].state).toBe("draft");
 });
 
@@ -132,7 +138,7 @@ test("runbook text is shown as text, never as markup", async ({ page }) => {
       author: "carol", harness_passed: true, created_at: now }],
   });
   await bootAs(page, "alice", srv);
-  await expect(page.getByText("Proposed")).toBeVisible();
+  await expect(card(page).getByText("Proposed")).toBeVisible();
   await expect(page.locator(".nctx img")).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __rbk?: number }).__rbk)).toBeUndefined();
 });

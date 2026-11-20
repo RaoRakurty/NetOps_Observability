@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// NetworkContext — Administration → Iris → Network Context (tracker 337 N-F1).
+// NetworkContext — Administration → Iris → Knowledge, Network context (tracker 337 N-F1).
 //
 // Short facts a workspace writes about its own network ("core-02 is the DR
 // site", "circuit ids starting CCT- are Comcast") that Iris reads before every

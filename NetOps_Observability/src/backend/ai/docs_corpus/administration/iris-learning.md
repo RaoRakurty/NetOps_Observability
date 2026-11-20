@@ -8,7 +8,7 @@ sidebar_position: 15
 
 # Decide what Iris learns from your team
 
-**Administration → Iris → Learning** collects suggestions drawn from what your team has already told Correlix. A person decides every one. Nothing changes on its own, and no AI model is retrained: a suggestion reaches Iris only through [Network Context](network-context.md), [Runbooks](iris-runbooks.md) or Iris's aliases, under the same two-person rule.
+**Administration → Iris → Learning & review** collects suggestions drawn from what your team has already told Correlix. A person decides every one. Nothing changes on its own, and no AI model is retrained: a suggestion reaches Iris only through [Network Context](network-context.md), [Runbooks](iris-runbooks.md) or Iris's aliases, under the same two-person rule.
 
 Where suggestions come from:
 

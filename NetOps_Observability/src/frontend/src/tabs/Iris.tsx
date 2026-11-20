@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ConnectModelBanner } from "../components/ConnectModelBanner";
-import { applyRecommended, answerFootnote, saveWarnings, testResultText, tierTestLines, GEMINI_FREE_TIER_WARNING } from "../iris/connectModel";
+// The AI models form moved to Administration → Iris → AI models (owner
+// 2026-11-19, "consolidate"); these stay importable from here.
+export { ConnectionTestLine, PROBE_RISK } from "../iris/IrisModelSettings";
+import { answerFootnote, IRIS_MODELS_CHANGED, IRIS_MODELS_ROUTE } from "../iris/connectModel";
 import { AI_NAME } from "../brand";
 import {
   api,
@@ -18,15 +21,12 @@ import {
   OpenAIChatResponse,
   CopilotConfig,
   AITenantConfig,
-  AITenantRow,
   AIModelsState,
-  ProviderTestResult,
   AiAnswer,
   AiCitation,
   AiCommand,
 } from "../services/api";
 import Icon from "../components/Icon";
-import IrisVocabulary from "../components/IrisVocabulary";
 import PresentationPlanRenderer from "../iris/PresentationPlanRenderer";
 import { hintFromAst } from "../iris/presentation";
 import HypothesisTrace from "../iris/HypothesisTrace";
@@ -42,7 +42,7 @@ import RecommendationCards, { NO_ACTION_NOTICE } from "../iris/RecommendationCar
 import ActionProposalCards from "../iris/ActionProposalCards";
 import QueryCorrection from "../iris/QueryCorrection";
 import { hasAIEntitlement } from "../lib/aiEntitlements";
-import { investigationsHint, modelsBanner } from "../iris/aiModelsBanner";
+import { modelsBanner } from "../iris/aiModelsBanner";
 import { operatorError } from "../lib/errors";
 
 // The Iris box's server conversation (tracker 337 N-C7/N-E4): only its id
@@ -146,27 +146,6 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/help", title: "Help", desc: "What Iris AI can do", module: "Help", kind: "send", text: "What can you do?" },
 ];
 
-// Provider tiles — the vendor name and the model family each one runs. Stated
-// facts about the provider, kept out of the JSX so one list is the authority.
-const PROVIDER_VENDOR: Record<string, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Google",
-};
-// Each provider tile carries one of the platform's module accents (the colours
-// the rail uses), so the models view reads in the same palette as every other
-// section. Theme tokens, not vendor brand colours.
-const PROVIDER_TINT: Record<string, string> = {
-  anthropic: "var(--mod-copilot)",
-  openai: "var(--mod-fleet)",
-  gemini: "var(--mod-network)",
-};
-const PROVIDER_MODEL: Record<string, string> = {
-  anthropic: "Claude",
-  openai: "GPT",
-  gemini: "Gemini",
-};
-
 // A short module badge per backend intent, for the "/" menu rows.
 const INTENT_BADGE: Record<string, string> = {
   current_state: "Live", incident_list: "Incidents", problem_explanation: "RCA",
@@ -212,11 +191,6 @@ function cmdToSlash(c: AiCommand): SlashCmd {
     ctx: c.requires_context, // /explain, /owner, /missing, /itsm need an incident
   };
 }
-
-// The plain risk statement for Iris's active probes (N-I3), shown wherever the
-// opt-in can be changed and repeated in the confirmation before it turns on.
-export const PROBE_RISK =
-  "Iris's troubleshooting methods may send a short test from this Correlix server — 3 pings, one traceroute, one DNS lookup or one web request — to this workspace's own devices and declared probes. Nothing is sent from a customer device, and never to an address the workspace does not own.";
 
 export default function Iris({ controls, context, onBusyChange, onLeave, ask, onAskHandled }: {
   /** The panel's window controls (Dock / Expand), rendered in this header
@@ -317,22 +291,10 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
   // Per-workspace settings (tenant admins): own provider key + platform-service
   // opt-out. Loads only for tenant admins (403/400 otherwise → stays null).
   const [tcfg, setTcfg] = useState<AITenantConfig | null>(null);
-  const [tKeyDraft, setTKeyDraft] = useState("");
-  // Per-workspace AI access rows (platform owner only).
-  const [tenantRows, setTenantRows] = useState<AITenantRow[] | null>(null);
-  // The platform half of read-only MCP (IRIS_MCP on the Features page).
-  const [mcpFeature, setMcpFeature] = useState(false);
-  // N-I3: whether the installation offers active probes at all (platform owner view).
-  const [probesFeature, setProbesFeature] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [savingCfg, setSavingCfg] = useState(false);
-  const [keyDraft, setKeyDraft] = useState("");
-  // C3: the latest "Test connection" verdict shown under the settings form.
-  const [cfgTest, setCfgTest] = useState<ProviderTestResult | null>(null);
-  const [testingCfg, setTestingCfg] = useState(false);
-  // Warn-before-save (never block): tier models that failed the latest test.
-  const [saveWarn, setSaveWarn] = useState<string[]>([]);
+  // The AI models settings live on Administration → Iris → AI models (owner
+  // 2026-11-19, "consolidate"); the gear, the banner and "Add API key" open it.
+  const openModels = () => { setShowHelp(false); window.location.hash = IRIS_MODELS_ROUTE; };
   // Slash-command menu (like Claude Code): typing "/" surfaces pre-made questions.
   // The list is the SERVER command registry (single source of truth); the static
   // set is only a fallback if the fetch fails.
@@ -349,7 +311,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
     setChatStmts({}); setChatDisc({});
     setConversation(null); // a cleared chat forgets its follow-up context too
     setDraft(""); setError(null);
-    setShowSettings(false); setShowHelp(false); setSlashOpen(false);
+    setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
   };
 
@@ -359,130 +321,25 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       setNlqEntitled(hasAIEntitlement(c, "ai.nlquery"));
       setAiModels(c?.ai_models);
     }).catch(() => { setEnabled(false); setNlqEntitled(false); });
-    // Platform owner → platform settings + the per-workspace access list;
-    // tenant admin → their own workspace settings. Whichever call the caller
-    // isn't authorized for simply stays null.
-    api.copilotConfig().then((c) => {
-      setCfg(c);
-      api.aiTenants().then((r) => { setTenantRows(r.tenants ?? []); setMcpFeature(!!r.mcp_feature); setProbesFeature(Boolean(r.probes_feature)); }).catch(() => setTenantRows(null));
-    }).catch(() => setCfg(null));
-    api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
+    // Platform owner → platform settings; tenant admin → their own workspace
+    // settings. Read for the header, the readiness line and the connect banner;
+    // changing them happens on Administration → Iris → AI models. Whichever
+    // call the caller isn't authorized for simply stays null.
+    const readModels = () => {
+      api.copilotConfig().then(setCfg).catch(() => setCfg(null));
+      api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
+    };
+    readModels();
+    // A save on the AI models tab announces itself; read the settings again so
+    // the header and the connect banner match what was saved.
+    window.addEventListener(IRIS_MODELS_CHANGED, readModels);
+    return () => window.removeEventListener(IRIS_MODELS_CHANGED, readModels);
   }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history.length, busy]);
 
-  const modelChoices = cfg?.model_suggestions?.[cfg.provider] ?? [];
-
-  const saveCfg = async (anyway = false) => {
-    if (!cfg) return;
-    // A model that failed its last test is saved only after a second click:
-    // the operator is told, never stopped (owner 2026-11-12).
-    const warn = saveWarnings(cfgTest, { provider: cfg.provider, model: cfg.model, model_fast: cfg.model_fast ?? "", model_strong: cfg.model_strong ?? "" }, cfg.recommended);
-    if (!anyway && warn.length > 0) {
-      setSaveWarn(warn);
-      return;
-    }
-    setSaveWarn([]);
-    setSavingCfg(true);
-    setError(null);
-    try {
-      const saved = await api.setCopilotConfig({
-        provider: cfg.provider,
-        model: cfg.model,
-        model_fast: cfg.model_fast ?? "",
-        model_strong: cfg.model_strong ?? "",
-        ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
-      });
-      setCfg((c) => ({ ...(c ?? saved), ...saved }));
-      setKeyDraft("");
-      setShowSettings(false);
-    } catch (e) {
-      setError(operatorError(e, "The settings could not be saved."));
-    } finally {
-      setSavingCfg(false);
-    }
-  };
-
-  // C3 "Test connection": the platform admin tests the platform key (or the
-  // pasted draft); a workspace admin tests their own workspace key only. The
-  // server never stores the key from a test and returns only a verdict.
-  const testCfg = async (scope: "platform" | "workspace") => {
-    setTestingCfg(true);
-    setError(null);
-    try {
-      if (scope === "platform" && cfg) {
-        // Every tier model of the form is tested (a blank one as its
-        // recommended model), each with its own verdict and latency.
-        setCfgTest(await api.testCopilotConfig({
-          provider: cfg.provider, key: keyDraft.trim() || undefined,
-          model: cfg.model.trim(), model_fast: (cfg.model_fast ?? "").trim(), model_strong: (cfg.model_strong ?? "").trim(),
-        }));
-        setSaveWarn([]);
-      } else if (tcfg) {
-        setCfgTest(await api.testAITenantConfig({
-          provider: tcfg.provider || undefined, key: tKeyDraft.trim() || undefined,
-          model: (tcfg.model || "").trim(), model_fast: (tcfg.model_fast ?? "").trim(), model_strong: (tcfg.model_strong ?? "").trim(),
-        }));
-      }
-    } catch (e) {
-      setCfgTest(null);
-      setError(operatorError(e, "The connection test could not run."));
-    } finally {
-      setTestingCfg(false);
-    }
-  };
-
-  // Save the tenant admin's own workspace settings (key is write-only: a blank
-  // draft leaves the stored key untouched).
-  const saveTCfg = async () => {
-    if (!tcfg) return;
-    setSavingCfg(true);
-    setError(null);
-    try {
-      const saved = await api.setAITenantConfig({
-        provider: tcfg.provider,
-        model: tcfg.model,
-        model_fast: tcfg.model_fast ?? "",
-        model_strong: tcfg.model_strong ?? "",
-        no_platform_key: tcfg.no_platform_key,
-        ...(tKeyDraft.trim() ? { key: tKeyDraft.trim() } : {}),
-      });
-      setTcfg(saved);
-      setTKeyDraft("");
-      setShowSettings(false);
-    } catch (e) {
-      setError(operatorError(e, "The settings could not be saved."));
-    } finally {
-      setSavingCfg(false);
-    }
-  };
-
-  // Flip one workspace's AI access / guardrails (platform owner) — optimistic row update.
-  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "mcp_enabled" | "max_calls" | "daily_tokens" | "probes_enabled">>) => {
-    // Turning active probes on is a deliberate act: the risk is stated and confirmed first.
-    if (patch.probes_enabled && !window.confirm(PROBE_RISK + "\n\nTurn active probes on for " + (row.name || row.tenant_id) + "?")) return;
-    const next = { ...row, ...patch };
-    setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? next : r)));
-    try {
-      await api.setAITenantAccess(row.tenant_id, {
-        assistant_enabled: next.assistant_enabled,
-        investigations_enabled: next.investigations_enabled,
-        // Sent only when this edit touched it, so a row loaded from an older
-        // server never switches MCP off by omission.
-        ...("mcp_enabled" in patch ? { mcp_enabled: !!next.mcp_enabled } : {}),
-        max_calls: next.max_calls || 0,
-        daily_tokens: next.daily_tokens || 0,
-        ...(patch.probes_enabled !== undefined
-          ? { probes_enabled: patch.probes_enabled, probes_acknowledged: patch.probes_enabled }
-          : {}),
-      });
-    } catch (e) {
-      setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
-      setError(operatorError(e, "That workspace's access could not be changed."));
-    }
-  };
 
   const send = async (text?: string) => {
     const content = (text ?? draft).trim();
@@ -712,12 +569,14 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
         </span>
         <span className="op-hd-actions">
           <button type="button" className="op-hd-btn op-hd-new" title="New conversation" aria-label="New conversation" onClick={newConversation}>+</button>
-          <button type="button" className={`op-hd-btn${showSettings ? " on" : ""}`} title="AI models" aria-label="AI models" aria-pressed={showSettings}
-            onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
-            <Icon name="model" size={15} />
-          </button>
+          {(cfg || tcfg) && (
+            <button type="button" className="op-hd-btn" title="AI models" aria-label="AI models" data-testid="iris-models-link"
+              onClick={openModels}>
+              <Icon name="model" size={15} />
+            </button>
+          )}
           <button type="button" className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation" aria-label="Help" aria-pressed={showHelp}
-            onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
+            onClick={() => setShowHelp((v) => !v)}>
             <Icon name="help" size={15} />
           </button>
           {controls}
@@ -728,7 +587,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
       </div>
       {context}
       {/* C5: admin-only (both config calls are 403 for operators). */}
-      <ConnectModelBanner platform={cfg} workspace={cfg ? null : tcfg} onConnect={() => { setShowSettings(true); setShowHelp(false); }} />
+      <ConnectModelBanner platform={cfg} workspace={cfg ? null : tcfg} onConnect={openModels} />
 
       {showHelp && (
         <div className="op-settings op-help">
@@ -747,255 +606,6 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
         </div>
       )}
 
-      {showSettings && cfg && (
-        <div className="op-settings">
-          <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
-            Pick a provider and paste its API key. The key is encrypted at rest and never shown again.
-          </p>
-          <label className="op-field">
-            <span>
-              {cfg.provider === "openai" ? "OpenAI" : cfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
-              {cfg.key_present
-                ? <span className="badge good" style={{ fontSize: 12.5 }}>{cfg.key_source === "env" ? "set by installer" : "saved"}</span>
-                : <span className="badge warn" style={{ fontSize: 12.5 }}>not set</span>}
-            </span>
-            <input
-              type="password"
-              value={keyDraft}
-              onChange={(e) => setKeyDraft(e.target.value)}
-              placeholder={cfg.key_present ? "Saved — leave blank to keep" : "Paste API key"}
-              autoComplete="off"
-              disabled={cfg.key_source === "env"}
-            />
-            {cfg.key_source === "env" && (
-              <span style={{ color: "var(--muted)", fontSize: 12.5 }}>Managed by your installation.</span>
-            )}
-          </label>
-          <div className="op-field">
-            <span>Provider</span>
-            <div className="op-tiles">
-              {(cfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
-                <button type="button" key={pv}
-                  className={`op-tile${cfg.provider === pv ? " on" : ""}`}
-                  onClick={() => { setCfg({ ...cfg, ...applyRecommended(pv, cfg.recommended, cfg) }); setCfgTest(null); }}>
-                  <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
-                    <Icon name="model" size={16} />
-                  </span>
-                  <span className="op-tile-text">
-                    <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
-                    <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-          {cfg.provider === "gemini" && <p className="connect-warn" role="note">{GEMINI_FREE_TIER_WARNING}</p>}
-          <details className="op-advanced">
-          <summary>Advanced: choose the models</summary>
-          <div className="op-field">
-            <span>Model</span>
-            <input className="op-modelinput" list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="Default model" />
-            <datalist id="copilot-models">{modelChoices.map((m) => <option key={m} value={m} />)}</datalist>
-            {modelChoices.length > 0 && (
-              <div className="op-modelchips">
-                {modelChoices.slice(0, 4).map((m) => (
-                  <button type="button" key={m} className={`op-modelchip${cfg.model === m ? " on" : ""}`} onClick={() => setCfg({ ...cfg, model: m })}>{m}</button>
-                ))}
-              </div>
-            )}
-          </div>
-          <TierModelFields
-            fast={cfg.model_fast ?? ""} strong={cfg.model_strong ?? ""}
-            onChange={(t) => setCfg({ ...cfg, model_fast: t.fast, model_strong: t.strong })} />
-          </details>
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button className="dash-btn accent" onClick={() => { void saveCfg(saveWarn.length > 0); }} disabled={savingCfg}>
-              {savingCfg ? "Saving…" : saveWarn.length > 0 ? "Save anyway" : "Save"}
-            </button>
-            <button className="dash-btn" onClick={() => testCfg("platform")} disabled={testingCfg || (!cfg.key_present && !keyDraft.trim())}>
-              {testingCfg ? "Testing…" : "Test connection"}
-            </button>
-            <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
-          </div>
-          {saveWarn.length > 0 && (
-            <div className="op-save-warn" role="alert" data-testid="iris-save-warn">
-              {saveWarn.map((w) => <p key={w} style={{ margin: 0 }}>{w}</p>)}
-              <p style={{ margin: 0 }}>Iris falls back to the evidence answer when a model fails. Save anyway, or pick a model that passed.</p>
-            </div>
-          )}
-          <ConnectionTestLine result={cfgTest ?? cfg.last_test ?? null} />
-
-          {/* Per-workspace access (platform owner): which customer workspaces get
-              the assistant, and which may run AI Investigations (tool lookups). */}
-          {tenantRows && tenantRows.length > 0 && (
-            <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 2 }}>Workspace access</div>
-              <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 8px" }}>
-                Assistant answers are always scoped to each workspace&apos;s own data. Investigations
-                let the AI run governed, read-only lookups before answering.
-              </p>
-              <p data-testid="iris-probes-risk" style={{ color: "var(--muted)", fontSize: 14, margin: "0 0 8px" }}>
-                Active probes: {PROBE_RISK}{" "}
-                {probesFeature ? "Each workspace is off until it is turned on here." : "They are off for every workspace until a platform administrator turns on “Iris active probes” on the Features page."}
-              </p>
-              {investigationsHint(aiModels) && (
-                <p data-testid="iris-investigations-hint" style={{ color: "var(--warn)", fontSize: 14, margin: "0 0 8px" }}>
-                  {investigationsHint(aiModels)}
-                </p>
-              )}
-              {tenantRows.map((row) => (
-                <div key={row.tenant_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12.5 }}>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.tenant_id}>
-                    {row.name || row.tenant_id}
-                    {row.key_present && <span className="badge good" style={{ fontSize: 12.5, marginLeft: 6 }}>own key</span>}
-                    {row.no_platform_key && !row.key_present && <span className="badge warn" style={{ fontSize: 12.5, marginLeft: 6 }}>own key required</span>}
-                  </span>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
-                    <input type="checkbox" checked={row.assistant_enabled}
-                      onChange={(e) => setAccess(row, { assistant_enabled: e.target.checked })} /> Assistant
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
-                    <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
-                      onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
-                  </label>
-                  {/* Read-only MCP (N-I5): an outside AI assistant may use Iris's lookups with a workspace API key. */}
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
-                    title={mcpFeature ? "Let an outside AI assistant use Iris's read-only lookups with an API key that has the iris:mcp scope" : "Turn on Iris over MCP under Platform → Features first"}>
-                    <input type="checkbox" data-testid="iris-mcp-toggle" checked={!!row.mcp_enabled} disabled={!mcpFeature}
-                      onChange={(e) => setAccess(row, { mcp_enabled: e.target.checked })} /> MCP
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}
-                    title={probesFeature ? "Let Iris's methods send a short test from Correlix to this workspace's own targets" : "Turn on “Iris active probes” on the Features page first"}>
-                    <input type="checkbox" data-testid="iris-probes-toggle" checked={Boolean(row.probes_enabled)}
-                      disabled={!probesFeature || !row.investigations_enabled}
-                      onChange={(e) => setAccess(row, { probes_enabled: e.target.checked })} /> Active probes
-                  </label>
-                  {/* Per-workspace spend guardrails — blank = platform default. */}
-                  <input type="number" min={0} max={8} value={row.max_calls || ""}
-                    title="Lookups per question (empty = platform default)"
-                    placeholder="4" disabled={!row.investigations_enabled}
-                    style={{ width: 44, fontSize: 12.5 }}
-                    onChange={(e) => setAccess(row, { max_calls: Math.max(0, Math.min(8, Number(e.target.value) || 0)) })} />
-                  <input type="number" min={0} step={50000} value={row.daily_tokens || ""}
-                    title="AI tokens per day (empty = platform default)"
-                    placeholder="250000" disabled={!row.assistant_enabled}
-                    style={{ width: 84, fontSize: 12.5 }}
-                    onChange={(e) => setAccess(row, { daily_tokens: Math.max(0, Number(e.target.value) || 0) })} />
-                </div>
-              ))}
-              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 4 }}>
-                Guardrails per workspace: lookups per question · AI tokens per day. Blank = platform defaults.
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Workspace settings — tenant admins manage their own AI service here:
-          bring their own provider key (write-only, encrypted at rest) or ride the
-          platform AI service when it's available. */}
-      {showSettings && !cfg && tcfg && (
-        <div className="op-settings">
-          <p style={{ color: "var(--muted)", fontSize: 12.5, margin: "0 0 10px" }}>
-            {tcfg.assistant_enabled
-              ? "Your workspace's AI. Keys are encrypted and never shown again."
-              : "AI is turned off for this workspace — ask your administrator."}
-          </p>
-          <label className="op-field">
-            <span>
-              {tcfg.provider === "openai" ? "OpenAI" : tcfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
-              {tcfg.key_present
-                ? <span className="badge good" style={{ fontSize: 12.5 }}>configured</span>
-                : <span className="badge warn" style={{ fontSize: 12.5 }}>not set</span>}
-            </span>
-            <input
-              type="password"
-              value={tKeyDraft}
-              onChange={(e) => setTKeyDraft(e.target.value)}
-              placeholder={tcfg.key_present ? "Saved — leave blank to keep" : "Paste API key"}
-              autoComplete="off"
-            />
-          </label>
-          <div className="op-field">
-            <span>Provider</span>
-            <div className="op-tiles">
-              {(tcfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
-                <button type="button" key={pv}
-                  className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "gemini") ? " on" : ""}`}
-                  onClick={() => { setTcfg({ ...tcfg, ...applyRecommended(pv, tcfg.recommended, tcfg) }); setCfgTest(null); }}>
-                  <span className="op-tile-icon" style={{ "--tile": PROVIDER_TINT[pv] ?? "var(--accent)" } as CSSProperties}>
-                    <Icon name="model" size={16} />
-                  </span>
-                  <span className="op-tile-text">
-                    <span className="op-tile-name">{PROVIDER_VENDOR[pv] ?? pv}</span>
-                    <span className="op-tile-sub">{PROVIDER_MODEL[pv] ?? ""}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-          {tcfg.provider === "gemini" && <p className="connect-warn" role="note">{GEMINI_FREE_TIER_WARNING}</p>}
-          <details className="op-advanced">
-          <summary>Advanced: choose the models</summary>
-          <div className="op-field">
-            <span>Model</span>
-            <input className="op-modelinput" value={tcfg.model}
-              onChange={(e) => setTcfg({ ...tcfg, model: e.target.value })}
-              placeholder="Default model" />
-          </div>
-          <TierModelFields
-            fast={tcfg.model_fast ?? ""} strong={tcfg.model_strong ?? ""}
-            onChange={(t) => setTcfg({ ...tcfg, model_fast: t.fast, model_strong: t.strong })} />
-          </details>
-          {tcfg.platform_key_available && (
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", margin: "2px 0 8px" }}>
-              <input type="checkbox" checked={!tcfg.no_platform_key}
-                onChange={(e) => setTcfg({ ...tcfg, no_platform_key: !e.target.checked })} />
-              Use the platform AI service when no key is set
-            </label>
-          )}
-          {/* N-I3: this workspace's own opt-in to active probes. */}
-          {tcfg.investigations_enabled && (
-            <div className="op-field" data-testid="iris-tenant-probes">
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
-                <input type="checkbox" checked={Boolean(tcfg.probes_enabled)} disabled={savingCfg || !tcfg.probes_available}
-                  onChange={async (e) => {
-                    const on = e.target.checked;
-                    if (on && !window.confirm(PROBE_RISK + "\n\nTurn active probes on for this workspace?")) return;
-                    setSavingCfg(true);
-                    try {
-                      setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, model_fast: tcfg.model_fast, model_strong: tcfg.model_strong,
-                        no_platform_key: tcfg.no_platform_key, probes_enabled: on, probes_acknowledged: on }));
-                    } catch (err) { setError(operatorError(err, "The active-probe setting could not be changed.")); }
-                    finally { setSavingCfg(false); }
-                  }} />
-                Active probes
-              </label>
-              <p style={{ color: "var(--muted)", fontSize: 14, margin: "4px 0 0" }}>
-                {tcfg.probes_available ? PROBE_RISK : "Not available yet: a platform administrator must turn on “Iris active probes” on the Features page."}
-              </p>
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button className="dash-btn accent" onClick={saveTCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
-            {tcfg.key_present && (
-              <button className="dash-btn" disabled={savingCfg}
-                onClick={async () => {
-                  setSavingCfg(true);
-                  try { setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, no_platform_key: tcfg.no_platform_key, clear_key: true })); setTKeyDraft(""); }
-                  catch (e) { setError(operatorError(e, "The key could not be removed.")); }
-                  finally { setSavingCfg(false); }
-                }}>Remove key</button>
-            )}
-            <button className="dash-btn" onClick={() => testCfg("workspace")} disabled={testingCfg || (!tcfg.key_present && !tKeyDraft.trim())}>
-              {testingCfg ? "Testing…" : "Test connection"}
-            </button>
-            <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
-          </div>
-          <ConnectionTestLine result={cfgTest} />
-          {tcfg.assistant_enabled && nlqEntitled && <IrisVocabulary />}
-        </div>
-      )}
 
       {/* Model-backed answers unavailable here (no add-on, or switched off):
           Iris still answers from the platform's data, and says what would
@@ -1029,7 +639,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
 
       {/* Conversation */}
       <div className="op-msgs">
-        {history.length === 0 && !showSettings && (
+        {history.length === 0 && (
           <div className="op-welcome">
             <div className="op-welcome-icon"><Icon name="copilot" size={26} /></div>
             <div className="op-welcome-title">How can I help?</div>
@@ -1054,7 +664,7 @@ export default function Iris({ controls, context, onBusyChange, onLeave, ask, on
             {(cfg && !cfg.key_present) || (!cfg && tcfg && tcfg.assistant_enabled && !tenantReady) ? (
               <div className="op-nokey">
                 <Icon name="key" size={15} /> Connect a provider key for free-form chat.
-                <button className="dash-btn accent" style={{ marginLeft: 6 }} onClick={() => setShowSettings(true)}>Add API key</button>
+                <button className="dash-btn accent" style={{ marginLeft: 6 }} onClick={openModels}>Add API key</button>
               </div>
             ) : (
               <div className="op-chips">
@@ -1508,44 +1118,4 @@ function extractAssistantText(r: CopilotChatResponse): string {
   }
   if ((r as OpenAIChatResponse).choices) return (r as OpenAIChatResponse).choices[0]?.message?.content ?? "";
   return JSON.stringify(r);
-}
-
-// TierModelFields — the optional model-router overrides. Iris answers quick
-// look-ups with the "fast" model and multi-step investigations with the
-// "strong" one; blank means "use the model above for everything", which is the
-// behaviour of every install that never sets them.
-// ConnectionTestLine — the latest "Test connection" verdict (C3/C6 "last
-// tested"), in plain words; never the provider's own message.
-export function ConnectionTestLine({ result }: { result: ProviderTestResult | null }) {
-  if (!result) return null;
-  return (
-    <div className={`op-conn-test ${(result.tiers?.length ? result.tiers.every((t) => t.ok) : result.ok) ? "ok" : "bad"}`} role="status" data-testid="connection-test">
-      {result.tiers?.length ? (result.tiers.every((t) => t.ok) ? "Every model answered." : "A model did not answer.") : testResultText(result)}
-      {result.tested_at && <span className="op-conn-when"> Tested {result.tested_at.replace("T", " ").replace(/\.\d+Z$|Z$/, " UTC")}.</span>}
-      {result.tiers?.length ? (
-        <ul className="op-conn-tiers" data-testid="connection-test-tiers">
-          {tierTestLines(result).map((l) => <li key={l.tier} className={l.ok ? "ok" : "bad"}>{l.text}</li>)}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-function TierModelFields({ fast, strong, onChange }: {
-  fast: string;
-  strong: string;
-  onChange: (t: { fast: string; strong: string }) => void;
-}) {
-  return (
-    <div className="op-field">
-      <span>Model for quick answers <span style={{ color: "var(--muted)" }}>(optional)</span></span>
-      <input className="op-modelinput" value={fast} aria-label="Model for quick answers"
-        onChange={(e) => onChange({ fast: e.target.value, strong })}
-        placeholder="Same as default model" />
-      <span>Model for deep investigations <span style={{ color: "var(--muted)" }}>(optional)</span></span>
-      <input className="op-modelinput" value={strong} aria-label="Model for deep investigations"
-        onChange={(e) => onChange({ fast, strong: e.target.value })}
-        placeholder="Same as default model" />
-    </div>
-  );
 }

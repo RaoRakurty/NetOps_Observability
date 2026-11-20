@@ -82,7 +82,7 @@ export function toggleDisabled(f: PlatformFeature): boolean {
 /** The confirmation text for a risky switch. AI switches send data out. */
 export function confirmText(f: PlatformFeature): string {
   if (f.requires === "iris_model") {
-    return "Questions, and the network evidence Iris gathers to answer them, will be sent to the AI provider configured in Iris settings. Turn this on only if your data policy allows that provider.";
+    return "Questions, and the network evidence Iris gathers to answer them, will be sent to the AI provider configured under Administration → Iris → AI models. Turn this on only if your data policy allows that provider.";
   }
   return "This feature reaches into your network or out of Correlix. Turn it on only if your security policy allows it.";
 }

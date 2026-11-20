@@ -89,26 +89,34 @@ async function bootAs(page: Page, user: string, srv: ReturnType<typeof newServer
     }
     return json({});
   });
+  // The old address still works: it opens Administration → Iris → Knowledge
+  // (owner 2026-11-19, "consolidate").
   await page.goto("/#/admin/network-context");
+  await expect(page).toHaveURL(/#\/admin\/iris\/knowledge$/);
 }
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
+// Administration → Iris → Knowledge shows Network context beside Runbooks (owner
+// 2026-11-19, "consolidate"), and both cards have Save draft / Approve: every
+// control here is looked up inside the Network context card.
+const card = (p: Page) => p.locator(".nctx").filter({ has: p.getByRole("heading", { name: "Network context", exact: true }) });
+
 test("one administrator writes, a second approves, and Iris reads it", async ({ page, browser }) => {
   const srv = newServer();
   await bootAs(page, "alice", srv);
-  await page.getByLabel("Short name").fill("DR site");
-  await page.getByLabel("The fact").fill("core-02 is the DR site");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await page.getByRole("button", { name: "Send for review" }).click();
-  await expect(page.getByText("Waiting for another administrator to review it.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  await card(page).getByLabel("Short name").fill("DR site");
+  await card(page).getByLabel("The fact").fill("core-02 is the DR site");
+  await card(page).getByRole("button", { name: "Save draft" }).click();
+  await card(page).getByRole("button", { name: "Send for review" }).click();
+  await expect(card(page).getByText("Waiting for another administrator to review it.")).toBeVisible();
+  await expect(card(page).getByRole("button", { name: "Approve" })).toHaveCount(0);
 
   const bobPage = await browser.newPage();
   await bootAs(bobPage, "bob", srv);
-  await expect(bobPage.getByText("Proposed")).toBeVisible();
-  await bobPage.getByRole("button", { name: "Approve" }).click();
-  await expect(bobPage.getByTestId("nctx-preview")).toContainText("core-02 is the DR site");
+  await expect(card(bobPage).getByText("Proposed")).toBeVisible();
+  await card(bobPage).getByRole("button", { name: "Approve" }).click();
+  await expect(card(bobPage).getByTestId("nctx-preview")).toContainText("core-02 is the DR site");
   expect(srv.approvals).toEqual([{ by: "bob", sha: "sha-1" }]);
   await bobPage.close();
 });
@@ -121,7 +129,7 @@ test("fact text is shown as text, never as markup", async ({ page }) => {
     versions: [{ version: 1, body: '<img src=x onerror="window.__nctx=1">', body_sha256: "s", state: "pending", author: "carol", created_at: now }],
   });
   await bootAs(page, "alice", srv);
-  await expect(page.getByText("Proposed")).toBeVisible();
+  await expect(card(page).getByText("Proposed")).toBeVisible();
   await expect(page.locator(".nctx img")).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __nctx?: number }).__nctx)).toBeUndefined();
 });

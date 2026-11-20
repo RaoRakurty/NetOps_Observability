@@ -5,11 +5,12 @@
 // real SPA with the API faked at the network boundary (./irisBackend.ts):
 //   · the admin banner shows for a platform admin with no key, and never for
 //     an operator (the config call is 403 for them);
-//   · the banner opens the settings, where Gemini carries the free-tier
-//     warning and Test connection sends the draft key and shows a verdict;
+//   · the banner opens Administration → Iris → AI models (owner 2026-11-19,
+//     "consolidate"), where Gemini carries the free-tier warning and Test
+//     connection sends the draft key and shows a verdict;
 //   · every answer carries the footnote naming who answered;
-//   · a platform admin's FRESH login with no key lands on the Features page,
-//     where the Connect-a-model step is.
+//   · a platform admin's FRESH login with no key lands on Administration →
+//     Iris → AI models, where the Connect-a-model step is.
 
 import { test, expect } from "@playwright/test";
 import { bootIris, openIris, askIris, irisPanel, topCpuAnswer, TENANT_CONFIG, type Json } from "./irisBackend";
@@ -34,18 +35,23 @@ const KEYLESS: Json = {
   recommended: RECOMMENDED, last_test: null, budget: { daily_tokens_default: 1000000, workspaces_exhausted: 0 },
 };
 
-test("a platform admin with no key sees the banner; it opens the settings and Test connection reports a verdict", async ({ page }) => {
+test("a platform admin with no key sees the banner; it opens AI models and Test connection reports a verdict", async ({ page }) => {
   const fake = await bootIris(page, { me: PLATFORM_ME, copilotConfig: KEYLESS, answer: () => topCpuAnswer() });
   await page.goto("/#/overview/home");
   await openIris(page);
-  const panel = irisPanel(page);
-  const banner = panel.getByTestId("connect-model-banner");
+  const banner = irisPanel(page).getByTestId("connect-model-banner");
   await expect(banner).toHaveText(/Connect a model to unlock full language understanding\./);
   await banner.getByRole("button", { name: "Connect a model" }).click();
-  await expect(panel.getByRole("note")).toContainText("Free-tier Gemini keys");
-  await panel.getByPlaceholder("Paste API key").fill("AIza-e2e-draft");
-  await panel.getByRole("button", { name: "Test connection" }).click();
-  await expect(panel.getByTestId("connection-test")).toContainText("Connected to gemini-flash-lite-latest in 0.4 s.");
+  // The drawer no longer holds the form: the banner opens the page's tab.
+  await expect(page).toHaveURL(/#\/admin\/iris\/ai-models$/);
+  await expect(page.getByRole("tab", { name: "AI models" })).toHaveAttribute("aria-selected", "true");
+  // With no key the guided step stands in for the form; "Not now" shows the full form.
+  await page.getByTestId("connect-model-step").getByRole("button", { name: "Not now" }).click();
+  const form = page.getByTestId("iris-model-settings");
+  await expect(form.getByRole("note")).toContainText("Free-tier Gemini keys");
+  await form.getByPlaceholder("Paste API key").fill("AIza-e2e-draft");
+  await form.getByRole("button", { name: "Test connection" }).click();
+  await expect(form.getByTestId("connection-test")).toContainText("Connected to gemini-flash-lite-latest in 0.4 s.");
   // Every tier field of the form is sent (2026-11-12); blanks test as the recommended models.
   expect(fake.connTests).toEqual([{ provider: "gemini", key: "AIza-e2e-draft", model: "", model_fast: "", model_strong: "" }]);
   // The key never shows on the page.
@@ -72,13 +78,11 @@ test("a workspace admin whose budget is spent is told so", async ({ page }) => {
   await expect(irisPanel(page).getByTestId("connect-model-banner")).toContainText("Today's AI budget for this workspace is spent.");
 });
 
-test("a platform admin's fresh login with no key lands on Features, where the Connect-a-model step is", async ({ page }) => {
+test("a platform admin's fresh login with no key lands on Administration → Iris → AI models, where the Connect-a-model step is", async ({ page }) => {
   await bootIris(page, { me: PLATFORM_ME, copilotConfig: KEYLESS });
-  await page.route(/\/api\/platform\/features$/, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ features: [], restart_pending: false, can_restart: false, store_load_error: "" }) }));
   await page.addInitScript(() => sessionStorage.setItem("netops_landing_pending", "1"));
   await page.goto("/#/overview/home");
-  await expect(page).toHaveURL(/#\/platform\/features$/);
+  await expect(page).toHaveURL(/#\/admin\/iris\/ai-models$/);
   const step = page.getByTestId("connect-model-step");
   await expect(step).toBeVisible();
   await expect(step.getByRole("radio", { name: "Gemini" })).toHaveAttribute("aria-checked", "true");

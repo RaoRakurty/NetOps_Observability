@@ -79,7 +79,7 @@ func (o *Orchestrator) answerUpgradeProcedure(ctx context.Context, p Principal, 
 	base.Statements = st
 	base.Disclaimers = append(disc, NoActionNotice,
 		"Iris never runs these steps: the engineer performs every change. Check the release notes for your exact model and release first; commands differ between releases.",
-		"To make it your team's runbook, adopt it under Administration → Iris → Runbooks → Vendor procedures.")
+		"To make it your team's runbook, adopt it under Administration → Iris → Knowledge → Runbooks → Vendor procedures.")
 	return base, nil
 }
 

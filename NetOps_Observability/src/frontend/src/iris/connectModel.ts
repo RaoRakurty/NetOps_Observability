@@ -175,11 +175,28 @@ export function answerFootnote(a: { provider?: string; model?: string; provider_
   return "Answered from your Correlix data (no AI model)";
 }
 
+// Where Iris's AI models are configured: Administration → Iris → AI models
+// (owner 2026-11-19, "consolidate"). The drawer's gear, the connect banner and
+// Platform → Features all link here.
+export const IRIS_MODELS_ROUTE = "#/admin/iris/ai-models";
+
+// The drawer reads the model settings for its header and connect banner; the
+// page that changes them says so, and the drawer reads them again. A plain
+// window event: no data rides on it, the listener re-asks the server.
+export const IRIS_MODELS_CHANGED = "correlix:iris-models-changed";
+export function announceModelsChanged(): void {
+  try {
+    window.dispatchEvent(new Event(IRIS_MODELS_CHANGED));
+  } catch {
+    /* no window (tests without a DOM): nothing listens */
+  }
+}
+
 // D5: on a FRESH login, a platform administrator whose installation has no
-// model key lands on the Features page, where the Connect-a-model step is.
-// Once dismissed, never again on this browser.
+// model key lands on Administration → Iris → AI models, where the
+// Connect-a-model step is. Once dismissed, never again on this browser.
 export const CONNECT_DISMISSED_KEY = "correlix.connectModel.dismissed";
-export const CONNECT_ROUTE = "#/platform/features";
+export const CONNECT_ROUTE = IRIS_MODELS_ROUTE;
 
 export function shouldLandOnConnect(x: {
   freshLogin: boolean;

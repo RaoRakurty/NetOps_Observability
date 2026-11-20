@@ -818,8 +818,8 @@
           "administration/network-context"
         ]
       },
-      "nav": "admin/network-context",
-      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Network Context (N-F1)"
+      "nav": "admin/iris/knowledge",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Knowledge, Network context (N-F1; was its own leaf until 2026-11-19)"
     },
     {
       "id": "docs-125",
@@ -830,8 +830,8 @@
           "administration/iris-runbooks"
         ]
       },
-      "nav": "admin/iris-runbooks",
-      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Runbooks (N-F2)"
+      "nav": "admin/iris/knowledge",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Knowledge, Runbooks (N-F2; was its own leaf until 2026-11-19)"
     },
     {
       "id": "docs-126",
@@ -842,8 +842,57 @@
           "administration/iris-learning"
         ]
       },
-      "nav": "admin/iris-learning",
-      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning (N-F5)"
+      "nav": "admin/iris/review",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning & review (N-F5; was its own leaf until 2026-11-19)"
+    },
+    {
+      "id": "docs-128",
+      "category": "docs",
+      "question": "Where do I paste the API key for the AI provider Iris uses?",
+      "expect": {
+        "slugs": [
+          "iris-ai/setup"
+        ]
+      },
+      "nav": "admin/iris/ai-models",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 AI models (moved from the Iris drawer, 2026-11-19)"
+    },
+    {
+      "id": "docs-129",
+      "category": "docs",
+      "question": "Which page holds all of Iris's administrator settings?",
+      "expect": {
+        "slugs": [
+          "iris-ai/overview",
+          "iris-ai/setup"
+        ]
+      },
+      "nav": "admin/iris",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris, the one page with four tabs (2026-11-19)"
+    },
+    {
+      "id": "docs-130",
+      "category": "docs",
+      "question": "How do I make Iris run an investigation by itself on a schedule?",
+      "expect": {
+        "slugs": [
+          "iris-ai/investigations"
+        ]
+      },
+      "nav": "admin/iris/investigations",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Investigations (2026-11-19)"
+    },
+    {
+      "id": "docs-131",
+      "category": "docs",
+      "question": "How do I see why Iris could not answer my team's questions?",
+      "expect": {
+        "slugs": [
+          "iris-ai/iris-settings"
+        ]
+      },
+      "nav": "admin/iris/review",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning & review, what Iris could not answer (2026-11-19)"
     },
     {
       "id": "docs-127",

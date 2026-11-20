@@ -92,11 +92,10 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   // ITSM delivery observability (Administration → Incident Response).
   // Administration → RCA Tickets: rules + case routing + deliveries as one flow.
   RcaTickets: () => import("./pages/admin/RcaTickets"),
-  // Network context (Administration → Iris): the facts Iris reads (N-F1).
-  NetworkContext: () => import("./pages/admin/NetworkContext"),
-  // Runbooks (Administration → Iris): the workspace's own methods + MOPs (N-F2).
-  TenantRunbooks: () => import("./pages/admin/TenantRunbooks"),
-  IrisLearning: () => import("./pages/admin/IrisLearning"),
+  // Administration → Iris (owner 2026-11-19, "consolidate"): ONE page with
+  // tabs — AI models, Knowledge (network context N-F1, names, runbooks N-F2),
+  // Learning & review (N-F5, recent questions, how Iris decided), Investigations.
+  IrisAdmin: () => import("./pages/admin/IrisAdmin"),
   // Sealed-quarantine viewer (Platform → Tools) — /api/quarantine is
   // requirePlatformAdmin, so the page belongs to the provider section.
   Quarantine: () => import("./pages/platform/Quarantine"),
@@ -184,9 +183,7 @@ const PipelineDebugger = lazy(ROUTE_CHUNKS["PipelineDebugger"] as () => Promise<
 // ITSM delivery outbox + audit trail — Administration → Incident Response.
 const RcaTickets = lazy(ROUTE_CHUNKS["RcaTickets"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DiscoveryHub = lazy(ROUTE_CHUNKS["DiscoveryHub"] as () => Promise<{ default: React.ComponentType<any> }>);
-const NetworkContext = lazy(ROUTE_CHUNKS["NetworkContext"] as () => Promise<{ default: React.ComponentType<any> }>);
-const TenantRunbooks = lazy(ROUTE_CHUNKS["TenantRunbooks"] as () => Promise<{ default: React.ComponentType<any> }>);
-const IrisLearning = lazy(ROUTE_CHUNKS["IrisLearning"] as () => Promise<{ default: React.ComponentType<any> }>);
+const IrisAdmin = lazy(ROUTE_CHUNKS["IrisAdmin"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Sealed-quarantine viewer — Platform → Tools.
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -513,17 +510,22 @@ export const NAV: NavSection[] = [
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).
-      // Iris — what the assistant knows about THIS workspace's network. The
-      // /api/ai/context routes are requirePerm(administration) + the caller's
-      // own tenant (a Global view is told to choose a workspace), and approval
-      // needs a second administrator — tenant-level, not platform-stamped.
-      { id: "network-context", label: "Network Context", group: "Iris", render: () => <NetworkContext /> },
-      // The /api/ai/runbooks routes: requirePerm(administration) + ai.runbook.author
-      // + the caller's own tenant; approval needs a second administrator.
-      { id: "iris-runbooks", label: "Runbooks", group: "Iris", render: () => <TenantRunbooks /> },
-      // The /api/ai/learning routes: requirePerm(administration) + ai.context.author
-      // + the caller's own tenant; adopting needs a person, approving a second one.
-      { id: "iris-learning", label: "Learning", group: "Iris", render: () => <IrisLearning /> },
+      // Iris — ONE page, four tabs (owner 2026-11-19, "consolidate"). Every
+      // section keeps its own server gate: /api/ai/context, /api/ai/runbooks and
+      // /api/ai/learning are requirePerm(administration) + the caller's own
+      // tenant with a second approver; the AI models tab makes the drawer's old
+      // calls (platform settings requirePlatformAdmin, workspace settings for
+      // the workspace's own admin) — tenant-level, not platform-stamped. The old
+      // leaves (network-context, iris-runbooks, iris-learning) are aliases below.
+      {
+        id: "iris", label: "Iris", group: "Iris", render: () => <IrisAdmin />,
+        subItems: [
+          { id: "ai-models", label: "AI models" },
+          { id: "knowledge", label: "Knowledge" },
+          { id: "review", label: "Learning & review" },
+          { id: "investigations", label: "Investigations" },
+        ],
+      },
       { id: "identity", label: "Identity & Access", group: "People & access", render: () => <IdentityAccess /> },
       {
         id: "api", label: "API Access", group: "People & access", render: () => <ApiAccessAdmin />,
@@ -794,6 +796,11 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "admin/sensors": "admin/discovery/sensors",
   // RCA Tickets merge (owner 2026-10-18).
   "admin/ticket-delivery": "admin/ticketing/deliveries",
+  // Administration → Iris consolidation (owner 2026-11-19): the three leaves
+  // became tabs of one page.
+  "admin/network-context": "admin/iris/knowledge",
+  "admin/iris-runbooks": "admin/iris/knowledge",
+  "admin/iris-learning": "admin/iris/review",
   "admin/datasources": "admin/discovery/coverage",
   "admin/snmp": "admin/discovery/snmp",
   "admin/telemetry-coverage": "admin/discovery/telemetry",

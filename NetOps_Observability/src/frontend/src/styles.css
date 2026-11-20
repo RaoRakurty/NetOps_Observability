@@ -8096,3 +8096,17 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .fl-detail .fl-ifaces, .fl-detail .fl-exp { font-family: var(--font-mono); }
 .fl-detail .fl-vol strong { color: var(--fg); font-weight: 600; }
 .fl-k { color: var(--fg-muted); font-family: var(--font-body, inherit); font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
+
+/* Administration → Iris (owner decision 2026-11-19, "consolidate"): one page,
+   four tabs. Font ≥ 14px per the NOC-admin UI standard. */
+.iris-admin-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--border); margin-top: 8px; }
+.iris-admin-tab {
+  appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--fg-muted); cursor: pointer; font-size: 14px; font-weight: 500; padding: var(--sp-2) var(--sp-3);
+}
+.iris-admin-tab:hover { color: var(--fg); }
+.iris-admin-tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.iris-admin-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The model form was drawer chrome; on the page it sits inside a card. */
+.iris-admin .iris-models .op-settings { max-width: 860px; padding: 0; border-bottom: 0; background: transparent; overflow: visible; }
+.iris-admin .iris-models .op-settings + .op-settings { margin-top: 16px; }

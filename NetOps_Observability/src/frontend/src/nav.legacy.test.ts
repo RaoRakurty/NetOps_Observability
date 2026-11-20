@@ -129,6 +129,10 @@ const LEGACY: [string, string, string][] = [
   ["#/admin/integrations", "admin", "integrations"],
   // Ticket Delivery is step 4 of RCA Tickets (2026-10-18).
   ["#/admin/ticket-delivery", "admin", "ticketing"],
+  // Administration → Iris became ONE page with tabs (owner 2026-11-19).
+  ["#/admin/network-context", "admin", "iris"],
+  ["#/admin/iris-runbooks", "admin", "iris"],
+  ["#/admin/iris-learning", "admin", "iris"],
   ["#/admin/notifications", "admin", "notifications"],
   ["#/admin/ticketing", "admin", "ticketing"],
   ["#/admin/api", "admin", "api"],
@@ -360,6 +364,11 @@ describe("Discovery & NMS split — every old link lands on its new home", () =>
     ["#/admin/collectors", "#/admin/discovery/sensors"],
     ["#/admin/telemetry-coverage", "#/admin/discovery/telemetry"],
     ["#/admin/ticket-delivery", "#/admin/ticketing/deliveries"],
+    // 2026-11-19: the three Iris leaves open their tab of Administration → Iris.
+    ["#/admin/network-context", "#/admin/iris/knowledge"],
+    ["#/admin/iris-runbooks", "#/admin/iris/knowledge"],
+    ["#/admin/iris-learning", "#/admin/iris/review"],
+    ["#/admin/iris-learning?x=1", "#/admin/iris/review?x=1"],
   ])("%s opens %s", (from, to) => {
     expect(canonicalHash(from)).toBe(to);
   });

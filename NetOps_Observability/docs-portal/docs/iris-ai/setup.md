@@ -46,8 +46,8 @@ API); it is unset by default, which leaves Iris on.
 
 ### Step 2 - Grant workspaces access
 
-1. Open Iris from the sidebar and select the **AI models** button in the panel
-   header.
+1. Open **Administration → Iris**, tab **AI models**. The **AI models**
+   button in the Iris panel header opens the same tab.
 2. Under **Workspace access**, each workspace has four checkboxes:
    - **Assistant** — may use Iris at all (on by default).
    - **Investigations** — may run governed, read-only lookups before answering
@@ -66,17 +66,20 @@ principal is never gated here.
 
 ### Step 3 - Connect an AI provider (optional)
 
-**Platform key.** In the same settings form, choose a provider tile
+**Platform key.** On the same **AI models** tab, choose a provider tile
 (**Gemini** is pre-selected; **OpenAI** and **Anthropic** are the others), paste
 the key, and select **Test** to check it answers. Three models are filled in
 with the provider's recommended choices, and you can change each one:
 **Default model**, **Model for quick answers** and **Model for deep
-investigations**. Then select **Save**. The key badge reads **not set**, **configured** when it was
+investigations**. Then select **Save**. Until a key is saved, the tab opens on
+a short **Connect a model** step instead (pick a provider, paste the key, test,
+save); **Not now** shows the full form. The key badge reads **not set**, **configured** when it was
 saved in the console, or **via environment** when the deployment supplies it. An
 environment key wins, and the field is disabled while one is present.
 
-**Workspace key.** A tenant administrator opens the same gear and sees
-**Workspace settings**: their own provider, model and key. A workspace key is
+**Workspace key.** A tenant administrator opens the same tab
+(**Administration → Iris → AI models**) and sees the workspace form: their own
+provider, model and key. A workspace key is
 write-only, sealed at rest under that workspace's own key, and used only for
 that workspace. It always wins over the platform key. Clearing **Use the
 platform AI service when no key is set** means the workspace goes key-free
