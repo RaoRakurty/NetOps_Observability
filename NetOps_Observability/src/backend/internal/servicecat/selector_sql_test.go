@@ -3,7 +3,11 @@
 
 package servicecat
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 // A tenant-authored value ending in a backslash must not escape its own
 // closing quote (ClickHouse reads backslash escapes inside literals).
@@ -51,5 +55,28 @@ func TestBuildSelectorConditionRejectsHostileSpecs(t *testing.T) {
 		if c, ok := BuildSelectorCondition(spec); ok || c != "" {
 			t.Errorf("spec %v produced %q", spec, c)
 		}
+	}
+}
+
+// Tracker 370 lead: no projected alias of the rollup may name a netops.flows
+// column. ClickHouse resolves a SELECT alias inside WHERE ahead of the column,
+// so `'acme' AS tenant_id` made `tenant_id = 'acme'` constant TRUE (proven on
+// the lab: a filter for a tenant with no rows counted every row).
+func TestRollupInsertSQLAliasesNameNoFlowsColumn(t *testing.T) {
+	sql, n := RollupInsertSQL("acme", []SelectorSet{{TenantID: "acme", ServiceID: "11111111-2222-4333-8444-555555555555", Version: 1,
+		Spec: map[string]any{"ports": []any{443.0}}}}, time.Unix(1_800_000_000, 0), time.Unix(1_800_000_060, 0),
+		" AND (src_addr IN ('10.1.0.1') OR dst_addr IN ('10.1.0.1') OR sampler_address IN ('10.1.0.1'))", "live")
+	if n != 1 {
+		t.Fatalf("want one select, got %d", n)
+	}
+	flowsColumns := []string{"tenant_id", "ts", "bytes", "packets", "sampling_rate", "src_addr", "dst_addr",
+		"src_port", "dst_port", "proto", "sampler_address", "flow_type", "in_if", "out_if"}
+	for _, col := range flowsColumns {
+		if strings.Contains(sql, " AS "+col+",") || strings.Contains(sql, " AS "+col+" ") {
+			t.Errorf("a projected alias names the flows column %q:\n%s", col, sql)
+		}
+	}
+	if !strings.Contains(sql, "(tenant_id = 'acme' OR (tenant_id = ''") {
+		t.Errorf("the tenant predicate must read the COLUMN:\n%s", sql)
 	}
 }

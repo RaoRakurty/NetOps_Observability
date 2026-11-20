@@ -86,7 +86,7 @@ func TestSvcRollupTickNeverMixesTenants(t *testing.T) {
 		if c.scope == "globex" {
 			other, otherAddr = "acme", "10.1.0.1"
 		}
-		if !strings.Contains(c.body, "'"+c.scope+"' AS tenant_id") {
+		if !strings.Contains(c.body, "'"+c.scope+"' AS r_tenant") {
 			t.Errorf("scope %s: statement does not stamp its own tenant:\n%s", c.scope, c.body)
 		}
 		if !strings.Contains(c.body, "tenant_id = '"+c.scope+"'") {
@@ -188,13 +188,13 @@ func TestSvcRollupInsertSQLStampsVersionAndProto(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("want 1 select, got %d", n)
 	}
-	if !strings.Contains(sql, "toUInt32(7) AS selector_version") {
+	if !strings.Contains(sql, "toUInt32(7) AS r_version") {
 		t.Errorf("selector_version not stamped:\n%s", sql)
 	}
 	if !strings.Contains(sql, "proto IN (17)") || strings.Contains(sql, "protocol IN") {
 		t.Errorf("protocols predicate must target the `proto` column:\n%s", sql)
 	}
-	if !strings.Contains(sql, "'backfill' AS rolled_by") {
+	if !strings.Contains(sql, "'backfill' AS r_rolled_by") {
 		t.Errorf("rolled_by not stamped:\n%s", sql)
 	}
 }
