@@ -56,6 +56,8 @@ var goldenCategories = []string{
 	"metrics", "interfaces", "devices", "circuits", "sites", "applications", "flows", "bgp", "routes",
 	"sdwan", "dns", "changes", "configuration", "incidents", "users", "cloud", "providers",
 	"time_comparisons", "aggregation", "ranking", "grouping",
+	// N-H6 step 3: "what is unusual right now for this time of week".
+	"seasonal",
 }
 
 const (
@@ -80,6 +82,7 @@ var intentTypes = map[string][]ast.QueryType{
 	"lookup":           {ast.EntityList},
 	"query_flows":      {ast.FlowTop},
 	"search_logs":      {ast.LogSearch},
+	"unusual_now":      {ast.SeasonalOutliers},
 }
 
 // result kind → the query types that can produce it.
@@ -97,6 +100,7 @@ var kindTypes = map[string][]ast.QueryType{
 	"inventory_rows":  {ast.EntityList},
 	"flow_rows":       {ast.FlowTop},
 	"log_rows":        {ast.LogSearch},
+	"seasonal_rows":   {ast.SeasonalOutliers},
 }
 
 var declines = map[string]bool{
@@ -759,7 +763,8 @@ func checkSupported(ctx context.Context, t *testing.T, cat *catalog.Catalog, w *
 	if !res.Valid {
 		t.Fatalf("expect.ast does not validate: %s", errCodes(res))
 	}
-	if a.Time.Kind == "" && a.Type != ast.IncidentExplain && !a.Type.IsInventory() {
+	// seasonal_outliers has no window of its own: the latest closed hour.
+	if a.Time.Kind == "" && a.Type != ast.IncidentExplain && !a.Type.IsInventory() && a.Type != ast.SeasonalOutliers {
 		found := false
 		for _, k := range res.Constraints {
 			found = found || k.Reason == "default_window"
@@ -881,6 +886,19 @@ func checkSupported(ctx context.Context, t *testing.T, cat *catalog.Catalog, w *
 	case ast.IncidentExplain:
 		if len(rs.MustIncludeRefs) != 1 || rs.MustIncludeRefs[0] != "incident:"+a.IncidentID {
 			t.Errorf("an explained incident's result must include exactly that incident")
+		}
+	case ast.SeasonalOutliers:
+		// The roll-up keeps device-keyed series: the question must select at
+		// least one device of tenant A (no target = every type, read per device).
+		target := a.Target
+		if target == "" {
+			target = "device"
+		}
+		if rs.MinRows != nil || len(rs.MustIncludeRefs) > 0 {
+			t.Error("a seasonal answer claims no rows (the fixture holds no roll-up)")
+		}
+		if n, _ := sc.Count(ctx, target, a.Refs); n == 0 {
+			t.Errorf("the query selects no %s in the fixture", target)
 		}
 	default: // metrics: the fixture has no values, so claims are about WHICH entities are selected
 		if rs.MinRows != nil {

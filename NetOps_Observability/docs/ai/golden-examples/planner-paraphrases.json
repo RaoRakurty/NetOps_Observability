@@ -107,7 +107,13 @@
       "who changed what in the half hour before every sd-wan incident",
       "list changes 45 minutes before all cloud incidents this week",
       "what changes preceded the incidents since monday",
-      "pull up every change made 30 min before each incident in the last 3 days"
+      "pull up every change made 30 min before each incident in the last 3 days",
+      "what's abnormal right now for this time of week",
+      "which interfaces are unusually busy for this time of day",
+      "anything unusual compared with a normal Tuesday morning",
+      "is anything out of the ordinary for this time of week",
+      "which circuits look abnormal for the time of day right now",
+      "show me what is unusual on site 50 for this time of week"
     ],
     "troubleshoot": [
       "bgp neighbor down on edge-1, peer is idle",
