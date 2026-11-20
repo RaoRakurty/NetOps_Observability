@@ -13,9 +13,17 @@ package featureflags
 //     api from booting, or the page could not undo it.
 //   - flags read by OTHER containers (the correlation engine's CORR_*,
 //     ENABLE_FLOW_CORRELATION, gnmic's ENABLE_GNMI_CORRELATION, the prober's
-//     FEATURE_TRACEROUTE / ACTIVE_PROBE / STAMP_REFLECTOR / DEM / SYNTHETICS /
-//     WAN_ECHO): the api cannot apply them; delivering them to those
-//     containers is a follow-up, not a switch that pretends.
+//     STAMP_REFLECTOR / DEM / SYNTHETICS / WAN_ECHO): the api cannot apply
+//     them. A flag joins the page only with a real delivery to its container,
+//     never as a switch that pretends.
+//
+// DELIVERED TO THE PROBER (Paths redesign P2, 2026-11-20): FEATURE_TRACEROUTE
+// and FEATURE_ACTIVE_PROBE are read by the prober container ONLY. The api
+// resolves them here like any Live flag (saved over install over default) and
+// internal/probercontrol publishes the result on the key-value channel; the
+// prober re-checks it every 15 s and starts or stops the collector without a
+// restart, reading OFF on every doubt. The api's own collector pool never runs
+// them (main.go), because Set writes this process's environment.
 //   - settings already managed on their own pages (notification channels,
 //     ITSM, SNMP discovery): one place per setting.
 //   - ENABLE_REPORT_SCHEDULER: a flag-gated log.Fatalf path at start.
@@ -44,6 +52,7 @@ func PlatformSpecs() []Spec {
 		integrate = "Integrations and automation"
 		analytics = "Analytics"
 		iris      = "Iris AI"
+		measure   = "Active measurement"
 	)
 	live, restart := ApplyLive, ApplyRestart
 	return []Spec{
@@ -68,6 +77,14 @@ func PlatformSpecs() []Spec {
 		{Env: "FEATURE_BMP", Label: "BMP listener", Group: routing, Apply: restart, Help: "Receive BGP Monitoring Protocol sessions from routers."},
 		{Env: "FEATURE_PATH_GRAPH", Label: "Path graph", Group: routing, Apply: restart, Help: "Build the forwarding-path graph from path measurements."},
 		{Env: "FEATURE_PATH_BASELINES", Label: "Path baselines", Group: routing, Apply: restart, Help: "Learn normal latency and loss per path."},
+
+		// Paths redesign P2: delivered to the prober (internal/probercontrol),
+		// applied there within 15 seconds. Risky: they send test packets from
+		// this server into the network, so ADR 0001 keeps them off by default.
+		{Env: "FEATURE_TRACEROUTE", Label: "Path discovery", Group: measure, Apply: live, Risky: true,
+			Help: "Trace the hop-by-hop path to each path target from the Correlix prober every minute, so Measured paths and root-cause analysis can see where a path breaks. Sends traceroute packets from this server."},
+		{Env: "FEATURE_ACTIVE_PROBE", Label: "Active path probes (STAMP)", Group: measure, Apply: live, Risky: true,
+			Help: "Send standard STAMP test packets from the Correlix prober to each probe target to measure latency, jitter and loss. Sends test traffic from this server."},
 		// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
 		// baselines (internal/seriesroll). Off, Iris still compares with the
 		// last four weeks the metric store keeps.

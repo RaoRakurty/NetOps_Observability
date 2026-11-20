@@ -18,8 +18,8 @@ administrators do not.
 ## 1. Choose a feature
 
 Features are grouped: **Collection**, **Discovery**, **Routing**,
-**Configuration and device access**, **Integrations and automation**,
-**Analytics** and **Iris AI**. Each line says what the feature does, and where its current value
+**Active measurement**, **Configuration and device access**,
+**Integrations and automation**, **Analytics** and **Iris AI**. Each line says what the feature does, and where its current value
 came from:
 
 - **Set at install** — the value the installer chose.
@@ -32,9 +32,25 @@ Use the switch. The change is saved at once and written to the audit log.
 
 Features that reach into your network or out of Correlix — SSH to devices,
 configuration backup, diagnostic commands, packet capture, wireless actions,
-ticket updates from your ITSM tool, the UniFi controller, and every **Iris AI**
-switch — ask you to confirm before they turn **on**. Turning any feature
+ticket updates from your ITSM tool, the UniFi controller, the two **Active
+measurement** switches, and every **Iris AI** switch — ask you to confirm
+before they turn **on**. Turning any feature
 **off** never asks.
+
+### The Active measurement switches
+
+| Switch | What it does |
+|---|---|
+| **Path discovery** | The Correlix prober traces the hop-by-hop path to each path target every minute, so **Measured paths** and root-cause analysis can see where a path breaks. |
+| **Active path probes (STAMP)** | The prober sends standard STAMP test packets to each probe target to measure latency, jitter and loss. |
+
+Both send test packets from this Correlix server into your network, so they
+start **off**. They run in the separate prober service, which picks up a
+change within about 15 seconds; no restart is needed. If the prober cannot
+read the switch from Correlix — for example while Correlix itself is
+restarting — it stops measuring rather than guess, and resumes on its own.
+Targets that are never probed (the server itself, link-local and cloud
+metadata addresses, multicast) are refused whoever listed them.
 
 ### The Iris AI switches
 

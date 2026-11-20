@@ -12,8 +12,8 @@ sidebar_position: 6
 ## Before you begin
 
 - An authenticated session in your tenant. Both pages read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
-- Path discovery is opt-in. `FEATURE_TRACEROUTE` is off by default; an administrator sets it with a target list in `TRACEROUTE_TARGETS` and grants the container `CAP_NET_RAW`.
-- Path SLA needs `FEATURE_ACTIVE_PROBE` plus `STAMP_TARGETS`, and a reflector at the far end via `FEATURE_STAMP_REFLECTOR`.
+- Path discovery is off by default. A platform administrator turns on **Path discovery** under **Platform → Configuration → Features → Active measurement** ([Turn Correlix features on and off](/administration/features)); the prober service applies it within about 15 seconds. The traced targets are the path targets configured for this installation.
+- Path SLA needs **Active path probes (STAMP)** on the same page, probe targets configured for this installation, and a STAMP reflector at the far end.
 - Service checks need `FEATURE_SYNTHETICS` plus the per-check target lists.
 
 ## Steps

@@ -280,6 +280,12 @@ func redisPublish(ctx context.Context, channel, key, val string, ttlSec int) {
 	if err == nil {
 		return
 	}
+	surfacePublishFailure(channel, key, err)
+}
+
+// surfacePublishFailure counts one failed publish under channel and logs it at
+// most once a minute per channel.
+func surfacePublishFailure(channel, key string, err error) {
 	v, _ := redisPublishFailures.LoadOrStore(channel, new(int64))
 	n := atomic.AddInt64(v.(*int64), 1)
 	now := time.Now().Unix()
