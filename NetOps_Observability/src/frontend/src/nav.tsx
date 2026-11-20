@@ -297,17 +297,24 @@ export const NAV: NavSection[] = [
       // The full engineer surface (every candidate); the promoted-outage library
       // lives under Analytics → RCA Reports (#113).
       { id: "rca", label: "RCA", render: () => <Correlations /> },
+      // Troubleshooting is the case workbench (pick a case, read the answer,
+      // open the evidence) — it sits beside RCA, not under the Paths header it
+      // used to inherit by following the Paths leaves without a group of its
+      // own (Paths redesign P0, 2026-11-20).
+      { id: "troubleshooting", label: "Troubleshooting", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       // Label unified to "Findings" (the component was Findings.tsx all along;
       // the old nav called it "Anomalies" — two names for one view).
       { id: "findings", label: "Findings", render: () => <Findings /> },
       // Correlix Topology Operating Canvas (React Flow + ELK) — the SINGLE
       // topology view; Capacity/Change-Review/Executive stay in-canvas modes.
       { id: "topology", label: "Topology", render: () => <TopologyCanvas /> },
-      // Paths — how traffic actually traverses the network.
-      { id: "flowtrace", label: "Flow Trace", group: "Paths", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
+      // Paths — how traffic actually traverses the network (the measurement
+      // plane). Labels renamed 2026-11-20 (Paths redesign P0): nothing on the
+      // first page is a flow, and the third page is circuits, not paths. The
+      // route ids — and so every bookmark and page-docs row — are unchanged.
+      { id: "flowtrace", label: "Measured paths", group: "Paths", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
       { id: "tunnels", label: "Tunnels", group: "Paths", render: () => <Tunnels /> },
-      { id: "wan-paths", label: "WAN Paths", group: "Paths", render: () => <WanCircuits /> },
-      { id: "troubleshooting", label: "Troubleshooting", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
+      { id: "wan-paths", label: "WAN circuits", group: "Paths", render: () => <WanCircuits /> },
     ],
   },
   // ── Infrastructure — what do I own / what is observed ───────────────────────
@@ -418,7 +425,7 @@ export const NAV: NavSection[] = [
           { id: "interface-metric", label: "Interface Metrics", route: "analytics/interface-performance" },
           { id: "bgp-metric", label: "BGP Metrics", route: "analytics/protocols" },
           { id: "bandwidth", label: "Bandwidth Utilization", route: "analytics/device-monitoring" },
-          { id: "wan-circuit", label: "WAN Interface Metrics", route: "investigate/wan-paths" },
+          { id: "wan-circuit", label: "WAN circuits", route: "investigate/wan-paths" },
         ],
       },
       // Marketing demo board: same live panel registry, flashier chrome. Style

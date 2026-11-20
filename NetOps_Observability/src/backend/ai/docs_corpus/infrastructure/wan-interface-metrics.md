@@ -7,7 +7,7 @@ sidebar_position: 7
 
 # Measure WAN paths
 
-**Investigate → Paths → WAN Paths** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN Interface Metrics**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, and the measurement policy that produces both.
+**Investigate → Paths → WAN circuits** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, and the measurement policy that produces both.
 
 ## Before you begin
 
@@ -19,7 +19,7 @@ sidebar_position: 7
 
 ### Step 1 - Read the summary tiles
 
-1. Open **Investigate → Paths → WAN Paths**. The table polls every 5 seconds, so the in-row sparkline advances live.
+1. Open **Investigate → Paths → WAN circuits**. The table polls every 5 seconds, so the in-row sparkline advances live.
 2. Read the four tiles: **WAN interfaces** with the count that has a measured SLA, **Throughput** with its inbound and outbound split, **Peak utilization** for the busiest interface, and **Interfaces down**.
 
 With no rows, peak utilization reads as a dash rather than as zero per cent.

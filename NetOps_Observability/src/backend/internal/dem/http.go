@@ -150,15 +150,19 @@ const (
 	ExperiencePath = "/api/dem/experience"
 )
 
-// disabledNote is the honest answer when the feature flag is off.
-const disabledNote = "Digital experience monitoring is off. Set " + EnvFeatureFlag +
-	"=true and run the prober profile to collect. An empty table here means nothing was measured — NOT that everything is well."
+// disabledNote is the honest answer when the feature flag is off. Operator
+// copy: it names no environment variable — customers never edit the
+// environment, and the prober's switches are not on the Features page yet
+// (internal/featureflags/specs.go), so the note says what is true without
+// telling the reader to do something they cannot (Paths redesign B5).
+const disabledNote = "Digital experience monitoring is not switched on for this installation yet, so nothing is measured. " +
+	"An empty table here means nothing was measured — NOT that everything is well."
 
 // noProberNote is the honest answer when the feature is on but no sample has
 // arrived. The prober is not a scrape target, so its own liveness is only
 // observable as "its samples are arriving".
-const noProberNote = "No probe result has reached the metrics store for this tenant. " +
-	"Check that the prober profile is running and that " + EnvFeatureFlag + " is set on it."
+const noProberNote = "No probe result has arrived for this tenant yet. " +
+	"The probe service may not be running, or digital experience monitoring may not be switched on for it."
 
 // rejectUnknownQuery refuses any query parameter this endpoint does not know.
 // as_tenant is always allowed: it is the platform-wide tenant switcher and can

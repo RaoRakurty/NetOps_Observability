@@ -18,7 +18,7 @@ The **Infrastructure** section answers one question: what do you own, and what h
 | [Connect a vendor controller](/infrastructure/nms-integrations) | **Infrastructure → NMS Integrations** | Poll a third-party controller for its computed state, SLA metrics and alarms, and feed them to correlation as management-plane evidence. |
 | [Read the topology canvas](/infrastructure/topology-canvas) | **Investigate → Topology** | The evidence-backed graph, with Explore, Investigate, Path Trace, Capacity and Dependency modes. |
 | [Trace paths and tunnels](/infrastructure/paths-and-tunnels) | **Investigate → Paths** | Measured hop-by-hop paths, path SLA probes, service checks, and overlay tunnel health. |
-| [Measure WAN paths](/infrastructure/wan-interface-metrics) | **Investigate → Paths → WAN Paths** | One row per WAN interface: live utilization plus a measured SLA to a derived target, with the tier that measured it. |
+| [Measure WAN paths](/infrastructure/wan-interface-metrics) | **Investigate → Paths → WAN circuits** | One row per WAN interface: live utilization plus a measured SLA to a derived target, with the tier that measured it. |
 
 ## Where the metric boards went
 

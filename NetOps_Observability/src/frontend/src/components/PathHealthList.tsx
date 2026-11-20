@@ -105,9 +105,8 @@ export default function PathHealthList({ limit }: { limit?: number }) {
   if (loading && rows.length === 0) return <div className="empty">Loading…</div>;
   if (rows.length === 0) {
     return (
-      <div className="empty">
-        No active path measurements yet. Enable STAMP path SLA (<code>FEATURE_ACTIVE_PROBE</code> +
-        <code> STAMP_TARGETS</code>) or synthetic checks to light up Path Behavior Health.
+      <div className="empty" data-testid="path-health-none">
+        No path probes are switched on yet.
       </div>
     );
   }
