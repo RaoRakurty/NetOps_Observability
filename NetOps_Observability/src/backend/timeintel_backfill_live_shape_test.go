@@ -173,8 +173,11 @@ func liveCHWithSeamType(t *testing.T) string {
 func runLiveCH(container, sql string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveCHTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "exec", container,
-		"clickhouse-client", "--query", sql)
+	// The statement goes in on stdin, never as an argument: a whole-page
+	// fetch names 2,000 keys and outgrows ARG_MAX ("fork/exec /usr/bin/docker:
+	// argument list too long"), which read as a server REFUSAL (2026-11-20).
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", container, "clickhouse-client")
+	cmd.Stdin = strings.NewReader(sql)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
