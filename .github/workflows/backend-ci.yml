@@ -569,7 +569,7 @@ jobs:
         # SKIPS without CH_TEST_URL, so the step also refuses a run that skipped.
         run: |
           set -euo pipefail
-          go test -tags=integration -count=1 -timeout 15m -v ./internal/flowquery/ | tee "$RUNNER_TEMP/ch-integration.log"
+          go test -tags=integration -count=1 -timeout 15m -v ./internal/flowquery/ ./internal/servicecat/ | tee "$RUNNER_TEMP/ch-integration.log"
           if grep -q -- '--- SKIP' "$RUNNER_TEMP/ch-integration.log"; then
             echo "an integration test skipped: CH_TEST_URL did not reach it" >&2
             exit 1
