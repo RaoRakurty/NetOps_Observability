@@ -194,14 +194,22 @@ func RollupInsertSQL(tenant string, sets []SelectorSet, from, to time.Time, addr
 		if !ok {
 			continue // no usable predicate → service stays unattributed (honest)
 		}
+		// Every projected column has an r_-prefixed alias that names NO
+		// netops.flows column. ClickHouse resolves a SELECT alias inside WHERE
+		// ahead of the column (prefer_column_name_to_alias=0), so `'<t>' AS
+		// tenant_id` turned the tenant predicate below into '<t>' = '<t>' —
+		// constant TRUE — and the rollup counted every untagged flow the row
+		// policy let through, not only the tenant's own (tracker 370 lead,
+		// proven on the lab 2026-11-20). INSERT maps by position, so the
+		// alias names never reach the target table.
 		selects = append(selects,
-			"SELECT "+tl+" AS tenant_id, toStartOfMinute(ts) AS minute, toUUID("+SQLStringLiteral(set.ServiceID)+") AS service_id, "+
-				"toUInt32("+strconv.Itoa(set.Version)+") AS selector_version, '' AS seam_id, "+SQLStringLiteral(rolledBy)+" AS rolled_by, "+
-				"toUInt64(sum(bytes * if(sampling_rate = 0, 1, sampling_rate))) AS bytes, "+
-				"toUInt64(sum(packets * if(sampling_rate = 0, 1, sampling_rate))) AS packets, "+
-				"toUInt64(count()) AS flows "+
+			"SELECT "+tl+" AS r_tenant, toStartOfMinute(ts) AS r_minute, toUUID("+SQLStringLiteral(set.ServiceID)+") AS r_service, "+
+				"toUInt32("+strconv.Itoa(set.Version)+") AS r_version, '' AS r_seam, "+SQLStringLiteral(rolledBy)+" AS r_rolled_by, "+
+				"toUInt64(sum(bytes * if(sampling_rate = 0, 1, sampling_rate))) AS r_bytes, "+
+				"toUInt64(sum(packets * if(sampling_rate = 0, 1, sampling_rate))) AS r_packets, "+
+				"toUInt64(count()) AS r_flows "+
 				"FROM netops.flows WHERE ts >= toDateTime("+fromU+") AND ts < toDateTime("+toU+") AND "+
-				tenantPred+" AND "+cond+" GROUP BY minute")
+				tenantPred+" AND "+cond+" GROUP BY r_minute")
 	}
 	if len(selects) == 0 {
 		return "", 0
