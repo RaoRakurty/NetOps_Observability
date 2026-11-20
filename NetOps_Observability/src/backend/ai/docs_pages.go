@@ -139,10 +139,10 @@ var navPageDocs = map[string]navPage{
 	"analytics/scorecard":             {Label: "Analytics → Recovery Scorecard", Docs: []pageDoc{wholePage("dashboards-reports/recovery-scorecard"), wholePage("incident-response/rca-time-intelligence")}},
 
 	// Administration (tenant-level)
-	"admin/integrations":          {Label: "Administration → Incident response → Integrations", Docs: []pageDoc{wholePage("incident-response/integrations")}},
-	"admin/notifications":         {Label: "Administration → Incident response → Notifications", Docs: []pageDoc{wholePage("incident-response/notifications")}},
-	"admin/ticketing":             {Label: "Administration → Incident response → RCA Tickets", Docs: []pageDoc{wholePage("incident-response/rca-ticketing"), wholePage("incident-response/ticket-delivery")}},
-	"admin/discovery":             {Label: "Administration → Data sources → Discovery", Docs: []pageDoc{wholePage("onboard-devices/snmp-profiles"), wholePage("onboard-devices/vendor-snmp-configs"), wholePage("onboard-devices/snmp-discovery"), wholePage("administration/sensors"), wholePage("onboard-devices/data-sources"), wholePage("administration/telemetry-coverage")}},
+	"admin/integrations":  {Label: "Administration → Incident response → Integrations", Docs: []pageDoc{wholePage("incident-response/integrations")}},
+	"admin/notifications": {Label: "Administration → Incident response → Notifications", Docs: []pageDoc{wholePage("incident-response/notifications")}},
+	"admin/ticketing":     {Label: "Administration → Incident response → RCA Tickets", Docs: []pageDoc{wholePage("incident-response/rca-ticketing"), wholePage("incident-response/ticket-delivery")}},
+	"admin/discovery":     {Label: "Administration → Data sources → Discovery", Docs: []pageDoc{wholePage("onboard-devices/snmp-profiles"), wholePage("onboard-devices/vendor-snmp-configs"), wholePage("onboard-devices/snmp-discovery"), wholePage("administration/sensors"), wholePage("onboard-devices/data-sources"), wholePage("administration/telemetry-coverage")}},
 	// Administration → Iris is ONE page with four tabs (owner 2026-11-19).
 	"admin/iris": {Label: "Administration → Iris", Explain: "admin.iris", Docs: []pageDoc{wholePage("iris-ai/setup"),
 		wholePage("administration/network-context"), wholePage("iris-ai/iris-settings"), wholePage("administration/iris-runbooks"),
