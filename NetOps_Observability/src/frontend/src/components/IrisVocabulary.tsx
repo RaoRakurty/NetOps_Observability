@@ -89,7 +89,19 @@ function RefLine({ r, onUse }: { r: IrisRef; onUse?: (r: IrisRef) => void }) {
   );
 }
 
-export default function IrisVocabulary() {
+// Which steps a caller shows (owner decision 2026-11-19, "consolidate"):
+// Administration → Iris renders the parts on their own tabs — Knowledge
+// (names, check a name, try a question), Learning & review (recent questions,
+// how Iris decided, what Iris could not answer), AI models (Slack and Teams)
+// and Investigations (investigations on their own, actions Iris proposes).
+// "all" keeps the original single list. Steps are numbered within the part.
+export type VocabularyPart = "all" | "knowledge" | "review" | "chat" | "investigations";
+
+export default function IrisVocabulary({ part = "all" }: { part?: VocabularyPart } = {}) {
+  const show = (p: Exclude<VocabularyPart, "all">) => part === "all" || part === p;
+  let step = 0;
+  // A part with one step (Slack and Teams) needs no number.
+  const stepTitle = (t: string) => (part === "chat" ? t : `${++step}. ${t}`);
   const [aliases, setAliases] = useState<IrisAlias[]>([]);
   const [max, setMax] = useState(0);
   const [loadErr, setLoadErr] = useState("");
@@ -357,11 +369,13 @@ export default function IrisVocabulary() {
   const cols = rows.length ? Object.keys(rows[0]) : [];
 
   return (
-    <div data-testid="iris-vocabulary" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Iris vocabulary</div>
-      <p style={{ ...muted, margin: "2px 0 0" }}>Teach Iris the names your team uses, and check how it reads a question. Only your workspace sees these.</p>
+    <div data-testid="iris-vocabulary" data-part={part}
+      style={part === "all" ? { marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 } : undefined}>
+      {part === "all" && <div style={{ fontSize: 16, fontWeight: 600 }}>Iris vocabulary</div>}
+      {part === "all" && <p style={{ ...muted, margin: "2px 0 0" }}>Teach Iris the names your team uses, and check how it reads a question. Only your workspace sees these.</p>}
 
-      <div style={stepHead}>1. Names your team uses</div>
+      {show("knowledge") && <>
+      <div style={stepHead}>{stepTitle("Names your team uses")}</div>
       {loadErr && <div role="alert" style={{ ...text14, color: "var(--bad)" }}>{loadErr}</div>}
       {aliases.length === 0 && !loadErr && <div style={muted}>No names yet.</div>}
       {aliases.length > 0 && (
@@ -397,7 +411,7 @@ export default function IrisVocabulary() {
         </div>
       )}
 
-      <div style={stepHead}>2. Check a name</div>
+      <div style={stepHead}>{stepTitle("Check a name")}</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input aria-label="Name to check" placeholder="type any name" value={checkText} maxLength={128}
           onChange={(e) => setCheckText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void runCheck(); }} style={text14} />
@@ -432,7 +446,7 @@ export default function IrisVocabulary() {
         </div>
       )}
 
-      <div style={stepHead}>3. Try a question</div>
+      <div style={stepHead}>{stepTitle("Try a question")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Ask, then follow up — &quot;that device&quot;, &quot;what else did they change&quot;. Iris only follows up on what it answered.</p>
       {history.length > 0 && (
         <ol style={{ margin: "0 0 6px", paddingLeft: 22 }} data-testid="iris-history">
@@ -513,29 +527,39 @@ export default function IrisVocabulary() {
         </div>
       )}
 
-      <div style={stepHead}>4. Recent questions</div>
+      </>}
+
+      {show("review") && <>
+      <div style={stepHead}>{stepTitle("Recent questions")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Your last questions and what Iris made of them. Mark any that went wrong.</p>
       <RecentQuestions refreshKey={asked} />
       <IrisEvalConsent />
 
-      <div style={stepHead}>5. How Iris decided</div>
+      <div style={stepHead}>{stepTitle("How Iris decided")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Every Iris answer, step by step: the plan, each policy check and tool run, and the model that answered. Workspace admins only.</p>
       <DecisionLedger refreshKey={asked} />
 
-      <div style={stepHead}>6. What Iris could not answer</div>
+      <div style={stepHead}>{stepTitle("What Iris could not answer")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Questions Iris left unanswered, grouped by why — a missing tool, missing data, the wrong route or reading, wording, or the AI model not answering. Workspace admins only.</p>
       <IrisMissTriage refreshKey={asked} />
 
-      <div style={stepHead}>7. Iris in Slack and Teams</div>
+      </>}
+
+      {show("chat") && <>
+      <div style={stepHead}>{stepTitle("Iris in Slack and Teams")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Ask Iris from chat. Answers use your own Correlix permissions; a workspace admin approves each linked account.</p>
       <IrisChatOps />
 
-      <div style={stepHead}>8. Investigations on their own</div>
+      </>}
+
+      {show("investigations") && <>
+      <div style={stepHead}>{stepTitle("Investigations on their own")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>Iris investigates new incidents that match, or on a schedule, read-only, and posts the result on the incident and your Slack lane.</p>
       <IrisTriggers />
-      <div style={stepHead}>9. Actions Iris proposes</div>
+      <div style={stepHead}>{stepTitle("Actions Iris proposes")}</div>
       <p style={{ ...muted, margin: "0 0 6px" }}>A note for the case's ticket, or a finding for investigation memory. Someone else approves each one.</p>
       <IrisActions />
+      </>}
     </div>
   );
 }

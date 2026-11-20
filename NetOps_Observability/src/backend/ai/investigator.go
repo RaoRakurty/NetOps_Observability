@@ -261,13 +261,13 @@ type RunbooksForFunc func(ctx context.Context, p Principal, t InvestigationTarge
 // are not on for them.
 const InvestigationsOffText = "A full investigation needs AI investigations, which are off for this workspace. " +
 	"A platform administrator can turn on \"AI investigations\" on the Features page, and a workspace administrator " +
-	"enables it for the workspace in Iris settings → workspace access. Iris can still check a specific symptom: " +
+	"enables it for the workspace under Administration → Iris → AI models. Iris can still check a specific symptom: " +
 	"ask about it directly (for example \"why is BGP down on edge-1\")."
 
 // InvestigationNeedsSwitchNote is added to a troubleshooting answer the planner
 // meant as a full investigation for a caller without AI investigations.
 const InvestigationNeedsSwitchNote = "This was answered as a single check. A full investigation needs AI investigations, " +
-	"which a platform administrator turns on in Features and a workspace administrator enables in Iris settings."
+	"which a platform administrator turns on in Features and a workspace administrator enables under Administration → Iris → AI models."
 
 // investigationSeed is the engine verdict read before the first pass, folded
 // into every pass's chain state (answerSkill reads it).

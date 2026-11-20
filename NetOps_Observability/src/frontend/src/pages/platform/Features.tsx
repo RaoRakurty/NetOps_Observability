@@ -24,7 +24,7 @@ import { fmtDateTime } from "../../lib/time";
 import { Modal } from "../../components/ui";
 import { groupFeatures, applyLabel, sourceLine, pendingLine, switchValue, lockedLine, toggleDisabled, confirmText } from "./featuresModel";
 import { useFeatureSwitches } from "./useFeatureSwitches";
-import ConnectModelStep from "../../iris/ConnectModelStep";
+import { IRIS_MODELS_ROUTE } from "../../iris/connectModel";
 import { PlatformAlertsNotice } from "../../components/PlatformAlertsNotice";
 
 export default function Features() {
@@ -51,8 +51,11 @@ export default function Features() {
   return (
     <div className="features-page" style={{ fontSize: 14, maxWidth: 1100 }}>
       <h2 style={{ margin: "0 0 4px" }}>Features</h2>
-      {/* The first-login landing for a platform admin with no model key (D5). */}
-      <ConnectModelStep />
+      {/* The model connection moved to Administration → Iris → AI models
+          (owner 2026-11-19, "consolidate"); the on/off switches stay here. */}
+      <p className="fact-line" data-testid="features-iris-models-link" style={{ margin: "0 0 12px" }}>
+        Iris&apos;s model and key: <a href={IRIS_MODELS_ROUTE}>Administration → Iris → AI models</a>.
+      </p>
       {/* Correlix's own alerts reaching nobody is platform-admin business. */}
       <PlatformAlertsNotice />
       <ol className="fact-line" style={{ margin: "0 0 16px", paddingLeft: 20, lineHeight: 1.7 }}>

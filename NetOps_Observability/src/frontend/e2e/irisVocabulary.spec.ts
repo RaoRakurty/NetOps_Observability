@@ -2,7 +2,8 @@
 // Copyright 2026 Correlix
 
 // Iris vocabulary panel E2E (workspace AI settings) — tracker 337 N-E5.
-// Drives the real panel inside the Iris drawer against the faked Iris API
+// Drives the real panel on Administration → Iris → Knowledge (it moved out of
+// the Iris drawer's settings, owner 2026-11-19 "consolidate") against the faked Iris API
 // (./irisBackend.ts) and proves:
 //   · adding a name whose target is ambiguous OFFERS a choice and saves nothing
 //     until the operator picks one — never an automatic guess;
@@ -14,7 +15,7 @@
 //   · hostile values in a result are text, and every control is named.
 
 import { test, expect, type Page } from "@playwright/test";
-import { bootIris, openIris, topCpuAnswer, memorySeriesAnswer, XSS_IMG, TENANT_CONFIG, type Json } from "./irisBackend";
+import { bootIris, topCpuAnswer, memorySeriesAnswer, XSS_IMG, TENANT_CONFIG, type Json } from "./irisBackend";
 
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
@@ -42,9 +43,7 @@ function resolve(text: string, types: string[]): Json {
 
 async function openPanel(page: Page) {
   const fake = await bootIris(page, { tenantConfig: TENANT_CONFIG, converse, resolve });
-  await page.goto("/#/overview/home");
-  await openIris(page);
-  await page.getByTitle("AI models").click();
+  await page.goto("/#/admin/iris/knowledge");
   await expect(panel(page)).toBeVisible();
   await expect(panel(page).getByText("No names yet.")).toBeVisible();
   return fake;

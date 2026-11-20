@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// TenantRunbooks — Administration → Iris → Runbooks (tracker 337 N-F2).
+// TenantRunbooks — Administration → Iris → Knowledge, Runbooks (tracker 337 N-F2).
 //
 // A workspace's own troubleshooting methods (investigative runbooks) and
 // procedures for a person (MOPs), written in the same format as Correlix's

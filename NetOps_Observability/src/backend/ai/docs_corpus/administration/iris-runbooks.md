@@ -8,7 +8,7 @@ sidebar_position: 14
 
 # Teach Iris your own runbooks
 
-**Administration → Iris → Runbooks** holds your team's own troubleshooting methods and procedures, written in the same format as the methods Iris ships with. There are two kinds:
+**Administration → Iris → Knowledge**, section **Runbooks**, holds your team's own troubleshooting methods and procedures, written in the same format as the methods Iris ships with. There are two kinds:
 
 - A **troubleshooting method** (*investigative*). Iris can run it: it gathers the evidence the method names, reads it, and follows the next step the method allows. It is proven by its **test cases** before anyone can approve it.
 - A **procedure for a person** (*MOP*). Iris can show it, but never runs it.

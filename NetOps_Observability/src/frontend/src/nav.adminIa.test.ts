@@ -66,9 +66,22 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   // RCA Tickets (owner 2026-10-18) merged Ticketing & Automation and Ticket
   // Delivery into one flow; both halves were tenant-scoped.
   ticketing: { scope: "tenant", gate: "ticketing_http.go policies → requirePerm(administration, read|write); handleTicketsOutbox/handleTicketsAudit → requirePerm(infrastructure, read) + principalTenant; integrations_http.go handleIntegrationReconcile → requireAdmin on the caller's own tenant" },
-  "network-context": { scope: "tenant", gate: "ai_handlers.go handleAIContext → requirePerm(administration, read/write/admin) + ai.context.author + principalTenant (a Global view must choose a workspace); approval needs a second person (internal/orgcontext)" },
-  "iris-runbooks": { scope: "tenant", gate: "ai_handlers.go handleAIRunbooks → requirePerm(administration, read/write/admin) + ai.runbook.author + principalTenant (a Global view must choose a workspace); approval needs a second person and passing cases (internal/tenantrunbook)" },
-  "iris-learning": { scope: "tenant", gate: "ai_handlers.go handleAILearning → requirePerm(administration, read/write/admin) + ai.context.author (+ the target's own entitlement to adopt) + principalTenant (a Global view must choose a workspace); adopting needs a person, approving a different one (internal/irislearning)" },
+  // Administration → Iris (owner 2026-11-19, "consolidate") is ONE leaf over
+  // four tabs, each section keeping the gate it had (MIXED):
+  //   AI models   → copilot_config.go handleCopilotConfig + ai_tenant_config.go
+  //                 handleAITenants → requirePlatformAdmin (platform model,
+  //                 per-workspace access); handleAITenantConfig → requireAdmin +
+  //                 principalTenant (a workspace's own model; refuses cross)
+  //   Knowledge   → ai_handlers.go handleAIContext / handleAIRunbooks →
+  //                 requirePerm(administration, read/write/admin) +
+  //                 ai.context.author / ai.runbook.author + principalTenant;
+  //                 approval needs a second person (internal/orgcontext,
+  //                 internal/tenantrunbook)
+  //   Learning    → ai_handlers.go handleAILearning → requirePerm(administration)
+  //                 + ai.context.author + principalTenant; adopting needs a
+  //                 person, approving a different one (internal/irislearning)
+  //   Investigations → the workspace's own Iris tools (principalTenant)
+  iris: { scope: "tenant", gate: "four tabs, each its former gate: AI models requirePlatformAdmin (platform) / requireAdmin + principalTenant (workspace); Knowledge + Learning requirePerm(administration) + principalTenant with a second approver (MIXED)" },
   // Discovery (owner 2026-10-18) is ONE tenant-visible leaf over five
   // sections, each keeping the gate it had as a leaf (MIXED):
   //   snmp      → snmp_profiles.go read → requirePerm(infrastructure, read);

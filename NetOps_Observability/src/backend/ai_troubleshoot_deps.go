@@ -5337,7 +5337,7 @@ func (s *server) aiKnowledgeRunbooks(ctx context.Context, tenant string) ([]ai.K
 		out = append(out, ai.KnowledgeDoc{
 			ID: r.ID, Layer: ai.LayerRunbook, Tenant: tenant, Source: "tenant_runbook", Authority: ai.AuthorityApproved,
 			Updated: updated, Scope: r.Scope, Title: r.Name(), Text: "when to use: " + when, Extra: body,
-			Href: "#/admin/iris-runbooks", Label: "approved " + updated.UTC().Format("2006-01-02") + ", version " + strconv.Itoa(v.Version),
+			Href: "#/admin/iris/knowledge", Label: "approved " + updated.UTC().Format("2006-01-02") + ", version " + strconv.Itoa(v.Version),
 		})
 		if len(out) >= aiKnowledgeMaxRunbooks {
 			break

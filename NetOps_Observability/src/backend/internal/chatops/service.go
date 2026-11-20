@@ -371,8 +371,8 @@ func (s *Service) linkPrompt(ctx context.Context, c Connection, in Inbound) stri
 		s.d.Log("error", "link code not issued", map[string]any{"tenant": c.TenantID, "error": err.Error()})
 		return Plain(c.Platform, "Iris could not start linking your chat account just now — try again shortly.")
 	}
-	return Plain(c.Platform, "To ask Iris here, link this chat account to your Correlix account: in Correlix open Iris → Settings → "+
-		"step 7, \"Iris in Slack and Teams\", and enter the code "+code+" within 15 minutes. A workspace admin then approves the link.")
+	return Plain(c.Platform, "To ask Iris here, link this chat account to your Correlix account: in Correlix open Administration → Iris → "+
+		"AI models, \"Slack and Teams\", and enter the code "+code+" within 15 minutes. A workspace admin then approves the link.")
 }
 
 func threadKey(l Link, in Inbound) string {

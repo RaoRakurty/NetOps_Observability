@@ -26,7 +26,10 @@ describe("currentPageRoute — only a real nav leaf is sent", () => {
     // subnet discovery moved to Administration → Data sources.
     expect(currentPageRoute("#/infrastructure/nms")).toBe("infrastructure/nms");
     expect(currentPageRoute("#/admin/discovery")).toBe("admin/discovery");
-    expect(currentPageRoute("#/admin/network-context")).toBe("admin/network-context");
+    // Administration → Iris is one page with tabs (owner 2026-11-19): a tab
+    // and an old leaf's address both name that page.
+    expect(currentPageRoute("#/admin/iris/knowledge")).toBe("admin/iris");
+    expect(currentPageRoute("#/admin/network-context")).toBe("admin/iris");
     // Legacy hashes from before the split land on the page they now map to.
     expect(currentPageRoute("#/infrastructure/discovery")).toBe("admin/discovery");
     expect(currentPageRoute("#/infrastructure/discovery/nms")).toBe("infrastructure/nms");

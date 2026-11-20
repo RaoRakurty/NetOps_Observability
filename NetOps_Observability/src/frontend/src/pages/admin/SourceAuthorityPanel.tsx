@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// SourceAuthorityPanel — Administration → Iris → Network Context, "Which source
+// SourceAuthorityPanel — Administration → Iris → Knowledge (Network context), "Which source
 // Iris believes" (tracker 337 N-F6).
 //
 // When several sources report the same device and disagree, Iris uses the

@@ -528,7 +528,9 @@ describe("Iris — the per-answer footnote names who answered (tracker 337 C6)",
     aiAsk.mockResolvedValue(citedAnswer({ provider: "gemini", model: "gemini-flash-latest" }));
     await renderOpsis();
     expect(screen.queryByTestId("connect-model-banner")).toBeNull();
-    fireEvent.click(screen.getByTitle("AI models"));
+    // The gear leads to Administration → Iris → AI models, which an operator
+    // cannot open, so it is not drawn (it used to open an empty panel).
+    expect(screen.queryByTitle("AI models")).toBeNull();
     expect(screen.queryByText("Test connection")).toBeNull();
     expect(document.querySelector(".op-modelinput")).toBeNull();
   });
@@ -545,35 +547,45 @@ describe("Iris — connect a model (tracker 337 C2/C3/C5)", () => {
       providers: ["gemini", "anthropic", "openai"], recommended, budget: { daily_tokens_default: 1000000, workspaces_exhausted: 0 } });
     aiTenants.mockResolvedValue({ tenants: [] });
   }
-  it("shows the admin banner when no key is set, and it opens the settings", async () => {
+  // The model form moved to Administration → Iris → AI models (owner
+  // 2026-11-19, "consolidate"); its tests moved with it to
+  // pages/admin/IrisAdmin.test.tsx. The drawer only links there.
+  it("shows the admin banner when no key is set, and it opens Administration → Iris → AI models", async () => {
     keylessOwner();
+    window.location.hash = "#/monitoring";
     await renderOpsis();
     const banner = await screen.findByTestId("connect-model-banner");
     expect(banner.textContent).toContain("Connect a model to unlock full language understanding.");
     fireEvent.click(screen.getByRole("button", { name: "Connect a model" }));
-    expect(await screen.findByText("Test connection")).toBeTruthy();
-    expect(screen.getByRole("note").textContent).toMatch(/Free-tier Gemini keys/);
+    expect(window.location.hash).toBe("#/admin/iris/ai-models");
+    expect(screen.queryByText("Test connection"), "no inline form in the drawer any more").toBeNull();
   });
-  it("picking a provider fills the recommended models (C2)", async () => {
+  it("the gear opens Administration → Iris → AI models for an administrator", async () => {
     keylessOwner();
+    window.location.hash = "#/monitoring";
     await renderOpsis();
     fireEvent.click(await screen.findByTitle("AI models"));
-    fireEvent.click(await screen.findByText("Anthropic"));
-    const model = document.querySelector(".op-modelinput") as HTMLInputElement;
-    expect(model.value).toBe("claude-sonnet-4-6");
-    expect(screen.queryByRole("note")).toBeNull(); // the free-tier warning is Gemini's
+    expect(window.location.hash).toBe("#/admin/iris/ai-models");
+    expect(document.querySelector(".op-modelinput")).toBeNull();
   });
-  it("Test connection sends the draft key and shows a plain verdict, never the provider's text", async () => {
-    keylessOwner();
-    testCopilotConfig.mockResolvedValue({ ok: false, provider: "gemini", model: "gemini-flash-lite-latest", latency_ms: 210, error_class: "auth" });
+  it("a workspace administrator gets the gear too, and \"Add API key\" goes to the same tab", async () => {
+    copilotConfig.mockRejectedValue(new Error("403"));
+    aiTenantConfig.mockResolvedValue({ assistant_enabled: true, provider: "anthropic", model: "", key_present: false,
+      platform_key_available: false, no_platform_key: false });
+    window.location.hash = "#/monitoring";
     await renderOpsis();
-    fireEvent.click(await screen.findByTitle("AI models"));
-    fireEvent.change(screen.getByPlaceholderText("Paste API key"), { target: { value: "AIza-draft" } });
-    await act(async () => { fireEvent.click(screen.getByText("Test connection")); });
-    // Every tier field of the form is sent (2026-11-12): blanks are tested as
-    // the provider's recommended models, each with its own verdict.
-    expect(testCopilotConfig).toHaveBeenCalledWith({ provider: "gemini", key: "AIza-draft", model: "", model_fast: "", model_strong: "" });
-    expect((await screen.findByTestId("connection-test")).textContent).toContain("The provider rejected this key.");
+    expect(await screen.findByTitle("AI models")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Add API key" }));
+    expect(window.location.hash).toBe("#/admin/iris/ai-models");
+  });
+  it("a save on the AI models tab is read again, so the banner goes away", async () => {
+    keylessOwner();
+    await renderOpsis();
+    expect(await screen.findByTestId("connect-model-banner")).toBeTruthy();
+    copilotConfig.mockResolvedValue({ provider: "gemini", model: "gemini-flash-latest", feature_enabled: true, key_present: true,
+      key_source: "stored", budget: { daily_tokens_default: 1000000, workspaces_exhausted: 0 } });
+    await act(async () => { window.dispatchEvent(new Event("correlix:iris-models-changed")); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(screen.queryByTestId("connect-model-banner")).toBeNull());
   });
   it("tells an admin when workspaces have spent today's budget (D4)", async () => {
     copilotConfig.mockResolvedValue({ provider: "gemini", model: "", feature_enabled: true, key_present: true, key_source: "stored",
@@ -624,48 +636,5 @@ describe("Iris — an entry point's question is asked once (found by e2e/irisFla
   });
 });
 
-// N-I3: the workspace's active-probe opt-in in Iris settings -> Workspace access.
-describe("Iris settings — active probes opt-in", () => {
-  const row = { tenant_id: "t-acme", name: "Acme", assistant_enabled: true, investigations_enabled: true,
-    probes_enabled: false, key_present: false, no_platform_key: false, max_calls: 0, daily_tokens: 0 };
-  function ownerWithWorkspace(probesFeature: boolean) {
-    copilotConfig.mockResolvedValue({ provider: "anthropic", model: "claude-sonnet-4-6", feature_enabled: true, key_present: true });
-    aiTenants.mockResolvedValue({ tenants: [row], tools_feature: true, probes_feature: probesFeature });
-    setAITenantAccess.mockReset();
-    setAITenantAccess.mockResolvedValue({ ...row, probes_enabled: true });
-  }
-
-  it("is disabled, and says why, until the installation turns active probes on", async () => {
-    ownerWithWorkspace(false);
-    await renderOpsis();
-    fireEvent.click(await screen.findByTitle("AI models"));
-    const toggle = (await screen.findByTestId("iris-probes-toggle")) as HTMLInputElement;
-    expect(toggle.disabled).toBe(true);
-    expect(screen.getByTestId("iris-probes-risk").textContent).toMatch(/Features page/);
-    expect(screen.getByTestId("iris-probes-risk").textContent).toMatch(/Nothing is sent from a customer device/);
-  });
-
-  it("states the risk and asks before turning on, then sends the acknowledgement", async () => {
-    ownerWithWorkspace(true);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    await renderOpsis();
-    fireEvent.click(await screen.findByTitle("AI models"));
-    const toggle = (await screen.findByTestId("iris-probes-toggle")) as HTMLInputElement;
-    expect(toggle.disabled).toBe(false);
-    await act(async () => { fireEvent.click(toggle); });
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(String(confirm.mock.calls[0][0])).toMatch(/3 pings, one traceroute/);
-    expect(setAITenantAccess).toHaveBeenCalledWith("t-acme", expect.objectContaining({ probes_enabled: true, probes_acknowledged: true }));
-    confirm.mockRestore();
-  });
-
-  it("sends nothing when the operator declines", async () => {
-    ownerWithWorkspace(true);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await renderOpsis();
-    fireEvent.click(await screen.findByTitle("AI models"));
-    await act(async () => { fireEvent.click(await screen.findByTestId("iris-probes-toggle")); });
-    expect(setAITenantAccess).not.toHaveBeenCalled();
-    confirm.mockRestore();
-  });
-});
+// N-I3 (the active-probe opt-in) moved with the workspace access list to
+// pages/admin/IrisAdmin.test.tsx (owner 2026-11-19, "consolidate").

@@ -8,7 +8,7 @@ sidebar_position: 13
 
 # Tell Iris about your network
 
-**Administration → Iris → Network Context** holds short facts about your own network that Iris reads before every answer: which site is the DR site, how your carriers name circuits, when your change windows are, which alert is a known harmless one. A fact reaches Iris only after a **second administrator** approves it.
+**Administration → Iris → Knowledge**, section **Network context**, holds short facts about your own network that Iris reads before every answer: which site is the DR site, how your carriers name circuits, when your change windows are, which alert is a known harmless one. A fact reaches Iris only after a **second administrator** approves it.
 
 Facts are background, not evidence. When live data disagrees with a fact, Iris goes with the live data and says so, and it never cites a fact as the cause of a problem.
 
@@ -114,7 +114,7 @@ The default order, highest first:
 3. **The imported source of truth** — NetBox.
 4. **A manual entry** — the devices API or the inventory file.
 
-To change the order for your workspace, open **Administration → Iris → Network Context**, go to
+To change the order for your workspace, open **Administration → Iris → Knowledge**, go to
 **Which source Iris believes**, move the sources up or down and choose **Save order**. **Use the platform
 default** undoes it. Your order applies only to your workspace.
 

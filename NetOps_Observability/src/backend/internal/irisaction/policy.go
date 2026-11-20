@@ -85,9 +85,9 @@ func Evaluate(k Kind, env Env) (Decision, string) {
 		}
 		return Deny, r
 	case !env.Settings.Enabled:
-		return Deny, "this workspace has not turned Iris actions on (Iris settings)"
+		return Deny, "this workspace has not turned Iris actions on (Administration → Iris → Investigations)"
 	case !env.Settings.Allows(k):
-		return Deny, "this workspace has not allowed this kind of action (Iris settings)"
+		return Deny, "this workspace has not allowed this kind of action (Administration → Iris → Investigations)"
 	case env.Settings.DryRunOnly:
 		return DryRunOnly, "this workspace allows dry runs only: Iris shows what it would send and sends nothing"
 	}

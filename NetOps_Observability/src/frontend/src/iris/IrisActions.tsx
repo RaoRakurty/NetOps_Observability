@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// IrisActions — Iris's approval-gated writes (tracker 337 N-I4), step 8 of the
-// Iris settings.
+// IrisActions — Iris's approval-gated writes (tracker 337 N-I4), on
+// Administration → Iris → Investigations (step 2).
 //
 // Two parts:
 //   1. Workspace admins: turn actions on (with an acknowledgement), choose

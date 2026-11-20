@@ -23,7 +23,7 @@ Iris proposes only at the end of an investigation that **concluded** with suppor
 
 ## Turn actions on for your workspace
 
-1. Open **Iris → Settings** and go to **9. Actions Iris proposes**.
+1. Open **Administration → Iris → Investigations** and go to **2. Actions Iris proposes**.
 2. Tick **Iris can propose actions for this workspace**.
 3. Tick each kind Iris may propose.
 4. Optional: tick **Dry runs only** — Iris then shows what it would send and sends nothing.

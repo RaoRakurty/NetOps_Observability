@@ -4,7 +4,7 @@
 // ActionProposalCards — the writes Iris PROPOSED at the end of a concluded
 // investigation (tracker 337 N-I4). A card is text only: there is no button
 // here, because the person Iris answered can never approve it. Approval
-// happens on Iris settings, step 8, by someone else. Every card says
+// happens on Administration → Iris → Investigations, by someone else. Every card says
 // "No action has been executed." — a client constant, never the server's data.
 
 import type { AiActionProposal } from "../services/api";
@@ -15,9 +15,9 @@ export const PROPOSED_NOTICE = "Proposed — needs approval by someone else.";
 function statusLine(p: AiActionProposal): string {
   switch (p.status) {
     case "proposed":
-      return `${PROPOSED_NOTICE} Iris settings, step 8.`;
+      return `${PROPOSED_NOTICE} Administration → Iris → Investigations.`;
     case "existing":
-      return "Already waiting for approval — Iris settings, step 8.";
+      return "Already waiting for approval — Administration → Iris → Investigations.";
     case "dry_run":
       return "Dry run only: this workspace sends nothing.";
     default:
