@@ -63,6 +63,7 @@ func TestDefaultPlanForEveryShape(t *testing.T) {
 		{"flow_top talkers", q(ast.FlowTop), &plan.ResultSet{}, Table, "", "Top talkers"},
 		{"flow_top services", q(ast.FlowTop, "service"), &plan.ResultSet{}, Table, "", "Busiest services"},
 		{"log_search", q(ast.LogSearch), &plan.ResultSet{}, Table, Timeline, "Device log lines"},
+		{"seasonal_outliers", q(ast.SeasonalOutliers), &plan.ResultSet{}, Table, Bar, "Unusual for the time right now"},
 		{"nil query", nil, &plan.ResultSet{}, Summary, "", "Answer"},
 		{"nil result", q(ast.MetricSeries), nil, Summary, "", "Answer"},
 	}

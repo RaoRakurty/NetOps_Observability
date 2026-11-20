@@ -100,6 +100,7 @@ export const QUERY_TYPES = [
   "entity_list",
   "flow_top",
   "log_search",
+  "seasonal_outliers",
 ] as const;
 
 export type QueryType = (typeof QUERY_TYPES)[number];
@@ -496,6 +497,9 @@ export function defaultPlanFor(result: ResultSet, hint: QueryHint = {}): Present
       return { primary_view: "SUMMARY", secondary_view: "TABLE", title: "What you can see" };
     case "entity_list":
       return { primary_view: "TABLE", title: "What you can see" };
+    // The estate-wide seasonal answer (N-H6 step 3): the unusual series, ranked.
+    case "seasonal_outliers":
+      return { primary_view: "TABLE", secondary_view: "BAR", title: "Unusual for the time right now" };
     default:
       return { primary_view: "SUMMARY", title: FALLBACK_TITLE };
   }

@@ -248,6 +248,8 @@ func Default(q *ast.AST, rs *plan.ResultSet) Plan {
 		}
 	case ast.LogSearch:
 		p.PrimaryView, p.SecondaryView, p.Title = Table, Timeline, "Device log lines"
+	case ast.SeasonalOutliers:
+		p.PrimaryView, p.SecondaryView, p.Title = Table, Bar, "Unusual for the time right now"
 	}
 	return p
 }
@@ -296,6 +298,8 @@ func Fits(v View, q *ast.AST, rs *plan.ResultSet) bool {
 		return v == Table || v == Bar || v == EvidenceList
 	case ast.LogSearch:
 		return v == Table || v == Timeline || v == EvidenceList
+	case ast.SeasonalOutliers:
+		return v == Table || v == Bar || v == EvidenceList
 	}
 	return false
 }

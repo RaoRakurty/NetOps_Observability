@@ -1,6 +1,6 @@
 ---
 title: Seasonal answers
-description: How Iris answers "is this normal for this time of week?" by comparing a value with the same hour in earlier weeks or days.
+description: How Iris answers "is this normal for this time of week?" and "what is unusual right now?" by comparing values with the same hour in earlier weeks or days.
 page_type: concept
 sidebar_position: 7
 ---
@@ -41,6 +41,40 @@ maintenance window is left out, and the answer says how many weeks it used.
 | 3 or more earlier weeks | the same hour on the same weekday | "for this time of week" |
 | 5 or more earlier days | the same hour on earlier days | "for this time of day" — never "for a Tuesday" |
 | less | the flat level of the last 7 days | "not enough history" |
+
+## Ask across the whole network
+
+You can also ask what is unusual everywhere at once, without naming a device:
+
+- `what's abnormal right now for this time of week?`
+- `which interfaces are unusually busy for this time of day?`
+- `anything unusual compared with a normal Tuesday morning?`
+- `anything unusual at Austin for this time of week?` (one site or device)
+- `which devices have unusual CPU for this time of week?` (one measurement)
+
+Iris checks every device, interface and circuit series you can see. It judges
+the most recent full hour against that series' own usual level for that hour.
+It lists the series furthest from usual, the 10 furthest by default and never
+more than 50. For each one it shows the value now, the typical value, how many
+deviations away it is and in which direction, and which comparison it used
+("for this time of week" or "for this time of day").
+
+- **Unusual** means at least 3 deviations above or below the usual level.
+  "Unusually busy" or "unusually high" lists only values above it, and "busy"
+  means inbound and outbound traffic.
+- **Not enough history:** a series without enough history is not ranked. The
+  answer says how many there were, for example *not enough history for 12
+  series*, so a short list never looks like a clean bill of health.
+- **Maintenance:** an hour inside a maintenance window is left out of the usual
+  level. If the hour being judged was itself under maintenance, that row is
+  marked.
+- **Metrics checked:** CPU and memory, interface traffic, errors and discards,
+  and circuit loss, latency, jitter and quality score. Circuit measurements are
+  shown only to platform operators for now. A workspace user gets the device
+  and interface answer, and Iris says that circuits were left out.
+
+This question reads only the hourly summaries described below. Without
+**Seasonal baselines history** switched on, Iris says it cannot answer.
 
 ## Keep four weeks of history
 

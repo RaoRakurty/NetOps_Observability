@@ -95,6 +95,55 @@ type SeasonalStore interface {
 	SeasonalHours(ctx context.Context, metric string, keys []string, hours []time.Time) (map[string]map[int64]float64, error)
 }
 
+// EstateSeasonalScope is an optional Scope (tracker 337 N-H6 step 3): the
+// estate-wide read behind "what stands out against its usual level for the time".
+// It returns, for the caller's OWN rolled-up series only (the roll-up's
+// tenant scope, never a tenant the question names), the latest closed hour the
+// roll-up holds at or after q.Since and each series' hourly median at that
+// hour and at every seasonal reference hour before it (seasonal.RefHours). A
+// series with no row at the judged hour is not returned. At most q.MaxSeries
+// series come back; more sets Truncated. A deployment without it cannot answer
+// the estate question, and says so.
+type EstateSeasonalScope interface {
+	SeasonalEstate(ctx context.Context, q EstateQuery) (EstateRead, error)
+}
+
+// EstateQuery is one bounded estate read.
+type EstateQuery struct {
+	Metrics []EstateMetric
+	// Devices, when non-empty, narrows every metric to series whose device
+	// label (EstateMetric.DeviceAt) is one of these values; empty = every
+	// series the caller's scope holds.
+	Devices   []string
+	Since     time.Time
+	MaxSeries int
+}
+
+// EstateMetric is one rolled-up metric and the position of the device label
+// in its entity key (0 for device / interface series; 1 — local_device — for
+// circuit series).
+type EstateMetric struct {
+	Name     string
+	DeviceAt int
+}
+
+// EstateRead is what SeasonalEstate returns. Hour is the judged hour's start
+// (zero when the roll-up holds no hour since q.Since).
+type EstateRead struct {
+	Hour      time.Time
+	Series    []EstateSeries
+	Truncated bool
+}
+
+// EstateSeries is one rolled-up series: its metric, its entity key (the key
+// labels joined with "\x1f") and its hourly median by hour start (unix
+// seconds).
+type EstateSeries struct {
+	Metric    string
+	EntityKey string
+	P50       map[int64]float64
+}
+
 // TenantLabeledScope is the OPTIONAL Scope seam for catalog "tenant_labeled"
 // metrics (tracker 337 N-B5): series the owning workspace's prober stamps with
 // a `tenant` label and no device label — the Digital Experience checks. The
