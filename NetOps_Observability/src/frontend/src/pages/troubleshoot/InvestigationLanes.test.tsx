@@ -26,7 +26,7 @@ import {
   ChangedLane, DemLane, EventsLane, FlowsLane, HealthLane, PathLane, RoutingLane,
   LANE_COMPONENT, type LaneScope,
 } from "./InvestigationLanes";
-import { ALL_LANES, LANE_SOURCE, LANE_TITLE, type LaneId, type LaneState } from "./investigationModel";
+import { ALL_LANES, LANE_OPEN, LANE_SOURCE, LANE_TITLE, type LaneId, type LaneState } from "./investigationModel";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -75,12 +75,19 @@ describe("LANE_COMPONENT", () => {
     expect(Object.keys(LANE_COMPONENT).sort()).toEqual([...ALL_LANES].sort());
   });
 
+  // Paths redesign P1: the card links somewhere the operator can GO, and the
+  // API it read stays on that link's title — nothing is unverifiable.
+  const openLink = (id: LaneId) => within(card(id)).getByTestId(`lane-open-${id}`);
+
   it("every lane names the API it read on its own card", async () => {
     for (const id of ALL_LANES) {
       const Lane = LANE_COMPONENT[id];
       const { unmount } = render(<Lane scope={scope} />);
       await waitFor(() => expect(stateOf(id)).not.toBe("loading"));
-      expect(within(card(id)).getByText(LANE_SOURCE[id])).toBeInTheDocument();
+      expect(openLink(id).getAttribute("title")).toBe(`Read from ${LANE_SOURCE[id]}`);
+      expect(openLink(id).getAttribute("href")).toBe(LANE_OPEN[id].href);
+      expect(openLink(id)).toHaveTextContent(`Open in ${LANE_OPEN[id].label}`);
+      expect(within(card(id)).queryByText(LANE_SOURCE[id])).toBeNull();
       unmount();
     }
   });
@@ -272,6 +279,16 @@ describe("ready — the rows an operator came for", () => {
     await waitFor(() => expect(stateOf("flows")).toBe("ready"));
     expect(card("flows")).toHaveTextContent("10.1.1.1");
     expect(card("flows")).toHaveTextContent("10.2.2.2");
+    // Paths redesign P1: bytes read as a size, never a raw count.
+    expect(card("flows")).toHaveTextContent("1.2 KB");
+    expect(card("flows")).not.toHaveTextContent("1234");
+  });
+
+  it("feed rows show a formatted time, not the raw stored timestamp", async () => {
+    render(<EventsLane scope={scope} />);
+    await waitFor(() => expect(stateOf("events")).toBe("ready"));
+    expect(card("events")).not.toHaveTextContent("2026-08-25 10:00:00");
+    expect(within(card("events")).getByTestId("lane-state-events")).toHaveTextContent("Has evidence");
   });
 
   it("events list the correlated feed rows", async () => {
@@ -436,7 +453,7 @@ describe("the evidence card leads with one plain sentence", () => {
   it("shows the rows and the API behind them with NO second click", async () => {
     render(<EventsLane scope={scope} />);
     await waitFor(() => expect(stateOf("events")).toBe("ready"));
-    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+    expect(within(card("events")).getByTestId("lane-open-events").getAttribute("title")).toBe(`Read from ${LANE_SOURCE.events}`);
     expect(within(card("events")).queryByRole("button", { name: /details/i })).toBeNull();
   });
 
@@ -447,7 +464,7 @@ describe("the evidence card leads with one plain sentence", () => {
     expect(card("events")).toHaveTextContent(/no event was recorded/i);
     expect(within(card("events")).queryByRole("listitem")).toBeNull();
     // the API it read is still named — nothing on this page is unverifiable
-    expect(within(card("events")).getByText(LANE_SOURCE.events)).toBeInTheDocument();
+    expect(within(card("events")).getByTestId("lane-open-events").getAttribute("title")).toBe(`Read from ${LANE_SOURCE.events}`);
   });
 
   it("opens the details for a FAILED lane, so the failure is never a click away", async () => {
@@ -455,7 +472,7 @@ describe("the evidence card leads with one plain sentence", () => {
     render(<DemLane scope={scope} />);
     await waitFor(() => expect(stateOf("dem")).toBe("error"));
     expect(within(card("dem")).getByRole("alert")).toBeInTheDocument();
-    expect(within(card("dem")).getByText(LANE_SOURCE.dem)).toBeInTheDocument();
+    expect(within(card("dem")).getByTestId("lane-open-dem").getAttribute("title")).toBe(`Read from ${LANE_SOURCE.dem}`);
   });
 
   it("titles every lane in the operator's words, not the engine's", () => {

@@ -22,7 +22,7 @@ type Hop = ProbePath["hops"][number];
 function HopTable({ hops }: { hops: Hop[] }) {
   const cols: Column<Hop>[] = [
     { key: "ttl", header: "Hop", width: "56px", sortable: true, sortValue: (h) => h.ttl, render: (h) => `${h.ttl}` },
-    { key: "ip", header: "Router", sortable: true, text: (h) => h.ip || "*", render: (h) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 }}>{h.ip || "* (no reply)"}</span> },
+    { key: "ip", header: "Router", sortable: true, text: (h) => h.ip || "*", render: (h) => <span className="mono">{h.ip || "* (no reply)"}</span> },
     // rtt_ms / loss_pct can be absent on a hop (no reply, or a prober that doesn't
     // measure per-hop loss) — guard against undefined.toFixed(), which throws and
     // white-screens the whole Measured paths page.
@@ -51,8 +51,8 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
   }, []);
 
   return (
-    <div className="dm-board">
-      <Group title="Path behavior" hue="#14B8A6">
+    <div className="dm-board paths-page">
+      <Group title="Path behavior" hue="var(--mod-network)">
         <p className="proto-key">
           Each path against its own baseline. Worst first.
           <AskIris topic="path.behaviour" label="Path behavior" />
@@ -60,9 +60,9 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
         <PathHealthList />
       </Group>
 
-      <Group title="Network paths" hue="#F97316">
+      <Group title="Network paths" hue="var(--mod-metrics)">
         {err ? (
-          <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
+          <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>
         ) : paths.length === 0 ? (
           <Panel title="No paths yet">
             <div className="board-empty">
@@ -87,7 +87,7 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
         )}
       </Group>
 
-      <Group title="Path SLA" hue="#14B8A6">
+      <Group title="Path SLA" hue="var(--mod-network)">
         <div className="dm-grid">
           <MetricTop title="Round-trip delay by target (ms)" query="(probe_rtt_ms or synthetic_icmp_rtt_ms)" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="One-way delay by target (ms)" query="probe_owd_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />

@@ -28,7 +28,7 @@
  */
 .ts-inv { display: flex; flex-direction: column; gap: 16px; font-size: 14px; }
 .ts-inv .card { margin-bottom: 0; }
-.ts-inv .empty { font-size: 14px; }
+.ts-inv .empty { font-size: 14px; font-style: normal; }
 
 /* ── the block frame ─────────────────────────────────────────────────────── */
 .ts-block { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
@@ -116,12 +116,19 @@
 }
 .tsl-disclose:hover { border-bottom-color: var(--accent); }
 .tsl-disclose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.tsl-src { font-size: 12.5px; color: var(--muted); }
-.tsl-api { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
+/* "Open in …" — where the operator goes to read the lane in full. */
+.tsl-open { align-self: flex-start; font-size: 14px; font-weight: 500; color: var(--accent); text-decoration: none; }
+.tsl-open:hover { text-decoration: underline; }
+.tsl-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm, 4px); }
+/* The lane's answer at a glance, in its header. */
+.tsl-state { font-size: 12.5px; white-space: nowrap; }
+.tsl-state-ready { color: var(--fg); background: color-mix(in srgb, var(--warn) 18%, var(--surface)); }
+.tsl-state-error { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, var(--surface)); }
+.tsl-state-empty, .tsl-state-not_connected, .tsl-state-loading { color: var(--muted); background: var(--surface-2, var(--hover)); }
 .tsl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .tsl-row {
   display: grid; grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 9px; align-items: baseline; font-size: 13px;
+  gap: 9px; align-items: baseline; font-size: 14px;
 }
 .tsl-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tsl-k { font-weight: 600; }
@@ -407,7 +414,7 @@
 .tac-cand-empty { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
 .tac-cand-actions { display: inline-flex; gap: 6px; margin-top: 6px; }
 .tac-cand-form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
-.tac-cand-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.tac-cand-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--muted); }
 .tac-cand-form input, .tac-cand-form textarea {
   font: inherit; font-size: 12.5px; color: var(--fg); background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px;
@@ -432,3 +439,51 @@
   text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px dashed var(--border);
   vertical-align: top; word-break: break-word;
 }
+
+/* ── Paths redesign P1 (2026-11-20): the Flow Trace board structure ─────────
+   Each block reads as a colour-keyed board group (the .dm-group look Measured
+   paths uses), headed by a band in the block's hue; lanes are board panels;
+   the answer's four facts are a stat grid. Type: 16/600 headings, 14 body,
+   12.5 for chips only. Hues are tokens set per block via --g. */
+.ts-group {
+  padding: 0; gap: 0; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius-md, 10px); background: var(--surface);
+}
+.ts-group > :not(.ts-group-head) { margin-left: 14px; margin-right: 14px; }
+.ts-group > :not(.ts-group-head) + :not(.ts-group-head) { margin-top: 14px; }
+.ts-group > :last-child { margin-bottom: 14px; }
+.ts-group .ts-group-head {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 14px;
+  padding: 10px 14px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg);
+  background: color-mix(in srgb, var(--g, var(--accent)) 14%, var(--surface));
+  border-left: 3px solid var(--g, var(--accent));
+}
+.ts-group > .ts-group-head + * { margin-top: 0; }
+
+.ts-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 4px 0 0;
+  align-self: stretch; /* the answer card is a flex-start column; the grid spans it */
+}
+.ts-fact {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px);
+  background: var(--surface-2, var(--hover));
+}
+.ts-fact dt { margin: 0; font-size: 14px; color: var(--muted); font-weight: 500; }
+.ts-fact dd {
+  margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--fg);
+  overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
+}
+
+.ts-path .panel-tools h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.ts-path .rca-ws { background: transparent; }
+
+.tsl-card.panel { padding: var(--sp-4, 16px); }
+.tsl-card .panel-tools { margin-bottom: 0; }
+.tsl-row .fact-line { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The 14 px floor for the shared classes this page reuses (the same list the
+   Flows and Paths scopes carry). .panel-tools h3 outranks .tsl-title on
+   specificity, so the lane title is restated here. */
+.ts-inv .fact-line, .ts-inv .mini-meta, .ts-inv .tsl-foot, .ts-inv .ts-case-f { font-size: 14px; }
+.ts-inv .tsl-title, .ts-inv .panel-tools h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }

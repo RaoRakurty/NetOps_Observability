@@ -103,7 +103,7 @@ export default function Tunnels() {
   const endpoint = (device: string, addr: string) => (
     <span title={`${device || "—"}${addr ? ` · ${addr}` : ""}`}>
       {device || "—"}
-      {addr && <span className="mini-meta" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{addr}</span>}
+      {addr && <span className="mini-meta mono" style={{ marginLeft: 6 }}>{addr}</span>}
     </span>
   );
 
@@ -141,7 +141,7 @@ export default function Tunnels() {
     : "quality not measured";
 
   return (
-    <div className="card">
+    <div className="card paths-page">
       <h2>Tunnels</h2>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
 
@@ -160,7 +160,7 @@ export default function Tunnels() {
           <span className="stat-label">Avg latency</span>
           <span className="stat-value">
             {avgLat != null ? avgLat.toFixed(0) : "—"}
-            {avgLat != null ? <span style={{ fontSize: 20, color: "var(--muted)" }}> ms</span> : null}
+            {avgLat != null ? <span className="stat-unit"> ms</span> : null}
           </span>
           <span className="stat-foot">{measuredFoot}</span>
         </div>
@@ -168,7 +168,7 @@ export default function Tunnels() {
           <span className="stat-label">Avg loss</span>
           <span className="stat-value">
             {avgLoss != null ? avgLoss.toFixed(2) : "—"}
-            {avgLoss != null ? <span style={{ fontSize: 20, color: "var(--muted)" }}> %</span> : null}
+            {avgLoss != null ? <span className="stat-unit"> %</span> : null}
           </span>
           <span className="stat-foot">{measuredFoot}</span>
         </div>
