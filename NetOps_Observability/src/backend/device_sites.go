@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/siteres"
+	"netops/backend/models"
 	"strings"
 	"time"
 )
@@ -211,4 +213,219 @@ func (s *server) handleDeviceSite(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
 	}
+}
+
+// ── discovered sites: preview + adopt ───────────────────────────────────────
+//
+// A DISCOVERED site (internal/siteres) is a virtual grouping by the site id a
+// device or its controller reports. Adopting one turns it into a real internal
+// SoT site (stamped with the caller's tenant) and binds its devices to it — so
+// the operator can then rename it, give it coordinates and a role. Rules:
+//
+//   - preview and apply build the SAME plan (siteres.PlanAdoption) from the same
+//     inputs; apply then performs it, re-checking each write;
+//   - a device that already has a site of record (an operator binding or a
+//     discovery site label) is never touched;
+//   - idempotent: once adopted the devices are bound, resolve as manual, and a
+//     second run plans nothing;
+//   - one tenant at a time: the cross-tenant "All tenants" view must pick a
+//     tenant first, so a site is never created in one tenant for another
+//     tenant's devices;
+//   - audited by the audit middleware (POST) plus one structured log line.
+
+// errAdoptNeedsTenant: the cross-tenant view cannot adopt (see above).
+var errAdoptNeedsTenant = errors.New("choose a tenant before adopting discovered sites")
+
+// maxAdoptKeys bounds the optional key filter of an adopt request (§9).
+const maxAdoptKeys = 1000
+
+// adoptionPlan builds the caller's adoption plan over its VISIBLE devices in
+// its own tenant, using the same site rule as the Topology canvas.
+func (s *server) adoptionPlan(claims jwtClaims) (siteres.Plan, string, error) {
+	tenant, cross := principalTenant(claims)
+	if cross {
+		return siteres.Plan{}, tenant, errAdoptNeedsTenant
+	}
+	devs := s.visibleDevicesFor(claims)
+	sc := s.siteContextFor(claims, s.sdwanOverlay.Load())
+	resolved := sc.resolveAll(devs)
+	in := make([]siteres.Device, 0, len(devs))
+	for _, d := range devs {
+		if !canSeeDevice(d, tenant, false) {
+			continue // defence in depth: never plan another tenant's device
+		}
+		in = append(in, siteres.Device{ID: d.ID, Name: d.Name, Tenant: deviceTenant(d), Site: resolved[d.ID]})
+	}
+	vis := s.tenantVisibilityFor(claims)
+	exists := func(slug string) bool {
+		_, readable := s.resolveSiteForScope(vis, slug)
+		return readable != siteAbsent
+	}
+	return siteres.PlanAdoption(in, siteSlug, exists), tenant, nil
+}
+
+// applyAdoption performs a plan for the caller. Every write is re-checked: a
+// slug that turned out to be taken by a site the caller may not read is
+// refused, and a device that gained a binding since the plan is skipped.
+func (s *server) applyAdoption(claims jwtClaims, tenant string, plan siteres.Plan) siteres.Plan {
+	byID := map[string]models.Device{}
+	for _, d := range s.visibleDevicesFor(claims) {
+		byID[d.ID] = d
+	}
+	vis := s.tenantVisibilityFor(claims)
+	// abandon marks a site that could not be created and every device it would
+	// have bound, so the summary never claims a bind that did not happen.
+	abandon := func(st *siteres.AdoptSite, action, detail string) {
+		plan.Summary[st.Action]--
+		st.Action = action
+		plan.Summary[action]++
+		for j := range st.Devices {
+			if st.Devices[j].Action == siteres.ActionBind {
+				st.Devices[j].Action, st.Devices[j].Detail = siteres.ActionSkip, detail
+				plan.Summary[siteres.ActionBind]--
+				plan.Summary[siteres.ActionSkip]++
+			}
+		}
+	}
+	for i := range plan.Sites {
+		st := &plan.Sites[i]
+		_, readable := s.resolveSiteForScope(vis, st.Slug)
+		switch readable {
+		case siteHidden:
+			abandon(st, siteres.ActionRefused, "not bound: "+refusedSiteDetail)
+			continue
+		case siteAbsent:
+			if _, err := s.sites.Upsert(Site{TenantID: tenant, Slug: st.Slug, Name: st.Name, UpdatedBy: claims.Sub}); err != nil {
+				abandon(st, siteres.ActionError, "not bound: the site could not be created ("+err.Error()+")")
+				continue
+			}
+		case siteReadable:
+			if st.Action == siteres.ActionCreate { // created since the plan: bind to it
+				plan.Summary[siteres.ActionCreate]--
+				st.Action = siteres.ActionReuse
+				plan.Summary[siteres.ActionReuse]++
+			}
+		}
+		for j := range st.Devices {
+			row := &st.Devices[j]
+			if row.Action != siteres.ActionBind {
+				continue
+			}
+			d, ok := byID[row.DeviceID]
+			if !ok || !canSeeDevice(d, tenant, false) {
+				row.Action, row.Detail = siteres.ActionError, "device is no longer visible"
+				plan.Summary[siteres.ActionBind]--
+				plan.Summary[siteres.ActionError]++
+				continue
+			}
+			if b, has := s.deviceSites.Get(tenant, false, d.ID); has {
+				row.Action, row.Detail = siteres.ActionSkip, "already placed at "+b.Site+" by an operator"
+				plan.Summary[siteres.ActionBind]--
+				plan.Summary[siteres.ActionSkip]++
+				continue
+			}
+			if err := s.bindDeviceSite(d, st.Slug, claims); err != nil {
+				row.Action, row.Detail = siteres.ActionError, err.Error()
+				plan.Summary[siteres.ActionBind]--
+				plan.Summary[siteres.ActionError]++
+			}
+		}
+	}
+	return plan
+}
+
+// filterPlan keeps only the sites named in keys (all when keys is empty) and
+// recomputes the summary.
+func filterPlan(plan siteres.Plan, keys []string) siteres.Plan {
+	if len(keys) == 0 {
+		return plan
+	}
+	want := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		want[k] = true
+	}
+	out := siteres.Plan{Sites: []siteres.AdoptSite{}, Summary: map[string]int{}}
+	for k := range plan.Summary {
+		out.Summary[k] = 0
+	}
+	for _, st := range plan.Sites {
+		if !want[st.Key] {
+			continue
+		}
+		out.Sites = append(out.Sites, st)
+		out.Summary[st.Action]++
+		for _, d := range st.Devices {
+			out.Summary[d.Action]++
+		}
+	}
+	return out
+}
+
+// handleDiscoveredSites serves GET /api/discovered-sites: the adoption PREVIEW
+// for the caller's tenant (infrastructure:read). The cross-tenant view gets an
+// empty plan and adoptable=false with the reason.
+func (s *server) handleDiscoveredSites(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	plan, _, err := s.adoptionPlan(claims)
+	if errors.Is(err, errAdoptNeedsTenant) {
+		writeJSON(w, http.StatusOK, map[string]any{"adoptable": false, "reason": err.Error(),
+			"plan": siteres.Plan{Sites: []siteres.AdoptSite{}, Summary: map[string]int{}}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"adoptable": true, "plan": plan})
+}
+
+// handleAdoptDiscoveredSites serves POST /api/discovered-sites/adopt
+// (infrastructure:write). Body {"dry_run": bool (default true), "keys": [...]}.
+// A dry run returns exactly the plan an apply would perform.
+func (s *server) handleAdoptDiscoveredSites(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return
+	}
+	var req struct {
+		DryRun *bool    `json:"dry_run"`
+		Keys   []string `json:"keys"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+		return
+	}
+	if len(req.Keys) > maxAdoptKeys {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("at most %d sites per request", maxAdoptKeys))
+		return
+	}
+	dryRun := req.DryRun == nil || *req.DryRun // default: preview (safe)
+	plan, tenant, err := s.adoptionPlan(claims)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	plan = filterPlan(plan, req.Keys)
+	if dryRun {
+		writeJSON(w, http.StatusOK, map[string]any{"dry_run": true, "plan": plan})
+		return
+	}
+	if s.sites == nil || s.deviceSites == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("the site store is not configured"))
+		return
+	}
+	applied := s.applyAdoption(claims, tenant, plan)
+	logInfo("sites", "discovered sites adopted", map[string]any{
+		"tenant": tenant, "actor": claims.Sub, "sites_created": applied.Summary[siteres.ActionCreate],
+		"sites_reused": applied.Summary[siteres.ActionReuse], "devices_bound": applied.Summary[siteres.ActionBind],
+		"devices_skipped": applied.Summary[siteres.ActionSkip], "errors": applied.Summary[siteres.ActionError],
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"dry_run": false, "plan": applied})
 }

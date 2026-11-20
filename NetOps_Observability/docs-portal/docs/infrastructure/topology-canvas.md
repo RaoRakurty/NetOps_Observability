@@ -48,6 +48,20 @@ A freshness chip beside the toolbar reads the age of the data from the view's ow
 5. Search from the top of the stage to find a node by name. A match hidden inside a collapsed group expands it.
 6. Drag a node to pin it for this layout, and use **Reset layout** to return to the automatic arrangement.
 
+#### How a device's site is decided {#how-sites-are-decided}
+
+With **Group** set to **Site**, every device lands in a site by one rule, applied in this order:
+
+1. **Placed by an operator.** The site a device is assigned to under **Infrastructure → Devices**, by a placement file, or by adopting a discovered site. This always wins.
+2. **The device's `site` label.** A `site` (or `location`) label discovery stamped on the device.
+3. **Discovered.** The site id the network reports for the device: its own SD-WAN answer first, then its controller's record for it (for example vManage), then what its SD-WAN peers report about it.
+
+A discovered site is a grouping only. Nothing is written to your sites, and the group says so: its chip reads **Discovered site** and its name carries where the id came from, for example `Site 50 · from vManage`. Where the controller names its sites, that name is used instead of the number. Devices group by tenant, by the system that numbered the site and by the id, so the same site id in two tenants is two sites. The controllers' own site (often 250) groups like any branch.
+
+To turn discovered sites into real ones you can rename and put on the map, [adopt them](/infrastructure/geomap#adopt-discovered-sites).
+
+When an operator placed a device at one site and the device reports a different site id, the device drawer shows a **Site note** saying so. The operator's site is still the one shown.
+
 ### Step 3 - Read utilization in Capacity mode
 
 1. Switch the mode to **Capacity**. The overlay flips to **Utilization**, which is the point of the mode.

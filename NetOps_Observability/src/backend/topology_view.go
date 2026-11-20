@@ -14,6 +14,8 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/ctloverlay"
+	"netops/backend/internal/discovery"
+	"netops/backend/internal/siteres"
 	"netops/backend/models"
 	"netops/backend/topology"
 )
@@ -404,13 +406,12 @@ func (s *server) projectPhysicalView(ctx context.Context, claims jwtClaims, pin 
 	if withCloud != nil {
 		withCloud(&in)
 	}
-	// SD-WAN branch segmentation: an edge with no site of record is grouped by
-	// the SD-WAN site its peers report (owner, 2026-10-10) — before projection,
-	// so the existing site grouping draws the branches.
-	switch mode {
-	case topology.ModeExplore, topology.ModeInvestigate, topology.ModeCapacity:
-		applySDWANSites(in.Devices, snap)
-	}
+	// Site grouping: ONE rule (internal/siteres) — the operator's binding, then
+	// the discovery site label, then the site id the device, its controller or
+	// its SD-WAN peers report, shown as a DISCOVERED site with provenance
+	// (owner 2026-10-10 / 2026-11-20). Before projection, so the existing site
+	// grouping draws the branches.
+	applySites(in.Devices, s.siteContextFor(claims, snap).resolveAll(pin.devs))
 	view := topology.Project(in)
 	view.Degraded = append(view.Degraded, pin.degraded...)
 	// SD-WAN overlay (tracker 349) on the physical views — never on path_trace
@@ -469,20 +470,86 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 	})
 }
 
-// applySDWANSites gives each device with NO site of record the SD-WAN site its
-// overlay peers report. A site assigned by an operator or a source of truth
-// always wins; facts are the caller's visible devices only.
-func applySDWANSites(facts []topology.DeviceFact, snap *sdwanOverlaySnapshot) {
-	if snap == nil {
-		return
+// siteContext is what the site rule (internal/siteres) reads beyond the device
+// itself: the operator's bindings (identity token → slug), the declared sites'
+// names, and the SD-WAN overlay snapshot. Built once per request for ONE
+// principal; every map is already scoped to that principal.
+type siteContext struct {
+	assign map[string]string            // identity token → site slug (deviceSiteStore.Assignments)
+	names  map[string]map[string]string // tenant → slug → declared site name
+	snap   *sdwanOverlaySnapshot
+}
+
+// siteContextFor gathers the caller's bindings and declared-site names. The
+// overlay snapshot is passed in so a view and its overlay read ONE snapshot.
+func (s *server) siteContextFor(claims jwtClaims, snap *sdwanOverlaySnapshot) siteContext {
+	tenant, cross := principalTenant(claims)
+	sc := siteContext{assign: s.geoAssignments(tenant, cross), names: map[string]map[string]string{}, snap: snap}
+	if s.sites != nil {
+		for _, st := range s.visibleSitesFor(claims) {
+			t := normTenant(st.TenantID)
+			if sc.names[t] == nil {
+				sc.names[t] = map[string]string{}
+			}
+			sc.names[t][st.Slug] = st.Name
+		}
 	}
+	return sc
+}
+
+// resolve applies the ONE site rule to a device: operator binding → discovery
+// site label → the site id the device, its controller or its SD-WAN peers
+// report (owner decision 2026-10-18: a manual site always wins).
+func (sc siteContext) resolve(d models.Device) siteres.Site {
+	in := siteres.Input{
+		Tenant:             deviceTenant(d),
+		Label:              firstNonEmpty(d.Labels["site"], d.Labels["location"]),
+		ControllerSiteID:   d.Labels["controller_site_id"],
+		ControllerSiteName: d.Labels["controller_site_name"],
+		ControllerSystem:   d.Labels["source_system"],
+	}
+	for _, tok := range discovery.DeviceIdentities(d) {
+		if slug, ok := sc.assign[tok]; ok && slug != "" {
+			in.BindingSlug = slug
+			in.BindingName = sc.names[deviceTenant(d)][slug]
+			break
+		}
+	}
+	if sc.snap != nil {
+		in.DeviceSiteID = sc.snap.devFacts[d.ID].SiteID
+		in.PeerSiteID = sc.snap.res.DeviceSites[d.ID]
+	}
+	return siteres.Resolve(in)
+}
+
+// resolveAll resolves every device and harmonises each discovered site's label
+// across its members (so a group never reads differently by member order).
+func (sc siteContext) resolveAll(devs []models.Device) map[string]siteres.Site {
+	sites := make([]siteres.Site, len(devs))
+	for i, d := range devs {
+		sites[i] = sc.resolve(d)
+	}
+	siteres.Harmonize(sites)
+	out := make(map[string]siteres.Site, len(devs))
+	for i, d := range devs {
+		out[d.ID] = sites[i]
+	}
+	return out
+}
+
+// applySites stamps the resolved site — key, readable label, provenance and any
+// disagreement note — onto the projection facts, so the existing site grouping
+// (topology.buildGroups) draws manual, labelled AND discovered sites. facts are
+// the caller's visible devices only, and a discovered key carries the device's
+// tenant, so two tenants' site 50 never share a group (§3a).
+func applySites(facts []topology.DeviceFact, resolved map[string]siteres.Site) {
 	for i := range facts {
-		if facts[i].Site != "" {
+		st, ok := resolved[facts[i].ID]
+		if !ok || st.Key == "" {
 			continue
 		}
-		if site := snap.res.DeviceSites[facts[i].ID]; site != "" {
-			facts[i].Site = "SD-WAN site " + site
-		}
+		facts[i].Site, facts[i].SiteLabel = st.Key, st.Label
+		facts[i].SiteSource, facts[i].SiteOrigin, facts[i].SiteNote = string(st.Source), st.Origin, st.Note
 	}
 }
 

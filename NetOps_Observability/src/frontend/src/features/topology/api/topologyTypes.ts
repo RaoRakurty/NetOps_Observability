@@ -141,7 +141,18 @@ export type TopologyNode = {
   role_evidence?: string[];
   vendor?: string;
   model?: string;
+  /** Site GROUPING KEY — a site slug, a discovery label, or a tenant-qualified
+   *  "discovered:…" key. Display it through siteName(node), never raw. */
   site?: string;
+  /** What a person reads for the site, when it differs from `site`
+   *  ("Site 50 · from vManage"). */
+  site_label?: string;
+  /** How the site was decided: manual | label | discovered. */
+  site_source?: "manual" | "label" | "discovered" | string;
+  /** Where a discovered site id was read: device | sdwan_peers | vmanage … */
+  site_origin?: string;
+  /** Set when an operator-set site and the device's reported id disagree. */
+  site_note?: string;
   rack?: string;
   mgmt_ip?: string;
   health: Health;
@@ -221,6 +232,11 @@ export type TopologyGroup = {
   health: Health; // rollup
   collapsed: boolean;
   owner?: string;
+  /** Site groups: how the site was decided (manual | label | discovered). A
+   *  discovered group is a virtual grouping by a reported site id. */
+  source?: "manual" | "label" | "discovered" | string;
+  /** Discovered site groups: where the site id was read. */
+  origin?: string;
 };
 
 // ── overlays ────────────────────────────────────────────────────────────────────

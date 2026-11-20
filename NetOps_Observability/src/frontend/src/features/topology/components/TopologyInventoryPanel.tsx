@@ -60,7 +60,7 @@ export function TopologyInventoryPanel({ view, selection, onPick }: {
     const q = deferredFilter.trim().toLowerCase();
     if (!q) return all;
     return all.filter((n) =>
-      `${n.label} ${n.mgmt_ip ?? ""} ${n.role ?? ""} ${n.vendor ?? ""} ${n.site ?? ""}`.toLowerCase().includes(q),
+      `${n.label} ${n.mgmt_ip ?? ""} ${n.role ?? ""} ${n.vendor ?? ""} ${n.site_label ?? n.site ?? ""}`.toLowerCase().includes(q),
     );
   }, [all, deferredFilter]);
 

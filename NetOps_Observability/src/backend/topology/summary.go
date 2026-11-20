@@ -287,6 +287,11 @@ func Summarize(in SummaryInput) NetworkSummary {
 		devNodes = append(devNodes, n)
 	}
 	sort.Slice(devNodes, func(i, j int) bool { return devNodes[i].ID < devNodes[j].ID })
+	discovered := readableSites(devNodes)
+	if discovered > 0 {
+		out.Notes = append(out.Notes, fmt.Sprintf("%d device(s) are grouped by a site id their controller or the device itself reports (marked \"from …\"); "+
+			"those sites are discovered, not declared, until an operator adopts them.", discovered))
+	}
 	for _, n := range devNodes {
 		names[n.ID] = safeName(n.Label, n.ID, &unnamed)
 	}
@@ -680,6 +685,37 @@ func sortedCounts(m map[string]int) []SummaryCount {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// readableSites rewrites each node's Site from its grouping KEY to what a
+// person reads (its SiteLabel), in place, so every site the summary names —
+// counts, site details, redundancy, overlay pairs — reads "Site 50 · from
+// vManage" instead of a tenant-qualified key. Two different keys that read the
+// same (the same discovered id in two tenants on a cross-tenant view) stay
+// distinct: the later one is qualified with its key. Returns how many nodes sit
+// at a DISCOVERED site.
+func readableSites(nodes []Node) int {
+	keyOf := map[string]string{} // readable name → the key that claimed it
+	discovered := 0
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Site == "" {
+			continue
+		}
+		if n.SiteSource == "discovered" {
+			discovered++
+		}
+		name := n.SiteLabel
+		if name == "" {
+			name = n.Site
+		}
+		if k, ok := keyOf[name]; ok && k != n.Site {
+			name = name + " (" + n.Site + ")"
+		}
+		keyOf[name] = n.Site
+		n.Site = name
+	}
+	return discovered
 }
 
 // safeName is a device's display name, never an address: a label that parses

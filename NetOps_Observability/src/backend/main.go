@@ -3953,6 +3953,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sites", s.handleSites)          // internal SoT sites: GET list / POST upsert
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
+	// Discovered sites (reported site ids): adoption preview / apply → SoT sites + bindings.
+	mux.HandleFunc("/api/discovered-sites", s.handleDiscoveredSites)
+	mux.HandleFunc("/api/discovered-sites/adopt", s.handleAdoptDiscoveredSites)
 	// WAN circuits (#1): controller-style endpoint registry + topology policy.
 	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces)          // per-WAN-interface table: util + circuit SLA + source
 	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)            // derived WAN endpoint registry (read)
