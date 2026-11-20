@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, AdoptPlan, AdoptSiteRow } from "../../services/api";
 import { operatorError } from "../../lib/errors";
+import AskIris from "../../components/AskIris";
 
 /** How a site's origin reads ("vmanage" → "vManage"). */
 export function originName(origin: string): string {
@@ -106,9 +107,8 @@ export default function DiscoveredSitesPanel({ onDone }: { onDone: () => void })
     <section className="card" aria-label="Adopt discovered sites" style={{ marginBottom: 14, fontSize: 14 }}>
       <h3 style={{ margin: "0 0 6px" }}>Adopt discovered sites</h3>
       <p className="mini-meta" style={{ fontSize: 14 }}>
-        These sites come from the site id a controller or the device itself reports. The topology already
-        groups devices by them, marked <i>discovered</i>. Adopting one makes it a real site you can rename and
-        put on the map. Devices that are already placed are never moved.
+        Sites reported by a controller or device. Adopt them to rename.
+        <AskIris topic="sites.discovered" label="Discovered sites" />
       </p>
       {err && <p role="alert" style={{ color: "var(--bad)" }}>{err}</p>}
       {reason && <p role="status">{reason}</p>}

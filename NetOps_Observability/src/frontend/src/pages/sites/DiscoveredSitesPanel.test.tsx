@@ -13,6 +13,7 @@ const { discoveredSites, adoptDiscoveredSites } = vi.hoisted(() => ({
   adoptDiscoveredSites: vi.fn(),
 }));
 vi.mock("../../services/api", () => ({ api: { discoveredSites, adoptDiscoveredSites } }));
+vi.mock("../../components/AskIris", () => ({ default: () => null }));
 
 import DiscoveredSitesPanel, { planSentence, originName } from "./DiscoveredSitesPanel";
 

@@ -53,8 +53,8 @@ func TestTopologySiteRule(t *testing.T) {
 		vmanageDev("d2", "vEdge-52", "t1", "50"),
 		vmanageDev("d3", "vSmart", "t1", "250"),
 		vmanageDev("d4", "vBond", "t1", "250"),
-		vmanageDev("d5", "cEdge-80", "t1", "80"), // manually placed
-		vmanageDev("d6", "cEdge-60", "t1", "60"), // labelled
+		vmanageDev("d5", "cEdge-80", "t1", "80"),                           // manually placed
+		vmanageDev("d6", "cEdge-60", "t1", "60"),                           // labelled
 		{ID: "d7", Name: "edge-mib", Address: "10.0.0.7", TenantID: "t1"},  // reports via its own MIB
 		{ID: "d8", Name: "edge-peer", Address: "10.0.0.8", TenantID: "t1"}, // known only to its peers
 		{ID: "d9", Name: "lonely", Address: "10.0.0.9", TenantID: "t1"},
