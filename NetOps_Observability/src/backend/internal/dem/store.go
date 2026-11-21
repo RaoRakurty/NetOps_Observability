@@ -67,6 +67,8 @@ type Patch struct {
 	LatencyBudgetMs       *float64 `json:"latency_budget_ms,omitempty"`
 	AvailabilityBudgetPct *float64 `json:"availability_budget_pct,omitempty"`
 	Paused                *bool    `json:"paused,omitempty"`
+	TracePath             *bool    `json:"trace_path,omitempty"`
+	StampProbe            *bool    `json:"stamp_probe,omitempty"`
 }
 
 // apply folds the patch onto a copy of t. The KIND is immutable: changing an
@@ -105,6 +107,12 @@ func (p Patch) apply(t Target) Target {
 	}
 	if p.Paused != nil {
 		t.Paused = *p.Paused
+	}
+	if p.TracePath != nil {
+		t.TracePath = *p.TracePath
+	}
+	if p.StampProbe != nil {
+		t.StampProbe = *p.StampProbe
 	}
 	return t
 }

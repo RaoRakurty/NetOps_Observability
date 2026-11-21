@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"netops/backend/internal/probetarget"
 )
 
 // Kind is what is being measured for one subject.
@@ -197,6 +199,15 @@ type Target struct {
 	// noisy target can be silenced without losing the record of why.
 	Paused bool `json:"paused"`
 
+	// TracePath also traces the hop-by-hop path to this target's host (Paths
+	// redesign P3): the Measured paths page and the engine's path evidence. It
+	// takes effect only while Path discovery is on (Platform → Features).
+	TracePath bool `json:"trace_path,omitempty"`
+	// StampProbe also sends STAMP (RFC 8762) test packets to the host's
+	// reflector (UDP 862) for latency, jitter and loss. It takes effect only
+	// while Active path probes are on, and needs a reflector at the far end.
+	StampProbe bool `json:"stamp_probe,omitempty"`
+
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -334,7 +345,30 @@ func (t *Target) Validate() error {
 	if t.AvailabilityBudgetPct < 0 || t.AvailabilityBudgetPct > 100 {
 		return errors.New("availability_budget_pct must be 0..100")
 	}
+	if t.TracePath || t.StampProbe {
+		// Layer 1 of 3 (save; then publish, then the prober): an address that
+		// is NEVER probed is refused here, whoever asked. A name is checked
+		// when the api resolves and pins it at publish — write-time DNS is not
+		// the vantage the probe runs from (validHostname's rule) — and an
+		// internal address must belong to the tenant's own inventory, which
+		// the publish layer checks against the live inventory.
+		if a, err := netip.ParseAddr(strings.Trim(t.ProbeHost(), "[]")); err == nil && probetarget.Classify(a) == probetarget.ClassRefused {
+			return errors.New("that address is never probed (loopback, link-local, metadata, multicast or reserved space), so path tracing and probes cannot be turned on for it")
+		}
+	}
 	return nil
+}
+
+// ProbeHost is the host a path trace or STAMP probe is aimed at: the URL's
+// host for an http target, the host for every other kind.
+func (t Target) ProbeHost() string {
+	if t.Kind == KindHTTP {
+		if u, err := url.Parse(t.Host); err == nil {
+			return u.Hostname()
+		}
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(t.Host), ".")
 }
 
 // validateDestination checks the destination is well formed FOR ITS KIND. This
