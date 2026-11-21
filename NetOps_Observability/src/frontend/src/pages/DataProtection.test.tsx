@@ -886,7 +886,9 @@ describe("Storage", () => {
     setup();
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Storage" });
-    expect(within(sec).getByText("measured total")).toBeTruthy();
+    // The section header renders before the storage read resolves, so wait for
+    // the DATA, not just the region (raced under CI load, #311 2026-11-21).
+    expect(await within(sec).findByText("measured total")).toBeTruthy();
     expect(within(sec).getAllByText("3.0 GiB").length).toBeGreaterThan(0);
     const sum = within(sec).getByText(/^Bytes by store · 1$/, { selector: "summary" });
     expect((sum.closest("details") as HTMLDetailsElement).open).toBe(false);

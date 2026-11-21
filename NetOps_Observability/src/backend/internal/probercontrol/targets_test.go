@@ -54,6 +54,25 @@ func TestTargetsRoundTrip(t *testing.T) {
 	}
 }
 
+// Regression (review of #310): a targets record whose fields hold a real
+// query-string URL, an ampersand, angle brackets and unicode survives the signed
+// envelope intact. The RawMessage envelope HTML-escaped them, so the prober
+// read every such record as bad_signature and measured nothing.
+func TestTargetsRecordWithQueryStringURLVerifies(t *testing.T) {
+	kv := targetKV{newKV()}
+	tr := []WireTarget{
+		{ID: "dem-q", Tenant: "acme", Site: "https://portal.example/health?region=eu&probe=1", Addr: "203.0.113.10"},
+		{ID: "dem-a", Tenant: "acme", Site: "R&D <lab> Zürich", Addr: "203.0.113.11"},
+	}
+	if err := NewTargetsPublisher(kv, collectOf(tr, nil, 0), ring(), clock(t0), nil).PublishOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, refused, why := NewTargetsReader(kv, ring(), clock(t0)).Read(context.Background(), ForTraceroute)
+	if why != ReasonPublished || refused != 0 || len(got) != 2 || got[0] != tr[0] || got[1] != tr[1] {
+		t.Fatalf("got %+v refused=%d why=%s, want both targets verbatim", got, refused, why)
+	}
+}
+
 // Layer 3: even inside a validly signed record the prober takes only pinned
 // IP literals with an owner, and refuses every never-probed address again.
 func TestTargetsReaderRefusesWhatIsNeverProbed(t *testing.T) {
