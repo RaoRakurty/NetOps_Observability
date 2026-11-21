@@ -22,10 +22,12 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"netops/backend/internal/probercontrol"
 	"netops/backend/internal/probetarget"
 	"netops/backend/safego"
 )
@@ -202,6 +204,65 @@ func Addrs(ts []ProbeTarget) []string {
 // (P3) is another, behind this interface.
 type TargetSource interface {
 	Targets(ctx context.Context) ([]ProbeTarget, error)
+}
+
+// targetsRecord is the prober-side reader of the api's signed target record,
+// injected (probercontrol.TargetsReader in production).
+type targetsRecord interface {
+	Configured() bool
+	Read(ctx context.Context, which string) ([]probercontrol.WireTarget, int, probercontrol.Reason)
+}
+
+// catalogueTargets is the P3 target source: the per-tenant Digital Experience
+// targets with "trace the path" / "STAMP probe" ticked, which the api resolves,
+// checks against each tenant's own inventory and publishes SIGNED with every
+// target's tenant (internal/probercontrol targets.go). With a channel, that
+// record is the ONLY source — every doubt is an empty list, never the env list
+// and never a stale one. With NO channel at all (a hand-made install without
+// the key-value service) the install-time environment list is read, as before.
+type catalogueTargets struct {
+	rec      targetsRecord
+	which    string // probercontrol.ForTraceroute | ForStamp
+	port     int    // >0: dial host:port (STAMP's reflector port)
+	fallback TargetSource
+}
+
+// newCatalogueTargets wires the production reader: the authenticated channel
+// and the rendered signing key.
+func newCatalogueTargets(which string, port int, fallback TargetSource) *catalogueTargets {
+	return &catalogueTargets{
+		rec:      probercontrol.NewTargetsReader(ControlKV{}, probercontrol.KeyringFromEnv(os.Getenv, log.Printf), time.Now),
+		which:    which,
+		port:     port,
+		fallback: fallback,
+	}
+}
+
+// Targets returns the verified catalogue targets. A list that does not read
+// is an error on the collector's status (with the reason, never an address).
+func (c *catalogueTargets) Targets(ctx context.Context) ([]ProbeTarget, error) {
+	if c.rec == nil || !c.rec.Configured() {
+		return c.fallback.Targets(ctx)
+	}
+	list, refused, why := c.rec.Read(ctx, c.which)
+	if why != probercontrol.ReasonPublished {
+		if why == probercontrol.ReasonNotPublished {
+			return nil, nil // the api has published no catalogue target (yet): nothing to measure
+		}
+		return nil, fmt.Errorf("catalogue targets not read (%s): nothing is measured until a signed list arrives", why)
+	}
+	out := make([]ProbeTarget, 0, len(list))
+	for _, t := range list {
+		addr := t.Addr
+		if c.port > 0 {
+			addr = net.JoinHostPort(addr, strconv.Itoa(c.port))
+		}
+		out = append(out, ProbeTarget{Addr: addr, Tenant: t.Tenant, Site: t.Site})
+	}
+	if refused > 0 {
+		return out, fmt.Errorf("%d catalogue target(s) refused by the prober (never probed, or not a pinned address)", refused)
+	}
+	return out, nil
 }
 
 // nameLookup resolves a host name, injected so tests never touch DNS.

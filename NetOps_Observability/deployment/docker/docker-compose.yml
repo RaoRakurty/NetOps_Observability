@@ -2590,6 +2590,10 @@ services:
       PROBER_ID: prober
       # Paths redesign P3: the switch and target records the api publishes are
       # believed only when they verify under this key (internal/probercontrol).
+      # With the key-value channel configured, the TARGETS come from that signed
+      # record (each tenant's catalogue entries with path tracing / STAMP on);
+      # TRACEROUTE_TARGETS / STAMP_TARGETS are read only on an install with no
+      # channel at all.
       PROBER_CONTROL_KEY_FILE: /run/secrets/probercontrol/prober/password
     volumes:
       - ../../data/secrets/probercontrol/prober:/run/secrets/probercontrol/prober:ro
