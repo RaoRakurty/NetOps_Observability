@@ -1273,6 +1273,11 @@ def generate_secrets() -> dict[str, str]:
         # construction, which matters: Vector substitutes it into a VRL string
         # literal, and internal/credfp refuses any other alphabet.
         "CREDSCRUB_FP_KEY":          generate_token(32),
+        # Paths redesign P3: the HMAC key the api signs the prober's control
+        # records with (Features-page switches, target list) and the prober
+        # verifies them with. Reaches both as files (render_service_secrets:
+        # probercontrol/api and probercontrol/prober), never as container env.
+        "PROBER_CONTROL_KEY":        generate_token(32),
         # SEC-010: per-service credentials for the vmauth metrics front
         # (profile `vmauth`). Tracker 367: render_service_secrets() writes them
         # into data/secrets (vmauth's auth.yml + one file per client); no URL
@@ -1381,6 +1386,11 @@ def _env_migration_lines(env: dict, profiles: str = DEFAULT_PROFILES,
     # aggregator's key file cannot be rendered and its config would be refused.
     if "CREDSCRUB_FP_KEY" not in env:
         additions.append(f"CREDSCRUB_FP_KEY={generate_token(32)}")
+    # Migration (Paths redesign P3): the prober control signing key. Without
+    # it neither key file can be rendered; the api then publishes no switch
+    # record and the prober reads every measurement switch OFF.
+    if "PROBER_CONTROL_KEY" not in env:
+        additions.append(f"PROBER_CONTROL_KEY={generate_token(32)}")
     # Migration (F-07/F-59): search-tier durability posture.
     if "OPENSEARCH_REPLICAS" not in env:
         additions.append("OPENSEARCH_REPLICAS=0")
@@ -1749,6 +1759,13 @@ CORR_DEBUG_TOKEN={secrets_map["CORR_DEBUG_TOKEN"]}
 # python3 scripts/install.py --rotate-app-secrets (stored tokens made under the
 # old key stop grouping with new ones, nothing else changes).
 CREDSCRUB_FP_KEY={secrets_map["CREDSCRUB_FP_KEY"]}
+
+# Prober control records (Paths redesign P3). The api signs the measurement
+# switches and target list it hands the prober with this key; the prober
+# believes only records that verify. Rendered into data/secrets/probercontrol/
+# for both; rotate with python3 scripts/install.py --rotate-app-secrets (the
+# prober accepts the previous key for ten minutes while both sides move).
+PROBER_CONTROL_KEY={secrets_map["PROBER_CONTROL_KEY"]}
 
 # Search-tier durability posture.
 #   OPENSEARCH_REPLICAS      F-07 — 0 is correct for the single-node appliance
@@ -3354,6 +3371,11 @@ SERVICE_SECRETS: tuple[ServiceSecret, ...] = (
     # its `credscrub` exec backend (cx-secret-exec.sh) at every config load.
     ServiceSecret("credscrub/api",        "CREDSCRUB_FP_KEY",        "api",     False),
     ServiceSecret("credscrub/aggregator", "CREDSCRUB_FP_KEY",        "root",    False),
+    # Paths redesign P3: the prober control signing key. Both read it through
+    # internal/credfile (PROBER_CONTROL_KEY_FILE), re-read within a second of a
+    # rotation. The prober runs as root (NET_RAW), like the vmauth/prober file.
+    ServiceSecret("probercontrol/api",    "PROBER_CONTROL_KEY",      "api",     False),
+    ServiceSecret("probercontrol/prober", "PROBER_CONTROL_KEY",      "root",    False),
 )
 
 

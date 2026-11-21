@@ -1010,7 +1010,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/stack/health": "infra",
 	"/api/health":       "infra",
 	"/api/paths/health": "infra",
-	"/api/probe/paths":  "infra",
+	// Paths redesign P3: measured paths are tenant data (probe_paths_isolation_test.go).
+	"/api/probe/paths": "scoped",
 	// Registry STORAGE posture (tracker 245): which backend kind holds each
 	// registry, whether it persists, whether it can serve. Deployment-wide and
 	// identical for every tenant — no tenant rows, no counts, no DSN — but read
