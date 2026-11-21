@@ -737,6 +737,20 @@ def topology_link_relation(lo: str, hi: str) -> Relation:
     )
 
 
+def control_session_relation(lo: str, hi: str) -> Relation:
+    """Rank 3 — an SD-WAN control session between two devices, as the controller's
+    own session table reports it (tracker 397). Observed by the management plane,
+    not inferred: the controller lists the session it holds. Kind-scoped in the
+    engine (`engine._session_grounding`): it grounds only a control-connection loss
+    to the end it names."""
+    return Relation(
+        edge_type=EdgeType.HOP_RESOLVES_TO.value,
+        method=ResolutionMethod.TOPOLOGY_LINK.value,
+        confidence=Confidence.STRONG.value, evidence_ref=f"control_session:{lo}--{hi}",
+        observation_method="control_session", observed_at="", ref=f"ctl:{lo}--{hi}",
+    )
+
+
 def seam_relation(seam_id: str, structural: bool) -> Relation:
     """A declared seam instance. Rank 2 when BOTH nodes match the seam's endpoints
     by their structural identity (a real, declared binding); rank 7 CANDIDATE when

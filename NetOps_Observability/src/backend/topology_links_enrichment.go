@@ -30,11 +30,18 @@ import (
 
 type topologyLinkExport struct {
 	TenantID string `json:"tenant_id"`       // local device's tenant ("" = global)
-	A        string `json:"a"`               // local device id (correlation entity device-part)
-	B        string `json:"b"`               // neighbour device id
+	A        string `json:"a,omitempty"`     // local device id (correlation entity device-part)
+	B        string `json:"b,omitempty"`     // neighbour device id
 	AIf      string `json:"a_if,omitempty"`  // local interface
 	BIf      string `json:"b_if,omitempty"`  // neighbour interface
-	Proto    string `json:"proto,omitempty"` // lldp | cdp | bgp_ls | sdwan_bfd (controller tunnel ↔ endpoint)
+	Proto    string `json:"proto,omitempty"` // lldp | cdp | bgp_ls | sdwan_bfd | sdwan_control
+	// Tracker 397, proto sdwan_control only: an edge ↔ controller control session.
+	// NO a/b on purpose — an engine that does not know the proto skips the row
+	// instead of reading it as a device adjacency (which would weld the fabric).
+	SA    string `json:"sa,omitempty"`     // one end's engine device id (sa < sb)
+	SAKey string `json:"sa_key,omitempty"` // its session key (system-ip)
+	SB    string `json:"sb,omitempty"`     // the other end's engine device id
+	SBKey string `json:"sb_key,omitempty"` // its session key
 }
 
 func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
@@ -89,6 +96,14 @@ func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
 			return
 		}
 		out = append(out, ctl...)
+		// Tracker 397: edge ↔ controller control sessions. Same rule: unread →
+		// keep the previous file rather than drop rows mid-incident.
+		sess, serr := s.controlSessionLinks(ctx)
+		if serr != nil {
+			log.Printf("topology-links-enrichment: control sessions unread, keeping the previous file: %v", serr)
+			return
+		}
+		out = append(out, sess...)
 		data, err := json.Marshal(out)
 		if err != nil {
 			log.Printf("topology-links-enrichment: marshal: %v", err)
@@ -98,7 +113,7 @@ func (s *server) startTopologyLinksEnrichment(ctx context.Context) {
 			log.Printf("topology-links-enrichment: write: %v", err)
 			return
 		}
-		log.Printf("topology-links-enrichment: exported %d adjacency link(s) (%d controller tunnel)", len(out), len(ctl))
+		log.Printf("topology-links-enrichment: exported %d adjacency link(s) (%d controller tunnel, %d control session)", len(out), len(ctl), len(sess))
 	}
 	go func() {
 		write()
@@ -133,13 +148,50 @@ func (s *server) controllerLinks(ctx context.Context) ([]topologyLinkExport, err
 		}
 		return c.Spec(), true
 	}
-	links, err := ctloverlay.Links(ctx, s.nms.Store(), spec, res, time.Now().UTC())
+	links, stats, err := ctloverlay.Links(ctx, s.nms.Store(), spec, res, time.Now().UTC())
 	if err != nil {
 		return nil, err
+	}
+	if stats.Truncated > 0 {
+		log.Printf("topology-links-enrichment: controller tunnels PARTIAL: %d tenant(s) hit the %d-row cap; rows beyond it are not exported", stats.Truncated, ctloverlay.RowCap)
 	}
 	out := make([]topologyLinkExport, 0, len(links))
 	for _, l := range links {
 		out = append(out, topologyLinkExport{TenantID: l.TenantID, A: l.A, B: l.B, Proto: l.Proto})
+	}
+	return out, nil
+}
+
+// controlSessionLinks wires ctloverlay.ControlLinks to the running NMS framework
+// (tracker 397): one sdwan_control row per tenant and device pair.
+func (s *server) controlSessionLinks(ctx context.Context) ([]topologyLinkExport, error) {
+	if s.nms == nil {
+		return nil, nil
+	}
+	var res ctloverlay.KeyResolver
+	if s.nmsResolver != nil {
+		res = s.nmsResolver
+	}
+	reg := s.nms.Registry()
+	spec := func(vendor string) (nms.ConnectorSpec, bool) {
+		c, ok := reg.Get(vendor)
+		if !ok {
+			return nms.ConnectorSpec{}, false
+		}
+		return c.Spec(), true
+	}
+	links, stats, err := ctloverlay.ControlLinks(ctx, s.nms.Store(), spec, res, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if stats.Truncated > 0 || stats.Collisions > 0 || stats.Malformed > 0 || stats.NoInstance > 0 {
+		log.Printf("topology-links-enrichment: control sessions: %d read, %d row(s); skipped %d malformed, %d without a controller instance, %d address(es) two controller instances claim; %d tenant(s) PARTIAL at the %d-row cap",
+			stats.Sessions, len(links), stats.Malformed, stats.NoInstance, stats.Collisions, stats.Truncated, ctloverlay.ControlRowCap)
+	}
+	out := make([]topologyLinkExport, 0, len(links))
+	for _, l := range links {
+		out = append(out, topologyLinkExport{TenantID: l.TenantID, Proto: ctloverlay.SessionProto,
+			SA: l.SA, SAKey: l.SAKey, SB: l.SB, SBKey: l.SBKey})
 	}
 	return out, nil
 }

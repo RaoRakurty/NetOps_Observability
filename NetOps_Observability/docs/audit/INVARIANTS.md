@@ -731,9 +731,15 @@ measurement has not run, so nothing here is PROVEN at scale.
   ifAdminStatus), SR Linux (chassis `portDown`/`subinterfaceDown` oper-down-reason) and SONiC
   (portmgrd `admin status to down`). BUILD: pack fixtures plus engine tests through stages
   [5]/[6] (`test_vendor_packs_wave1_387.py`, `test_link_cause_syslog_388.py`); every syslog
-  row is `doc_claimed`, no capture. Still without a cause: Arista EOS syslog, SR OS syslog,
-  the Viptela interface trap (its varbinds cannot say), the controller relay, and Nokia's
-  polled `tmnxPortReasonDownFlags` — tracker 388.
+  row is `doc_claimed`, no capture. The vManage relay (388c, 2026-11-21): the
+  `interface-admin-state-change` device event states `correlation_hints.link_cause=admin`
+  (`nms/vmanage_kinds.go` LinkCause) and stage [1] lifts it into the attr (closed vocabulary,
+  link kinds only: `controller_events.controller_link_cause`). BUILD only:
+  `TestVManageAdminStateChangeStatesLinkCause` and `test_controller_link_cause_388c.py`
+  (through stage [5]); the event name is `doc_claimed`, no lab capture. Still without a
+  cause: Arista EOS syslog, SR OS syslog, the Viptela interface trap (its varbinds cannot
+  say), the vEdge syslog notification, and Nokia's polled `tmnxPortReasonDownFlags` —
+  tracker 388.
 ## 24. Configurable source authority (tracker 337 N-F6, 2026-11-09)
 
 Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant
@@ -920,6 +926,40 @@ services follow the link and window. Owner decisions 2026-11-13 (a)–(e).
 | Every page rule is in `rules-scale-slo.yaml` (vmalert-only, so it fires with the api down), maps to one of the four conditions, and the count matches the code comment | ✅ | **BUILD** — `TestPageTierRuleCountMatchesTheComment` (`pageRuleCount = 14`), `TestEngineRulesFileCarriesNoPageTier`, `TestPageRuleNamesAreTheFourApprovedConditions` (`internal/alertwebhook/pagetier_test.go`) |
 | Condition 2 has a third vantage — the devices themselves: inventoried devices a collector reached in the last 7 days send nothing on any lane (`MonitoredSourcesSilent`, #271) | ✅ | **BUILD** — `rules-tests/monitored-sources-silent.test.yaml` (promtool); **DEPLOY GATE** — `deploy-qualify.sh` Q11 (required); **RUNTIME** — fired correctly for the 2026-11-14 lab-gateway outage |
 | Condition 3 covers BOTH stores: ClickHouse rejecting batches (`ClickHouseWritesRejected`) and OpenSearch refusing writes — the flood-stage read-only block or documents a Vector sink discarded as rejected (`OpenSearchWritesRefused`). Before 2026-11-19 no OpenSearch rule carried `tier: page`, so a flood-stage block only reached the warning digest | ✅ | **BUILD** — `rules-tests/opensearch-writes-refused.test.yaml` (fires on the flood shape and on confirmed rejections; silent on OpenSearch's own ISM 409 trickle and on a 6%-free disk with healthy writes), `correlation-consumer-liveness.test.yaml` §11 (ClickHouse) |
+
+## 31. SD-WAN control-session rung — BUILT, not proven on the rig (tracker 397, 2026-11-21)
+
+Engine 3.6.0, stage [4]. The api exports the controller's own edge↔controller control
+sessions as `proto: "sdwan_control"` topology_links rows; the engine grounds a pair on one
+at rank 3 only when one side is a control-connection loss naming the other end's session
+key. Without the rows the fan-in is silent past `CORR_TOKEN_HUB_CAP` edges.
+
+- Rows never enter the device-adjacency `pairs`, so no other kind grounds on them: a
+  controller's own alarms and an edge's unrelated link flap stay apart. BUILD
+  (`test_control_session_grounding_397.py`, weld guard).
+- Without rows: 64 warn control-loss nodes form one object, 65 form none (the hub cap).
+  BUILD — this pins the row-397 measurement, which was prose until now.
+- With rows and a node on the controller: one authoritative object holding every edge at
+  65, 500 and 2000 edges, candidates linear in the edges. BUILD.
+- With rows and NO node on the controller: still nothing. Rank 3 is pair-shaped, so the
+  edges do not ground to each other through a shared neighbour. Stated limit.
+- Evidence with no session row is byte-identical bar `engine`; the rows an object grounded
+  on are embedded (`grounding_context.session_adjacency`) and replay. BUILD.
+- Rows are per tenant; a tenant's adjacency reads its own rows ∪ global only. BUILD.
+
+**NOT proven on the rig.** The lab holds no control-connection loss (`corr_signals`, 8
+days). The proof is the owner's vSmart-shutdown drill (as on 2026-11-10), recording:
+1. the `sdwan_control` rows in `topology_links.json` (expected 19 on the lab: 8 edges ×
+   {vManage, vSmart} plus 3 controller pairs) and that their ends equal
+   `controller_state_current.device_id`;
+2. one object topped by `sdwan-controller-unreachable` holding all 8 edges;
+3. `corr_edges` rows at rank 3 (`ctl:`) from each edge to the controller-side node;
+4. no "no authoritative edge" cap reason on that object;
+5. the controller-side node's kind and its event-time gap to the first edge loss (the
+   star forms only if it lands inside the temporal window);
+6. the rows surviving an outage longer than 30 minutes (whether vManage keeps listing a
+   down session decides the export window).
+Past the cap on real telemetry needs the drill with `CORR_TOKEN_HUB_CAP=4` (owner call).
 
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 

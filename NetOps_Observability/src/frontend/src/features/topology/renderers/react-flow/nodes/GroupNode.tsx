@@ -13,6 +13,7 @@ import { memo } from "react";
 import type { RFGroupData } from "../rfTypes";
 import { HEALTH_COLOR, HEALTH_TINT, HEALTH_LABEL, HEALTH_GLYPH } from "../../../utils/topologyHealth";
 import { radiusForDepth } from "../../../layout/groupGeometry";
+import { isDiscoveredGroup } from "../../../utils/siteName";
 
 const GROUP_TYPE_LABEL: Record<string, string> = {
   site: "Site",
@@ -42,7 +43,9 @@ function GroupNodeBase(props: NodeProps) {
   const dim = emphasis === "dim";
   const spotlight = emphasis === "spotlight";
   const color = HEALTH_COLOR[health];
-  const kindLabel = GROUP_TYPE_LABEL[group.group_type] ?? group.group_type;
+  // A discovered site (grouped by a reported site id, not declared) says so on
+  // the chip itself — it is a virtual grouping until an operator adopts it.
+  const kindLabel = isDiscoveredGroup(group) ? "Discovered site" : GROUP_TYPE_LABEL[group.group_type] ?? group.group_type;
 
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();

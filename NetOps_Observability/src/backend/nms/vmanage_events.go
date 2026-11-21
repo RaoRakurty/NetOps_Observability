@@ -222,8 +222,10 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 		recovery := false
 		// Canonical kind from the event name (vmanage_kinds.go); direction from
 		// the event's own new-state detail, never from polling.
+		linkCause := ""
 		if k, rec, ok := vmanageEventKind(r.EventName, det); ok {
 			normType, stateKind, recovery = k.Kind, k.StateKind, rec
+			linkCause = k.LinkCause
 			if !recovery && k.StateKey != "" {
 				severity = "high" // a session / link going down — the trap rules' severity
 			}
@@ -263,6 +265,11 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 			// vsmart | vbond | vmanage — which controller role the lost session ran to.
 			e.CorrelationHints["peer_type"] = pt
 		}
+		if linkCause != "" {
+			// The event's own name states the cause (vmanage_kinds.go LinkCause):
+			// an admin shutdown is an operator change, not a fault (tracker 388c).
+			e.CorrelationHints["link_cause"] = linkCause
+		}
 		if recovery {
 			e.NormalizedEventType += "_clear"
 			e.Severity = "info"
@@ -300,6 +307,7 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 			State        string `json:"state"`
 			StateDesc    string `json:"state_description"`
 			SiteID       vmStr  `json:"site-id"`
+			SiteName     string `json:"site-name"` // newer releases only; absent → the site reads by its id
 			Version      string `json:"version"`
 			LastUpd      vmNum  `json:"lastupdated"`
 			Model        string `json:"device-model"`
@@ -331,7 +339,7 @@ func vmanageInventoryTransform(tenant, integrationID string, raw []byte) (Batch,
 			// board-serial is the board/SUDI identity on a cEdge, not necessarily
 			// the chassis serial a support case asks for — an alias, not a claim.
 			Vendor: "cisco", Model: facts.Model, OS: "Catalyst SD-WAN", OSVersion: d.Version,
-			SiteID: facts.Site, Role: facts.Role, Managed: edge,
+			SiteID: facts.Site, SiteName: d.SiteName, Role: facts.Role, Managed: edge,
 			Reachable: strings.ToLower(d.Reachability),
 			Aliases:   map[string]string{"system_ip": d.SystemIP, "uuid": d.UUID, "board_serial": d.BoardSerial, "personality": d.Personality},
 			LastSeen:  ts,
