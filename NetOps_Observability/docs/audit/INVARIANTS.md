@@ -728,9 +728,15 @@ measurement has not run, so nothing here is PROVEN at scale.
   ifAdminStatus), SR Linux (chassis `portDown`/`subinterfaceDown` oper-down-reason) and SONiC
   (portmgrd `admin status to down`). BUILD: pack fixtures plus engine tests through stages
   [5]/[6] (`test_vendor_packs_wave1_387.py`, `test_link_cause_syslog_388.py`); every syslog
-  row is `doc_claimed`, no capture. Still without a cause: Arista EOS syslog, SR OS syslog,
-  the Viptela interface trap (its varbinds cannot say), the controller relay, and Nokia's
-  polled `tmnxPortReasonDownFlags` — tracker 388.
+  row is `doc_claimed`, no capture. The vManage relay (388c, 2026-11-21): the
+  `interface-admin-state-change` device event states `correlation_hints.link_cause=admin`
+  (`nms/vmanage_kinds.go` LinkCause) and stage [1] lifts it into the attr (closed vocabulary,
+  link kinds only: `controller_events.controller_link_cause`). BUILD only:
+  `TestVManageAdminStateChangeStatesLinkCause` and `test_controller_link_cause_388c.py`
+  (through stage [5]); the event name is `doc_claimed`, no lab capture. Still without a
+  cause: Arista EOS syslog, SR OS syslog, the Viptela interface trap (its varbinds cannot
+  say), the vEdge syslog notification, and Nokia's polled `tmnxPortReasonDownFlags` —
+  tracker 388.
 ## 24. Configurable source authority (tracker 337 N-F6, 2026-11-09)
 
 Owner decision 2026-11-09: controller-observed > SNMP-discovered > manually entered by default, per-tenant

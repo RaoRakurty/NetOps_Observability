@@ -222,8 +222,10 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 		recovery := false
 		// Canonical kind from the event name (vmanage_kinds.go); direction from
 		// the event's own new-state detail, never from polling.
+		linkCause := ""
 		if k, rec, ok := vmanageEventKind(r.EventName, det); ok {
 			normType, stateKind, recovery = k.Kind, k.StateKind, rec
+			linkCause = k.LinkCause
 			if !recovery && k.StateKey != "" {
 				severity = "high" // a session / link going down — the trap rules' severity
 			}
@@ -262,6 +264,11 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 		if pt := vmPeerType(det["peer-type"]); pt != "" {
 			// vsmart | vbond | vmanage — which controller role the lost session ran to.
 			e.CorrelationHints["peer_type"] = pt
+		}
+		if linkCause != "" {
+			// The event's own name states the cause (vmanage_kinds.go LinkCause):
+			// an admin shutdown is an operator change, not a fault (tracker 388c).
+			e.CorrelationHints["link_cause"] = linkCause
 		}
 		if recovery {
 			e.NormalizedEventType += "_clear"
