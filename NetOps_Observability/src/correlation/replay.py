@@ -36,6 +36,7 @@ from directed_topology import DirectedTopology, frozen_oracle
 from engine import (
     EngineConfig,
     ObjectSnapshot,
+    SESSION_PROTO,
     PathGraphView,
     SeamView,
     TopologyAdjacency,
@@ -136,8 +137,15 @@ class StoredObject:
         an adjacency-grounded (fabric) edge replays against the SAME links, not the
         live topology. Absent = none used (pre-C7 / seam-only objects)."""
         blob = json.loads(self.hypotheses_blob)
-        pairs = (blob.get("grounding_context") or {}).get("adjacency") or ()
-        return TopologyAdjacency.from_links([{"a": p[0], "b": p[1]} for p in pairs])
+        ctx = blob.get("grounding_context") or {}
+        pairs = ctx.get("adjacency") or ()
+        links: list[dict] = [{"a": p[0], "b": p[1]} for p in pairs]
+        # Tracker 397: the control-session rows this object grounded on.
+        for r in ctx.get("session_adjacency") or ():
+            if isinstance(r, list) and len(r) == 4:
+                links.append({"proto": SESSION_PROTO, "sa": r[0], "sa_key": r[1],
+                              "sb": r[2], "sb_key": r[3]})
+        return TopologyAdjacency.from_links(links)
 
     def paths(self) -> PathGraphView | None:
         """The Service Path Graph view this object grounded against (contract §2),

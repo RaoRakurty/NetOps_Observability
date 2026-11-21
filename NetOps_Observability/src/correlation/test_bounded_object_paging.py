@@ -131,7 +131,13 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # exactly two leaves differ — `engine` and `hypotheses/ranking/catalog_version`.
 # This object carries no security evidence and no control-connection loss, so its
 # DECISION cannot move, and it did not.
-FIXTURE_GOLDEN = "1189fe8c3ee56756"
+# RE-FROZEN, 2026-11-21, tracker 397 control-session rung (was "1189fe8c3ee56756" on
+# main 3.5.0, 2c780f77). ENGINE_SEMVER 3.5.0 -> 3.6.0; the catalog did not move.
+# CHECKED by diffing every hashed input (nodes, signals, edges, hypotheses blob,
+# engine) against origin/main 2c780f77: exactly one leaf differs — `engine`. This
+# object carries no control-connection loss and no session row, so its DECISION
+# cannot move, and it did not.
+FIXTURE_GOLDEN = "af0aa0dc8fb43ec2"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,
