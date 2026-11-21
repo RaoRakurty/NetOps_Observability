@@ -1005,7 +1005,7 @@ function TunnelsHealth() {
   const worst = lats.length ? Math.round(Math.max(...lats)) : null;
   const asOf = asOfText(oldestQualityAsOf(measured));
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("investigate/tunnels"))}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("investigate/paths/tunnels"))}>
       <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
       <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
       <div className="stat s-accent" data-testid="cc-tunnel-avg-latency"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span>{asOf && <span className="stat-foot">{asOf}</span>}</div>
@@ -1085,7 +1085,7 @@ export const PANELS: Record<string, PanelDef> = {
   traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, category: "Traffic", render: () => <TrafficInOut />, drill: "explore/flows" },
   "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, category: "Traffic", render: () => <TopHosts />, drill: "explore/flows" },
   "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto />, drill: "explore/flows" },
-  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "investigate/tunnels" },
+  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "investigate/paths/tunnels" },
   "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor />, drill: "infrastructure/devices" },
   topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "investigate/topology" },
 };

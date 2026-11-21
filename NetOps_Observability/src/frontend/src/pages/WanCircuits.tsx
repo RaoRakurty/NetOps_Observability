@@ -8,6 +8,7 @@ import { latSev, lossSev } from "../tabs/Tunnels";
 import { Section, useCap, ShowAll } from "./bgp/Section";
 import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
+import { matchesSite } from "./paths/pathsModel";
 import {
   MAX_NEXT_HOPS,
   blankNextHopRow,
@@ -147,13 +148,13 @@ const mono = { fontFamily: "var(--font-mono, monospace)" } as const;
 
 const PATH_CAP = 25;
 
-function PathsSection({ panel, onRetry, q }: {
-  panel: Panel<{ circuits: WanCircuit[] }>; onRetry: () => void; q: string;
+function PathsSection({ panel, onRetry, q, site = "" }: {
+  panel: Panel<{ circuits: WanCircuit[] }>; onRetry: () => void; q: string; site?: string;
 }) {
   const rows = useMemo(() => {
-    const all = sortCircuits(panel.data?.circuits ?? []);
+    const all = sortCircuits(panel.data?.circuits ?? []).filter((c) => matchesSite(site, c.local.site, c.remote.site));
     return q.trim() ? all.filter((c) => matchesCircuit(c, q)) : all;
-  }, [panel.data, q]);
+  }, [panel.data, q, site]);
   const cap = useCap(rows, PATH_CAP);
 
   return (
@@ -212,10 +213,13 @@ function PathsSection({ panel, onRetry, q }: {
 
 const ENDPOINT_CAP = 25;
 
-function EndpointsSection({ panel, onRetry, q }: {
-  panel: Panel<{ endpoints: WanEndpoint[] }>; onRetry: () => void; q: string;
+function EndpointsSection({ panel, onRetry, q, site = "" }: {
+  panel: Panel<{ endpoints: WanEndpoint[] }>; onRetry: () => void; q: string; site?: string;
 }) {
-  const all = useMemo(() => sortEndpoints(panel.data?.endpoints ?? []), [panel.data]);
+  const all = useMemo(
+    () => sortEndpoints(panel.data?.endpoints ?? []).filter((e) => matchesSite(site, e.site)),
+    [panel.data, site],
+  );
   const rows = useMemo(() => (q.trim() ? all.filter((e) => matchesEndpoint(e, q)) : all), [all, q]);
   const cap = useCap(rows, ENDPOINT_CAP);
   const counts = useMemo(() => provenanceCounts(all), [all]);
@@ -488,7 +492,12 @@ function PolicySection({ panel, onRetry, canEdit, onSaved }: {
 
 // ── the page ────────────────────────────────────────────────────────────────
 
-export default function WanCircuits() {
+export default function WanCircuits({ site = "", onSites }: {
+  /** The Paths page's site filter (a siteKey): an interface on a router there. "" is All sites. */
+  site?: string;
+  /** Reports the sites these interfaces name, for the Paths page's site list. */
+  onSites?: (labels: string[]) => void;
+} = {}) {
   const [rows, setRows] = useState<WanInterfaceRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   // Evidence the SERVER could not read while deriving this table (tracker 290).
@@ -540,12 +549,16 @@ export default function WanCircuits() {
     reloadCircuits();
   }, [reloadPolicy, reloadEndpoints, reloadCircuits]);
 
+  useEffect(() => { onSites?.(rows.map((r) => r.site ?? "")); }, [rows, onSites]);
+  // The page's site filter scopes the tiles, the table and both registries.
+  const scoped = useMemo(() => rows.filter((r) => matchesSite(site, r.site)), [rows, site]);
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((r) =>
+    if (!needle) return scoped;
+    return scoped.filter((r) =>
       `${r.device} ${r.interface} ${r.remote_device ?? ""} ${r.target ?? ""} ${r.target_label ?? ""} ${r.source_label ?? ""}`.toLowerCase().includes(needle));
-  }, [rows, q]);
+  }, [scoped, q]);
 
   const rowKey = (r: WanInterfaceRow) => `${r.device}#${r.interface}`;
 
@@ -629,11 +642,11 @@ export default function WanCircuits() {
       render: (r) => (r.has_oper ? <span className={`badge ${r.oper_up ? "good" : "bad"}`}>{r.oper_up ? "up" : "down"}</span> : dash) },
   ], []);
 
-  const down = rows.filter((r) => r.has_oper && !r.oper_up).length;
-  const totIn = rows.reduce((a, r) => a + (r.has_util ? r.in_bps : 0), 0);
-  const totOut = rows.reduce((a, r) => a + (r.has_util ? r.out_bps : 0), 0);
-  const peak = rows.filter((r) => r.has_util).reduce((m, r) => Math.max(m, r.util_pct), 0);
-  const measured = rows.filter((r) => r.has_latency || r.has_loss).length;
+  const down = scoped.filter((r) => r.has_oper && !r.oper_up).length;
+  const totIn = scoped.reduce((a, r) => a + (r.has_util ? r.in_bps : 0), 0);
+  const totOut = scoped.reduce((a, r) => a + (r.has_util ? r.out_bps : 0), 0);
+  const peak = scoped.filter((r) => r.has_util).reduce((m, r) => Math.max(m, r.util_pct), 0);
+  const measured = scoped.filter((r) => r.has_latency || r.has_loss).length;
 
   return (
     <div className="card paths-page">
@@ -651,9 +664,9 @@ export default function WanCircuits() {
       ))}
 
       <div className="stat-grid" style={{ marginBottom: 18 }}>
-        <div className={`stat ${rows.length ? "s-good" : "s-muted"}`}>
+        <div className={`stat ${scoped.length ? "s-good" : "s-muted"}`}>
           <span className="stat-label">WAN interfaces</span>
-          <span className="stat-value">{rows.length}</span>
+          <span className="stat-value">{scoped.length}</span>
           <span className="stat-foot">{measured} with measured SLA</span>
         </div>
         <div className="stat s-muted">
@@ -661,15 +674,15 @@ export default function WanCircuits() {
           <span className="stat-value">{fmtBps(totIn + totOut)}</span>
           <span className="stat-foot">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)}</span>
         </div>
-        <div className={`stat ${rows.length ? (peak < 70 ? "s-good" : peak < 90 ? "s-warn" : "s-bad") : "s-muted"}`}>
+        <div className={`stat ${scoped.length ? (peak < 70 ? "s-good" : peak < 90 ? "s-warn" : "s-bad") : "s-muted"}`}>
           <span className="stat-label">Peak utilization</span>
-          <span className="stat-value">{rows.length ? peak.toFixed(1) : "—"}{rows.length ? <span className="stat-unit"> %</span> : null}</span>
+          <span className="stat-value">{scoped.length ? peak.toFixed(1) : "—"}{scoped.length ? <span className="stat-unit"> %</span> : null}</span>
           <span className="stat-foot">busiest interface</span>
         </div>
         <div className={`stat ${down ? "s-bad" : "s-muted"}`}>
           <span className="stat-label">Interfaces down</span>
           <span className="stat-value">{down}</span>
-          <span className="stat-foot">{rows.length ? (down ? `${down} down` : "all up") : "none reported"}</span>
+          <span className="stat-foot">{scoped.length ? (down ? `${down} down` : "all up") : "none reported"}</span>
         </div>
       </div>
 
@@ -678,7 +691,7 @@ export default function WanCircuits() {
           <span className="omni-icon">⌕</span>
           <input placeholder="Search devices, interfaces, targets…" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
-        <span className="dt-count">{filtered.length} of {rows.length} interfaces</span>
+        <span className="dt-count">{filtered.length} of {scoped.length} interfaces</span>
       </div>
 
       {loaded && rows.length === 0 ? (
@@ -698,8 +711,8 @@ export default function WanCircuits() {
         />
       )}
 
-      <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} />
-      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} />
+      <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} site={site} />
+      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} />
       <PolicySection panel={policy} onRetry={reloadPolicy} canEdit={canEdit} onSaved={afterPolicySave} />
     </div>
   );

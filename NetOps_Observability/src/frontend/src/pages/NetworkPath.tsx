@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel, MetricTop } from "../components/board/panels";
 import PathHealthList from "../components/PathHealthList";
 import AskIris from "../components/AskIris";
 import PathsSetup from "../components/PathsSetup";
+import NetworkPathView from "../features/topology/components/NetworkPathView";
+import { probePathToView } from "./paths/probePathView";
+import { matchesSite } from "./paths/pathsModel";
 
 // NetworkPath (nav: Investigate → Paths → Measured paths; it was labelled
 // "Flow Trace" until 2026-11-20) — visualizes the active-measurement pipeline:
@@ -19,6 +22,11 @@ import PathsSetup from "../components/PathsSetup";
 // workspace's own branch edges pre-ticked, and add them — never an environment
 // name, never a setting that does not exist. Every path served here is the
 // caller's own workspace's (GET /api/probe/paths is tenant-scoped since P3).
+//
+// P5: this is the Measured paths TAB of Investigate → Paths. The page's site
+// filter narrows the paths to those whose target is at the chosen site, and
+// "Hop by hop" draws each path as the measured ribbon (first-loss hop marked,
+// pages/paths/probePathView.ts) with its hop table underneath.
 
 type Hop = ProbePath["hops"][number];
 
@@ -35,7 +43,13 @@ function HopTable({ hops }: { hops: Hop[] }) {
   return <DataTable<Hop> rows={hops} columns={cols} rowKey={(h) => `${h.ttl}-${h.ip}`} height={Math.min(420, 44 + hops.length * 28)} ariaLabel="Path hops" initialSort={{ key: "ttl", dir: "asc" }} />;
 }
 
-export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
+export default function NetworkPath({ rangeMinutes = 60, site = "", onSites }: {
+  rangeMinutes?: number;
+  /** The Paths page's site filter (a siteKey); "" is All sites. */
+  site?: string;
+  /** Reports the sites these paths name, for the Paths page's site list. */
+  onSites?: (labels: string[]) => void;
+} = {}) {
   const m = rangeMinutes;
   const [paths, setPaths] = useState<ProbePath[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -53,6 +67,9 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  useEffect(() => { onSites?.(paths.map((p) => p.site ?? "")); }, [paths, onSites]);
+  const shown = useMemo(() => paths.filter((p) => matchesSite(site, p.site)), [paths, site]);
+
   return (
     <div className="dm-board paths-page">
       <Group title="Path behavior" hue="var(--mod-network)">
@@ -63,9 +80,11 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
         <PathHealthList />
       </Group>
 
-      <Group title="Network paths" hue="var(--mod-metrics)">
+      <Group title="Hop by hop" hue="var(--mod-metrics)">
         {err ? (
           <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>
+        ) : paths.length > 0 && shown.length === 0 ? (
+          <div className="empty" data-testid="paths-none-at-site">No measured paths at this site.</div>
         ) : paths.length === 0 ? (
           <Panel title="No paths yet">
             <div className="board-empty-msg">No active path measurements.</div>
@@ -73,13 +92,16 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
             {loaded && <p className="proto-key">Probes stay on one path.<AskIris topic="path.traceroute" label="Traceroute" /></p>}
           </Panel>
         ) : (
-          paths.map((p) => (
+          shown.map((p) => (
             <Panel key={`${p.vantage_id ?? ""}|${p.tenant_id ?? ""}|${p.dst}|${p.method ?? ""}`} title={`${p.dst}${p.site ? ` · ${p.site}` : ""} — ${p.hops.length} hops`} action={
               <span style={{ display: "flex", gap: 6 }}>
                 <span className={`badge ${p.reached ? "good" : "warn"}`}>{p.reached ? "reached" : "incomplete"}</span>
                 {p.changed && <span className="badge bad">path changed</span>}
               </span>
             }>
+              <div className="paths-ribbon" data-testid="paths-ribbon">
+                <NetworkPathView view={probePathToView(p)} rail={false} />
+              </div>
               <HopTable hops={p.hops} />
             </Panel>
           ))

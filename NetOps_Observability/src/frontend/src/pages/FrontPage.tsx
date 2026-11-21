@@ -656,7 +656,7 @@ export default function FrontPage() {
           <Safe><RcaCoverage /></Safe>
           <Safe><TopHealthContributors /></Safe>
           <Safe><TopIssues /></Safe>
-          <Safe><Panel title="Hot paths" to="investigate/flowtrace"><PathHealthList limit={5} /></Panel></Safe>
+          <Safe><Panel title="Hot paths" to="investigate/paths/measured"><PathHealthList limit={5} /></Panel></Safe>
         </div>
         <div className="fp-col" style={{ flex: "1 1 320px" }}>
           <Safe><RecommendedAction /></Safe>
