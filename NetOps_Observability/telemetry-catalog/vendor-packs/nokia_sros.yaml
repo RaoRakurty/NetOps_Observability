@@ -84,7 +84,7 @@ rules:
         - {contains: [ctoken, 'BGP']}
         - {re: [msg, '-(?:bgpBackwardTransNotification-2039|tBgpNgBackwardTransition-2020)\s\[', '']}
     extract:
-      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, ''], [msg, '\(ASN \d{1,10}\)\s+([0-9A-Fa-f:]{2,39}?):\s', 1, '']]}
       from_state: {re: [[msg, 'from higher state (\S{1,32}) to lower state', 1, '']]}
       to_state: {re: [[msg, 'to lower state (\S{1,32})', 1, '']]}
       reason: {re: [[msg, 'due to event (.{1,64})', 1, '']]}
@@ -123,7 +123,7 @@ rules:
         - {re: [msg, '-(?:bgpEstablishedNotification-2038|tBgpNgEstablished-2019)\s\[', '']}
     severity: warn
     extract:
-      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, ''], [msg, '\(ASN \d{1,10}\)\s+([0-9A-Fa-f:]{2,39}?):\s', 1, '']]}
       state: {const: up}
     emit:
       metric: bgp_adjacency
@@ -153,7 +153,7 @@ rules:
         - {contains: [ctoken, 'BGP']}
         - {re: [msg, '-(?:sendNotification-2005|receiveNotification-2006)\s\[', '']}
     extract:
-      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, '']]}
+      peer: {re: [[msg, '\b(\d{1,3}(?:\.\d{1,3}){3})\b', 1, ''], [msg, '\(ASN \d{1,10}\)\s+([0-9A-Fa-f:]{2,39}?):\s', 1, '']]}
       code: {re: [[msg, 'notification: code (\S{1,48})', 1, '']]}
       subcode: {re: [[msg, 'subcode (\S{1,48})', 1, '']]}
       direction:
@@ -525,6 +525,21 @@ fixtures:
       severity_native_text: WARNING
       normalized_severity: warning
     signal: {rule_id: syslog.sros.bgp.down, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: down, peer: 192.0.2.2}
+
+  # Tracker 382: the same event for an IPv6 peer. SYNTHETIC: Nokia's page prints the IPv4
+  # form only; this is that documented shape with an IPv6 literal (no SR OS on the lab).
+  - name: a BGP session to an IPv6 peer moving down names the peer
+    fidelity: doc_claimed
+    source: 'synthetic, tracker 382: the documented tBgpNgBackwardTransition 2020 shape (https://documentation.nokia.com/sr/22-10/books/log-events/log-bgp.html) with an IPv6 peer'
+    hostname: 10.221.38.108
+    appname: TMNX
+    severity: warning
+    message: '18 Base BGP-WARNING-tBgpNgBackwardTransition-2020 []: (ASN 65001) 2001:db8:0:1::2: moved from higher state Established to lower state Idle due to event holdTimerExpired'
+    expect:
+      parser_status: parsed
+      facility: BGP
+      event_type: bgp_2020
+    signal: {rule_id: syslog.sros.bgp.down, kind: bgp_adjacency_change, severity: warn, opens_alone: false, state: down, peer: '2001:db8:0:1::2'}
 
   - name: the BGP4-MIB twin of the same transition, set to major by the operator, is critical
     fidelity: doc_claimed

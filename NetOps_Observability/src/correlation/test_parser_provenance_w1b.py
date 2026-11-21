@@ -669,7 +669,12 @@ RULES_HASH_LINK_CAUSE_SRLINUX_SONIC = "246b7761c983b90677e247d8d5d83177a58270892
 #: row also names the port of `<if> link status is DOWN.`; the ConfD NETCONF session
 #: grammar reads a quoted user without its quotes.
 RULES_HASH_VENDOR_PACKS_WAVE2 = "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b459e4c4351eba6cba"
-RULES_HASH_A3 = RULES_HASH_VENDOR_PACKS_WAVE2
+#:
+#: Tracker 382 BGP IPv6 peer (2026-11-21): the generic BGP adjacency and churn rows, and
+#: the three nokia_sros BGP rows, read an IPv6 peer as a second extract alternative after
+#: the IPv4 one. No rule matches a different line; only the peer attribute is added.
+RULES_HASH_BGP_IPV6_PEER = "c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61"
+RULES_HASH_A3 = RULES_HASH_BGP_IPV6_PEER
 
 
 def _guard_patterns(node) -> list[str]:
