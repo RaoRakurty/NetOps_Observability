@@ -72,19 +72,21 @@ ARTIFACT_INPUTS = (
 PARSER_ARTIFACT_INPUTS = (
     "telemetry-catalog/events.yaml", "telemetry-catalog/vendor-packs/*",
     "telemetry-catalog/bake_rules.py", "telemetry-catalog/record_pack_corpus.py",
-    "telemetry-catalog/coverage_matrix.py", "telemetry-catalog/source_equivalence.py",
+    "telemetry-catalog/coverage_matrix.py",
     "src/correlation/rule_model.py", "src/correlation/syslog_packs.py",
     "scripts/gen-syslog-packs.py", "scripts/gen-syslog-admission.py",
     "scripts/gen-vendor-coverage.py",
 )
 
 # The checks PARSER_ARTIFACT_INPUTS triggers: each generator's own --check, so
-# the hook can never disagree with the tests that call the same flag.
+# the hook can never disagree with the tests that call the same flag. Only
+# generators that run on the stdlib + PyYAML: source_equivalence imports the
+# engine catalog (pydantic), which the ingest-contract job does not install, and
+# telemetry-catalog-ci already runs it.
 PARSER_ARTIFACT_CHECKS = (
     ("telemetry-catalog/bake_rules.py", "python3 telemetry-catalog/bake_rules.py"),
     ("telemetry-catalog/record_pack_corpus.py", "python3 telemetry-catalog/record_pack_corpus.py"),
     ("telemetry-catalog/coverage_matrix.py", "python3 telemetry-catalog/coverage_matrix.py"),
-    ("telemetry-catalog/source_equivalence.py", "python3 telemetry-catalog/source_equivalence.py"),
     ("scripts/gen-syslog-packs.py", "python3 scripts/gen-syslog-packs.py"),
     ("scripts/gen-syslog-admission.py", "python3 scripts/gen-syslog-admission.py"),
     ("scripts/gen-vendor-coverage.py", "python3 scripts/gen-vendor-coverage.py"),
