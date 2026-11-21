@@ -486,10 +486,12 @@ def test_the_parser_is_untouched():
     every older one; the trap link rows this file protects did not move.
     Re-pinned for tracker 387 vendor wave 2: a Comware PHY_UPDOWN row (warn) behind every
     older one, and the neutral syslog link row names the port of a `link status is` line;
-    the trap link rows this file protects did not move."""
-    assert parser_rules.PARSER_REV == "2026-11-13-vendor-packs-wave2"
+    the trap link rows this file protects did not move.
+    Re-pinned for tracker 382 (BGP IPv6 peer): the BGP rows gain an IPv6 peer extract
+    alternative; no link row moved."""
+    assert parser_rules.PARSER_REV == "2026-11-21-bgp-ipv6-peer"
     assert parser_rules.BAKED_RULES_HASH == (
-        "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b459e4c4351eba6cba")
+        "c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-13-vendor-packs-wave2'
+PARSER_REV = '2026-11-21-bgp-ipv6-peer'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -1174,7 +1174,11 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'vendors': ['cisco', 'arista', 'juniper'],
      'markers': ['ADJCHANGE', 'ADJCHG'],
      'guard': {'all': [{'any': [{'contains': ['ctoken', 'ADJCHANGE']}, {'contains': ['ctoken', 'ADJCHG']}]}, {'contains': ['ctoken', 'BGP']}]},
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg',
+                                  '\\b(?:neighbou?r|peer|sent\\s+to|received\\s+from)\\s+(?:neighbou?r\\s+)?\\[?([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[\\w./-]{1,32})?)',
+                                  1,
+                                  'i']]},
                  'tgt_new': {'re': [['msg', '\\bnew state\\s+(\\w+)', 1, 'i']]},
                  'state': {'scan': {'target': 'tgt_new',
                                     'target_scope': 'catalog',
@@ -1261,7 +1265,11 @@ _ROWS: tuple[dict[str, Any], ...] = (
                        {'not': {'contains': ['ctoken', 'NBR_RESET']}},
                        {'not': {'contains': ['ctoken', 'MAXPFX']}},
                        {'any': [{'contains': ['ctoken', 'NOTIFICATION']}, {'not': {'re': ['msg', '\\bmaximum\\s+prefix-limit\\b', 'i']}}]}]},
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg',
+                                  '\\b(?:neighbou?r|peer|sent\\s+to|received\\s+from)\\s+(?:neighbou?r\\s+)?\\[?([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[\\w./-]{1,32})?)',
+                                  1,
+                                  'i']]},
                  'subtype': {'case': [{'when': {'contains': ['ctoken', 'NBR_RESET']}, 'value': 'nbr_reset'},
                                       {'when': {'contains': ['ctoken', 'MAXPFX']}, 'value': 'maxpfx'},
                                       {'when': {'contains': ['ctoken', 'NOTIFICATION']}, 'value': 'notification'},
@@ -1311,7 +1319,11 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                          {'contains': ['ctoken', 'MAXPFX']},
                                          {'contains': ['ctoken', 'NOTIFICATION']}]}]},
                        {'re': ['msg', '\\b(?:NOTIFICATION\\s+(?:sent\\s+to|received\\s+from)|maximum\\s+prefix-limit)\\b', 'i']}]},
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg',
+                                  '\\b(?:neighbou?r|peer|sent\\s+to|received\\s+from)\\s+(?:neighbou?r\\s+)?\\[?([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[\\w./-]{1,32})?)',
+                                  1,
+                                  'i']]},
                  'subtype': {'case': [{'when': {'contains': ['ctoken', 'NBR_RESET']}, 'value': 'nbr_reset'},
                                       {'when': {'contains': ['ctoken', 'MAXPFX']}, 'value': 'maxpfx'},
                                       {'when': {'contains': ['ctoken', 'NOTIFICATION']}, 'value': 'notification'},
@@ -2458,7 +2470,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'pattern_src': '-(?:bgpBackwardTransNotification-2039|tBgpNgBackwardTransition-2020)\\s\\[',
      'guard': {'all': [{'contains': ['ctoken', 'BGP']},
                        {'re': ['msg', '-(?:bgpBackwardTransNotification-2039|tBgpNgBackwardTransition-2020)\\s\\[', '']}]},
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg', '\\(ASN \\d{1,10}\\)\\s+([0-9A-Fa-f:]{2,39}?):\\s', 1, '']]},
                  'from_state': {'re': [['msg', 'from higher state (\\S{1,32}) to lower state', 1, '']]},
                  'to_state': {'re': [['msg', 'to lower state (\\S{1,32})', 1, '']]},
                  'reason': {'re': [['msg', 'due to event (.{1,64})', 1, '']]},
@@ -2492,7 +2505,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'pattern_src': '-(?:bgpEstablishedNotification-2038|tBgpNgEstablished-2019)\\s\\[',
      'guard': {'all': [{'contains': ['ctoken', 'BGP']}, {'re': ['msg', '-(?:bgpEstablishedNotification-2038|tBgpNgEstablished-2019)\\s\\[', '']}]},
      'severity': 'warn',
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]}, 'state': {'const': 'up'}},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg', '\\(ASN \\d{1,10}\\)\\s+([0-9A-Fa-f:]{2,39}?):\\s', 1, '']]},
+                 'state': {'const': 'up'}},
      'emit': {'metric': 'bgp_adjacency',
               'modality': 'control_plane',
               'entity': {'type': 'device', 'id': '{host}'},
@@ -2514,7 +2529,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'fidelity_status': 'doc_claimed',
      'pattern_src': '-(?:sendNotification-2005|receiveNotification-2006)\\s\\[',
      'guard': {'all': [{'contains': ['ctoken', 'BGP']}, {'re': ['msg', '-(?:sendNotification-2005|receiveNotification-2006)\\s\\[', '']}]},
-     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
+     'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, ''],
+                                 ['msg', '\\(ASN \\d{1,10}\\)\\s+([0-9A-Fa-f:]{2,39}?):\\s', 1, '']]},
                  'code': {'re': [['msg', 'notification: code (\\S{1,48})', 1, '']]},
                  'subcode': {'re': [['msg', 'subcode (\\S{1,48})', 1, '']]},
                  'direction': {'case': [{'when': {'re': ['msg', '-sendNotification-2005 \\[', '']}, 'value': 'sent'},
@@ -4374,6 +4390,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b459e4c4351eba6cba'
+BAKED_RULES_HASH = 'c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

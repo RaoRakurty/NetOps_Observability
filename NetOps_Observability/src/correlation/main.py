@@ -13964,6 +13964,10 @@ CORR_HEALTH_STALE_AFTER_S = float(os.environ.get("CORR_HEALTH_STALE_AFTER_S", "1
 _HEALTH_SNAPSHOT: dict | None = None    # {"health": dict, "metrics": str, "built_mono": float}
 HEALTH_SNAPSHOTS_BUILT = 0
 HEALTH_SIDECAR_ERRORS = 0
+# Callers that hung up before reading the whole answer. Not a sidecar failure:
+# Docker's healthcheck read the status and exited with the body unread, and the
+# kernel reset the connection under the body write, every 30 s (2026-11-21).
+HEALTH_SIDECAR_PEER_GONE = 0
 
 
 def _publish_health_snapshot() -> None:
@@ -14429,6 +14433,16 @@ def _start_health_sidecar() -> object | None:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                # The caller left before reading the whole answer: the status
+                # was already sent, so there is nobody to write a 500 to and
+                # nothing in the sidecar failed. Counted apart from real
+                # failures and logged at debug, so a probe that reads only the
+                # status does not bury them in warnings (§10: still observable).
+                global HEALTH_SIDECAR_PEER_GONE
+                HEALTH_SIDECAR_PEER_GONE += 1
+                log.debug("health sidecar caller left mid-response (%s): %s — total=%d",
+                          type(exc).__name__, exc, HEALTH_SIDECAR_PEER_GONE)
             except Exception as exc:  # noqa: BLE001 — a probe handler must
                 # never kill the sidecar thread (reachability IS the feature);
                 # counted + logged so failures are observable (§10), never silent.
