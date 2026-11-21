@@ -11,7 +11,15 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 
 const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_admin: false, accessible_tenants: ["t_acme"], all_tenants: false };
 
-async function mockApi(page: Page) {
+const SUGGESTED = {
+  path_discovery: false, active_probe: false, tracing: 0,
+  suggestions: [
+    { device_id: "cedge-40", name: "cedge-40", address: "192.168.222.105", site: "Branch 40" },
+    { device_id: "cedge-50", name: "cedge-50", address: "192.168.222.106", site: "Branch 50" },
+  ],
+};
+
+async function mockApi(page: Page, created: unknown[] = []) {
   await page.addInitScript(() => localStorage.setItem("netops_token", "e2e-fake-token"));
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route: Route) => {
     const url = new URL(route.request().url());
@@ -20,6 +28,11 @@ async function mockApi(page: Page) {
     if (p.includes("/api/auth/me")) return json(ME);
     if (p.includes("/api/scopes")) return json({ scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "o", org_name: "Acme", region: "us" }], all_tenants: false });
     if (p.endsWith("/api/probe/paths")) return json([]);
+    if (p.endsWith("/api/probe/targets/suggested")) return json(SUGGESTED);
+    if (p.endsWith("/api/dem/targets") && route.request().method() === "POST") {
+      created.push(route.request().postDataJSON());
+      return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+    }
     if (p.endsWith("/api/paths/health")) return json({ paths: [] });
     if (p.endsWith("/api/tunnels")) return json({ data: [] });
     if (p.endsWith("/api/correlations") || p.endsWith("/api/incidents")) return json([]);
@@ -43,10 +56,10 @@ test("Paths groups the three measurement pages; Troubleshooting sits beside RCA"
   await expect(nav.locator(".subnav-group")).toHaveCount(1);
 });
 
-test("Measured paths says path discovery is not switched on — no env names, no phantom setting", async ({ page }) => {
+test("Measured paths shows numbered setup steps — the real switch, no env names, no phantom setting", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/investigate/flowtrace");
-  await expect(page.getByTestId("paths-empty-hint")).toHaveText("A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.");
+  await expect(page.getByRole("link", { name: "Platform › Configuration › Features" })).toHaveAttribute("href", "#/platform/features");
   await expect(page.getByText(/API settings/)).toHaveCount(0);
   await expect(page.locator("code", { hasText: /FEATURE_|_TARGETS/ })).toHaveCount(0);
   await expect(page.getByTestId("paths-synthetics-link").getByRole("link")).toHaveAttribute("href", "#/operations/digital-experience/synthetics");
@@ -67,7 +80,7 @@ for (const [hash, check] of [
 test("the old Flow Trace address still opens Measured paths", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/infrastructure/flowtrace");
-  await expect(page.getByTestId("paths-empty-hint")).toBeVisible();
+  await expect(page.getByText("No active path measurements.")).toBeVisible();
 });
 
 test("Troubleshooting opens its case picker", async ({ page }) => {
@@ -174,3 +187,17 @@ for (const theme of ["light", "indigo"] as const) {
     });
   }
 }
+
+// Paths P3: step 2 offers the workspace's own branch edges pre-ticked, and
+// adding them creates traced catalogue targets with no tenant in the body.
+test("Measured paths setup adds the ticked branch edges as traced targets", async ({ page }) => {
+  const created: Record<string, unknown>[] = [];
+  await mockApi(page, created);
+  await page.goto("/#/investigate/flowtrace");
+  const list = page.getByTestId("paths-suggestions");
+  await expect(list.locator("input[type=checkbox]")).toHaveCount(2);
+  await list.locator("input[type=checkbox]").nth(1).uncheck();
+  await page.getByTestId("paths-trace-selected").click();
+  await expect(page.getByTestId("paths-added")).toContainText("1 added");
+  expect(created).toEqual([{ name: "Path to cedge-40", kind: "icmp", host: "192.168.222.105", site: "Branch 40", interval_sec: 60, trace_path: true }]);
+});

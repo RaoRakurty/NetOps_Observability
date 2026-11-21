@@ -4849,6 +4849,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .paths-page .board-empty-hint { color: var(--fg-muted, var(--muted)); max-width: 520px; }
 .paths-page .empty { font-style: normal; }
 .paths-page .proto-key a { color: var(--accent); font-weight: 500; }
+/* Paths redesign P3: the Measured paths setup steps (PathsSetup). */
+.paths-page .paths-step-text, .paths-page .paths-step-text p { font-size: 14px; line-height: 1.5; margin: 0 0 var(--sp-2); }
+.paths-page .paths-step-text a { color: var(--accent); font-weight: 500; }
+.paths-page .paths-pick { list-style: none; margin: 0 0 var(--sp-3); padding: 0; display: grid; gap: var(--sp-2); }
+.paths-page .paths-pick li { font-size: 14px; }
+.paths-page .paths-pick-site { color: var(--muted); }
 .paths-page :focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 /* Path behaviour cards (PathHealthList) — classes + tokens, no inline hex.
