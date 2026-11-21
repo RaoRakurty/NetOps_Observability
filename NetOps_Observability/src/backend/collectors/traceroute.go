@@ -22,6 +22,7 @@ import (
 	"golang.org/x/net/ipv4"
 
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/probercontrol"
 )
 
 // traceroute.go — modern, Paris-consistent path discovery (the "which path"
@@ -872,7 +873,9 @@ func NewTraceroute() Collector {
 		},
 		methods: methods,
 		auto:    auto,
-		targets: newEnvTargets("TRACEROUTE_TARGETS", 0),
+		// Paths P3: the signed catalogue projection; the env list only when no
+		// channel exists at all.
+		targets: newCatalogueTargets(probercontrol.ForTraceroute, 0, newEnvTargets("TRACEROUTE_TARGETS", 0)),
 		status:  Status{Name: "traceroute", Healthy: true, Kind: "metrics"},
 	}
 }

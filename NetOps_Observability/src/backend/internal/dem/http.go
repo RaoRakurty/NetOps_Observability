@@ -230,6 +230,8 @@ type createWire struct {
 	LatencyBudgetMs       float64 `json:"latency_budget_ms"`
 	AvailabilityBudgetPct float64 `json:"availability_budget_pct"`
 	Paused                bool    `json:"paused"`
+	TracePath             bool    `json:"trace_path"`
+	StampProbe            bool    `json:"stamp_probe"`
 }
 
 // HandleTargets serves the collection route (GET list, POST create).
@@ -298,7 +300,7 @@ func (a *API) createTarget(w http.ResponseWriter, r *http.Request) {
 		Resolver: in.Resolver, IntervalSec: in.IntervalSec,
 		Site: in.Site, App: in.App, ExpectStatus: in.ExpectStatus,
 		LatencyBudgetMs: in.LatencyBudgetMs, AvailabilityBudgetPct: in.AvailabilityBudgetPct,
-		Paused: in.Paused, CreatedBy: p.Subject,
+		Paused: in.Paused, TracePath: in.TracePath, StampProbe: in.StampProbe, CreatedBy: p.Subject,
 	}
 	out, err := a.deps.Targets.Create(r.Context(), t)
 	switch {
