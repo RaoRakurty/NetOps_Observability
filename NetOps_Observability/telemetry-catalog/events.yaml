@@ -209,7 +209,20 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: 2026-11-13-vendor-packs-wave2
+# 2026-11-21-bgp-ipv6-peer — tracker 382, on top of 2026-11-13-vendor-packs-wave2. The
+# syslog BGP rows (syslog.bgp.adjacency_change and the two tracker-184 churn rows through
+# bgp_churn_extract) read their peer as the first IPv4 address in the message, so a line
+# naming an IPv6 neighbour had no peer and stayed device-level after P6 D1. A second,
+# ORDERED alternative now reads an IPv6 literal anchored on the vendor's own keyword
+# (`neighbor` IOS/IOS-XE/NX-OS/IOS XR/FRR, `peer` EOS, `sent to`/`received from` the
+# NOTIFICATION shapes); the SR OS BGP rows gain the same for their `(ASN n) <addr>:` shape.
+# The IPv4 alternative stays FIRST, so every line that matched before reads the same peer
+# (the golden corpus replays byte-for-byte); only lines that had NO peer gain one.
+# canon.canonical_peer validates and compresses the text; anything that is not an address
+# leaves the signal host-level, as before. Fixtures are synthetic: the vendors' documented
+# IPv4 line shapes with an IPv6 literal (no IPv6 BGP line on the lab).
+#
+parser_rev: 2026-11-21-bgp-ipv6-peer
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -313,6 +326,10 @@ parser_rev: 2026-11-13-vendor-packs-wave2
 #    table holds the literal text; nothing is indirect at runtime) ────────────
 _frag:
   ip: &ip '\b(\d{1,3}(?:\.\d{1,3}){3})\b'
+  # Tracker 382: an IPv6 BGP peer, ANCHORED on the vendor's keyword (a bare hex-and-colon
+  # run would read a timestamp). Always the SECOND alternative after *ip, so an IPv4 line
+  # reads exactly what it read before. canon.canonical_peer validates the text.
+  ip6_peer: &ip6_peer '\b(?:neighbou?r|peer|sent\s+to|received\s+from)\s+(?:neighbou?r\s+)?\[?([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[\w./-]{1,32})?)'
   mac: &mac '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\b'
   sysid: &sysid '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b'
   ifword: &ifword '[Ii]nterface\s+([A-Za-z][\w/.\-]*)'
@@ -333,7 +350,7 @@ _frag:
               - {contains: [ctoken, 'NOTIFICATION']}
       - {re: [msg, *bgp_churn_pattern, 'i']}
   bgp_churn_extract: &bgp_churn_extract
-    peer: {re: [[msg, *ip, 1, '']]}
+    peer: {re: [[msg, *ip, 1, ''], [msg, *ip6_peer, 1, 'i']]}
     # MNEMONIC FIRST, message second. %BGP-5-NBR_RESET states its reason as
     # "(BGP Notification received)" — reading the message first would file a
     # reset as a teardown. The message shapes are the JUNOS fallback only (rpd
@@ -597,7 +614,7 @@ rules:
             - {contains: [ctoken, 'ADJCHG']}
         - {contains: [ctoken, 'BGP']}
     extract:
-      peer: {re: [[msg, *ip, 1, '']]}
+      peer: {re: [[msg, *ip, 1, ''], [msg, *ip6_peer, 1, 'i']]}
       tgt_new: {re: [[msg, '\bnew state\s+(\w+)', 1, 'i']]}
       # target_scope: catalog — THE DIVERGENCE. See the header note.
       state:

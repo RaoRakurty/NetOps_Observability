@@ -125,7 +125,7 @@
   "nokia/snmptrap/rules_total": 3,
   "nokia/snmptrap/rules_validated": 0,
   "nokia/snmptrap/trap_definitions": 0,
-  "nokia/syslog/fixtures": 28,
+  "nokia/syslog/fixtures": 29,
   "nokia/syslog/grammars": 3,
   "nokia/syslog/rules_total": 14,
   "nokia/syslog/rules_validated": 0,
