@@ -12,10 +12,10 @@ import AskIris from "../components/AskIris";
 // "Flow Trace" until 2026-11-20) — visualizes the active-measurement pipeline:
 // the hop-by-hop path from traceroute (/api/probe/paths) and the path SLA from
 // STAMP (probe_* metrics in VictoriaMetrics). Both sources are opt-in in the
-// prober (FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE). Those switches are not on
-// the Features page yet, so the empty state says plainly that path discovery is
-// not switched on — never an environment name, never a setting that does not
-// exist (the old hint pointed at "API settings").
+// prober (FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE). Since Paths P2 both are
+// switches on the Features page (Platform › Configuration › Features › Active
+// measurement), so the empty state points there — never an environment name,
+// never a setting that does not exist (the old hint pointed at "API settings").
 
 type Hop = ProbePath["hops"][number];
 

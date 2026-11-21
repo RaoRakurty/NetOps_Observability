@@ -10,6 +10,7 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/ctloverlay"
+	"netops/backend/internal/tunnelview"
 	"netops/backend/models"
 	"netops/backend/topology"
 )
@@ -129,6 +130,22 @@ type sdwanOverlaySnapshot struct {
 	// devFacts: the published facts themselves (per-session detail the Tunnels
 	// view lists; the topology only needs the folded pairs).
 	devFacts map[string]collectors.OverlayDeviceFacts
+	// tunnels: tenant → one row per SD-WAN tunnel, both ends folded under the
+	// engine's tunnel id (Paths P4, internal/tunnelview). Folded once per cycle
+	// so /api/tunnels, polled every 15–30 s by several widgets, never re-walks
+	// every colour pair per request.
+	tunnels map[string][]tunnelview.Tunnel
+}
+
+// newSDWANOverlaySnapshot builds a snapshot and folds its tunnels.
+// devTenant is every device's normalised tenant.
+func newSDWANOverlaySnapshot(at time.Time, res topology.OverlayResult, facts map[string]collectors.OverlayDeviceFacts, devTenant map[string]string) (*sdwanOverlaySnapshot, tunnelview.FoldStats) {
+	have := make(map[string]bool, len(facts))
+	for id := range facts {
+		have[id] = true
+	}
+	tun, st := tunnelview.Fold(tunnelview.FoldInput{DevTenant: devTenant, Facts: facts, SystemIPs: res.SystemIPs})
+	return &sdwanOverlaySnapshot{at: at, res: res, facts: have, devFacts: facts, tunnels: tun}, st
 }
 
 // refreshSDWANOverlay re-infers the overlay from the collector's published
@@ -178,11 +195,12 @@ func (s *server) refreshSDWANOverlay(ctx context.Context) {
 	}
 	start := time.Now()
 	res := topology.InferOverlay(in)
-	have := make(map[string]bool, len(facts))
-	for id := range facts {
-		have[id] = true
+	snap, fst := newSDWANOverlaySnapshot(time.Now(), res, facts, in.DevTenant)
+	s.sdwanOverlay.Store(snap)
+	if fst.Conflicts > 0 || fst.NoTenant > 0 {
+		logInfo("topology", "SD-WAN tunnels folded with gaps", map[string]any{
+			"folded": fst.Folded, "unfolded": fst.Unfolded, "end_conflicts": fst.Conflicts, "facts_without_tenant": fst.NoTenant})
 	}
-	s.sdwanOverlay.Store(&sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts})
 	if res.Stats.Unresolved > 0 || res.Stats.Ambiguous > 0 || cst.Unresolved > 0 || cst.Malformed > 0 || cst.Truncated > 0 {
 		logInfo("topology", "SD-WAN overlay inferred with gaps", map[string]any{
 			"pairs": res.Stats.PairsObserved, "drawn": res.Stats.PairsDrawn, "unresolved_system_ips": res.Stats.Unresolved,

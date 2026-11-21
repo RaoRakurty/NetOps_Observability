@@ -26,6 +26,7 @@ import (
 	"netops/backend/collectors"
 
 	"netops/backend/alerts"
+	"netops/backend/internal/tunnelview"
 	"netops/backend/models"
 	"netops/backend/topology"
 )
@@ -222,11 +223,8 @@ func twoTenantOverlay(t *testing.T) (*sdwanOverlaySnapshot, map[string]string) {
 		}
 	}
 	res := topology.InferOverlay(topology.OverlayInput{DevTenant: tenantOf, Facts: facts, DrawAllPairs: true})
-	have := map[string]bool{}
-	for id := range facts {
-		have[id] = true
-	}
-	return &sdwanOverlaySnapshot{at: time.Now(), res: res, facts: have, devFacts: facts}, tenantOf
+	snap, _ := newSDWANOverlaySnapshot(time.Now(), res, facts, tenantOf)
+	return snap, tenantOf
 }
 
 func devsOf(tenantOf map[string]string, tenant string, skip ...string) []models.Device {
@@ -384,42 +382,51 @@ func TestSDWANMissingTunnelNoteNamesTheSourceThatCouldReportThem(t *testing.T) {
 
 func TestSDWANTunnelRowsAreTenantIsolated(t *testing.T) {
 	snap, tenantOf := twoTenantOverlay(t)
-	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 1000, time.Now())
-	if len(rows) != 6 { // 3 edges × 2 peers × 1 colour pair
-		t.Fatalf("rows = %d, want 6", len(rows))
+	devs := devsOf(tenantOf, "acme")
+	tuns := sdwanTunnelsFor(snap, devs)
+	if len(tuns) != 3 { // 3 edges, full mesh, one colour pair: 3 tunnels, each folded from both ends
+		t.Fatalf("tunnels = %d, want 3 (one per tunnel, not one per end)", len(tuns))
+	}
+	nameOf, _ := tunnelNamesAndSites(siteContext{}, devs, false)
+	var rows []tunnelview.Row
+	for _, tun := range tuns {
+		if tun.Tenant != "acme" || tun.TunnelID == "" || tun.EndsReported() != 2 {
+			t.Fatalf("tunnel %+v: want acme, folded, both ends reported", tun)
+		}
+		rows = append(rows, tunnelview.RowOf(tun, nameOf, nil, nil, nil, time.Now()))
 	}
 	raw, _ := json.Marshal(rows)
 	if strings.Contains(string(raw), "globex") {
 		t.Fatalf("acme's tunnels carry globex: %s", raw)
 	}
 	for _, r := range rows {
-		if r["type"] != "sdwan" || !strings.HasPrefix(r["remote_device"].(string), "acme-") {
-			t.Fatalf("row %v: remote must resolve to an acme device", r)
+		if r.Type != "sdwan" || !strings.HasPrefix(r.LocalDevice, "acme-") || !strings.HasPrefix(r.RemoteDevice, "acme-") {
+			t.Fatalf("row %+v: both ends must resolve to acme devices", r)
 		}
 	}
 }
 
-func TestSDWANTunnelRowsHonourVisibilityStatusAndLimit(t *testing.T) {
+func TestSDWANTunnelRowsHonourVisibility(t *testing.T) {
 	snap, tenantOf := twoTenantOverlay(t)
-	// acme-e2 hidden: its own tunnels are not listed, and tunnels TO it carry
-	// the overlay system-ip, never its name.
-	rows := sdwanTunnelRows(snap, devsOf(tenantOf, "acme", "acme-e2"), "", 1000, time.Now())
-	for _, r := range rows {
-		if r["local_device"] == "acme-e2" || r["remote_device"] == "acme-e2" {
-			t.Fatalf("a hidden device's name leaked: %v", r)
+	// acme-e2 hidden: its own reports are dropped, and tunnels TO it carry the
+	// overlay system-ip, never its name or id.
+	devs := devsOf(tenantOf, "acme", "acme-e2")
+	tuns := sdwanTunnelsFor(snap, devs)
+	if len(tuns) != 3 { // e0-e1 from both ends; e0-e2 and e1-e2 from the visible end only
+		t.Fatalf("tunnels = %d, want 3", len(tuns))
+	}
+	nameOf, _ := tunnelNamesAndSites(siteContext{}, devs, false)
+	for _, tun := range tuns {
+		raw, _ := json.Marshal(tunnelview.RowOf(tun, nameOf, nil, nil, nil, time.Now()))
+		if strings.Contains(string(raw), "acme-e2") {
+			t.Fatalf("a hidden device's name or id leaked: %s", raw)
 		}
 	}
-	if len(rows) != 4 {
-		t.Fatalf("rows = %d, want 4", len(rows))
+	if got := sdwanTunnelsFor(nil, devsOf(tenantOf, "acme")); got != nil {
+		t.Fatal("no snapshot must yield no tunnels")
 	}
-	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "down", 1000, time.Now()); len(got) != 0 {
-		t.Fatalf("status=down returned %d up tunnels", len(got))
-	}
-	if got := sdwanTunnelRows(snap, devsOf(tenantOf, "acme"), "", 2, time.Now()); len(got) != 2 {
-		t.Fatalf("limit not honoured: %d", len(got))
-	}
-	if got := sdwanTunnelRows(nil, devsOf(tenantOf, "acme"), "", 10, time.Now()); got != nil {
-		t.Fatal("no snapshot must yield no rows")
+	if got := sdwanTunnelsFor(snap, nil); got != nil {
+		t.Fatal("no visible device must yield no tunnels")
 	}
 }
 

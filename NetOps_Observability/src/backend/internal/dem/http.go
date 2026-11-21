@@ -152,9 +152,10 @@ const (
 
 // disabledNote is the honest answer when the feature flag is off. Operator
 // copy: it names no environment variable — customers never edit the
-// environment, and the prober's switches are not on the Features page yet
-// (internal/featureflags/specs.go), so the note says what is true without
-// telling the reader to do something they cannot (Paths redesign B5).
+// environment, and the DEM switch is not on the Features page yet (path
+// discovery and STAMP are, since Paths P2; internal/featureflags/specs.go), so
+// the note says what is true without telling the reader to do something they
+// cannot (Paths redesign B5).
 const disabledNote = "Digital experience monitoring is not switched on for this installation yet, so nothing is measured. " +
 	"An empty table here means nothing was measured — NOT that everything is well."
 
