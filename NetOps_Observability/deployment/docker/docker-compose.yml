@@ -1615,7 +1615,9 @@ services:
     # alerting instead of restarting. Loop-wedge detection now belongs to
     # vmalert (CorrProbeLaneFlatlined / staleness rules), not Docker health.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8094/healthz', timeout=4).status==200 else 1)\""]
+      # Reads the body before exiting: a probe that hangs up after the status
+      # leaves a connection reset under the sidecar's body write each tick.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8094/healthz', timeout=4); r.read(); sys.exit(0 if r.status==200 else 1)\""]
       interval: 30s
       timeout: 8s
       retries: 5
