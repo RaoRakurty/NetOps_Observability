@@ -29,6 +29,7 @@ from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 
 from catalog import Catalog
 from directed_topology import Oracle, RecordingOracle
@@ -45,6 +46,7 @@ from path_graph import (
     PathIndex,
     Relation,
     ResolutionMethod,
+    control_session_relation,
     is_live,
     resource_identity_relation,
     seam_relation,
@@ -55,11 +57,30 @@ from path_graph import (
 )
 from rank_memo import RankMemo, rank_key
 from scoring import RankingResult, rank
-from signals import SIGNAL_NS, EntityType, Severity, Signal, Source, clause_attr
+from signals import (
+    CONTROL_LOSS_KINDS,
+    SIGNAL_NS,
+    EntityType,
+    Severity,
+    Signal,
+    Source,
+    clause_attr,
+    controller_peer,
+)
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.5.0"  # 3.5.0 = owner decisions D1-D3 on top of 3.4.0 (below).
+ENGINE_SEMVER = "3.6.0"  # 3.6.0 = tracker 397 control-session rung on top of 3.5.0.
+# 3.6.0: tracker 397 — stage [4] rank-3 CONTROL-SESSION rung. The API exports the
+# controller's own edge↔controller control sessions as `proto: "sdwan_control"`
+# topology_links rows; TopologyAdjacency keeps them apart from `pairs` and grounds a
+# pair on one ONLY when one side is a control-connection loss naming the other end's
+# session key (`_session_grounding`). So an edge's loss grounds authoritatively to
+# the node on the controller it names (its unreachable alarm, its own session loss),
+# and the fan-in star past CORR_TOKEN_HUB_CAP edges grounds at rank 3 instead of on
+# a capped rank-7 token. Kind-scoped: no other kind ever grounds on a session row.
+# Byte-identical (bar this version) for evidence with no such row.
+# 3.5.0 = owner decisions D1-D3 on top of 3.4.0.
 # 3.5.0: owner decisions 2026-11-11 (Fable RCA review). D1
 # stage [7]: security and management_plane witnesses support but never anchor the
 # confirming pair (a dated security detection excepted). D2 stage [6]: context
@@ -696,18 +717,108 @@ class TopologyAdjacency:
     same as before — backward compatible)."""
 
     pairs: frozenset[frozenset[str]] = frozenset()
+    # Tracker 397: SD-WAN control sessions (edge ↔ controller), exported by the API
+    # from the controller's own `control_conn` session table as `proto:
+    # "sdwan_control"` rows. Each is (sa, sa_key, sb, sb_key) with sa < sb: the two
+    # ends' engine device ids and their native session keys (system-ip — what
+    # `signals.controller_peer` returns). KIND-SCOPED: these never enter `pairs`, so
+    # they can never weld two devices' unrelated signals (a controller's own alarms
+    # and an edge's link flap stay apart); they ground ONLY a control-connection
+    # loss to the end it names (`_session_grounding`). Empty = no session rows →
+    # byte-identical behaviour.
+    sessions: frozenset[tuple[str, str, str, str]] = frozenset()
 
     def adjacent(self, a: str, b: str) -> bool:
         return a != b and frozenset({a, b}) in self.pairs
 
+    @cached_property
+    def _session_index(self) -> dict[frozenset[str], tuple[tuple[str, str, str, str], ...]]:
+        idx: dict[frozenset[str], list[tuple[str, str, str, str]]] = {}
+        for row in sorted(self.sessions):
+            idx.setdefault(frozenset({row[0], row[2]}), []).append(row)
+        return {k: tuple(v) for k, v in idx.items()}
+
+    def session_keys(self, da: str, db: str) -> tuple[tuple[str, str], ...]:
+        """For every session row joining devices `da` and `db`: (key of da's end,
+        key of db's end). Empty when none, or when da == db."""
+        if da == db or not self.sessions:
+            return ()
+        out = []
+        for sa, ka, _sb, kb in self._session_index.get(frozenset({da, db}), ()):
+            out.append((ka, kb) if sa == da else (kb, ka))
+        return tuple(out)
+
     @staticmethod
     def from_links(links: list[dict] | tuple[dict, ...]) -> TopologyAdjacency:
         out: set[frozenset[str]] = set()
+        sess: set[tuple[str, str, str, str]] = set()
         for link in links or ():
+            if not isinstance(link, dict):
+                continue
+            if link.get("proto") == SESSION_PROTO:
+                row = _session_row(link)
+                if row is not None:
+                    sess.add(row)
+                continue  # kind-scoped: a session row is never a device adjacency
             a, b = str(link.get("a") or ""), str(link.get("b") or "")
             if a and b and a != b:
                 out.add(frozenset({a, b}))
-        return TopologyAdjacency(frozenset(out))
+        return TopologyAdjacency(frozenset(out), frozenset(sess))
+
+
+#: Tracker 397: the topology_links.json `proto` of an SD-WAN control-session row.
+SESSION_PROTO = "sdwan_control"
+_SESSION_FIELD_MAX = 128
+
+
+def _session_row(link: dict) -> tuple[str, str, str, str] | None:
+    """One `sdwan_control` row → (sa, sa_key, sb, sb_key) with sa < sb, or None.
+    Zero-trust: every field must be a non-empty bounded string and the two ends
+    distinct; anything else is dropped (the row is wire data)."""
+    vals = []
+    for k in ("sa", "sa_key", "sb", "sb_key"):
+        v = link.get(k)
+        if not isinstance(v, str):
+            return None
+        v = v.strip()
+        if not v or len(v) > _SESSION_FIELD_MAX:
+            return None
+        vals.append(v)
+    sa, ka, sb, kb = vals
+    if sa == sb:
+        return None
+    return (sa, ka, sb, kb) if sa < sb else (sb, kb, sa, ka)
+
+
+def node_controller_peers(node: Node) -> frozenset[str]:
+    """The controllers a control-connection-loss node names (`signals.
+    controller_peer`, per signal) — empty for every other kind. The stage-[4]
+    session rung reads only this, so only a node that NAMES the far end of a lost
+    control session can ground on a session row."""
+    if node.kind not in CONTROL_LOSS_KINDS:
+        return frozenset()
+    return frozenset(p for p in (controller_peer(s)[0] for s in node.signals) if p)
+
+
+def _session_grounding(
+    adjacency: TopologyAdjacency, da: str | None, pa: frozenset[str],
+    db: str | None, pb: frozenset[str],
+) -> Grounding | None:
+    """Rank 3 — a control session the controller itself reports (tracker 397).
+
+    Grounds (a, b) ONLY when a session row joins their two devices AND one of them
+    is a control-connection loss naming the OTHER end's session key: an edge's loss
+    naming the vSmart grounds to a node on the vSmart (its unreachable alarm, or its
+    own loss of that edge); the vSmart's loss naming an edge grounds to that edge.
+    Two edges never ground to each other through it (rank 3 is pair-shaped), and no
+    other kind ever does — the weld guard the T4c tunnel rows kept."""
+    if not adjacency.sessions or not da or not db or not (pa or pb):
+        return None
+    for ka, kb in adjacency.session_keys(da, db):
+        if kb in pa or ka in pb:
+            lo, hi = sorted((da, db))
+            return Grounding("topo", f"ctl:{lo}--{hi}", control_session_relation(lo, hi))
+    return None
 
 
 # Shared empty-adjacency default. TopologyAdjacency is a frozen dataclass, so one
@@ -779,6 +890,12 @@ def resolve_grounding(
     if da and db and adjacency.adjacent(da, db):
         lo, hi = sorted((da, db))
         return Grounding("topo", f"adj:{lo}--{hi}", topology_link_relation(lo, hi))
+    # rank 3 — a control session the controller reports (tracker 397), kind-scoped.
+    if adjacency.sessions:
+        g = _session_grounding(adjacency, da, node_controller_peers(a),
+                               db, node_controller_peers(b))
+        if g is not None:
+            return g
     # rank 6 — INFERRED (cloud route / policy). Supporting only.
     if paths is not None:
         rel = paths.relate(ia, ib, a.window(), b.window(),
@@ -947,6 +1064,8 @@ class _CandidateIndex:
         memb: list[dict] | None,
         route_hits: list[bool] | None,
         token_hub_cap: int = CORR_TOKEN_HUB_CAP,
+        *,
+        ctl_peers: list[frozenset[str]] | None = None,
     ) -> None:
         # The token (rank-7) and identity-ref (rank-1) dimensions are built as
         # SEPARATE buckets so the #168 hub cap can touch ONLY the token one. The
@@ -1045,6 +1164,16 @@ class _CandidateIndex:
                 for j in dev_index.get(ends[1], ()):
                     if i != j:
                         adj.add((i, j) if i < j else (j, i))
+        # Tracker 397: control-session rows, pair-shaped like the links above but
+        # KIND-SCOPED — a pair is a candidate only when one end's control-loss node
+        # names the other end's session key (exactly `_session_grounding`), so the
+        # superset stays sound and a controller's unrelated alarms add nothing.
+        if ctl_peers is not None and adjacency.sessions:
+            for sa, ka, sb, kb in sorted(adjacency.sessions):
+                for i in dev_index.get(sa, ()):
+                    for j in dev_index.get(sb, ()):
+                        if i != j and (kb in ctl_peers[i] or ka in ctl_peers[j]):
+                            adj.add((i, j) if i < j else (j, i))
         self.adj_pairs: frozenset[tuple[int, int]] = frozenset(adj)
         by_node: dict[int, list[int]] = {}
         for i, j in adj:
@@ -1196,13 +1325,14 @@ def _candidate_pairs(
     route_hits: list[bool] | None,
     cohort: frozenset[int] | None = None,
     token_hub_cap: int = CORR_TOKEN_HUB_CAP,
+    ctl_peers: list[frozenset[str]] | None = None,
 ) -> set[tuple[int, int]]:
     """Build-then-emit in one call. Retained as the direct entry point (and the
     reference the complexity tests pin); the engine itself goes through
     _CandidateIndex so the build is paid once per snapshot epoch."""
     return _emit_candidates(
         _CandidateIndex(n, toks, refs, seam_evs, devs, adjacency, memb, route_hits,
-                        token_hub_cap),
+                        token_hub_cap, ctl_peers=ctl_peers),
         cohort)
 
 
@@ -1259,6 +1389,9 @@ class WindowPrep:
     scoped_view: PathGraphView | None = None
     discovery: tuple = ()
     disc: tuple = ()
+    # Tracker 397: per-node controller peers (node_controller_peers) — None when the
+    # adjacency carries no session rows, so the rung costs nothing without them.
+    ctl_peers: list[frozenset[str]] | None = None
 
     def matches(
         self, nodes: tuple[Node, ...], seams: tuple[SeamView, ...],
@@ -1301,6 +1434,7 @@ def prepare_window(
     declared = [nd.declared_path_ids() for nd in nodes]
     windows = [nd.window() for nd in nodes]
     devs = [nd.adjacency_key() for nd in nodes]
+    ctl = [node_controller_peers(nd) for nd in nodes] if adjacency.sessions else None
     seams_sorted = tuple(sorted(seams, key=lambda s: s.seam_id))
     seam_evs = [s.endpoint_values() | {s.seam_id} for s in seams_sorted]
     # per-node seam memberships, by STRUCTURAL identity and by token (rank 2 vs 7)
@@ -1321,8 +1455,9 @@ def prepare_window(
         seams_sorted=seams_sorted, seam_evs=seam_evs, seam_ident=seam_ident,
         seam_token=seam_token, memb=memb, route_hits=route_hits,
         index=_CandidateIndex(n, toks, refs, seam_evs, devs, adjacency, memb,
-                              route_hits),
+                              route_hits, ctl_peers=ctl),
         key_index={nd.key: i for i, nd in enumerate(nodes)},
+        ctl_peers=ctl,
     )
 
 
@@ -1422,6 +1557,7 @@ def build_edges(
     seam_token = prep.seam_token
     memb = prep.memb
     windows = prep.windows
+    ctl = prep.ctl_peers
 
     def _grounded(ai: int, bi: int) -> Grounding | None:
         """resolve_grounding over the precomputed per-node views — same rungs,
@@ -1448,6 +1584,11 @@ def build_edges(
         if da and db and adjacency.adjacent(da, db):
             lo, hi = sorted((da, db))
             return Grounding("topo", f"adj:{lo}--{hi}", topology_link_relation(lo, hi))
+        # rank 3 — control session (tracker 397), the same predicate as above
+        if ctl is not None:
+            g = _session_grounding(adjacency, da, ctl[ai], db, ctl[bi])
+            if g is not None:
+                return g
         # rank 6 — INFERRED route (the SAME deterministic relate result as above:
         # a rank ≤ 5 relation already returned, so only a route relation reaches here)
         if rel is not None:
@@ -1586,7 +1727,8 @@ def build_edges(
             w_topo = cfg.w_topo_inferred
         elif grounding.kind == "seam":
             w_topo = cfg.w_topo_seam
-        elif grounding.ref.startswith("adj:"):
+        elif grounding.ref.startswith(("adj:", "ctl:")):
+            # an inventoried link, or a controller-reported control session (397)
             w_topo = cfg.w_topo_adjacency
         else:
             w_topo = cfg.w_topo_containment
@@ -2322,6 +2464,9 @@ class ObjectSnapshot:
     # must replay against the same topology, not live links. Empty when no adjacency
     # grounding was used → blob unchanged (seam/containment objects never churn).
     adjacency_pairs: tuple[tuple[str, str], ...] = ()
+    # Tracker 397: the control-session rows (component-scoped) this object could
+    # ground on, embedded for replay like adjacency_pairs. Empty → blob unchanged.
+    session_rows: tuple[tuple[str, str, str, str], ...] = ()
     # #81 P5: fused application-identity signals (source=app_identity) whose tokens
     # overlap this object's nodes — the ENRICHMENT pool, NOT graph nodes (they are
     # excluded from build_nodes, so they never seed/extend an object). Used only by
@@ -2758,6 +2903,9 @@ class ObjectSnapshot:
         # adjacency-grounded fabric edge replay against the same links.
         if self.adjacency_pairs:
             ctx["adjacency"] = [list(p) for p in self.adjacency_pairs]
+        # Tracker 397: control-session rows, ONLY when present (byte-identical else).
+        if self.session_rows:
+            ctx["session_adjacency"] = [list(r) for r in self.session_rows]
         # Service Path Graph (v1): embed the explicit relations this object's edges
         # were admitted on + the path objects they came from — ONLY when a path
         # relation was actually used, so every pre-contract object's blob (hence
@@ -3901,6 +4049,11 @@ def run_window(
             (lo, hi) for p in adjacency.pairs
             if p <= comp_devs for lo, hi in (tuple(sorted(p)),)
         ))
+        # Tracker 397: only the session rows an edge of THIS object grounded on.
+        used_ctl = {e.grounding.ref for e in comp_edges if e.grounding.ref.startswith("ctl:")}
+        session_rows = tuple(sorted(
+            r for r in adjacency.sessions if f"ctl:{r[0]}--{r[2]}" in used_ctl
+        )) if used_ctl else ()
         # Path-causality P2 enrichment (ADDITIVE): name the on-path device that
         # explains this object's app symptom. None (no discovery / no symptom / no
         # on-path cause) ⇒ the object is byte-for-byte pre-P2.
@@ -3935,6 +4088,7 @@ def run_window(
             storm_mode=storm_mode,
             orientations=orientations,
             adjacency_pairs=adjacency_pairs,
+            session_rows=session_rows,
             identity_signals=_identities_for(comp, identity_sigs),
             data_class=comp_dc,
             environment=_first_attr(comp_sigs, "environment", "prod"),
