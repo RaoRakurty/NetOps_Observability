@@ -270,3 +270,38 @@ func TestNonBGPEventsCarryNoTransitionClass(t *testing.T) {
 		}
 	}
 }
+
+// Tracker 388(c): vManage's interface-admin-state-change names an operator's
+// shutdown by its event name, so the connector states link_cause=admin; the
+// oper-state event (interface-state-change) cannot tell admin from fault and
+// states nothing — the engine then fails closed and treats it as a fault.
+func TestVManageAdminStateChangeStatesLinkCause(t *testing.T) {
+	cases := []struct {
+		event, state, wantCause, wantType string
+	}{
+		{"interface-admin-state-change", "down", "admin", "link_state_change"},
+		{"Interface-Admin-State-Change", "down", "admin", "link_state_change"},
+		{"interface-admin-state-change", "up", "admin", "link_state_change_clear"},
+		{"interface-state-change", "down", "", "link_state_change"},
+	}
+	for _, c := range cases {
+		raw := `{"data":[{"id":"i1","eventname":"` + c.event + `","component":"VPN","severity_level":"major",
+		 "entry_time":1793500000000,"system_ip":"10.255.255.81","host_name":"cEDGE-81",
+		 "details":"if-name=GigabitEthernet2; new-state=` + c.state + `"}]}`
+		b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
+		if err != nil || len(b.Events) != 1 {
+			t.Fatalf("%s/%s: %v %+v", c.event, c.state, err, b)
+		}
+		e := b.Events[0]
+		got, has := e.CorrelationHints["link_cause"]
+		if got != c.wantCause || has != (c.wantCause != "") {
+			t.Errorf("%s/%s: link_cause = %q (present %v), want %q", c.event, c.state, got, has, c.wantCause)
+		}
+		if e.NormalizedEventType != c.wantType {
+			t.Errorf("%s/%s: type = %q, want %q", c.event, c.state, e.NormalizedEventType, c.wantType)
+		}
+		if e.InterfaceName != "GigabitEthernet2" {
+			t.Errorf("%s/%s: interface = %q", c.event, c.state, e.InterfaceName)
+		}
+	}
+}

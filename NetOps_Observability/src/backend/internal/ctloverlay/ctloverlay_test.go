@@ -232,7 +232,7 @@ func TestControllerTunnelLinksMatchTheEngineEntity(t *testing.T) {
 	prec.IntegrationID = "nmsi-2"
 	st := fakeSessions{ints: []nms.Integration{ic, plat}, recs: map[string][]nms.StateRecord{
 		"t_w": {rec, mirror, half}, "global": {prec}}}
-	rows, err := Links(context.Background(), st, vmSpec, res, t4now)
+	rows, _, err := Links(context.Background(), st, vmSpec, res, t4now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestControllerTunnelLinksMatchTheEngineEntity(t *testing.T) {
 
 func TestControllerTunnelLinksStoreErrorIsReturned(t *testing.T) {
 	st := fakeSessions{ints: []nms.Integration{{ID: "i", Tenant: "t_w", Vendor: "vmanage", BaseURL: "https://x"}}, err: errors.New("pg down")}
-	if _, err := Links(context.Background(), st, vmSpec, tenantResolver{}, t4now); err == nil {
+	if _, _, err := Links(context.Background(), st, vmSpec, tenantResolver{}, t4now); err == nil {
 		t.Fatal("a store error must reach the writer, which then keeps the previous file")
 	}
 }

@@ -137,6 +137,12 @@ type ConfigStore interface {
 	// rows; truncated reports that more existed. Tenant-scoped only: there is
 	// no cross-tenant overlay read (the topology is drawn per tenant).
 	OverlaySessions(ctx context.Context, tenant string, since time.Time, limit int) (recs []StateRecord, truncated bool, err error)
+	// ControlSessions returns ONE tenant's control-plane sessions (state kinds
+	// control_conn and omp) that name a peer and were seen at or after since,
+	// newest first, at most limit rows; truncated reports that more existed.
+	// Tenant-scoped only, like OverlaySessions (tracker 397: the engine's
+	// control-session rung reads them through topology_links.json).
+	ControlSessions(ctx context.Context, tenant string, since time.Time, limit int) (recs []StateRecord, truncated bool, err error)
 	Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error)
 	// DeviceStore: controller-sourced inventory (device_store.go).
 	DeviceStore
@@ -345,6 +351,39 @@ func (m *memStore) OverlaySessions(_ context.Context, tenant string, since time.
 			return out[i].LastSeen.After(out[j].LastSeen)
 		}
 		return out[i].IntegrationID+out[i].EntityKey < out[j].IntegrationID+out[j].EntityKey
+	})
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
+}
+
+// controlSessionKinds are the state kinds ControlSessions reads (tracker 397).
+var controlSessionKinds = map[string]bool{"control_conn": true, "omp": true}
+
+func (m *memStore) ControlSessions(_ context.Context, tenant string, since time.Time, limit int) ([]StateRecord, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	if limit > controlSessionsMax {
+		limit = controlSessionsMax
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []StateRecord
+	for k, r := range m.states {
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) < 3 || parts[0] != tenant || !controlSessionKinds[r.StateKind] || r.PeerID == "" || r.LastSeen.Before(since) {
+			continue
+		}
+		r.IntegrationID = parts[1]
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastSeen.Equal(out[j].LastSeen) {
+			return out[i].LastSeen.After(out[j].LastSeen)
+		}
+		return out[i].IntegrationID+"\x00"+out[i].EntityKey < out[j].IntegrationID+"\x00"+out[j].EntityKey
 	})
 	if len(out) > limit {
 		return out[:limit], true, nil
@@ -755,6 +794,49 @@ func (s *pgStore) OverlaySessions(ctx context.Context, tenant string, since time
 			first_seen, last_seen, flap_count, device_id, site_id, tunnel_id, peer_id, local_color, remote_color
 			FROM controller_state_current
 			WHERE tenant_id=$1 AND state_kind='bfd' AND tunnel_id<>'' AND last_seen >= $2
+			ORDER BY last_seen DESC, integration_id, entity_key LIMIT $3`, tenant, since, limit+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r StateRecord
+			if err := rows.Scan(&r.IntegrationID, &r.EntityKey, &r.StateKind, &r.CurrentState, &r.PreviousState,
+				&r.FirstSeen, &r.LastSeen, &r.FlapCount, &r.DeviceID, &r.SiteID,
+				&r.TunnelID, &r.PeerID, &r.LocalColor, &r.RemoteColor); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
+}
+
+// controlSessionsMax bounds one tenant's control-session read whatever the caller asks.
+const controlSessionsMax = 20000
+
+func (s *pgStore) ControlSessions(ctx context.Context, tenant string, since time.Time, limit int) ([]StateRecord, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	if limit > controlSessionsMax {
+		limit = controlSessionsMax
+	}
+	var out []StateRecord
+	// RLS (WithTenant, non-cross) AND an explicit tenant predicate: a policy
+	// regression alone can never widen this read (§3a, belt and braces).
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT integration_id, entity_key, state_kind, current_state, previous_state,
+			first_seen, last_seen, flap_count, device_id, site_id, tunnel_id, peer_id, local_color, remote_color
+			FROM controller_state_current
+			WHERE tenant_id=$1 AND state_kind IN ('control_conn','omp') AND peer_id<>'' AND last_seen >= $2
 			ORDER BY last_seen DESC, integration_id, entity_key LIMIT $3`, tenant, since, limit+1)
 		if err != nil {
 			return err

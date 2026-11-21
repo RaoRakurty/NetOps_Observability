@@ -29,6 +29,7 @@ package ctloverlay
 
 import (
 	"context"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -228,6 +229,11 @@ type Link struct {
 	Proto    string
 }
 
+// LinkStats is what Links could not read in full, for the log.
+type LinkStats struct {
+	Truncated int // tenants whose session read hit RowCap (rows beyond it are not exported)
+}
+
 // ── T4c: tunnel ↔ endpoint adjacency for the correlation engine ─────────────
 
 // SpecFor returns the connector spec for a vendor id.
@@ -248,10 +254,11 @@ type SpecFor func(vendor string) (nms.ConnectorSpec, bool)
 // TENANT: a row carries its integration's owner, never "" — the engine merges
 // ""-tenant rows into EVERY tenant's adjacency. An end that does not resolve
 // within the integration's own tenant gets no row.
-func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, now time.Time) ([]Link, error) {
+func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, now time.Time) ([]Link, LinkStats, error) {
+	var stats LinkStats
 	ints, err := st.ListEnabled(ctx)
 	if err != nil {
-		return nil, err
+		return nil, stats, err
 	}
 	byID := make(map[string]nms.Integration, len(ints))
 	tenants := map[string]bool{}
@@ -268,9 +275,12 @@ func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, 
 	seen := map[string]bool{}
 	var out []Link
 	for _, tenant := range order {
-		recs, _, err := st.OverlaySessions(ctx, tenant, now.Add(-Window), RowCap)
+		recs, truncated, err := st.OverlaySessions(ctx, tenant, now.Add(-Window), RowCap)
 		if err != nil {
-			return nil, err
+			return nil, stats, err
+		}
+		if truncated {
+			stats.Truncated++ // a capped read is partial: counted, the caller logs it
 		}
 		owner := tenant
 		if owner == "" {
@@ -321,5 +331,232 @@ func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, 
 		}
 		return out[i].B < out[j].B
 	})
-	return out, nil
+	return out, stats, nil
+}
+
+// ── tracker 397: edge ↔ controller control sessions for the engine ──────────
+
+// ControlWindow is how far back a stored control session still exports. Wider
+// than Window on purpose: the rows must survive the outage they describe, and
+// whether a controller keeps listing a session after it went down is not
+// established (INVARIANTS §31, drill item 6). A stale row costs nothing — it
+// grounds only a control-connection loss that names it.
+const ControlWindow = 24 * time.Hour
+
+// ControlRowCap bounds one tenant's control-session read.
+const ControlRowCap = 20000
+
+// SessionProto is the topology_links.json proto of a control-session row; the
+// engine (engine.SESSION_PROTO) keeps such rows out of its device adjacency.
+const SessionProto = "sdwan_control"
+
+// ControlSessionStore is the slice of the NMS store ControlLinks reads.
+type ControlSessionStore interface {
+	ListEnabled(ctx context.Context) ([]nms.Integration, error)
+	ControlSessions(ctx context.Context, tenant string, since time.Time, limit int) ([]nms.StateRecord, bool, error)
+}
+
+// SessionLink is one control-session row: the two ends' engine device ids
+// (SA < SB) and their native session keys (system-ips — what the engine's
+// signals.controller_peer returns). It deliberately has no a/b: an engine that
+// does not know the proto must skip it, never read it as a device adjacency.
+type SessionLink struct {
+	TenantID     string
+	SA, SAKey    string
+	SB, SBKey    string
+	Integrations int // distinct integrations that reported it (for the log)
+}
+
+// ControlStats is what ControlLinks could not place, for the log.
+type ControlStats struct {
+	Sessions   int // records read
+	Malformed  int // no reporting system-ip, a peer that is not an address, or one box at both ends
+	NoInstance int // the integration has no controller instance (cannot be told apart)
+	Collisions int // a raw (unresolved) end two controller instances claim: no row
+	Truncated  int // tenants whose read hit ControlRowCap
+}
+
+// ControlLinks returns one row per (tenant, unordered device pair) that a
+// controller reports a control session between, so the engine's stage [4]
+// control-session rung can ground an edge's control-connection loss to the
+// controller it names (tracker 397).
+//
+// IDENTITY. The reporting end is the record's stored device, re-resolved by its
+// system-ip (the entity key's first field, or the device id itself when that is
+// an address); the far end is the peer key resolved within the integration's
+// OWN tenant, else the native key — a controller is not inventoried as a managed
+// edge, and the engine's controller-side nodes carry exactly that address.
+//
+// TWO FABRICS IN ONE TENANT. A device node carries no "@instance", so a raw
+// address that two controller instances both report could be two boxes. Such
+// an end gets no row (counted): that tenant keeps the pre-397 behaviour.
+//
+// TENANT: a row carries its integration's owner, never "" (the engine merges
+// ""-tenant rows into every tenant's adjacency).
+func ControlLinks(ctx context.Context, st ControlSessionStore, spec SpecFor, res KeyResolver, now time.Time) ([]SessionLink, ControlStats, error) {
+	var stats ControlStats
+	ints, err := st.ListEnabled(ctx)
+	if err != nil {
+		return nil, stats, err
+	}
+	byID := make(map[string]nms.Integration, len(ints))
+	tenants := map[string]bool{}
+	for _, ic := range ints {
+		byID[ic.ID] = ic
+		tenants[ic.Tenant] = true
+	}
+	order := make([]string, 0, len(tenants))
+	for t := range tenants {
+		order = append(order, t)
+	}
+	sort.Strings(order)
+	instance := map[string]string{}
+	var out []SessionLink
+	for _, tenant := range order {
+		recs, truncated, err := st.ControlSessions(ctx, tenant, now.Add(-ControlWindow), ControlRowCap)
+		if err != nil {
+			return nil, stats, err
+		}
+		if truncated {
+			stats.Truncated++
+		}
+		owner := tenant
+		if owner == "" {
+			owner = "global"
+		}
+		out = append(out, controlTenantLinks(tenant, owner, recs, byID, instance, spec, res, &stats)...)
+	}
+	return out, stats, nil
+}
+
+type sessionEnd struct{ dev, key string }
+
+// controlTenantLinks builds one tenant's rows. Pure apart from the resolver and
+// the instance cache.
+func controlTenantLinks(tenant, owner string, recs []nms.StateRecord, byID map[string]nms.Integration,
+	instance map[string]string, spec SpecFor, res KeyResolver, stats *ControlStats) []SessionLink {
+	resolve := func(key string) (string, bool) {
+		if res == nil {
+			return "", false
+		}
+		dev, ok := res.ResolveDevice(tenant, nms.KeySystemIP, key, "")
+		return dev, ok && dev != ""
+	}
+	type pairKey struct{ a, b sessionEnd }
+	pairs := map[pairKey]map[string]bool{} // pair → integrations
+	rawBy := map[string]map[string]bool{}  // unresolved address → controller instances claiming it
+	pairRaw := map[pairKey][]string{}
+	for _, r := range recs {
+		stats.Sessions++
+		ic, ok := byID[r.IntegrationID]
+		if !ok {
+			continue // the integration was disabled or deleted since the row was written
+		}
+		ci, done := instance[ic.ID]
+		if !done {
+			if spec != nil {
+				if sp, ok := spec(ic.Vendor); ok {
+					if id, _, err := nms.ControllerInstanceID(sp, ic.BaseURL); err == nil {
+						ci = id
+					}
+				}
+			}
+			instance[ic.ID] = ci
+		}
+		if ci == "" {
+			stats.NoInstance++
+			continue
+		}
+		repKey := reportingKey(r)
+		farKey := strings.TrimSpace(r.PeerID)
+		if repKey == "" || net.ParseIP(farKey) == nil {
+			stats.Malformed++
+			continue
+		}
+		var raw []string
+		rep := sessionEnd{key: repKey}
+		if dev, ok := resolve(repKey); ok {
+			rep.dev = dev
+		} else if d := strings.TrimSpace(r.DeviceID); d != "" {
+			rep.dev = d
+			if d == repKey {
+				raw = append(raw, d)
+			}
+		} else {
+			stats.Malformed++
+			continue
+		}
+		far := sessionEnd{key: farKey}
+		if dev, ok := resolve(farKey); ok {
+			far.dev = dev
+		} else {
+			far.dev = farKey
+			raw = append(raw, farKey)
+		}
+		if rep.dev == far.dev {
+			stats.Malformed++
+			continue
+		}
+		for _, a := range raw {
+			if rawBy[a] == nil {
+				rawBy[a] = map[string]bool{}
+			}
+			rawBy[a][ci] = true
+		}
+		pk := pairKey{rep, far}
+		if far.dev < rep.dev {
+			pk = pairKey{far, rep}
+		}
+		if pairs[pk] == nil {
+			pairs[pk] = map[string]bool{}
+		}
+		pairs[pk][ic.ID] = true
+		pairRaw[pk] = append(pairRaw[pk], raw...)
+	}
+	out := make([]SessionLink, 0, len(pairs))
+	collided := map[string]bool{}
+	for pk, by := range pairs {
+		bad := false
+		for _, a := range pairRaw[pk] {
+			if len(rawBy[a]) > 1 {
+				bad = true
+				collided[a] = true
+			}
+		}
+		if bad {
+			continue
+		}
+		out = append(out, SessionLink{TenantID: owner, SA: pk.a.dev, SAKey: pk.a.key,
+			SB: pk.b.dev, SBKey: pk.b.key, Integrations: len(by)})
+	}
+	stats.Collisions += len(collided)
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.SA != b.SA {
+			return a.SA < b.SA
+		}
+		if a.SB != b.SB {
+			return a.SB < b.SB
+		}
+		if a.SAKey != b.SAKey {
+			return a.SAKey < b.SAKey
+		}
+		return a.SBKey < b.SBKey
+	})
+	return out
+}
+
+// reportingKey is the reporting device's system-ip: the device id itself when
+// that is an address (a controller is not inventoried), else the entity key's
+// first field ("<system-ip>-<index>-<color>-<peer>-<peer color>", vManage
+// control-connections), else "".
+func reportingKey(r nms.StateRecord) string {
+	if d := strings.TrimSpace(r.DeviceID); net.ParseIP(d) != nil {
+		return d
+	}
+	head, _, _ := strings.Cut(r.EntityKey, "-")
+	if net.ParseIP(head) != nil {
+		return head
+	}
+	return ""
 }

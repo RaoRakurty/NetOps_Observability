@@ -423,12 +423,23 @@ func TestSDWANTunnelRowsHonourVisibilityStatusAndLimit(t *testing.T) {
 	}
 }
 
-func TestApplySDWANSitesNeverOverridesASiteOfRecord(t *testing.T) {
+func TestPeerReportedSitesNeverOverrideASiteOfRecord(t *testing.T) {
 	snap := &sdwanOverlaySnapshot{at: time.Now(), res: topology.OverlayResult{DeviceSites: map[string]string{"a": "40", "b": "60"}}}
-	facts := []topology.DeviceFact{{ID: "a"}, {ID: "b", Site: "London DC"}, {ID: "c"}}
-	applySDWANSites(facts, snap)
-	if facts[0].Site != "SD-WAN site 40" || facts[1].Site != "London DC" || facts[2].Site != "" {
-		t.Fatalf("sites: %q %q %q", facts[0].Site, facts[1].Site, facts[2].Site)
+	devs := []models.Device{
+		{ID: "a", TenantID: "acme"},
+		{ID: "b", TenantID: "acme", Labels: map[string]string{"site": "London DC"}},
+		{ID: "c", TenantID: "acme"},
 	}
-	applySDWANSites(facts, nil) // no snapshot: no change, no panic
+	facts := toDeviceFacts(devs, nil, nil, nil, nil)
+	sc := siteContext{snap: snap}
+	applySites(facts, sc.resolveAll(devs))
+	if facts[0].Site != "discovered:acme:sdwan:40" || facts[0].SiteLabel != "Site 40 · from SD-WAN peers" ||
+		facts[1].Site != "London DC" || facts[2].Site != "" {
+		t.Fatalf("sites: %+v / %+v / %+v", facts[0], facts[1], facts[2])
+	}
+	none := toDeviceFacts(devs, nil, nil, nil, nil)
+	applySites(none, siteContext{}.resolveAll(devs)) // no snapshot: labels only, no panic
+	if none[0].Site != "" || none[1].Site != "London DC" {
+		t.Fatalf("no-snapshot sites: %q %q", none[0].Site, none[1].Site)
+	}
 }

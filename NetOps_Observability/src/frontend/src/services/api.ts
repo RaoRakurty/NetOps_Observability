@@ -6867,7 +6867,14 @@ export const api = {
   // internal SoT. dry_run (default true) returns a plan; dry_run:false applies.
   importSot: (body: { kind: "sites" | "device_sites"; format: "csv" | "json" | "geojson"; data: string; dry_run?: boolean; overwrite?: boolean }) =>
     request<ImportResult>("/api/sot/import", { method: "POST", body: JSON.stringify(body) }),
-  flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
+
+  // Discovered sites (site ids a device or its controller reports): the
+  // adoption PREVIEW, then an explicit adopt. dry_run defaults to true on the
+  // server; keys limits the adoption to the selected sites.
+  discoveredSites: () => request<DiscoveredSitesResponse>("/api/discovered-sites"),
+  adoptDiscoveredSites: (body: { dry_run: boolean; keys?: string[] }) =>
+    request<AdoptResponse>("/api/discovered-sites/adopt", { method: "POST", body: JSON.stringify(body) }),
+  flowsTimeseries:(sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${legacyFlowSince(sinceSeconds)}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
@@ -10689,6 +10696,19 @@ export type SiteInput = { slug?: string; name: string; status?: string; owner?: 
 // External SoT import plan/result (POST /api/sot/import).
 export type ImportRowResult = { line: number; key: string; action: string; detail?: string };
 export type ImportResult = { kind: string; dry_run: boolean; summary: Record<string, number>; rows: ImportRowResult[] };
+
+// Discovered-site adoption (GET /api/discovered-sites, POST …/adopt). A plan's
+// sites are "create" (a new SoT site) or "reuse" (the slug already exists);
+// device rows are "bind" or "skip" (the device already has a site of record).
+// An apply may also report "refused" / "error".
+export type AdoptDeviceRow = { device_id: string; name: string; action: string; detail?: string };
+export type AdoptSiteRow = {
+  key: string; site_id: string; origin: string; label: string; slug: string; name: string;
+  action: string; devices: AdoptDeviceRow[];
+};
+export type AdoptPlan = { sites: AdoptSiteRow[]; summary: Record<string, number> };
+export type DiscoveredSitesResponse = { adoptable: boolean; reason?: string; plan: AdoptPlan };
+export type AdoptResponse = { dry_run: boolean; plan: AdoptPlan };
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };
