@@ -102,6 +102,11 @@ func ToInventoryDevice(ic Integration, d ControllerDevice) models.Device {
 	if d.SiteID != "" {
 		labels["controller_site_id"] = d.SiteID
 	}
+	if d.SiteName != "" {
+		// The controller's own name for that site: the discovered site's label
+		// (internal/siteres) — still a label, never the operator's site.
+		labels["controller_site_name"] = d.SiteName
+	}
 	if d.Serial != "" {
 		labels["serial"] = d.Serial
 	}

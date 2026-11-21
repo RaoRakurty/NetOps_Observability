@@ -176,7 +176,7 @@ export function nodeTooltip(node: TopologyNode, metricsLine?: string): string {
   };
   add("Vendor / model", [node.vendor, node.model].filter(Boolean).join(" · "));
   add("Role", node.role);
-  add("Site / rack", [node.site, node.rack].filter(Boolean).join(" · "));
+  add("Site / rack", [node.site_label ?? node.site, node.rack].filter(Boolean).join(" · "));
   add("Owner", node.owner);
   add("Mgmt IP", node.mgmt_ip);
   if (metricsLine) lines.push(metricsLine);

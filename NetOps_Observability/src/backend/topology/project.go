@@ -134,6 +134,10 @@ func Project(in Input) View {
 			Vendor:      d.Vendor,
 			Model:       d.Model,
 			Site:        d.Site,
+			SiteLabel:   siteLabelOf(d),
+			SiteSource:  siteSourceOf(d),
+			SiteOrigin:  d.SiteOrigin,
+			SiteNote:    d.SiteNote,
 			Rack:        d.Rack,
 			MgmtIP:      d.MgmtIP,
 			Health:      health,
@@ -554,6 +558,23 @@ func groupID(site string) string {
 	return "site:" + site
 }
 
+// siteLabelOf is the readable name of a device's site, set only when it differs
+// from the grouping key — a plain label/slug site keeps its historical payload.
+func siteLabelOf(d DeviceFact) string {
+	if d.Site == "" || d.SiteLabel == "" || d.SiteLabel == d.Site {
+		return ""
+	}
+	return d.SiteLabel
+}
+
+// siteSourceOf is how the device's site was decided; nothing when it has none.
+func siteSourceOf(d DeviceFact) string {
+	if d.Site == "" {
+		return ""
+	}
+	return d.SiteSource
+}
+
 // buildGroups rolls site-tagged nodes into site groups, with a worst-child health
 // rollup. Nodes without a site are left ungrouped (no synthetic "unknown" bucket).
 func buildGroups(nodes []Node) []Group {
@@ -579,13 +600,23 @@ func buildGroups(nodes []Node) []Group {
 			health = worseHealth(health, m.Health)
 		}
 		sort.Strings(children)
+		// Every member of one site carries the same label and provenance
+		// (internal/siteres harmonises them), so the first member's are the
+		// group's.
+		first := members[0]
+		label := first.SiteLabel
+		if label == "" {
+			label = site
+		}
 		groups = append(groups, Group{
 			ID:        groupID(site),
-			Label:     site,
+			Label:     label,
 			GroupType: "site",
 			Children:  children,
 			Health:    health,
 			Collapsed: false,
+			Source:    first.SiteSource,
+			Origin:    first.SiteOrigin,
 		})
 	}
 	return groups

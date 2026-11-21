@@ -39,6 +39,17 @@ Coordinates belong to the site, so correcting a wrong latitude moves every devic
 
 Two alternatives to the picker: give the device a `site` label whose value matches the slug, or import a device-to-site placement file, described in [Import inventory from a source of truth](/automation/import-and-sync).
 
+#### Adopt discovered sites {#adopt-discovered-sites}
+
+Devices whose controller or SD-WAN answer reports a site id are already grouped by it on the [topology canvas](/infrastructure/topology-canvas#how-sites-are-decided), marked as discovered. Adopting turns those groups into real sites in one step.
+
+1. On the **Sites** tab, select **Adopt discovered sites…**. The list is a preview: nothing is written yet.
+2. Read each row. It names the discovered site (for example `Site 50 · from vManage`), the site it will create (`Site 50`, slug `site-50`) or the existing site it will reuse, and each device. A device that is already placed, by an operator or by its `site` label, reads **left alone** and is never moved.
+3. Untick any site you do not want.
+4. Select **Adopt N sites**. The confirmation states what was created and placed.
+
+The new sites are ordinary sites: rename them, add coordinates, or delete them like any other. Adopting again does nothing, because the devices are now placed. Adoption needs `infrastructure:write` and works in one tenant at a time, so the platform owner's **All tenants** view asks you to choose a tenant first. Every adoption is recorded in the audit log.
+
 ### Step 3 - Set a one-off location
 
 For a device that belongs to no declared site:

@@ -183,3 +183,28 @@ func TestRunPollMarksOnlyACleanInventorySnapshotComplete(t *testing.T) {
 		t.Fatalf("empty clean snapshot: %+v", r.Routed)
 	}
 }
+
+// A controller that names its sites (newer vManage releases carry "site-name")
+// files the name beside the id, as labels only — never as the operator's site —
+// and a release without it leaves the name absent rather than inventing one.
+func TestControllerSiteNameIsAFiledLabel(t *testing.T) {
+	const raw = `{"data":[
+ {"device-type":"vedge","host-name":"vEdge-51","system-ip":"10.255.255.51","device-model":"vedge-cloud","site-id":50,"site-name":"Branch Boston","reachability":"reachable"},
+ {"device-type":"vedge","host-name":"vEdge-60","system-ip":"10.255.255.60","device-model":"vedge-cloud","site-id":60,"reachability":"reachable"}]}`
+	b, err := VManageAutoTransformer{}.TransformStream("t-retail", "int-vm", "inventory", []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Devices) != 2 {
+		t.Fatalf("devices = %d", len(b.Devices))
+	}
+	ic := Integration{Tenant: "t-retail", ID: "int-vm", Vendor: "vmanage"}
+	named := ToInventoryDevice(ic, b.Devices[0])
+	if named.Labels["controller_site_id"] != "50" || named.Labels["controller_site_name"] != "Branch Boston" || named.Labels["site"] != "" {
+		t.Fatalf("labels %v", named.Labels)
+	}
+	unnamed := ToInventoryDevice(ic, b.Devices[1])
+	if _, ok := unnamed.Labels["controller_site_name"]; ok || unnamed.Labels["controller_site_id"] != "60" {
+		t.Fatalf("labels %v", unnamed.Labels)
+	}
+}

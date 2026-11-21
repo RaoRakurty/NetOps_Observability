@@ -142,6 +142,17 @@ type Node struct {
 	ChangeState    string             `json:"change_state,omitempty"`
 	Metrics        map[string]float64 `json:"metrics,omitempty"`
 	Evidence       []EvidenceRef      `json:"evidence"`
+	// Site (above) is the site GROUPING KEY (internal/siteres): an operator's
+	// site slug, a discovery label, or a tenant-qualified discovered key.
+	// SiteLabel is what a person reads (set only when it differs from Site);
+	// SiteSource says how the site was decided (manual | label | discovered),
+	// SiteOrigin where a discovered id was read (device | sdwan_peers |
+	// vmanage …), and SiteNote flags an operator-set site the device's own
+	// report disagrees with. All omitted when unknown.
+	SiteLabel  string `json:"site_label,omitempty"`
+	SiteSource string `json:"site_source,omitempty"`
+	SiteOrigin string `json:"site_origin,omitempty"`
+	SiteNote   string `json:"site_note,omitempty"`
 	// Issues are the active alerts DRIVING this node's health — surfaced so the
 	// inspector can answer "why is this device critical/warning" with the actual
 	// problem, not just a colour. Worst-first, capped. Empty when healthy.
@@ -219,6 +230,12 @@ type Group struct {
 	Health    string   `json:"health"`
 	Collapsed bool     `json:"collapsed"`
 	Owner     string   `json:"owner,omitempty"`
+	// Source / Origin (site groups only): how the site was decided — "manual",
+	// "label" or "discovered" — and, for a discovered site, where its id was
+	// read. The SPA marks a discovered group as such: it is a virtual grouping,
+	// not a declared site.
+	Source string `json:"source,omitempty"`
+	Origin string `json:"origin,omitempty"`
 }
 
 // ── output: view ─────────────────────────────────────────────────────────────
@@ -328,6 +345,13 @@ type DeviceFact struct {
 	ExternalBGPPeers    int      // BGP peers whose address belongs to no inventory device
 	FabricNeighborCount int      // neighbors classified dc_leaf / dc_spine
 	SiteKind            string   // declared site kind (dc | branch | campus …) from labels / source of truth
+	// ── site provenance (internal/siteres) — Site above is the grouping key;
+	// these say how it reads and how it was decided (see Node.SiteLabel). An
+	// empty SiteLabel reads as Site.
+	SiteLabel  string
+	SiteSource string
+	SiteOrigin string
+	SiteNote   string
 }
 
 // LinkFact is one deduped, undirected adjacency (output of the link normalizer).
