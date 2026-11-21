@@ -198,6 +198,7 @@ func (r *stampReflector) setErr(err error) {
 
 type stampSender struct {
 	interval time.Duration
+	targets  TargetSource
 	packets  int
 	mu       sync.RWMutex
 	status   Status
@@ -210,6 +211,7 @@ func NewSTAMPSender() Collector {
 	return &stampSender{
 		interval: envDuration("STAMP_INTERVAL", 30*time.Second),
 		packets:  envInt("STAMP_PACKETS", 20),
+		targets:  newEnvTargets("STAMP_TARGETS", 862),
 		status:   Status{Name: "stamp-sender", Healthy: true, Kind: "metrics"},
 	}
 }
@@ -235,29 +237,18 @@ func (s *stampSender) Run(ctx context.Context) error {
 	}
 }
 
-func stampTargets() []string {
-	raw := strings.TrimSpace(os.Getenv("STAMP_TARGETS"))
-	if raw == "" {
-		return nil
-	}
-	var out []string
-	for _, p := range strings.Split(raw, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		out = append(out, withPort(p, 862))
-	}
-	return out
-}
-
 func (s *stampSender) probeAll(ctx context.Context) {
-	targets := stampTargets()
+	// Validated targets only (probetarget): a refused entry is dropped and
+	// reported on the status, never probed.
+	targets, terr := s.targets.Targets(ctx)
 	now := time.Now().UnixMilli()
 	prober := proberID()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	reachable := 0
 	var lastErr string
+	if terr != nil {
+		lastErr = terr.Error()
+	}
 	var lines []string
 	var events []ProbeEvent
 	for _, tgt := range targets {

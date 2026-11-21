@@ -295,3 +295,13 @@ func mustJSON(t *testing.T, code int, body string, into any) {
 		t.Fatalf("decode: %v (%s)", err, body)
 	}
 }
+
+// Operator copy names no environment variable (Paths redesign B5): customers
+// never edit the environment, so a note telling them to set one is a dead end.
+func TestNotesNameNoEnvironmentVariable(t *testing.T) {
+	for name, note := range map[string]string{"disabledNote": disabledNote, "noProberNote": noProberNote} {
+		if strings.Contains(note, EnvFeatureFlag) || strings.Contains(note, "FEATURE_") || strings.Contains(note, "=true") || strings.Contains(note, "profile") {
+			t.Errorf("%s names an environment switch or compose profile: %q", name, note)
+		}
+	}
+}

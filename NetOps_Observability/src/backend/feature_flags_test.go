@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netops/backend/internal/featureflags"
+	"netops/backend/internal/probercontrol"
 )
 
 type memEnv struct {
@@ -48,15 +49,38 @@ func (m *memStore) Save(b []byte) error { m.b = append([]byte(nil), b...); retur
 // The spec table is the page's contract: every entry must be a flag the
 // backend actually reads, none may be a CONTROL (a switch that could stop the
 // boot or remove a protection), and none may be a flag another container
-// reads (the api cannot apply it).
+// reads (the api cannot apply it) UNLESS it is delivered to that container —
+// today the prober's measurement switches (internal/probercontrol).
 func TestFeatureSpecsAreReadAndSafe(t *testing.T) {
 	forbidden := map[string]string{
 		"FEATURE_SEALED_FIELDS":   "boot-fatal and turning it off stops encrypting",
 		"AI_TOOLS_ALL_TENANTS":    "cross-tenant reach",
 		"ENABLE_REPORT_SCHEDULER": "flag-gated log.Fatalf at start",
-		"FEATURE_TRACEROUTE":      "read by the prober container",
-		"FEATURE_DEM":             "read by the prober container too",
+		"FEATURE_DEM":             "read by the prober container too, and not delivered",
+		"FEATURE_STAMP_REFLECTOR": "read by the prober container, and not delivered",
 		"ENABLE_FLOW_CORRELATION": "read by the correlation engine",
+	}
+	delivered := map[string]bool{}
+	for _, env := range probercontrol.Delivered() {
+		delivered[env] = true
+	}
+	onPage := map[string]featureflags.Spec{}
+	for _, sp := range featureflags.PlatformSpecs() {
+		onPage[sp.Env] = sp
+	}
+	// Every switch delivered to the prober is on the page, Live (the prober
+	// applies it within a check), risky (ADR 0001: it sends test packets from
+	// this server) and never console-only (the install value stays the
+	// fallback for hand-made installs).
+	for env := range delivered {
+		sp, ok := onPage[env]
+		if !ok {
+			t.Errorf("%s is delivered to the prober but has no switch on the page", env)
+			continue
+		}
+		if sp.Apply != featureflags.ApplyLive || !sp.Risky || sp.ConsoleOnly {
+			t.Errorf("%s must be Live, Risky and not console-only: %+v", env, sp)
+		}
 	}
 	src := readGoSources(t)
 	seen := map[string]bool{}
@@ -76,6 +100,32 @@ func TestFeatureSpecsAreReadAndSafe(t *testing.T) {
 		}
 		if sp.Apply != featureflags.ApplyLive && sp.Apply != featureflags.ApplyRestart {
 			t.Errorf("%s has no apply class", sp.Env)
+		}
+	}
+}
+
+// The api's own collector pool must never run the prober's measurement
+// collectors: Set writes a saved switch into the api's environment, so a pool
+// that read FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE would start a second,
+// unprivileged vantage in the api the moment the page turned one on. The
+// prober gates them through internal/probercontrol instead (Paths P2).
+func TestAPIPoolNeverRunsProberMeasurement(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	for _, name := range []string{"traceroute", "stamp-sender"} {
+		if !strings.Contains(src, `pool.Enable("`+name+`", false)`) {
+			t.Errorf("the api pool must pin %s off", name)
+		}
+		if strings.Contains(src, `pool.Enable("`+name+`", os.Getenv`) {
+			t.Errorf("%s is still enabled from the environment somewhere in main.go", name)
+		}
+	}
+	for _, gate := range []string{"probercontrol.EnvTraceroute", "probercontrol.EnvActiveProbe", "pool.Gate(name"} {
+		if !strings.Contains(src, gate) {
+			t.Errorf("the prober must gate its measurement collectors (missing %s)", gate)
 		}
 	}
 }

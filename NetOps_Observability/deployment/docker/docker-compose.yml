@@ -1970,6 +1970,13 @@ services:
       WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
       WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
       WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
+      # The prober's measurement switches (Paths redesign P2). The api does NOT
+      # run these collectors; it reads the install value here so the Features
+      # page shows it and a saved switch can override it, then publishes the
+      # resolved value to the prober (internal/probercontrol, key
+      # netops:prober:switches). Off by default (ADR 0001).
+      FEATURE_TRACEROUTE: ${FEATURE_TRACEROUTE:-false}
+      FEATURE_ACTIVE_PROBE: ${FEATURE_ACTIVE_PROBE:-false}
       # Service Path Graph (docs/design/service-path-graph-contract.md): prober
       # traceroutes → immutable PathObservations/PathHops resolved through the §3
       # ranked resolver, exported to /data/enrichment/path_graph.json for the
@@ -2484,7 +2491,8 @@ services:
   # publishes traceroute topology to Redis (api reads it) and pushes metrics to
   # VictoriaMetrics. Opt-in + dormant by default:
   #   docker compose --profile prober up -d prober
-  # then set FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE + targets. This keeps the
+  # then switch Path discovery / Active path probes on the Features page and
+  # declare targets (TRACEROUTE_TARGETS / STAMP_TARGETS). This keeps the
   # API container unprivileged; the prober is the first member of the future
   # network-diagnostics plane.
   prober:
@@ -2530,7 +2538,12 @@ services:
       VICTORIA_URL: "http://victoria:8428"
       METRICS_URL: ${METRICS_URL:-http://victoria:8428}
       # Active measurement — all OFF by default (ADR 0001: privileged features
-      # disabled by default). Enable + set targets to turn the plane on.
+      # disabled by default). FEATURE_TRACEROUTE and FEATURE_ACTIVE_PROBE are
+      # switched on the Features page (Platform › Configuration › Features): the
+      # api publishes the resolved switch on the key-value channel and this
+      # container re-checks it every 15 s, OFF on every doubt. The two values
+      # below are read ONLY when no key-value channel is configured (REDIS_HOST
+      # unset). Targets still come from the *_TARGETS lists here.
       FEATURE_TRACEROUTE: ${FEATURE_TRACEROUTE:-false}
       TRACEROUTE_TARGETS: ${TRACEROUTE_TARGETS:-}
       TRACEROUTE_METHOD: ${TRACEROUTE_METHOD:-icmp}

@@ -78,6 +78,9 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		// N-H6 PR 2: the hourly roll-up read runs at the caller's tenant scope
 		// (STRICT row policy) with the operator restriction's exclusion.
 		"SeasonalHours": {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
+		// N-H6 step 3: the estate-wide read — both of its queries — runs at
+		// the caller's tenant scope with the operator restriction's exclusion.
+		"SeasonalEstate": {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
 	}
 	for method, needles := range want {
 		if src[method] == "" {

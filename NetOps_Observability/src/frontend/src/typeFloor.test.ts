@@ -43,6 +43,31 @@ describe("type floor", () => {
     expect(hits, "Use var(--fs-meta) / var(--fs-sm) — see docs/ui/DESIGN_SYSTEM.md").toEqual([]);
   });
 
+  // Paths redesign P1 (2026-11-20): the floor held in styles.css while page
+  // stylesheets drifted under it — investigation.css carried a 12px label and
+  // the pipeline debugger thirteen 11–12px rules, none of them seen. Every
+  // shipped .css file is scanned now, with the same canvas exemptions.
+  it("no page stylesheet declares anything below 12.5px outside canvas renderers", () => {
+    const hits: string[] = [];
+    for (const p of walk(SRC)) {
+      const rel = relative(SRC, p).split(sep).join("/");
+      if (!rel.endsWith(".css") || rel === "styles.css" || EXEMPT_DIRS.some((d) => rel.startsWith(d))) continue;
+      let selector = "";
+      readFileSync(p, "utf8").split("\n").forEach((line, i) => {
+        if (line.includes("{")) selector = line.split("{")[0];
+        if (SMALL_CSS.test(line) && !EXEMPT_CSS_SELECTOR.test(selector)) hits.push(`${rel}:${i + 1} ${line.trim()}`);
+        SMALL_CSS.lastIndex = 0;
+      });
+    }
+    expect(hits, "Use var(--fs-meta) / var(--fs-sm) — see docs/ui/DESIGN_SYSTEM.md").toEqual([]);
+  });
+
+  it("the stylesheet walk reaches the page stylesheets (a broken walk must not pass)", () => {
+    const css = walk(SRC).map((p) => relative(SRC, p).split(sep).join("/")).filter((r) => r.endsWith(".css"));
+    expect(css).toContain("pages/troubleshoot/investigation.css");
+    expect(css.length).toBeGreaterThan(3);
+  });
+
   it("no inline style sets a font size below 12.5px outside canvas renderers", () => {
     const hits: string[] = [];
     for (const p of walk(SRC)) {

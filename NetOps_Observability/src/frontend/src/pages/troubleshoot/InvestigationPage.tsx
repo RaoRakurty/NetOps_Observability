@@ -41,6 +41,7 @@ import {
   type CorrObject,
   type CorrTimeline,
   type Incident,
+  type RcaPathAttribution,
   type Seam,
   type SeamOwnerEntry,
   type TacCaseLink,
@@ -49,6 +50,8 @@ import {
 import { ShellContext } from "../../context/shell";
 import AskIris from "../../components/AskIris";
 import RcaCaseHeader from "../../components/rca/RcaCaseHeader";
+import RcaPathCausality from "../../components/rca/RcaPathCausality";
+import { readTopologyContext, type TopologyContext } from "../../components/rca/topologyContext";
 import { buildRcaCase, type RcaCase } from "../../components/rca/rcaCase";
 import { isContextStory } from "../../components/rca/rcaPhrases";
 import TacEscalationPanel from "./TacEscalationPanel";
@@ -137,6 +140,10 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   const [seams, setSeams] = useState<Record<string, Seam>>({});
   const [seamOwners, setSeamOwners] = useState<Record<string, SeamOwnerEntry>>({});
   const [ticket, setTicket] = useState<TicketStatus | null>(null);
+  // The case's measured path (the same report JSON the RCA workspace reads).
+  // Best-effort: absent, RcaPathCausality falls back to the timeline's spine.
+  const [pathAttr, setPathAttr] = useState<RcaPathAttribution | null>(null);
+  const [topoCtx, setTopoCtx] = useState<TopologyContext | null>(null);
   const [handoffNote, setHandoffNote] = useState("");
 
   // Lane states feed the answer card's ONE layer line. A lane earns a layer by
@@ -178,6 +185,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   useEffect(() => {
     let alive = true;
     setObj(null); setTimeline(null); setTicket(null); setCaseErr(""); setLaneStates({});
+    setPathAttr(null); setTopoCtx(null);
     setEscalateOpen(false); setIrisOpen(false); setHandoffNote(""); setTacCase(null);
     if (!corrId) return;
     // The case read is the one fetch that is NOT best-effort: if it fails the
@@ -191,6 +199,11 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
     api.correlationTimeline(corrId).then((t) => { if (alive) setTimeline(t); })
       .catch(() => { /* no engine header, not a broken page */ });
     api.correlationTickets(corrId).then((t) => { if (alive) setTicket(t?.status ?? null); }).catch(() => { /* ticketing optional */ });
+    // Wrapped so a backend (or a test double) without the report read is a
+    // missing path panel, never a thrown render.
+    Promise.resolve().then(() => api.rcaReportJson(corrId))
+      .then((r) => { if (alive) { setPathAttr(r?.path_attribution ?? null); setTopoCtx(readTopologyContext(r)); } })
+      .catch(() => { /* report JSON is best-effort; the path falls back to the timeline */ });
     return () => { alive = false; };
   }, [pickedKey, corrId]);
 
@@ -269,8 +282,8 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   return (
     <div className="ts-inv">
       {/* ── 1 · What's wrong? ──────────────────────────────────────────────── */}
-      <section className="ts-block card" aria-labelledby="ts-what-h" data-testid="ts-pick">
-        <h2 id="ts-what-h" className="ts-block-h">
+      <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-network)" } as React.CSSProperties} aria-labelledby="ts-what-h" data-testid="ts-pick">
+        <h2 id="ts-what-h" className="ts-block-h ts-group-head">
           What&apos;s wrong?
           <AskIris topic="investigate.how" label="What's wrong?" />
         </h2>
@@ -328,7 +341,8 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
       {/* ── 2 · The answer ─────────────────────────────────────────────────── */}
       {picked && (
-        <section className="ts-block card" aria-label="The answer" data-testid="ts-answer-block">
+        <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--accent)" } as React.CSSProperties} aria-label="The answer" data-testid="ts-answer-block">
+          <h2 className="ts-block-h ts-group-head">The answer</h2>
           {caseErr ? (
             <p className="ts-bad" role="alert" data-testid="ts-case-error">{caseErr}</p>
           ) : corrId && !rcaCase ? (
@@ -341,14 +355,14 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
                 case's device. A case that names none reads the whole fleet, and
                 a fleet-wide row is somebody's fault but not provably this
                 one's, so the line stays Unknown and the lane says why. */}
-            <p className="ts-answer-f fact-line">Breaking at: <b>{breakingAt(laneStates, Boolean(scope.device))}</b></p>
-            <p className="ts-answer-f fact-line">
-              Affects: <b>{corrId ? affectsLine(obj?.affected) : affectsLine("")}</b>
-            </p>
-            <p className="ts-answer-f fact-line">
-              Since: <b>{since ? fmtDateTime(since) : "Not stated"}</b>
-            </p>
-            <p className="ts-answer-f fact-line">Owner: <b>{plainOwner(rcaCase?.ownershipLabel)}</b></p>
+            {/* Four facts as a stat grid (Paths redesign P1). The text keeps
+                its "Label: value" reading order for screen readers and tests. */}
+            <dl className="ts-facts" data-testid="ts-facts">
+              <div className="ts-fact"><dt>Breaking at:</dt> <dd>{breakingAt(laneStates, Boolean(scope.device))}</dd></div>
+              <div className="ts-fact"><dt>Affects:</dt> <dd>{corrId ? affectsLine(obj?.affected) : affectsLine("")}</dd></div>
+              <div className="ts-fact"><dt>Since:</dt> <dd>{since ? fmtDateTime(since) : "Not stated"}</dd></div>
+              <div className="ts-fact"><dt>Owner:</dt> <dd>{plainOwner(rcaCase?.ownershipLabel)}</dd></div>
+            </dl>
             <span className="ts-answer-chip badge" data-testid="ts-confidence">
               {corrId ? confidenceChip(obj?.top_confidence) : confidenceChip(0)}
             </span>
@@ -399,13 +413,28 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
           {escalateOpen && (
             <TacEscalationPanel incidentId={picked.id} autoStart onCaseOpened={setTacCase} />
           )}
+
+          {/* The case's path — the SAME single path view the RCA workspace
+              renders, with its own honest fallbacks (spine / adjacency / not
+              discovered). Correlated cases only: a described investigation has
+              no engine timeline to draw from. */}
+          {corrId && timeline && rcaCase && (
+            <div className="ts-path panel" data-testid="ts-path">
+              <div className="panel-tools"><h3>Case path</h3></div>
+              <div className="rca-ws">
+                <RcaPathCausality data={pathAttr} timeline={timeline} context={topoCtx}
+                  ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause}
+                  measuredBreak={rcaCase.measuredBreak} />
+              </div>
+            </div>
+          )}
         </section>
       )}
 
       {/* ── 3 · The evidence ───────────────────────────────────────────────── */}
       {picked && (
-        <section className="ts-block card" aria-labelledby="ts-ev-h" data-testid="ts-evidence">
-          <h2 id="ts-ev-h" className="ts-block-h">The evidence</h2>
+        <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-logs)" } as React.CSSProperties} aria-labelledby="ts-ev-h" data-testid="ts-evidence">
+          <h2 id="ts-ev-h" className="ts-block-h ts-group-head">The evidence</h2>
           <button
             type="button" className="ts-ev-toggle tsl-disclose"
             aria-expanded={evidenceOpen} aria-controls="ts-ev-body"

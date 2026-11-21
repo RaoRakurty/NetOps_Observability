@@ -313,6 +313,24 @@ describe("UI copy — developer-speak stays removed", () => {
     expect(hits.join("\n"), `rule ${id} did not fire on: ${sample}`).toContain(`${id}:`);
   });
 
+  // env-switch-in-copy is proseOnly, so a bare `<code>FEATURE_X</code>` — a
+  // one-word span — slipped past it: the path-health empty state printed
+  // FEATURE_ACTIVE_PROBE and STAMP_TARGETS that way until 2026-11-20 (Paths
+  // redesign P0). An environment name set in code type on a screen is still an
+  // instruction to edit the environment, which customers never do.
+  it("no shipped .tsx sets an environment switch or target list in <code>", () => {
+    const CODE_ENV = /<code>\s*(?:(?:FEATURE|ENABLE)_[A-Z0-9_]+|[A-Z][A-Z0-9]*_(?:TARGETS|TENANT))\b/;
+    const hits = files.flatMap((f) => {
+      const rel = relative(SRC, f).split(sep).join("/");
+      return stripComments(readFileSync(f, "utf-8")).split("\n").flatMap((line, i) =>
+        CODE_ENV.test(line) ? [`${rel}:${i + 1} — ${line.trim().slice(0, 90)}`] : []);
+    });
+    expect(hits, `environment names reached the UI in <code>:\n${hits.join("\n")}`).toEqual([]);
+    // Teeth: the guard fires on the copy it was written to kill.
+    expect(CODE_ENV.test("Enable STAMP path SLA (<code>FEATURE_ACTIVE_PROBE</code> +")).toBe(true);
+    expect(CODE_ENV.test("<code> STAMP_TARGETS</code>")).toBe(true);
+  });
+
   it("never fires on identifiers, field access, or comments", () => {
     const legit = [
       'import { pollStatus } from "./api";',

@@ -94,7 +94,9 @@ describe("LaneHealth — reading the lane", () => {
     // screen; the reasoning is one click away, and BOTH are pinned here.
     expect(await screen.findByText(/not enabled here/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Ask Iris about the security lane/i })).toBeTruthy();
-    expect(screen.getByText(/FEATURE_SECURITY_LANE/)).toBeTruthy();
+    // The switch is named as the Features page names it — never the env var.
+    expect(screen.getByText(/turn on “Security findings” in Platform › Features/)).toBeTruthy();
+    expect(screen.queryByText(/FEATURE_SECURITY_LANE/)).toBeNull();
     expect(screen.queryByRole("button", { name: /scan now/i })).toBeNull();
   });
 

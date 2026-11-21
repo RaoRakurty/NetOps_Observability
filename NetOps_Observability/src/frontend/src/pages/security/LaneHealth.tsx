@@ -192,7 +192,7 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
     return (
       <Panel title="Security lane">
         <div className="empty">
-          The security lane is not enabled here — <code>FEATURE_SECURITY_LANE</code>
+          The security lane is not enabled here. A platform administrator can turn on “Security findings” in Platform › Features.
           <AskIris topic="lane.not-enabled" label="the security lane" />
         </div>
       </Panel>

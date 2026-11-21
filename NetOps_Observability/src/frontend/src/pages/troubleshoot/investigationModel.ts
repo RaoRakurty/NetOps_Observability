@@ -72,7 +72,23 @@ export const LANE_SOURCE: Record<LaneId, string> = {
   events: "/api/events/feed",
 };
 
-export const ALL_LANES: LaneId[] = ["dem", "changed", "health", "path", "routing", "flows", "events"];
+/**
+ * Where an operator goes to read a lane in full. The card used to print the
+ * API path ("Read from /api/…") — verifiable, but not somewhere a NOC engineer
+ * can go. The API stays on the link's title for anyone who wants it (Paths
+ * redesign P1, 2026-11-20).
+ */
+export const LANE_OPEN: Record<LaneId, { label: string; href: string }> = {
+  dem: { label: "Measured paths", href: "#/investigate/flowtrace" },
+  changed: { label: "Logs", href: "#/explore/logs" },
+  health: { label: "Device Monitoring", href: "#/analytics/device-monitoring" },
+  path: { label: "Measured paths", href: "#/investigate/flowtrace" },
+  routing: { label: "Protocol Monitoring", href: "#/analytics/protocols" },
+  flows: { label: "Flows", href: "#/explore/flows" },
+  events: { label: "Logs", href: "#/explore/logs" },
+};
+
+export const ALL_LANES: LaneId[] =["dem", "changed", "health", "path", "routing", "flows", "events"];
 
 export type LaneState = "loading" | "error" | "not_connected" | "empty" | "ready";
 
@@ -465,7 +481,7 @@ export function classifyMetricLane(
  * all means no probe agent has ever reported, which is a not-connected source,
  * not a healthy network.
  */
-export function classifyDemLane(paths: PathHealthItem[]): LaneResult<PathHealthItem> {
+export function classifyDemLane(paths: PathHealthItem[], device = ""): LaneResult<PathHealthItem> {
   if (paths.length === 0) {
     return {
       state: "not_connected",
@@ -473,12 +489,18 @@ export function classifyDemLane(paths: PathHealthItem[]): LaneResult<PathHealthI
       rows: [],
     };
   }
-  const worst = [...paths].sort((a, b) => a.score - b.score);
+  // Scoped to the case's device (Paths redesign P1): a fleet of healthy or
+  // degraded paths that never touch this device is not this case's evidence,
+  // and a "ready" lane is what earns a layer on the answer card.
+  const d = norm(device);
+  const mine = d ? paths.filter((p) => norm(p.agent) === d || norm(p.dst) === d) : paths;
+  if (mine.length === 0) return { state: "empty", note: NO_PATH_TOUCHES_DEVICE, rows: [] };
+  const worst = [...mine].sort((a, b) => a.score - b.score);
   return { state: "ready", note: "", rows: worst };
 }
 
 /** classifyPathLane — measured traceroute paths (/api/probe/paths). */
-export function classifyPathLane(paths: ProbePath[]): LaneResult<ProbePath> {
+export function classifyPathLane(paths: ProbePath[], device = ""): LaneResult<ProbePath> {
   if (paths.length === 0) {
     return {
       state: "not_connected",
@@ -486,7 +508,21 @@ export function classifyPathLane(paths: ProbePath[]): LaneResult<ProbePath> {
       rows: [],
     };
   }
-  return { state: "ready", note: "", rows: paths };
+  // Scoped like the DEM lane: a trace counts when it ends at the case's device
+  // or crosses it (a hop's address or reverse name).
+  const d = norm(device);
+  const mine = d
+    ? paths.filter((p) => norm(p.dst) === d || (p.hops ?? []).some((h) => norm(h.ip) === d || norm(h.host) === d))
+    : paths;
+  if (mine.length === 0) return { state: "empty", note: NO_PATH_TOUCHES_DEVICE, rows: [] };
+  return { state: "ready", note: "", rows: mine };
+}
+
+/** The scoped path lanes' quiet sentence: measured, but not through this device. */
+export const NO_PATH_TOUCHES_DEVICE = "Paths are measured, but none starts at, ends at or crosses this case's device.";
+
+function norm(v: string | undefined): string {
+  return String(v ?? "").trim().toLowerCase();
 }
 
 // ── Flow lane ────────────────────────────────────────────────────────────────
