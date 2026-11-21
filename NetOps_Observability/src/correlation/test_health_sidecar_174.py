@@ -202,3 +202,102 @@ def test_metrics_text_still_builds_its_own_payload_when_not_given_one():
     injected["engine_v2"] = dict(injected["engine_v2"])
     injected["engine_v2"]["open_objects"] = 123456
     assert "corr_open_objects 123456" in main._metrics_text(injected)
+
+
+# ── a caller that leaves mid-response (2026-11-21) ───────────────────────────
+
+class _GoneWriter:
+    """A socket whose peer already left: every write resets."""
+
+    def __init__(self, exc: type[OSError]):
+        self.exc = exc
+
+    def write(self, _b: bytes) -> int:
+        raise self.exc(104, "Connection reset by peer")
+
+    def flush(self) -> None:
+        return None
+
+
+def _handler_with(srv, writer):
+    h = object.__new__(srv.RequestHandlerClass)
+    h.path = "/healthz"
+    h.command = "GET"
+    h.request_version = "HTTP/1.1"
+    h.requestline = "GET /healthz HTTP/1.1"
+    h.client_address = ("127.0.0.1", 1)
+    h.close_connection = True
+    h.wfile = writer
+    return h
+
+
+@pytest.mark.parametrize("exc", [ConnectionResetError, BrokenPipeError])
+def test_a_caller_that_hangs_up_is_not_a_sidecar_failure(monkeypatch, caplog, exc):
+    """Docker's healthcheck read the status and exited with the body unread; the
+    kernel reset the connection under the body write and the sidecar logged a
+    WARNING as a handler failure every 30 s. The peer leaving is counted on its
+    own, at debug, and the real-failure count does not move."""
+    main._publish_health_snapshot()
+    monkeypatch.setattr(main, "CORR_HEALTH_SIDECAR_PORT", 18095)
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_ERRORS", 0)
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_PEER_GONE", 0)
+    srv = main._start_health_sidecar()
+    assert srv is not None
+    try:
+        with caplog.at_level("DEBUG", logger=main.log.name):
+            _handler_with(srv, _GoneWriter(exc)).do_GET()
+    finally:
+        srv.shutdown()
+    assert main.HEALTH_SIDECAR_PEER_GONE == 1
+    assert main.HEALTH_SIDECAR_ERRORS == 0, "a departed caller was counted as a failure"
+    assert not [r for r in caplog.records if r.levelname == "WARNING"], caplog.text
+
+
+def test_a_real_handler_failure_is_still_a_warning(monkeypatch, caplog):
+    """The split must not swallow genuine failures: any other error is still
+    counted as one and logged at WARNING."""
+    monkeypatch.setattr(main, "_sidecar_response",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(main, "CORR_HEALTH_SIDECAR_PORT", 18096)
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_ERRORS", 0)
+    monkeypatch.setattr(main, "HEALTH_SIDECAR_PEER_GONE", 0)
+    srv = main._start_health_sidecar()
+    assert srv is not None
+
+    class _Sink:
+        def __init__(self):
+            self.data = b""
+
+        def write(self, b: bytes) -> int:
+            self.data += b
+            return len(b)
+
+        def flush(self) -> None:
+            return None
+
+    sink = _Sink()
+    try:
+        with caplog.at_level("WARNING", logger=main.log.name):
+            _handler_with(srv, sink).do_GET()
+    finally:
+        srv.shutdown()
+    assert main.HEALTH_SIDECAR_ERRORS == 1 and main.HEALTH_SIDECAR_PEER_GONE == 0
+    assert sink.data.split(b"\r\n", 1)[0].endswith(b" 500 Internal Server Error"), sink.data[:40]
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "compose.tls.yml"])
+def test_compose_healthcheck_reads_the_whole_answer(compose_file):
+    """The other half of the fix: the probe reads the body before it exits, so
+    it does not leave a reset behind on every tick. Both the plaintext baseline
+    and the TLS overlay (what a TLS install, and the lab, actually run)."""
+    import pathlib
+    import re
+    compose = (pathlib.Path(__file__).resolve().parents[2]
+               / "deployment" / "docker" / compose_file).read_text()
+    probes = [ln for ln in compose.splitlines()
+              if ln.strip().startswith("test:") and "8094/healthz" in ln]
+    assert len(probes) == 1, f"want the one correlation sidecar probe, got {probes}"
+    m = re.search(r"test: \[(.*)\]", probes[0])
+    assert m
+    assert ".read()" in m.group(1), m.group(1)
