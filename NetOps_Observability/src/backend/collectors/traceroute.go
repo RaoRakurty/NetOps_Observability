@@ -102,11 +102,18 @@ type PathResult struct {
 	// legitimately disagree. Before this field existed, multiple probers published
 	// into one shared key and silently CLOBBERED each other — a LAN vantage and a
 	// WAN prober overwrote one another and neither could be attributed.
-	VantageID string    `json:"vantage_id,omitempty"`
-	Hops      []Hop     `json:"hops"`
-	Reached   bool      `json:"reached"`
-	Changed   bool      `json:"changed"` // path differs from the previous trace
-	TS        time.Time `json:"ts"`
+	VantageID string `json:"vantage_id,omitempty"`
+	// TenantID is the tenant whose target this trace measured (Paths redesign
+	// P3). "" = a target from the install-time list, owned by the platform. It
+	// is part of the path's identity: two tenants tracing the same destination
+	// from one prober are two paths, each served only to its own tenant.
+	TenantID string `json:"tenant_id,omitempty"`
+	// Site is the destination's site, when its target declared one.
+	Site    string    `json:"site,omitempty"`
+	Hops    []Hop     `json:"hops"`
+	Reached bool      `json:"reached"`
+	Changed bool      `json:"changed"` // path differs from the previous trace
+	TS      time.Time `json:"ts"`
 }
 
 // ── shared path store (collector writes, API reads) ───────────────────────────
@@ -127,19 +134,20 @@ var Paths = &pathRegistry{m: make(map[string]PathResult)}
 // second property is the contract's §2.2 path identity (the vantage is part of it) —
 // and its absence was a real bug: a LAN vantage and the WAN prober clobbered each
 // other's paths. Legacy/empty method normalizes to "icmp" (the historical default);
-// an empty vantage normalizes to this process's PROBER_ID.
-func pathKey(dst, method string) string {
-	return pathKeyFor(ProberID(), dst, method)
+// an empty vantage normalizes to this process's PROBER_ID. The owning tenant is
+// part of the key too (P3), so one tenant's trace never overwrites another's.
+func pathKey(tenant, dst, method string) string {
+	return pathKeyFor(ProberID(), tenant, dst, method)
 }
 
-func pathKeyFor(vantage, dst, method string) string {
+func pathKeyFor(vantage, tenant, dst, method string) string {
 	if method == "" {
 		method = "icmp"
 	}
 	if vantage == "" {
 		vantage = ProberID()
 	}
-	return vantage + "|" + dst + "|" + method
+	return vantage + "|" + strings.ToLower(strings.TrimSpace(tenant)) + "|" + dst + "|" + method
 }
 
 func (r *pathRegistry) set(p PathResult) {
@@ -147,7 +155,7 @@ func (r *pathRegistry) set(p PathResult) {
 		p.VantageID = ProberID() // attribute every path to the prober that measured it
 	}
 	r.mu.Lock()
-	r.m[pathKeyFor(p.VantageID, p.Dst, p.Method)] = p
+	r.m[pathKeyFor(p.VantageID, p.TenantID, p.Dst, p.Method)] = p
 	r.mu.Unlock()
 	r.persist()
 }
@@ -253,10 +261,10 @@ func safeFileToken(v string) string {
 	return string(out)
 }
 
-func (r *pathRegistry) get(dst, method string) (PathResult, bool) {
+func (r *pathRegistry) get(tenant, dst, method string) (PathResult, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	p, ok := r.m[pathKey(dst, method)]
+	p, ok := r.m[pathKey(tenant, dst, method)]
 	return p, ok
 }
 
@@ -903,8 +911,10 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 	reachedAny := map[string]bool{} // a target counts reachable if ANY method reaches it
 	// store one trace result + emit its metrics (method label keeps icmp/tcp/auto
 	// series distinct; route stability via path_changed feeds Path Health).
-	emit := func(dst string, res PathResult) {
-		if prev, ok := Paths.get(dst, res.Method); ok {
+	emit := func(tgt ProbeTarget, res PathResult) {
+		dst := tgt.Addr
+		res.TenantID, res.Site = tgt.Tenant, tgt.Site
+		if prev, ok := Paths.get(tgt.Tenant, dst, res.Method); ok {
 			res.Changed = pathSignature(prev.Hops) != pathSignature(res.Hops)
 		}
 		Paths.set(res)
@@ -928,7 +938,8 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 			fmt.Sprintf(`probe_path_changed{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, changed, now),
 		)
 	}
-	for _, dst := range targets {
+	for _, tgt := range targets {
+		dst := tgt.Addr
 		if c.auto {
 			// Priority mode: icmp first, fall back to tcp to fill gaps → one trace.
 			res, err := tracePriority(ctx, dst, c.cfg, c.methods)
@@ -936,7 +947,7 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 				lastErr = err.Error()
 				continue
 			}
-			emit(dst, res)
+			emit(tgt, res)
 			continue
 		}
 		// Parallel mode: trace each method independently → one trace per method.
@@ -948,7 +959,7 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 				lastErr = err.Error()
 				continue
 			}
-			emit(dst, res)
+			emit(tgt, res)
 		}
 	}
 	reachable := len(reachedAny)

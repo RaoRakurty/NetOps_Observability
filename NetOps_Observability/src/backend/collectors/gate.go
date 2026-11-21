@@ -177,11 +177,31 @@ func (ControlKV) Get(ctx context.Context, key string) (string, error) {
 	return redisCmd(c, "GET", key)
 }
 
-// TargetSource supplies a measurement collector's targets each tick. P2 reads
-// the install's environment; the GUI target list (Paths redesign P3) swaps in
-// another source behind this interface.
+// ProbeTarget is one destination a measurement collector probes, with the
+// tenant that owns it (Paths redesign P3). Every result is stamped with that
+// tenant, so a path measured for one tenant is never served to another. An
+// install-time list has no owner: Tenant "" is the platform's (the api maps it
+// to PATH_GRAPH_TENANT when that is set — the single-tenant install).
+type ProbeTarget struct {
+	Addr   string // host, IP, or host:port — what the collector dials
+	Tenant string // owning tenant; "" = the platform's
+	Site   string // the site the destination belongs to, when known
+}
+
+// Addrs projects targets onto their dial addresses.
+func Addrs(ts []ProbeTarget) []string {
+	out := make([]string, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, t.Addr)
+	}
+	return out
+}
+
+// TargetSource supplies a measurement collector's targets each tick. The
+// install's environment is one source; the api's signed catalogue projection
+// (P3) is another, behind this interface.
 type TargetSource interface {
-	Targets(ctx context.Context) ([]string, error)
+	Targets(ctx context.Context) ([]ProbeTarget, error)
 }
 
 // nameLookup resolves a host name, injected so tests never touch DNS.
@@ -218,12 +238,12 @@ func ownedByOperator(netip.Addr) bool { return true }
 // dropped and counted in the returned error (never the address: a refused
 // address is still the customer's data); the allowed rest are returned with
 // it, so one bad entry costs that entry only.
-func (e *envTargets) Targets(ctx context.Context) ([]string, error) {
+func (e *envTargets) Targets(ctx context.Context) ([]ProbeTarget, error) {
 	raw := strings.TrimSpace(e.getenv(e.key))
 	if raw == "" {
 		return nil, nil
 	}
-	var out []string
+	var out []ProbeTarget
 	refused, unresolved := 0, 0
 	var why string
 	for _, p := range strings.Split(raw, ",") {
@@ -248,7 +268,7 @@ func (e *envTargets) Targets(ctx context.Context) ([]string, error) {
 			unresolved++
 			continue
 		}
-		out = append(out, p)
+		out = append(out, ProbeTarget{Addr: p})
 	}
 	if refused == 0 && unresolved == 0 {
 		return out, nil

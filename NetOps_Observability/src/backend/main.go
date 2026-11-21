@@ -3212,7 +3212,9 @@ func Run() {
 	// The prober's measurement switches (Paths redesign P2): publish the
 	// Features page's resolved values for the prober to read every check.
 	if srv.features != nil {
-		pub := probercontrol.NewPublisher(collectors.ControlKV{}, srv.features.Enabled, time.Now)
+		// Signed (P3): only the api and the prober hold the key.
+		pub := probercontrol.NewPublisher(collectors.ControlKV{}, srv.features.Enabled,
+			probercontrol.KeyringFromEnv(os.Getenv, log.Printf), time.Now, log.Printf)
 		workers.start("prober-switch-publish", func() { pub.Run(ctx) })
 	}
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
@@ -3516,7 +3518,10 @@ func runProber() {
 	// CheckEvery, starting or stopping each collector without a restart. Every
 	// doubt (channel unread, nothing published, stale record) reads OFF
 	// (internal/probercontrol); with no channel at all the environment decides.
-	switches := probercontrol.NewReader(collectors.ControlKV{}, os.LookupEnv, time.Now, log.Printf)
+	// Signed records only (P3): an unsigned or badly-signed record, or no key
+	// on this side, reads OFF.
+	switches := probercontrol.NewReader(collectors.ControlKV{}, probercontrol.KeyringFromEnv(os.Getenv, log.Printf),
+		os.LookupEnv, time.Now, log.Printf)
 	for name, sw := range map[string]string{"traceroute": probercontrol.EnvTraceroute, "stamp-sender": probercontrol.EnvActiveProbe} {
 		if err := pool.Gate(name, func(ctx context.Context) (bool, string) {
 			d := switches.Decide(ctx, sw)
