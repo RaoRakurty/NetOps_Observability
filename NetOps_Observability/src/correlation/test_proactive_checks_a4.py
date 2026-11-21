@@ -523,7 +523,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # has neither format.
     # 2026-11-13-vendor-packs-wave2: tracker 387 Comware and DNOS 6 packs; the V1 pool has
     # neither format, and its IOS link lines keep their port.
-    assert parser_rules.PARSER_REV == "2026-11-13-vendor-packs-wave2", (
+    # 2026-11-21-bgp-ipv6-peer: tracker 382 adds an IPv6 peer extract alternative to the
+    # BGP rows. Extracts never change which rule a line matches, so no V1 line can move.
+    assert parser_rules.PARSER_REV == "2026-11-21-bgp-ipv6-peer", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

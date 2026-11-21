@@ -5,7 +5,7 @@
 #
 # `vector test` proof that the shipped syslog_normalized transform agrees with
 # `syslog_packs.PackTable.parse` and with every pack fixture's own expect:.
-# cases: 177
+# cases: 178
 #
 # Keep every dollar sign out of this file: Vector interpolates environment
 # variables in the raw config text, comments included.
@@ -2130,6 +2130,24 @@ tests:
               assert_eq!(.event_type, "bgp_2020", "wrong event_type")
               assert_eq!(.severity_native_text, "WARNING", "wrong severity_native_text")
               assert_eq!(.normalized_severity, "warning", "wrong normalized_severity")
+  - name: "nokia_sros: a BGP session to an IPv6 peer moving down names the peer"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "10.221.38.108"
+          appname: "TMNX"
+          severity: "warning"
+          message: "18 Base BGP-WARNING-tBgpNgBackwardTransition-2020 []: (ASN 65001) 2001:db8:0:1::2: moved from higher state Established to lower state Idle due to event holdTimerExpired"
+          timestamp: "2026-01-01T00:00:00Z"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.parser_status, "parsed", "wrong parser_status")
+              assert_eq!(.facility, "BGP", "wrong facility")
+              assert_eq!(.event_type, "bgp_2020", "wrong event_type")
   - name: "nokia_sros: the BGP4-MIB twin of the same transition, set to major by the operator, is critical"
     inputs:
       - insert_at: syslog_normalized
