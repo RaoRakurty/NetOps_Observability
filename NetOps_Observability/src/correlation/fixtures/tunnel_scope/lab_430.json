@@ -1,0 +1,665 @@
+{
+ "_provenance": "Recorded on the lab 2026-11-21 (tracker 430): `links` are the api's real sdwan_bfd rows from data/api/enrichment/topology_links.json; `traps` are the distinct (PATH entity, observer) pairs of real trap.sdwan.bfd signals in netops.corr_signals over 30 days. The tenant id is replaced by t-lab; nothing else is edited.",
+ "tenant": "t-lab",
+ "instance": "ci-0067892ae8f31576",
+ "links": [
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.20/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.20/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.40/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.40/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.20/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.20/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.40/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.40/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.100/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "vedge-100-3efc4148",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.40/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.40/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.40/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.40/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.20/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "vedge-20-02efdcad",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.51/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.52/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.51/mpls@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.52/mpls@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-40-fdf7b64f",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.40/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.51/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "vedge-51-79fbba30",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/biz-internet|10.255.255.60/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/mpls|10.255.255.60/mpls@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.52/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "vedge-52-bf77ee2c",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.60/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.60/biz-internet|10.255.255.80/biz-internet@ci-0067892ae8f31576",
+   "b": "cedge-80-b0afc197",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.60/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-60-07ae8615",
+   "proto": "sdwan_bfd"
+  },
+  {
+   "tenant_id": "t-lab",
+   "a": "10.255.255.60/mpls|10.255.255.81/mpls@ci-0067892ae8f31576",
+   "b": "cedge-81-dde8d64d",
+   "proto": "sdwan_bfd"
+  }
+ ],
+ "traps": [
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.20/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.20/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.40/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.51/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.51/biz-internet",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.52/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.52/biz-internet",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.60/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/biz-internet|10.255.255.80/biz-internet",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.20/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.20/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.40/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.51/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.51/mpls",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.52/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.52/mpls",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.60/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.100/mpls|10.255.255.81/mpls",
+   "sender": "vedge-100-3efc4148"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.40/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.51/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.51/biz-internet",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.52/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.52/biz-internet",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.60/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/biz-internet|10.255.255.80/biz-internet",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.40/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.51/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.51/mpls",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.52/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.52/mpls",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.60/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.20/mpls|10.255.255.81/mpls",
+   "sender": "vedge-20-02efdcad"
+  },
+  {
+   "pair": "10.255.255.40/biz-internet|10.255.255.51/biz-internet",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.40/biz-internet|10.255.255.52/biz-internet",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.40/mpls|10.255.255.51/mpls",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.40/mpls|10.255.255.52/mpls",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.51/biz-internet|10.255.255.60/biz-internet",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.51/biz-internet|10.255.255.80/biz-internet",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.51/mpls|10.255.255.60/mpls",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.51/mpls|10.255.255.81/mpls",
+   "sender": "vedge-51-79fbba30"
+  },
+  {
+   "pair": "10.255.255.52/biz-internet|10.255.255.60/biz-internet",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.52/biz-internet|10.255.255.80/biz-internet",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.52/mpls|10.255.255.60/mpls",
+   "sender": "vedge-52-bf77ee2c"
+  },
+  {
+   "pair": "10.255.255.52/mpls|10.255.255.81/mpls",
+   "sender": "vedge-52-bf77ee2c"
+  }
+ ]
+}
