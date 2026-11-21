@@ -154,12 +154,25 @@ func KeyringFromEnv(getenv func(string) string, logf Logf) *Keyring {
 	return NewKeyring(f, time.Now)
 }
 
-// envelope is the signed wire format. Payload keeps its exact bytes through a
-// decode (json.RawMessage), so the prober verifies what the api signed.
+// envelope is the signed wire format.
+//
+// Payload is the record's exact JSON text carried as a JSON STRING. A string
+// round-trips byte-for-byte through encoding/json whatever escaping the encoder
+// applies; a json.RawMessage does not — json.Marshal compacts it and
+// HTML-escapes &, < and >, so the bytes the prober verified were not the bytes
+// the api signed and any record holding a URL query string, a space or an
+// angle bracket failed as bad_signature (review of #310, 2026-11-21).
+//
+// V is the envelope version; any other is refused (ErrUnsigned), so a record
+// in an older envelope shape reads OFF, never as something it is not.
 type envelope struct {
-	Payload json.RawMessage `json:"payload"`
-	Sig     string          `json:"sig"`
+	V       int    `json:"v"`
+	Payload string `json:"payload"`
+	Sig     string `json:"sig"`
 }
+
+// envelopeVersion is the signed-envelope wire version.
+const envelopeVersion = 1
 
 func mac(key, kind string, payload []byte) []byte {
 	m := hmac.New(sha256.New, []byte(key))
@@ -177,7 +190,7 @@ func (k *Keyring) Seal(kind string, payload []byte) (string, error) {
 	if !json.Valid(payload) {
 		return "", errors.New("probercontrol: the payload is not JSON")
 	}
-	b, err := json.Marshal(envelope{Payload: payload, Sig: hex.EncodeToString(mac(key, kind, payload))})
+	b, err := json.Marshal(envelope{V: envelopeVersion, Payload: string(payload), Sig: hex.EncodeToString(mac(key, kind, payload))})
 	if err != nil {
 		return "", fmt.Errorf("probercontrol: seal: %w", err)
 	}
@@ -191,16 +204,22 @@ func (k *Keyring) Open(kind, raw string) ([]byte, error) {
 		return nil, err
 	}
 	var env envelope
-	if err := json.Unmarshal([]byte(raw), &env); err != nil || len(env.Payload) == 0 || strings.TrimSpace(env.Sig) == "" {
+	if err := json.Unmarshal([]byte(raw), &env); err != nil || env.V != envelopeVersion || env.Payload == "" || strings.TrimSpace(env.Sig) == "" {
 		return nil, ErrUnsigned
 	}
 	got, err := hex.DecodeString(env.Sig)
 	if err != nil {
 		return nil, ErrBadSignature
 	}
+	payload := []byte(env.Payload)
 	for _, key := range keys {
-		if hmac.Equal(got, mac(key, kind, env.Payload)) {
-			return env.Payload, nil
+		if hmac.Equal(got, mac(key, kind, payload)) {
+			if !json.Valid(payload) {
+				// Signed, but not JSON: the api never seals that (Seal checks), so
+				// the record is not one of ours to act on.
+				return nil, ErrBadSignature
+			}
+			return payload, nil
 		}
 	}
 	return nil, ErrBadSignature
