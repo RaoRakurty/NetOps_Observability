@@ -673,8 +673,19 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   all: syslog/trap control-loss rows are `warn`, below the open floor, so control loss
   alone opens NOTHING (measured: 64 nodes → one controller object, 65 → zero); an edge
   whose own BFD loss grounds to it, or a vManage-relayed (`high`) row, opens its OWN
-  edge-local object instead — N symptoms again. Tracker: export controller↔edge
-  control-session rows into `topology_links` (rank 3). **Transport look-alike, fail
+  edge-local object instead — N symptoms again. **Control-session rung (tracker 397,
+  ENGINE_SEMVER 3.6.0):** the api exports the controller's own edge↔controller sessions
+  as `proto: "sdwan_control"` rows (`sa`/`sb` engine device ids, `sa_key`/`sb_key`
+  system-ips, no `a`/`b`). `TopologyAdjacency.sessions` keeps them OUT of `pairs`; stage
+  [4] grounds a pair on one at rank 3 ONLY when one side is a control-loss node naming
+  the other end's key (`engine._session_grounding`, same predicate in resolve_grounding,
+  the fast path and `_CandidateIndex`). So each edge's loss grounds authoritatively to a
+  node ON the controller it names (its unreachable alarm, its own loss of that edge) and
+  the star holds past the cap. Rank 3 is pair-shaped: with no node on the controller the
+  edges still do not ground to each other (pinned, test_control_session_grounding_397).
+  Kind-scoped by construction: a controller's own alarms never weld onto an edge's
+  unrelated flap. Embedded per object as `grounding_context.session_adjacency` (only the
+  rows an edge grounded on) and replayed. **Transport look-alike, fail
   closed:** an edge id that lost controllers of ≥2 distinct peer types (vSmart AND
   vManage/vBond — its own transport failed) is not counted toward any fan-in; when that is
   every edge, nothing is attested and the edge-local reading is not demoted. A catalog
@@ -726,7 +737,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
-  controller fan-in, 3.5.0 since owner D1–D3); byte-identical when no tunnel rows exist. The verdict tier still
+  controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
+  rung); byte-identical when no tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.
