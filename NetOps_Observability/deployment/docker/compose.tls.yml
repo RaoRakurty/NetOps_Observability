@@ -267,7 +267,9 @@ services:
       # snapshot_age_s, so a stalled loop is a VISIBLE condition upstream,
       # never a restart trigger. localhost probe: the SVID's SANs don't cover
       # 'localhost', so hostname check is off; the CA still verifies the cert.
-      test: ["CMD-SHELL", "python -c \"import urllib.request,ssl,sys; ctx=ssl.create_default_context(cafile='/certs/ca.pem'); ctx.check_hostname=False; sys.exit(0 if urllib.request.urlopen('https://localhost:8094/healthz', timeout=4, context=ctx).status==200 else 1)\""]
+      # Reads the body before exiting: a probe that hangs up after the status
+      # leaves a connection reset under the sidecar's body write each tick.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,ssl,sys; ctx=ssl.create_default_context(cafile='/certs/ca.pem'); ctx.check_hostname=False; r=urllib.request.urlopen('https://localhost:8094/healthz', timeout=4, context=ctx); r.read(); sys.exit(0 if r.status==200 else 1)\""]
       interval: 30s
       timeout: 8s
       retries: 5
