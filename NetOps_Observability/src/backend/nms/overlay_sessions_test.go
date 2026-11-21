@@ -56,3 +56,41 @@ func TestBFDTransformCarriesBothColours(t *testing.T) {
 		}
 	}
 }
+
+// Tracker 397: the in-memory store keeps the Postgres control-session contract —
+// control_conn/omp rows that name a peer, own tenant only, since-bounded, newest
+// first, limited with a truncation flag.
+func TestMemControlSessionsContract(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemStore()
+	t0 := time.Date(2026, 11, 21, 3, 0, 0, 0, time.UTC)
+	rec := func(key, kind, peer string, at time.Time) StateRecord {
+		return StateRecord{EntityKey: key, StateKind: kind, CurrentState: "up", LastSeen: at, PeerID: peer}
+	}
+	if err := st.UpsertStates(ctx, "t-a", "i-a", []StateRecord{
+		rec("c1", "control_conn", "10.0.0.2", t0), rec("o1", "omp", "10.0.0.2", t0.Add(time.Second)),
+		rec("c2", "control_conn", "", t0), rec("b1", "bfd", "10.0.0.3", t0), rec("r1", "reachability", "10.0.0.2", t0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertStates(ctx, "t-b", "i-b", []StateRecord{rec("c1", "control_conn", "10.0.0.2", t0)}); err != nil {
+		t.Fatal(err)
+	}
+	got, truncated, err := st.ControlSessions(ctx, "t-a", t0.Add(-time.Minute), 10)
+	if err != nil || truncated || len(got) != 2 || got[0].EntityKey != "o1" || got[0].IntegrationID != "i-a" {
+		t.Fatalf("t-a: err=%v truncated=%v %+v", err, truncated, got)
+	}
+	b, _, _ := st.ControlSessions(ctx, "t-b", t0.Add(-time.Minute), 10)
+	if len(b) != 1 || b[0].IntegrationID != "i-b" {
+		t.Fatalf("CROSS-TENANT: t-b must read exactly its own session: %+v", b)
+	}
+	if one, tr, _ := st.ControlSessions(ctx, "t-a", t0.Add(-time.Minute), 1); len(one) != 1 || !tr {
+		t.Fatalf("limit must truncate and say so: %v %+v", tr, one)
+	}
+	if none, _, _ := st.ControlSessions(ctx, "t-a", t0.Add(time.Hour), 10); len(none) != 0 {
+		t.Fatalf("since must bound: %+v", none)
+	}
+	if zero, _, _ := st.ControlSessions(ctx, "t-a", t0.Add(-time.Minute), 0); zero != nil {
+		t.Fatalf("limit 0 reads nothing: %+v", zero)
+	}
+}

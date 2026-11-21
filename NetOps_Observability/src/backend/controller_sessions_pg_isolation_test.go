@@ -105,3 +105,58 @@ func TestPgControllerSessionsKeepIdentityAndAreTenantIsolated(t *testing.T) {
 		t.Fatalf("re-poll must update, not duplicate: %+v", again)
 	}
 }
+
+// TestPgControlSessionsAreTenantIsolated (tracker 397): the control-session read
+// behind the engine's control-session rung, on Postgres as the non-superuser app
+// role — control_conn/omp rows that name a peer only, own tenant only (even when
+// another tenant reports the SAME session addressing), since-bounded, newest
+// first, and truncation is reported. Gated on DATABASE_URL_TEST.
+func TestPgControlSessionsAreTenantIsolated(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres control-session isolation test")
+	}
+	ctx := context.Background()
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.DB().Close()
+	st := nms.NewPGStore(ps.DB(), nil)
+	t0 := time.Date(2026, 11, 21, 3, 0, 0, 0, time.UTC)
+	cc := func(kind, dev, sys, peer string, at time.Time) nms.StateRecord {
+		return nms.StateRecord{EntityKey: sys + "-0-mpls-" + peer + "-default", StateKind: kind, CurrentState: "up",
+			FirstSeen: at, LastSeen: at, DeviceID: dev, PeerID: peer}
+	}
+	if err := st.UpsertStates(ctx, "t_cs_retail", "int-cr", []nms.StateRecord{
+		cc("control_conn", "vedge-20", "10.255.255.20", "10.255.255.2", t0),
+		cc("omp", "vedge-20", "10.255.255.20", "10.255.255.2", t0.Add(time.Second)),
+		cc("control_conn", "vedge-21", "10.255.255.21", "", t0),             // names no peer
+		cc("bfd", "vedge-20", "10.255.255.20", "10.255.255.51", t0),         // not a control session
+		cc("reachability", "vedge-20", "10.255.255.20", "10.255.255.2", t0), // not a control session
+	}); err != nil {
+		t.Fatalf("UpsertStates retail: %v", err)
+	}
+	if err := st.UpsertStates(ctx, "t_cs_acme", "int-ca", []nms.StateRecord{
+		cc("control_conn", "vedge-20", "10.255.255.20", "10.255.255.2", t0),
+	}); err != nil {
+		t.Fatalf("UpsertStates acme: %v", err)
+	}
+	got, truncated, err := st.ControlSessions(ctx, "t_cs_retail", t0.Add(-time.Hour), 10)
+	if err != nil || truncated || len(got) != 2 {
+		t.Fatalf("retail control read: err=%v truncated=%v %+v", err, truncated, got)
+	}
+	if got[0].StateKind != "omp" || got[0].IntegrationID != "int-cr" || got[1].PeerID != "10.255.255.2" {
+		t.Fatalf("newest first, identity round-trips: %+v", got)
+	}
+	acme, _, err := st.ControlSessions(ctx, "t_cs_acme", t0.Add(-time.Hour), 10)
+	if err != nil || len(acme) != 1 || acme[0].IntegrationID != "int-ca" {
+		t.Fatalf("CROSS-TENANT: acme must read exactly its own session: %v %+v", err, acme)
+	}
+	if none, _, err := st.ControlSessions(ctx, "t_cs_retail", t0.Add(time.Hour), 10); err != nil || len(none) != 0 {
+		t.Fatalf("since must bound the read: %v %+v", err, none)
+	}
+	if one, tr, err := st.ControlSessions(ctx, "t_cs_retail", t0.Add(-time.Hour), 1); err != nil || len(one) != 1 || !tr {
+		t.Fatalf("limit 1 of 2 must say truncated: %v %v %+v", err, tr, one)
+	}
+}
