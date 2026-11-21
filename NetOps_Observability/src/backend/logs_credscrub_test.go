@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,19 @@ func TestCommunityMaskDoesNotChangeTheTenantScopedQuery(t *testing.T) {
 	}
 	plainPath, plainBody := run(false)
 	maskedPath, maskedBody := run(true)
+	// The routine originals' roll-up cutoff (logroutine.AggSince, now − 24 h) is
+	// the one wall-clock value in the request: two runs a second apart send
+	// different bounds (seen in CI on PR #318, 2026-11-21). Compare everything
+	// else byte for byte, and require the cutoff to be there so the mask never
+	// silently matches nothing.
+	cutoff := regexp.MustCompile(`("_index":"netops-syslogroutine-"\}\},\{"range":\{"timestamp":\{"lt":")[^"]+(")`)
+	for _, b := range []string{plainBody, maskedBody} {
+		if !cutoff.MatchString(b) {
+			t.Fatalf("the routine roll-up cutoff is not where this test expects it; update the mask:\n%s", b)
+		}
+	}
+	plainBody = cutoff.ReplaceAllString(plainBody, "${1}<cutoff>${2}")
+	maskedBody = cutoff.ReplaceAllString(maskedBody, "${1}<cutoff>${2}")
 	if plainPath != maskedPath || plainBody != maskedBody {
 		t.Fatalf("the scrubber changed the store request:\n%s %s\n%s %s", plainPath, plainBody, maskedPath, maskedBody)
 	}
