@@ -955,12 +955,14 @@ func topoCtxAuthoritativeRefs(meta map[string]any) map[string]bool {
 
 // topoCtxAuthoritative: the engine's relation record first; otherwise only the
 // prefixes that are rank ≤5 by construction (an L2/L3 adjacency, a path-hop
-// relation). Anything else (route:, a bare shared token) is not.
+// relation, a controller-reported control session — engine 3.6.0, tracker 397).
+// Anything else (route:, a bare shared token) is not.
 func topoCtxAuthoritative(kind, ref string, auth map[string]bool) bool {
 	if auth[ref] {
 		return true
 	}
-	return kind == "topo" && (strings.HasPrefix(ref, "adj:") || strings.HasPrefix(ref, "path:"))
+	return kind == "topo" && (strings.HasPrefix(ref, "adj:") || strings.HasPrefix(ref, "path:") ||
+		strings.HasPrefix(ref, "ctl:"))
 }
 
 // topoCtxCausalBasis words an engine edge's basis for an operator: how the two
@@ -972,6 +974,8 @@ func topoCtxCausalBasis(basis string, conf float64, gk, gref string, authoritati
 	switch {
 	case strings.HasPrefix(gref, "adj:"):
 		join = "joined across a known link"
+	case strings.HasPrefix(gref, "ctl:"):
+		join = "joined on a control session the controller reports"
 	case strings.HasPrefix(gref, "path:"):
 		join = "joined on a measured path"
 	case strings.HasPrefix(gref, "route:"):
