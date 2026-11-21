@@ -40,14 +40,14 @@ IPV6_LINES = [
     ("%BGP-5-ADJCHANGE: neighbor 2001:DB8::2 vpn vrf CUST-A Up", None,
      "2001:DB8::2", "2001:db8::2", "up"),
     # IOS XR
-    ("%ROUTING-BGP-5-ADJCHANGE : neighbor 2001:db8::2 Down - Peer closing down the session"
-     " (VRF: default) (AS: 65001)", None, "2001:db8::2", "2001:db8::2", "down"),
+    (("%ROUTING-BGP-5-ADJCHANGE : neighbor 2001:db8::2 Down - Peer closing down the session"
+      " (VRF: default) (AS: 65001)"), None, "2001:db8::2", "2001:db8::2", "down"),
     # NX-OS
     ("%BGP-5-ADJCHANGE: bgp-65000 [4321] (default) neighbor 2001:db8:10::5 Up", None,
      "2001:db8:10::5", "2001:db8:10::5", "up"),
     # Arista EOS
-    ("%BGP-5-ADJCHANGE: peer 2001:db8::9 (VRF default AS 65001) old state Established"
-     " event RecvNotify new state Idle", None, "2001:db8::9", "2001:db8::9", "down"),
+    (("%BGP-5-ADJCHANGE: peer 2001:db8::9 (VRF default AS 65001) old state Established"
+      " event RecvNotify new state Idle"), None, "2001:db8::9", "2001:db8::9", "down"),
 ]
 
 
@@ -103,5 +103,5 @@ def test_a_non_address_after_the_keyword_stays_host_level():
     """`neighbor ::::` matches the shape but is no address: canon abstains on the
     peer and the signal keeps its device binding, as any unparseable peer did."""
     sig = _syslog("%BGP-5-ADJCHANGE: neighbor :::::: Down")
-    out, outcome = canonicalize(sig, _lab())
+    out, _outcome = canonicalize(sig, _lab())
     assert out.entity_id == DEVICE
