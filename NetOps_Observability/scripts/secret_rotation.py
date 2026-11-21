@@ -139,6 +139,12 @@ POLICY: dict[str, Policy] = {
     # with new ones (the fingerprint is keyed).
     "CREDSCRUB_FP_KEY": Policy(
         FREE, "", "", ""),
+    # Paths redesign P3: the prober control signing key. Both sides re-read
+    # their rendered file within a second; the prober keeps accepting the
+    # previous key for RotationGrace (10 min), so a rotation never turns
+    # measurement off. Nothing stored is keyed by it.
+    "PROBER_CONTROL_KEY": Policy(
+        FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
     # SEC-010 vmauth per-service credentials. Tracker 367 layer 1: they reach

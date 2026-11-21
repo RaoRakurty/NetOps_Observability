@@ -481,7 +481,7 @@ func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
 			if p.VantageID == "" {
 				p.VantageID = vantage // a pre-upgrade prober published without attribution
 			}
-			k := pathKeyFor(p.VantageID, p.Dst, p.Method)
+			k := pathKeyFor(p.VantageID, p.TenantID, p.Dst, p.Method)
 			if prev, ok := seen[k]; ok && prev.TS.After(p.TS) {
 				continue // keep the newest measurement of the same path
 			}

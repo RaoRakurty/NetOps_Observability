@@ -209,7 +209,7 @@ func TestEnvTargetsKeepOnlyAllowedTargets(t *testing.T) {
 		})}
 	got, err := e.Targets(context.Background())
 	want := "10.20.0.1,branch-edge,8.8.8.8"
-	if strings.Join(got, ",") != want {
+	if strings.Join(Addrs(got), ",") != want {
 		t.Fatalf("targets = %v, want %s", got, want)
 	}
 	if err == nil {
@@ -232,7 +232,7 @@ func TestEnvTargetsWithPorts(t *testing.T) {
 	env := map[string]string{"STAMP_TARGETS": "10.1.1.1, 10.1.1.2:8620, 127.0.0.1:862"}
 	e := &envTargets{key: "STAMP_TARGETS", defaultPort: 862, getenv: func(k string) string { return env[k] }, lookup: fakeLookup(nil)}
 	got, err := e.Targets(context.Background())
-	if strings.Join(got, ",") != "10.1.1.1:862,10.1.1.2:8620" {
+	if strings.Join(Addrs(got), ",") != "10.1.1.1:862,10.1.1.2:8620" {
 		t.Fatalf("targets = %v", got)
 	}
 	if err == nil || !strings.Contains(err.Error(), "1 refused") {
