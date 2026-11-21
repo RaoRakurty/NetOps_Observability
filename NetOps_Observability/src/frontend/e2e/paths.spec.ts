@@ -19,6 +19,41 @@ const SUGGESTED = {
   ],
 };
 
+// Paths P4: one row per SD-WAN tunnel (both ends folded), controller quality
+// with its own time, an open case on one tunnel, and the site matrix.
+const asOf = new Date(Date.now() - 40 * 60_000).toISOString();
+const end = (device: string, ip: string, site: string, state = "up") => ({
+  device_id: device, device, system_ip: ip, color: "mpls", state, sessions: 1, up: state === "up" ? 1 : 0,
+  site: { label: site, source: "manual" },
+});
+const TUNNEL_ROW = (id: string, a: ReturnType<typeof end>, b: ReturnType<typeof end>, state: string, kase: string | null) => ({
+  id, type: "sdwan", tunnel_id: id, status: state === "up" ? "up" : "down", state, ends_reported: 2, a, b,
+  local_device: a.device, local_addr: "mpls", remote_device: b.device, remote_addr: "mpls",
+  latency_ms: 18.4, jitter_ms: 2.1, loss_pct: state === "up" ? 0.2 : 4.5, qoe: 8.6, uptime_s: 0, measured: true, ts: new Date().toISOString(),
+  quality: { latency_ms: 18.4, jitter_ms: 2.1, loss_pct: state === "up" ? 0.2 : 4.5, qoe: 8.6, as_of: asOf, ends: 2, source: "controller_statistics" },
+  case: kase ? { id: kase, tier: "suspected", entity_id: id } : null, sources: ["controller"],
+});
+const TUNNELS = {
+  data: [
+    TUNNEL_ROW("10.255.255.40/mpls|10.255.255.100/mpls", end("cedge-40", "10.255.255.40", "Branch 40"), end("vedge-100", "10.255.255.100", "DC East"), "up", null),
+    TUNNEL_ROW("10.255.255.50/mpls|10.255.255.100/mpls", end("cedge-50", "10.255.255.50", "Branch 50", "down"), end("vedge-100", "10.255.255.100", "DC East"), "disagree", "case-uuid-1"),
+  ],
+  rows: 2, total: 2, truncated: false,
+  quality: { status: "ok", window_s: 10800 }, cases: { status: "ok" },
+  matrix: {
+    sites: [
+      { key: "s1", label: "Branch 40", source: "manual", devices: 1 },
+      { key: "s2", label: "Branch 50", source: "manual", devices: 1 },
+      { key: "s3", label: "DC East", source: "manual", devices: 1 },
+    ],
+    cells: [
+      { a: "s1", b: "s3", state: "up", tunnels: 1, up: 1, down: 0, disagree: 0, transports: [{ color: "mpls", state: "up", tunnels: 1 }], measured: 1, worst_loss_pct: 0.2, worst_latency_ms: 18.4, quality_as_of: asOf, cases: [] },
+      { a: "s2", b: "s3", state: "disagree", tunnels: 1, up: 0, down: 0, disagree: 1, transports: [{ color: "mpls", state: "disagree", tunnels: 1 }], measured: 1, worst_loss_pct: 4.5, worst_latency_ms: 18.4, quality_as_of: asOf, cases: ["case-uuid-1"] },
+    ],
+    sites_total: 3, unplaced_tunnels: 0, truncated: false,
+  },
+};
+
 async function mockApi(page: Page, created: unknown[] = []) {
   await page.addInitScript(() => localStorage.setItem("netops_token", "e2e-fake-token"));
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route: Route) => {
@@ -34,11 +69,39 @@ async function mockApi(page: Page, created: unknown[] = []) {
       return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
     }
     if (p.endsWith("/api/paths/health")) return json({ paths: [] });
-    if (p.endsWith("/api/tunnels")) return json({ data: [] });
+    if (p.endsWith("/api/tunnels")) return json(TUNNELS);
     if (p.endsWith("/api/correlations") || p.endsWith("/api/incidents")) return json([]);
     return json({});
   });
 }
+
+test("Tunnels draws one row per tunnel and a site matrix that filters the table", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/investigate/tunnels");
+  const matrix = page.getByTestId("tunnels-matrix");
+  await expect(matrix).toBeVisible();
+  // Two site pairs, each drawn on both sides of the diagonal.
+  await expect(page.getByTestId("tunnels-matrix-cell")).toHaveCount(4);
+  await expect(page.locator('[data-testid="tunnels-matrix-cell"][data-state="disagree"]').first()).toHaveClass(/t-warn/);
+  await expect(page.getByText("2 of 2 tunnels")).toBeVisible();
+  await expect(page.getByTestId("tunnel-state").filter({ hasText: "ends disagree" })).toHaveCount(1);
+  await expect(page.getByTestId("tunnel-asof").first()).toHaveText(/^as of \d\d:\d\d \(40 min ago\)$/);
+
+  await page.locator('[data-testid="tunnels-matrix-cell"][data-state="disagree"]').first().click();
+  await expect(page.getByText("1 of 2 tunnels")).toBeVisible();
+  await expect(page.getByTestId("tunnels-cell-filter")).toContainText("Branch 50");
+  await page.getByTestId("tunnels-cell-filter").click();
+  await expect(page.getByText("2 of 2 tunnels")).toBeVisible();
+});
+
+test("a Tunnels case chip opens the case in RCA", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/investigate/tunnels");
+  const chip = page.getByTestId("tunnel-case");
+  await expect(chip).toHaveAttribute("href", "#/investigate/rca?id=case-uuid-1");
+  await chip.click();
+  await expect(page).toHaveURL(/#\/investigate\/rca\?id=case-uuid-1$/);
+});
 
 test("Paths groups the three measurement pages; Troubleshooting sits beside RCA", async ({ page }) => {
   await mockApi(page);
