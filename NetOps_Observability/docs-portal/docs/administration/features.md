@@ -52,6 +52,11 @@ restarting — it stops measuring rather than guess, and resumes on its own.
 Targets that are never probed (the server itself, link-local and cloud
 metadata addresses, multicast) are refused whoever listed them.
 
+The prober only obeys switch settings that Correlix has signed with a key
+that just the two of them hold, so no other service can turn measurement on.
+Each measured path belongs to the workspace whose target it traced, and only
+that workspace sees it.
+
 ### The Iris AI switches
 
 | Switch | What it allows | Needs |

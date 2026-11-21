@@ -5,7 +5,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
 )
 
@@ -28,13 +28,22 @@ import (
 // to VictoriaMetrics (queried via /api/metrics); the traceroute path topology is
 // served here for the Network Path UI.
 
-// handleProbePaths returns the latest traceroute path per (VANTAGE, destination,
-// method). Every path carries the vantage that measured it: two probers observing
-// the same destination from different places are two DISTINCT paths (contract §2.2)
-// and both are returned — they used to overwrite each other in one shared key.
-// When the prober runs as a sidecar it shares topology via PROBE_PATHS_FILE (a
-// shared volume) — serve that file if present; otherwise serve the in-process store
-// (collector running inside the API). Authenticated (the /api mux is withAuth).
+// handleProbePaths returns the latest traceroute path per (VANTAGE, tenant,
+// destination, method). Every path carries the vantage that measured it: two
+// probers observing the same destination from different places are two DISTINCT
+// paths (contract §2.2) and both are returned — they used to overwrite each other
+// in one shared key.
+//
+// TENANT-SCOPED (Paths redesign P3, §3a). Each path carries the tenant whose
+// target it measured, and the caller receives only the paths its scope reads
+// (probePathsVisibleTo). Before P3 this was classed as stack-wide "infra" and
+// returned every path to any authenticated caller — harmless while targets were
+// an install-time list, a leak once tenants name their own targets.
+//
+// The source is the same precedence currentProbePaths uses: the key-value store
+// (sidecar probers publish there — ADR 0001) merged across vantages, then the
+// shared PROBE_PATHS_FILE, then the in-process store; remote vantages' pushed
+// traces are merged into whichever answered.
 func (s *server) handleProbePaths(w http.ResponseWriter, r *http.Request) {
 	// POST = a REMOTE vantage publishing its own traces (probe_paths_ingest.go): the
 	// only transport a prober inside a customer LAN has, since it cannot reach the
@@ -43,27 +52,68 @@ func (s *server) handleProbePaths(w http.ResponseWriter, r *http.Request) {
 		s.handleProbePathsPush(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	// Primary: the key-value store (sidecar probers publish here — ADR 0001), merged
-	// across every vantage that has published.
-	if collectors.RedisAddr() != "" {
-		if paths, err := collectors.FetchProbePathsAll(r.Context()); err == nil && len(paths) > 0 {
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(paths) // best-effort: a failed encode/write means the client is gone
-			return
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	paths, err := s.currentProbePaths(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("the probe path store could not be read"))
+		return
+	}
+	writeJSON(w, http.StatusOK, probePathsVisibleTo(s.tenantVisibilityFor(claims), paths))
+}
+
+// probePathOwner is the tenant a path is served to: the tenant its target
+// belonged to, stamped by the prober. A path with no owner came from the
+// install-time target list (or a prober older than P3): it belongs to
+// PATH_GRAPH_TENANT when the install names one — the single-tenant install,
+// where that one tenant's operators must keep seeing their traces — and
+// otherwise to the platform ("" ⇒ the Provider scope and cross-tenant callers
+// only, never every tenant).
+func probePathOwner(p collectors.PathResult) string {
+	if t := normTenant(p.TenantID); t != "" {
+		return t
+	}
+	return normTenant(os.Getenv("PATH_GRAPH_TENANT"))
+}
+
+// probePathsVisibleTo keeps the paths a scope may read, in order. The
+// operator-visibility restriction applies first (a hidden tenant stays hidden
+// on the cross-tenant path too); then a cross-tenant caller reads everything
+// and anyone else reads only its own tenant's paths (owner.ScopeReads: the
+// Provider scope also reads the platform's untagged ones). Default-closed: an
+// unbound "" scope reads nothing that has an owner.
+func probePathsVisibleTo(v tenantVisibility, paths []collectors.PathResult) []collectors.PathResult {
+	out := make([]collectors.PathResult, 0, len(paths))
+	for _, p := range paths {
+		pt := probePathOwner(p)
+		if v.hides(pt) {
+			continue
+		}
+		switch {
+		case v.cross:
+			out = append(out, p)
+		case strings.TrimSpace(v.tenant) == "":
+			// An unbound scope is not the platform (alertVisibleTenantOnly's
+			// rule): owner.ScopeReads("", "") would hand it every untagged path.
+		case owner.ScopeReads(v.tenant, pt):
+			out = append(out, p)
 		}
 	}
-	// Fallback: shared file, then the in-process store.
-	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
-		// #nosec G304 -- path is the operator-configured PROBE_PATHS_FILE, not user input
-		if data, err := os.ReadFile(path); err == nil {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(data) // best-effort: status committed; a failed write means the client is gone
-			return
-		}
+	return out
+}
+
+// probePushTenant is the owner stamped on a remote vantage's pushed paths: the
+// PUSHING principal's tenant, never anything in the body (§3a rule 2). A
+// cross-tenant pusher (the platform owner's "All tenants" view) stamps the
+// platform ("").
+func probePushTenant(claims jwtClaims) string {
+	tenant, cross := principalTenant(claims)
+	if cross || owner.IsPlatform(tenant) {
+		return ""
 	}
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(s.mergedProbePaths(collectors.Paths.All())) // best-effort: a failed encode/write means the client is gone
+	return normTenant(tenant)
 }
 
 // mergedProbePaths folds the remote vantages' pushed traces into whatever the local

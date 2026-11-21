@@ -54,19 +54,42 @@ var t0 = time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 
 func clock(t time.Time) func() time.Time { return func() time.Time { return t } }
 
+// keyVal is a settable key source (the rendered key file in production).
+type keyVal struct {
+	v   string
+	err error
+}
+
+func (k *keyVal) Value() (string, error) { return k.v, k.err }
+
+const testKey = "k0-0123456789abcdefghijklmnopqrstuvwxyzABCDEF"
+
+func ring() *Keyring { return NewKeyring(&keyVal{v: testKey}, clock(t0)) }
+
+// openRecord verifies and decodes a published switch record.
+func openRecord(t *testing.T, raw string) Record {
+	t.Helper()
+	payload, err := ring().Open(KindSwitches, raw)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	var rec Record
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
 // The api publishes exactly the resolved values of every delivered switch,
 // with the schema version, its own time and the TTL that expires it.
 func TestPublisherWritesTheResolvedSwitches(t *testing.T) {
 	kv := newKV()
 	resolved := map[string]bool{EnvTraceroute: true, EnvActiveProbe: false}
-	p := NewPublisher(kv, func(env string) bool { return resolved[env] }, clock(t0))
+	p := NewPublisher(kv, func(env string) bool { return resolved[env] }, ring(), clock(t0), nil)
 	if err := p.PublishOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var rec Record
-	if err := json.Unmarshal([]byte(kv.vals[Key]), &rec); err != nil {
-		t.Fatal(err)
-	}
+	rec := openRecord(t, kv.vals[Key])
 	if rec.V != SchemaVersion || !rec.IssuedAt.Equal(t0) || len(rec.Switches) != len(Delivered()) {
 		t.Fatalf("record = %+v", rec)
 	}
@@ -83,7 +106,7 @@ func TestPublisherWritesTheResolvedSwitches(t *testing.T) {
 func TestPublisherWithoutChannelAndOnFailure(t *testing.T) {
 	kv := newKV()
 	kv.configured = false
-	p := NewPublisher(kv, func(string) bool { return true }, clock(t0))
+	p := NewPublisher(kv, func(string) bool { return true }, ring(), clock(t0), nil)
 	if err := p.PublishOnce(context.Background()); err != nil || len(kv.vals) != 0 {
 		t.Fatalf("no channel: err=%v vals=%v", err, kv.vals)
 	}
@@ -98,7 +121,18 @@ func TestPublisherWithoutChannelAndOnFailure(t *testing.T) {
 func TestReaderFailsClosed(t *testing.T) {
 	fresh := func(sw map[string]bool, at time.Time) string {
 		b, _ := json.Marshal(Record{V: SchemaVersion, IssuedAt: at, Switches: sw})
-		return string(b)
+		raw, err := ring().Seal(KindSwitches, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	sealed := func(payload string) string {
+		raw, err := ring().Seal(KindSwitches, []byte(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
 	}
 	cases := []struct {
 		name       string
@@ -113,9 +147,11 @@ func TestReaderFailsClosed(t *testing.T) {
 		{"unread channel", true, "", errors.New("dial tcp: refused"), map[string]string{EnvTraceroute: "true"}, Decision{false, ReasonUnread}},
 		{"nothing published", true, "", nil, map[string]string{EnvTraceroute: "true"}, Decision{false, ReasonNotPublished}},
 		{"switch not named", true, fresh(map[string]bool{EnvActiveProbe: true}, t0), nil, nil, Decision{false, ReasonNotPublished}},
-		{"garbage", true, "{not json", nil, nil, Decision{false, ReasonInvalid}},
-		{"wrong schema", true, `{"v":2,"issued_at":"2026-11-20T10:00:00Z","switches":{"FEATURE_TRACEROUTE":true}}`, nil, nil, Decision{false, ReasonInvalid}},
-		{"no timestamp", true, `{"v":1,"switches":{"FEATURE_TRACEROUTE":true}}`, nil, nil, Decision{false, ReasonInvalid}},
+		{"garbage", true, "{not json", nil, nil, Decision{false, ReasonUnsigned}},
+		{"a P2 (unsigned v1) record", true, `{"v":1,"issued_at":"2026-11-20T10:00:00Z","switches":{"FEATURE_TRACEROUTE":true}}`, nil, nil, Decision{false, ReasonUnsigned}},
+		{"signed garbage", true, sealed(`"not a record"`), nil, nil, Decision{false, ReasonInvalid}},
+		{"wrong schema", true, sealed(`{"v":1,"issued_at":"2026-11-20T10:00:00Z","switches":{"FEATURE_TRACEROUTE":true}}`), nil, nil, Decision{false, ReasonInvalid}},
+		{"no timestamp", true, sealed(`{"v":2,"switches":{"FEATURE_TRACEROUTE":true}}`), nil, nil, Decision{false, ReasonInvalid}},
 		{"stale", true, fresh(map[string]bool{EnvTraceroute: true}, t0.Add(-MaxAge-time.Second)), nil, nil, Decision{false, ReasonStale}},
 		{"from the future", true, fresh(map[string]bool{EnvTraceroute: true}, t0.Add(2*time.Minute)), nil, nil, Decision{false, ReasonStale}},
 		{"small skew tolerated", true, fresh(map[string]bool{EnvTraceroute: true}, t0.Add(30*time.Second)), nil, nil, Decision{true, ReasonPublished}},
@@ -130,7 +166,7 @@ func TestReaderFailsClosed(t *testing.T) {
 			if c.val != "" {
 				kv.vals[Key] = c.val
 			}
-			r := NewReader(kv, envOf(c.env), clock(t0), nil)
+			r := NewReader(kv, ring(), envOf(c.env), clock(t0), nil)
 			if got := r.Decide(context.Background(), EnvTraceroute); got != c.want {
 				t.Fatalf("got %+v, want %+v", got, c.want)
 			}
@@ -144,8 +180,8 @@ func TestRoundTripAppliesWithoutRestart(t *testing.T) {
 	kv := newKV()
 	on := true
 	now := t0
-	p := NewPublisher(kv, func(env string) bool { return env == EnvTraceroute && on }, func() time.Time { return now })
-	r := NewReader(kv, envOf(nil), func() time.Time { return now }, nil)
+	p := NewPublisher(kv, func(env string) bool { return env == EnvTraceroute && on }, ring(), func() time.Time { return now }, nil)
+	r := NewReader(kv, ring(), envOf(nil), func() time.Time { return now }, nil)
 	if err := p.PublishOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +215,7 @@ func TestReaderLogsTransitionsOnce(t *testing.T) {
 	kv := newKV()
 	var lines []string
 	logf := func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
-	r := NewReader(kv, envOf(nil), clock(t0), logf)
+	r := NewReader(kv, ring(), envOf(nil), clock(t0), logf)
 	for i := 0; i < 3; i++ {
 		r.Decide(context.Background(), EnvTraceroute)
 	}

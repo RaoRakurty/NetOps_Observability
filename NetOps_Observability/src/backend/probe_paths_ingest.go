@@ -28,7 +28,8 @@ func newRemotePathStore() *remotePathStore { return pathgraph.NewRemotePathStore
 // is bounded; every path is validated before it can become evidence (§3 zero trust:
 // the prober is an input, not a trusted peer).
 func (s *server) handleProbePathsPush(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, pathgraph.MaxPushBytes)
@@ -50,7 +51,13 @@ func (s *server) handleProbePathsPush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errors.New("path ingest is not enabled"))
 		return
 	}
-	s.remotePaths.Put(vantage, clean, time.Now().UTC())
+	// The owner comes from the token, never the body (§3a rule 2): a remote
+	// vantage cannot file its traces under another tenant.
+	stamp := probePushTenant(claims)
+	for i := range clean {
+		clean[i].TenantID = stamp
+	}
+	s.remotePaths.Put(stamp, vantage, clean, time.Now().UTC())
 	logInfo("pathgraph", "remote vantage published paths", map[string]any{
 		"vantage": vantage, "paths": len(clean),
 	})

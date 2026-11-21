@@ -324,7 +324,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		enrichPathStamp(&view, s.stampByDst(r.Context(), pf))
 		// Traceroute per-hop RTT/loss (keyed by hop IP) — covers the intermediate
 		// hops STAMP never targets; the UI prefers stamp_* and falls back to trace_*.
-		enrichPathTrace(&view, s.traceByHop(r.Context(), pf))
+		enrichPathTrace(&view, s.traceByHop(r.Context(), pf, s.tenantVisibilityFor(claims)))
 		// #85 — bandwidth/throughput/reliability/MTU onto the path edges (interface
 		// facts, same (device, ifName) join as Utilization).
 		enrichPathIfMetrics(&view, s.pathIfaceMetrics(r.Context(), pf))
