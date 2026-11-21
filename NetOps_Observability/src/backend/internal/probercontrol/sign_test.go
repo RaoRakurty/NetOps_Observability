@@ -5,6 +5,7 @@ package probercontrol
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,9 +32,9 @@ func TestSealOpenBindsKeyKindAndBytes(t *testing.T) {
 	if _, err := other.Open(KindSwitches, raw); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("another key must not verify it: %v", err)
 	}
-	tampered := strings.Replace(raw, `{"v":2}`, `{"v":3}`, 1)
+	tampered := strings.Replace(raw, `{\"v\":2}`, `{\"v\":3}`, 1)
 	if tampered == raw {
-		t.Fatalf("the payload is embedded verbatim; test setup is wrong: %s", raw)
+		t.Fatalf("the payload is embedded as an escaped string; test setup is wrong: %s", raw)
 	}
 	if _, err := r.Open(KindSwitches, tampered); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("a tampered payload must not verify: %v", err)
@@ -59,8 +60,54 @@ func TestSealOpenBindsKeyKindAndBytes(t *testing.T) {
 	if _, err := r.Open(KindSwitches, `{"v":2,"switches":{}}`); !errors.Is(err, ErrUnsigned) {
 		t.Fatalf("a bare record is unsigned: %v", err)
 	}
-	if _, err := r.Open(KindSwitches, `{"payload":{"v":2},"sig":"not-hex"}`); !errors.Is(err, ErrBadSignature) {
+	if _, err := r.Open(KindSwitches, `{"v":1,"payload":"{\"v\":2}","sig":"not-hex"}`); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("a non-hex signature is bad: %v", err)
+	}
+	// The pre-fix envelope (payload as a raw JSON object, no version) is not
+	// this envelope: refused as unsigned, which reads OFF.
+	if _, err := r.Open(KindSwitches, `{"payload":{"v":2},"sig":"00"}`); !errors.Is(err, ErrUnsigned) {
+		t.Fatalf("a versionless raw-object envelope must be refused: %v", err)
+	}
+}
+
+// Regression (review of #310): every payload byte survives the envelope. The
+// RawMessage envelope HTML-escaped &, <, > and compacted whitespace, so the
+// prober verified different bytes than the api signed and refused the record.
+func TestSealOpenIsByteExactForAnyPayload(t *testing.T) {
+	r := ring()
+	big := `{"targets":[` + strings.Repeat(`{"id":"dem-x","addr":"203.0.113.1","site":"Branch 40 & HQ"},`, 2000) + `{}]}`
+	for name, payload := range map[string]string{
+		"ampersand query":  `{"url":"https://a/?x=1&y=2"}`,
+		"whitespace":       "{\"a\": 1,\n\t\"b\" : [ 1 , 2 ] }",
+		"angle brackets":   `{"n":"<b>bold</b>"}`,
+		"unicode":          `{"site":"Zürich — 東京 🚀","esc":"é "}`,
+		"escaped quotes":   `{"q":"say \"hi\" \\ there","u":"é "}`,
+		"compact baseline": `{"a":1}`,
+		"large":            big,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := r.Seal(KindTargets, []byte(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := r.Open(KindTargets, raw)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			if string(got) != payload {
+				t.Fatalf("payload changed in transit:\n got %q\nwant %q", got, payload)
+			}
+		})
+	}
+	// Signed bytes that are not JSON are never handed to a reader.
+	k := NewKeyring(&keyVal{v: testKey}, clock(t0))
+	notJSON := `not json`
+	env, err := json.Marshal(envelope{V: envelopeVersion, Payload: notJSON, Sig: hex.EncodeToString(mac(testKey, KindTargets, []byte(notJSON)))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Open(KindTargets, string(env)); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("signed non-JSON must be refused: %v", err)
 	}
 }
 
