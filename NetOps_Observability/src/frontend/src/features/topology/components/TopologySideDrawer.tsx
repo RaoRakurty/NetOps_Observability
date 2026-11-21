@@ -24,6 +24,7 @@ import {
   fmtUtil,
 } from "../utils/topologyHealth";
 import type { Health } from "../api/topologyTypes";
+import { siteName, siteProvenance, isDiscoveredGroup } from "../utils/siteName";
 import ConfidencePanel from "./ConfidencePanel";
 import EvidencePanel from "./EvidencePanel";
 import AskIris from "../../../components/AskIris";
@@ -223,7 +224,9 @@ function NodeBody({ node }: { node: TopologyNode }) {
         <MetaRow label="Vendor" value={node.vendor} />
         <MetaRow label="Model" value={node.model} />
         <MetaRow label="Mgmt IP" value={node.mgmt_ip} />
-        <MetaRow label="Site" value={node.site} />
+        <MetaRow label="Site" value={siteName(node) || undefined} />
+        <MetaRow label="Site from" value={node.site ? siteProvenance(node) || undefined : undefined} />
+        <MetaRow label="Site note" value={node.site_note} />
         <MetaRow label="Rack" value={node.rack} />
         <MetaRow label="Zone" value={node.zone} />
         <MetaRow label="Owner" value={node.owner} />
@@ -367,8 +370,14 @@ function GroupBody({
         <HealthBadge health={worst} />
       </div>
       <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginBottom: 14 }}>
-        {group.group_type} · {members.length} nodes
+        {isDiscoveredGroup(group) ? "discovered site" : group.group_type} · {members.length} nodes
       </div>
+      {isDiscoveredGroup(group) && (
+        <p data-testid="discovered-site-note" style={{ fontSize: 14, margin: "0 0 14px", color: "var(--fg-muted)" }}>
+          Grouped by the site id its devices report — not a declared site yet.{" "}
+          <a href="#/infrastructure/sites/sites">Adopt it in Sites</a> to rename it and put it on the map.
+        </p>
+      )}
 
       <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
         <MetaRow label="Nodes" value={String(members.length)} />

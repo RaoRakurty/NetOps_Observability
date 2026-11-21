@@ -1121,6 +1121,13 @@ var routeIsolationLedger = map[string]string{
 	// 1). Proven by internal/pipedebug/sessions_test.go.
 	"/api/debug/sessions":  "platform",
 	"/api/debug/sessions/": "platform",
+
+	// Discovered-site adoption (2026-11-20): the plan is built over the
+	// caller's visible devices in its OWN tenant (the cross-tenant view must
+	// pick a tenant first), sites are stamped from the principal and bindings
+	// from the device. Proven by discovered_sites_test.go.
+	"/api/discovered-sites":       "scoped",
+	"/api/discovered-sites/adopt": "scoped",
 }
 
 var validRouteCategories = map[string]bool{

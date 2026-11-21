@@ -11,6 +11,7 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/devreach"
+	"netops/backend/internal/siteres"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
@@ -71,19 +72,14 @@ func controllerReportedVersion(d models.Device) string {
 // reportedSite is the site id the device itself reports (its SD-WAN overlay
 // facts, keyed by THIS device's id — so it is this tenant's row), else the one
 // its controller reports for it (the controller_site_id label the controller
-// discovery source stamps). Pure.
+// discovery source stamps). Pure. It is siteres.Discovered — the same order
+// the topology's discovered sites use — minus the peers' inference.
 func reportedSite(d models.Device, facts collectors.OverlayDeviceFacts) (id, source string) {
-	if s := strings.TrimSpace(facts.SiteID); s != "" {
-		return s, "device"
-	}
-	if s := strings.TrimSpace(d.Labels["controller_site_id"]); s != "" {
-		sys := strings.TrimSpace(d.Labels["source_system"])
-		if sys == "" {
-			sys = "controller"
-		}
-		return s, sys
-	}
-	return "", ""
+	return siteres.Discovered(siteres.Input{
+		DeviceSiteID:     facts.SiteID,
+		ControllerSiteID: d.Labels["controller_site_id"],
+		ControllerSystem: d.Labels["source_system"],
+	})
 }
 
 // errReachabilityUnread: the collectors' liveness could not be read.

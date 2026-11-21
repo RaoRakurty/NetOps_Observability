@@ -12,6 +12,7 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
+import DiscoveredSitesPanel from "./sites/DiscoveredSitesPanel";
 // Device Geomap (Infrastructure → Maps) — the fleet plotted by site. Placement
 // is INTENT data: sites and their latitude/longitude live in the Source of
 // Truth (Automation → Source of Truth), never GeoIP — RFC 1918 management
@@ -259,6 +260,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
   const [add, setAdd] = useState({ name: "", status: "", owner: "", lat: "", lng: "" });
   const [drafts, setDrafts] = useState<Record<string, { name: string; status: string; owner: string; lat: string; lng: string }>>({});
   const [showImport, setShowImport] = useState(false);
+  const [showAdopt, setShowAdopt] = useState(false);
 
   const load = async () => {
     try { const r = await api.sites(); setSites(r.sites); setActive(r.active || "internal"); setErr(null); }
@@ -323,15 +325,21 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
         <h3 style={{ margin: 0 }}>Sites</h3>
         <span className="badge" style={{ fontSize: 12.5 }}>Source of truth</span>
         {editable && (
-          <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setShowImport((v) => !v)}>
-            {showImport ? "Close import" : "Import…"}
-          </button>
+          <>
+            <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setShowAdopt((v) => !v)}>
+              {showAdopt ? "Close discovered sites" : "Adopt discovered sites…"}
+            </button>
+            <button className="dash-btn" onClick={() => setShowImport((v) => !v)}>
+              {showImport ? "Close import" : "Import…"}
+            </button>
+          </>
         )}
       </div>
       <p className="mini-meta">
         Give a site coordinates, then place devices on it.
         <AskIris topic="geomap.sites" label="Sites" />
       </p>
+      {editable && showAdopt && <DiscoveredSitesPanel onDone={() => { load(); onChanged(); }} />}
       {editable && showImport && <ImportPanel onDone={() => { load(); onChanged(); }} />}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       <table className="loc-editor">

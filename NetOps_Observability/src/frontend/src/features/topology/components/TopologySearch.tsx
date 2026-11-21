@@ -40,7 +40,7 @@ function buildIndex(view: TopologyView): Indexed[] {
       node.tags?.ip,
       node.vendor,
       node.model,
-      node.site,
+      node.site_label ?? node.site,
       node.role,
       node.owner,
       node.health,
@@ -161,7 +161,7 @@ export default function TopologySearch({
                     fontFamily: "var(--font-mono, ui-monospace, monospace)",
                   }}
                 >
-                  {[node.tags?.ip, node.vendor, node.site, ports.slice(0, 2).join(", ")]
+                  {[node.tags?.ip, node.vendor, node.site_label ?? node.site, ports.slice(0, 2).join(", ")]
                     .filter(Boolean)
                     .join(" · ")}
                 </div>
