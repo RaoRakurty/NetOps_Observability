@@ -94,6 +94,51 @@ def test_fast_checks_pass_on_the_committed_tree():
     assert tp.run_fast_checks() == []
 
 
+def test_a_parser_input_triggers_the_parser_checks_only():
+    """Tracker 382 (2026-11-21): events.yaml and a vendor pack changed, the hook
+    said no generated-artifact input changed, and two stale artifacts reached CI."""
+    for path in ("telemetry-catalog/events.yaml", "telemetry-catalog/vendor-packs/nokia_sros.yaml",
+                 "src/correlation/rule_model.py", "scripts/gen-syslog-admission.py"):
+        plan = tp.classify([P + path])
+        assert plan.parser_checks, path
+        assert not plan.artifact_checks, path
+        assert any("parser artifacts" in c for c in plan.local), path
+    assert not tp.classify([P + "src/correlation/engine.py"]).parser_checks
+
+
+def test_every_parser_check_names_a_tracked_generator_with_a_check_flag():
+    for script, regen in tp.PARSER_ARTIFACT_CHECKS:
+        with open(os.path.join(ROOT, script), encoding="utf-8") as fh:
+            src = fh.read()
+        assert "--check" in src, script
+        assert script in regen, (script, regen)
+
+
+def test_parser_checks_pass_on_the_committed_tree():
+    assert tp.run_parser_checks() == []
+
+
+def test_a_stale_or_unrunnable_parser_check_is_a_failure(tmp_path, monkeypatch):
+    stale = tmp_path / "stale.py"
+    stale.write_text("import sys; print('x is STALE', file=sys.stderr); sys.exit(1)\n")
+    slow = tmp_path / "slow.py"
+    slow.write_text("import time; time.sleep(5)\n")
+    monkeypatch.setattr(tp, "PARSER_ARTIFACT_CHECKS",
+                        ((str(stale), "python3 stale.py"), (str(slow), "python3 slow.py")))
+    real_run = tp.subprocess.run
+
+    def bounded(cmd, **kw):
+        if cmd[1] == str(slow):
+            raise tp.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(tp.subprocess, "run", bounded)
+    failures = tp.run_parser_checks()
+    assert len(failures) == 2, failures
+    assert "STALE" in failures[0] and "python3 stale.py" in failures[0]
+    assert "UNKNOWN" in failures[1]
+
+
 def test_run_fast_skips_when_no_artifact_input_changed():
     assert tp.main(["--run-fast", P + "docs/TRACKER.md"]) == 0
 
@@ -415,6 +460,7 @@ def test_every_project_path_rule_matches_a_tracked_file():
     except (OSError, subprocess.SubprocessError) as exc:
         pytest.skip(f"git ls-files unavailable: {exc}")
     tables = {"HIGH_RISK": tp.HIGH_RISK, "ARTIFACT_INPUTS": tp.ARTIFACT_INPUTS,
+              "PARSER_ARTIFACT_INPUTS": tp.PARSER_ARTIFACT_INPUTS,
               "DOCS": tp.DOCS, "FRONTEND": tp.FRONTEND,
               "CI_FULL_TRIGGERS": tp.CI_FULL_TRIGGERS,
               "CI_RULES": tuple(p for p, _ in tp.CI_RULES)}

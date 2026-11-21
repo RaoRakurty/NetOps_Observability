@@ -63,6 +63,35 @@ ARTIFACT_INPUTS = (
     "docs/THIRD_PARTY_LICENSES.md", "docs/sbom/*", "docs/compliance/oci-inventory.json",
 )
 
+# Paths whose change can make a GENERATED PARSER artifact stale: the baked
+# rules, the golden corpus, the coverage matrix, the vector syslog-pack and
+# syslog-admission tests, and the vendor coverage report. Kept apart from
+# ARTIFACT_INPUTS because these checks take seconds, not milliseconds. Tracker
+# 382 (2026-11-21) changed events.yaml and a vendor pack, the hook said "no
+# generated-artifact input changed", and two stale artifacts reached CI.
+PARSER_ARTIFACT_INPUTS = (
+    "telemetry-catalog/events.yaml", "telemetry-catalog/vendor-packs/*",
+    "telemetry-catalog/bake_rules.py", "telemetry-catalog/record_pack_corpus.py",
+    "telemetry-catalog/coverage_matrix.py",
+    "src/correlation/rule_model.py", "src/correlation/syslog_packs.py",
+    "scripts/gen-syslog-packs.py", "scripts/gen-syslog-admission.py",
+    "scripts/gen-vendor-coverage.py",
+)
+
+# The checks PARSER_ARTIFACT_INPUTS triggers: each generator's own --check, so
+# the hook can never disagree with the tests that call the same flag. Only
+# generators that run on the stdlib + PyYAML: source_equivalence imports the
+# engine catalog (pydantic), which the ingest-contract job does not install, and
+# telemetry-catalog-ci already runs it.
+PARSER_ARTIFACT_CHECKS = (
+    ("telemetry-catalog/bake_rules.py", "python3 telemetry-catalog/bake_rules.py"),
+    ("telemetry-catalog/record_pack_corpus.py", "python3 telemetry-catalog/record_pack_corpus.py"),
+    ("telemetry-catalog/coverage_matrix.py", "python3 telemetry-catalog/coverage_matrix.py"),
+    ("scripts/gen-syslog-packs.py", "python3 scripts/gen-syslog-packs.py"),
+    ("scripts/gen-syslog-admission.py", "python3 scripts/gen-syslog-admission.py"),
+    ("scripts/gen-vendor-coverage.py", "python3 scripts/gen-vendor-coverage.py"),
+)
+
 # High-risk regardless of size: tenant isolation, auth, crypto/trust, schema,
 # the LLM boundary, and the dependency/supply-chain surface (CLAUDE.md §3,
 # §3a, §6, §8, §15).
@@ -218,6 +247,7 @@ class Plan:
     tier: str = "docs"
     reasons: list[str] = field(default_factory=list)
     artifact_checks: bool = False
+    parser_checks: bool = False
     local: list[str] = field(default_factory=list)
     ci_only: list[str] = field(default_factory=list)
 
@@ -255,6 +285,8 @@ def classify(paths: list[str]) -> Plan:
     for p in rels:
         if _match(p, ARTIFACT_INPUTS):
             plan.artifact_checks = True
+        if _match(p, PARSER_ARTIFACT_INPUTS):
+            plan.parser_checks = True
         if (hit := _match(p, HIGH_RISK)):
             _raise(plan, "high-risk", f"{p} (matches {hit})")
         elif _match(p, FRONTEND):
@@ -268,6 +300,9 @@ def classify(paths: list[str]) -> Plan:
 
     if plan.artifact_checks:
         plan.local.append("python3 scripts/test-plan.py --run-fast   (SBOM, notices, digest lock, toolchain pins)")
+    if plan.parser_checks:
+        plan.local.append("python3 scripts/test-plan.py --run-fast   (parser artifacts: baked rules, corpus, "
+                          "coverage matrix, syslog packs/admission, vendor coverage)")
     go_pkgs = _go_packages(rels)
     if plan.tier in ("code", "high-risk"):
         if go_pkgs:
@@ -293,7 +328,7 @@ def classify(paths: list[str]) -> Plan:
         plan.local.append("go test -tags=pgintegration against a real Postgres when storage/tenant code changed (§17)")
         plan.local.append("the §3a isolation test for any data-returning surface touched")
         plan.ci_only.append("govulncheck (needs the vuln DB)")
-    if plan.tier == "docs" and not plan.artifact_checks:
+    if plan.tier == "docs" and not (plan.artifact_checks or plan.parser_checks):
         plan.local.append("nothing — docs-only; CI still runs whatever applies")
     return plan
 
@@ -393,6 +428,26 @@ def run_fast_checks() -> list[str]:
     return failures
 
 
+def run_parser_checks() -> list[str]:
+    """Each parser generator's --check. Returns failure messages; a check that
+    cannot run, or runs past its bound, is a failure (state unknown), never a pass."""
+    failures: list[str] = []
+    for script, regen in PARSER_ARTIFACT_CHECKS:
+        try:
+            res = subprocess.run([sys.executable, script, "--check"], cwd=PROJECT,
+                                 capture_output=True, text=True, timeout=300, check=False)
+        except FileNotFoundError as exc:
+            failures.append(f"{script} --check could not start: {exc!r}")
+            continue
+        except subprocess.TimeoutExpired:
+            failures.append(f"{script} --check exceeded 300 s — state UNKNOWN")
+            continue
+        if res.returncode != 0:
+            tail = "\n".join((res.stderr or res.stdout).strip().splitlines()[-6:])
+            failures.append(f"{script} reports stale artifacts — run `{regen}` and commit:\n{tail}")
+    return failures
+
+
 # Variables git exports to hooks (githooks(5)). Inherited by a git started
 # from another directory they point it at the wrong worktree: inside pre-push,
 # sbom.py's `git ls-files` (cwd = the project dir) listed nothing, the component
@@ -448,17 +503,22 @@ def main(argv: list[str] | None = None) -> int:
     if forced:
         _raise(plan, "high-risk", "diff unreadable — strictest tier")
         plan.artifact_checks = True
+        plan.parser_checks = True
 
     if args.run_fast:
-        if not (plan.artifact_checks or args.always):
+        if not (plan.artifact_checks or plan.parser_checks or args.always):
             print("test-plan: no generated-artifact input changed — fast checks not needed")
             return 0
-        failures = run_fast_checks()
+        failures: list[str] = []
+        if plan.artifact_checks or args.always:
+            failures += run_fast_checks()
+        if plan.parser_checks or args.always:
+            failures += run_parser_checks()
         for f in failures:
             print(f"✗ {f}", file=sys.stderr)
         if failures:
             return 1
-        print("✓ test-plan: generated artifacts current (SBOM, notices, digest lock, toolchain pins)")
+        print("✓ test-plan: generated artifacts current")
         return 0
 
     print(f"tier: {plan.tier}   ({len(paths)} changed path(s))")
