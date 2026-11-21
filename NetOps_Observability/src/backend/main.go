@@ -3213,9 +3213,13 @@ func Run() {
 	// Features page's resolved values for the prober to read every check.
 	if srv.features != nil {
 		// Signed (P3): only the api and the prober hold the key.
-		pub := probercontrol.NewPublisher(collectors.ControlKV{}, srv.features.Enabled,
-			probercontrol.KeyringFromEnv(os.Getenv, log.Printf), time.Now, log.Printf)
+		ring := probercontrol.KeyringFromEnv(os.Getenv, log.Printf)
+		pub := probercontrol.NewPublisher(collectors.ControlKV{}, srv.features.Enabled, ring, time.Now, log.Printf)
 		workers.start("prober-switch-publish", func() { pub.Run(ctx) })
+		// The catalogue's traced / STAMP targets, resolved, checked against
+		// each tenant's own inventory and pinned (P3), signed with the same key.
+		tpub := probercontrol.NewTargetsPublisher(collectors.ControlKV{}, srv.proberTargetCollect(), ring, time.Now, log.Printf)
+		workers.start("prober-target-publish", func() { tpub.Run(ctx) })
 	}
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
@@ -3975,6 +3979,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/topn", s.handleFlowsTopN)
 	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
 	mux.HandleFunc("/api/probe/paths", s.handleProbePaths)
+	mux.HandleFunc("/api/probe/targets/suggested", s.handleProbeTargetSuggestions) // Paths P3: the setup steps' picker
 	mux.HandleFunc("/api/geomap", s.handleGeomap)
 	mux.HandleFunc("/api/sites", s.handleSites)          // internal SoT sites: GET list / POST upsert
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE

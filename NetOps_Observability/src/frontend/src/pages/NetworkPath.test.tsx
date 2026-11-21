@@ -18,6 +18,8 @@ const mockApi = vi.hoisted(() => ({
   metricsQueryRange: vi.fn(),
   features: vi.fn(),
   devices: vi.fn(),
+  probeTargetSuggestions: vi.fn(),
+  createDemTarget: vi.fn(),
 }));
 
 vi.mock("../services/api", () => ({ api: mockApi }));
@@ -30,14 +32,16 @@ beforeEach(() => {
   mockApi.metricsQueryRange.mockResolvedValue({ data: { result: [] } });
   mockApi.features.mockResolvedValue({});
   mockApi.devices.mockResolvedValue([]);
+  mockApi.probeTargetSuggestions.mockResolvedValue({ path_discovery: false, active_probe: false, tracing: 0, suggestions: [] });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("Measured paths — empty states say what is true", () => {
-  it("names the real switch (Features page), with no setting that does not exist", async () => {
+  it("shows numbered setup steps naming the real switch (Features page), never a setting that does not exist", async () => {
     render(<NetworkPath />);
-    const hint = await screen.findByTestId("paths-empty-hint");
-    expect(hint.textContent).toBe("A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.");
+    const link = await screen.findByRole("link", { name: "Platform › Configuration › Features" });
+    expect(link.getAttribute("href")).toBe("#/platform/features");
+    expect(document.body.textContent).toMatch(/Path discovery/);
     expect(document.body.textContent).not.toMatch(/API settings/);
   });
 

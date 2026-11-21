@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"sort"
 	"strconv"
@@ -22,6 +24,9 @@ import (
 	"netops/backend/internal/incident"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/probercontrol"
+	"netops/backend/internal/probetarget"
+	"netops/backend/models"
 )
 
 // probe_handlers.go — read API for active-measurement results. STAMP metrics go
@@ -818,3 +823,179 @@ func newExperienceEventLane() (*expbus.Queue, error) {
 }
 
 // DEM-EXPERIENCE-END
+
+// ── Paths P3: catalogue targets for the prober ───────────────────────────────
+
+// proberTargetCollect is layer 2 of the prober target validation (internal/
+// probercontrol targets.go): every catalogue target with "trace the path" or
+// "STAMP probe" ticked is RESOLVED here, checked with the full probe-target
+// rule against its OWNING tenant's live inventory (internal space only when
+// that tenant owns the exact address), and published as the pinned address —
+// never a name. ListAll is the projector's one cross-tenant read; each target
+// keeps its own tenant.
+func (s *server) proberTargetCollect() probercontrol.Collect {
+	return func(ctx context.Context) (tr, st []probercontrol.WireTarget, dropped int, err error) {
+		if s.demTargets == nil {
+			return nil, nil, 0, nil
+		}
+		all, err := s.demTargets.ListAll(ctx)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		owned := s.proberOwnedAddresses()
+		for _, t := range all {
+			if t.Paused || (!t.TracePath && !t.StampProbe) {
+				continue
+			}
+			tenant := normTenant(t.TenantID)
+			mine := owned[tenant]
+			a, rerr := probetarget.Resolve(ctx, proberLookup, t.ProbeHost(), func(a netip.Addr) bool { return mine[a] })
+			if rerr != nil || tenant == "" {
+				dropped++
+				continue
+			}
+			w := probercontrol.WireTarget{ID: t.ID, Tenant: tenant, Site: t.Site, Addr: a.String()}
+			if t.TracePath {
+				tr = append(tr, w)
+			}
+			if t.StampProbe {
+				st = append(st, w)
+			}
+		}
+		return tr, st, dropped, nil
+	}
+}
+
+// proberOwnedAddresses maps each tenant to the exact addresses its inventory
+// holds. The platform-infrastructure scope is right here: the projector
+// measures every tenant's own targets (the operator-visibility restriction is a
+// READ rule, never a collection rule — platformInfraDeviceVisibility).
+func (s *server) proberOwnedAddresses() map[string]map[netip.Addr]bool {
+	out := map[string]map[netip.Addr]bool{}
+	if s.discovery == nil {
+		return out
+	}
+	for _, d := range platformInfraDeviceVisibility().filter(s.discovery.Devices()) {
+		a, err := netip.ParseAddr(strings.TrimSpace(d.Address))
+		if err != nil {
+			continue
+		}
+		t := normTenant(deviceTenant(d))
+		if out[t] == nil {
+			out[t] = map[netip.Addr]bool{}
+		}
+		out[t][a.Unmap()] = true
+	}
+	return out
+}
+
+// proberLookup resolves a catalogue host with a bounded deadline.
+func proberLookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return net.DefaultResolver.LookupNetIP(cctx, "ip", host)
+}
+
+// probeTargetSuggestion is one suggested path-discovery target.
+type probeTargetSuggestion struct {
+	DeviceID string `json:"device_id"`
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Site     string `json:"site,omitempty"`
+	Traced   bool   `json:"traced,omitempty"`
+}
+
+// maxProbeSuggestions bounds the suggestion list (a picker, not an export).
+const maxProbeSuggestions = 200
+
+// handleProbeTargetSuggestions serves GET /api/probe/targets/suggested: the
+// caller's OWN inventory edges (routers, firewalls, cloud gateways) with an
+// address, by site, pre-ticked by the Measured paths setup steps — plus
+// whether path discovery is on and how many of the caller's catalogue targets
+// already trace their path. Per-tenant data (§3a): requirePerm + the device
+// visibility rule; the catalogue read is the caller's own tenant's.
+func (s *server) handleProbeTargetSuggestions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	traced := map[string]bool{}
+	tracing := 0
+	if s.demTargets != nil && strings.TrimSpace(tenant) != "" {
+		list, err := s.demTargets.List(r.Context(), tenant)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, errors.New("the target list could not be read"))
+			return
+		}
+		for _, t := range list {
+			if t.TracePath {
+				tracing++
+				traced[t.ProbeHost()] = true
+			}
+		}
+	}
+	var devs []models.Device
+	if s.discovery != nil {
+		devs = s.deviceVisibilityFor(claims).filter(s.discovery.Devices())
+	}
+	assign := s.geoAssignments(tenant, cross)
+	out := make([]probeTargetSuggestion, 0)
+	for _, d := range devs {
+		if !probeEdgeLike(d) {
+			continue
+		}
+		a, err := netip.ParseAddr(strings.TrimSpace(d.Address))
+		if err != nil || probetarget.Classify(a) == probetarget.ClassRefused {
+			continue
+		}
+		addr := a.Unmap().String()
+		out = append(out, probeTargetSuggestion{DeviceID: d.ID, Name: d.Name, Address: addr, Site: sotSiteFor(d, assign), Traced: traced[addr]})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].Site == "") != (out[j].Site == "") {
+			return out[i].Site != "" // devices with a site first
+		}
+		if out[i].Site != out[j].Site {
+			return out[i].Site < out[j].Site
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) > maxProbeSuggestions {
+		out = out[:maxProbeSuggestions]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path_discovery": s.featureOn(probercontrol.EnvTraceroute),
+		"active_probe":   s.featureOn(probercontrol.EnvActiveProbe),
+		"tracing":        tracing,
+		"suggestions":    out,
+	})
+}
+
+// probeEdgeLike is a device worth tracing a path to: the routing edge of a
+// site (router, firewall, cloud gateway) — not every switch and access point.
+func probeEdgeLike(d models.Device) bool {
+	typ := d.Type
+	if strings.TrimSpace(typ) == "" {
+		typ = inferDeviceType(d) // Type is stamped only on the devices API read
+	}
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "router", "firewall", "cloud-gw":
+		return true
+	}
+	role := strings.ToLower(d.Labels["role"] + " " + d.Labels["device_role"])
+	return strings.Contains(role, "edge") || strings.Contains(role, "branch") || strings.Contains(role, "wan")
+}
+
+// featureOn is a switch's running value as the Features page shows it.
+func (s *server) featureOn(env string) bool {
+	if s.features != nil {
+		return s.features.Enabled(env)
+	}
+	return os.Getenv(env) == "true"
+}

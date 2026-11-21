@@ -6803,6 +6803,9 @@ export const api = {
     request<ClickHouseResponse>(`/api/flows/by-type?since=${legacyFlowSince(sinceSeconds)}s`),
   // Active-measurement path topology (traceroute).
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
+  /** Paths redesign P3: the caller's own branch edges to trace, by site, plus
+   *  whether path discovery is on and how many targets are already traced. */
+  probeTargetSuggestions: () => request<ProbeTargetSuggestions>("/api/probe/targets/suggested"),
   // LLDP-discovered topology adjacencies (tenant-scoped, deduped). Empty when the
   // LLDP collector is off — the topology then falls back to tier inference.
   // device: one device's neighbours, filtered server-side (404 for a device
@@ -8765,6 +8768,9 @@ export const api = {
     request<DemDataHealthResponse>(`/api/dem/data-health${demWindowQS(window)}`),
   /** The per-tenant synthetic target catalogue (internal/dem). */
   demTargets: () => request<DemTargetsResponse>("/api/dem/targets"),
+  /** Create a catalogue target (the tenant is stamped from the token). */
+  createDemTarget: (body: DemTargetCreate) =>
+    request<DemTarget>("/api/dem/targets", { method: "POST", body: JSON.stringify(body) }),
   /** The per-target experience score with its site and app roll-ups. */
   demExperience: (window?: DemWindow) =>
     request<DemExperienceResponse>(`/api/dem/experience${demWindowQS(window)}`),
@@ -9334,9 +9340,47 @@ export interface DemTarget {
   latency_budget_ms?: number;
   availability_budget_pct?: number;
   paused: boolean;
+  /** Paths redesign P3: also trace the hop-by-hop path to the host. */
+  trace_path?: boolean;
+  /** Paths redesign P3: also send STAMP probes to the host's reflector. */
+  stamp_probe?: boolean;
   created_by?: string;
   created_at: string;
   updated_at: string;
+}
+
+/** POST /api/dem/targets body (internal/dem createWire). No tenant: the
+ *  server stamps it from the token. */
+export interface DemTargetCreate {
+  name: string;
+  kind: "icmp" | "tcp" | "dns" | "http";
+  host: string;
+  port?: number;
+  interval_sec?: number;
+  site?: string;
+  app?: string;
+  trace_path?: boolean;
+  stamp_probe?: boolean;
+}
+
+/** One suggested path-discovery target: an inventory edge device of the
+ *  caller's own workspace. */
+export interface ProbeTargetSuggestion {
+  device_id: string;
+  name: string;
+  address: string;
+  site?: string;
+  /** Already a traced catalogue target. */
+  traced?: boolean;
+}
+
+/** GET /api/probe/targets/suggested. */
+export interface ProbeTargetSuggestions {
+  path_discovery: boolean;
+  active_probe: boolean;
+  /** This workspace's catalogue targets with trace_path set. */
+  tracing: number;
+  suggestions: ProbeTargetSuggestion[];
 }
 
 /** dem.Component — one scored dimension of a target's verdict. */
@@ -10646,7 +10690,7 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 export type ProbeHop = { ttl: number; ip: string; host?: string; rtt_ms?: number; loss_pct?: number; via?: string };
 // A destination can be traced by more than one method (icmp + tcp); they often
 // diverge, so each (dst, method) is a distinct ProbePath.
-export type ProbePath = { dst: string; method?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
+export type ProbePath = { dst: string; method?: string; vantage_id?: string; tenant_id?: string; site?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
 
 // A normalized topology adjacency. source_protocol is one (or a "+"-joined set
 // when independently confirmed) of lldp | cdp | bgp_ls. For bgp_ls links igp
