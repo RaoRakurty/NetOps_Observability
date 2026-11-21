@@ -251,7 +251,8 @@ func (s *stampSender) probeAll(ctx context.Context) {
 	}
 	var lines []string
 	var events []ProbeEvent
-	for _, tgt := range targets {
+	for _, pt := range targets {
+		tgt := pt.Addr
 		res, err := probeSTAMP(ctx, tgt, s.packets)
 		if err != nil {
 			lastErr = err.Error()

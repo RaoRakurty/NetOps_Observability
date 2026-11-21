@@ -58,24 +58,43 @@ func TestPathRegistry(t *testing.T) {
 	if len(all) != 2 || all[0].Dst != "b" {
 		t.Fatalf("All() ordering wrong: %+v", all)
 	}
-	if _, ok := r.get("a", "icmp"); !ok {
+	if _, ok := r.get("", "a", "icmp"); !ok {
 		t.Fatal("get(a,icmp) missing")
 	}
 	// empty method normalizes to icmp (legacy default).
-	if _, ok := r.get("a", ""); !ok {
+	if _, ok := r.get("", "a", ""); !ok {
 		t.Fatal("get(a,\"\") should normalize to icmp")
 	}
 
 	// icmp and tcp traces to the SAME dst must coexist (not overwrite).
 	r.set(PathResult{Dst: "a", Method: "tcp", TS: time.Unix(300, 0)})
-	if _, ok := r.get("a", "tcp"); !ok {
+	if _, ok := r.get("", "a", "tcp"); !ok {
 		t.Fatal("get(a,tcp) missing — methods overwrote each other")
 	}
-	if _, ok := r.get("a", "icmp"); !ok {
+	if _, ok := r.get("", "a", "icmp"); !ok {
 		t.Fatal("get(a,icmp) lost after adding tcp")
 	}
 	if len(r.All()) != 3 {
 		t.Fatalf("All() should hold 3 (a/icmp, a/tcp, b/icmp): %+v", r.All())
+	}
+}
+
+// Paths redesign P3: the owning tenant is part of a path's identity. Two
+// tenants tracing the SAME destination from one prober keep two paths, each
+// stamped with its own tenant — neither overwrites (and so leaks into) the other.
+func TestPathRegistryKeepsTenantsApart(t *testing.T) {
+	r := &pathRegistry{m: make(map[string]PathResult)}
+	r.set(PathResult{Dst: "8.8.8.8", Method: "icmp", TenantID: "acme", Hops: []Hop{{TTL: 1, IP: "10.1.0.1"}}, TS: time.Unix(100, 0)})
+	r.set(PathResult{Dst: "8.8.8.8", Method: "icmp", TenantID: "globex", Hops: []Hop{{TTL: 1, IP: "10.2.0.1"}}, TS: time.Unix(200, 0)})
+	if len(r.All()) != 2 {
+		t.Fatalf("two tenants' traces to one destination must coexist: %+v", r.All())
+	}
+	a, ok := r.get("ACME ", "8.8.8.8", "icmp")
+	if !ok || a.TenantID != "acme" || a.Hops[0].IP != "10.1.0.1" {
+		t.Fatalf("acme's path = %+v %v (the tenant key is case- and blank-tolerant)", a, ok)
+	}
+	if _, ok := r.get("", "8.8.8.8", "icmp"); ok {
+		t.Fatal("no platform-owned path was stored; a tenant's path must not answer for the platform's")
 	}
 }
 

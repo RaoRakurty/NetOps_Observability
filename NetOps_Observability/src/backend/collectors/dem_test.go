@@ -379,21 +379,40 @@ func TestPathFingerprintOnlyWhenAPathWasMeasured(t *testing.T) {
 
 	Paths.set(PathResult{Dst: "198.51.100.7", Method: "icmp", TS: time.Now().UTC(),
 		Hops: []Hop{{TTL: 1, IP: "10.0.0.1"}, {TTL: 2, IP: "198.51.100.7"}}})
-	fp, hops, ok := observedPath("198.51.100.7", time.Now().UTC())
+	fp, hops, ok := observedPath("acme", "198.51.100.7", time.Now().UTC())
 	if !ok || hops != 2 || fp == 0 {
 		t.Fatalf("fresh path not observed: %v %d %v", ok, hops, fp)
 	}
 	// A stale trace is NOT this window's observation.
-	if _, _, stale := observedPath("198.51.100.7", time.Now().UTC().Add(2*demPathMaxAge)); stale {
+	if _, _, stale := observedPath("acme", "198.51.100.7", time.Now().UTC().Add(2*demPathMaxAge)); stale {
 		t.Fatal("a stale traceroute counted as a current path observation")
 	}
 	// A different path yields a different fingerprint, which is what `changes()`
 	// counts.
 	Paths.set(PathResult{Dst: "198.51.100.7", Method: "icmp", TS: time.Now().UTC(),
 		Hops: []Hop{{TTL: 1, IP: "10.9.9.9"}, {TTL: 2, IP: "198.51.100.7"}}})
-	fp2, _, _ := observedPath("198.51.100.7", time.Now().UTC())
+	fp2, _, _ := observedPath("acme", "198.51.100.7", time.Now().UTC())
 	if fp2 == fp {
 		t.Fatal("a re-routed path produced the same fingerprint")
+	}
+	// Paths redesign P3: another tenant's trace to the same host never answers
+	// for acme; acme's own trace wins over the platform's.
+	Paths.set(PathResult{Dst: "203.0.113.50", Method: "icmp", TenantID: "globex", TS: time.Now().UTC(),
+		Hops: []Hop{{TTL: 1, IP: "10.7.7.7"}, {TTL: 2, IP: "203.0.113.50"}}})
+	if _, _, leak := observedPath("acme", "203.0.113.50", time.Now().UTC()); leak {
+		t.Fatal("globex's trace was counted as acme's path observation")
+	}
+	Paths.set(PathResult{Dst: "203.0.113.50", Method: "icmp", TS: time.Now().UTC(),
+		Hops: []Hop{{TTL: 1, IP: "10.8.8.8"}, {TTL: 2, IP: "203.0.113.50"}}})
+	platFP, _, ok := observedPath("acme", "203.0.113.50", time.Now().UTC())
+	if !ok {
+		t.Fatal("with no trace of its own, acme reads the platform's install-time trace")
+	}
+	Paths.set(PathResult{Dst: "203.0.113.50", Method: "icmp", TenantID: "acme", TS: time.Now().UTC().Add(-time.Second),
+		Hops: []Hop{{TTL: 1, IP: "10.1.1.1"}, {TTL: 2, IP: "203.0.113.50"}}})
+	ownFP, _, _ := observedPath("acme", "203.0.113.50", time.Now().UTC())
+	if ownFP == platFP {
+		t.Fatal("acme's own trace must win over the platform's, even when slightly older")
 	}
 }
 

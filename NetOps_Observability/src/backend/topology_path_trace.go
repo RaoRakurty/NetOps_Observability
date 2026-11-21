@@ -43,7 +43,7 @@ const traceHopMaxAge = 15 * time.Minute
 // the VM per-hop RTT series and the probe-paths store (RTT fill + loss). Both are
 // best-effort with bounded IO (vmInstant carries a 15s timeout; the paths store is
 // a local/file/kv read) — a missing source just leaves fields unset.
-func (s *server) traceByHop(ctx context.Context, f []string) map[string]traceSample {
+func (s *server) traceByHop(ctx context.Context, f []string, v tenantVisibility) map[string]traceSample {
 	// SEC (2026-08-04): scoped like its sibling gatherTopoMetrics — an unscoped
 	// read let two tenants that both run a `core-sw1` render each other's
 	// metrics onto their own path (topology_view.go:86-91 documents the
@@ -59,7 +59,9 @@ func (s *server) traceByHop(ctx context.Context, f []string) map[string]traceSam
 	if err != nil {
 		paths = nil
 	}
-	return foldTraceByHop(vm, paths, time.Now())
+	// Only the caller's own traces paint its path (Paths redesign P3): a hop
+	// address another tenant traced must not lend its RTT/loss to this view.
+	return foldTraceByHop(vm, probePathsVisibleTo(v, paths), time.Now())
 }
 
 // foldTraceByHop is the pure join: VM samples (RTT, keyed by the `hop` label) plus

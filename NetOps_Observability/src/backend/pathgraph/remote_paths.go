@@ -37,33 +37,40 @@ const (
 // vantages rather than letting a misconfigured pusher exhaust memory.
 const maxRemoteVantages = 64
 
-// RemotePathStore holds the latest push per vantage. Not tenant-keyed: a
-// pushed path set is raw MEASUREMENT, and the tenant is stamped by the
-// ingester from its own configuration (§1: the owner is stamped by the
-// platform, never taken from the payload). It is bounded and self-expiring.
+// RemotePathStore holds the latest push per (OWNER, vantage). The owner is the
+// pushing principal's tenant, stamped by the handler from the token — never the
+// payload (§3a rule 2) — and it is part of the key (Paths redesign P3): before,
+// the store was keyed by vantage alone, so a second tenant pushing under the
+// same vantage id replaced the first tenant's traces. It is bounded and
+// self-expiring.
 type RemotePathStore struct {
 	mu sync.RWMutex
-	by map[string]remotePathEntry // vantage → its latest published set
+	by map[string]remotePathEntry // owner \x00 vantage → its latest published set
 }
 
 type remotePathEntry struct {
-	paths []collectors.PathResult
-	at    time.Time
+	owner, vantage string
+	paths          []collectors.PathResult
+	at             time.Time
 }
+
+func remoteKey(owner, vantage string) string { return owner + "\x00" + vantage }
 
 // NewRemotePathStore builds the bounded in-memory store.
 func NewRemotePathStore() *RemotePathStore {
 	return &RemotePathStore{by: map[string]remotePathEntry{}}
 }
 
-// Put records one vantage's latest set (full replace per vantage).
-func (s *RemotePathStore) Put(vantage string, paths []collectors.PathResult, now time.Time) {
+// Put records one owner's vantage's latest set (full replace per owner and
+// vantage). owner is the pushing principal's tenant ("" = the platform).
+func (s *RemotePathStore) Put(owner, vantage string, paths []collectors.PathResult, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.by) >= maxRemoteVantages && s.by[vantage].at.IsZero() {
+	k := remoteKey(owner, vantage)
+	if len(s.by) >= maxRemoteVantages && s.by[k].at.IsZero() {
 		return
 	}
-	s.by[vantage] = remotePathEntry{paths: paths, at: now}
+	s.by[k] = remotePathEntry{owner: owner, vantage: vantage, paths: paths, at: now}
 }
 
 // All returns every non-expired pushed path, attributed to its vantage.
@@ -71,12 +78,14 @@ func (s *RemotePathStore) All(now time.Time) []collectors.PathResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []collectors.PathResult{}
-	for v, e := range s.by {
+	for _, e := range s.by {
 		if now.Sub(e.at) > RemotePathTTL {
 			continue // stale: a dead vantage's paths simply stop being current
 		}
 		for _, p := range e.paths {
-			p.VantageID = v // authoritative attribution: the vantage we authenticated
+			// Authoritative attribution: the vantage and the owner we
+			// authenticated, whatever the stored copy says.
+			p.VantageID, p.TenantID = e.vantage, e.owner
 			out = append(out, p)
 		}
 	}

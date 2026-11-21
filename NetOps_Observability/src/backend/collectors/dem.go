@@ -265,7 +265,7 @@ func (d *demRunner) runOne(ctx context.Context, t dem.WireTarget) demOutcome {
 		// rather than reporting an unmeasured target as reachable.
 		out.res = synResult{failClass: "unknown"}
 	}
-	out.pathFP, out.hops, out.pathHas = observedPath(demPathHost(t), time.Now().UTC())
+	out.pathFP, out.hops, out.pathHas = observedPath(t.Tenant, demPathHost(t), time.Now().UTC())
 	return out
 }
 
@@ -382,18 +382,35 @@ func demSystemResolver(server string, timeout time.Duration) demResolver {
 //
 // Absent or stale ⇒ (0, 0, false), which the score renders as "path stability
 // not measured". It must never render as "stable": we did not look.
-func observedPath(host string, now time.Time) (fp uint32, hops int, ok bool) {
+//
+// Tenant-bound (Paths redesign P3): only the target's OWN tenant's trace, or —
+// when it has none — a platform-owned trace from the install-time list (the
+// operator's measurement of the shared network) counts. Another tenant's trace
+// to the same host never lends its fingerprint to this tenant's score.
+func observedPath(tenant, host string, now time.Time) (fp uint32, hops int, ok bool) {
 	if host == "" {
 		return 0, 0, false
 	}
-	var best PathResult
+	tenant = strings.ToLower(strings.TrimSpace(tenant))
+	var own, platform PathResult
 	for _, p := range Paths.All() {
 		if p.Dst != host {
 			continue
 		}
-		if p.TS.After(best.TS) {
-			best = p
+		switch strings.ToLower(strings.TrimSpace(p.TenantID)) {
+		case tenant:
+			if p.TS.After(own.TS) {
+				own = p
+			}
+		case "":
+			if p.TS.After(platform.TS) {
+				platform = p
+			}
 		}
+	}
+	best := own
+	if best.Dst == "" {
+		best = platform
 	}
 	if best.Dst == "" || now.Sub(best.TS) > demPathMaxAge {
 		return 0, 0, false

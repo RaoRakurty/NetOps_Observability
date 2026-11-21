@@ -157,7 +157,7 @@ func TestPathEnrichersPropagateScopeFilters(t *testing.T) {
 		call func(s *server)
 	}{
 		{"stampByDst", func(s *server) { s.stampByDst(t.Context(), []string{sentinel}) }},
-		{"traceByHop", func(s *server) { s.traceByHop(t.Context(), []string{sentinel}) }},
+		{"traceByHop", func(s *server) { s.traceByHop(t.Context(), []string{sentinel}, tenantVisibility{tenant: "acme"}) }},
 		{"pathIfaceMetrics", func(s *server) { s.pathIfaceMetrics(t.Context(), []string{sentinel}) }},
 		{"resolveCurrentByDst", func(s *server) { s.resolveCurrentByDst(t.Context(), []string{sentinel}) }},
 		{"wanSparkSeries", func(s *server) { s.wanSparkSeries(t.Context(), 1000, 600, 30, []string{sentinel}) }},

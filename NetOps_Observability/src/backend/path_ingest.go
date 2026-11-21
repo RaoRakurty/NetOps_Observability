@@ -316,7 +316,50 @@ func (s *server) ingestPathsOnce(ctx context.Context) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	cfg := pathIngestConfigFromEnv(time.Now().UTC())
+	base := pathIngestConfigFromEnv(time.Now().UTC())
+	// One pass per OWNING tenant (Paths redesign P3). A path is resolved
+	// against its own tenant's fact base and seams and filed under that tenant
+	// — never under one install-wide PATH_GRAPH_TENANT, which filed every
+	// tenant's traces as one tenant's evidence once tenants named their own
+	// targets. PATH_GRAPH_TENANT remains the owner of UNTAGGED paths only (the
+	// install-time list, a pre-P3 prober): probePathOwner. A path with no owner
+	// at all is skipped — the engine drops an empty-tenant object anyway, and
+	// filing it under a guessed tenant would be a fabricated attribution.
+	byTenant := map[string][]collectors.PathResult{}
+	var order []string
+	unowned := 0
+	for _, p := range paths {
+		t := probePathOwner(p)
+		if t == "" {
+			unowned++
+			continue
+		}
+		if _, seen := byTenant[t]; !seen {
+			order = append(order, t)
+		}
+		byTenant[t] = append(byTenant[t], p)
+	}
+	if unowned > 0 {
+		logWarn("pathgraph", "probe paths with no owning tenant were not ingested (set PATH_GRAPH_TENANT for an install-time target list)",
+			map[string]any{"paths": unowned})
+	}
+	var firstErr error
+	for _, tenant := range order {
+		cfg := base
+		cfg.Tenant = tenant
+		if err := s.ingestTenantPaths(ctx, cfg, byTenant[tenant]); err != nil {
+			logWarn("pathgraph", "path ingest failed for one tenant; the others continue", map[string]any{"tenant": tenant, "err": err.Error()})
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// ingestTenantPaths writes one tenant's paths, resolved against that tenant's
+// facts and seams.
+func (s *server) ingestTenantPaths(ctx context.Context, cfg pathIngestCfg, paths []collectors.PathResult) error {
 	src := s.pathFacts
 	if src == nil {
 		src = serverPathFacts{s}
@@ -358,7 +401,7 @@ func (s *server) ingestPathsOnce(ctx context.Context) error {
 		}
 		written++
 	}
-	logInfo("pathgraph", "path observations written", map[string]any{"observations": written, "paths": len(paths)})
+	logInfo("pathgraph", "path observations written", map[string]any{"observations": written, "paths": len(paths), "tenant": cfg.Tenant})
 	return nil
 }
 

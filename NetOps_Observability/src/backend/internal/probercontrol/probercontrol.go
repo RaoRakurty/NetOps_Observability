@@ -24,6 +24,10 @@
 // install without the key-value service): there the prober's own environment
 // is the only setting that exists, and it is read as before.
 //
+// SIGNED (P3, sign.go). Every record is an HMAC-SHA256 envelope under a key
+// only the api and the prober hold; the prober reads an unsigned or
+// badly-signed record, or any record while it holds no key, as OFF.
+//
 // This package owns the wire contract and both ends' logic; the transport is
 // injected (KV), so it never imports the collectors and is tested without a
 // server.
@@ -32,6 +36,7 @@ package probercontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -59,8 +64,10 @@ const (
 	Key = "netops:prober:switches"
 	// Channel names the publish channel in the api's failure counter.
 	Channel = "prober-switches"
-	// SchemaVersion is the record's wire version; any other is refused.
-	SchemaVersion = 1
+	// SchemaVersion is the record's wire version; any other is refused. 2 =
+	// the record travels inside a signed envelope (P3); a v1 prober reads a v2
+	// envelope as an unknown schema, which is OFF.
+	SchemaVersion = 2
 	// PublishEvery is how often the api republishes.
 	PublishEvery = 30 * time.Second
 	// TTLSeconds expires the record when the api stops publishing.
@@ -101,15 +108,20 @@ type Resolver func(env string) bool
 type Publisher struct {
 	kv      KV
 	resolve Resolver
+	ring    *Keyring
 	now     func() time.Time
+	logf    Logf
+
+	lastErr string // dedupes the signing-failure log line
 }
 
-// NewPublisher builds the api-side publisher.
-func NewPublisher(kv KV, resolve Resolver, now func() time.Time) *Publisher {
-	return &Publisher{kv: kv, resolve: resolve, now: now}
+// NewPublisher builds the api-side publisher. ring signs every record; with no
+// key loaded nothing is published (the prober then reads every switch OFF).
+func NewPublisher(kv KV, resolve Resolver, ring *Keyring, now func() time.Time, logf Logf) *Publisher {
+	return &Publisher{kv: kv, resolve: resolve, ring: ring, now: now, logf: logf}
 }
 
-// Encode renders the record for the switches as resolved now.
+// Encode renders the signed record for the switches as resolved now.
 func (p *Publisher) Encode() (string, error) {
 	rec := Record{V: SchemaVersion, IssuedAt: p.now().UTC(), Switches: map[string]bool{}}
 	for _, env := range Delivered() {
@@ -119,7 +131,7 @@ func (p *Publisher) Encode() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("probercontrol: encode: %w", err)
 	}
-	return string(b), nil
+	return p.ring.Seal(KindSwitches, b)
 }
 
 // PublishOnce writes one record. A deployment with no channel publishes
@@ -132,13 +144,20 @@ func (p *Publisher) PublishOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return p.kv.SetEX(ctx, Channel, Key, body, TTLSeconds)
+	if err := p.kv.SetEX(ctx, Channel, Key, body, TTLSeconds); err != nil {
+		return fmt.Errorf("%w: %w", errTransport, err)
+	}
+	return nil
 }
 
+// errTransport marks a failure the transport already counted and logged.
+var errTransport = errors.New("probercontrol: publish failed")
+
 // Run publishes now and then every PublishEvery until ctx ends. A failed
-// publish is surfaced by the transport (counted and logged) and retried on
-// the next tick; the prober turns the collectors off once the record ages
-// past MaxAge, which is the safe direction.
+// publish is retried on the next tick; the prober turns the collectors off
+// once the record ages past MaxAge, which is the safe direction. A transport
+// failure is counted and logged by the transport; a failure BEFORE the
+// transport (no signing key) is logged here, once per change.
 func (p *Publisher) Run(ctx context.Context) {
 	t := time.NewTicker(PublishEvery)
 	defer t.Stop()
@@ -146,13 +165,32 @@ func (p *Publisher) Run(ctx context.Context) {
 		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := p.PublishOnce(pctx)
 		cancel()
-		_ = err // #nosec G104 -- surfaced by the transport (failure counter + throttled log); retried next tick
+		p.noteErr(err)
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// noteErr logs a publish failure that the transport did not see (it never
+// got that far), once per distinct failure, and the recovery once.
+func (p *Publisher) noteErr(err error) {
+	msg := ""
+	if err != nil && !errors.Is(err, errTransport) {
+		msg = err.Error()
+	}
+	if msg == p.lastErr || p.logf == nil {
+		p.lastErr = msg
+		return
+	}
+	if msg == "" {
+		p.logf("prober-switch: publishing signed switch records again")
+	} else {
+		p.logf("prober-switch: switch records are NOT being published, so the prober reads every switch OFF: %s", msg)
+	}
+	p.lastErr = msg
 }
 
 // ── prober side ─────────────────────────────────────────────────────────────
@@ -168,6 +206,9 @@ const (
 	ReasonNotPublished Reason = "not_published" // no record, or the record omits this switch
 	ReasonInvalid      Reason = "invalid"       // will not decode, or an unknown schema version
 	ReasonStale        Reason = "stale"         // older than MaxAge, or stamped in the future
+	ReasonNoKey        Reason = "no_key"        // the prober holds no signing key
+	ReasonUnsigned     Reason = "unsigned"      // the record is not a signed envelope
+	ReasonBadSignature Reason = "bad_signature" // the signature does not verify
 )
 
 // Decision is one switch's effective state and why.
@@ -185,6 +226,7 @@ type Logf func(format string, args ...any)
 // Reader decides each switch on the prober from the published record.
 type Reader struct {
 	kv   KV
+	ring *Keyring
 	env  LookupEnv
 	now  func() time.Time
 	logf Logf
@@ -193,9 +235,9 @@ type Reader struct {
 	last map[string]Decision
 }
 
-// NewReader builds the prober-side reader.
-func NewReader(kv KV, env LookupEnv, now func() time.Time, logf Logf) *Reader {
-	return &Reader{kv: kv, env: env, now: now, logf: logf, last: map[string]Decision{}}
+// NewReader builds the prober-side reader. ring verifies every record.
+func NewReader(kv KV, ring *Keyring, env LookupEnv, now func() time.Time, logf Logf) *Reader {
+	return &Reader{kv: kv, ring: ring, env: env, now: now, logf: logf, last: map[string]Decision{}}
 }
 
 // Decide reads the channel and returns the switch's effective state. Every
@@ -226,8 +268,17 @@ func (r *Reader) decide(ctx context.Context, env string) Decision {
 	if raw == "" {
 		return Decision{Reason: ReasonNotPublished}
 	}
+	payload, err := r.ring.Open(KindSwitches, raw)
+	switch {
+	case errors.Is(err, ErrNoKey):
+		return Decision{Reason: ReasonNoKey}
+	case errors.Is(err, ErrUnsigned):
+		return Decision{Reason: ReasonUnsigned}
+	case err != nil:
+		return Decision{Reason: ReasonBadSignature}
+	}
 	var rec Record
-	if err := json.Unmarshal([]byte(raw), &rec); err != nil || rec.V != SchemaVersion || rec.IssuedAt.IsZero() {
+	if err := json.Unmarshal(payload, &rec); err != nil || rec.V != SchemaVersion || rec.IssuedAt.IsZero() {
 		return Decision{Reason: ReasonInvalid}
 	}
 	now := r.now()
