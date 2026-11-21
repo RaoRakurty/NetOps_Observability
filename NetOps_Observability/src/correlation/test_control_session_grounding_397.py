@@ -45,7 +45,15 @@ from engine import (
     run_window,
 )
 from replay import StoredObject, replay
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 from test_sdwan_controller_fan_in import T0, TENANT, VMANAGE, VSMART, trap_control_down
 
 CAT = builtin_catalog()
@@ -237,9 +245,11 @@ def test_the_rows_used_are_embedded_and_replay():
     (obj,) = run_window(_outage(4), CAT, (), adjacency=adj)
     ctx = json.loads(obj.hypotheses_blob())["grounding_context"]
     embedded = {tuple(r) for r in ctx["session_adjacency"]}
-    assert embedded == {tuple(sorted([(edge(i), edge_key(i)), (VSMART, VSMART)])[0]
-                              + sorted([(edge(i), edge_key(i)), (VSMART, VSMART)])[1])
-                        for i in range(4)}
+    want = set()
+    for i in range(4):
+        lo, hi = sorted([(edge(i), edge_key(i)), (VSMART, VSMART)])
+        want.add(lo + hi)
+    assert embedded == want
     assert not any(VMANAGE in r for r in embedded), "only rows an edge grounded on"
     win = _outage(4)
     stored = StoredObject.from_rows(obj.to_object_row(1), obj.to_edge_rows(1))

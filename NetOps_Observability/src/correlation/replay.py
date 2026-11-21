@@ -34,9 +34,9 @@ from aggregation import AGG_POLICY_VERSION, AggPlane
 from catalog import Catalog, builtin_catalog
 from directed_topology import DirectedTopology, frozen_oracle
 from engine import (
+    SESSION_PROTO,
     EngineConfig,
     ObjectSnapshot,
-    SESSION_PROTO,
     PathGraphView,
     SeamView,
     TopologyAdjacency,
