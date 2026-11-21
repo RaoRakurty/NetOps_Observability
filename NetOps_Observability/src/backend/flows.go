@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +23,8 @@ import (
 	"netops/backend/internal/flowsampling"
 	"netops/backend/internal/iana"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/siteres"
+	"netops/backend/internal/tunnelview"
 	"netops/backend/models"
 )
 
@@ -1087,17 +1088,28 @@ func chStringLiteral(v string) string { return "'" + chLiteralEscaper.Replace(v)
 // handleTunnels returns the latest sample for each overlay tunnel (IPsec /
 // SD-WAN / GRE) the collectors have reported, newest first. "LIMIT 1 BY id"
 // collapses the time series to the current state per tunnel. Optional
-// ?status=up|down filters; ?limit caps the rows. Empty until a collector
-// populates netops.tunnels — the view renders whatever real data arrives.
+// ?status=up|down filters; ?limit caps the rows; ?include=matrix adds the
+// site × site matrix (Paths P4). Empty until a collector populates
+// netops.tunnels or the SD-WAN overlay is read.
+//
+// SD-WAN tunnels are ONE row per tunnel (both ends folded under the engine's
+// tunnel id, internal/tunnelview), with the controller's path quality, the
+// open case naming the tunnel and both ends' sites joined per request — each
+// read with the caller's own scope.
 func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	limit, errLimit := intQuery(r, "limit", 200, 1, 2000)
 	if errLimit != nil {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
+	status := r.URL.Query().Get("status")
+	if status != "up" && status != "down" {
+		status = ""
+	}
+	withMatrix := r.URL.Query().Get("include") == "matrix"
 	var conds []string
-	if st := r.URL.Query().Get("status"); st == "up" || st == "down" {
-		conds = append(conds, "status = '"+st+"'")
+	if status != "" {
+		conds = append(conds, "status = '"+status+"'")
 	}
 	// Tenant isolation: a scoped principal only sees tunnels terminating on a
 	// device it can view (local or remote endpoint). This asks the package's
@@ -1109,6 +1121,10 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	claims, _ := userFrom(r.Context())
 	cond, empty := s.deviceTenantPairCondFor(claims, "local_device", "remote_device")
 	if empty {
+		if withMatrix {
+			writeJSON(w, http.StatusOK, tunnelEnvelope(nil, 0, "none", "ok", emptyTunnelMatrix()))
+			return
+		}
 		writeEmptyClickHouse(w)
 		return
 	}
@@ -1125,7 +1141,9 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	// not showing"). They come from the SD-WAN overlay facts — never written to
 	// netops.tunnels, whose seam rule would turn every session into a VPN seam
 	// suggestion — and are merged here, for the caller's visible devices only.
-	sdwanRows := sdwanTunnelRows(s.sdwanOverlay.Load(), s.visibleDevicesFor(claims), r.URL.Query().Get("status"), limit, time.Now())
+	snap := s.sdwanOverlay.Load()
+	visible := s.visibleDevicesFor(claims)
+	tuns := sdwanTunnelsFor(snap, visible)
 	// `ts` is the wire field, so the ORDER BY is TABLE-QUALIFIED rather than
 	// renamed, and the fold sorts the DateTime column, never the ISO String.
 	sql := `
@@ -1138,92 +1156,180 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	if len(sdwanRows) == 0 {
+	if len(tuns) == 0 && !withMatrix {
 		s.proxyClickHouse(w, r, sql) // unchanged path: no SD-WAN tunnels visible
 		return
 	}
-	rows, err := s.chRows(r, sql)
+	chRows, err := s.chRows(r, sql)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, errors.New("tunnel inventory is unavailable"))
 		return
 	}
-	for _, sr := range sdwanRows {
-		if len(rows) >= limit {
-			break
-		}
-		rows = append(rows, sr)
+	folded := false
+	for _, t := range tuns {
+		folded = folded || t.TunnelID != ""
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "rows": len(rows)})
-}
-
-// sdwanTunnelRows lists the SD-WAN tunnels of the caller's visible devices as
-// tunnel rows: one per (device, remote edge, local colour, remote colour). The
-// remote device is named only when it resolves to a device of the SAME tenant
-// (the overlay inference is tenant-partitioned); otherwise the row carries the
-// remote system-ip. Latency/jitter/loss are not read over SNMP and stay 0.
-func sdwanTunnelRows(snap *sdwanOverlaySnapshot, visible []models.Device, status string, limit int, now time.Time) []map[string]any {
-	if snap == nil || len(snap.devFacts) == 0 || limit <= 0 {
-		return nil
+	qStatus, quality := "none", tunnelview.QualityIndex{}
+	cStatus, cases := "ok", tunnelview.CaseIndex{}
+	if folded {
+		qStatus, quality = s.tunnelQuality(r.Context(), claims)
+		cStatus, cases = s.tunnelCases(r.Context(), claims)
 	}
-	tenantOf := make(map[string]string, len(visible))
-	nameOf := make(map[string]string, len(visible))
-	ids := make([]string, 0, len(visible))
-	for _, d := range visible {
-		tenantOf[d.ID] = normTenant(d.TenantID)
-		nameOf[d.ID] = firstNonEmpty(d.Name, d.ID)
-		ids = append(ids, d.ID)
+	nameOf, siteOf := tunnelNamesAndSites(s.siteContextFor(claims, snap), visible, len(tuns) > 0)
+	var matrix *tunnelview.Matrix
+	if withMatrix {
+		m := tunnelview.BuildMatrix(tuns, siteOf, quality, cases)
+		matrix = &m
 	}
-	sort.Strings(ids)
-	ts := snap.at.UTC().Format(time.RFC3339)
-	var out []map[string]any
-	for _, dev := range ids {
-		f, ok := snap.devFacts[dev]
-		if !ok {
+	stateAt := time.Now()
+	if snap != nil {
+		stateAt = snap.at
+	}
+	out := make([]any, 0, limit)
+	for _, row := range chRows {
+		out = append(out, row)
+	}
+	total := len(chRows)
+	for _, t := range tuns {
+		if status != "" && t.Status() != status {
 			continue
 		}
-		owners := snap.res.SystemIPs[tenantOf[dev]]
-		for _, p := range f.Peers {
-			remote := p.SystemIP
-			if owner, ok := owners[p.SystemIP]; ok {
-				if n, visibleToo := nameOf[owner]; visibleToo {
-					remote = n
-				}
-			}
-			remoteAddr := ""
-			if len(p.TLOCAddrs) > 0 {
-				remoteAddr = p.TLOCAddrs[0]
-			}
-			for _, cp := range p.ColorPairs {
-				st := "down"
-				if cp.Up > 0 {
-					st = "up"
-				}
-				if (status == "up" || status == "down") && st != status {
-					continue
-				}
-				out = append(out, map[string]any{
-					"id":            "sdwan|" + dev + "|" + p.SystemIP + "|" + cp.LocalColor + "|" + cp.RemoteColor,
-					"type":          "sdwan",
-					"local_device":  nameOf[dev],
-					"local_addr":    cp.LocalColor,
-					"remote_device": remote,
-					"remote_addr":   firstNonEmpty(remoteAddr, cp.RemoteColor),
-					"status":        st,
-					// Path quality is not read over SNMP for an SD-WAN tunnel:
-					// "measured": false makes the view show "—", never a 0 ms
-					// that reads like a perfect link.
-					"latency_ms": 0, "jitter_ms": 0, "loss_pct": 0, "qoe": 0, "uptime_s": 0,
-					"measured": false,
-					"ts":       ts,
-				})
-				if len(out) >= limit {
-					return out
-				}
-			}
+		total++
+		if len(out) >= limit {
+			continue
 		}
+		out = append(out, tunnelview.RowOf(t, nameOf, siteOf, quality.For(t), cases.For(t), stateAt))
+	}
+	writeJSON(w, http.StatusOK, tunnelEnvelope(out, total, qStatus, cStatus, matrix))
+}
+
+// tunnelEnvelope is the /api/tunnels JSON body beside the legacy data/rows.
+func tunnelEnvelope(rows []any, total int, qStatus, cStatus string, matrix *tunnelview.Matrix) map[string]any {
+	if rows == nil {
+		rows = []any{}
+	}
+	body := map[string]any{
+		"data": rows, "rows": len(rows), "total": total, "truncated": total > len(rows),
+		"quality": map[string]any{"status": qStatus, "window_s": int(tunnelview.QualityWindow.Seconds())},
+		"cases":   map[string]any{"status": cStatus},
+	}
+	if matrix != nil {
+		body["matrix"] = matrix
+	}
+	return body
+}
+
+func emptyTunnelMatrix() *tunnelview.Matrix {
+	return &tunnelview.Matrix{Sites: []tunnelview.MatrixSite{}, Cells: []tunnelview.Cell{}}
+}
+
+// sdwanTunnelsFor is the caller's view of the folded SD-WAN tunnels: only
+// reports from devices it can see, and an end it cannot see named by its
+// system-ip alone (tunnelview.Visible).
+func sdwanTunnelsFor(snap *sdwanOverlaySnapshot, visible []models.Device) []tunnelview.Tunnel {
+	if snap == nil || len(snap.tunnels) == 0 || len(visible) == 0 {
+		return nil
+	}
+	vis := make(map[string]bool, len(visible))
+	for _, d := range visible {
+		vis[d.ID] = true
+	}
+	return tunnelview.Visible(snap.tunnels, vis)
+}
+
+// tunnelNamesAndSites names and places the caller's visible devices. Sites are
+// resolved by the one site rule (manual binding first) only when there is a
+// tunnel to place.
+func tunnelNamesAndSites(sc siteContext, visible []models.Device, resolve bool) (tunnelview.NameOf, tunnelview.SiteOf) {
+	names := make(map[string]string, len(visible))
+	for _, d := range visible {
+		names[d.ID] = firstNonEmpty(d.Name, d.ID)
+	}
+	var resolved map[string]siteres.Site
+	if resolve {
+		resolved = sc.resolveAll(visible)
+	}
+	nameOf := func(id string) string { return names[id] }
+	siteOf := func(id string) (tunnelview.Site, bool) {
+		st, ok := resolved[id]
+		if !ok || st.Key == "" {
+			return tunnelview.Site{}, false
+		}
+		return tunnelview.Site{Key: st.Key, Label: st.Label, Source: string(st.Source)}, true
+	}
+	return nameOf, siteOf
+}
+
+// tunnelQuality reads the controller's per-tunnel path quality with the
+// caller's metric scope. A failed read is "unavailable" — never zeros.
+func (s *server) tunnelQuality(ctx context.Context, claims jwtClaims) (string, tunnelview.QualityIndex) {
+	filters := s.metricsScopeFiltersFor(claims)
+	vals, err := s.vmInstantScoped(ctx, tunnelview.QualityQuery, filters)
+	if err == nil {
+		var asOf []vmSample
+		if asOf, err = s.vmInstantScoped(ctx, tunnelview.AsOfQuery, filters); err == nil {
+			qi := tunnelview.NewQualityIndex(tunnelSamples(vals), tunnelSamples(asOf))
+			if qi.Len() == 0 {
+				return "none", qi
+			}
+			return "ok", qi
+		}
+	}
+	logWarn("tunnels", "tunnel quality unread — rows say unavailable", map[string]any{"error": err.Error()})
+	return "unavailable", tunnelview.QualityIndex{}
+}
+
+func tunnelSamples(in []vmSample) []tunnelview.Sample {
+	out := make([]tunnelview.Sample, 0, len(in))
+	for _, v := range in {
+		out = append(out, tunnelview.Sample{Labels: v.Labels, Value: v.Value})
 	}
 	return out
 }
+
+// tunnelCases reads the caller's open correlation objects that name a PATH
+// entity, at the caller's ClickHouse scope. Open means open AND created within
+// the incident-liveness window: the projection keeps rows open long after the
+// engine closed them in history.
+func (s *server) tunnelCases(ctx context.Context, claims jwtClaims) (string, tunnelview.CaseIndex) {
+	conds := []string{
+		"state = 'open'",
+		"created_at >= now() - INTERVAL " + strconv.Itoa(int(nlqIncidentLiveness.Hours())) + " HOUR",
+		"JSONHas(affected, 'paths')",
+	}
+	if c := s.tenantIDExcludeCondFor(claims, "tenant_id"); c != "" {
+		conds = append(conds, c)
+	}
+	sql := "SELECT toString(correlation_id) AS id, toString(verdict_tier) AS tier, tenant_id, " +
+		"toString(toUnixTimestamp(created_at)) AS created, JSONExtract(affected, 'paths', 'Array(String)') AS paths " +
+		"FROM netops.corr_current FINAL WHERE " + strings.Join(conds, " AND ") +
+		" ORDER BY created_at DESC LIMIT " + strconv.Itoa(tunnelCaseRowCap) + " FORMAT JSON"
+	rows, err := s.chRowsScope(ctx, s.chTenantScopeFor(claims), sql, "api:/api/tunnels:cases")
+	if err != nil {
+		logWarn("tunnels", "open cases unread — rows carry no case", map[string]any{"error": err.Error()})
+		return "unavailable", tunnelview.CaseIndex{}
+	}
+	objs := make([]tunnelview.OpenObject, 0, len(rows))
+	for _, row := range rows {
+		o := tunnelview.OpenObject{ID: fmt.Sprint(row["id"]), Tier: fmt.Sprint(row["tier"]), Tenant: fmt.Sprint(row["tenant_id"])}
+		if sec, perr := strconv.ParseInt(fmt.Sprint(row["created"]), 10, 64); perr == nil {
+			o.CreatedAt = time.Unix(sec, 0).UTC()
+		}
+		if ps, ok := row["paths"].([]any); ok {
+			for _, p := range ps {
+				if str, ok := p.(string); ok {
+					o.Paths = append(o.Paths, str)
+				}
+			}
+		}
+		objs = append(objs, o)
+	}
+	return "ok", tunnelview.NewCaseIndex(objs)
+}
+
+// tunnelCaseRowCap bounds the open-case read: newest first, so a cap drops
+// the oldest objects.
+const tunnelCaseRowCap = 5000
 
 // ── Names and traffic class (tracker 387 PR 13; internal/flownames) ──────────
 
