@@ -801,6 +801,7 @@ type tracerouteCollector struct {
 	cfg      traceConfig
 	methods  []string // ordered, deduped: which methods to trace each cycle
 	auto     bool     // priority mode: icmp first, fall back to tcp to fill gaps
+	targets  TargetSource
 	mu       sync.RWMutex
 	status   Status
 }
@@ -863,6 +864,7 @@ func NewTraceroute() Collector {
 		},
 		methods: methods,
 		auto:    auto,
+		targets: newEnvTargets("TRACEROUTE_TARGETS", 0),
 		status:  Status{Name: "traceroute", Healthy: true, Kind: "metrics"},
 	}
 }
@@ -888,25 +890,16 @@ func (c *tracerouteCollector) Run(ctx context.Context) error {
 	}
 }
 
-func tracerouteTargets() []string {
-	raw := strings.TrimSpace(os.Getenv("TRACEROUTE_TARGETS"))
-	if raw == "" {
-		return nil
-	}
-	var out []string
-	for _, p := range strings.Split(raw, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 func (c *tracerouteCollector) traceAll(ctx context.Context) {
-	targets := tracerouteTargets()
+	// Validated targets only (probetarget): a refused entry is dropped and
+	// reported on the status, never traced.
+	targets, terr := c.targets.Targets(ctx)
 	now := time.Now().UnixMilli()
 	var lines []string
 	var lastErr string
+	if terr != nil {
+		lastErr = terr.Error()
+	}
 	reachedAny := map[string]bool{} // a target counts reachable if ANY method reaches it
 	// store one trace result + emit its metrics (method label keeps icmp/tcp/auto
 	// series distinct; route stability via path_changed feeds Path Health).

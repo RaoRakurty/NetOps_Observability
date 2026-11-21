@@ -46,7 +46,7 @@ test("Paths groups the three measurement pages; Troubleshooting sits beside RCA"
 test("Measured paths says path discovery is not switched on — no env names, no phantom setting", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/investigate/flowtrace");
-  await expect(page.getByTestId("paths-empty-hint")).toHaveText("Path discovery is not switched on for this installation yet.");
+  await expect(page.getByTestId("paths-empty-hint")).toHaveText("A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.");
   await expect(page.getByText(/API settings/)).toHaveCount(0);
   await expect(page.locator("code", { hasText: /FEATURE_|_TARGETS/ })).toHaveCount(0);
   await expect(page.getByTestId("paths-synthetics-link").getByRole("link")).toHaveAttribute("href", "#/operations/digital-experience/synthetics");

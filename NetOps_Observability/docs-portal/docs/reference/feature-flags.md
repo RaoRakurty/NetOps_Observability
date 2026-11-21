@@ -32,7 +32,7 @@ Two rules hold for all of them:
 | `ENABLE_TUNNEL_DISCOVERY` | `true` | Discover IPsec, GRE and SD-WAN tunnels. |
 | `ENABLE_VENDOR_DETECTION` | `false` | Identify vendor and OS from sysObjectID. |
 | `ENABLE_VRF_COLLECTION` | `true` | Read routing instances (VRF, VPN, routing-instance, VPRN) and their interfaces over SNMP. |
-| `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes. |
+| `FEATURE_ACTIVE_PROBE` | `false` | Send STAMP active-measurement probes from the prober (Features page: Active path probes). |
 | `FEATURE_ACTIVE_VERIFICATION` | `false` | Verify a recovery before closing a case. |
 | `FEATURE_AI` | `(empty)` | Turns Iris off entirely when false. Model answers are the Iris AI add-on plus Platform → Configuration → Features. |
 | `FEATURE_AI_TOOLS` | `false` | No longer a switch: read once on upgrade to keep AI investigations on. Platform → Configuration → Features decides. |
@@ -72,7 +72,7 @@ Two rules hold for all of them:
 | `FEATURE_SVC_FLOW_ROLLUP` | `false` | Roll flows up to services. |
 | `FEATURE_SYNTHETICS` | `false` | Run synthetic HTTP and DNS checks. |
 | `FEATURE_TEAMS_NOTIFICATIONS` | `false` | Post to Microsoft Teams. |
-| `FEATURE_TRACEROUTE` | `false` | Run the traceroute collector (needs CAP_NET_RAW). |
+| `FEATURE_TRACEROUTE` | `false` | Run path discovery (traceroute) in the prober (Features page: Path discovery). |
 | `FEATURE_TWILIO_NOTIFICATIONS` | `false` | Send SMS through Twilio. |
 | `FEATURE_UNIFI` | `false` | Collect from a UniFi controller. |
 | `FEATURE_WAN_ECHO` | `false` | Measure WAN circuits with echo probes. |

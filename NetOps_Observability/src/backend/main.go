@@ -130,6 +130,7 @@ import (
 	"netops/backend/internal/owner"
 	"netops/backend/internal/platformalert"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/probercontrol"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
 	"netops/backend/internal/ratelimit"
@@ -1079,14 +1080,16 @@ func newServer() *server {
 	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
 	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).
 	pool.Enable("snmptrap", os.Getenv("FEATURE_SNMP_TRAPS") == "true")
-	// Active path measurement (STAMP / RFC 8762) — opt-in. The sender probes
-	// STAMP_TARGETS; the reflector responds to probes aimed at this host. Both
-	// dormant by default (no targets / not enabled).
-	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
+	// Active path measurement. The STAMP sender (FEATURE_ACTIVE_PROBE) and path
+	// discovery (FEATURE_TRACEROUTE) run in the PROBER only (ADR 0001: privileged
+	// measurement isolated), switched from the Features page and delivered by
+	// internal/probercontrol (Paths redesign P2, 2026-11-20). The api never runs
+	// them: the page writes a saved switch into this process's environment, and
+	// reading it here would start a second, unprivileged vantage in the api.
+	pool.Enable("stamp-sender", false)
+	pool.Enable("traceroute", false)
+	// The reflector answers probes aimed at this host — opt-in, dormant by default.
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
-	// Path discovery (Paris-consistent traceroute, ICMP/TCP) — opt-in; traces
-	// TRACEROUTE_TARGETS. Needs CAP_NET_RAW for the raw socket.
-	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
 	// Service-level synthetic checks (HTTP/ICMP/TCP) — opt-in; probes the
 	// SYNTHETIC_*_TARGETS lists. HTTP/TCP need no privileges; ICMP falls back
 	// to raw only where CAP_NET_RAW exists (prober sidecar).
@@ -3206,6 +3209,12 @@ func Run() {
 	// WAN circuit SLA targets: publish the projected circuit mesh to Redis for
 	// the wan-echo collector (#2). Gated by FEATURE_WAN_ECHO; no-op without Redis.
 	srv.startWANCircuitPublish(ctx)
+	// The prober's measurement switches (Paths redesign P2): publish the
+	// Features page's resolved values for the prober to read every check.
+	if srv.features != nil {
+		pub := probercontrol.NewPublisher(collectors.ControlKV{}, srv.features.Enabled, time.Now)
+		workers.start("prober-switch-publish", func() { pub.Run(ctx) })
+	}
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
@@ -3502,9 +3511,21 @@ func runProber() {
 	collectors.SetMeshHTTPClient(backendHTTPClient)
 
 	pool := collectors.NewPool(nil)
-	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
+	// Path discovery and the STAMP sender follow the Features page: the api
+	// publishes the resolved switches and the prober re-checks them every
+	// CheckEvery, starting or stopping each collector without a restart. Every
+	// doubt (channel unread, nothing published, stale record) reads OFF
+	// (internal/probercontrol); with no channel at all the environment decides.
+	switches := probercontrol.NewReader(collectors.ControlKV{}, os.LookupEnv, time.Now, log.Printf)
+	for name, sw := range map[string]string{"traceroute": probercontrol.EnvTraceroute, "stamp-sender": probercontrol.EnvActiveProbe} {
+		if err := pool.Gate(name, func(ctx context.Context) (bool, string) {
+			d := switches.Decide(ctx, sw)
+			return d.On, string(d.Reason)
+		}, probercontrol.CheckEvery); err != nil {
+			log.Fatalf("prober: %v", err)
+		}
+	}
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
-	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
 	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
 	pool.Enable("dem", envBool(dem.EnvFeatureFlag))
 	pool.Enable("wan-echo", os.Getenv("FEATURE_WAN_ECHO") == "true")

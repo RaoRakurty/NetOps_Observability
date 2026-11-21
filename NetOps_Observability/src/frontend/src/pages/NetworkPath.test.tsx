@@ -34,10 +34,10 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("Measured paths — empty states say what is true", () => {
-  it("says path discovery is not switched on, with no setting that does not exist", async () => {
+  it("names the real switch (Features page), with no setting that does not exist", async () => {
     render(<NetworkPath />);
     const hint = await screen.findByTestId("paths-empty-hint");
-    expect(hint.textContent).toBe("Path discovery is not switched on for this installation yet.");
+    expect(hint.textContent).toBe("A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.");
     expect(document.body.textContent).not.toMatch(/API settings/);
   });
 

@@ -68,7 +68,7 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
             <div className="board-empty">
               <div className="board-empty-msg">No active path measurements.</div>
               <div className="board-empty-hint" data-testid="paths-empty-hint">
-                Path discovery is not switched on for this installation yet.
+                A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.
               </div>
             </div>
             {loaded && <p className="proto-key">Probes stay on one path.<AskIris topic="path.traceroute" label="Traceroute" /></p>}

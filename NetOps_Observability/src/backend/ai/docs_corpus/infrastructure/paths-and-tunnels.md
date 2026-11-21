@@ -12,7 +12,8 @@ sidebar_position: 6
 ## Before you begin
 
 - An authenticated session in your tenant. Both pages read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
-- Path discovery is opt-in and off by default. In this release it is not a switch on the **Features** page yet: the platform operator turns it on for the probe service at install time, together with the list of destinations to trace. Path SLA probes work the same way and also need a reflector at the far end.
+- Path discovery is off by default. A platform administrator turns on **Path discovery** under **Platform → Configuration → Features → Active measurement** ([Turn Correlix features on and off](/administration/features)); the prober service applies it within about 15 seconds. The traced targets are the path targets configured for this installation.
+- Path SLA needs **Active path probes (STAMP)** on the same page, probe targets configured for this installation, and a STAMP reflector at the far end.
 - Service checks (HTTP, ICMP, TCP and certificate expiry) live on **Operations → Digital Experience → Synthetics**, not on these pages.
 
 ## Steps
