@@ -120,7 +120,10 @@ future and counts the past. So a wrong clock with a stated zone does not correla
 vocabulary (admin | fault | unknown) only where the line itself states it: IOS/IOS-XE, IOS XR,
 NX-OS, Junos, SR Linux (oper-down-reason) and SONiC (portmgrd). Every such row is `warn`, so
 stages [5]/[6] read it exactly as they read the admin trap (test_link_cause_syslog_388.py).
-EOS and SR OS syslog, the Viptela interface trap and the controller relay carry none.
+The vManage relay states it too (388c): `interface-admin-state-change` carries
+`correlation_hints.link_cause=admin`, which stage [1] lifts into the attr only for link kinds
+and only from that vocabulary (`controller_events.controller_link_cause`); the oper-state
+event states nothing. EOS and SR OS syslog and the Viptela interface trap carry none.
 
 **Admission gates.**
 - Metric lane: an event older than −120 s / +3600 s is dropped (M:925-926, M:12426).

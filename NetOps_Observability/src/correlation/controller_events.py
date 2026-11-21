@@ -120,6 +120,27 @@ def bgp_not_a_session_failure(sig: Signal) -> str:
     return cls if cls in BGP_NOT_A_SESSION_FAILURE else ""
 
 
+#: Tracker 388(c): the link causes a controller connector may STATE — the syslog
+#: rules' vocabulary (parser_rules.py `link_cause`). The connector knows the
+#: vendor's event names (nms/vmanage_kinds.go LinkCause); stage [1] only lifts a
+#: stated cause into the clause-testable `link_cause` attr (signals.CLAUSE_ATTR_KEYS)
+#: and never infers one. Closed set, link kinds only, fail-closed: an absent,
+#: unknown-word or non-string hint states nothing, so the signal opens as a fault.
+CONTROLLER_LINK_CAUSES: frozenset[str] = frozenset({"admin", "fault", "unknown"})
+_LINK_CAUSE_KINDS: frozenset[str] = frozenset({"link_state_change"})
+
+
+def controller_link_cause(kind: str, hints: dict) -> str:
+    """The link cause a controller event states, or "" when it states none."""
+    if kind.removesuffix("_clear") not in _LINK_CAUSE_KINDS:
+        return ""
+    raw = hints.get("link_cause")
+    if not isinstance(raw, str):
+        return ""
+    cause = raw.strip().lower()
+    return cause if cause in CONTROLLER_LINK_CAUSES else ""
+
+
 def count_bgp_not_a_session_failure(cls: str) -> None:
     """Count one relayed transition that built no session-failure signal."""
     if cls in BGP_NOT_A_SESSION_FAILURE:
@@ -246,6 +267,7 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
         clock_quality="unknown",
     )
 
+    link_cause = controller_link_cause(kind, hints)
     tokens = tuple(t for t in (device, site, tunnel, iface, peer) if t)
     return Signal(
         tenant_id=tenant,
@@ -285,5 +307,7 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
                if device and origin_observer_enabled() else {}),
             **({"correlation_hints": _bounded_hints(ev["correlation_hints"])}
                if ev.get("correlation_hints") else {}),
+            # Tracker 388(c): a cause the connector STATED (closed vocabulary).
+            **({"link_cause": link_cause} if link_cause else {}),
         },
     )

@@ -173,6 +173,12 @@ type vmEventKind struct {
 	StateKind string
 	StateKey  string   // the details key carrying the new state ("" = no direction)
 	Up        []string // new-state values that mean "recovered"
+	// LinkCause is what the event NAME says caused a link transition: "admin"
+	// for an operator's shutdown. It rides to the engine as
+	// correlation_hints.link_cause, which stage [1] (controller_events.py) lifts
+	// into the signal's `link_cause` attr, so stages [5]/[6] treat it like the
+	// syslog lane's admin-down (tracker 385/388c). "" = the name does not say.
+	LinkCause string
 }
 
 // vmanageEventKinds maps /dataservice/event names to canonical kinds.
@@ -184,7 +190,7 @@ var vmanageEventKinds = map[string]vmEventKind{
 	"bgp-peer-state-change":           {Kind: "bgp_adjacency_change", StateKind: "bgp", StateKey: "bgp-new-state", Up: []string{"established"}},
 	"ospf-neighbor-state-change":      {Kind: "ospf_adjacency_change", StateKind: "ospf", StateKey: "new-state", Up: []string{"full"}},
 	"interface-state-change":          {Kind: "link_state_change", StateKind: "interface", StateKey: "new-state", Up: []string{"up"}},
-	"interface-admin-state-change":    {Kind: "link_state_change", StateKind: "interface", StateKey: "new-state", Up: []string{"up"}},
+	"interface-admin-state-change":    {Kind: "link_state_change", StateKind: "interface", StateKey: "new-state", Up: []string{"up"}, LinkCause: "admin"},
 	"bfd-state-change":                {Kind: "controller_bfd_down", StateKind: "bfd", StateKey: "new-state", Up: []string{"up"}},
 	"control-connection-state-change": {Kind: "controller_control_connection_loss", StateKind: "control_conn", StateKey: "new-state", Up: []string{"up"}},
 	"omp-peer-state-change":           {Kind: "controller_control_connection_loss", StateKind: "omp", StateKey: "new-state", Up: []string{"up"}},
