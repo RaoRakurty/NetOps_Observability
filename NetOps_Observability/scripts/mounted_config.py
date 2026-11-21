@@ -40,6 +40,14 @@ A mount is fingerprinted only when ALL of these hold:
      (SVID renewal, rotate-tls-services.sh), and a deploy script must never read
      private keys — they are deliberately not readable by everyone.
 
+Inside a mounted directory, a `tests/` subdirectory is skipped. It holds the
+fixtures `vector test` and the test suite read (deployment/docker/vector/tests,
+vector-router/tests); no service loads it, since each one names its config files.
+Hashing it marked vector-aggregator and vector-router "STILL RUNNING THE OLD
+CONFIG" after every parser change that only regenerated fixtures (2026-11-21).
+A mount whose source IS a tests directory is still hashed: it was mounted on
+purpose.
+
 Directories are hashed recursively in a fixed order: every entry contributes its
 path relative to the install root, its type, and its content (files) or link text
 (symlinks are recorded, never followed). Paths are root-relative so the same tree
@@ -131,6 +139,11 @@ def _entry(h: _Hasher, kind: str, rel: str) -> None:
     h.update(f"\0{kind}\0{rel}\0".encode())
 
 
+#: Subdirectory names skipped inside a mounted config directory: fixtures for
+#: the tests, never read by a running service (module docstring).
+FIXTURE_DIRS = frozenset({"tests"})
+
+
 def hash_source(source: Path, base: Path, tree: str, h: _Hasher) -> None:
     """Feed one mount source (file, dir or missing) into `h`, deterministically.
     Every path is labelled `<tree>/<path relative to the tree>`."""
@@ -161,7 +174,9 @@ def hash_source(source: Path, base: Path, tree: str, h: _Hasher) -> None:
         raise InputError(f"cannot list mounted config directory {exc.filename}: {exc.strerror or exc}")
 
     for dirpath, dirnames, filenames in os.walk(real, onerror=walk_error, followlinks=False):
-        dirnames.sort()
+        # Test fixtures beside the config are not config (module docstring).
+        dirnames[:] = sorted(d for d in dirnames
+                             if not (d in FIXTURE_DIRS and not (Path(dirpath) / d).is_symlink()))
         here = Path(dirpath)
         names = sorted(set(filenames) | {d for d in dirnames if (here / d).is_symlink()})
         for d in dirnames:
