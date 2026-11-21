@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/probercontrol"
 )
 
 // stamp.go — active path measurement via STAMP, the Simple Two-way Active
@@ -211,7 +213,7 @@ func NewSTAMPSender() Collector {
 	return &stampSender{
 		interval: envDuration("STAMP_INTERVAL", 30*time.Second),
 		packets:  envInt("STAMP_PACKETS", 20),
-		targets:  newEnvTargets("STAMP_TARGETS", 862),
+		targets:  newCatalogueTargets(probercontrol.ForStamp, 862, newEnvTargets("STAMP_TARGETS", 862)),
 		status:   Status{Name: "stamp-sender", Healthy: true, Kind: "metrics"},
 	}
 }

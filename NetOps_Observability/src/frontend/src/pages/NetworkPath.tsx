@@ -7,15 +7,18 @@ import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel, MetricTop } from "../components/board/panels";
 import PathHealthList from "../components/PathHealthList";
 import AskIris from "../components/AskIris";
+import PathsSetup from "../components/PathsSetup";
 
 // NetworkPath (nav: Investigate → Paths → Measured paths; it was labelled
 // "Flow Trace" until 2026-11-20) — visualizes the active-measurement pipeline:
 // the hop-by-hop path from traceroute (/api/probe/paths) and the path SLA from
-// STAMP (probe_* metrics in VictoriaMetrics). Both sources are opt-in in the
-// prober (FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE). Since Paths P2 both are
-// switches on the Features page (Platform › Configuration › Features › Active
-// measurement), so the empty state points there — never an environment name,
-// never a setting that does not exist (the old hint pointed at "API settings").
+// STAMP (probe_* metrics in VictoriaMetrics). Both are platform switches on the
+// Features page (Paths P2), and the targets are the workspace's own Digital
+// Experience catalogue entries with "trace the path" set (P3). With no paths,
+// the empty state is PathsSetup: numbered steps that say what is on, offer the
+// workspace's own branch edges pre-ticked, and add them — never an environment
+// name, never a setting that does not exist. Every path served here is the
+// caller's own workspace's (GET /api/probe/paths is tenant-scoped since P3).
 
 type Hop = ProbePath["hops"][number];
 
@@ -65,17 +68,13 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
           <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>
         ) : paths.length === 0 ? (
           <Panel title="No paths yet">
-            <div className="board-empty">
-              <div className="board-empty-msg">No active path measurements.</div>
-              <div className="board-empty-hint" data-testid="paths-empty-hint">
-                A platform administrator switches on Path discovery under Platform › Configuration › Features › Active measurement; it traces the path targets configured for this installation.
-              </div>
-            </div>
+            <div className="board-empty-msg">No active path measurements.</div>
+            {loaded && <PathsSetup />}
             {loaded && <p className="proto-key">Probes stay on one path.<AskIris topic="path.traceroute" label="Traceroute" /></p>}
           </Panel>
         ) : (
           paths.map((p) => (
-            <Panel key={p.dst} title={`${p.dst} — ${p.hops.length} hops`} action={
+            <Panel key={`${p.vantage_id ?? ""}|${p.tenant_id ?? ""}|${p.dst}|${p.method ?? ""}`} title={`${p.dst}${p.site ? ` · ${p.site}` : ""} — ${p.hops.length} hops`} action={
               <span style={{ display: "flex", gap: 6 }}>
                 <span className={`badge ${p.reached ? "good" : "warn"}`}>{p.reached ? "reached" : "incomplete"}</span>
                 {p.changed && <span className="badge bad">path changed</span>}
