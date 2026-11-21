@@ -4857,6 +4857,39 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .paths-page .paths-pick-site { color: var(--muted); }
 .paths-page :focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 2px; border-radius: var(--radius-sm); }
 
+/* Paths P4: Tunnels — site matrix and one row per tunnel (tabs/Tunnels.tsx). */
+.tunnels-page > .stat-grid { margin-bottom: var(--sp-4); }
+/* The DataTable header is 12.5px app-wide; on the Paths pages only chips may be. */
+.paths-page .dtv-th, .paths-page .dtv-arrow { font-size: 14px; }
+.paths-page .tun-matrix-wrap { overflow-x: auto; max-width: 100%; }
+.paths-page .tun-matrix { width: auto; border-collapse: separate; border-spacing: var(--sp-1); font-size: 14px; }
+.paths-page .tun-matrix th {
+  font-weight: 500; color: var(--muted); text-align: left; padding: var(--sp-1) var(--sp-3) var(--sp-1) 0;
+  white-space: nowrap; text-transform: none; letter-spacing: normal; border: 0; background: none;
+}
+.paths-page .tun-matrix thead th { text-align: center; padding: var(--sp-1) var(--sp-2); }
+.paths-page .tun-matrix td { padding: 0; text-align: center; border: 0; background: none; }
+.paths-page .tun-cell-none { color: var(--muted); min-width: 56px; height: 40px; }
+.paths-page .tun-cell {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1);
+  min-width: 56px; height: 40px; padding: 0 var(--sp-2); border-radius: var(--r-2);
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--fg, inherit);
+  font: 600 14px var(--font-ui); cursor: pointer;
+}
+.paths-page .tun-cell.t-good { border-color: color-mix(in srgb, var(--good) 45%, transparent); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.paths-page .tun-cell.t-warn { border-color: color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.paths-page .tun-cell.t-bad  { border-color: color-mix(in srgb, var(--bad) 60%, transparent);  background: color-mix(in srgb, var(--bad) 18%, transparent); }
+.paths-page .tun-cell.is-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.paths-page .tun-cell { white-space: nowrap; }
+.paths-page .tun-cell-bad { font-size: 14px; font-weight: 500; color: var(--fg, inherit); }
+.paths-page .tun-end { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.paths-page .tun-end-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.paths-page .tun-end-colour { margin-left: var(--sp-2); color: var(--muted); font-size: 14px; }
+.paths-page .tun-end-site { color: var(--muted); font-size: 14px; }
+.paths-page .tun-state { display: inline-flex; flex-direction: column; gap: 2px; }
+.paths-page .tun-one-end { color: var(--muted); font-size: 14px; white-space: nowrap; }
+.paths-page .tun-filter { font-size: 14px; }
+
 /* Path behaviour cards (PathHealthList) — classes + tokens, no inline hex.
    --ph is the state hue; Unknown is grey, never green ("we could not ask"
    must never read as "we asked and it was fine"). */

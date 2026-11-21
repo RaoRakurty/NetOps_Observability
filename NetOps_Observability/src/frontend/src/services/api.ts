@@ -2010,6 +2010,86 @@ export type Tunnel = {
   /** false for a tunnel whose path quality is not measured (SD-WAN tunnels
    *  read from the overlay): latency/jitter/loss/QoE render as "—". */
   measured?: boolean;
+  // ── Paths P4 (2026-11-21): SD-WAN rows are ONE per tunnel, both ends folded
+  //    under the correlation engine's tunnel id. Absent on IPsec/GRE rows. ──
+  /** The engine's tunnel id (sorted TLOC pair); "" when it could not be formed. */
+  tunnel_id?: string;
+  /** up | down | disagree (the two ends report different states). */
+  state?: string;
+  /** How many ends reported the tunnel: 1 or 2. */
+  ends_reported?: number;
+  a?: TunnelEnd;
+  b?: TunnelEnd;
+  /** The controller's path quality; null when the tunnel has none. */
+  quality?: TunnelQuality | null;
+  /** The open correlation object naming this tunnel; null when there is none. */
+  case?: TunnelCase | null;
+  sources?: string[];
+};
+
+/** One end of a folded SD-WAN tunnel. device_id/site are null when the caller
+ *  cannot see that end's device or the device has no site. */
+export type TunnelEnd = {
+  device_id: string | null;
+  device: string;
+  system_ip: string;
+  color: string;
+  state: string;
+  sessions: number;
+  up: number;
+  site: { label: string; source: string } | null;
+};
+
+/** Controller path quality: the worst reading across the reporting ends, as of
+ *  the older end's newest sample (it runs 30–60 minutes behind). */
+export type TunnelQuality = {
+  latency_ms: number;
+  jitter_ms: number;
+  loss_pct: number;
+  qoe: number;
+  as_of: string;
+  ends: number;
+  source: string;
+};
+
+export type TunnelCase = { id: string; tier: string; entity_id: string };
+
+export type TunnelMatrixSite = { key: string; label: string; source: string; devices: number };
+
+export type TunnelMatrixCell = {
+  a: string;
+  b: string;
+  state: string;
+  tunnels: number;
+  up: number;
+  down: number;
+  disagree: number;
+  transports: { color: string; state: string; tunnels: number }[];
+  measured: number;
+  worst_loss_pct: number | null;
+  worst_latency_ms: number | null;
+  quality_as_of: string | null;
+  cases: string[];
+};
+
+export type TunnelMatrix = {
+  sites: TunnelMatrixSite[];
+  cells: TunnelMatrixCell[];
+  sites_total: number;
+  unplaced_tunnels: number;
+  truncated: boolean;
+};
+
+/** /api/tunnels body. The legacy `data`/`rows` are always present; the rest is
+ *  sent when SD-WAN tunnels are visible (or the matrix was asked for). */
+export type TunnelsResponse = {
+  data: Tunnel[];
+  rows: number;
+  total?: number;
+  truncated?: boolean;
+  quality?: { status: "ok" | "none" | "unavailable"; window_s: number };
+  cases?: { status: "ok" | "unavailable" };
+  matrix?: TunnelMatrix;
 };
 
 // ---------- Vulnerability Management (#13) ----------
@@ -6881,10 +6961,11 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${legacyFlowSince(sinceSeconds)}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
-  tunnels: (limit = 200, status?: string) => {
+  tunnels: (limit = 200, status?: string, opts: { matrix?: boolean } = {}) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (status) p.set("status", status);
-    return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
+    if (opts.matrix) p.set("include", "matrix");
+    return request<TunnelsResponse>(`/api/tunnels?${p}`);
   },
   // `degraded` carries the evidence the SERVER could not read while deriving the
   // table — today: the adjacency evidence, without which every interface falls

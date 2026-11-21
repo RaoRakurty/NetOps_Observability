@@ -15,6 +15,7 @@ import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tab
 import { GeomapSection } from "./DeviceGeomap";
 import AskIris from "../components/AskIris";
 import { ifRateBps, ifUtilPct } from "../lib/ifUtilisation";
+import { asOfText, oldestQualityAsOf } from "../tabs/tunnels.model";
 
 // Device Monitoring — the network-device-fleet cockpit (the fleet master
 // board). Collapsible, tinted section groups built on the
@@ -248,8 +249,8 @@ function TunnelOverlay() {
     { key: "type", header: "Type", width: 84, text: (t) => t.type ?? "", render: (t) => <span className="badge">{t.type || "—"}</span> },
     { key: "local", header: "Local", sortable: true, text: (t) => `${t.local_device} ${t.local_addr}`, sortValue: (t) => t.local_device || "", render: (t) => endpoint(t.local_device, t.local_addr) },
     { key: "remote", header: "Remote", sortable: true, text: (t) => `${t.remote_device} ${t.remote_addr}`, sortValue: (t) => t.remote_device || "", render: (t) => endpoint(t.remote_device, t.remote_addr) },
-    { key: "latency", header: "Latency", width: 92, align: "right", sortable: true, sortValue: (t) => t.latency_ms, sev: (t) => latSev(t.latency_ms), render: (t) => (t.latency_ms > 0 ? `${t.latency_ms.toFixed(1)} ms` : "—") },
-    { key: "loss", header: "Loss", width: 80, align: "right", sortable: true, sortValue: (t) => t.loss_pct, sev: (t) => lossSev(t.loss_pct), render: (t) => (t.loss_pct > 0 ? `${t.loss_pct.toFixed(2)} %` : "—") },
+    { key: "latency", header: "Latency", width: 92, align: "right", sortable: true, sortValue: (t) => t.latency_ms, sev: (t) => (t.measured === false ? undefined : latSev(t.latency_ms)), render: (t) => (t.measured !== false && t.latency_ms > 0 ? `${t.latency_ms.toFixed(1)} ms` : "—") },
+    { key: "loss", header: "Loss", width: 80, align: "right", sortable: true, sortValue: (t) => t.loss_pct, sev: (t) => (t.measured === false ? undefined : lossSev(t.loss_pct)), render: (t) => (t.measured !== false && t.loss_pct > 0 ? `${t.loss_pct.toFixed(2)} %` : "—") },
     { key: "uptime", header: "Uptime", width: 88, align: "right", sortable: true, sortValue: (t) => t.uptime_s, render: (t) => fmtTunnelUptime(t.uptime_s) },
     {
       key: "status", header: "Status", width: 82, sortable: true, text: (t) => t.status ?? "", sortValue: (t) => t.status ?? "",
@@ -261,6 +262,9 @@ function TunnelOverlay() {
   const down = rows.length - up;
   const ipsec = rows.filter((t) => t.type === "ipsec").length;
   const gre = rows.filter((t) => t.type === "gre").length;
+  // SD-WAN latency/loss are the controller's reading, 30–60 minutes behind
+  // (Paths P4): say how old, under the table.
+  const asOf = asOfText(oldestQualityAsOf(rows.filter((t) => t.measured !== false)));
 
   if (err) return <Panel title="Tunnels — current state"><div className="empty" style={{ color: "var(--bad)" }}>{err}</div></Panel>;
   if (rows.length === 0) return <Panel title="Tunnels — current state"><EmptyHint kind="tunnels" /></Panel>;
@@ -285,6 +289,7 @@ function TunnelOverlay() {
           ariaLabel="Tunnels current state"
           initialSort={{ key: "status", dir: "asc" }}
         />
+        {asOf && <p className="proto-key" data-testid="dm-tunnel-asof">SD-WAN path quality {asOf}.</p>}
       </Panel>
     </>
   );

@@ -62,24 +62,30 @@ Service checks measure a service, not a path, so the page links to **Operations 
 
 ### Step 4 - Read tunnels {#tunnels}
 
-Open **Investigate → Paths → Tunnels**. It lists overlay circuits reported through device telemetry, one row per tunnel, and refreshes every 15 seconds.
+Open **Investigate → Paths → Tunnels**. It lists overlay circuits, **one row per tunnel**, and refreshes every 15 seconds. An SD-WAN tunnel is reported by both of its edges; the page folds the two reports into one row under the same tunnel identity the correlation engine uses, so a row and an RCA case about that tunnel name the same thing. IPsec and GRE tunnels read from device telemetry appear as before.
 
-1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. The two averages cover only the tunnels whose quality is measured, and the tile says how many that is; a tunnel known only as up or down counts toward the first two tiles and never drags an average toward zero. With no measured tunnel, latency and loss read as a dash rather than as zero.
-2. Narrow with **Search tunnels, devices, addresses…**, which matches id, type, endpoint device, address and status.
-3. Read the columns:
+1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. The two averages cover only the tunnels whose quality is measured, and the tiles say how many that is and how old the reading is. A tunnel known only as up or down counts toward the first two tiles and never drags an average toward zero. With no measured tunnel, latency and loss read as a dash rather than as zero. When the two ends of a tunnel report different states, **Tunnels down** says how many ends disagree.
+2. Read the **Site matrix**. Each site with a tunnel end is a row and a column; a cell is every tunnel between those two sites (the diagonal is tunnels inside one site). The cell shows how many tunnels there are and is coloured by the worst state among them: red when one is down, amber when two ends disagree, green when all are up. Select a cell to narrow the table to that site pair, and select it again, or the filter button above the table, to show every tunnel. Sites follow the one site rule: a site you assign by hand wins over a discovered one. Tunnels with an end at no site are counted under the matrix.
+3. Narrow with **Search tunnels, devices, sites…**, which matches devices, system-ips, colours, sites, type, state and the tunnel identity.
+4. Read the columns:
 
 | Column | What it shows |
 |---|---|
-| **Type** | The tunnel type as the device reports it. |
-| **Local** / **Remote** | Each endpoint, device name with its tunnel address. |
+| **Type** | The tunnel type: `sdwan`, `ipsec` or `gre`. |
+| **End A** / **End B** | Each end: device name with its transport colour, and its site underneath. An end on a device you cannot see is named by its system-ip. |
+| **State** | `up`, `down`, or **ends disagree** when the two ends report different states. **One end reporting** means only one edge has reported the tunnel so far. |
 | **Latency** | Tinted green under 50 ms, amber under 150 ms, red above. |
 | **Jitter** | Green under 30 ms, amber under 60 ms, red above. |
 | **Loss** | Green under 1 per cent, amber under 3 per cent, red above. |
 | **QoE** | A 0 to 10 experience score. Green at 8 and above, amber at 5, red below. |
-| **Uptime** | How long the tunnel has been up, rendered as days and hours, then hours and minutes, then minutes. Zero renders as a dash. |
-| **Status** | `up` or `down`. |
+| **Quality as of** | When the quality reading was taken, with its age, for example *as of 16:30 (40 min ago)*. |
+| **Case** | When an open correlation case names this tunnel, a chip with its confidence that opens the case in **Investigate → RCA**. |
 
-4. Sort by any SLA column to bring the worst tunnel to the top. The cell tinting keeps an impaired overlay readable in a long list.
+5. Sort by any column to bring the worst tunnel to the top. The table opens with down tunnels first, then tunnels whose ends disagree.
+
+For an SD-WAN tunnel, latency, jitter, loss and QoE are the controller's own path statistics. The controller publishes them about 30 to 60 minutes after the fact, in 10-minute buckets, which is why every reading carries its time: it tells you how a path behaved, not what it is doing this minute. The current up or down state comes from the controller's live session state and is not delayed. When the worst quality differs between the two directions of a tunnel, the row shows the worse one, as of the older of the two readings. A tunnel with no reading shows a dash.
+
+If path quality or open cases cannot be read at that moment, the page says so in one line above the matrix and shows dashes and no case chips; it never fills the gap with zeros.
 
 ## What you see
 
@@ -115,7 +121,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
-The page states it as `No tunnels reported. IPsec / SD-WAN tunnel state appears here once a collector populates it from device telemetry.`
+The page states it as `No tunnels reported yet. SD-WAN tunnels come from Infrastructure › NMS Integrations.`, with a link to that page: SD-WAN tunnels appear once a controller integration is connected, and IPsec and GRE tunnels once a device reports them.
 
 Three states to keep apart. A trace reading **incomplete** means the destination or an intermediate hop never answered, which is a fact about the probe rather than a fault. A hop reading a dash for loss means the method measures loss end to end and not per hop. An empty Tunnels table means nothing is exporting tunnel state, not that every tunnel is down.
 

@@ -7,6 +7,7 @@ import { useAppNames } from "../services/appNames";
 import { StatStrip, Stat } from "../components/ui";
 import { Group, Panel, MetricTop, MetricStat, BarPanel } from "../components/board/panels";
 import { NocHeader, LiveChip } from "../components/noc";
+import { asOfText, oldestQualityAsOf } from "../tabs/tunnels.model";
 
 // Quality — service- and link-quality scoring across the fleet. Distinct from the
 // raw error/discard counts on Device Monitoring: this board is about RATES and
@@ -47,6 +48,31 @@ export function pathHealth(lossPct: number, latencyMs: number, jitterMs: number,
 };
 const healthTone = (h: number) => (h >= 80 ? "good" : h >= 60 ? "warn" : "bad");
 
+export interface TunnelQualityStats {
+  total: number;
+  up: number;
+  /** Rows whose path quality is measured; the scores below cover only these. */
+  measured: number;
+  avgQoe: number;
+  worstLoss: number;
+  avgHealth: number;
+}
+
+// The tunnel scores. Only MEASURED rows are scored: an SD-WAN tunnel with no
+// controller reading carries measured:false and zeros, and scoring it read a
+// fleet of unmeasured tunnels as perfect paths (Paths P4, 2026-11-21). Total
+// and up still count every row.
+export function tunnelQualityStats(rows: Tunnel[]): TunnelQualityStats {
+  const m = rows.filter((t) => t.measured !== false);
+  const up = rows.filter((t) => String(t.status).toLowerCase() === "up").length;
+  const qoes = m.map((t) => num(t.qoe)).filter((q) => q > 0);
+  const avgQoe = qoes.length ? qoes.reduce((a, b) => a + b, 0) / qoes.length : 0;
+  const worstLoss = m.reduce((acc, t) => Math.max(acc, num(t.loss_pct)), 0);
+  const healths = m.map((t) => pathHealth(num(t.loss_pct), num(t.latency_ms), num(t.jitter_ms), num(t.uptime_s)));
+  const avgHealth = healths.length ? healths.reduce((a, b) => a + b, 0) / healths.length : 0;
+  return { total: rows.length, up, measured: m.length, avgQoe, worstLoss, avgHealth };
+}
+
 // ── Overlay / tunnel quality (from /api/tunnels) ──────────────────────────────
 function TunnelQuality() {
   const [rows, setRows] = useState<Tunnel[]>([]);
@@ -62,28 +88,22 @@ function TunnelQuality() {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  const stats = useMemo(() => {
-    const up = rows.filter((t) => String(t.status).toLowerCase() === "up").length;
-    const qoes = rows.map((t) => num(t.qoe)).filter((q) => q > 0);
-    const avgQoe = qoes.length ? qoes.reduce((a, b) => a + b, 0) / qoes.length : 0;
-    const worstLoss = rows.reduce((m, t) => Math.max(m, num(t.loss_pct)), 0);
-    const healths = rows.map((t) => pathHealth(num(t.loss_pct), num(t.latency_ms), num(t.jitter_ms), num(t.uptime_s)));
-    const avgHealth = healths.length ? healths.reduce((a, b) => a + b, 0) / healths.length : 0;
-    return { total: rows.length, up, avgQoe, worstLoss, avgHealth };
-  }, [rows]);
+  const stats = useMemo(() => tunnelQualityStats(rows), [rows]);
+  const measuredRows = useMemo(() => rows.filter((t) => t.measured !== false), [rows]);
+  const asOf = asOfText(oldestQualityAsOf(measuredRows));
 
   const healthRows = useMemo(
-    () => rows
+    () => measuredRows
       .map((t) => ({ label: `${t.local_device || t.id} → ${t.remote_device || "—"}`, value: pathHealth(num(t.loss_pct), num(t.latency_ms), num(t.jitter_ms), num(t.uptime_s)) }))
       .sort((a, b) => a.value - b.value)
       .slice(0, 12)
       .map((r) => ({ ...r, danger: r.value < 60 })),
-    [rows],
+    [measuredRows],
   );
 
   const worst = useMemo(
-    () => [...rows].filter((t) => num(t.qoe) > 0).sort((a, b) => num(a.qoe) - num(b.qoe)).slice(0, 8),
-    [rows],
+    () => [...measuredRows].filter((t) => num(t.qoe) > 0).sort((a, b) => num(a.qoe) - num(b.qoe)).slice(0, 8),
+    [measuredRows],
   );
   const qoeTone = (q: number) => (q >= 8 ? "good" : q >= 5 ? "warn" : "bad");
 
@@ -97,10 +117,17 @@ function TunnelQuality() {
       <StatStrip>
         <Stat label="Tunnels" value={stats.total} />
         <Stat label="Up" value={stats.up} tone={stats.total > 0 && stats.up === stats.total ? "good" : stats.up < stats.total ? "warn" : ""} />
-        <Stat label="Avg Path Health" value={stats.total ? Math.round(stats.avgHealth) : "—"} tone={stats.total ? healthTone(stats.avgHealth) : ""} />
-        <Stat label="Avg QoE" value={stats.total ? stats.avgQoe.toFixed(1) : "—"} tone={stats.total ? qoeTone(stats.avgQoe) : ""} />
-        <Stat label="Worst loss" value={stats.total ? `${stats.worstLoss.toFixed(1)}%` : "—"} tone={stats.worstLoss >= 3 ? "bad" : stats.worstLoss >= 1 ? "warn" : "good"} />
+        <Stat label="Avg Path Health" value={stats.measured ? Math.round(stats.avgHealth) : "—"} tone={stats.measured ? healthTone(stats.avgHealth) : ""} />
+        <Stat label="Avg QoE" value={stats.measured && stats.avgQoe > 0 ? stats.avgQoe.toFixed(1) : "—"} tone={stats.measured && stats.avgQoe > 0 ? qoeTone(stats.avgQoe) : ""} />
+        <Stat label="Worst loss" value={stats.measured ? `${stats.worstLoss.toFixed(1)}%` : "—"} tone={!stats.measured ? "" : stats.worstLoss >= 3 ? "bad" : stats.worstLoss >= 1 ? "warn" : "good"} />
       </StatStrip>
+      {stats.total > 0 && (
+        <p className="proto-key" data-testid="tunnel-quality-asof">
+          {stats.measured
+            ? `Scores cover ${stats.measured} of ${stats.total} tunnels${asOf ? `, ${asOf}` : ""}.`
+            : "No tunnel has a path quality reading yet."}
+        </p>
+      )}
       <BarPanel title="Path Health by tunnel (0–100 · 40% loss / 30% latency / 20% jitter / 10% stability)" rows={healthRows} fmtX={(n) => `${n.toFixed(0)}`} err={err} dataKind="generic" />
       <Panel title="Lowest-QoE overlay tunnels">
         {err ? (

@@ -19,6 +19,7 @@ import { usePrefs } from "../theme/prefs";
 import { useShell } from "../context/shell";
 import { setDrill } from "../theme/drill";
 import TopologyCanvas from "../features/topology/renderers/react-flow/TopologyCanvas";
+import { asOfText, oldestQualityAsOf } from "../tabs/tunnels.model";
 
 // pressable — shared keyboard-activation props for click-to-navigate tiles that
 // are not <button>s (stat grids, KPI tiles, mini-rows). Gives every role="button"
@@ -996,15 +997,19 @@ function TunnelsHealth() {
   if (rows.length === 0) return <Empty msg="No tunnel telemetry yet." />;
   const up = rows.filter((t) => String(t.status).toLowerCase() === "up").length;
   const down = rows.length - up;
-  const lats = rows.map((t) => Number(t.latency_ms)).filter((n) => Number.isFinite(n) && n > 0);
+  // Latency is the controller's reading for an SD-WAN tunnel, 30–60 minutes
+  // behind: only measured rows count, and the tiles say how old it is (Paths P4).
+  const measured = rows.filter((t) => t.measured !== false);
+  const lats = measured.map((t) => Number(t.latency_ms)).filter((n) => Number.isFinite(n) && n > 0);
   const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : null;
   const worst = lats.length ? Math.round(Math.max(...lats)) : null;
+  const asOf = asOfText(oldestQualityAsOf(measured));
   return (
     <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("investigate/tunnels"))}>
       <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
       <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
-      <div className="stat s-accent"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
-      <div className={`stat ${worst && worst > 120 ? "s-warn" : "s-accent"}`}><span className="stat-label">Worst latency</span><span className="stat-value">{worst ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
+      <div className="stat s-accent" data-testid="cc-tunnel-avg-latency"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span>{asOf && <span className="stat-foot">{asOf}</span>}</div>
+      <div className={`stat ${worst && worst > 120 ? "s-warn" : "s-accent"}`}><span className="stat-label">Worst latency</span><span className="stat-value">{worst ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span>{asOf && <span className="stat-foot">{asOf}</span>}</div>
     </div>
   );
 }
