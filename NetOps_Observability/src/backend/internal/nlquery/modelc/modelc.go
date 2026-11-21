@@ -279,6 +279,8 @@ func intentFor(t ast.QueryType) string {
 		return "list_incidents"
 	case ast.IncidentExplain:
 		return "explain_incident"
+	case ast.SeasonalOutliers:
+		return "unusual_now"
 	}
 	return ""
 }

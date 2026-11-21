@@ -4821,6 +4821,66 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 /* FLOWS-CSS-END */
 
+/* ── Paths section scope (Paths redesign P1, 2026-11-20) ─────────────────────
+   Measured paths, Tunnels and WAN circuits share ONE visual system: the Flow
+   Trace board structure (colour-keyed dm-group heads, panels, one fact line)
+   on the Explore › Flows type scale above. Group heads and panel titles
+   16px/600, body 14px, 12.5px only for chips; --font-ui for prose,
+   --font-mono for addresses, --font-display for KPI numerals only. */
+.paths-page { font-family: var(--font-ui); font-size: 14px; }
+.paths-page > h2, .paths-page.card > h2 {
+  font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 var(--sp-3);
+}
+.paths-page .dm-group-head, .paths-page .panel-tools h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.paths-page .panel { padding: var(--sp-4); }
+.paths-page .proto-key, .paths-page .board-empty-msg, .paths-page .board-empty-hint, .paths-page .empty,
+.paths-page .mini-meta, .paths-page .fact-line, .paths-page .wan-line, .paths-page .wan-count,
+.paths-page .ds-table th, .paths-page .ds-table td, .paths-page .dt-count, .paths-page .stat-label,
+.paths-page .stat-foot, .paths-page select, .paths-page input, .paths-page .btn-ghost,
+.paths-page .dm-list li, .paths-page .omni-icon, .paths-page .bgp-sec-note, .paths-page .bgp-sec-stamp,
+.paths-page label, .paths-page label span, .paths-page th, .paths-page td,
+.paths-page .dp-field > span:first-child, .paths-page .dp-tbl thead th { font-size: 14px; }
+.paths-page .wan-mono, .paths-page .ph-dst, .paths-page .mono, .paths-page code {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px;
+}
+.paths-page .stat-value { font-family: var(--font-display); }
+.paths-page .stat-value .stat-unit { font-size: 18px; color: var(--muted); font-family: var(--font-ui); }
+.paths-page .badge { font-size: 12.5px; }
+.paths-page .board-empty-hint { color: var(--fg-muted, var(--muted)); max-width: 520px; }
+.paths-page .empty { font-style: normal; }
+.paths-page .proto-key a { color: var(--accent); font-weight: 500; }
+.paths-page :focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* Path behaviour cards (PathHealthList) — classes + tokens, no inline hex.
+   --ph is the state hue; Unknown is grey, never green ("we could not ask"
+   must never read as "we asked and it was fine"). */
+.ph-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ph-card {
+  --ph: var(--muted);
+  border: 1px solid var(--border); border-left: 3px solid var(--ph); border-radius: var(--r-2);
+  padding: 10px 12px; background: var(--panel, var(--surface)); min-width: 0;
+}
+.ph-card[data-state="healthy"] { --ph: var(--good); }
+.ph-card[data-state="watch"] { --ph: var(--warn); }
+.ph-card[data-state="degraded"] { --ph: color-mix(in srgb, var(--warn) 50%, var(--bad)); }
+.ph-card[data-state="severe"] { --ph: var(--bad); }
+.ph-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.ph-badge {
+  font-size: 12.5px; font-weight: 600; letter-spacing: .3px; padding: 1px 7px; border-radius: var(--radius-sm);
+  color: #fff; background: var(--ph); white-space: nowrap; /* white on the state hue in both themes */
+}
+.ph-dst { font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; overflow-wrap: anywhere; color: var(--fg); }
+.ph-agent, .ph-conf { font-size: 14px; color: var(--muted); }
+.ph-conf { margin-left: auto; }
+.ph-conf b { color: var(--fg); }
+.ph-reason { font-size: 14px; margin-top: 6px; color: var(--fg); line-height: 1.45; }
+.ph-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 14px; margin: 7px 0 0; }
+.ph-facts dt { color: var(--muted); }
+.ph-facts dd { margin: 0; color: var(--fg); font-variant-numeric: tabular-nums; }
+.ph-ev { margin-top: 7px; }
+.ph-ev summary { cursor: pointer; font-size: 14px; color: var(--accent); }
+.ph-ev ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.5; color: var(--fg); }
+
 /* Compact segmented toggle (bar/table, uni/bi) */
 .seg-mini { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .seg-mini button {

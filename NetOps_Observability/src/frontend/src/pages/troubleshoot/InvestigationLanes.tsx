@@ -35,7 +35,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type FeedItem, type PathHealthItem, type ProbePath, type PromInstantSeries } from "../../services/api";
 import { operatorError } from "../../lib/errors";
+import { fmtDateTime } from "../../lib/time";
+import { fmtBytes } from "../../components/board/panels";
 import {
+  LANE_OPEN,
   LANE_SOURCE,
   LANE_TITLE,
   changeLabel,
@@ -91,9 +94,10 @@ function LaneCard({ id, result, children }: {
   // a wall.
   const summary = laneSummary(id, result.state, result.rows.length);
   return (
-    <section className="tsl-card card" role="region" aria-labelledby={headingId} data-lane={id} data-state={result.state}>
-      <div className="tsl-head">
+    <section className="tsl-card panel" role="region" aria-labelledby={headingId} data-lane={id} data-state={result.state}>
+      <div className="tsl-head panel-tools">
         <h3 id={headingId} className="tsl-title">{LANE_TITLE[id]}</h3>
+        <span className={`badge tsl-state tsl-state-${result.state}`} data-testid={`lane-state-${id}`}>{LANE_STATE_CHIP[result.state]}</span>
       </div>
 
       {/* One plain sentence, always. For every state but "ready" the lane's own
@@ -110,10 +114,29 @@ function LaneCard({ id, result, children }: {
 
       <div className="tsl-detail">
         {result.state === "ready" && children}
-        <div className="tsl-src">Read from <span className="tsl-api">{LANE_SOURCE[id]}</span></div>
+        {/* Somewhere the operator can GO, with the API on the title for anyone
+            who wants to verify the read (Paths redesign P1). */}
+        <a className="tsl-open" href={LANE_OPEN[id].href} title={`Read from ${LANE_SOURCE[id]}`} data-testid={`lane-open-${id}`}>
+          Open in {LANE_OPEN[id].label} →
+        </a>
       </div>
     </section>
   );
+}
+
+/** The state chip in each lane's header — the lane's answer at a glance. */
+const LANE_STATE_CHIP: Record<LaneResult<unknown>["state"], string> = {
+  loading: "Checking",
+  error: "Could not read",
+  not_connected: "Not connected",
+  empty: "Quiet",
+  ready: "Has evidence",
+};
+
+/** A feed timestamp as the operator reads every other time on the page. */
+function when(ts: string | undefined): string {
+  const s = fmtDateTime(ts);
+  return s === "—" ? String(ts ?? "") : s;
 }
 
 /** useLane — one lane's fetch, with its state reported up to the ladder. */
@@ -147,7 +170,7 @@ function useLane<T>(
 export function DemLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
   const res = useLane<PathHealthItem>(
     "dem",
-    async () => classifyDemLane((await api.pathsHealth())?.paths ?? []),
+    async () => classifyDemLane((await api.pathsHealth())?.paths ?? [], scope.device ?? ""),
     [scope.device, scope.minutes, scope.caseId],
     report,
   );
@@ -202,7 +225,7 @@ export function ChangedLane({ scope, report }: { scope: LaneScope; report?: Lane
             <span className={`tsl-dot ${isConfigChangeKind(it.kind) ? "change" : "state"}`} aria-hidden="true" />
             <span className="tsl-k">{changeLabel(it.kind)}</span>
             <span className="tsl-v">{it.entity_id}</span>
-            <span className="fact-line">{it.ts}</span>
+            <span className="fact-line">{when(it.ts)}</span>
           </li>
         ))}
       </ul>
@@ -258,7 +281,7 @@ export function HealthLane({ scope, report }: {
 export function PathLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
   const res = useLane<ProbePath>(
     "path",
-    async () => classifyPathLane((await api.probePaths()) ?? []),
+    async () => classifyPathLane((await api.probePaths()) ?? [], scope.device ?? ""),
     [scope.device, scope.minutes, scope.caseId],
     report,
   );
@@ -318,6 +341,13 @@ export function RoutingLane({ scope, report }: { scope: LaneScope; report?: Lane
 
 type FlowRow = Record<string, unknown>;
 
+/** Bytes as "1.2 KB", never a raw count; an absent or non-numeric value is blank. */
+function flowBytes(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? fmtBytes(n) : "";
+}
+
 export function FlowsLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
   const res = useLane<FlowRow>(
     "flows",
@@ -340,7 +370,7 @@ export function FlowsLane({ scope, report }: { scope: LaneScope; report?: LaneSt
             <span className="tsl-dot state" aria-hidden="true" />
             <span className="tsl-k">{String(r.src_addr ?? r.src ?? "—")}</span>
             <span className="tsl-v">→ {String(r.dst_addr ?? r.dst ?? "—")}</span>
-            <span className="fact-line">{String(r.bytes ?? r.total_bytes ?? "")}</span>
+            <span className="fact-line">{flowBytes(r.bytes ?? r.total_bytes)}</span>
           </li>
         ))}
       </ul>
@@ -372,7 +402,7 @@ export function EventsLane({ scope, report }: { scope: LaneScope; report?: LaneS
             <span className={`tsl-dot ${it.severity === "critical" ? "bad" : "state"}`} aria-hidden="true" />
             <span className="tsl-k">{it.title || it.kind}</span>
             <span className="tsl-v">{it.entity_id}</span>
-            <span className="fact-line">{it.ts}</span>
+            <span className="fact-line">{when(it.ts)}</span>
           </li>
         ))}
       </ul>

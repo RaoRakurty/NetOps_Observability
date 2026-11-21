@@ -38,6 +38,9 @@ var ErrEmptyScope = errors.New("the entities in the question resolve to nothing 
 // Planner executes validated queries against a Scope.
 type Planner struct {
 	Cat *catalog.Catalog
+	// EstateTimeout bounds the estate-wide seasonal read (0 =
+	// EstateReadTimeout).
+	EstateTimeout time.Duration
 }
 
 // Execute runs one VALIDATED query. The caller must have run validate.Validate
@@ -64,6 +67,8 @@ func (p Planner) Execute(ctx context.Context, sc Scope, q *ast.AST, constraints 
 		err = p.flows(ctx, sc, q, rs)
 	case ast.LogSearch:
 		err = p.logs(ctx, sc, q, rs)
+	case ast.SeasonalOutliers:
+		err = p.seasonalOutliers(ctx, sc, q, rs)
 	default:
 		err = fmt.Errorf("plan: query type %q is not executable", q.Type)
 	}

@@ -8,6 +8,7 @@ import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 import FidelityBadge from "../FidelityBadge";
 import RcaCaseHeader, { Pill } from "./RcaCaseHeader";
 import AskIris from "../AskIris";
+import { troubleshootingCaseHref } from "../../lib/caseLink";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 import { RCA_SECTION_NAMES, HOW_TO_READ, WOULD_CONFIRM_LABEL } from "./rcaPhrases";
 
@@ -126,7 +127,9 @@ export default function RcaWorkspace({
   feedbackSlot?: ReactNode;
 }) {
   const [detail, setDetail] = useState<string>("");
-  void correlationId; // kept on the contract for callers; Iris reads it via aiSlot
+  // The case workbench for this same correlation (Troubleshooting reads
+  // `?case=`). Never offered on a synthetic example case.
+  const caseHref = data.synthetic ? "" : troubleshootingCaseHref(correlationId);
 
   return (
     <div className={`rca-ws${aiSlot ? " rw-docked" : ""}`}>
@@ -144,6 +147,10 @@ export default function RcaWorkspace({
           {data.synthetic && <span className="rw-watermark">Synthetic data · example case</span>}
           <button className="rw-btn" onClick={onExportPdf} disabled={exportDisabled}
             title="Download the incident report as a PDF document">⤓ Export PDF</button>
+          {caseHref && (
+            <a className="rw-btn" href={caseHref} data-testid="rca-open-troubleshooting"
+              title="Open this case on the Troubleshooting page, with its evidence lanes">Open in Troubleshooting</a>
+          )}
           {/* View switch as a toggle group (not ARIA tabs: no tabpanel/roving-
               focus wiring here, and plain buttons are fully keyboard operable). */}
           <div className="rw-tabs" role="group" aria-label="View">

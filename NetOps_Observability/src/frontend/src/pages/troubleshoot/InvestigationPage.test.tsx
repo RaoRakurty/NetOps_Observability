@@ -104,7 +104,9 @@ const investigation = (over: Partial<Incident> = {}): Incident => ({
 });
 
 const pathHealth = (over: Partial<PathHealthItem> = {}): PathHealthItem => ({
-  path_id: "p1", agent: "probe-a", dst: "10.0.0.1", health_state: "degraded", score: 40,
+  // dst is the case's device (wan-r2): the DEM lane reads only paths that
+  // touch the case's device (Paths redesign P1).
+  path_id: "p1", agent: "probe-a", dst: "wan-r2", health_state: "degraded", score: 40,
   confidence: "medium", severities: {}, baseline_source: "rolling", reason: "loss above baseline",
   likely_fault_domain: "wan", evidence: [],
   current: { latency_p95_5m: 30, jitter_p95_5m: 3, loss_pct_5m: 1 },
@@ -181,7 +183,9 @@ describe("the three blocks", () => {
 
   it("renders the three blocks in order once a case is picked", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
-    expect(blockHeadings()).toEqual(["What's wrong?", "The evidence"]);
+    // "The answer" carries a visible heading since the P1 restyle (each block
+    // reads as a board group with its own head band).
+    expect(blockHeadings()).toEqual(["What's wrong?", "The answer", "The evidence"]);
     const blocks = Array.from(document.querySelectorAll(".ts-block"));
     expect(blocks.map((b) => b.getAttribute("data-testid")))
       .toEqual(["ts-pick", "ts-answer-block", "ts-evidence"]);
@@ -646,6 +650,17 @@ describe("block 3 — the evidence", () => {
   it("scopes the lanes to the case's first affected device", async () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
     await waitFor(() => expect(mocks.eventsFeed).toHaveBeenCalledWith(expect.objectContaining({ entity: "wan-r2" })));
+  });
+
+  // Paths redesign P1: the DEM lane is scoped like the rest. A measured path
+  // that never touches the case's device is "Quiet" — never this case's
+  // evidence, so it cannot earn a layer on the answer card.
+  it("collapses the DEM lane when no measured path touches the case's device", async () => {
+    mocks.pathsHealth.mockResolvedValue({ paths: [pathHealth({ dst: "10.9.9.9", agent: "probe-z" })], count: 1 });
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    await click("Show the evidence");
+    await waitFor(() => expect(document.querySelector('[data-lane="dem"]')?.getAttribute("data-state")).toBe("empty"));
+    expect(laneSlot("dem")).toHaveAttribute("data-quiet", "yes");
   });
 
   it("passes the shell's range down to the lanes", async () => {

@@ -20,6 +20,7 @@ import (
 
 	"netops/backend/internal/nlquery/ast"
 	"netops/backend/internal/nlquery/catalog"
+	"netops/backend/internal/nlquery/seasonal"
 )
 
 const summaryItems = 5
@@ -47,6 +48,8 @@ func Summarize(cat *catalog.Catalog, q *ast.AST, rs *ResultSet) string {
 		summarizeFlows(&b, q, rs)
 	case q.Type == ast.LogSearch:
 		summarizeList(&b, rs, "log line", logLine)
+	case q.Type == ast.SeasonalOutliers:
+		summarizeEstate(&b, cat, q, rs)
 	default:
 		summarizeList(&b, rs, "row", genericLine)
 	}
@@ -339,6 +342,73 @@ func genericLine(r Row) string {
 		parts = append(parts, fmt.Sprintf("%s=%v", k, r[k]))
 	}
 	return strings.Join(parts, " ")
+}
+
+// summarizeEstate answers the estate-wide seasonal question: each unusual
+// series with its value now, its usual level in the profile's own words
+// ("for this time of week" / "for this time of day" — never a weekday) and how
+// many robust deviations it is off. With none, it says nothing is unusual
+// among the series checked — never that nothing is wrong.
+func summarizeEstate(b *strings.Builder, cat *catalog.Catalog, q *ast.AST, rs *ResultSet) {
+	what := "unusual for the time right now"
+	if q.Predicate != nil {
+		what = "unusually high for the time right now"
+	}
+	switch {
+	case rs.Window.From.IsZero():
+		b.WriteString("Iris cannot say what is unusual right now.")
+	case len(rs.Rows) == 0:
+		fmt.Fprintf(b, "Nothing is %s: no series checked is %.0f or more robust deviations from its usual level.", what, seasonal.AboveZ)
+	default:
+		fmt.Fprintf(b, "%d %s %s:", len(rs.Rows), plural(len(rs.Rows), "series is", "series are"), what)
+		for i, r := range rs.Rows {
+			if i == summaryItems {
+				fmt.Fprintf(b, "\n… and %d more.", len(rs.Rows)-summaryItems)
+				break
+			}
+			b.WriteString("\n• " + estateLine(cat, r))
+		}
+	}
+	writeNotes(b, rs)
+}
+
+func estateLine(cat *catalog.Catalog, r Row) string {
+	label, unit := metricLabel(cat, str(r["metric"]))
+	cur, _ := r["value"].(float64)
+	exp, _ := r["expected"].(float64)
+	z, _ := r["z"].(float64)
+	who := str(r["device"])
+	switch {
+	case str(r["circuit"]) != "":
+		who = "circuit " + str(r["circuit"]) + " on " + who
+	case str(r["interface"]) != "":
+		who += " " + str(r["interface"])
+	}
+	val := func(v float64) string {
+		if unit == "bps" {
+			return humanBits(v)
+		}
+		return fmtValue(v, unit)
+	}
+	line := fmt.Sprintf("%s %s: %s now vs %s, %s — %.1f robust deviations %s",
+		who, label, val(cur), val(exp), str(r["baseline"]), math.Abs(z), str(r["direction"]))
+	if m, _ := r["maintenance"].(bool); m {
+		line += " (during declared maintenance)"
+	}
+	return line
+}
+
+// humanBits renders a bit rate with a decimal prefix ("412.3 Mb/s").
+func humanBits(v float64) string {
+	for _, u := range []struct {
+		div  float64
+		name string
+	}{{1e12, "Tb/s"}, {1e9, "Gb/s"}, {1e6, "Mb/s"}, {1e3, "kb/s"}} {
+		if math.Abs(v) >= u.div {
+			return strconv.FormatFloat(v/u.div, 'f', 1, 64) + " " + u.name
+		}
+	}
+	return strconv.FormatFloat(v, 'f', 0, 64) + " b/s"
 }
 
 func writeNotes(b *strings.Builder, rs *ResultSet) {

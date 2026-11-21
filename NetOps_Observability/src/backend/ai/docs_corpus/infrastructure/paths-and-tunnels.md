@@ -1,26 +1,26 @@
 ---
 title: Trace paths and tunnels
-description: Read measured hop-by-hop paths, path SLA probes and active service checks, and read overlay tunnel health.
+description: Read measured hop-by-hop paths and path SLA probes, and read overlay tunnel health.
 page_type: task
 sidebar_position: 6
 ---
 
 # Trace paths and tunnels
 
-**Investigate → Paths** groups the three surfaces that answer how traffic actually gets there: **Flow Trace** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN Paths** for per-circuit SLA on the underlay. Every number on these pages comes from a measurement, and an empty board states what to enable rather than going blank.
+**Investigate → Paths** groups the three surfaces that answer how traffic actually gets there: **Measured paths** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN circuits** for per-circuit SLA on the underlay. Every number on these pages comes from a measurement, and an empty board says that nothing is measured rather than going blank. (Until 2026-11 the first and third pages were labelled **Flow Trace** and **WAN Paths**; their addresses did not change, so old bookmarks still open them.)
 
 ## Before you begin
 
 - An authenticated session in your tenant. Both pages read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
 - Path discovery is off by default. A platform administrator turns on **Path discovery** under **Platform → Configuration → Features → Active measurement** ([Turn Correlix features on and off](/administration/features)); the prober service applies it within about 15 seconds. The traced targets are the path targets configured for this installation.
 - Path SLA needs **Active path probes (STAMP)** on the same page, probe targets configured for this installation, and a STAMP reflector at the far end.
-- Service checks need `FEATURE_SYNTHETICS` plus the per-check target lists.
+- Service checks (HTTP, ICMP, TCP and certificate expiry) live on **Operations → Digital Experience → Synthetics**, not on these pages.
 
 ## Steps
 
 ### Step 1 - Read Path Behavior Health
 
-Open **Investigate → Paths → Flow Trace**. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
+Open **Investigate → Paths → Measured paths**. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
 
 ### Step 2 - Read a traceroute panel
 
@@ -41,7 +41,7 @@ The second board shows the measured hop-by-hop path to each configured destinati
 
 The trace is Paris-consistent, so on a load-balanced network the path shown is one real path rather than an artifact of per-probe re-hashing.
 
-With the feature off, the board reads **No paths yet** and names the environment variables to set. `/api/probe/paths` answers with an empty list rather than an error:
+With path discovery off, the board reads **No paths yet** and says that path discovery is not switched on for this installation. `/api/probe/paths` answers with an empty list rather than an error:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -52,17 +52,17 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 []
 ```
 
-### Step 3 - Read path SLA and service checks
+### Step 3 - Read path SLA
 
 Below the traces, four charts show the standards-based path SLA per target from active probes: round-trip delay, one-way delay, jitter and PDV, and packet loss. They feed the Path Behavior Health board above.
 
-The last board covers active service checks: HTTP total time and time to first byte with per-phase timings, ICMP round-trip, TCP connect time, TLS certificate days to expiry, and checks down now.
+Service checks measure a service, not a path, so the page links to **Operations → Digital Experience → Synthetics** for them instead of repeating their charts.
 
 ### Step 4 - Read tunnels {#tunnels}
 
 Open **Investigate → Paths → Tunnels**. It lists overlay circuits reported through device telemetry, one row per tunnel, and refreshes every 15 seconds.
 
-1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. With no tunnels reported, latency and loss read as a dash rather than as zero.
+1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. The two averages cover only the tunnels whose quality is measured, and the tile says how many that is; a tunnel known only as up or down counts toward the first two tiles and never drags an average toward zero. With no measured tunnel, latency and loss read as a dash rather than as zero.
 2. Narrow with **Search tunnels, devices, addresses…**, which matches id, type, endpoint device, address and status.
 3. Read the columns:
 

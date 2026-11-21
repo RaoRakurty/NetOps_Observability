@@ -56,6 +56,14 @@ const (
 	// they read are resolved refs, never names.
 	FlowTop   QueryType = "flow_top"
 	LogSearch QueryType = "log_search"
+	// SeasonalOutliers (tracker 337 N-H6 step 3) is the estate-wide "what
+	// stands out against its usual level for the time": every series the hourly
+	// roll-up keeps for the caller, judged at the latest closed hour against
+	// its own seasonal profile, ranked by how far it is from its usual level.
+	// target is the entity type ("device", "interface", "circuit") or empty
+	// for all of them; metric optionally narrows to one rolled-up metric. It
+	// has no window of its own: the judged hour is the roll-up's latest.
+	SeasonalOutliers QueryType = "seasonal_outliers"
 )
 
 // flow_top groups (its single group_by value). A conversation is an unordered
@@ -75,6 +83,10 @@ const (
 	FilterTopic    = "topic"
 )
 
+// FilterMetric narrows a seasonal_outliers answer to several rolled-up metrics
+// ("unusually busy" = inbound and outbound traffic), eq/in over metric names.
+const FilterMetric = "metric"
+
 // LogSeverities are the normalised syslog levels, most severe first.
 var LogSeverities = []string{"critical", "error", "warning", "notice", "info"}
 
@@ -87,7 +99,7 @@ var LogTopics = []string{"bgp", "ospf", "isis", "bfd", "interface", "tunnel", "c
 func (t QueryType) Known() bool {
 	switch t {
 	case MetricSeries, MetricTopK, MetricFilter, CompareWindows, ChangeList, IncidentList, IncidentExplain,
-		EntityCount, EntityList, FlowTop, LogSearch:
+		EntityCount, EntityList, FlowTop, LogSearch, SeasonalOutliers:
 		return true
 	}
 	return false

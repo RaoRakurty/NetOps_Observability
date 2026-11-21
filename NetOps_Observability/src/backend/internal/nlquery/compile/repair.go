@@ -44,6 +44,9 @@ var grammarWords = []string{
 	"unusual", "abnormal", "normal", "baseline", "anomalous", "elevated", "high", "losing", "dropping",
 	// seasonal baselines (N-H6): "usual / typical / expected for this time of week"
 	"usual", "typical", "expected",
+	// the estate-wide seasonal question (N-H6 step 3, estate.go)
+	"acting", "busier", "busy", "estate", "heavy", "loaded", "metric", "moment", "ordinary", "present",
+	"regular", "seem", "series", "spiked", "spiking", "strange", "transport", "weekday", "weird",
 	"flapping", "packets", "seeing", "established", "idle", "average", "mean", "maximum", "peak", "minimum",
 	"total", "most", "best", "worst", "busiest", "highest", "lowest", "rank", "ranked", "recent", "latest",
 	"engineers", "engineer", "people", "users", "admins", "admin", "persons", "person", "made", "make", "done",

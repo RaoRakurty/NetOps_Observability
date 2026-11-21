@@ -228,6 +228,7 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 	st.requireReferences()
 	if hasTime {
 		st.time = tp.tr
+		st.timeSpan = tp.span
 		st.e.phrase(tp.span)
 	} else if m := recencyRe.FindString(text); m != "" {
 		// "any bgp peers flapping lately": a vague recency is a real window,
@@ -247,6 +248,10 @@ func (c Compiler) compileText(ctx context.Context, question, text string, cx Con
 	}
 	if flowRe.MatchString(text) {
 		r, err := st.flowTop()
+		return st.done(r), err
+	}
+	// the estate-wide seasonal question (N-H6 step 3).
+	if r, ok, err := st.estate(); ok || err != nil {
 		return st.done(r), err
 	}
 	switch {
@@ -305,6 +310,8 @@ type state struct {
 	raw  string // the question as asked, for values whose casing is data (owner names)
 	// sup is the catalog superlative that named the metric ("busiest").
 	sup string
+	// timeSpan is the words the question's window was read from.
+	timeSpan string
 	// readings are the interpretations this compile applied (severity, an
 	// implicit top N), disclosed with the result.
 	readings []lex.Reading

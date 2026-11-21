@@ -120,7 +120,7 @@ describe("routes", () => {
   it("keeps the existing interface metrics table and its live read", async () => {
     render(<WanCircuits />);
     await waitFor(() => expect(mockApi.wanCircuits).toHaveBeenCalled());
-    expect(screen.getByRole("heading", { name: "WAN interfaces" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "WAN circuits" })).toBeTruthy();
     expect(screen.getByText(/No WAN interfaces yet\./)).toBeTruthy();
   });
 });
@@ -397,7 +397,7 @@ describe("a WAN projection whose adjacency evidence never arrived", () => {
     const alert = await waitFor(() => screen.getByTestId("wan-degraded"));
     expect(alert).toHaveAttribute("role", "alert");
     expect(alert.textContent).toMatch(/reachability anchor/i);
-    expect(screen.getByRole("heading", { name: "WAN interfaces" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "WAN circuits" })).toBeTruthy();
   });
 
   it("says nothing on a healthy read", async () => {
