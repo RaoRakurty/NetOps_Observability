@@ -507,6 +507,54 @@ func TestMatrixNeverMergesTheSameSlugInTwoTenants(t *testing.T) {
 	}
 }
 
+func TestRowsCarryTheMatrixSiteRefNotTheSlug(t *testing.T) {
+	// Two tenants each have a site labelled "HQ" with slug "hq". A cell filter
+	// that matched on labels would mix them; the row's ref names exactly one
+	// matrix site, and the slug never reaches the wire.
+	a := Tunnel{Tenant: "acme", TunnelID: "10.0.0.1/mpls|10.0.0.2/mpls",
+		A: End{DeviceID: "a1", SystemIP: "10.0.0.1", Color: "mpls", Reported: true, Up: 1},
+		B: End{DeviceID: "a2", SystemIP: "10.0.0.2", Color: "mpls"}}
+	g := a
+	g.Tenant = "globex"
+	g.A.DeviceID, g.B.DeviceID = "g1", "g2"
+	so := siteMap(map[string]Site{"a1": {Key: "hq", Label: "HQ"}, "a2": {Key: "hq", Label: "HQ"},
+		"g1": {Key: "hq", Label: "HQ"}, "g2": {Key: "hq", Label: "HQ"}})
+	m := BuildMatrix([]Tunnel{a, g}, so, QualityIndex{}, CaseIndex{})
+	refs := map[string]string{}
+	for _, tun := range []Tunnel{a, g} {
+		r := RowOf(tun, nil, so, nil, nil, time.Unix(0, 0))
+		r.AttachSiteRefs(tun, &m)
+		if r.A.Site == nil || r.B.Site == nil || r.A.Site.Ref == "" || r.A.Site.Ref != r.B.Site.Ref {
+			t.Fatalf("%s: both ends at one site need one ref: %+v %+v", tun.Tenant, r.A.Site, r.B.Site)
+		}
+		refs[tun.Tenant] = r.A.Site.Ref
+		raw, _ := json.Marshal(r)
+		if strings.Contains(string(raw), `"hq"`) {
+			t.Fatalf("a tenant's slug leaked on a row: %s", raw)
+		}
+		listed := false
+		for _, ms := range m.Sites {
+			listed = listed || ms.Key == r.A.Site.Ref
+		}
+		if !listed {
+			t.Fatalf("row ref %q is not a matrix site key", r.A.Site.Ref)
+		}
+	}
+	if refs["acme"] == refs["globex"] {
+		t.Fatalf("two tenants' HQ share one ref: %v", refs)
+	}
+	// Without a matrix in the response there is no ref to give.
+	r := RowOf(a, nil, so, nil, nil, time.Unix(0, 0))
+	r.AttachSiteRefs(a, nil)
+	if r.A.Site.Ref != "" {
+		t.Fatalf("no matrix, no ref: %+v", r.A.Site)
+	}
+	// A site the cap left out has no ref.
+	if got := m.SiteRef("acme", Site{Key: "nowhere"}); got != "" {
+		t.Fatalf("unlisted site ref = %q", got)
+	}
+}
+
 func TestMatrixSitesCap(t *testing.T) {
 	var ts []Tunnel
 	sites := map[string]Site{}
