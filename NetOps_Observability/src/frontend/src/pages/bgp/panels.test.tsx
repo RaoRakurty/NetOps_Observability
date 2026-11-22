@@ -116,6 +116,13 @@ describe("RpkiPanel", () => {
     // nothing is swallowed; what it drops is developer text, covered below.
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Network down."));
   });
+
+  it("reads a reply without its results list as unreadable, never as nothing to check", async () => {
+    bgpRpki.mockResolvedValue({});
+    render(<RpkiPanel />);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("could not be read"));
+    expect(screen.queryByText("Nothing to check.")).toBeNull();
+  });
 });
 
 // ── ASPA ────────────────────────────────────────────────────────────────────
