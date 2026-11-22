@@ -395,7 +395,7 @@ def test_on_non_event_lanes_never_reach_canonicalize(canon_on, inventory, monkey
     calls: list[str] = []
     real = main.canonicalize_detailed
     monkeypatch.setattr(main, "canonicalize_detailed",
-                        lambda s, r: calls.append(s.source.value) or real(s, r))
+                        lambda s, r, *rest: calls.append(s.source.value) or real(s, r, *rest))
     probe = Signal(tenant_id=TENANT, ts=INGEST, source=Source.PROBE, kind="probe_loss",
                    observer=Observer(observer_id="agent-1", observer_type=ObserverType.VANTAGE_AGENT),
                    modality_class=ModalityClass.ACTIVE_PROBE, entity_type=EntityType.DEVICE,

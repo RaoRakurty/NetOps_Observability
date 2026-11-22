@@ -69,7 +69,7 @@ import pytest
 import main
 import producers as P
 import signals
-from canon import canonicalize_series, tenant_key
+from canon import canonicalize_series, tenant_key, tunnel_scope
 from controller_events import controller_event_to_signal
 from engine import build_nodes
 from entity_resolver import EntityResolver, identity_resolver_for
@@ -129,8 +129,21 @@ IDENTITY_DIVERGENCES = {
     "interface_spelling_differs": (
         "D4 (tracker 374): syslog says `GigabitEthernet1`, IF-MIB ifName says `Gi1` — one "
         "port, two series/nodes. P6 PR-E"),
+    "tunnel_scope_differs_per_lane": (
+        "tracker 430: a trap BFD binds the bare TLOC pair, the controller lane binds "
+        "`<pair>@<controller instance>` — one tunnel, two nodes, and the trap's grounds to "
+        "nothing. The canon tunnel axis scopes the trap from the tenant's T4c rows"),
 }
 IDENTITY_DIVERGENCES_ON: dict[str, str] = {}
+
+# Tracker 430: the lab's recorded sdwan_bfd rows and a recorded trap (pair, sender)
+# (fixtures/tunnel_scope/lab_430.json), restamped to this file's tenant.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                       "tunnel_scope", "lab_430.json"), encoding="utf-8") as _fh:
+    _LAB_430 = json.load(_fh)
+LAB_TUNNEL_ROWS = [{**r, "tenant_id": TENANT} for r in _LAB_430["links"]]
+LAB_TUNNEL_TRAP = _LAB_430["traps"][0]
+LAB_TUNNEL_INSTANCE = _LAB_430["instance"]
 
 # The lab inventory as the Go API exports it for t_lab (entity_resolver.json):
 # cEDGE-81 by id, name and management address, its ports by ifIndex, and the
@@ -164,6 +177,10 @@ def lab_inventory(monkeypatch):
     monkeypatch.setattr(main, "cached_identity_resolver_for",
                         lambda tenant: res if tenant_key(tenant) == TENANT else
                         identity_resolver_for({}, tenant))
+    scope = tunnel_scope(TENANT, LAB_TUNNEL_ROWS)
+    monkeypatch.setattr(main, "cached_tunnel_scope_for",
+                        lambda tenant: scope if tenant_key(tenant) == TENANT else
+                        tunnel_scope(tenant, []))
     monkeypatch.setattr(main, "IDENTITY_CANON_COUNTS", {})
 
 
@@ -312,7 +329,39 @@ def observed_identity_divergences(view, canon: bool) -> set[str]:
         seen.add("syslog_names_the_box_by_its_address")
     if link.entity_id.split(":", 1)[1] != snmp_series_key("Gi1", canon).split(":", 1)[1]:
         seen.add("interface_spelling_differs")
+    if view(lab_tunnel_trap()).entity_id != lab_tunnel_controller().entity_id:
+        seen.add("tunnel_scope_differs_per_lane")
     return seen
+
+
+def lab_tunnel_trap():
+    """A recorded lab trap BFD (pair, sender) through the production trap rules."""
+    pair, sender = LAB_TUNNEL_TRAP["pair"], LAB_TUNNEL_TRAP["sender"]
+    (lip, lcol), (rip, rcol) = (h.split("/", 1) for h in pair.split("|"))
+    vf = "1.3.6.1.4.1.41916.100.1."
+    sig = P.trap_control_signal({
+        "_signal": "snmptrap", "timestamp": "2026-11-01T17:00:01Z", "device": sender,
+        "trap_oid": "1.3.6.1.4.1.41916.100.2.4", "trap_name": "viptelaBfdBfdStateChange",
+        "event_state": "raise", "severity_native_text": "critical",
+        "varbinds": [{"oid": vf + "9.0", "value": lip}, {"oid": vf + "10.0", "value": lcol},
+                     {"oid": vf + "11.0", "value": rip}, {"oid": vf + "12.0", "value": rcol}]},
+        TENANT, INGEST)
+    assert sig is not None and sig.entity_id == pair
+    return sig
+
+
+def lab_tunnel_controller():
+    """The controller lane's report of the same tunnel, as nms/vmanage_device.go emits it."""
+    sig = controller_event_to_signal({
+        "tenant_id": TENANT, "integration_id": "nmsi-parity", "source_system": "vmanage",
+        "vendor": "cisco", "normalized_event_type": "controller_bfd_down", "severity": "high",
+        "device_id": LAB_TUNNEL_TRAP["sender"], "peer_id": "", "site_id": "",
+        "tunnel_id": LAB_TUNNEL_TRAP["pair"], "event_id": "parity-430",
+        "event_time": "2026-11-01T17:00:01Z", "controller_instance": LAB_TUNNEL_INSTANCE,
+        "correlation_hints": {"tunnel_scheme": "tloc_pair", "controller_instance_basis": "host"},
+    }, INGEST)
+    assert sig is not None
+    return sig
 
 
 def uptime_cs(trap: dict) -> int:
