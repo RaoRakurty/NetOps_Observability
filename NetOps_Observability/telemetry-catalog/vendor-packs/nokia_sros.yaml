@@ -247,7 +247,8 @@ rules:
       state:
         case:
           - {when: {re: [msg, ' is not operational', '']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {re: [msg, ' is operational', '']}, value: up}
+          - {when: {always: true}, value: unknown}
     emit:
       metric: link_state
       modality: control_plane

@@ -488,10 +488,13 @@ def test_the_parser_is_untouched():
     older one, and the neutral syslog link row names the port of a `link status is` line;
     the trap link rows this file protects did not move.
     Re-pinned for tracker 382 (BGP IPv6 peer): the BGP rows gain an IPv6 peer extract
-    alternative; no link row moved."""
-    assert parser_rules.PARSER_REV == "2026-11-21-bgp-ipv6-peer"
+    alternative; no link row moved.
+    Re-pinned for tracker 380 PR 2 (positional state): the trap link rows' up is now an
+    explicit linkUp match instead of the else-branch — linkDown/linkUp read exactly as
+    before; only an impossible third value is unknown instead of up."""
+    assert parser_rules.PARSER_REV == "2026-11-22-positional-state"
     assert parser_rules.BAKED_RULES_HASH == (
-        "c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61")
+        "5923e8c68405e06755ce6d6df6b8397198221384f1fb049034d2e47fa4d1dc0c")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

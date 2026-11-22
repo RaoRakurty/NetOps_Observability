@@ -91,7 +91,8 @@ rules:
       state:
         case:
           - {when: {re: [msg, ' is now down', '']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {re: [msg, ' is now up', '']}, value: up}
+          - {when: {always: true}, value: unknown}
       link_reason: {re: [[msg, ' is now down for reason: ([a-z0-9-]{1,64})', 1, '']]}
       link_cause:
         case:

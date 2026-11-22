@@ -114,7 +114,8 @@ rules:
       state:
         case:
           - {when: {re: [msg, 'operation status DOWN ', '']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {re: [msg, 'operation status UP ', '']}, value: up}
+          - {when: {always: true}, value: unknown}
     emit:
       metric: link_state
       modality: control_plane

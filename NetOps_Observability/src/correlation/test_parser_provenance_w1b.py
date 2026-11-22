@@ -674,7 +674,12 @@ RULES_HASH_VENDOR_PACKS_WAVE2 = "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b
 #: the three nokia_sros BGP rows, read an IPv6 peer as a second extract alternative after
 #: the IPv4 one. No rule matches a different line; only the peer attribute is added.
 RULES_HASH_BGP_IPV6_PEER = "c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61"
-RULES_HASH_A3 = RULES_HASH_BGP_IPV6_PEER
+#:
+#: Tracker 380 PR 2 (2026-11-22): `up` is a positional claim. The OSPF, routing, link
+#: and VTEP syslog rows read the state a transition goes TO; eight else-up rows match
+#: up explicitly and default to unknown.
+RULES_HASH_POSITIONAL_STATE = "5923e8c68405e06755ce6d6df6b8397198221384f1fb049034d2e47fa4d1dc0c"
+RULES_HASH_A3 = RULES_HASH_POSITIONAL_STATE
 
 
 def _guard_patterns(node) -> list[str]:

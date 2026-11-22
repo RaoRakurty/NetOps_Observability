@@ -21,7 +21,7 @@ from rule_model import Rule, compile_rule, install_fidelity, pack_digest, rules_
 SOURCE = "telemetry-catalog/events.yaml"
 
 #: HAND-BUMPED in events.yaml on any rule change; rides on every signal.
-PARSER_REV = '2026-11-21-bgp-ipv6-peer'
+PARSER_REV = '2026-11-22-positional-state'
 
 #: The telemetry-catalog event-family fidelity ladder, as of PARSER_REV — the
 #: families that declare a `fidelity_status`. A family the catalog knows but
@@ -1208,7 +1208,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'guard': {'all': [{'any': [{'contains': ['ctoken', 'ADJCHANGE']}, {'contains': ['ctoken', 'ADJCHG']}]}, {'contains': ['ctoken', 'OSPF']}]},
      'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
                  'ifname': {'re': [['msg', '\\bon\\s+([A-Za-z][\\w/.\\-]*)', 1, 'i']]},
-                 'state': {'scan': {'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
+                 'tgt': {'re': [['msg', '\\b(?:from\\s+\\S+\\s+to|went|is\\s+now)\\s+([A-Za-z0-9-]+)', 1, 'i']]},
+                 'state': {'scan': {'target': 'tgt',
+                                    'target_order': [['up', '^full$', 'i'], ['down', '^(?:down|init|attempt|exstart|exchange|loading|deleted)$', 'i']],
+                                    'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
                                     'field': 'msg',
                                     'default': 'unknown'}}},
      'emit': {'kind': 'ospf_adjacency_change',
@@ -1232,7 +1235,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'markers': ['ADJCHANGE', 'ADJCHG'],
      'guard': {'any': [{'contains': ['ctoken', 'ADJCHANGE']}, {'contains': ['ctoken', 'ADJCHG']}]},
      'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
-                 'state': {'scan': {'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
+                 'tgt': {'re': [['msg', '\\b(?:from\\s+\\S+\\s+to|changed\\s+(?:state\\s+)?to|went|is\\s+now)\\s+([A-Za-z0-9-]+)', 1, 'i']]},
+                 'state': {'scan': {'target': 'tgt',
+                                    'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
                                     'field': 'msg',
                                     'default': 'unknown'}}},
      'emit': {'kind': 'routing_adjacency_change',
@@ -1374,7 +1379,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'extract': {'ifname': {'alt': [{'re': [['msg', '[Ii]nterface\\s+([A-Za-z][\\w/.\\-]*)', 1, '']]},
                                     {'re': [['msg', ': ([A-Za-z][\\w/.\\-]*):? link status is ', 1, '']]},
                                     {'const': 'unknown'}]},
-                 'state': {'scan': {'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
+                 'tgt': {'re': [['msg', '\\b(?:changed\\s+state\\s+to|link\\s+status\\s+is|is\\s+now)\\s+(administratively\\s+down|[A-Za-z]+)', 1, 'i']]},
+                 'state': {'scan': {'target': 'tgt',
+                                    'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
                                     'field': 'msg',
                                     'default': 'unknown'}}},
      'emit': {'kind': 'link_state_change',
@@ -1506,7 +1513,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'markers': ['NVE', 'VTEP'],
      'guard': {'any': [{'contains': ['ctoken', 'NVE']}, {'all': [{'contains': ['ctoken', 'VTEP']}, {'contains': ['ctoken_msg_u', 'BFD']}]}]},
      'extract': {'peer': {'re': [['msg', '\\b(\\d{1,3}(?:\\.\\d{1,3}){3})\\b', 1, '']]},
-                 'state': {'scan': {'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
+                 'tgt': {'re': [['msg', '\\b(?:changed\\s+(?:state\\s+)?to|is\\s+now|state\\s+is)\\s+([A-Za-z]+)', 1, 'i']]},
+                 'state': {'scan': {'target': 'tgt',
+                                    'order': [['down', '\\b(?:down|idle|init|backward|failed)\\b', 'i'], ['up', '\\b(?:up|established|full)\\b', 'i']],
                                     'field': 'msg',
                                     'default': 'unknown'}}},
      'emit': {'kind': 'vtep_state_change',
@@ -2241,7 +2250,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                'IFNET/[0-7]/PHY_UPDOWN:\\sPhysical\\sstate\\son\\sthe\\sinterface\\s\\S{1,128}\\schanged\\sto\\s(?:up|down)',
                                'i']}]},
      'extract': {'ifname': {'re': [['msg', 'Physical state on the interface (\\S{1,128}) changed to ', 1, 'i']]},
-                 'state': {'case': [{'when': {'re': ['msg', 'changed to down', 'i']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]}},
+                 'state': {'case': [{'when': {'re': ['msg', 'changed to down', 'i']}, 'value': 'down'},
+                                    {'when': {'re': ['msg', 'changed to up', 'i']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]}},
      'emit': {'metric': 'link_state',
               'modality': 'control_plane',
               'entity': {'type': 'interface', 'id': '{host}:{ifname}'},
@@ -2340,7 +2351,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
                  'level': {'re': [['msg', 'IS-IS (?:lost|new) (L\\d) adjacency', 1, '']]},
                  'ifname': {'re': [['msg', 'adjacency to \\S{1,128} on ([^,\\s]{1,64})', 1, '']]},
                  'reason': {'re': [['msg', 'reason: ([^:\\r\\n]{1,64})', 1, '']]},
-                 'state': {'case': [{'when': {'contains': ['ctoken', 'RPD_ISIS_ADJDOWN']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]}},
+                 'state': {'case': [{'when': {'contains': ['ctoken', 'RPD_ISIS_ADJDOWN']}, 'value': 'down'},
+                                    {'when': {'contains': ['ctoken', 'RPD_ISIS_ADJUP']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]}},
      'emit': {'metric': 'isis_adjacency',
               'modality': 'control_plane',
               'entity': {'type': 'device', 'id': '{host}'},
@@ -2373,7 +2386,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
                  'admin_status': {'re': [['msg', 'ifAdminStatus (\\w{1,16})\\(', 1, '']]},
                  'oper_status': {'re': [['msg', 'ifOperStatus (\\w{1,16})\\(', 1, '']]},
                  'state': {'case': [{'when': {'contains': ['ctoken', 'SNMP_TRAP_LINK_DOWN']}, 'value': 'down'},
-                                    {'when': {'always': True}, 'value': 'up'}]},
+                                    {'when': {'contains': ['ctoken', 'SNMP_TRAP_LINK_UP']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]},
                  'link_cause': {'case': [{'when': {'all': [{'eq': ['$state', 'down']}, {'eq': ['$admin_status', 'down']}]}, 'value': 'admin'},
                                          {'when': {'eq': ['$state', 'down']}, 'value': 'unknown'}]}},
      'emit': {'metric': 'link_state',
@@ -2431,7 +2445,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                '\\|EV\\|(?:port|subinterface)(?:Down|Up)\\|[A-Z]:\\s(?:The\\ssubinterface|Interface)\\s\\S{1,128}\\sis\\snow\\s(?:down|up)',
                                '']}]},
      'extract': {'ifname': {'re': [['msg', '(?:The subinterface|Interface) (\\S{1,128}) is now ', 1, '']]},
-                 'state': {'case': [{'when': {'re': ['msg', ' is now down', '']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]},
+                 'state': {'case': [{'when': {'re': ['msg', ' is now down', '']}, 'value': 'down'},
+                                    {'when': {'re': ['msg', ' is now up', '']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]},
                  'link_reason': {'re': [['msg', ' is now down for reason: ([a-z0-9-]{1,64})', 1, '']]},
                  'link_cause': {'case': [{'when': {'all': [{'eq': ['$state', 'down']},
                                                            {'re': ['$link_reason', '^(?:(?:port|lag|mda)-)?admin-disabled$', '']}]},
@@ -2601,7 +2617,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
                        {'re': ['msg', '-link(?:Down-2004|Up-2005)\\s\\[', '']},
                        {'re': ['msg', '\\]:\\s*Interface \\S{1,128} is (?:not )?operational', '']}]},
      'extract': {'ifname': {'re': [['msg', 'Interface (\\S{1,128}) is (?:not )?operational', 1, '']]},
-                 'state': {'case': [{'when': {'re': ['msg', ' is not operational', '']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]}},
+                 'state': {'case': [{'when': {'re': ['msg', ' is not operational', '']}, 'value': 'down'},
+                                    {'when': {'re': ['msg', ' is operational', '']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]}},
      'emit': {'metric': 'link_state',
               'modality': 'control_plane',
               'entity': {'type': 'interface', 'id': '{host}:{ifname}'},
@@ -2840,7 +2858,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'severity': 'warn',
      'extract': {'ifname': {'re': [['msg', 'to host interface ([A-Za-z][\\w/.:-]{0,63})', 1, '']]},
                  'state': {'case': [{'when': {'re': ['msg', 'operation status DOWN ', '']}, 'value': 'down'},
-                                    {'when': {'always': True}, 'value': 'up'}]}},
+                                    {'when': {'re': ['msg', 'operation status UP ', '']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]}},
      'emit': {'metric': 'link_state',
               'modality': 'control_plane',
               'entity': {'type': 'interface', 'id': '{host}:{ifname}'},
@@ -3259,7 +3278,8 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'vendors': ['standard'],
      'guard': {'any': [{'equals_any': ['oid', ['1.3.6.1.6.3.1.1.5.3', '1.3.6.1.6.3.1.1.5.4']]}, {'equals_any': ['name', ['linkDown', 'linkUp']]}]},
      'extract': {'state': {'case': [{'when': {'any': [{'eq': ['oid', '1.3.6.1.6.3.1.1.5.3']}, {'eq': ['name', 'linkDown']}]}, 'value': 'down'},
-                                    {'when': {'always': True}, 'value': 'up'}]},
+                                    {'when': {'any': [{'eq': ['oid', '1.3.6.1.6.3.1.1.5.4']}, {'eq': ['name', 'linkUp']}]}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]},
                  'iface': {'alt': [{'vb': ['1.3.6.1.2.1.31.1.1.1.1']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.2']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.1']},
@@ -4062,7 +4082,9 @@ _ROWS: tuple[dict[str, Any], ...] = (
      'family': 'link_state_change',
      'vendors': ['any'],
      'guard': {'all': [{'contains': ['etype', 'link']}, {'any': [{'contains': ['etype', 'down']}, {'contains': ['etype', 'up']}]}]},
-     'extract': {'state': {'case': [{'when': {'contains': ['etype', 'down']}, 'value': 'down'}, {'when': {'always': True}, 'value': 'up'}]},
+     'extract': {'state': {'case': [{'when': {'contains': ['etype', 'down']}, 'value': 'down'},
+                                    {'when': {'contains': ['etype', 'up']}, 'value': 'up'},
+                                    {'when': {'always': True}, 'value': 'unknown'}]},
                  'iface': {'alt': [{'vb': ['1.3.6.1.2.1.31.1.1.1.1']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.2']},
                                    {'vb': ['1.3.6.1.2.1.2.2.1.1']},
@@ -4390,6 +4412,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = 'c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61'
+BAKED_RULES_HASH = '5923e8c68405e06755ce6d6df6b8397198221384f1fb049034d2e47fa4d1dc0c'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

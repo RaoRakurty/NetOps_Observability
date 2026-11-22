@@ -159,7 +159,8 @@ rules:
       state:
         case:
           - {when: {contains: [ctoken, 'RPD_ISIS_ADJDOWN']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {contains: [ctoken, 'RPD_ISIS_ADJUP']}, value: up}
+          - {when: {always: true}, value: unknown}
     emit:
       metric: isis_adjacency
       modality: control_plane
@@ -201,7 +202,8 @@ rules:
       state:
         case:
           - {when: {contains: [ctoken, 'SNMP_TRAP_LINK_DOWN']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {contains: [ctoken, 'SNMP_TRAP_LINK_UP']}, value: up}
+          - {when: {always: true}, value: unknown}
       link_cause:
         case:
           - when: {all: [{eq: ['$state', down]}, {eq: ['$admin_status', down]}]}

@@ -141,7 +141,8 @@ rules:
       state:
         case:
           - {when: {re: [msg, 'changed to down', 'i']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {re: [msg, 'changed to up', 'i']}, value: up}
+          - {when: {always: true}, value: unknown}
     emit:
       metric: link_state
       modality: control_plane
