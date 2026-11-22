@@ -333,7 +333,11 @@ const healthBody = (over: Record<string, unknown> = {}) => ({
 /** Selects the device so the health + timers panels mount. */
 async function pickDevice(id = "spine1") {
   const { fireEvent } = await import("@testing-library/react");
-  fireEvent.change(screen.getByLabelText("Device") as HTMLSelectElement, { target: { value: id } });
+  const select = screen.getByLabelText("Device") as HTMLSelectElement;
+  // Same race as the health-block test: wait for the option before choosing it.
+  await within(select).findByRole("option", { name: id });
+  fireEvent.change(select, { target: { value: id } });
+  expect(select.value).toBe(id);
 }
 
 describe("advanced depth blocks", () => {
