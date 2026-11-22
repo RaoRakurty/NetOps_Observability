@@ -13,6 +13,7 @@ const api = {
   listSaved: vi.fn(), getSaved: vi.fn(), createSaved: vi.fn(), updateSaved: vi.fn(), deleteSaved: vi.fn(),
   correlations: vi.fn(), healthScore: vi.fn(), correlationsStats: vi.fn(), geomap: vi.fn(),
   eventsFeed: vi.fn(), metricsForecast: vi.fn(), correlationTimeline: vi.fn(),
+  getOverviewDefault: vi.fn(), setOverviewDefault: vi.fn(), resetOverviewDefault: vi.fn(), permissions: vi.fn(),
 };
 vi.mock("../../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (api as Record<string, unknown>)[k] ?? (() => Promise.resolve([])) }),
@@ -148,5 +149,56 @@ describe("My dashboards — templates and saving", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Give the dashboard a name.");
     expect(api.createSaved).not.toHaveBeenCalled();
+  });
+});
+
+describe("My dashboards — the team default", () => {
+  const ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const asAdmin = () => api.permissions.mockResolvedValue({ role: "admin", permissions: { administration: 3 } });
+  const asOperator = () => api.permissions.mockResolvedValue({ role: "operator", permissions: { administration: 0 } });
+
+  it("lets a tenant administrator make a dashboard the team default", async () => {
+    location.hash = "#/overview/dashboards";
+    asAdmin();
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
+    api.setOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: ID, dashboard: board(), unavailable: false });
+    render(<MyDashboards />);
+    fireEvent.click(await screen.findByRole("button", { name: "Make this the team default" }));
+    await waitFor(() => expect(api.setOverviewDefault).toHaveBeenCalledWith(ID));
+    expect(await screen.findByTestId("team-default-chip")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reset to built-in" })).toBeTruthy();
+  });
+
+  it("resets the team default to the built-in Overview", async () => {
+    location.hash = "#/overview/dashboards";
+    asAdmin();
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: ID, dashboard: board(), unavailable: false });
+    api.resetOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
+    render(<MyDashboards />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reset to built-in" }));
+    await waitFor(() => expect(api.resetOverviewDefault).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("team-default-chip")).toBeNull());
+  });
+
+  it("shows everyone which dashboard is the team default, but only administrators get the buttons", async () => {
+    location.hash = "#/overview/dashboards";
+    asOperator();
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: ID, dashboard: board(), unavailable: false });
+    render(<MyDashboards />);
+    expect(await screen.findByTestId("team-default-chip")).toBeTruthy();
+    await waitFor(() => expect(api.permissions).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Make this the team default" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset to built-in" })).toBeNull();
+  });
+
+  it("shows the server's reason when a promotion is refused, and marks nothing", async () => {
+    location.hash = "#/overview/dashboards";
+    asAdmin();
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
+    api.setOverviewDefault.mockRejectedValue(new Error("404 Not Found: dashboard not found"));
+    render(<MyDashboards />);
+    fireEvent.click(await screen.findByRole("button", { name: "Make this the team default" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Dashboard not found.");
+    expect(screen.queryByTestId("team-default-chip")).toBeNull();
   });
 });

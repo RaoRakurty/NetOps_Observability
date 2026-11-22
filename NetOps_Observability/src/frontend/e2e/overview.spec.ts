@@ -83,3 +83,21 @@ for (const theme of ["light", "indigo"] as const) {
     expect(await body.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(14);
   });
 }
+
+test("a team default opens for the tenant, and the built-in Overview keeps its own address", async ({ page }) => {
+  await mockApi(page);
+  const board = {
+    id: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", type: "dashboard", name: "NOC wall", owner: "adm", tenant_id: "t_acme",
+    body: { v: 1, cells: [{ type: "rca-top-issues", span: 12 }] }, created_at: "2026-11-22T10:00:00Z", updated_at: "2026-11-22T10:00:00Z",
+  };
+  // Registered after mockApi, so Playwright matches it first.
+  await page.route(/\/api\/settings\/overview-default$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ tenant_id: "t_acme", dashboard_id: board.id, dashboard: board, unavailable: false }) }));
+  await page.goto("/#/overview/operations");
+  // First paint compiles the lazy page chunk on the cold dev server (CI): the repo-wide 30 s first-paint wait.
+  await expect(page.getByText("Your team's default: NOC wall")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("team-default-board")).toBeVisible();
+  await page.getByTestId("dashboard-picker").selectOption({ label: "Built-in Overview" });
+  await expect(page).toHaveURL(/#\/overview\/operations\/builtin$/);
+  await expect(page.getByTestId("overview-attention")).toHaveText("Nothing needs attention right now.");
+});

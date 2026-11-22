@@ -4266,6 +4266,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
+	mux.HandleFunc("/api/settings/overview-default", s.handleOverviewDefault)  // team-default Overview dashboard (tenant_display.go)
 	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
