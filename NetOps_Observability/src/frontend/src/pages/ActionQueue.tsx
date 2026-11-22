@@ -12,6 +12,7 @@
 // what "needs action" means. The Command Center keeps its embedded copy with
 // KPI-driven filtering; this page is the queue alone, full-height.
 
+import { useDeviceLabels } from "../lib/deviceNames";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, CorrObject } from "../services/api";
 import DataTable from "../components/DataTable";
@@ -45,7 +46,8 @@ export default function ActionQueue() {
 
   const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
-  const columns = useMemo(() => queueColumns(open), [open]);
+  const labels = useDeviceLabels();
+  const columns = useMemo(() => queueColumns(open, labels), [open, labels]);
   const queueHeight = useMemo(
     () => Math.min(720, visible.length * 34 + 40 + (open ? 300 : 0)),
     [visible.length, open],
