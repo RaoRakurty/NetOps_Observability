@@ -3287,7 +3287,7 @@ export function IntegrationsAdmin() {
           PagerDuty routing key and Slack webhook (moved here from RCA Tickets,
           owner 2026-10-18, so every destination lives in one place; same gate:
           requireAdmin + itsmKey(tenant), itsm_config.go). */}
-      <h3 className="adm-grouphead" style={{ marginTop: "var(--sp-3)" }}>Paging and chat</h3>
+      <h3 className="adm-grouphead" style={{ marginTop: "var(--sp-3)" }}>Paging for problems</h3>
       <PagerDutyPagingConnection />
       <SlackChannelConnection />
 
@@ -3795,7 +3795,7 @@ export function NotificationsAdmin() {
     <div className="adm">
       <AdminHead
         title="Notifications"
-        sub={platform ? "Where alerts are delivered." : "Who scheduled reports go to."}
+        sub={platform ? "Alerts about Correlix itself." : "Who scheduled reports go to."}
         topic={platform ? "notify.channels" : "notify.contact-points"}
       />
       {platform ? (() => {
