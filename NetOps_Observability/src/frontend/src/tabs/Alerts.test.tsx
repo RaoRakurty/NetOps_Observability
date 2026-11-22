@@ -17,6 +17,7 @@ const episodeMute = vi.fn();
 const episodeAssign = vi.fn();
 const episodeSnooze = vi.fn();
 const episodeNote = vi.fn();
+const devices = vi.fn();
 
 vi.mock("../services/api", () => ({
   api: {
@@ -27,10 +28,12 @@ vi.mock("../services/api", () => ({
     episodeAssign: (...a: unknown[]) => episodeAssign(...a),
     episodeSnooze: (...a: unknown[]) => episodeSnooze(...a),
     episodeNote: (...a: unknown[]) => episodeNote(...a),
+    devices: (...a: unknown[]) => devices(...a),
   },
 }));
 
 import Alerts, { EpisodeDetailBody } from "./Alerts";
+import { resetDeviceNamesForTest } from "../lib/deviceNames";
 
 const baseEpisode = {
   id: "ep-1",
@@ -64,6 +67,8 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetDeviceNamesForTest();
+  devices.mockResolvedValue([{ id: "leaf1", name: "Leaf-1", address: "10.0.0.1" }]);
   alertEpisodes.mockResolvedValue({ episodes: [baseEpisode, mutedEpisode], total: 2, truncated: false });
   alerts.mockResolvedValue([{ id: "a1" }, { id: "a2" }, { id: "a3" }]);
 });
@@ -71,7 +76,8 @@ beforeEach(() => {
 describe("Active Alerts grouped by episode", () => {
   it("renders one row per episode with count badge, first/last seen, flap chip and honest suppressed state", async () => {
     render(<Alerts />);
-    await waitFor(() => expect(alertEpisodes).toHaveBeenCalledWith("open"));
+    // The Firing tab asks the episode API for active episodes (no client re-filter).
+    await waitFor(() => expect(alertEpisodes).toHaveBeenCalledWith("active"));
 
     // Count badge: 7 firings folded into ×7.
     expect(await screen.findByText("×7")).toBeTruthy();
@@ -83,7 +89,9 @@ describe("Active Alerts grouped by episode", () => {
     // appears as a KPI label, so assert at least one chip exists.)
     expect(screen.getAllByText("Flapping").length).toBeGreaterThan(0);
     // The muted episode STAYS in the list, with its paused state disclosed.
-    expect(screen.getByText("LinkDown")).toBeTruthy();
+    expect(screen.getByText("LinkDown on spine2")).toBeTruthy();
+    // The device reads by its inventory NAME (owner, 2026-11-22), not the raw id.
+    expect(await screen.findByText("HighCPU on Leaf-1")).toBeTruthy();
     // (Also a KPI label — assert the chip exists alongside it.)
     expect(screen.getAllByText("Notifications paused").length).toBeGreaterThan(1);
   });
@@ -175,5 +183,40 @@ describe("EpisodeDetailBody triage affordances", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add note" }));
     await waitFor(() => expect(episodeNote).toHaveBeenCalledWith("ep-1", "correlated with maintenance"));
     expect(await screen.findByText("correlated with maintenance")).toBeTruthy();
+  });
+});
+
+describe("Active Alerts in the Logs pattern (owner, 2026-11-22)", () => {
+  it("each tab asks the episode API for its own status", async () => {
+    render(<Alerts />);
+    await waitFor(() => expect(alertEpisodes).toHaveBeenCalledWith("active"));
+    fireEvent.click(screen.getByRole("button", { name: /^Cleared/ }));
+    await waitFor(() => expect(alertEpisodes).toHaveBeenCalledWith("cleared"));
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+    await waitFor(() => expect(alertEpisodes).toHaveBeenCalledWith("all"));
+  });
+
+  it("a cut list says so, and its tiles say they count the loaded rows only", async () => {
+    alertEpisodes.mockResolvedValue({ episodes: [baseEpisode, mutedEpisode], total: 900, truncated: true });
+    render(<Alerts />);
+    expect(await screen.findByTestId("alerts-truncated")).toBeTruthy();
+    expect(screen.getByText("Counted in the 2 loaded episodes of 900.")).toBeTruthy();
+  });
+
+  it("a severity tile filters the list to that severity", async () => {
+    render(<Alerts />);
+    await screen.findByText("LinkDown on spine2");
+    fireEvent.click(screen.getByRole("button", { name: /^Critical: 1/ }));
+    await waitFor(() => expect(screen.queryByText("LinkDown on spine2")).toBeNull());
+    expect(screen.getByText(/HighCPU on/)).toBeTruthy();
+  });
+
+  it("a row opens a side panel; Esc closes it", async () => {
+    render(<Alerts />);
+    fireEvent.click(await screen.findByText("×7"));
+    const dlg = await screen.findByRole("dialog");
+    expect(dlg.getAttribute("aria-modal")).toBe("true");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });

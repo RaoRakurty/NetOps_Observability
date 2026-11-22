@@ -3,9 +3,9 @@ topic: wan.policy
 question: What does the measurement policy control?
 keywords: measurement policy, wan device pattern, derived registry, policy saved
 ---
-The policy is the only thing stored on this page. It decides which devices
-count as WAN devices, whether interfaces connected to them are measured too,
-what the fallback anchors are, and which ISP next-hops are declared. Everything
-above it — the endpoint registry and the measured paths — is derived on read
-from that policy plus what the collectors see, so saving it re-derives them.
-Nothing is deleted by a policy change; objects simply stop being derived.
+The policy says what to measure WAN interfaces to and which devices look like
+WAN routers. It holds the fallback anchors, the ISP next-hops — declaring one
+for a single interface also confirms that interface as WAN — whether ports
+facing a WAN router are offered as possible, and the device-name hint. The
+hint only suggests where to look; it never makes a port WAN on its own.
+Everything else is derived on read, so saving the policy re-derives it.

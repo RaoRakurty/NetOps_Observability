@@ -218,7 +218,9 @@ export type NavSection = {
 // The information architecture (owner tree, 2026-08 nav redesign). Organized by
 // the operator journey rather than by signal type or implementation surface:
 //   Overview      — where do I start? (Command Center · Operations · My board)
-//   Operations    — what is happening right now? (incidents · alerts · queue)
+//   Operations    — what is happening right now? (problems · incidents · alerts),
+//                   most aggregated first: correlated problems, then owned incidents,
+//                   then the raw alert firings
 //   Investigate   — why is it happening? (RCA · findings · topology · paths)
 //   Infrastructure— what do I own / what is observed?
 //   Explore       — the raw telemetry planes (metrics · logs · flows · events)
@@ -251,11 +253,12 @@ export const NAV: NavSection[] = [
     label: "Operations",
     icon: "monitoring",
     children: [
+      // Problems: the correlated cases that need action (the Command Center's
+      // triage queue as a routed page; id `queue` kept, so every link and
+      // bookmark still resolves). Ordered most-aggregated first (owner, 2026-11-22).
+      { id: "queue", label: "Problems", render: () => <ActionQueue /> },
       { id: "incidents", label: "Incidents", render: () => <Incidents /> },
       { id: "alerts", label: "Active Alerts", render: () => <Alerts /> },
-      // The Command Center's triage queue as a first-class routed page (it was a
-      // panel with no route; the Command Center keeps its embedded copy).
-      { id: "queue", label: "Action Queue", render: () => <ActionQueue /> },
       // Digital Experience (DEM). Sub-items mirror the page's seven tabs, and
       // each one is a real deep link: #/operations/digital-experience/<tab>.
       { id: "digital-experience", label: "Digital Experience", render: () => <DigitalExperience />, subItems: [

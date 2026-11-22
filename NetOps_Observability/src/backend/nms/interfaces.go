@@ -52,7 +52,14 @@ type ControllerInterface struct {
 	VRF         string   // VPN / VRF ("" = not reported)
 	Description string   // the operator's interface description
 	Addrs       []string // raw addresses as reported ("a.b.c.d", "a.b.c.d/24", IPv6, "-")
-	Time        time.Time
+	// PortRole is what the controller says the port is for, raw (vEdge
+	// `port-type`: transport | service | loopback); "" = not reported. The
+	// bridge keeps it only from a closed set.
+	PortRole string
+	// IfType is the interface type, raw (cEdge `interface-type`, an IANA ifType
+	// name such as iana-iftype-tunnel); "" = not reported.
+	IfType string
+	Time   time.Time
 }
 
 // OutcomeResolver is a DeviceResolver that also says why a key did not

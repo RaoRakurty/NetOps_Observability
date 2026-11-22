@@ -95,6 +95,63 @@ type Row struct {
 	Alias string `json:"alias,omitempty"`
 	// Addrs are the interface's identifying addresses, canonical IP text.
 	Addrs []string `json:"addrs,omitempty"`
+	// Role is what the controller says the port is for (RoleTransport,
+	// RoleService, RoleLoopback; "" = not reported). vEdge reports it as
+	// `port-type`; it is the strongest per-interface WAN fact there is.
+	Role string `json:"role,omitempty"`
+	// Kind is the interface's type as the controller reports it (KindEthernet,
+	// KindLoopback, KindTunnel, KindOther; "" = not reported). cEdge reports the
+	// IANA ifType as `interface-type`.
+	Kind string `json:"kind,omitempty"`
+}
+
+// Interface roles a controller reports, a closed set (anything else is "").
+const (
+	RoleTransport = "transport"
+	RoleService   = "service"
+	RoleLoopback  = "loopback"
+)
+
+// Interface kinds, a closed set (anything else is "").
+const (
+	KindEthernet = "ethernet"
+	KindLoopback = "loopback"
+	KindTunnel   = "tunnel"
+	KindOther    = "other"
+)
+
+// CleanRole maps a controller's port role onto the closed set; "" otherwise.
+// Controller output is untrusted input (§3): an unknown value states nothing.
+func CleanRole(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case RoleTransport:
+		return RoleTransport
+	case RoleService:
+		return RoleService
+	case RoleLoopback:
+		return RoleLoopback
+	}
+	return ""
+}
+
+// CleanKind maps a controller's interface type (an IANA ifType name such as
+// `iana-iftype-ethernet-csmacd`, or a bare one) onto the closed set; "" when
+// it names nothing this package knows.
+func CleanKind(s string) string {
+	k := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "iana-iftype-")
+	switch {
+	case k == "":
+		return ""
+	case k == KindEthernet || strings.HasPrefix(k, "ethernet") || k == "gigabitethernet" || k == "fastether":
+		return KindEthernet
+	case k == KindLoopback || k == "sw-loopback" || k == "softwareloopback":
+		return KindLoopback
+	case k == KindTunnel:
+		return KindTunnel
+	case k == KindOther:
+		return KindOther
+	}
+	return ""
 }
 
 // DeviceRows is one inventory device's interfaces from one controller poll.
@@ -210,6 +267,8 @@ func Normalize(r Row) (out Row, ok bool, droppedAddrs int) {
 		IfName:  cleanText(r.IfName),
 		VRF:     cleanText(r.VRF),
 		Alias:   cleanText(r.Alias),
+		Role:    CleanRole(r.Role),
+		Kind:    CleanKind(r.Kind),
 	}
 	if out.IfName == "" || InternalVPN(out.VRF) || InternalLoopback(out.IfName) {
 		return Row{}, false, 0

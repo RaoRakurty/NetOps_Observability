@@ -84,7 +84,7 @@ var navPageDocs = map[string]navPage{
 	// Operations
 	"operations/incidents":          {Label: "Operations → Incidents", Docs: []pageDoc{wholePage("incidents/working-incidents"), wholePage("incidents/reading-an-incident"), wholePage("incidents/overview")}, Explain: "page.incidents"},
 	"operations/alerts":             {Label: "Operations → Active Alerts", Docs: []pageDoc{wholePage("monitoring/manage-alerts")}, Explain: "page.active-alerts"},
-	"operations/queue":              {Label: "Operations → Action Queue", Docs: []pageDoc{wholePage("incidents/action-queue")}},
+	"operations/queue":              {Label: "Operations → Problems", Docs: []pageDoc{wholePage("incidents/action-queue")}},
 	"operations/digital-experience": {Label: "Operations → Digital Experience", Docs: []pageDoc{wholePage("monitoring/digital-experience")}},
 	"operations/cloud":              {Label: "Operations → Cloud", Docs: []pageDoc{wholePage("monitoring/cloud")}},
 	"operations/network-health":     {Label: "Operations → Network Health", Docs: []pageDoc{wholePage("monitoring/link-quality")}},

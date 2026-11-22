@@ -50,7 +50,18 @@ function ep(over: Partial<WanEndpoint> = {}): WanEndpoint {
   };
 }
 
-const PEER_EP = ep({ target: "10.1.1.2", target_kind: "direct_peer", target_label: "Directly-connected peer spine-1 Ethernet9" });
+const PEER_EP = ep({
+  target: "10.1.1.2", target_kind: "direct_peer", target_label: "Directly-connected peer spine-1 Ethernet9",
+  wan_confidence: "confirmed", wan_basis: "sdwan_tunnel_source",
+  wan_reason: "SD-WAN transport interface — tunnel Tunnel1 runs over it.",
+  wan_evidence: [{ source: "controller", detail: "VPN 0, and tunnel Tunnel1 uses the same address" }],
+});
+/** A possible interface: the port facing a WAN router (2026-11-22: not measured). */
+const LINKED_CANDIDATE = ep({
+  device: "core-sw-2", interface: "Ethernet4", address: "10.2.2.4", measurable_addr: "10.2.2.4",
+  connected_to_wan: true, wan_confidence: "possible", wan_basis: "linked",
+  wan_reason: "Directly connected to wan-edge-1, which looks like a WAN router — this is usually the LAN side.",
+});
 const ISP_EP = ep({ interface: "Ethernet2", address: "203.0.113.2", measurable_addr: "203.0.113.2", target: "203.0.113.1", target_kind: "next_hop", target_label: "ISP next-hop 203.0.113.1" });
 const ANCHOR_EP = ep({ interface: "Ethernet3", address: "198.51.100.2", measurable_addr: "198.51.100.2", target: "1.1.1.1", target_kind: "anchor", target_label: "Reachability anchor 1.1.1.1" });
 const BARE_EP = ep({ device: "spine-1", interface: "Ethernet9", address: "10.1.1.2", measurable_addr: "10.1.1.2", connected_to_wan: true, site: "London" });
@@ -123,7 +134,7 @@ describe("routes", () => {
     expect(screen.getByRole("heading", { name: "WAN circuits" })).toBeTruthy();
     // The call is made before its result renders: await the text, not the call
     // (failed #323's vitest job under CI load, 2026-11-22).
-    expect(await screen.findByText(/No WAN interfaces yet\./)).toBeTruthy();
+    expect(await screen.findByText(/No confirmed WAN interfaces yet\./)).toBeTruthy();
   });
 });
 
@@ -179,7 +190,7 @@ describe("measured paths", () => {
 // ── the derived endpoint registry ───────────────────────────────────────────
 
 describe("endpoint registry", () => {
-  it("renders each derived interface with its address, site and linked flag", async () => {
+  it("renders each derived interface with its address, site and why it is WAN", async () => {
     render(<WanCircuits />);
     const sec = await waitFor(() => {
       const s = section("wan-endpoints");
@@ -187,8 +198,31 @@ describe("endpoint registry", () => {
       return s;
     });
     expect(within(sec).getAllByText("spine-1").length).toBeGreaterThan(0);
-    expect(within(sec).getByText("linked")).toBeTruthy();
     expect(within(sec).getAllByText("198.51.100.2").length).toBeGreaterThan(0);
+    const why = within(sec).getByText("Tunnel runs over it");
+    expect(why.getAttribute("title")).toContain("tunnel Tunnel1 runs over it");
+    expect(why.getAttribute("title")).toContain("VPN 0");
+    // An interface with no stated reason shows a dash, never a guess.
+    expect(within(sec).getAllByTestId("wan-why").some((c) => c.textContent === "—")).toBe(true);
+  });
+
+  it("lists possible interfaces apart, collapsed, and never as WAN circuits", async () => {
+    mockApi.wanEndpoints.mockResolvedValue({ endpoints: [PEER_EP], candidates: [LINKED_CANDIDATE] });
+    render(<WanCircuits />);
+    const box = await screen.findByTestId("wan-possible");
+    expect(box.tagName).toBe("DETAILS");
+    expect((box as HTMLDetailsElement).open).toBe(false);
+    expect(within(box).getByText(/Possible WAN — not confirmed \(1\)/)).toBeTruthy();
+    expect(within(box).getByText("core-sw-2")).toBeTruthy();
+    expect(within(box).getByText("Faces a WAN router").getAttribute("title")).toContain("usually the LAN side");
+    expect(within(section("wan-endpoints")).queryByText("core-sw-2")).toBeNull();
+  });
+
+  it("shows no possible section when there is nothing possible", async () => {
+    render(<WanCircuits />);
+    await waitFor(() => expect(mockApi.wanEndpoints).toHaveBeenCalled());
+    await screen.findByText("London");
+    expect(screen.queryByTestId("wan-possible")).toBeNull();
   });
 
   it("counts how many interfaces measure to a peer, an ISP next-hop, an anchor and nothing", async () => {

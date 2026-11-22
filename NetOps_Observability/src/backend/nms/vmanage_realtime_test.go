@@ -80,6 +80,41 @@ func TestVEdgeInterfacesUseTheirOwnVocabulary(t *testing.T) {
 	}
 }
 
+// The per-interface WAN facts: vEdge's port-type and cEdge's interface-type
+// reach the interface records verbatim (the bridge keeps them only from a
+// closed set). Recorded 20.6 payloads.
+func TestInterfaceRecordsCarryPortRoleAndType(t *testing.T) {
+	roleOf := func(fixture string) map[string][2]string {
+		b, err := vmanageInterfaceRealtimeTransform("t1", "i1", readFixture(t, fixture))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string][2]string{}
+		for _, c := range b.Interfaces {
+			out[c.IfName] = [2]string{c.PortRole, c.IfType}
+		}
+		return out
+	}
+	v := roleOf("interface_realtime_vedge20.json")
+	for ifn, want := range map[string]string{"ge0/0": "transport", "ge0/2": "transport", "system": "loopback", "ge0/1": "service", "eth0": "service"} {
+		if v[ifn][0] != want {
+			t.Errorf("vEdge %s port role %q, want %q", ifn, v[ifn][0], want)
+		}
+	}
+	c := roleOf("interface_realtime_cedge40.json")
+	for ifn, want := range map[string]string{
+		"GigabitEthernet1": "iana-iftype-ethernet-csmacd", "Tunnel1": "iana-iftype-tunnel",
+		"Loopback200": "iana-iftype-sw-loopback", "NVI0": "iana-iftype-other",
+	} {
+		if c[ifn][1] != want {
+			t.Errorf("cEdge %s type %q, want %q", ifn, c[ifn][1], want)
+		}
+	}
+	if c["GigabitEthernet1"][0] != "" {
+		t.Errorf("cEdge reports no port-type; got %q", c["GigabitEthernet1"][0])
+	}
+}
+
 func TestInterfaceStatusIsNeverGuessed(t *testing.T) {
 	for in, want := range map[string]float64{
 		"Up": 1, "if-oper-state-ready": 1, "if-state-up": 1,
