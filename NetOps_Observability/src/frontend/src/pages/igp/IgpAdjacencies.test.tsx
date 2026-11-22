@@ -266,8 +266,13 @@ describe("health block", () => {
     });
 
     const select = screen.getByLabelText("Device") as HTMLSelectElement;
+    // The device list loads on its own: choosing "leaf1" before its option exists
+    // is a no-op, and the panel never appears (failed #329's vitest job under CI
+    // load). Wait for the option, then choose it.
+    await within(select).findByRole("option", { name: "leaf1" });
     const { fireEvent } = await import("@testing-library/react");
     fireEvent.change(select, { target: { value: "leaf1" } });
+    expect(select.value).toBe("leaf1");
 
     const panel = await screen.findByLabelText("Device IGP health");
     await waitFor(() => expect(igpHealth).toHaveBeenCalledWith("ospf", "leaf1", { since: "24h" }));
