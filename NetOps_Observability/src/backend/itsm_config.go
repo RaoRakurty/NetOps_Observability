@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"netops/backend/internal/ticketing"
+	"netops/backend/internal/vault"
 	"os"
 	"regexp"
 	"strings"
@@ -56,9 +57,19 @@ type (
 
 func itsmKey(tenant string) string { return ticketing.ITSMKey(tenant) }
 
-func newITSMConfigStore(_ *server, path string) *itsmConfigStore {
+// newITSMConfigStore builds the store with the secret-custody vault, so the
+// connectors' write-only secrets are sealed at rest under each tenant's DEK
+// (tracker 456). A nil or dormant vault keeps them plaintext — the same rule as
+// every other sealed config (secrets_config.go).
+func newITSMConfigStore(v *vault.Vault, path string) *itsmConfigStore {
 	return ticketing.NewITSMConfigStore(path, itsmConfigFromEnv, itsmStateFile,
-		func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" })
+		func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" },
+		itsmCustody(v))
+}
+
+// itsmCustody adapts the vault to the ticketing domain's injected custody.
+func itsmCustody(v *vault.Vault) ticketing.SecretCustody {
+	return ticketing.SecretCustody{Seal: sealFn(v), Open: openFn(v), Active: v.Sealed}
 }
 
 func itsmConfigFromEnv() itsmConfig {

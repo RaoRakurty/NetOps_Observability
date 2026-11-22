@@ -135,6 +135,12 @@ type ITSMConfigStore struct {
 	// legacyAlertITSM gates the DEPRECATED broadcast-alert lane (emergency
 	// escape hatch; dormant when nil/false). Injected — env reads stay in main.
 	legacyAlertITSM func() bool
+	// custody seals the write-only secrets at rest (itsm_custody.go).
+	// Injected — the vault lives in main. Zero value = plaintext.
+	custody SecretCustody
+	// sealedUnreadable is set when a sealed (v3) store could not be opened;
+	// persist then refuses, so a save never overwrites credentials it never read.
+	sealedUnreadable error
 
 	mu   sync.RWMutex
 	path string
@@ -179,12 +185,25 @@ func ITSMKey(tenant string) string {
 
 // NewITSMConfigStore loads the persisted per-tenant config (or seeds the global
 // connector from env on first run), then builds the live connectors per tenant.
-func NewITSMConfigStore(path string, envDefault func() ITSMConfig, stateFileFor func(system, tenant string) string, legacyAlertITSM func() bool) *ITSMConfigStore {
-	s := &ITSMConfigStore{path: path, envDefault: envDefault, stateFileFor: stateFileFor, legacyAlertITSM: legacyAlertITSM, cfgs: map[string]ITSMConfig{}, live: map[string]*itsmLive{}}
-	if !s.load() {
+//
+// custody seals the connector secrets at rest; a plaintext store found while
+// custody is active is rewritten sealed here, once (tracker 456).
+func NewITSMConfigStore(path string, envDefault func() ITSMConfig, stateFileFor func(system, tenant string) string, legacyAlertITSM func() bool, custody SecretCustody) *ITSMConfigStore {
+	s := &ITSMConfigStore{path: path, envDefault: envDefault, stateFileFor: stateFileFor, legacyAlertITSM: legacyAlertITSM, custody: custody, cfgs: map[string]ITSMConfig{}, live: map[string]*itsmLive{}}
+	loaded, plaintext := s.load()
+	if !loaded {
 		// First run: the pre-per-tenant single connector was platform-wide → seed
 		// it under the global "" key.
 		s.cfgs[""] = s.envDefault()
+	} else if plaintext && s.custody.active() {
+		// One-time migration: the store predates at-rest sealing (or custody
+		// was switched on since). Rewrite it sealed now rather than on the
+		// next save, so no plaintext secret outlives this boot.
+		if err := s.persist(); err != nil {
+			applog.Error("itsm", "stored ITSM config is still PLAINTEXT — sealing it failed; it is retried on the next save", map[string]any{"err": err.Error()})
+		} else {
+			applog.Info("itsm", "stored ITSM config sealed at rest (migrated from plaintext)", map[string]any{"tenants": len(s.cfgs)})
+		}
 	}
 	for tenant, cfg := range s.cfgs {
 		s.apply(tenant, cfg)
@@ -192,12 +211,15 @@ func NewITSMConfigStore(path string, envDefault func() ITSMConfig, stateFileFor 
 	return s
 }
 
-// load reads the persisted config. Returns false when absent/empty so the caller
-// seeds from env. Migrates the legacy single-object format under the "" key.
-func (s *ITSMConfigStore) load() bool {
+// load reads the persisted config. loaded is false when absent/empty (or
+// unreadable) so the caller seeds from env; plaintext reports a store whose
+// secrets were read in the clear (v2 or the legacy format), which the caller
+// seals when custody is active. Migrates the legacy single-object format under
+// the "" key.
+func (s *ITSMConfigStore) load() (loaded, plaintext bool) {
 	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false // absent = never configured; the env seed applies
+		return false, false // absent = never configured; the env seed applies
 	}
 	if err != nil {
 		// The store did not ANSWER — a different fact from "never configured"
@@ -206,27 +228,41 @@ func (s *ITSMConfigStore) load() bool {
 		// later Set() persists the whole map and would overwrite the stored
 		// contents that were never read.
 		applog.Error("itsm", "stored ITSM config unreadable — falling back to env defaults; a save will OVERWRITE the stored config", map[string]any{"err": err.Error()})
-		return false
+		return false, false
 	}
 	if len(b) == 0 {
-		return false // present but empty = never configured
+		return false, false // present but empty = never configured
 	}
 	// New per-tenant format (versioned envelope).
 	var f itsmConfigFile
-	if json.Unmarshal(b, &f) == nil && f.Version >= 2 && f.Tenants != nil {
-		s.cfgs = map[string]ITSMConfig{}
+	if json.Unmarshal(b, &f) == nil && f.Version >= itsmFileVersionPlain && f.Tenants != nil {
+		cfgs := make(map[string]ITSMConfig, len(f.Tenants))
 		for k, v := range f.Tenants {
-			s.cfgs[ITSMKey(k)] = v
+			cfgs[ITSMKey(k)] = v
 		}
-		return true
+		if f.Version < itsmFileVersionSealed {
+			s.cfgs = cfgs
+			return true, true
+		}
+		opened, err := s.custody.openAll(cfgs)
+		if err != nil {
+			// Sealed credentials we cannot open. Run on the env defaults for
+			// liveness, but REFUSE every save (persist): overwriting would
+			// destroy credentials that still open once custody is restored.
+			s.sealedUnreadable = err
+			applog.Error("itsm", "stored ITSM config is sealed and could not be opened — running on env defaults and refusing saves until custody is restored", map[string]any{"err": err.Error()})
+			return false, false
+		}
+		s.cfgs = opened
+		return true, false
 	}
 	// Legacy single global connector → migrate under "".
 	var c ITSMConfig
 	if json.Unmarshal(b, &c) != nil {
-		return false
+		return false, false
 	}
 	s.cfgs = map[string]ITSMConfig{"": c}
-	return true
+	return true, true
 }
 
 // itsmConfigFromEnv seeds the GLOBAL connector from the legacy env vars so an
@@ -234,6 +270,9 @@ func (s *ITSMConfigStore) load() bool {
 func (s *ITSMConfigStore) Set(tenant string, in ITSMConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(); err != nil {
+		return err
+	}
 	tenant = ITSMKey(tenant)
 
 	in.ServiceNow = NormalizeServiceNow(in.ServiceNow)
@@ -296,8 +335,18 @@ func (s *ITSMConfigStore) Set(tenant string, in ITSMConfig) error {
 }
 
 // persist writes the whole per-tenant map as the versioned envelope. Caller holds s.mu.
+//
+// The secrets are sealed under each tenant's DEK while custody is active
+// (itsm_custody.go); the in-memory map stays plaintext for the connectors.
 func (s *ITSMConfigStore) persist() error {
-	b, err := json.Marshal(itsmConfigFile{Version: 2, Tenants: s.cfgs}) // #nosec G117 -- ITSM creds are intentionally persisted to the kv store
+	if err := s.writable(); err != nil {
+		return err
+	}
+	f, err := s.custody.sealAll(s.cfgs)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(f) // #nosec G117 -- ITSM creds are persisted sealed when custody is active (tracker 456); plaintext only with custody dormant
 	if err != nil {
 		return err
 	}
@@ -448,6 +497,9 @@ func (s *ITSMConfigStore) SystemConfigFor(tenant, system string) (SystemConfig, 
 func (s *ITSMConfigStore) SetPagerDutyRCA(tenant string, in PagerDutyRCAConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(); err != nil {
+		return err
+	}
 	tenant = ITSMKey(tenant)
 	cfg := s.cfgs[tenant]
 	if in.RoutingKey == "" {
@@ -471,6 +523,9 @@ func (s *ITSMConfigStore) SetPagerDutyRCA(tenant string, in PagerDutyRCAConfig) 
 func (s *ITSMConfigStore) SetSlackRCA(tenant string, in SlackRCAConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(); err != nil {
+		return err
+	}
 	tenant = ITSMKey(tenant)
 	cfg := s.cfgs[tenant]
 	if in.WebhookURL == "" {
@@ -497,6 +552,9 @@ func (s *ITSMConfigStore) SetSlackRCA(tenant string, in SlackRCAConfig) error {
 func (s *ITSMConfigStore) SetTeamsRCA(tenant string, in TeamsRCAConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(); err != nil {
+		return err
+	}
 	tenant = ITSMKey(tenant)
 	cfg := s.cfgs[tenant]
 	in.WebhookURL = strings.TrimSpace(in.WebhookURL)
