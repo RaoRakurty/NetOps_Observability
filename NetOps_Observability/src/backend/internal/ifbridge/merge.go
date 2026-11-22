@@ -51,6 +51,24 @@ type Merged struct {
 	AddrVRF map[string]map[string]string
 	// Stats counts address and ifIndex rows by source and outcome.
 	Stats map[StatKey]int
+	// NMS is each device's controller-reported rows as stored, VRF, role and
+	// kind intact (a deep copy: callers cannot mutate the bridge through it).
+	// The address maps above keep one name per address, so they cannot say that
+	// `Tunnel1` rides `GigabitEthernet1`, and AddrVRF drops the VRF of an
+	// address whose port spelling lost a conflict. Per-interface facts (the WAN
+	// classifier) read these rows instead.
+	NMS map[string]DeviceRows
+}
+
+// copyDeviceRows deep-copies one device's rows, address slices included.
+func copyDeviceRows(d DeviceRows) DeviceRows {
+	rows := make([]Row, len(d.Rows))
+	for i, r := range d.Rows {
+		r.Addrs = append([]string(nil), r.Addrs...)
+		rows[i] = r
+	}
+	d.Rows = rows
+	return d
 }
 
 // SamePort reports whether two spellings name one port. The api passes the
@@ -102,7 +120,7 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 		Addr: map[string]map[string]string{}, Index: map[string]map[string]string{},
 		Alias: map[string]map[string]string{}, IndexSource: map[string]map[string]string{},
 		AddrSource: map[string]map[string]string{}, AddrVRF: map[string]map[string]string{},
-		Stats: map[StatKey]int{},
+		Stats: map[StatKey]int{}, NMS: map[string]DeviceRows{},
 	}
 	count := func(src, outcome string) { out.Stats[StatKey{src, outcome}]++ }
 
@@ -128,6 +146,10 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 
 	for _, dev := range sortedKeys(nms.Devices) {
 		d := nms.Devices[dev]
+		if d == nil {
+			continue
+		}
+		out.NMS[dev] = copyDeviceRows(*d)
 		idx, addr, alias := map[string]nmsVal{}, map[string]nmsVal{}, map[string]nmsVal{}
 		for _, r := range d.Rows {
 			if r.IfIndex != "" {
