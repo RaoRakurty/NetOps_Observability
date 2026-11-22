@@ -5439,6 +5439,10 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
 .cc-decision { margin-top: 13px; padding: 10px 13px; border-radius: 9px; background: var(--accent-soft); border: 1px solid var(--accent-soft-2, var(--border)); border-left: 3px solid var(--accent);
   font-size: 13px; line-height: 1.5; color: var(--fg); }
 .cc-err { color: var(--crit); font-size: 13px; margin: 8px 0 0; }
+/* A queue cut at its page size says so (Problems, 2026-11-22). */
+.cc-trunc { color: var(--fg-muted); font-size: 14px; margin: 6px 0; }
+/* Problems tabs: Needs action | All open. */
+.cc-tabs { display: flex; gap: var(--sp-2, 8px); margin: 4px 0 8px; }
 /* panels */
 .cc-panel { background: var(--glass-bg, var(--surface-2)); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
   backdrop-filter: blur(12px) saturate(115%); -webkit-backdrop-filter: blur(12px) saturate(115%); box-shadow: var(--shadow-1); }
