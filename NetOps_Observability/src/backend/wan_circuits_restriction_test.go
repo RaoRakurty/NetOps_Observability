@@ -171,6 +171,9 @@ func newRestrictedWanFixture(t *testing.T) *restrictedWanFixture {
 			return links, nil
 		},
 	}
+	s.wanIfEvidence = wanTransportEvidence(func(ctx context.Context) (map[string]map[string]string, error) {
+		return s.wanIfAddr(ctx)
+	})
 	return &restrictedWanFixture{t: t, s: s, acme: acme.ID, globex: globex.ID}
 }
 
@@ -205,25 +208,37 @@ func (f *restrictedWanFixture) asTenant(h http.HandlerFunc, path, tenantID strin
 
 // ── decoded shapes ───────────────────────────────────────────────────────────
 
-type wanEndpointsResp struct {
-	Endpoints []struct {
-		TenantID       string `json:"tenant_id"`
-		Device         string `json:"device"`
-		Interface      string `json:"interface"`
-		Address        string `json:"address"`
-		Site           string `json:"site"`
-		Target         string `json:"target"`
-		TargetKind     string `json:"target_kind"`
-		TargetLabel    string `json:"target_label"`
-		ConnectedToWAN bool   `json:"connected_to_wan"`
-	} `json:"endpoints"`
+type wanEndpointRow struct {
+	TenantID       string `json:"tenant_id"`
+	Device         string `json:"device"`
+	Interface      string `json:"interface"`
+	Address        string `json:"address"`
+	Site           string `json:"site"`
+	Target         string `json:"target"`
+	TargetKind     string `json:"target_kind"`
+	TargetLabel    string `json:"target_label"`
+	ConnectedToWAN bool   `json:"connected_to_wan"`
+	WanConfidence  string `json:"wan_confidence"`
 }
 
-// keys renders the endpoint set as "device/interface" — an assertion names the
-// leaked interface rather than reporting a count that moved.
+// wanEndpointsResp is the registry: confirmed WAN interfaces, and the possible
+// ones (since 2026-11-22 an interface pulled in only because it faces a WAN
+// router is possible, not measured). Both are the tenant's inventory, so both
+// must obey the restriction.
+type wanEndpointsResp struct {
+	Endpoints  []wanEndpointRow `json:"endpoints"`
+	Candidates []wanEndpointRow `json:"candidates"`
+}
+
+func (e wanEndpointsResp) all() []wanEndpointRow {
+	return append(append([]wanEndpointRow{}, e.Endpoints...), e.Candidates...)
+}
+
+// keys renders the endpoint set (confirmed and possible) as "device/interface" —
+// an assertion names the leaked interface rather than reporting a count that moved.
 func (e wanEndpointsResp) keys() map[string]bool {
 	out := map[string]bool{}
-	for _, ep := range e.Endpoints {
+	for _, ep := range e.all() {
 		out[ep.Device+"/"+ep.Interface] = true
 	}
 	return out
@@ -324,7 +339,7 @@ func TestWanEndpointsHonourTheOperatorVisibilityRestriction(t *testing.T) {
 	// ── half 1: the Global view drops acme's interfaces entirely.
 	var global wanEndpointsResp
 	body := f.get(f.s.handleWanEndpoints, "/api/wan/endpoints", f.owner(), &global)
-	for _, ep := range global.Endpoints {
+	for _, ep := range global.all() {
 		if strings.HasPrefix(ep.Device, "acme-") {
 			t.Errorf("RESTRICTION LEAK: the Global endpoint registry still lists the restricted tenant's %s/%s at %s (site %q)",
 				ep.Device, ep.Interface, ep.Address, ep.Site)
@@ -339,7 +354,7 @@ func TestWanEndpointsHonourTheOperatorVisibilityRestriction(t *testing.T) {
 	// ── half 2: the owner walks in with as_tenant=acme. Nothing is served.
 	var scoped wanEndpointsResp
 	f.asTenant(f.s.handleWanEndpoints, "/api/wan/endpoints", f.acme, &scoped)
-	if n := len(scoped.Endpoints); n != 0 {
+	if n := len(scoped.all()); n != 0 {
 		t.Errorf("RESTRICTION LEAK: as_tenant=acme served %d WAN endpoint(s): %v", n, sortedKeys(scoped.keys()))
 	}
 

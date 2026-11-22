@@ -562,6 +562,15 @@ type server struct {
 	// the WAN endpoint projector. Defaults to fetchIfAddrMap (the merged interface bridge); a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
 	wanIfAddr func(context.Context) (map[string]map[string]string, error)
+	// wanIfEvidence is the per-interface WAN evidence source (the merged bridge
+	// with each device's controller rows: VPN, port role, interface kind).
+	// Defaults to a ~30 s cache of the merged bridge; when only wanIfAddr is set
+	// (older tests) it is built from that map alone, with no controller rows.
+	wanIfEvidence func(context.Context) (ifbridge.Merged, error)
+	// wanEvidenceCache memoizes the default evidence read: /api/wan/interfaces is
+	// polled every few seconds and the bundle is the same for every principal
+	// (visibility is applied after, per request).
+	wanEvidenceCache wanEvidenceCache
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
 	// topology links) for deriving each WAN interface's measurement target. Defaults
 	// to collectors.FetchTopologyLinks; a DI seam so target derivation is testable.

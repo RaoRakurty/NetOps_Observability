@@ -86,6 +86,13 @@ type Endpoint struct {
 	Target      string     `json:"target,omitempty"`       // dst host we measure to
 	TargetKind  TargetKind `json:"target_kind,omitempty"`  // how the target was derived
 	TargetLabel string     `json:"target_label,omitempty"` // customer-facing target description
+
+	// Why this interface is WAN (classify.go): confirmed rows are measured and
+	// become circuits; possible rows are listed apart and never probed.
+	WanConfidence string     `json:"wan_confidence,omitempty"`
+	WanBasis      Basis      `json:"wan_basis,omitempty"`
+	WanReason     string     `json:"wan_reason,omitempty"`
+	WanEvidence   []Evidence `json:"wan_evidence,omitempty"`
 }
 
 // Circuit is one interface → its measurement target (a 1:1 link, NOT a mesh).

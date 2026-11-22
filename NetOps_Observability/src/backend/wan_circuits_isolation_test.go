@@ -7,9 +7,11 @@ import (
 	"context"
 	"netops/backend/internal/discovery"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/ifbridge"
 	"netops/backend/models"
 	"netops/backend/wan"
 )
@@ -32,7 +34,7 @@ func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string, neighbo
 	if err != nil {
 		t.Fatalf("device sites store: %v", err)
 	}
-	return &server{
+	s := &server{
 		discovery:   discovery.NewDiscoveryAggregator(),
 		wanPolicy:   wp,
 		sites:       sites,
@@ -43,6 +45,41 @@ func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string, neighbo
 		wanNeighbors: func(context.Context) ([]collectors.LLDPNeighbor, error) {
 			return neighbors, nil
 		},
+	}
+	// Read through s.wanIfAddr at call time, so a test that swaps that seam
+	// (an unread registry) still drives the projection.
+	s.wanIfEvidence = wanTransportEvidence(func(ctx context.Context) (map[string]map[string]string, error) {
+		return s.wanIfAddr(ctx)
+	})
+	return s
+}
+
+// wanTransportEvidence is the evidence an SD-WAN controller gives for transport
+// ports: every addressed port of a device whose id matches the default WAN name
+// pattern, reported in VPN 0 with port role transport. The projector tests that
+// use it are about tenancy, visibility and target derivation — which port is
+// WAN is wan/classify_test.go's business — so those devices' ports are all
+// confirmed WAN, as the name pattern alone made them before 2026-11-22.
+func wanTransportEvidence(fetch func(context.Context) (map[string]map[string]string, error)) func(context.Context) (ifbridge.Merged, error) {
+	pat := regexp.MustCompile("(?i)" + wan.DefaultPattern)
+	return func(ctx context.Context) (ifbridge.Merged, error) {
+		ifaddr, err := fetch(ctx)
+		m := ifbridge.Merged{Addr: ifaddr, NMS: map[string]ifbridge.DeviceRows{}}
+		for dev, addrs := range ifaddr {
+			if !pat.MatchString(dev) {
+				continue
+			}
+			byIf := map[string][]string{}
+			for ip, ifn := range addrs {
+				byIf[ifn] = append(byIf[ifn], ip)
+			}
+			rows := make([]ifbridge.Row, 0, len(byIf))
+			for ifn, ips := range byIf {
+				rows = append(rows, ifbridge.Row{IfName: ifn, VRF: "0", Role: ifbridge.RoleTransport, Addrs: ips})
+			}
+			m.NMS[dev] = ifbridge.DeviceRows{Rows: rows}
+		}
+		return m, err
 	}
 }
 
@@ -146,9 +183,10 @@ func TestWanDeriveTarget(t *testing.T) {
 	}
 }
 
-// TestWanConnectedInterfaceIncluded is the LAB guarantee: the WAN router's
-// interface AND the Spine's interface toward it are BOTH in scope and measure to
-// each other (directly-connected peer) — no hub/spoke needed.
+// TestWanConnectedInterfaceIncluded: the WAN router's interface measures to the
+// directly-connected peer, and the peer's interface toward it is OFFERED as a
+// possible WAN interface (owner decision 2026-11-22: it is usually the LAN side
+// of the router, so it is listed apart and never measured until marked).
 func TestWanConnectedInterfaceIncluded(t *testing.T) {
 	ifaddr := map[string]map[string]string{
 		"wan-r2": {"10.0.0.1": "Eth1"},
@@ -162,25 +200,40 @@ func TestWanConnectedInterfaceIncluded(t *testing.T) {
 	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
 	s.discovery.Upsert(models.Device{ID: "spine1", Name: "spine1", TenantID: "acme"})
 
-	eps, _, _ := s.wanProject(context.Background(), wanVis(s, "acme"))
+	proj, _ := s.wanProjectAll(context.Background(), wanVis(s, "acme"))
 	byKey := map[string]WanEndpoint{}
-	for _, e := range eps {
+	for _, e := range proj.Endpoints {
 		byKey[e.Device+"/"+e.Interface] = e
 	}
+	possible := map[string]WanEndpoint{}
+	for _, e := range proj.Candidates {
+		possible[e.Device+"/"+e.Interface] = e
+	}
 
-	// WAN router interface → measures to the spine peer.
+	// WAN router interface → confirmed, measures to the spine peer.
 	wr := byKey["wan-r2/Eth1"]
-	if wr.Target != "10.0.0.2" || wr.TargetKind != WanTargetDirectPeer {
-		t.Errorf("wan-r2/Eth1 should target the spine peer, got %q/%v", wr.Target, wr.TargetKind)
+	if wr.Target != "10.0.0.2" || wr.TargetKind != WanTargetDirectPeer || wr.WanConfidence != wan.Confirmed {
+		t.Errorf("wan-r2/Eth1 should be confirmed and target the spine peer, got %+v", wr)
 	}
-	// Spine's interface toward the WAN router is pulled in and measures back.
-	sp := byKey["spine1/Eth3"]
-	if sp.Target != "10.0.0.1" || sp.TargetKind != WanTargetDirectPeer || !sp.ConnectedToWAN {
-		t.Errorf("spine1/Eth3 should be included (connected_to_wan) and target the WAN router, got %+v", sp)
+	// Spine's interface toward the WAN router: possible, not measured.
+	if _, measured := byKey["spine1/Eth3"]; measured {
+		t.Error("spine1/Eth3 faces the WAN router (usually its LAN side) and must not be measured until marked")
 	}
-	// The spine's OTHER interface (not connected to a WAN device) is NOT in scope.
+	sp, ok := possible["spine1/Eth3"]
+	if !ok || !sp.ConnectedToWAN || sp.WanBasis != wan.BasisLinked || sp.Target != "" || sp.WanReason == "" {
+		t.Errorf("spine1/Eth3 should be offered as possible (linked, no target, with a reason), got %+v (offered %v)", sp, ok)
+	}
+	for _, c := range proj.Circuits {
+		if c.Local.Device == "spine1" {
+			t.Errorf("a possible interface became a circuit: %+v", c.Local)
+		}
+	}
+	// The spine's OTHER interface (not connected to a WAN device) is neither.
 	if _, ok := byKey["spine1/Eth1"]; ok {
 		t.Error("spine1/Eth1 is not connected to a WAN device and must not be measured")
+	}
+	if _, ok := possible["spine1/Eth1"]; ok {
+		t.Error("spine1/Eth1 is not connected to a WAN device and must not be offered")
 	}
 }
 
