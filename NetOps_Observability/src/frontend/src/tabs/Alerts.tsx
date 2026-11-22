@@ -4,34 +4,34 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDateTime } from "../lib/time";
 import { api, AlertEpisode } from "../services/api";
-import { severityClass, severityColor, severityRank } from "../theme/severity";
+import { severityClass, severityColor, severityRank, SEVERITY_TONES } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
-import { Segmented } from "../components/ui";
 import { useWorkspace } from "../context/workspace";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris from "../components/AskIris";
+import EvIcon from "../components/event/EvIcon";
+import SidePanel from "../components/event/SidePanel";
 import Logs from "./Logs";
 import { operatorError } from "../lib/errors";
-// Active Alerts, grouped by EPISODE: repeated firings of the same
-// (resource, signal, state) collapse into one row with first/last/count,
-// flap detection and triage (acknowledge / assign / mute / snooze / notes).
-// Muting or snoozing pauses NOTIFICATIONS only — the episode stays visible
-// with its paused state shown honestly. Selecting a row opens the episode in
-// the dockable Inspector (shell-v2) with a "View logs" pivot; v1 falls back
-// to an inline detail section.
+import { useDeviceNames } from "../lib/deviceNames";
+import { useIsPhone } from "../lib/useIsPhone";
+import {
+  ALERT_TABS, type AlertsTab, type AlertFilters, type AlertView,
+  isSuppressed, statusLabel, statusTone, toAlertView, alertTiles, filterAlerts, facetValues, activeAlertFilterCount,
+} from "./alertsModel";
 
-const mono: React.CSSProperties = { fontFamily: "var(--font-mono, monospace)", fontSize: 12.5 };
+// Operations → Active Alerts, grouped by EPISODE: repeated firings of the same
+// (resource, signal, state) collapse into one row with first/last/count, flap
+// detection and triage (acknowledge / assign / mute / snooze / notes). Muting or
+// snoozing pauses NOTIFICATIONS only — the episode stays visible with its paused
+// state shown honestly.
+//
+// Laid out the way the Logs page was redone (owner, 2026-11-22): severity tiles
+// that filter, tabs that map onto the episode API's own status filter, one
+// search box with quick filters over the loaded rows, two-line rows with the
+// device by NAME, and a side panel for one episode.
 
-type EpisodeFilter = "open" | "closed" | "all";
-
-const isSuppressed = (e: AlertEpisode) =>
-  !!e.muted || (!!e.snoozed_until && Date.parse(e.snoozed_until) > Date.now());
-
-const statusLabel = (s: AlertEpisode["status"]) =>
-  s === "active" ? "Active" : s === "cleared" ? "Cleared" : "Closed";
-
-const statusTone = (s: AlertEpisode["status"]) =>
-  s === "active" ? "var(--warn)" : s === "cleared" ? "var(--ok)" : "var(--fg-subtle)";
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono, monospace)", fontSize: 14 };
 
 // Labeled, mode-aware time rendering (lib/time is the single time authority —
 // never a bare toLocaleString, which shows an unlabeled ambiguous clock).
@@ -42,7 +42,8 @@ export default function Alerts() {
   const [total, setTotal] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [rawFiring, setRawFiring] = useState(0);
-  const [filter, setFilter] = useState<EpisodeFilter>("open");
+  const [tab, setTab] = useState<AlertsTab>("active");
+  const [filters, setFilters] = useState<AlertFilters>({});
   const [sel, setSel] = useState<string | null>(null);
   // loadErr — this page's OWN failure state. It cannot be delegated to the
   // top-level health indicator: that polls /healthz, which stays 200 while a
@@ -51,10 +52,12 @@ export default function Alerts() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const ws = useWorkspace();
+  const names = useDeviceNames();
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     try {
-      const [ep, raw] = await Promise.all([api.alertEpisodes(filter), api.alerts()]);
+      const [ep, raw] = await Promise.all([api.alertEpisodes(tab), api.alerts()]);
       setItems(ep.episodes ?? []);
       setTotal(ep.total ?? (ep.episodes ?? []).length);
       setTruncated(!!ep.truncated);
@@ -65,7 +68,7 @@ export default function Alerts() {
     } finally {
       setLoaded(true);
     }
-  }, [filter]);
+  }, [tab]);
 
   useEffect(() => {
     let alive = true;
@@ -85,23 +88,18 @@ export default function Alerts() {
     setItems((prev) => prev.map((x) => (x.id === ep.id ? ep : x)));
   }, []);
 
-  const columns = useMemo<Column<AlertEpisode>[]>(() => [
-    { key: "signal", header: "Monitor", width: "16%", sortable: true, text: (e) => e.signal,
-      render: (e) => <span title={e.signal}>{e.signal}</span> },
-    { key: "state", header: "Severity", width: 92, sortable: true,
-      text: (e) => e.state, sortValue: (e) => severityRank(e.state),
-      render: (e) => <span className={`badge ${severityClass(e.state)}`}>{e.state}</span> },
-    { key: "resource", header: "Resource", width: 140, sortable: true, text: (e) => e.resource ?? "",
-      render: (e) => <span style={mono}>{e.resource || "Platform"}</span> },
-    { key: "count", header: "Occurrences", width: 104, sortable: true,
-      text: (e) => String(e.count), sortValue: (e) => e.count,
-      render: (e) => (
-        <span className="badge" title={`${e.count} firing${e.count === 1 ? "" : "s"} folded into this episode`}>
-          ×{e.count}
-        </span>
-      ) },
-    { key: "status", header: "Status", width: 230, sortable: true, text: (e) => e.status,
-      render: (e) => (
+  const views = useMemo(() => items.map((e) => toAlertView(e, names)), [items, names]);
+  const shown = useMemo(() => filterAlerts(views, filters), [views, filters]);
+  const tiles = useMemo(() => alertTiles(items, truncated, total), [items, truncated, total]);
+  const deviceFacet = useMemo(() => facetValues(views, (v) => v.device), [views]);
+  const monitorFacet = useMemo(() => facetValues(views, (v) => v.episode.signal), [views]);
+  const set = (patch: Partial<AlertFilters>) => setFilters((f) => ({ ...f, ...patch }));
+
+  const columns = useMemo<Column<AlertView>[]>(() => {
+    const sevCell = (v: AlertView) => <span className={`badge ${severityClass(v.episode.state)}`}>{v.episode.state}</span>;
+    const statusCell = (v: AlertView) => {
+      const e = v.episode;
+      return (
         <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
           <Chip label={statusLabel(e.status)} tone={statusTone(e.status)} />
           {e.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${e.flip_count ?? 0} flips)`} />}
@@ -115,39 +113,65 @@ export default function Alerts() {
           {e.acknowledged_by && <Chip label={`Ack · ${e.acknowledged_by}`} tone="var(--ok)" />}
           {e.assigned_to && <Chip label={`→ ${e.assigned_to}`} tone="var(--accent)" title={`Assigned to ${e.assigned_to}`} />}
         </span>
-      ) },
-    { key: "first", header: "First seen", width: 156, sortable: true,
-      sortValue: (e) => Date.parse(e.first_seen) || 0,
-      render: (e) => fmt(e.first_seen) },
-    { key: "last", header: "Last seen", width: 156, sortable: true,
-      sortValue: (e) => Date.parse(e.last_seen) || 0,
-      render: (e) => fmt(e.last_seen) },
-  ], []);
-
-  const select = (e: AlertEpisode) => {
-    setSel(e.id);
-    if (ws.enabled) {
-      ws.openInspector(
-        <EpisodeDetailBody
-          episode={e}
-          onUpdated={onUpdated}
-          onViewLogs={
-            e.resource
-              ? () => ws.openDrawer(<Logs initialQuery={`host:"${e.resource}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${e.resource}` })
-              : undefined
-          }
-        />,
-        { title: e.signal, subtitle: `${e.state}${e.resource ? ` · ${e.resource}` : ""}` },
       );
+    };
+    const countCell = (v: AlertView) => (
+      <span className="badge" title={`${v.episode.count} firing${v.episode.count === 1 ? "" : "s"} folded into this episode`}>
+        ×{v.episode.count}
+      </span>
+    );
+    const alertCell = (v: AlertView) => (
+      <div className="lv-two">
+        <span className="al-title" title={v.title}>{v.title}</span>
+        <span className="lv-line lv-detail-line al-detail" title={v.detail}>{v.detail}</span>
+      </div>
+    );
+    if (isPhone) {
+      return [{
+        key: "alert", header: "Alert", sortable: true, sortValue: (v) => Date.parse(v.episode.last_seen) || 0,
+        render: (v) => (
+          <div className="lv-phone-cell">
+            <div className="lv-phone-top">{sevCell(v)} {countCell(v)} <span className="al-when">{fmt(v.episode.last_seen)}</span></div>
+            {alertCell(v)}
+            {statusCell(v)}
+          </div>
+        ),
+      }];
     }
-  };
+    return [
+      { key: "state", header: "Severity", width: 104, sortable: true,
+        text: (v) => v.episode.state, sortValue: (v) => severityRank(v.episode.state), render: sevCell },
+      { key: "alert", header: "Alert", sortable: true, text: (v) => `${v.title} ${v.detail}`, render: alertCell },
+      { key: "device", header: "Device", width: 170, sortable: true, text: (v) => v.device,
+        render: (v) => (
+          <div className="lv-two">
+            <span className="al-device">{v.device}</span>
+            {v.deviceId && <span className="lv-trunc lv-addr" style={mono} title={v.deviceId}>{v.deviceId}</span>}
+          </div>
+        ) },
+      { key: "count", header: "Count", width: 84, sortable: true,
+        text: (v) => String(v.episode.count), sortValue: (v) => v.episode.count, render: countCell },
+      { key: "status", header: "Status", width: 230, sortable: true, text: (v) => v.episode.status, render: statusCell },
+      { key: "last", header: "Since", width: 172, sortable: true,
+        sortValue: (v) => Date.parse(v.episode.last_seen) || 0,
+        render: (v) => (
+          <div className="lv-two al-since">
+            <span title="First seen">{fmt(v.episode.first_seen)}</span>
+            <span className="al-last" title="Last seen">{fmt(v.episode.last_seen)}</span>
+          </div>
+        ) },
+    ];
+  }, [isPhone]);
 
-  const selected = !ws.enabled && sel ? items.find((e) => e.id === sel) : undefined;
+  const selected = sel ? items.find((e) => e.id === sel) : undefined;
+  const selectedView = selected ? toAlertView(selected, names) : undefined;
 
   const active = items.filter((e) => e.status === "active");
   const eCrit = active.filter((e) => e.state === "critical" || e.state === "error").length;
   const eFlap = items.filter((e) => e.flapping && e.status !== "closed").length;
   const ePaused = items.filter((e) => isSuppressed(e) && e.status !== "closed").length;
+  const tabMeta = ALERT_TABS.find((t) => t.id === tab) ?? ALERT_TABS[0];
+  const nFilters = activeAlertFilterCount(filters);
 
   return (
     <div className="dm-board cc-board">
@@ -184,27 +208,60 @@ export default function Alerts() {
         </NocKpis>
       </NocHeader>
       <div className="cc-panel">
-        <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Alert episodes</h3>
-          <span className="cc-panel-meta" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            <Segmented<EpisodeFilter>
-              value={filter}
-              onChange={setFilter}
-              ariaLabel="Episode filter"
-              options={[
-                { value: "open", label: "Open", title: "Active and recently-cleared episodes" },
-                { value: "closed", label: "Closed", title: "Episodes that stayed quiet past the close window" },
-                { value: "all", label: "All" },
-              ]}
-            />
-            {loadErr
-              ? "Feed unavailable"
-              : truncated
-                ? `${items.length} of ${total}`
-                : `${items.length} episode${items.length === 1 ? "" : "s"}`}
-          </span>
+        <div className="lv-subtabs" role="group" aria-label="Episode status">
+          {ALERT_TABS.map((t) => (
+            <button key={t.id} type="button" className="lv-subtab" aria-pressed={tab === t.id}
+              onClick={() => { setTab(t.id); setSel(null); }}>
+              {t.label}
+              {tab === t.id && loaded && !loadErr && (
+                <span className="lv-subtab-n" aria-hidden="true"> ({truncated ? `${items.length} of ${total}` : items.length})</span>
+              )}
+            </button>
+          ))}
         </div>
         <div style={{ padding: "11px 13px" }}>
+          {/* Severity tiles over the loaded episodes: a tile filters the list, and
+              the note says whether the counts are every episode or only the loaded ones. */}
+          {!loadErr && items.length > 0 && (
+            <div className="lv-tiles-wrap" data-testid="alerts-severity-tiles">
+              <div className="lv-tiles" role="group" aria-label="Severity of the loaded episodes">
+                {tiles.tiles.map((t) => {
+                  const on = filters.severity === t.id;
+                  return (
+                    <button key={t.id} type="button" className={`lv-tile lv-tile-${t.id}`} aria-pressed={on}
+                      aria-label={`${t.label}: ${t.count}. ${on ? "Showing only these; press to show all" : "Press to show only these"}`}
+                      onClick={() => set({ severity: on ? undefined : t.id })}>
+                      <span className="lv-tile-ico" aria-hidden="true"><EvIcon name={SEVERITY_TONES[t.id].icon} size={20} /></span>
+                      <span className="lv-tile-txt">
+                        <span className="lv-tile-n">{t.count.toLocaleString()}</span>
+                        <span className="lv-tile-k">{t.label}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="lv-tiles-note">{tiles.note}</p>
+            </div>
+          )}
+          {!loadErr && items.length > 0 && (
+            <div className="lv-filters" data-testid="alerts-filters">
+              <input className="form-input al-search" type="search" placeholder="Search alerts, devices, people"
+                aria-label="Search alerts" value={filters.q ?? ""} onChange={(e) => set({ q: e.target.value })} />
+              <select aria-label="Device" value={filters.device ?? ""} onChange={(e) => set({ device: e.target.value || undefined })}>
+                <option value="">All devices</option>
+                {deviceFacet.map((o) => <option key={o.value} value={o.value}>{o.value} ({o.count})</option>)}
+              </select>
+              <select aria-label="Monitor" value={filters.monitor ?? ""} onChange={(e) => set({ monitor: e.target.value || undefined })}>
+                <option value="">All monitors</option>
+                {monitorFacet.map((o) => <option key={o.value} value={o.value}>{o.value} ({o.count})</option>)}
+              </select>
+              <label className="al-check"><input type="checkbox" checked={!!filters.flapping} onChange={(e) => set({ flapping: e.target.checked || undefined })} /> Flapping</label>
+              <label className="al-check"><input type="checkbox" checked={!!filters.paused} onChange={(e) => set({ paused: e.target.checked || undefined })} /> Paused</label>
+              <label className="al-check"><input type="checkbox" checked={!!filters.unassigned} onChange={(e) => set({ unassigned: e.target.checked || undefined })} /> Unassigned</label>
+              <span className="al-scope">In these {items.length.toLocaleString()} loaded episodes</span>
+              {nFilters > 0 && <button type="button" className="btn-ghost" onClick={() => setFilters({})}>Clear filters</button>}
+            </div>
+          )}
           {loadErr && (
             <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
               <strong>Alert episodes could not be loaded.</strong>
@@ -219,30 +276,52 @@ export default function Alerts() {
           {items.length === 0 ? (
             loadErr || !loaded ? null : (
               <div className="empty">
-                {filter === "open" ? "Nothing firing." : "No episodes match this filter."}
+                {tabMeta.empty}
                 <AskIris topic="alerts.nothing-firing" label="an empty alert list" />
               </div>
             )
+          ) : shown.length === 0 ? (
+            <div className="empty">No episode matches these filters. <button type="button" className="btn-ghost" onClick={() => setFilters({})}>Clear filters</button></div>
           ) : (
-            <DataTable<AlertEpisode>
-              rows={items}
+            <DataTable<AlertView>
+              rows={shown}
               columns={columns}
-              rowKey={(e) => e.id}
+              rowKey={(v) => v.id}
+              rowHeight={isPhone ? 96 : 48}
               height="58vh"
               ariaLabel="Alert episodes"
-              onRowClick={(e) => select(e)}
-              rowAccent={(e) => severityColor(e.state)}
-              rowClassName={(e) => (sel === e.id ? "dtv-selected" : "")}
+              onRowClick={(v) => setSel(v.id)}
+              rowAccent={(v) => severityColor(v.episode.state)}
+              rowClassName={(v) => (sel === v.id ? "dtv-selected" : "")}
               initialSort={{ key: "last", dir: "desc" }}
             />
           )}
-          {selected && (
-            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-              <EpisodeDetailBody episode={selected} onUpdated={onUpdated} />
-            </div>
+          {truncated && !loadErr && (
+            <p className="lv-tiles-note" data-testid="alerts-truncated">Showing {items.length.toLocaleString()} of {total.toLocaleString()} episodes — the newest first.</p>
           )}
         </div>
       </div>
+      {selected && selectedView && (
+        <SidePanel
+          narrow
+          title={selectedView.title}
+          subtitle={`${statusLabel(selected.status)} · ${selected.state}`}
+          onClose={() => setSel(null)}
+          testId="alert-panel"
+          overlayTestId="alert-panel-overlay"
+        >
+          <EpisodeDetailBody
+            episode={selected}
+            deviceName={selectedView.device}
+            onUpdated={onUpdated}
+            onViewLogs={
+              selected.resource && ws.enabled
+                ? () => ws.openDrawer(<Logs initialQuery={`host:"${selected.resource}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${selectedView.device}` })
+                : undefined
+            }
+          />
+        </SidePanel>
+      )}
     </div>
   );
 }
@@ -263,10 +342,13 @@ export function EpisodeDetailBody({
   episode,
   onUpdated,
   onViewLogs,
+  deviceName,
 }: {
   episode: AlertEpisode;
   onUpdated?: (ep: AlertEpisode) => void;
   onViewLogs?: () => void;
+  /** The device's inventory name; the raw id is shown beside it when it differs. */
+  deviceName?: string;
 }) {
   const [ep, setEp] = useState<AlertEpisode>(episode);
   const [assignee, setAssignee] = useState(episode.assigned_to ?? "");
@@ -296,7 +378,7 @@ export function EpisodeDetailBody({
   };
 
   const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 14, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 96 }}>{k}</span>
       <span>{v}</span>
     </div>
@@ -313,16 +395,18 @@ export function EpisodeDetailBody({
         <Chip label={statusLabel(ep.status)} tone={statusTone(ep.status)} />
         {ep.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${ep.flip_count ?? 0} flips)`} />}
       </div>
-      {ep.summary && <div style={{ fontSize: 13 }}>{ep.summary}</div>}
+      {ep.summary && <div style={{ fontSize: 14 }}>{ep.summary}</div>}
       {isSuppressed(ep) && (
-        <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+        <div style={{ fontSize: 14, color: "var(--muted)" }}>
           Notifications paused
           {ep.muted ? ` by ${ep.muted_by || "an operator"}` : ` until ${fmt(ep.snoozed_until)}`}.
           <AskIris topic="alerts.notifications-paused" label="paused notifications" />
         </div>
       )}
       <div>
-        {row("Resource", <span style={mono}>{ep.resource || "Platform"}</span>)}
+        {row("Device", ep.resource
+          ? <span>{deviceName || ep.resource}{deviceName && deviceName !== ep.resource && <span style={{ ...mono, color: "var(--muted)" }}> · {ep.resource}</span>}</span>
+          : <span>Platform</span>)}
         {row("First seen", <span style={mono}>{fmt(ep.first_seen)}</span>)}
         {row("Last seen", <span style={mono}>{fmt(ep.last_seen)}</span>)}
         {row("Occurrences", <span style={mono}>{ep.count}</span>)}
@@ -388,19 +472,19 @@ export function EpisodeDetailBody({
           </button>
         )}
       </div>
-      {err && <div style={{ fontSize: 12.5, color: "var(--crit)" }}>{err}</div>}
+      {err && <div style={{ fontSize: 14, color: "var(--crit)" }}>{err}</div>}
 
       {/* Notes */}
       <div>
-        <div style={{ fontSize: 12.5, color: "var(--muted)", letterSpacing: 0.2, marginBottom: 4 }}>
+        <div style={{ fontSize: 14, color: "var(--muted)", letterSpacing: 0.2, marginBottom: 4 }}>
           Notes
         </div>
         {(ep.notes ?? []).length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>No notes yet.</div>
+          <div style={{ fontSize: 14, color: "var(--muted)" }}>No notes yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {(ep.notes ?? []).map((n, i) => (
-              <div key={i} style={{ fontSize: 12.5, borderLeft: "2px solid var(--border)", paddingLeft: 8 }}>
+              <div key={i} style={{ fontSize: 14, borderLeft: "2px solid var(--border)", paddingLeft: 8 }}>
                 <div style={{ color: "var(--muted)" }}>
                   <span style={mono}>{n.by}</span> · {fmt(n.at)}
                 </div>
