@@ -84,27 +84,40 @@ export function matrixGrid(m: TunnelMatrix | null | undefined): MatrixGrid {
   return { sites, cellAt: (a, b) => byPair.get(`${a}\u0000${b}`) };
 }
 
-/** A matrix cell as the table filter it applies: the two site labels, unordered. */
+/**
+ * A matrix cell as the table filter it applies. `ra`/`rb` are the cell's opaque
+ * site keys, which rows carry as `site.ref`; `a`/`b` are the labels, used only
+ * for a row without refs (labels are not unique: two tenants can both have "HQ").
+ */
 export interface CellFilter {
   a: string;
   b: string;
+  ra?: string;
+  rb?: string;
 }
 
 export function cellFilter(m: TunnelMatrix | null | undefined, cell: TunnelMatrixCell): CellFilter | null {
   const label = (key: string) => m?.sites.find((s) => s.key === key)?.label;
   const a = label(cell.a);
   const b = label(cell.b);
-  return a && b ? { a, b } : null;
+  return a && b ? { a, b, ra: cell.a, rb: cell.b } : null;
 }
 
 const endSite = (e: TunnelEnd | undefined) => e?.site?.label ?? "";
+const endRef = (e: TunnelEnd | undefined) => e?.site?.ref ?? "";
 
 /**
- * Whether a row belongs to a matrix cell. Rows carry each end's site LABEL (the
- * server keeps its site keys private), so the match is on the label pair in
- * either direction; an intra-site cell needs both ends at that site.
+ * Whether a row belongs to a matrix cell, in either direction; an intra-site
+ * cell needs both ends at that site. When the row's ends carry the matrix's
+ * site refs the match is exact on them; only a row without refs falls back to
+ * the label pair.
  */
 export function rowInCell(t: Tunnel, f: CellFilter): boolean {
+  const ra = endRef(t.a);
+  const rb = endRef(t.b);
+  if (ra && rb && f.ra && f.rb) {
+    return (ra === f.ra && rb === f.rb) || (ra === f.rb && rb === f.ra);
+  }
   const a = endSite(t.a);
   const b = endSite(t.b);
   if (!a || !b) return false;
