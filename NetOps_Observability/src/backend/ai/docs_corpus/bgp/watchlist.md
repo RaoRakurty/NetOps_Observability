@@ -46,7 +46,7 @@ something Correlix keeps checking.
 
 ## Steps
 
-1. Go to **Analytics → Metric Dashboards → BGP Operations**.
+1. Go to **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 2. Type the prefix or ASN into the **Prefix or ASN** box.
 3. Select **Investigate**. The verdict bar and every panel below it now answer
    about that resource.

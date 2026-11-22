@@ -30,11 +30,13 @@ import {
 } from "../../services/api";
 import { Segmented, Stat, StatStrip } from "../../components/ui";
 import { Panel } from "../../components/board/panels";
+import AskIris from "../../components/AskIris";
+import { fmtDateTime } from "../../lib/time";
+import { attentionReason, deviceIndex, needsAttention, type ProblemRef } from "../protocols/protocolsModel";
 import {
   IGP_WINDOWS,
   PEER_LABEL,
   PROTO_LABEL,
-  PROTO_STATES,
   adjCounts,
   adjKey,
   adjTone,
@@ -99,7 +101,6 @@ function CoverageStrip({ coverage, notes }: { coverage?: IgpAdjacenciesResponse[
         >
           <span className="igp-cov-label">{c.label}</span>
           <span className="igp-cov-state">{c.collected ? "collected" : "not collected"}</span>
-          <span className="mini-meta igp-cov-detail">{c.detail}</span>
         </li>
       ))}
     </ul>
@@ -293,9 +294,13 @@ export interface IgpAdjacenciesProps {
   proto: IgpProto;
   /** Initial ?since= token. Must be one the server accepts (1m..7d). */
   defaultWindow?: string;
+  /** Open problems by inventory device id, for the "Problem" chip. */
+  problems?: ReadonlyMap<string, ProblemRef>;
 }
 
-export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdjacenciesProps) {
+const rcaHref = (corrId: string) => `#/investigate/rca?id=${encodeURIComponent(corrId)}`;
+
+export default function IgpAdjacencies({ proto, defaultWindow = "24h", problems }: IgpAdjacenciesProps) {
   const [win, setWin] = useState<string>(defaultWindow);
   const [device, setDevice] = useState<string>("");
   const [devices, setDevices] = useState<Device[]>([]);
@@ -343,6 +348,12 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
     () => adjCounts(payload?.adjacencies, payload?.coverage?.live_series ?? false),
     [payload],
   );
+  const idx = useMemo(() => deviceIndex(devices), [devices]);
+  const attention = useMemo(() => rows.filter(needsAttention), [rows]);
+  const nameOf = (raw: string) => {
+    const id = idx.idOf(raw);
+    return id ? idx.nameOf(id) : raw;
+  };
 
   return (
     <div className="igp-view" data-proto={proto} data-state={adj.state}>
@@ -362,14 +373,55 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
             ))}
           </select>
         </label>
-        {payload && (
-          <span className="mini-meta">
-            window {windowLabel(payload.window_seconds)} · evidence: {payload.source}
-          </span>
-        )}
+        <AskIris topic="igp.coverage" label={`${PROTO_LABEL[proto]} evidence`} />
       </div>
 
-      <CoverageStrip coverage={payload?.coverage} notes={payload?.notes} />
+      <Panel title="Needs attention">
+        <StateBlock result={adj}>
+          {attention.length === 0 ? (
+            <div className="empty" role="status" data-testid="igp-all-steady">
+              {rows.length === 0
+                ? `No ${PROTO_LABEL[proto]} adjacency reported in the last ${payload ? windowLabel(payload.window_seconds) : "window"}.`
+                : `All ${rows.length} adjacencies steady in the last ${payload ? windowLabel(payload.window_seconds) : "window"}.`}
+            </div>
+          ) : (
+            <div className="ds-table-wrap">
+              <table className="ds-table igp-attention">
+                <thead>
+                  <tr>
+                    <th scope="col">Device</th>
+                    <th scope="col">{PEER_LABEL[proto]}</th>
+                    <th scope="col">What</th>
+                    <th scope="col">Since</th>
+                    <th scope="col">Problem</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attention.map((a) => {
+                    const id = idx.idOf(a.device);
+                    const site = id ? idx.siteOf(id) : "";
+                    const pr = id ? problems?.get(id) : undefined;
+                    return (
+                      <tr key={adjKey(a)} data-attention={adjTone(a) || "warn"}>
+                        <td>
+                          {nameOf(a.device)}
+                          {site && <div className="fact-line">{site}</div>}
+                        </td>
+                        <td className="mono">{a.peer || "—"}{a.ifname ? ` · ${a.ifname}` : ""}</td>
+                        <td><span className="igp-state" data-tone={adjTone(a) || "warn"}>{attentionReason(a)}</span></td>
+                        <td>{a.last_change ? fmtDateTime(a.last_change) : "—"}</td>
+                        <td>
+                          {pr ? <a className="chip-link" href={rcaHref(pr.id)} title={pr.title}>{pr.handle}</a> : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </StateBlock>
+      </Panel>
 
       <StatStrip>
         <Stat label="Adjacencies reported" value={String(counts.reported)} />
@@ -386,6 +438,13 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
         <Stat label="Flaps in window" value={String(counts.flaps)} tone={counts.flaps > 0 ? "warn" : ""} />
       </StatStrip>
 
+      <CoverageStrip coverage={payload?.coverage} notes={payload?.notes} />
+
+      {/* The full table only once there is one: loading, error and "not
+          collected" are already stated, once, by "Needs attention" above. */}
+      {adj.state === "ready" && (
+      <details className="igp-more">
+        <summary>All adjacencies ({rows.length})</summary>
       <Panel title={`${PROTO_LABEL[proto]} adjacencies`}>
         <StateBlock result={adj}>
           <div className="ds-table-wrap">
@@ -396,7 +455,9 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
                   <th scope="col">{PEER_LABEL[proto]}</th>
                   <th scope="col">Interface</th>
                   {proto === "isis" && <th scope="col">Level</th>}
-                  <th scope="col">State</th>
+                  <th scope="col">
+                    State <AskIris topic={proto === "isis" ? "isis.adjacency-states" : "ospf.neighbor-states"} label={`${PROTO_LABEL[proto]} states`} />
+                  </th>
                   {/* OSPF-MIB has no per-neighbour timer column, so this
                       column exists only where a per-adjacency timer can be
                       collected at all. */}
@@ -409,7 +470,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
               <tbody>
                 {rows.map((a) => (
                   <tr key={adjKey(a)} data-tone={adjTone(a)} data-source={a.state_source}>
-                    <td className="mono">{a.device}</td>
+                    <td>{nameOf(a.device)}</td>
                     <td className="mono">{a.peer || "—"}</td>
                     <td className="mono">{a.ifname || "—"}</td>
                     {proto === "isis" && <td>{a.level || "—"}</td>}
@@ -437,15 +498,16 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
             </ul>
           )}
         </StateBlock>
-        <p className="mini-meta">
-          <strong>{PROTO_LABEL[proto]} state</strong>: {PROTO_STATES[proto]}
-        </p>
       </Panel>
+      </details>
+      )}
 
       {device && <HealthBlock result={health} />}
       {device && <TimersPanel result={health} />}
 
-      <Panel title={`${PROTO_LABEL[proto]} roll-up by device (worst first)`}>
+      <details className="igp-more">
+        <summary>By device</summary>
+      <Panel title={`${PROTO_LABEL[proto]} by device`}>
         <StateBlock result={sum}>
           <div className="ds-table-wrap">
             <table className="ds-table">
@@ -465,7 +527,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
               <tbody>
                 {(sum.data?.devices ?? []).map((d) => (
                   <tr key={d.device}>
-                    <td className="mono">{d.device}</td>
+                    <td>{nameOf(d.device)}</td>
                     <td className="mono">{countOrNotCollected(d.adjacencies)}</td>
                     <td
                       className="mono"
@@ -499,6 +561,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
           )}
         </StateBlock>
       </Panel>
+      </details>
     </div>
   );
 }

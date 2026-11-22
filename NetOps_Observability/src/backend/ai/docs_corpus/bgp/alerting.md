@@ -88,12 +88,12 @@ and the class that pages someone at 03:00 can never disagree.
 
 ### Set the policy from the console
 
-The same policy is editable on **Analytics → BGP Operations**, in the **Alert
+The same policy is editable on **Analytics → Protocol Monitoring → BGP**, in the **Alert
 policy — what counts as an incident** section. It sits directly beneath the
 **Incidents — watched prefixes** section, because every verdict there is this
 policy's output.
 
-1. Open **Analytics → BGP Operations**.
+1. Open **Analytics → Protocol Monitoring → BGP**.
 2. In **Alert policy**, set **Expected origin AS** and **Upstream (transit) AS**
    for the tenant default. Both accept `AS64500` or `64500`, separated by
    commas.

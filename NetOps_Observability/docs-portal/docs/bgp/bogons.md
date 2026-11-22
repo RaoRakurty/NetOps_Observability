@@ -25,7 +25,7 @@ network or somebody announcing space they do not hold.
 
 ## Steps
 
-1. Go to **Analytics → Metric Dashboards → BGP Operations**.
+1. Go to **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 2. Read **Bogons — set in force and sightings** in the right-hand column.
 3. Check the chips: how many embedded blocks are compiled, the transcription
    date of those tables, and whether the full-bogons feed is on.

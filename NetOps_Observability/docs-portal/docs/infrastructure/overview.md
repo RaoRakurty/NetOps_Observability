@@ -22,7 +22,7 @@ The **Infrastructure** section answers one question: what do you own, and what h
 
 ## Where the metric boards went
 
-Device Monitoring, Interface Performance, Protocol Monitoring and BGP Operations are boards, not inventory. They sit under **Analytics → Metric Dashboards**, and the topology, path and tunnel views sit under **Investigate**. The [built-in dashboards](/dashboards-reports/built-in-dashboards) page is the tour of what each board answers.
+Device Monitoring, Interface Performance and Protocol Monitoring are boards, not inventory. They sit under **Analytics → Metric Dashboards**, and the topology, path and tunnel views sit under **Investigate**. The [built-in dashboards](/dashboards-reports/built-in-dashboards) page is the tour of what each board answers.
 
 ## Where to start
 

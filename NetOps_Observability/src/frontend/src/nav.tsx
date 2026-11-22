@@ -24,8 +24,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
   PortsWorkbench: () => import("./pages/PortsWorkbench"),
   Wireless: () => import("./pages/Wireless"),
-  BgpOspf: () => import("./pages/BgpOspf"),
-  BgpOps: () => import("./pages/BgpOps"),
+  ProtocolsPage: () => import("./pages/protocols/ProtocolsPage"),
   Troubleshooting: () => import("./pages/Troubleshooting"),
   Correlations: () => import("./tabs/Correlations"),
   RcaReports: () => import("./pages/RcaReports"),
@@ -109,8 +108,7 @@ const DeviceMonitoring = lazy(ROUTE_CHUNKS["DeviceMonitoring"] as () => Promise<
 const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => Promise<{ default: React.ComponentType<any> }>);
 const PortsWorkbench = lazy(ROUTE_CHUNKS["PortsWorkbench"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Wireless = lazy(ROUTE_CHUNKS["Wireless"] as () => Promise<{ default: React.ComponentType<any> }>);
-const BgpOspf = lazy(ROUTE_CHUNKS["BgpOspf"] as () => Promise<{ default: React.ComponentType<any> }>);
-const BgpOps = lazy(ROUTE_CHUNKS["BgpOps"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ProtocolsPage = lazy(ROUTE_CHUNKS["ProtocolsPage"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Correlations = lazy(ROUTE_CHUNKS["Correlations"] as () => Promise<{ default: React.ComponentType<any> }>);
 const RcaReports = lazy(ROUTE_CHUNKS["RcaReports"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -433,10 +431,12 @@ export const NAV: NavSection[] = [
       // The device-monitoring board suite (docs/design/device-monitoring-dashboards.md).
       { id: "device-monitoring", label: "Device Monitoring", group: "Metric Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "interface-performance", label: "Interface Performance", group: "Metric Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
-      { id: "protocols", label: "Protocol Monitoring", group: "Metric Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
-      // Item 10 (2026-08-25): the consolidated BGP outage screen — routing
-      // status, RPKI, AS-paths, churn, RDAP ownership in one place.
-      { id: "bgp-ops", label: "BGP Operations", group: "Metric Dashboards", render: () => <BgpOps /> },
+      // One leaf, three tabs (2026-11-22). The BGP tab is the consolidated BGP
+      // outage screen (item 10, 2026-08-25), formerly its own "BGP Operations"
+      // leaf: its "sessions down or flapping" duplicated this page's BGP charts.
+      { id: "protocols", label: "Protocol Monitoring", group: "Metric Dashboards", render: (c) => <ProtocolsPage rangeMinutes={c.rangeMinutes} />, subItems: [
+        { id: "bgp", label: "BGP" }, { id: "ospf", label: "OSPF" }, { id: "isis", label: "IS-IS" },
+      ] },
       { id: "reports", label: "Reports", render: () => <Reports /> },
       // #113: the management library — ONLY promoted real outages + documents.
       { id: "rca-reports", label: "RCA Reports", render: () => <RcaReports /> },
@@ -774,6 +774,8 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "infrastructure/monitoring": "analytics/device-monitoring",
   "infrastructure/ifperf": "analytics/interface-performance",
   "infrastructure/bgpospf": "analytics/protocols",
+  // BGP Operations became the BGP tab of Protocol Monitoring (2026-11-22).
+  "analytics/bgp-ops": "analytics/protocols/bgp",
   "infrastructure/troubleshooting": "investigate/troubleshooting",
   "infrastructure/topology-canvas": "investigate/topology",
   // Topology's pre-move home (also an old FrontPage drill target). Without the

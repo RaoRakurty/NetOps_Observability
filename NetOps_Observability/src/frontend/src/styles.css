@@ -1488,7 +1488,7 @@ code, kbd, pre, .mono, td.mono {
 /* "…and N more" under a capped list — a COUNT, not an explanatory note. */
 .list-more { font-size: 12.5px; color: var(--muted); }
 
-/* Protocol state key (BgpOspf) — a STATED FACT beside the panels, not an
+/* Protocol state key (Protocol Monitoring) — a STATED FACT beside the panels, not an
    explanatory note: which state value means healthy. The state-code legends it
    replaced are authored files behind the (i). */
 .proto-key { display: flex; align-items: center; gap: 4px; margin: 0;
@@ -4828,6 +4828,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    16px/600, body 14px, 12.5px only for chips; --font-ui for prose,
    --font-mono for addresses, --font-display for KPI numerals only. */
 .paths-page { font-family: var(--font-ui); font-size: 14px; }
+/* Protocol Monitoring (2026-11-22): its counts and device picker read at body size. */
+.protocols-page .ds-stat-label, .protocols-page select, .protocols-page option { font-size: 14px; }
 .paths-page > h2, .paths-page.card > h2 {
   font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 var(--sp-3);
 }
