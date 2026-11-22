@@ -370,7 +370,7 @@ func NormalizeSeamOwners(raw map[string]SeamOwnerEntry) (map[string]SeamOwnerEnt
 // carrier / cloud_provider / …) into the tenant's actual responsible party.
 func IsGovernanceAuditAction(action any) bool {
 	switch action {
-	case "set_required_tags", "set_rca_window", "set_attribution_precedence", "set_time_display", "set_seam_owners":
+	case "set_required_tags", "set_rca_window", "set_attribution_precedence", "set_time_display", "set_seam_owners", "set_overview_default":
 		return true
 	}
 	return false

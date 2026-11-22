@@ -13,7 +13,7 @@ import { corrObject } from "../../test/factories";
 const api = {
   correlations: vi.fn(), healthScore: vi.fn(), correlationsStats: vi.fn(), geomap: vi.fn(), me: vi.fn(),
   eventsFeed: vi.fn(), metricsForecast: vi.fn(), stackHealth: vi.fn(), correlationTimeline: vi.fn(),
-  listSaved: vi.fn(),
+  listSaved: vi.fn(), getOverviewDefault: vi.fn(),
 };
 vi.mock("../../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (api as Record<string, unknown>)[k] }),
@@ -59,6 +59,7 @@ beforeEach(() => {
   api.stackHealth.mockResolvedValue({ overall: "healthy", up: 10, degraded: 0, down: 0 });
   api.correlationTimeline.mockResolvedValue({ signals: [] });
   api.listSaved.mockResolvedValue([]);
+  api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -155,5 +156,49 @@ describe("Overview — collapsed groups poll nothing", () => {
     head.open = true;
     fireEvent(head, new Event("toggle"));
     expect(await screen.findByTestId("stub-traffic")).toBeTruthy();
+  });
+});
+
+describe("Overview — the team default", () => {
+  const teamBoard = {
+    id: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", type: "dashboard", name: "NOC wall", owner: "adm", tenant_id: "t1",
+    body: { v: 1, cells: [{ type: "traffic", span: 12 }] }, created_at: "2026-11-22T10:00:00Z", updated_at: "2026-11-22T10:00:00Z",
+  };
+  afterEach(() => { location.hash = ""; });
+
+  it("opens the team's default dashboard instead of the built-in page", async () => {
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: teamBoard, unavailable: false });
+    render(<OverviewPage />);
+    expect(await screen.findByText("Your team's default: NOC wall")).toBeTruthy();
+    expect(screen.getByTestId("team-default-board")).toBeTruthy();
+    expect(screen.getByTestId("stub-traffic")).toBeTruthy();
+    // The built-in page is not mounted underneath it.
+    expect(screen.queryByText("Open problems")).toBeNull();
+    // The picker names the team default and still reaches the built-in page.
+    expect(screen.getByRole("option", { name: "Overview (team default)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Built-in Overview" })).toBeTruthy();
+  });
+
+  it("shows the built-in page at its own address even when a team default exists", async () => {
+    location.hash = "#/overview/operations/builtin";
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: teamBoard, unavailable: false });
+    render(<OverviewPage />);
+    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+    expect(screen.queryByTestId("team-default-board")).toBeNull();
+    expect((screen.getByTestId("dashboard-picker") as HTMLSelectElement).value).toBe("__builtin");
+  });
+
+  it("falls back to the built-in page with a quiet note when the default is gone", async () => {
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: null, unavailable: true });
+    render(<OverviewPage />);
+    expect(await screen.findByTestId("team-default-unavailable")).toBeTruthy();
+    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+  });
+
+  it("shows the built-in page when the team default cannot be read", async () => {
+    api.getOverviewDefault.mockRejectedValue(new Error("502"));
+    render(<OverviewPage />);
+    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+    expect(screen.queryByTestId("team-default-unavailable")).toBeNull();
   });
 });

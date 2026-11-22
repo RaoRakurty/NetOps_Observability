@@ -19,14 +19,22 @@
 // nothing. Liveness is derived from real fetch outcomes (useBoardHealth), never
 // a wall clock: a failing source reads "Disconnected". The header's picker
 // switches to a custom dashboard (My dashboards); this page stays the default.
+//
+// Team default (2026-11-22): when a tenant administrator has made one of the
+// tenant's dashboards the team default, #/overview/operations opens THAT
+// dashboard for everyone in the tenant, and the built-in page moves to
+// #/overview/operations/builtin. A team default that was deleted, or that this
+// user may not read, falls back to the built-in page with a quiet note. The
+// built-in page's reads start only when it is the page shown.
 
 import { useEffect, useState } from "react";
-import { api, type AuthUser } from "../../services/api";
+import { api, type AuthUser, type SavedObject } from "../../services/api";
 import PathHealthList from "../../components/PathHealthList";
 import { useOverviewData } from "./useOverviewData";
 import { customerProblems, internalObjects, topProblem } from "./overviewModel";
 import { AttentionBlock, LazyGroup, Liveness, RegistryCell, SiteHealth } from "./boardParts";
 import DashboardPicker from "./DashboardPicker";
+import { ReadOnlyBoard } from "./MyDashboards";
 import {
   CapacityOutlook, ImpactSummary, InternalMonitoringChecks, KpiStrip, PlatformHealth, RcaCoverage,
   RcaPanel, RcaPathPanel, Safe, TelemetryCoverage, TopHealthContributors, TopIssues, WhatChanged,
@@ -44,7 +52,85 @@ function usePlatformAdmin(): boolean {
   return admin;
 }
 
+type TeamDefault =
+  | { state: "loading" }
+  | { state: "none" }
+  | { state: "board"; board: SavedObject }
+  | { state: "unavailable" };
+
+/** The tenant's team-default dashboard, read once. A failed read is "none":
+ *  the built-in Overview is always a safe answer. */
+function useTeamDefault(): TeamDefault {
+  const [team, setTeam] = useState<TeamDefault>({ state: "loading" });
+  useEffect(() => {
+    let alive = true;
+    // Started inside a promise so even a synchronous failure falls back.
+    Promise.resolve().then(() => api.getOverviewDefault())
+      .then((d) => {
+        if (!alive) return;
+        if (d?.dashboard) setTeam({ state: "board", board: d.dashboard });
+        else setTeam(d?.dashboard_id ? { state: "unavailable" } : { state: "none" });
+      })
+      .catch(() => { if (alive) setTeam({ state: "none" }); });
+    return () => { alive = false; };
+  }, []);
+  return team;
+}
+
+/** Whether the address asks for the built-in page (#/overview/operations/builtin). */
+function isBuiltinHash(hash: string): boolean {
+  return hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] === "builtin";
+}
+
+function useBuiltinRoute(): boolean {
+  const [builtin, setBuiltin] = useState(() => isBuiltinHash(location.hash));
+  useEffect(() => {
+    const on = () => setBuiltin(isBuiltinHash(location.hash));
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return builtin;
+}
+
+/** The team-default dashboard shown as the Overview. */
+function TeamOverview({ board }: { board: SavedObject }) {
+  return (
+    <div className="overview-page fp dm-board" data-testid="overview-page">
+      <div className="mydash-head">
+        <div>
+          <h1 className="mydash-title">Overview</h1>
+          <div className="ov-sub">Your team's default: {board.name}</div>
+        </div>
+        <div className="ov-head-right">
+          <DashboardPicker current="default" teamDefault />
+          <Liveness />
+        </div>
+      </div>
+      <ReadOnlyBoard board={board} />
+    </div>
+  );
+}
+
 export default function OverviewPage() {
+  const team = useTeamDefault();
+  const builtin = useBuiltinRoute();
+  if (team.state === "loading") {
+    return <div className="overview-page card" aria-busy="true" data-testid="overview-loading">Loading the Overview…</div>;
+  }
+  if (team.state === "board" && !builtin) return <TeamOverview board={team.board} />;
+  return (
+    <BuiltinOverview
+      teamDefault={team.state === "board"}
+      note={team.state === "unavailable"
+        ? "Your team's default dashboard is no longer available, so this is the built-in Overview."
+        : undefined}
+    />
+  );
+}
+
+/** The built-in Overview. `teamDefault`: the tenant has a team default and this
+ *  is the built-in page opened by its own address. */
+function BuiltinOverview({ teamDefault, note }: { teamDefault: boolean; note?: string }) {
   const d = useOverviewData();
   const platformAdmin = usePlatformAdmin();
   const problems = d.corr ? customerProblems(d.corr) : undefined;
@@ -58,10 +144,12 @@ export default function OverviewPage() {
           <div className="ov-sub">What is broken, where, and what to do first.</div>
         </div>
         <div className="ov-head-right">
-          <DashboardPicker current="default" />
+          <DashboardPicker current={teamDefault ? "builtin" : "default"} teamDefault={teamDefault} />
           <Liveness />
         </div>
       </div>
+
+      {note && <div className="ccw-hint ov-note" data-testid="team-default-unavailable">{note}</div>}
 
       <AttentionBlock d={d} />
 
