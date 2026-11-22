@@ -8,6 +8,7 @@
 // through usePolled, so they report into the board-health signal the page's
 // liveness header reads (a failing source reads "Disconnected", never "Live").
 
+import { createContext, createElement, useContext, type ReactNode } from "react";
 import { api, type CorrObject, type CorrStats, type HealthScoreResp } from "../../services/api";
 import { usePolled } from "../panels";
 
@@ -39,4 +40,18 @@ export function useOverviewData(): OverviewData {
     stats: stats.data,
     statsErr: stats.err,
   };
+}
+
+// A custom dashboard can hold several RCA panels; they share ONE read through
+// this provider instead of each polling the same three endpoints.
+const OverviewDataContext = createContext<OverviewData | null>(null);
+
+export function OverviewDataProvider({ children }: { children?: ReactNode }) {
+  const d = useOverviewData();
+  return createElement(OverviewDataContext.Provider, { value: d }, children);
+}
+
+/** The shared read, or null outside an OverviewDataProvider. */
+export function useSharedOverviewData(): OverviewData | null {
+  return useContext(OverviewDataContext);
 }

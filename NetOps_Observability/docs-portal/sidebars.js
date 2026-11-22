@@ -175,6 +175,7 @@ const sidebars = {
           items: [
             'dashboards-reports/command-center',
             'dashboards-reports/operations-overview',
+            'dashboards-reports/my-dashboards',
             'dashboards-reports/built-in-dashboards',
             'dashboards-reports/reports',
             'dashboards-reports/recovery-scorecard',

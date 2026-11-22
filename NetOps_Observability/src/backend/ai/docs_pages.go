@@ -79,6 +79,7 @@ var navPageDocs = map[string]navPage{
 	// Overview
 	"overview/home":       {Label: "Overview → Home (Command Center)", Docs: []pageDoc{wholePage("dashboards-reports/command-center"), wholePage("noc-guide/where-to-start")}, Explain: "page.command-center"},
 	"overview/operations": {Label: "Overview → Overview", Docs: []pageDoc{wholePage("dashboards-reports/operations-overview")}, Explain: "page.overview"},
+	"overview/dashboards": {Label: "Overview → My dashboards", Docs: []pageDoc{wholePage("dashboards-reports/my-dashboards")}},
 
 	// Operations
 	"operations/incidents":          {Label: "Operations → Incidents", Docs: []pageDoc{wholePage("incidents/working-incidents"), wholePage("incidents/reading-an-incident"), wholePage("incidents/overview")}, Explain: "page.incidents"},

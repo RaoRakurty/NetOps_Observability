@@ -7704,6 +7704,9 @@ export const api = {
       body: JSON.stringify({ type, name, body }),
     }),
   deleteSaved: (id: string) => request<void>(`/api/saved/${id}`, { method: "DELETE" }),
+  // One saved object by id (My dashboards' deep links). Another tenant's id is a
+  // 404 from the server — the same answer as an id that never existed.
+  getSaved: (id: string) => request<SavedObject>(`/api/saved/${encodeURIComponent(id)}`),
 
   // Global omni-search — resolves a free-text query to jump targets
   // (devices, alerts, saved objects) plus a raw log-search handoff.

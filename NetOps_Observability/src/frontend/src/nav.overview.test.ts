@@ -24,6 +24,22 @@ describe("Overview section", () => {
     expect(leaves).toContainEqual(["operations", "Overview"]);
   });
 
+  it("hosts the tenant's own dashboards as My dashboards, after the default", () => {
+    const ids = overview().map((l) => l.id);
+    expect(ids).toEqual(["home", "operations", "dashboards"]);
+    expect(overview().find((l) => l.id === "dashboards")?.label).toBe("My dashboards");
+  });
+
+  it.each([
+    ["#/overview/dashboards"],
+    ["#/overview/dashboards/new?template=default"],
+    ["#/overview/dashboards/0f1e2d3c4b5a69788796a5b4c3d2e1f0"],
+  ])("%s opens My dashboards (the page reads the rest of the address)", (hash) => {
+    const r = resolveRoute(hash, NAV);
+    expect(r.section?.id).toBe("overview");
+    expect(r.leaf?.id).toBe("dashboards");
+  });
+
   it("no longer lists My Dashboard as its own leaf", () => {
     const ids = overview().map((l) => l.id);
     expect(ids).not.toContain("board");

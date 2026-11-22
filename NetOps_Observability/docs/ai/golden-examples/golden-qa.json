@@ -711,6 +711,18 @@
       "notes": "the liveness header moved from My Dashboard to the merged Overview"
     },
     {
+      "id": "docs-061b",
+      "category": "docs",
+      "question": "How do I build my own dashboard from a copy of the Overview?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/my-dashboards"
+        ]
+      },
+      "nav": "overview/dashboards",
+      "notes": "nav-leaf coverage (N-G1): Overview → My dashboards"
+    },
+    {
       "id": "docs-062",
       "category": "docs",
       "question": "Where is the audit trail of who changed what in the console?",

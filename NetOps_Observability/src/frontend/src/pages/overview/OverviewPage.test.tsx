@@ -13,6 +13,7 @@ import { corrObject } from "../../test/factories";
 const api = {
   correlations: vi.fn(), healthScore: vi.fn(), correlationsStats: vi.fn(), geomap: vi.fn(), me: vi.fn(),
   eventsFeed: vi.fn(), metricsForecast: vi.fn(), stackHealth: vi.fn(), correlationTimeline: vi.fn(),
+  listSaved: vi.fn(),
 };
 vi.mock("../../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (api as Record<string, unknown>)[k] }),
@@ -57,6 +58,7 @@ beforeEach(() => {
   api.metricsForecast.mockResolvedValue({ interfaces: [], min_days: 14 });
   api.stackHealth.mockResolvedValue({ overall: "healthy", up: 10, degraded: 0, down: 0 });
   api.correlationTimeline.mockResolvedValue({ signals: [] });
+  api.listSaved.mockResolvedValue([]);
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 

@@ -18,6 +18,7 @@ import { AI_NAME } from "./brand";
 export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   DemoShowcase: () => import("./pages/DemoShowcase"),
   Overview: () => import("./pages/overview/OverviewPage"),
+  MyDashboards: () => import("./pages/overview/MyDashboards"),
   Devices: () => import("./pages/Devices"),
   DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
@@ -102,6 +103,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
 
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Overview = lazy(ROUTE_CHUNKS["Overview"] as () => Promise<{ default: React.ComponentType<any> }>);
+const MyDashboards = lazy(ROUTE_CHUNKS["MyDashboards"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Devices = lazy(ROUTE_CHUNKS["Devices"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DeviceMonitoring = lazy(ROUTE_CHUNKS["DeviceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
 const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -245,6 +247,9 @@ export const NAV: NavSection[] = [
       // into ONE default page. The id stays `operations` so saved landings and
       // links keep resolving; the old My Dashboard route aliases here.
       { id: "operations", label: "Overview", render: () => <Overview /> },
+      // The tenant's own dashboards: #/overview/dashboards[/new | /<id>]. Each
+      // dashboard has its own address (the third segment), read by the page.
+      { id: "dashboards", label: "My dashboards", render: () => <MyDashboards /> },
     ],
   },
   // ── Operations — what is happening right now ────────────────────────────────

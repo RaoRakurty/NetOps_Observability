@@ -13,6 +13,7 @@ Boards and reports live under **Analytics**, alongside the operational landing v
 |---|---|---|
 | [Home, the Command Center](/dashboards-reports/command-center) | **Overview → Home** | The triage queue: correlated incidents with RCA state, owner, ticket state and a recommended next action. |
 | [Overview](/dashboards-reports/operations-overview) | **Overview → Overview** | The one default screen: what needs attention, open problems, what is broken now, health by site, what changed and whether data is arriving. |
+| [My dashboards](/dashboards-reports/my-dashboards) | **Overview → My dashboards** | Your tenant's own views, from a copy of the default, a template, or empty. |
 | [Built-in dashboards](/dashboards-reports/built-in-dashboards) | **Analytics → Dashboards → Dashboard List** | The directory of built-in boards, plus the dashboards you compose yourself. |
 | [Schedule a report](/dashboards-reports/reports) | **Analytics → Reports** | Build, schedule, preview and deliver a report. |
 

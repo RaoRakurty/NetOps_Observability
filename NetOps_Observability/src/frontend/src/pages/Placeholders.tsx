@@ -5,7 +5,6 @@
 // the IA's "coming soon" stub pages; every stub has graduated to a real page,
 // so only the directory remains. New IA slots get their own page files.)
 import Icon from "../components/Icon";
-import SavedDashboards from "./SavedDashboards";
 
 // ── Dashboards ────────────────────────────────────────────────────────────
 // Dashboard List (build-order #10) — a curated DIRECTORY of the live boards.
@@ -73,7 +72,13 @@ export function DashboardList() {
           </div>
         ))}
       </div>
-      <SavedDashboards />
+      {/* The builder moved to Overview → My dashboards (2026-11-22): every
+          dashboard there has its own address and can start from the default. */}
+      <a className="card dash-card" href="#/overview/dashboards" data-testid="my-dashboards-link">
+        <Icon name="overview" size={14} />
+        <strong className="dash-card-label">My dashboards — build and open your own views</strong>
+        <span className="dash-card-go" aria-hidden>→</span>
+      </a>
     </div>
   );
 }

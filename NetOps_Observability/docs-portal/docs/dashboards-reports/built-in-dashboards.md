@@ -7,7 +7,7 @@ sidebar_position: 2
 
 # Built-in dashboards
 
-**Analytics → Dashboards → Dashboard List** is the directory of built-in boards, grouped as Network monitoring, Traffic and paths, and Health and operations. Below the directory sits **Your dashboards**, the composer. Boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
+**Analytics → Dashboards → Dashboard List** is the directory of built-in boards, grouped as Network monitoring, Traffic and paths, and Health and operations. Your own dashboards live under **Overview → My dashboards**; see [Build your own dashboards](/dashboards-reports/my-dashboards). Boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
 
 ## Network monitoring
 
@@ -76,21 +76,17 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 
 ## Dashboards you compose yourself
 
-**Your dashboards** sits below the directory. A dashboard is a named, ordered list of panel cells rendered through the same registry the curated boards use, and it is persisted server-side as a saved object of type `dashboard`, scoped to your tenant.
+Your own dashboards live under **Overview → My dashboards**: start from a copy of the default Overview, from Network telemetry, or empty, and each dashboard gets its own address. The steps are in [Build your own dashboards](/dashboards-reports/my-dashboards).
 
-1. Select **+ New dashboard**.
-2. Select **+ Add panel** and pick from the categorised registry. Each entry shows its default width.
-3. Set each panel's width from the span control, reorder with the move controls, and remove with the remove control.
-4. Name the dashboard and select **Save**.
-
-The layout model is a 12-column grid, and a span is the only layout unit. The five valid spans are 3, 4, 6, 8 and 12 columns, and a board holds at most 40 cells. Reordering and resizing cover composition without a drag-layout dependency.
+A dashboard is a named, ordered list of panel cells rendered through the same registry the curated boards use, and it is persisted server-side as a saved object of type `dashboard`, scoped to your tenant. The layout model is a 12-column grid, and a span is the only layout unit. The five valid spans are 3, 4, 6, 8 and 12 columns, and a board holds at most 40 cells.
 
 ### The panel registry
 
-29 panels in nine categories:
+41 panels in ten categories:
 
 | Category | Panels |
 |---|---|
+| Problems and RCA | What needs attention, Overview KPIs, Top active issues, Where the fault is, Impact, RCA coverage, Top health contributors, Telemetry coverage, Health by site, What changed, Capacity outlook, Hot paths |
 | Health and KPIs | KPIs, Site availability, Stack performance |
 | Resources | CPU, Memory, Storage and Bandwidth utilization gauges, plus CPU, memory, storage and temperature saturation trends |
 | Interfaces | Interface utilization, errors and discards, each top-N |
