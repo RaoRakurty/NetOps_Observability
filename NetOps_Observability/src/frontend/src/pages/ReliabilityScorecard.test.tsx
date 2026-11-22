@@ -169,7 +169,9 @@ describe("NOC Recovery Scorecard", () => {
   it("the header states the page and asks Iris for the readiness recipe", async () => {
     render(<ReliabilityScorecard />);
     expect(await screen.findByText("Where incident time is spent.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Ask Iris about Recovery Readiness" })).toBeTruthy();
+    // The Ask Iris button renders with the readiness block, which can land after
+    // the header under load: await it rather than reading it synchronously.
+    expect(await screen.findByRole("button", { name: "Ask Iris about Recovery Readiness" })).toBeTruthy();
     expect(screen.queryByText(/deterministic score from repeat rate/)).toBeNull();
   });
 
