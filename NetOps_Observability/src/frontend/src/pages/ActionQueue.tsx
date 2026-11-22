@@ -16,9 +16,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, CorrObject } from "../services/api";
 import DataTable from "../components/DataTable";
 import {
-  type ActionItem, type CcFilters,
-  buildItem, isActionableCorr, bySeverityThenAge, filterItems,
+  type ActionItem, type CcFilters, type ProblemsTab, type TicketLinks,
+  buildItem, bySeverityThenAge, filterItems, problemsForTab,
+  NO_TICKET_LINKS, indexTicketLinks, QUEUE_PAGE, truncationNote,
 } from "./commandCenter.model";
+import { Segmented } from "../components/ui";
 import { FilterBar, queueColumns, ExpandPanel } from "./CommandCenter";
 import AskIris from "../components/AskIris";
 import WirelessRemediation from "./WirelessRemediation";
@@ -29,21 +31,36 @@ export default function ActionQueue() {
   const [open, setOpen] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [filters, setFilters] = useState<CcFilters>({});
+  const [tab, setTab] = useState<ProblemsTab>("needs");
+  const [links, setLinks] = useState<TicketLinks>(NO_TICKET_LINKS);
+  const [more, setMore] = useState(false);
 
-  // Same source + actionability filter as the Command Center's embedded queue.
-  // (The ITSM incident list is NOT fetched here — it only feeds the Command
-  // Center's ticketing-gap KPIs, which stay on that page.)
+  // Same source as the Command Center's embedded queue; "Needs action" applies
+  // the same actionability rule, "All open" also shows the single-signal groups
+  // still gathering evidence. Ticket state comes from the case's own links.
   const load = useCallback(async () => {
     try {
-      const cs = await api.correlations(200, 2592000, "open");
-      setCorr((cs?.data ?? []).filter(isActionableCorr));
+      const [cs, tl] = await Promise.all([
+        api.correlations(QUEUE_PAGE, 2592000, "open"),
+        // Started inside a promise: a failed or missing links read degrades the
+        // Ticket column to what it can honestly say, never the whole queue.
+        Promise.resolve().then(() => api.ticketLinks(2000)).then((r) => indexTicketLinks(r?.links, r?.complete === true)).catch(() => NO_TICKET_LINKS),
+      ]);
+      setCorr(cs?.data ?? []);
+      setMore(!!cs?.next_cursor);
+      setLinks(tl);
       setErr(null);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoaded(true); }
   }, []);
   useEffect(() => { load(); const id = setInterval(load, 30_000); return () => clearInterval(id); }, [load]);
 
-  const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
+  const items = useMemo(
+    () => problemsForTab(corr, tab).map((c) => buildItem(c, Date.now(), links)).sort(bySeverityThenAge),
+    [corr, tab, links],
+  );
+  const needsCount = useMemo(() => problemsForTab(corr, "needs").length, [corr]);
+  const allCount = useMemo(() => problemsForTab(corr, "all").length, [corr]);
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
   const columns = useMemo(() => queueColumns(open), [open]);
   const queueHeight = useMemo(
@@ -60,6 +77,20 @@ export default function ActionQueue() {
           <span className="cc-panel-meta"><a href="#/overview/home">KPIs in Command Center →</a></span>
         </div>
         {err && <p className="cc-err">{err}</p>}
+        {loaded && (
+          <div className="cc-tabs">
+            <Segmented<ProblemsTab>
+              value={tab}
+              ariaLabel="Which problems"
+              options={[
+                { value: "needs", label: `Needs action (${needsCount})` },
+                { value: "all", label: `All open (${allCount})` },
+              ]}
+              onChange={(t) => { setTab(t); setOpen(null); }}
+            />
+          </div>
+        )}
+        {loaded && more && <p className="cc-trunc" role="status" data-testid="queue-truncated">{truncationNote(corr.length, more)}</p>}
         {loaded && items.length > 0 && (
           <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
         )}

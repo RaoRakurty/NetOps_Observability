@@ -7309,7 +7309,11 @@ export const api = {
     request<CorrelationTickets>(`/api/correlations/${encodeURIComponent(id)}/tickets`),
   // All of the caller-tenant's ticket links (#103 UX-1) — the RCA candidate
   // list joins these by correlation id for the "Notified via" column.
-  ticketLinks: () => request<{ links: TicketLinkRow[] }>(`/api/tickets/links`),
+  // Paged on the server (default 500, max 2000). `complete` says outright whether
+  // the answer is every link: a miss in a partial answer is "not in this page".
+  ticketLinks: (limit?: number) =>
+    request<{ links: TicketLinkRow[]; total?: number; complete?: boolean; has_more?: boolean }>(
+      limit ? `/api/tickets/links?limit=${limit}` : `/api/tickets/links`),
   // ITSM delivery observability (#78 P3). The outbox is what is still on its
   // way to the ticketing system — pending / retrying / failed / dead_letter —
   // with the provider's own error text on the row. Both reads are paged and

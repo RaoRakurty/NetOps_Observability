@@ -11,14 +11,53 @@
 //   - internal-stack noise is excluded from the customer-facing queue (#76);
 //   - a ticket is only "needed" once RCA is Confirmed (no premature ITSM churn).
 
-import type { CorrObject } from "../services/api";
+import type { CorrObject, TicketLinkRow } from "../services/api";
 import { ownerLabel, isInternalStackAffected } from "../components/rca/labels";
 
 export type RcaState = "New" | "Correlated" | "RCA running" | "Suspected" | "Confirmed" | "Blocked" | "Resolved";
 export type EvidenceState = "Complete" | "Partial" | "Single-stream";
 export type FaultDomain = "LAN" | "SD-WAN" | "Data Center" | "ISP / Carrier" | "Cloud Provider" | "Application" | "Security" | "Unknown";
 export type OwnerState = "Assigned" | "Recommended" | "Missing" | "Escalated";
-export type TicketState = "Not eligible" | "Eligible" | "Ticket needed" | "Ticketed" | "Sync failed";
+export type TicketState =
+  | "Not eligible" | "Eligible" | "Ticket needed" | "Ticket pending" | "Ticketed" | "Sync failed"
+  // The ticket links could not be read in full, so "no ticket" cannot be said:
+  // a miss in a partial read is "not in this page", never "not filed" (F-67).
+  | "Unknown";
+
+/** The tenant's ticket links, joined by correlation id. `ok` says the read
+ *  succeeded; `complete` says it returned every link (the endpoint pages). */
+export type TicketLinks = { byCorr: ReadonlyMap<string, readonly TicketLinkRow[]>; ok: boolean; complete: boolean };
+
+export const NO_TICKET_LINKS: TicketLinks = { byCorr: new Map(), ok: false, complete: false };
+
+/** The queue reads at most this many open problems per refresh. */
+export const QUEUE_PAGE = 200;
+
+/** "Showing the 200 newest open problems — more exist" when the read stopped at
+ *  the page size, so a truncated queue never passes for the whole picture. */
+export function truncationNote(read: number, more: boolean): string {
+  return more ? `Showing the ${read} newest open problems — more exist. Open Investigate → RCA for all of them.` : "";
+}
+
+/** Problems tab: "needs" is the actionable queue; "all" adds the single-signal
+ *  groups still gathering evidence (internal-stack objects stay out of both). */
+export type ProblemsTab = "needs" | "all";
+
+export function problemsForTab(all: readonly CorrObject[], tab: ProblemsTab): CorrObject[] {
+  return tab === "needs" ? all.filter(isActionableCorr) : all.filter((c) => !isInternalStackAffected(c.affected));
+}
+
+/** Indexes a /api/tickets/links answer by correlation id. */
+export function indexTicketLinks(rows: readonly TicketLinkRow[] | undefined, complete: boolean): TicketLinks {
+  const byCorr = new Map<string, TicketLinkRow[]>();
+  for (const r of rows ?? []) {
+    if (!r?.corr_object_id) continue;
+    const list = byCorr.get(r.corr_object_id);
+    if (list) list.push(r);
+    else byCorr.set(r.corr_object_id, [r]);
+  }
+  return { byCorr, ok: true, complete };
+}
 export type Sev = "crit" | "major" | "warn" | "ok";
 
 export interface ActionItem {
@@ -107,6 +146,27 @@ export function deriveTicket(rca: RcaState): TicketState {
   return "Not eligible"; // suspected/correlated: hold until RCA confirms impact
 }
 
+/**
+ * The ticket state from the case's REAL ticket links (any system: ServiceNow,
+ * Jira, PagerDuty…), falling back to the RCA-derived eligibility only when the
+ * links were read in full and none names this case. Before this the column
+ * could never say "Ticketed": it read the RCA state alone (owner review,
+ * 2026-11-22).
+ */
+export function ticketFromLinks(rca: RcaState, rows: readonly TicketLinkRow[] | undefined, links: TicketLinks): TicketState {
+  if (rows && rows.length) {
+    const states = rows.map((r) => (r.state || "").toLowerCase());
+    if (states.some((s) => s === "open" || s === "updated" || s === "resolved")) return "Ticketed";
+    if (states.some((s) => s === "pending")) return "Ticket pending";
+    if (states.some((s) => s === "failed")) return "Sync failed";
+  }
+  const derived = deriveTicket(rca);
+  if (links.ok && links.complete) return derived;
+  // Not read, or read in part: never claim "Ticket needed" (it invites a
+  // duplicate ticket); the eligibility rules that need no read still hold.
+  return derived === "Ticket needed" ? "Unknown" : derived;
+}
+
 export function deriveSev(c: CorrObject, rca: RcaState): Sev {
   if (rca === "Confirmed") return "crit";
   if (rca === "Suspected" || rca === "Blocked") return "major";
@@ -116,14 +176,20 @@ export function deriveSev(c: CorrObject, rca: RcaState): Sev {
 // Next action — enterprise NOC language; what the operator should do NOW.
 export function deriveNextAction(it: Omit<ActionItem, "nextAction">): string {
   if (it.rca === "Confirmed" && it.owner === "Missing") return "Assign owner · escalate";
-  if (it.rca === "Confirmed") return it.ticket === "Ticketed" ? "Track resolution" : "Open ticket · escalate";
+  if (it.rca === "Confirmed") {
+    if (it.ticket === "Ticketed") return "Track resolution";
+    if (it.ticket === "Ticket pending") return "Track ticket creation";
+    if (it.ticket === "Sync failed") return "Fix ticket sync · escalate";
+    if (it.ticket === "Unknown") return "Check for a ticket · escalate";
+    return "Open ticket · escalate";
+  }
   if (it.rca === "Blocked") return "Add evidence · unblock RCA";
   if (it.owner === "Missing") return "Assign owner · open RCA";
   if (it.rca === "Suspected") return "Confirm impact · hold ticket";
   return "Review correlation";
 }
 
-export function buildItem(c: CorrObject, now: number = Date.now()): ActionItem {
+export function buildItem(c: CorrObject, now: number = Date.now(), links: TicketLinks | null = null): ActionItem {
   const affected = parseAffected(c.affected);
   const missing = parseMissing(c.evidence_missing);
   const rca = deriveRca(c, missing);
@@ -134,7 +200,7 @@ export function buildItem(c: CorrObject, now: number = Date.now()): ActionItem {
     evidence: deriveEvidence(c, missing),
     fault: deriveFault(c, affected),
     owner, ownerName,
-    ticket: deriveTicket(rca),
+    ticket: links ? ticketFromLinks(rca, links.byCorr.get(c.correlation_id), links) : deriveTicket(rca),
     ageMs: now - Date.parse(startedAt(c)),
   };
   return { ...base, nextAction: deriveNextAction(base) };
@@ -177,7 +243,7 @@ export const ownerRank = (o: OwnerState): number => OWNER_RANK[o] ?? 9;
 
 // Most ITSM-urgent first.
 const TICKET_RANK: Record<TicketState, number> = {
-  "Sync failed": 0, "Ticket needed": 1, Eligible: 2, Ticketed: 3, "Not eligible": 4,
+  "Sync failed": 0, "Ticket needed": 1, Unknown: 2, Eligible: 3, "Ticket pending": 4, Ticketed: 5, "Not eligible": 6,
 };
 export const ticketRank = (t: TicketState): number => TICKET_RANK[t] ?? 9;
 
