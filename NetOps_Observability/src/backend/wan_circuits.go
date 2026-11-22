@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,9 +16,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/ifbridge"
 	"netops/backend/internal/metricval"
 	"netops/backend/models"
 	"netops/backend/wan"
@@ -147,9 +150,31 @@ func (s *server) wanPolicyFor(claims jwtClaims) WanMeasurementPolicy {
 
 // ---- projector: interface-IP table × neighbors × policy → endpoints + targets ----
 
-// wanProject builds the WAN endpoint set (every WAN interface + every interface
-// directly connected to a WAN device) with each interface's derived measurement
-// target, plus the 1:1 interface→target links.
+// wanProjection is one principal's WAN view. Endpoints are the CONFIRMED WAN
+// interfaces (measured, each with a derived target, each a circuit);
+// Candidates are the POSSIBLE ones (listed apart, never probed, until an
+// operator marks them). Both carry why (wan_basis / wan_reason / wan_evidence).
+type wanProjection struct {
+	Endpoints  []WanEndpoint
+	Candidates []WanEndpoint
+	Circuits   []WanCircuit
+}
+
+// wanProject is the confirmed half of wanProjectAll: the endpoints and circuits
+// every measuring and listing consumer reads (the echo publisher, Iris).
+func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEndpoint, []WanCircuit, error) {
+	p, err := s.wanProjectAll(ctx, vis)
+	return p.Endpoints, p.Circuits, err
+}
+
+// wanProjectAll builds the WAN view per INTERFACE from evidence (wan.Classify):
+// the controller's VPN, port role and interface kind (interface bridge), the
+// SD-WAN overlay's transport locators, a next-hop declared for exactly that
+// port, and the operator's marks. Until 2026-11-22 it took every addressed port
+// of any device whose NAME matched the WAN pattern, so an SD-WAN edge listed its
+// LAN, loopback and system ports as WAN circuits (owner report). The name
+// pattern now only makes a device a candidate, which widens what is offered as
+// possible and never confirms a port.
 //
 // vis is the RESOLVED device-registry visibility for the caller (tenancy.go): the
 // ordinary tenant rule AND the per-tenant operator-visibility restriction. It is
@@ -163,21 +188,18 @@ func (s *server) wanPolicyFor(claims jwtClaims) WanMeasurementPolicy {
 // does not resolve through `nameToID`. So a device removed here cannot come back
 // as a peer's NAME, its interface IP, or a "Directly-connected peer <name>"
 // target label — the interface facing it falls through to the reachability
-// anchor instead, which names nothing. That is the half a device filter alone
-// does not obviously buy you, and TestWanCircuitsHonour… asserts it on the wire.
-// It returns a THIRD value: whether the directly-connected-peer evidence was
-// actually read. The whole target-derivation ranking hangs off it — with no
-// neighbour index every interface falls through to the reachability anchor, so
-// an unread channel silently re-points the measurement from "the peer across
-// this link" to "1.1.1.1". That failure is SAFE (it fails closed and discloses
-// nothing) and completely INVISIBLE, which is precisely tracker 290: the row
-// still says "Reachability anchor" and nothing says the peer was never looked
-// for. Callers surface it; they do not drop it.
-func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEndpoint, []WanCircuit, error) {
+// anchor instead, which names nothing. The evidence bundle is read for every
+// device, but only visible devices are ever classified, so another tenant's
+// controller rows or overlay facts never decide a caller's interface.
+//
+// The error is whether the directly-connected-peer evidence was actually read
+// (tracker 290): with no neighbour index every interface falls through to the
+// reachability anchor, which is safe and invisible, so callers surface it.
+func (s *server) wanProjectAll(ctx context.Context, vis deviceVisibility) (wanProjection, error) {
 	if vis.deny {
 		// The operator scoped INTO a restricted tenant: no devices, and no read of
 		// that tenant's measurement policy either.
-		return nil, nil, nil
+		return wanProjection{}, nil
 	}
 	tenant, cross := vis.tenant, vis.cross
 	pol := s.wanPolicy.Get(tenant, cross)
@@ -186,38 +208,24 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 	// All devices visible to this principal, id→device and name→id.
 	visible := map[string]models.Device{}
 	nameToID := map[string]string{}
-	wanDev := map[string]bool{} // device id → is a WAN-pattern device
 	for _, d := range vis.filter(s.discovery.Devices()) {
 		if d.ID == "" {
 			continue
 		}
 		visible[d.ID] = d
 		nameToID[strings.ToLower(d.Name)] = d.ID
-		if pat.MatchString(d.Name) {
-			wanDev[d.ID] = true
-		}
 	}
-	if len(wanDev) == 0 {
-		return nil, nil, nil
+	if len(visible) == 0 {
+		return wanProjection{}, nil
 	}
 
-	fetchIfAddr := s.wanIfAddr
-	if fetchIfAddr == nil {
-		fetchIfAddr = fetchIfAddrMap
-	}
-	// device → ip → ifName. This registry is what makes an interface VISIBLE to the
-	// projection at all (`for ip, ifn := range ifaddr[devID]` below is the only
-	// source of in-scope interfaces on a WAN device), so an unread registry does
-	// not merely drop port labels here — it empties the WAN interface table and
-	// the circuit list derived from it. The projection still answers, because the
-	// alternative is refusing a WAN page whenever the SNMP share channel blips and
-	// because `wanProject` already carries the adjacency-evidence error its callers
-	// turn into a banner; what it must not do is answer "this tenant has no WAN
-	// interfaces" without anyone being able to find out that nothing was read
-	// (tracker 307, §10).
-	ifaddr, ifaddrErr := fetchIfAddr(ctx)
-	reportIfRegistryUnread("wan", "the interface table for this projection is EMPTY — no WAN interface or circuit can be derived, which is indistinguishable from a tenant that has none", ifaddrErr,
-		map[string]any{"tenant": tenant, "cross": cross, "wan_devices": len(wanDev)})
+	// The evidence bundle: the merged bridge (address → port, and each device's
+	// controller rows). An unread bridge empties the view, so it is reported
+	// rather than answered as "this tenant has no WAN interfaces" (tracker 307).
+	ev, evErr := s.wanEvidence(ctx)
+	reportIfRegistryUnread("wan", "the interface table for this projection is EMPTY — no WAN interface or circuit can be derived, which is indistinguishable from a tenant that has none", evErr,
+		map[string]any{"tenant": tenant, "cross": cross, "devices": len(visible)})
+	ifaddr := ev.Addr
 
 	// ifName → ip, per device (inverse of ifaddr) — for peer-IP resolution.
 	ipByDevIf := map[string]map[string]string{}
@@ -232,67 +240,101 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 	// Directly-connected neighbours, joined to the peer's interface IP.
 	neighbors, neighborsErr := s.wanNeighborIndex(ctx, visible, nameToID, ipByDevIf)
 
-	// Which (device, ifName) interfaces are IN SCOPE:
-	//   - every interface on a WAN device, PLUS
-	//   - (if enabled) every interface directly connected to a WAN device.
-	type ifRef struct{ dev, ifn, ip string }
-	inScope := map[string]ifRef{} // key = wan.IfKey(devID, ifName)
-	addIf := func(devID, ifn, ip string) {
-		if wan.IsMgmtInterface(ifn) {
-			return // management ports are never WAN transport
-		}
-		k := wan.IfKey(devID, ifn)
-		if _, ok := inScope[k]; !ok {
-			inScope[k] = ifRef{devID, ifn, ip}
-		}
+	// SD-WAN overlay facts: the transport locators each device lists.
+	var overlay map[string]collectors.OverlayDeviceFacts
+	if snap := s.sdwanOverlay.Load(); snap != nil {
+		overlay = snap.devFacts
 	}
-	for devID := range wanDev {
-		for ip, ifn := range ifaddr[devID] {
-			addIf(devID, ifn, ip)
-		}
+
+	// A candidate device: its name matches the pattern, or it is an SD-WAN edge.
+	candidate := map[string]bool{}
+	for id, d := range visible {
+		_, ov := overlay[id]
+		candidate[id] = pat.MatchString(d.Name) || ov || len(ev.NMS[id].Rows) > 0
 	}
+	// Ports directly connected to a candidate device (usually its LAN side).
+	linked := map[string]map[string]string{}
 	if pol.IncludeConnectedOn() {
 		for k, peer := range neighbors {
 			devID, ifn := wan.SplitIfKey(k)
-			if devID == "" {
+			if devID == "" || candidate[devID] {
 				continue
 			}
-			// Only pull in a NON-WAN device's interface when its peer is a WAN device.
-			if wanDev[devID] {
-				continue // already covered above
-			}
-			if id := nameToID[strings.ToLower(peer.Device)]; id != "" && wanDev[id] {
-				addIf(devID, ifn, ipByDevIf[devID][ifn])
+			if id := nameToID[strings.ToLower(peer.Device)]; id != "" && candidate[id] {
+				if linked[devID] == nil {
+					linked[devID] = map[string]string{}
+				}
+				linked[devID][ifn] = peer.Device
 			}
 		}
 	}
 
-	// Build endpoints with a derived target each.
-	var endpoints []WanEndpoint
-	for _, ref := range inScope {
-		d := visible[ref.dev]
+	var proj wanProjection
+	ids := make([]string, 0, len(visible))
+	for id := range visible {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		d := visible[id]
+		rows := ev.NMS[id].Rows
+		if len(ifaddr[id]) == 0 && len(rows) == 0 {
+			continue
+		}
+		in := wan.DeviceInputs{
+			DeviceID: id, Name: d.Name, Candidate: candidate[id],
+			AddrIf: ifaddr[id], NextHops: pol.NextHops, Linked: linked[id],
+		}
+		for _, r := range rows {
+			in.Rows = append(in.Rows, wan.IfRow{Name: r.IfName, VRF: r.VRF, Role: r.Role, Kind: r.Kind, Alias: r.Alias, Addrs: r.Addrs})
+		}
+		if f, ok := overlay[id]; ok {
+			for _, t := range f.TLOCs {
+				in.TLOCIfaces = append(in.TLOCIfaces, t.Interface)
+			}
+			in.TLOCAddrs = f.LocalTLOCAddrs
+		}
+		facts := wan.BuildFacts(in, canonIface)
+		addrOf := map[string]string{}
+		for _, f := range facts.Ifaces {
+			addrOf[f.Name] = preferIPv4(f.Addrs)
+		}
 		site := ""
-		if b, ok := s.deviceSites.Get(tenant, cross, ref.dev); ok {
+		if b, ok := s.deviceSites.Get(tenant, cross, id); ok {
 			site = b.Site
 		}
-		ep := WanEndpoint{
-			TenantID: deviceTenant(d), DeviceID: d.ID, Device: d.Name, Interface: ref.ifn,
-			Address: ref.ip, Measurable: ref.ip, Site: site,
-			ConnectedToWAN: !wanDev[ref.dev],
+		for _, v := range wan.Classify(facts) {
+			ip := addrOf[v.Interface]
+			if v.Confidence == "" || ip == "" {
+				continue // not WAN, or nothing to measure from
+			}
+			ep := WanEndpoint{
+				TenantID: deviceTenant(d), DeviceID: id, Device: d.Name, Interface: v.Interface,
+				Address: ip, Measurable: ip, Site: site,
+				ConnectedToWAN: v.Basis == wan.BasisLinked,
+				WanConfidence:  v.Confidence, WanBasis: v.Basis, WanReason: v.Reason, WanEvidence: v.Evidence,
+			}
+			if v.Confidence != wan.Confirmed {
+				proj.Candidates = append(proj.Candidates, ep)
+				continue
+			}
+			ep.Target, ep.TargetKind, ep.TargetLabel = wan.DeriveTarget(id, v.Interface, neighbors, pol)
+			proj.Endpoints = append(proj.Endpoints, ep)
 		}
-		ep.Target, ep.TargetKind, ep.TargetLabel = wan.DeriveTarget(ref.dev, ref.ifn, neighbors, pol)
-		endpoints = append(endpoints, ep)
 	}
-	sort.Slice(endpoints, func(a, b int) bool {
-		if endpoints[a].Device != endpoints[b].Device {
-			return endpoints[a].Device < endpoints[b].Device
-		}
-		return endpoints[a].Interface < endpoints[b].Interface
-	})
+	byName := func(eps []WanEndpoint) {
+		sort.Slice(eps, func(a, b int) bool {
+			if eps[a].Device != eps[b].Device {
+				return eps[a].Device < eps[b].Device
+			}
+			return eps[a].Interface < eps[b].Interface
+		})
+	}
+	byName(proj.Endpoints)
+	byName(proj.Candidates)
 
-	// 1:1 interface → target links.
-	var circuits []WanCircuit
-	for _, ep := range endpoints {
+	// 1:1 interface → target links, confirmed interfaces only.
+	for _, ep := range proj.Endpoints {
 		if ep.Target == "" {
 			continue
 		}
@@ -302,7 +344,7 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 		switch ep.TargetKind {
 		case WanTargetDirectPeer:
 			// Fill the peer device/if for display.
-			if peer, ok := neighbors[wan.IfKey(wan.DeviceIDForName(ep.Device, nameToID), ep.Interface)]; ok {
+			if peer, ok := neighbors[wan.IfKey(ep.DeviceID, ep.Interface)]; ok {
 				remote.Device, remote.Interface = peer.Device, peer.Iface
 			}
 		case WanTargetAnchor:
@@ -310,12 +352,67 @@ func (s *server) wanProject(ctx context.Context, vis deviceVisibility) ([]WanEnd
 		case WanTargetNextHop:
 			remote.Device = "Next-hop"
 		}
-		circuits = append(circuits, WanCircuit{
+		proj.Circuits = append(proj.Circuits, WanCircuit{
 			TenantID: ep.TenantID, ID: wan.CircuitID(ep, remote), Local: ep, Remote: remote,
 			Kind: ep.TargetKind, Source: "registry", Enabled: true,
 		})
 	}
-	return endpoints, circuits, neighborsErr
+	return proj, neighborsErr
+}
+
+// preferIPv4 picks the address an interface is measured from: its first IPv4
+// address, else its first address ("" when it has none).
+func preferIPv4(addrs []string) string {
+	for _, a := range addrs {
+		if ip := net.ParseIP(a); ip != nil && ip.To4() != nil {
+			return a
+		}
+	}
+	if len(addrs) > 0 {
+		return addrs[0]
+	}
+	return ""
+}
+
+// wanEvidenceTTL is how long the default evidence read is reused.
+const wanEvidenceTTL = 30 * time.Second
+
+// wanEvidenceCache memoizes the merged-bridge read the WAN projection uses. The
+// bundle is the same for every principal — visibility is applied after, per
+// request — so caching it never mixes one caller's output into another's. A
+// failed read is never cached.
+type wanEvidenceCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	val ifbridge.Merged
+}
+
+func (c *wanEvidenceCache) get(ctx context.Context, now time.Time, fetch func(context.Context) (ifbridge.Merged, error)) (ifbridge.Merged, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && now.Sub(c.at) >= 0 && now.Sub(c.at) < wanEvidenceTTL {
+		return c.val, nil
+	}
+	m, err := fetch(ctx)
+	if err != nil {
+		return m, err
+	}
+	c.val, c.at = m, now
+	return m, nil
+}
+
+// wanEvidence is the projection's evidence bundle: the wanIfEvidence seam, else
+// the older wanIfAddr seam (an address map, no controller rows), else the cached
+// merged bridge. Callers must not mutate what it returns.
+func (s *server) wanEvidence(ctx context.Context) (ifbridge.Merged, error) {
+	if s.wanIfEvidence != nil {
+		return s.wanIfEvidence(ctx)
+	}
+	if s.wanIfAddr != nil {
+		m, err := s.wanIfAddr(ctx)
+		return ifbridge.Merged{Addr: m}, err
+	}
+	return s.wanEvidenceCache.get(ctx, time.Now(), fetchIfBridge)
 }
 
 // wanNeighborIndex fetches the merged topology links via the DI seam and
@@ -434,6 +531,13 @@ type WanInterfaceRow struct {
 	Address        string `json:"address"`
 	Site           string `json:"site,omitempty"`
 	ConnectedToWAN bool   `json:"connected_to_wan,omitempty"` // Spine-style: connected to a WAN device, not on one
+
+	// Why this interface is WAN (wan.Classify). The table lists confirmed rows;
+	// possible ones travel in the response's `candidates`.
+	WanConfidence string         `json:"wan_confidence,omitempty"`
+	WanBasis      wan.Basis      `json:"wan_basis,omitempty"`
+	WanReason     string         `json:"wan_reason,omitempty"`
+	WanEvidence   []wan.Evidence `json:"wan_evidence,omitempty"`
 
 	// live interface load/state (VictoriaMetrics device_if_*)
 	InBps   float64 `json:"in_bps"`
@@ -570,9 +674,25 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 // speed and oper-state whenever a device name collides across tenants — the
 // defect topology_view.go:86-91 documents.
 func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f []string) ([]WanInterfaceRow, error) {
-	endpoints, circuits, projErr := s.wanProject(ctx, vis)
+	rows, _, err := s.wanInterfaceView(ctx, vis, f)
+	return rows, err
+}
+
+// wanSeriesKey is the join key between a device_if_* series and a WAN row: the
+// series' `device` label is the INVENTORY ID, and its ifName may be spelled
+// either way ("Gi1" from SNMP, "GigabitEthernet1" from the controller). Until
+// 2026-11-22 rows looked the series up by device NAME, so on any inventory whose
+// ids differ from their names (the lab: "cedge-40-fdf7b64f") utilisation,
+// oper-state and the sparkline never joined.
+func wanSeriesKey(device, ifn string) string { return wan.IfKey(device, canonIface(ifn)) }
+
+// wanInterfaceView is the table rows (confirmed WAN interfaces) and the
+// possible ones the page lists apart.
+func (s *server) wanInterfaceView(ctx context.Context, vis deviceVisibility, f []string) ([]WanInterfaceRow, []WanEndpoint, error) {
+	proj, projErr := s.wanProjectAll(ctx, vis)
+	endpoints, circuits := proj.Endpoints, proj.Circuits
 	if len(endpoints) == 0 {
-		return nil, projErr
+		return nil, proj.Candidates, projErr
 	}
 
 	// local (device,if) → target link, so each interface finds its target.
@@ -612,7 +732,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 			if dev == "" || ifn == "" {
 				continue
 			}
-			set(getU(wan.IfKey(dev, ifn)), sm.Value)
+			set(getU(wanSeriesKey(dev, ifn)), sm.Value)
 		}
 	}
 	foldUtil(`rate(device_if_in_octets[2m])*8`, func(u *util, v float64) { u.in, u.hasIn = v, true })
@@ -621,7 +741,19 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 	foldUtil(`device_if_oper_status`, func(u *util, v float64) { u.oper, u.hasOper = v, true })
 
 	// Live throughput history for the in-row moving sparkline (last 10m @ 30s step).
-	spark := s.wanSparkSeries(ctx, time.Now().Unix(), 600, 30, f)
+	spark := map[string][]float64{}
+	for k, v := range s.wanSparkSeries(ctx, time.Now().Unix(), 600, 30, f) {
+		dev, ifn := wan.SplitIfKey(k)
+		spark[wanSeriesKey(dev, ifn)] = v
+	}
+	// A series is labelled with the inventory id; a row knows both id and name.
+	seriesKeys := func(e WanEndpoint) []string {
+		keys := []string{}
+		if e.DeviceID != "" {
+			keys = append(keys, wanSeriesKey(e.DeviceID, e.Interface))
+		}
+		return append(keys, wanSeriesKey(e.Device, e.Interface))
+	}
 
 	rows := make([]WanInterfaceRow, 0, len(endpoints))
 	for _, e := range endpoints {
@@ -629,8 +761,19 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 			Device: e.Device, Interface: e.Interface, Address: e.Address,
 			Site: e.Site, ConnectedToWAN: e.ConnectedToWAN,
 			Target: e.Target, TargetKind: e.TargetKind, TargetLabel: e.TargetLabel,
+			WanConfidence: e.WanConfidence, WanBasis: e.WanBasis, WanReason: e.WanReason, WanEvidence: e.WanEvidence,
 		}
-		if u, ok := uMap[wan.IfKey(e.Device, e.Interface)]; ok {
+		var u *util
+		var sp []float64
+		for _, k := range seriesKeys(e) {
+			if u == nil {
+				u = uMap[k]
+			}
+			if sp == nil {
+				sp = spark[k]
+			}
+		}
+		if u != nil {
 			row.InBps, row.OutBps = u.in, u.out
 			row.HasUtil = u.hasIn || u.hasOut
 			if sp := u.speedMbps * 1e6; sp > 0 {
@@ -644,7 +787,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 				row.OperUp, row.HasOper = u.oper == 1, true
 			}
 		}
-		if sp := spark[wan.IfKey(e.Device, e.Interface)]; len(sp) > 0 {
+		if len(sp) > 0 {
 			row.Spark = sp
 		}
 		if c, ok := linkByLocal[wan.IfKey(e.Device, e.Interface)]; ok {
@@ -674,7 +817,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, vis deviceVisibility, f [
 		}
 		return rows[i].Interface < rows[j].Interface
 	})
-	return rows, projErr
+	return rows, proj.Candidates, projErr
 }
 
 // ---- HTTP handlers ----
@@ -709,8 +852,16 @@ func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
 	// than it saves. What the table cannot say for itself is that every "Reachability
 	// anchor" in the Target column may be a fallback the projection took because
 	// the peer was never looked for, so the payload says it instead.
-	rows, err := s.wanInterfaceRows(r.Context(), s.deviceVisibilityFor(claims), s.metricsScopeFiltersFor(claims))
-	writeJSON(w, http.StatusOK, map[string]any{"interfaces": rows, "degraded": wanDegradedNotes(err)})
+	rows, candidates, err := s.wanInterfaceView(r.Context(), s.deviceVisibilityFor(claims), s.metricsScopeFiltersFor(claims))
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": rows, "candidates": nonNilEndpoints(candidates), "degraded": wanDegradedNotes(err)})
+}
+
+// nonNilEndpoints keeps an empty list on the wire as [] rather than null.
+func nonNilEndpoints(eps []WanEndpoint) []WanEndpoint {
+	if eps == nil {
+		return []WanEndpoint{}
+	}
+	return eps
 }
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.
@@ -719,8 +870,8 @@ func (s *server) handleWanEndpoints(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	eps, _, err := s.wanProject(r.Context(), s.deviceVisibilityFor(claims))
-	writeJSON(w, http.StatusOK, map[string]any{"endpoints": eps, "degraded": wanDegradedNotes(err)})
+	proj, err := s.wanProjectAll(r.Context(), s.deviceVisibilityFor(claims))
+	writeJSON(w, http.StatusOK, map[string]any{"endpoints": proj.Endpoints, "candidates": nonNilEndpoints(proj.Candidates), "degraded": wanDegradedNotes(err)})
 }
 
 // handleWanCircuits: GET /api/wan/circuits — the derived interface→target links.

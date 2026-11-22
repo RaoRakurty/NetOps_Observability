@@ -1608,7 +1608,17 @@ export type Finding = {
 // and the SLA resolved through the 5-tier source ranking. Has* flags distinguish a
 // real 0 from "no data".
 export type WanTargetKind = "direct_peer" | "next_hop" | "anchor" | "";
-export type WanInterfaceRow = {
+/** Why an interface counts as WAN (server-authored). "confirmed" interfaces are
+ *  measured; "possible" ones are listed apart and never measured until marked. */
+export type WanConfidence = "confirmed" | "possible";
+export type WanEvidence = { source: string; detail: string };
+export type WanWhy = {
+  wan_confidence?: WanConfidence;
+  wan_basis?: string;
+  wan_reason?: string;
+  wan_evidence?: WanEvidence[];
+};
+export type WanInterfaceRow = WanWhy & {
   device: string;
   interface: string;
   address: string;
@@ -5961,7 +5971,7 @@ export interface VrfInterfacesResponse {
  *  (GET /api/wan/endpoints). `target_kind` is the PROVENANCE of the measurement
  *  target: a directly-connected peer, an operator-declared ISP next-hop, or a
  *  public reachability anchor. */
-export type WanEndpoint = {
+export type WanEndpoint = WanWhy & {
   device: string;
   interface: string;
   address: string;
@@ -6972,13 +6982,14 @@ export const api = {
   // `degraded` carries the evidence the SERVER could not read while deriving the
   // table — today: the adjacency evidence, without which every interface falls
   // back to a reachability anchor (tracker 290). Absent/empty on a healthy read.
-  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[]; degraded?: string[] }>(`/api/wan/interfaces`),
+  // `interfaces` are the confirmed WAN interfaces; `candidates` the possible ones.
+  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[]; candidates?: WanEndpoint[]; degraded?: string[] }>(`/api/wan/interfaces`),
 
   // ---- WAN projection + measurement policy (set B) --------------------------
   // Endpoints and circuits are DERIVED on read (interface-IP table × neighbours
   // × policy); only the policy is persisted, so a PUT here changes what every
   // WAN surface measures next.
-  wanEndpoints: () => request<{ endpoints: WanEndpoint[] }>(`/api/wan/endpoints`),
+  wanEndpoints: () => request<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>(`/api/wan/endpoints`),
   wanCircuits: () => request<{ circuits: WanCircuit[] }>(`/api/wan/circuits`),
   wanPolicy: () => request<WanMeasurementPolicy>(`/api/wan/policy`),
   setWanPolicy: (policy: WanMeasurementPolicy) =>
@@ -7309,7 +7320,11 @@ export const api = {
     request<CorrelationTickets>(`/api/correlations/${encodeURIComponent(id)}/tickets`),
   // All of the caller-tenant's ticket links (#103 UX-1) — the RCA candidate
   // list joins these by correlation id for the "Notified via" column.
-  ticketLinks: () => request<{ links: TicketLinkRow[] }>(`/api/tickets/links`),
+  // Paged on the server (default 500, max 2000). `complete` says outright whether
+  // the answer is every link: a miss in a partial answer is "not in this page".
+  ticketLinks: (limit?: number) =>
+    request<{ links: TicketLinkRow[]; total?: number; complete?: boolean; has_more?: boolean }>(
+      limit ? `/api/tickets/links?limit=${limit}` : `/api/tickets/links`),
   // ITSM delivery observability (#78 P3). The outbox is what is still on its
   // way to the ticketing system — pending / retrying / failed / dead_letter —
   // with the provider's own error text on the row. Both reads are paged and

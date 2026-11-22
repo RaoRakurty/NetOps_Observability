@@ -7,12 +7,14 @@ sidebar_position: 7
 
 # Measure WAN paths
 
-**Investigate → Paths → WAN circuits** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, and the measurement policy that produces both.
+**Investigate → Paths → WAN circuits** puts one row on screen for every interface the platform has evidence is a WAN link, and says what the evidence is. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, the interfaces that might be WAN, and the measurement policy.
+
+An interface counts as WAN only on evidence about that interface: the SD-WAN controller reports it as a transport port, the device lists it as a transport locator, an SD-WAN tunnel runs over its address, an ISP next-hop is declared for it, or an operator marked it. A device's name never makes all of its ports WAN, so a branch router's LAN, loopback and management ports do not appear.
 
 ## Before you begin
 
 - Devices exporting `device_if_*` interface metrics. See [Verify monitoring](/onboard-devices/verify-monitoring).
-- WAN devices matched by the measurement policy. The default name pattern is `wan|edge|gw|dmz`.
+- Evidence for which interfaces are WAN: an SD-WAN controller integration (Infrastructure › NMS Integrations), SD-WAN devices answering SNMP, or an ISP next-hop declared per interface in the measurement policy.
 - At least one measurement source for the SLA columns. Utilization and status populate without one; latency, jitter, loss, QoE and availability do not.
 
 ## Steps
@@ -28,7 +30,8 @@ With no rows, peak utilization reads as a dash rather than as zero per cent.
 
 | Column | What it shows |
 |---|---|
-| **Router** and **Interface** | The device and its interface. An interface marked **linked** is not itself a WAN interface but is directly connected to a WAN device, so both ends of a lab WAN hop are measured. |
+| **Router** and **Interface** | The device and its interface. |
+| **Why WAN** | The evidence that makes it a WAN interface: **SD-WAN transport**, **Transport locator**, **Tunnel runs over it**, **Next-hop declared** or **Marked by an operator**. Hover for the full sentence. |
 | **Utilization**, **In**, **Out** | Live load as a bar plus a percentage, and the two throughput directions. All three read as a dash where no interface counters arrived. |
 | **Live** | An inline sparkline of recent throughput, redrawn each poll. |
 | **Measured to** | The derived target and how it was derived: **Peer** for a directly connected peer learned over LLDP, **Next-hop** for an ISP next hop, or **Anchor** for a public-DNS reachability anchor. |
@@ -64,30 +67,37 @@ and the measurement policy.
 device and interface, the far end, and how the target was derived. A row marked
 **held** is in the registry and is not being measured.
 
-**Endpoint registry** lists every interface the projection covers, its address,
-the address the far end measures to, its site, and its derived target. An
-interface marked **linked** is not on a WAN device. It is directly connected to
-one, so the platform measures it too.
+**Endpoint registry** lists every WAN interface, why it counts as WAN, its
+address, the address the far end measures to, its site, and its derived target.
 
-Both sections are empty until an interface has an address and either a neighbour
-on the wire, a declared ISP next-hop or a reachability anchor. The empty state
-says which of the three is missing.
+**Possible WAN — not confirmed** is collapsed under the registry and appears only
+when there is something in it. It lists interfaces with a hint but no proof: a
+description that reads like a WAN link, a public address on a router that looks
+like a WAN router, the port facing a WAN router (usually its LAN side), or the
+ports of a WAN-looking router where nothing is confirmed yet. These are not
+measured.
+
+Both derived sections are empty until an interface has an address and either a
+neighbour on the wire, a declared ISP next-hop or a reachability anchor. The empty
+state says which of the three is missing.
 
 ### Step 6 - Set the measurement policy
 
 **Measurement policy** is the only stored part of this page. Saving it re-derives
 the endpoint registry and the measured paths above.
 
-1. Set the **WAN device name pattern**. A device whose name matches is a WAN
-   device. Matching ignores case, and the default is `wan|edge|gw|dmz`.
+1. Set the **WAN device name pattern**. A device whose name matches looks like a
+   WAN router, which only decides what is offered as possible; it never makes a
+   port WAN. Matching ignores case, and the default is `wan|edge|gw|dmz`.
 2. Leave **Also measure interfaces directly connected to a WAN device** selected
-   to keep both ends of a WAN hop measured.
+   to list the ports facing a WAN router as possible.
 3. Set the **Reachability anchors** an interface measures to when it has neither
    a neighbour on the wire nor a declared next-hop. Separate them with commas.
    The defaults are `1.1.1.1` and `8.8.8.8`.
 4. Add an **ISP next-hop override** for each interface whose far end is an ISP.
    A next-hop is where your ownership of the path hands off to the ISP. Key it by
-   device, or by `device/interface` for a single interface.
+   device, or by `device/interface` for a single interface; a next-hop declared
+   for a single interface also confirms that interface as WAN.
 5. Select **Save policy**.
 
 `infrastructure:write` is required to save. Without it the section renders the
@@ -96,9 +106,9 @@ refused.
 
 ## What you see
 
-Every WAN interface you operate has a row, its utilization matches the device, and each SLA column either carries a measured number with a tier badge or an honest dash.
+Every WAN interface you operate has a row that says why it is WAN, its utilization matches the device, and each SLA column either carries a measured number with a tier badge or an honest dash. A router's LAN, loopback and management ports are not in the table.
 
-On a deployment with no WAN interface matched yet, `/api/wan/interfaces` says so with a null list rather than an empty success:
+On a deployment with no confirmed WAN interface yet, `/api/wan/interfaces` says so with a null list, and carries the possible ones apart:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -106,10 +116,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 ```json
-{"interfaces":null}
+{"interfaces":null,"candidates":[]}
 ```
 
-The page states the same thing and names both halves of the fix: the interfaces appear once the matched devices export `device_if_*` metrics, and the SLA columns populate once a probe measures each interface's derived target.
+The page states it as `No confirmed WAN interfaces yet. Possible ones, if any, are listed below.`: interfaces appear once something says they are WAN, and the SLA columns populate once a probe measures each interface's derived target.
 
 ## Related
 
