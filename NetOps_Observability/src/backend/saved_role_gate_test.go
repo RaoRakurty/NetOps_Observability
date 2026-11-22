@@ -17,7 +17,9 @@ import (
 // change or delete them — including an `ingest:*` API key, which customers
 // publish inside their web pages for the RUM snippet (2026-11-22).
 
-func savedAs(role string) jwtClaims { return jwtClaims{Sub: role + "@acme", Role: role, Tenant: "acme"} }
+func savedAs(role string) jwtClaims {
+	return jwtClaims{Sub: role + "@acme", Role: role, Tenant: "acme"}
+}
 
 func seedSaved(t *testing.T, s *server, typ string) saved.Object {
 	t.Helper()
