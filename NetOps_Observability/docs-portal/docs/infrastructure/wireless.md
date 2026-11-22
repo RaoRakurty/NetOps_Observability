@@ -117,7 +117,7 @@ The read-only routes:
 
 Version 1 registers **no executor**. An approved action that reaches gate 4 therefore records the state `failed` with the reason `gate 4: no executor registered — the vendor write RPC has not earned live validation (Phase 9)`. The framework reports a refusal rather than pretending to have acted. Every transition is an audit event.
 
-The approval queue itself is on **Operations → Action Queue**, beneath the incident queue. See [review a proposed wireless remediation](/infrastructure/review-a-wireless-remediation) for the decision procedure.
+The approval queue itself is on **Operations → Problems**, beneath the incident queue. See [review a proposed wireless remediation](/infrastructure/review-a-wireless-remediation) for the decision procedure.
 
 ### Client data and retention
 

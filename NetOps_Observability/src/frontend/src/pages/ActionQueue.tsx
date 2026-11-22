@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// ActionQueue — Operations → Action Queue (2026-08 nav redesign). The Command
+// ActionQueue — Operations → Problems (was "Action Queue"; renamed 2026-11-22). The Command
 // Center's triage queue promoted to a first-class routed page: before this, the
 // queue was a panel inside the Command Center with NO route of its own, so it
 // could not be bookmarked, linked from a ticket, or set as a landing page.
@@ -12,6 +12,7 @@
 // what "needs action" means. The Command Center keeps its embedded copy with
 // KPI-driven filtering; this page is the queue alone, full-height.
 
+import { useDeviceLabels } from "../lib/deviceNames";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, CorrObject } from "../services/api";
 import DataTable from "../components/DataTable";
@@ -45,7 +46,8 @@ export default function ActionQueue() {
 
   const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
-  const columns = useMemo(() => queueColumns(open), [open]);
+  const labels = useDeviceLabels();
+  const columns = useMemo(() => queueColumns(open, labels), [open, labels]);
   const queueHeight = useMemo(
     () => Math.min(720, visible.length * 34 + 40 + (open ? 300 : 0)),
     [visible.length, open],
@@ -55,8 +57,8 @@ export default function ActionQueue() {
     <div className="dm-board cc-board">
       <div className="cc-panel">
         <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Action Queue</h3>
-          <AskIris topic="queue.action-queue" label="Action Queue" />
+          <h3 className="cc-panel-t">Problems</h3>
+          <AskIris topic="queue.action-queue" label="Problems" />
           <span className="cc-panel-meta"><a href="#/overview/home">KPIs in Command Center →</a></span>
         </div>
         {err && <p className="cc-err">{err}</p>}
@@ -81,7 +83,7 @@ export default function ActionQueue() {
               rowKey={(it) => it.corr.correlation_id}
               rowHeight={34}
               height={queueHeight}
-              ariaLabel="Action Queue — correlated incidents"
+              ariaLabel="Problems — correlated cases that need action"
               rowAccent={(it) => (it.sev === "crit" ? "var(--crit)" : it.sev === "major" ? "var(--warn)" : undefined)}
               onRowClick={(it) => setOpen((cur) => (cur === it.corr.correlation_id ? null : it.corr.correlation_id))}
               expandedKey={open}

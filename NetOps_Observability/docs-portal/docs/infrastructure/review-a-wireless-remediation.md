@@ -13,7 +13,7 @@ move one radio to a different channel, restart one access point's radio, or
 disconnect one client session. It never carries the fix out on its own. A person
 approves it, a person executes it, and every transition is recorded.
 
-The approval queue is on **Operations → Action Queue**, beneath the incident
+The approval queue is on **Operations → Problems**, beneath the incident
 queue, so the decision sits next to the work it belongs to.
 
 ## Before you begin
@@ -34,7 +34,7 @@ queue, so the decision sits next to the work it belongs to.
 
 ### Step 1 — Read what is waiting
 
-1. Go to **Operations → Action Queue**.
+1. Go to **Operations → Problems**.
 2. Scroll to **Wireless remediation**.
 3. Read the row: what the action does in plain words, the single target it acts
    on, the incident it came from, and who proposed it.

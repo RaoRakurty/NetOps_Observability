@@ -271,6 +271,55 @@ func TestControllerTunnelLinksMatchTheEngineEntity(t *testing.T) {
 	}
 }
 
+// Tracker 430: the engine's tunnel rows must survive the outage they describe.
+// A session the controller stopped reporting 40 minutes ago is gone from the
+// drawing (Window) but still exported for the engine (LinkWindow); one older
+// than LinkWindow is not. Rows keep their owner, never "".
+func TestControllerTunnelLinksOutliveTheDrawingWindow(t *testing.T) {
+	if LinkWindow <= Window {
+		t.Fatalf("LinkWindow %v must be wider than Window %v", LinkWindow, Window)
+	}
+	res := tenantResolver{"t_w": {"10.0.0.20": "ctl-a", "10.0.0.51": "ctl-b", "10.0.0.81": "ctl-c"}}
+	ic := nms.Integration{ID: "nmsi-1", Tenant: "t_w", Vendor: "vmanage", BaseURL: "https://200.250.250.1"}
+	outage := bfdRec("10.0.0.20", "mpls", "10.0.0.51", "mpls", "down", Window+10*time.Minute)
+	outage.IntegrationID = "nmsi-1"
+	expired := bfdRec("10.0.0.20", "lte", "10.0.0.81", "lte", "down", LinkWindow+time.Minute)
+	expired.IntegrationID = "nmsi-1"
+	st := fakeSessions{ints: []nms.Integration{ic}, recs: map[string][]nms.StateRecord{"t_w": {outage, expired}}}
+
+	rows, _, err := Links(context.Background(), st, vmSpec, res, t4now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci, _, err := nms.ControllerInstanceID(nms.Specs()["vmanage"], ic.BaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		if r.TenantID != "t_w" {
+			t.Fatalf("a row must carry its integration's owner: %+v", r)
+		}
+		got[r.A+"|"+r.B] = true
+	}
+	node := outage.TunnelID + "@" + ci
+	if !got[node+"|ctl-a"] || !got[node+"|ctl-b"] {
+		t.Fatalf("a session 40 minutes into an outage must still export both ends: %v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("a session older than LinkWindow must not export: %v", got)
+	}
+
+	// The drawing is unchanged: the same 40-minute-old session does not draw.
+	facts, _, err := Facts(context.Background(), st, res, t4now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts["ctl-a"].Peers) != 0 {
+		t.Fatalf("the overlay drawing must keep the 30-minute Window: %+v", facts["ctl-a"])
+	}
+}
+
 func TestControllerTunnelLinksStoreErrorIsReturned(t *testing.T) {
 	st := fakeSessions{ints: []nms.Integration{{ID: "i", Tenant: "t_w", Vendor: "vmanage", BaseURL: "https://x"}}, err: errors.New("pg down")}
 	if _, _, err := Links(context.Background(), st, vmSpec, tenantResolver{}, t4now); err == nil {

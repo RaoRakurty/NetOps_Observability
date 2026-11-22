@@ -38,6 +38,15 @@ Four pure functions:
   device grounding token) rewritten, `attrs["canon"] = {"raw", "basis"}` stamped on
   a rewrite only. `native_id` and therefore `signal_id` are NEVER touched, so the
   archive identity and replay are unchanged.
+* `tunnel_scope(tenant, rows)` + the `tunnel` axis (tracker 430) — a trap BFD
+  signal binds the bare TLOC pair `<ipA>/<colA>|<ipB>/<colB>`; the controller lane
+  binds `<pair>@<controller instance>`. The trap cannot know the instance, so the
+  two never met, and the bare node never reached the T4c tunnel↔endpoint rows
+  (`Node.adjacency_key` keys a PATH node only by an `@`-scoped id): trap BFD
+  evidence was an island. The axis rewrites the trap's pair to `<pair>@<ci>` when
+  EXACTLY ONE controller instance's `sdwan_bfd` rows for that pair, in the
+  signal's own tenant, name the trap's sender as an endpoint; otherwise it
+  abstains and the raw pair stays.
 * `canonicalize_series(ev, entity_id, tokens, resolver, tenant)` — the same rules
   for a metric-lane series key (`device`, `device:ifName`, `device:peer`,
   `device:neighbour`); the SOURCE-DECLARED ifIndex (`index`) is the only licence
@@ -330,8 +339,8 @@ _IFACE_ATTR_KEYS: Final = ("interface", "interface_name")
 @dataclass(frozen=True)
 class CanonResult:
     """What `canonicalize_detailed` decided. `axes` lists (axis, outcome) per axis
-    examined — `tenant`, `parse`, `device`, `iface`, `peer`, `length`, `model` — for
-    PR-E's `corr_identity_canon_total{lane,axis,outcome}`."""
+    examined — `tenant`, `parse`, `device`, `iface`, `peer`, `tunnel`, `length`,
+    `model` — for PR-E's `corr_identity_canon_total{lane,axis,outcome}`."""
     signal: Signal
     outcome: str
     axes: tuple[tuple[str, str], ...] = ()
@@ -343,6 +352,60 @@ class _Axis:
     value: str
     outcome: str
     basis: str = ""
+
+
+# ── SD-WAN tunnel scope (tracker 430) ────────────────────────────────────────
+
+TUNNEL_SCHEME_TLOC_PAIR: Final = "tloc_pair"
+SDWAN_BFD_PROTO: Final = "sdwan_bfd"
+# nms/controller_instance.go: "ci-" + the first 8 bytes of a sha256, in hex.
+_CONTROLLER_INSTANCE = re.compile(r"ci-[0-9a-f]{16}")
+
+
+@dataclass(frozen=True)
+class TunnelScope:
+    """One tenant's SD-WAN tunnel instances, from the api's T4c rows in
+    topology_links.json (`proto: sdwan_bfd`, `a` = `<pair>@<instance>`, `b` = an
+    endpoint's inventory id). `by_pair[pair][instance]` is that instance's
+    endpoints for the pair. Built by `tunnel_scope`; never mutated."""
+    tenant: str
+    by_pair: Mapping[str, Mapping[str, frozenset[str]]]
+
+
+def _tloc_pair(pair: str) -> bool:
+    """`<ip>/<colour>|<ip>/<colour>`: two non-empty halves, each with an inner `/`,
+    and nothing that scopes or orders it (`@`, `->`)."""
+    halves = pair.split("|")
+    return (len(halves) == 2 and "@" not in pair and "->" not in pair
+            and all("/" in h and h[0] != "/" and h[-1] != "/" for h in halves))
+
+
+def tunnel_scope(tenant: str, rows: object) -> TunnelScope:
+    """The tenant's TunnelScope from link rows (zero trust: every row is checked).
+
+    A row counts only when `proto` is `sdwan_bfd`, its `tenant_id` is this tenant
+    (canon.tenant_key), `a` splits once on `@` into a TLOC pair and a controller
+    instance id, and `b` is a bounded non-empty string. Anything else — another
+    proto (the 397 `sdwan_control` rows), another tenant's row, a malformed or
+    oversized field — is dropped. Order-independent."""
+    acc: dict[str, dict[str, set[str]]] = {}
+    want = tenant_key(tenant)
+    for row in rows if isinstance(rows, (list, tuple)) else ():
+        if not isinstance(row, Mapping) or row.get("proto") != SDWAN_BFD_PROTO:
+            continue
+        rt = row.get("tenant_id")
+        if not isinstance(rt, str) or tenant_key(rt) != want:
+            continue
+        a, b = row.get("a"), row.get("b")
+        if (not isinstance(a, str) or not isinstance(b, str) or not b.strip()
+                or len(a) > MAX_ID_CHARS or len(b) > MAX_ID_CHARS):
+            continue
+        pair, sep, inst = a.partition("@")
+        if not sep or not _tloc_pair(pair) or not _CONTROLLER_INSTANCE.fullmatch(inst):
+            continue
+        acc.setdefault(pair, {}).setdefault(inst, set()).add(b.strip())
+    return TunnelScope(tenant, {p: {i: frozenset(e) for i, e in insts.items()}
+                                for p, insts in acc.items()})
 
 
 def _str_attr(attrs: Mapping, key: str) -> str:
@@ -514,10 +577,50 @@ def _plan_interface(raw: str, sig: Signal, resolver: EntityResolver) -> _Plan:
                  (("device", d.outcome), ("iface", i.outcome)), basis)
 
 
-def _plan(raw: str, sig: Signal, resolver: EntityResolver) -> _Plan | None:
+def _plan_tunnel(raw: str, sig: Signal, resolver: EntityResolver,
+                 tunnels: TunnelScope) -> _Plan | None:
+    """Tracker 430: a trap BFD signal's bare TLOC pair → `<pair>@<instance>`, the
+    controller lane's id for the same session, when exactly ONE controller
+    instance's rows for that pair name the trap's sender as an endpoint.
+
+    The sender guard is what keeps two fabrics apart: when both reuse the pair,
+    each trap takes the instance whose row names ITS sender. None when the entity
+    is not a tloc-pair tunnel id (an opaque legacy id, an already-scoped id)."""
+    if (_str_attr(sig.attrs, "tunnel_scheme") != TUNNEL_SCHEME_TLOC_PAIR
+            or not _tloc_pair(raw)):
+        return None
+    sender_raw = sig.observer.observer_id
+    if not sender_raw:
+        return _abstain(("tunnel", ABSTAIN_UNKNOWN))
+    d = _device_axis(sender_raw, resolver)
+    if d.outcome in (ABSTAIN_AMBIGUOUS, ABSTAIN_GENERIC, ABSTAIN_CONFLICT):
+        # A sender that names several boxes cannot say whose fabric this is.
+        return _abstain(("device", d.outcome))
+    # Trap senders are inventory ids already (the receiver's identity join); a
+    # canonicalised spelling is accepted too, so a resolver rename never hides it.
+    senders = {sender_raw, d.value}
+    owners = sorted(inst for inst, endpoints in tunnels.by_pair.get(raw, {}).items()
+                    if endpoints & senders)
+    if not owners:
+        return _abstain(("tunnel", ABSTAIN_UNKNOWN))
+    if len(owners) > 1:
+        return _abstain(("tunnel", ABSTAIN_AMBIGUOUS))
+    scoped = f"{raw}@{owners[0]}"
+    # raw_device/device drive the token swap: the bare pair token becomes the
+    # scoped id, so the node's grounding token is the controller lane's too.
+    return _Plan(scoped, raw, scoped, (("tunnel", REWRITTEN),), ("tunnel:endpoint",))
+
+
+def _plan(raw: str, sig: Signal, resolver: EntityResolver,
+          tunnels: TunnelScope | None = None) -> _Plan | None:
     kind = sig.kind.removesuffix("_clear")
     if sig.entity_type == EntityType.INTERFACE:
         return _plan_interface(raw, sig, resolver)
+    if sig.entity_type == EntityType.PATH:
+        # Only the trap lane binds a bare pair; the controller lane scopes its own.
+        if sig.source == Source.TRAP and tunnels is not None:
+            return _plan_tunnel(raw, sig, resolver, tunnels)
+        return None
     if sig.entity_type != EntityType.DEVICE:
         return None
     if sig.source in (Source.TRAP, Source.CONTROLLER) and kind in SESSION_KINDS:
@@ -541,17 +644,22 @@ def _overall(axes: tuple[tuple[str, str], ...]) -> str:
     return UNCHANGED
 
 
-def canonicalize_detailed(sig: Signal, resolver: EntityResolver | None) -> CanonResult:
+def canonicalize_detailed(sig: Signal, resolver: EntityResolver | None,
+                          tunnels: TunnelScope | None = None) -> CanonResult:
     """`canonicalize` plus the per-axis outcomes and the basis. Never raises on a
-    well-formed Signal, whatever strings it carries."""
+    well-formed Signal, whatever strings it carries. `tunnels` is the signal's
+    own tenant's TunnelScope (tracker 430); None leaves trap tunnels unexamined."""
     rtenant = getattr(resolver, "tenant", None)
     if resolver is None or rtenant is None or tenant_key(rtenant) != tenant_key(sig.tenant_id):
         # §3a: only the signal's OWN tenant's inventory may rename its evidence.
         return CanonResult(sig, ABSTAIN_CONFLICT, (("tenant", ABSTAIN_CONFLICT),))
+    if tunnels is not None and tenant_key(tunnels.tenant) != tenant_key(sig.tenant_id):
+        # §3a: … and only its own tenant's tunnel rows may scope its tunnels.
+        return CanonResult(sig, ABSTAIN_CONFLICT, (("tenant", ABSTAIN_CONFLICT),))
     if sig.source not in EVENT_SOURCES:
         return CanonResult(sig, UNCHANGED)
     raw = _raw_entity(sig)
-    plan = _plan(raw, sig, resolver)
+    plan = _plan(raw, sig, resolver, tunnels)
     if plan is None:
         return CanonResult(sig, UNCHANGED)
     if plan.entity_id and plan.entity_id == sig.entity_id and raw != sig.entity_id:
@@ -579,13 +687,14 @@ def canonicalize_detailed(sig: Signal, resolver: EntityResolver | None) -> Canon
     return CanonResult(out, REWRITTEN, plan.axes, basis)
 
 
-def canonicalize(sig: Signal, resolver: EntityResolver | None) -> tuple[Signal, str]:
+def canonicalize(sig: Signal, resolver: EntityResolver | None,
+                 tunnels: TunnelScope | None = None) -> tuple[Signal, str]:
     """(signal, outcome). The signal is the INPUT object when nothing changes, else
     a new Signal (dataclasses.replace, a new attrs dict) whose `entity_id` follows
-    D1/D2/D4/D5 and whose attrs carry `canon = {"raw", "basis"}`. `native_id`,
-    `signal_id`, `ts`, `observer` and every other field are untouched.
-    Outcome ∈ OUTCOMES."""
-    r = canonicalize_detailed(sig, resolver)
+    D1/D2/D4/D5 and the tracker-430 tunnel axis, and whose attrs carry
+    `canon = {"raw", "basis"}`. `native_id`, `signal_id`, `ts`, `observer` and
+    every other field are untouched. Outcome ∈ OUTCOMES."""
+    r = canonicalize_detailed(sig, resolver, tunnels)
     return r.signal, r.outcome
 
 
@@ -593,7 +702,7 @@ def canonicalize(sig: Signal, resolver: EntityResolver | None) -> tuple[Signal, 
 
 # Every axis canonicalize_detailed / canonicalize_series reports — the closed
 # label set of main's corr_identity_canon_total{lane,axis,outcome}.
-AXES: Final = ("tenant", "parse", "device", "iface", "peer", "length", "model")
+AXES: Final = ("tenant", "parse", "device", "iface", "peer", "tunnel", "length", "model")
 
 # metric_identity families whose series key canonicalize_series understands.
 # cloud_resource keys a provider resource id, not an inventory device: untouched.

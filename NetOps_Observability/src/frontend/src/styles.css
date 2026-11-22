@@ -1039,6 +1039,17 @@ code, kbd, pre, .mono, td.mono {
 .lv-tile-info { --lt-tone: var(--sev-info); --lt-bg: var(--sev-info-bg); }
 .lv-tile-ok { --lt-tone: var(--sev-ok); --lt-bg: var(--sev-ok-bg); }
 .lv-tiles-note { margin: 6px 0 0; color: var(--fg-muted); font-size: var(--fs-meta); }
+/* Active Alerts and Incidents in the Logs pattern (owner, 2026-11-22). */
+.al-title { font-size: 14px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.al-detail { font-size: 14px; color: var(--fg-muted); }
+.al-device { font-size: 14px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.al-since { font-size: 14px; font-variant-numeric: tabular-nums; }
+.al-last { color: var(--fg-muted); }
+.al-when { color: var(--fg-muted); font-size: 14px; margin-left: auto; }
+.al-search { min-width: 240px; flex: 1 1 240px; font-size: 14px; }
+.al-check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--fg); }
+.al-scope { color: var(--fg-muted); font-size: 14px; }
+@media (max-width: 640px) { .al-search { min-width: 0; flex-basis: 100%; } }
 /* Sub-tabs: Events (N) · Logs · Traps · … */
 .lv-subtabs { display: flex; gap: 4px; margin-top: var(--sp-3); border-bottom: 1px solid var(--border); overflow-x: auto; }
 .lv-subtab {
