@@ -1782,7 +1782,7 @@ tests:
             source: |
               assert_eq!(.cx_admission.by, "marker", "wrong admission gate")
               assert_eq!(.cx_admission.v, "ce973109b960", "wrong rules_hash stamp")
-  - name: "pack hpe_comware: a Comware link up is the same row with state up, at warn"
+  - name: "pack hpe_comware: a Comware link up is the same row with state up, as a recovery clear at info"
     inputs:
       - insert_at: syslog_admission_stamp
         type: log

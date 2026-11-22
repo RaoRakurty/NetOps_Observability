@@ -62,7 +62,8 @@ def test_cisco_bgp4_downs_only_an_established_session(suffix, frm, to, extra, wa
     if want is None:
         assert sig is None or sig.kind != "bgp_adjacency_change", sig and sig.attrs
         return
-    assert sig is not None and sig.kind == "bgp_adjacency_change"
+    # Tracker 380: an up is the recovery clear `bgp_adjacency_change_clear`.
+    assert sig is not None and sig.kind.removesuffix("_clear") == "bgp_adjacency_change"
     assert sig.attrs["state"] == want
 
 
@@ -85,7 +86,8 @@ def test_sdwan_bgp_peer_is_gated_on_the_transition_class(event_state, tclass, wa
     if want is None:
         assert sig is None or sig.kind != "bgp_adjacency_change", sig and sig.attrs
         return
-    assert sig is not None and sig.kind == "bgp_adjacency_change"
+    # Tracker 380: an up is the recovery clear `bgp_adjacency_change_clear`.
+    assert sig is not None and sig.kind.removesuffix("_clear") == "bgp_adjacency_change"
     assert (sig.attrs["state"], sig.attrs["peer"]) == (want, "192.0.2.9")
 
 

@@ -189,7 +189,8 @@ def test_eos_isis_adjchg_reaches_the_isis_row():
 
 @pytest.mark.parametrize(("frm", "to", "state", "sev"), [
     ("Established", "Idle", "down", "warn"),
-    ("OpenConfirm", "Established", "up", "warn"),
+    # Tracker 380: a session coming up is the recovery clear, at info.
+    ("OpenConfirm", "Established", "up", "info"),
     ("Connect", "Active", "unknown", "info"),
 ])
 def test_junos_bgp_direction_comes_from_the_transition(frm, to, state, sev):

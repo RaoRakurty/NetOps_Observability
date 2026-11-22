@@ -81,6 +81,8 @@ rules:
       ifname: {re: [[msg, 'Interface (\S{1,128}?),', 1, '']]}
       state: {const: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -129,6 +131,8 @@ rules:
           - {when: {always: true}, value: unknown}
       state: {const: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -159,6 +163,8 @@ rules:
       ifname: {re: [[msg, 'Interface (\S{1,128}) is up', 1, '']]}
       state: {const: up}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -387,7 +393,7 @@ fixtures:
     severity: notice
     message: '%ETHPORT-5-IF_UP: Interface Ethernet1/5 is up in mode access'
     expect: {}
-    signal: {rule_id: syslog.nxos.link.up, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw01.pdx01:Ethernet1/5'}
+    signal: {rule_id: syslog.nxos.link.up, kind: link_state_change_clear, severity: info, opens_alone: false, state: up, entity: 'sw01.pdx01:Ethernet1/5'}
 
   - name: an NX-OS speed change stays a log
     fidelity: doc_claimed

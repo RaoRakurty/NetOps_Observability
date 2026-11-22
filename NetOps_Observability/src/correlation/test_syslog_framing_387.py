@@ -210,7 +210,8 @@ def test_pri_cannot_move_a_typed_link_row(word: str) -> None:
     """The rows state severity by state and shape. Real PRI cannot widen or narrow what
     stage [5] opens on them, nor what `_admin_change_only` sees as opening."""
     assert _signal(_ios("LINK-3-UPDOWN", LINK_DOWN, word)).severity.value == "high"
-    assert _signal(_ios("LINK-3-UPDOWN", "Interface Gi1, changed state to up", word)).severity.value == "warn"
+    # Tracker 380: an up is the recovery clear at info, whatever the PRI.
+    assert _signal(_ios("LINK-3-UPDOWN", "Interface Gi1, changed state to up", word)).severity.value == "info"
     assert _signal(_ios("LINEPROTO-5-UPDOWN", PROTO_DOWN, word)).severity.value == "warn"
 
 

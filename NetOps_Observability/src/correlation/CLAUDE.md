@@ -151,8 +151,9 @@ event states nothing. EOS and SR OS syslog and the Viptela interface trap carry 
 `trap.bfd.*` and `trap.resource.*` rows read those fields. Owner rule "ingestion is
 not incident creation" and D3: a row emits `crit` only for a raise the vendor calls
 critical; everything else is `warn`, below the open floor, and can still join a
-component. `controller_*` and resource recoveries arrive as `<kind>_clear`;
-interface and BGP keep the device lane's `state=up` convention (tracker 380). A BFD
+component. `controller_*` and resource recoveries arrive as `<kind>_clear`; since
+tracker 380 so do interface, BGP, OSPF, IS-IS, routing and VTEP ups (see "Recoveries
+are clears", §8). A BFD
 trap binds `<tloc pair>` without the controller's `@instance`, and its device token is
 its observer, which `Node.tokens()` drops: the bare node shares no token with vManage's
 `<pair>@<ci>` node or the endpoint devices, and `adjacency_key()` keys only `@` ids, so
@@ -326,7 +327,8 @@ count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
 
 **Nodes and components.**
 - Nodes = signals grouped by `entity_type:entity_id:kind`; `*_clear` kinds and
-  APP_IDENTITY are skipped (E:466-494).
+  APP_IDENTITY are skipped (E:466-494). Since tracker 380 every lane's link and
+  adjacency recovery is a clear, so a recovery is never a node, evidence or a witness.
 - Components = connected by admitted edges (E:3169), plus a tenant-scoped fold across
   grounded seams (E:3305, E:3635).
 
@@ -717,7 +719,24 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
 - **Recoveries are clears.** An SD-WAN transition back to a good state, and a cleared
   vManage alarm, arrive as `<kind>_clear` at info. They bind to the fault's entity and
   build_nodes skips them. Before T0 they were fault-kind evidence that kept a recovered
-  tunnel's node alive.
+  tunnel's node alive. **Device lanes too (tracker 380, 2026-11-22):** the 32 syslog,
+  pack and trap rows that emit `link_state_change` or `bgp/ospf/isis/routing_adjacency_change`
+  / `vtep_state_change` declare `emit.clear_when` (`$state == up`), so an up is
+  `<kind>_clear` at info with the same entity, tokens, native_id and attrs (same
+  signal_id). Before it the up was the FAULT kind at warn — a live node — and because
+  clauses key on kind only (`CLAUSE_ATTR_KEYS` is `{link_cause}`) a recovery alone
+  CONFIRMED `bgp-peer-flap` beside a CPU episode and headlined `local-link-fault` after
+  a reboot (lab, 2026-11-18). No template needs the up: a flap is read from its downs.
+  Stage [1] only — no catalog, gate or constant moved; ENGINE_SEMVER stays 3.6.0. The
+  wiring that keyed on the kind reads the base kind: the trap BGP transition collapser,
+  the A4 dwell watch, and the aggregation plane's K1 identity
+  (`aggregation.RECOVERY_CLEAR_BASE`, policy `p3.k3.v2`; one-to-one, so the forwarded
+  set is unchanged). The RCA document's never-established reading also counts a BGP
+  clear for the peer as established (`rcaNeverEstablishedOnly`). `up` is a positional
+  claim (380 PR 2): rows classify the state a transition goes TO, so `from FULL to
+  EXSTART` is a down, not a recovery. Not clears, deliberately: STP forwarding (a
+  topology change), FHRP roles, LLDP neighbour adds, wireless `*_up` kinds (tracker
+  follow-up).
 - **Canonical kinds from controllers (E2a, 2026-11-01).** vManage alarms (keyed on the
   release's `rule_name_display`, all 99 rules of 20.6 mapped or explicitly unclassified —
   nms/vmanage_kinds.go) and device events now arrive as the kinds the templates use:

@@ -77,7 +77,7 @@ from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from aggregation import AGG_POLICY_VERSION, AggKey, AggPlane
+from aggregation import AGG_POLICY_VERSION, AggKey, AggPlane, DeltaClass
 from catalog import builtin_catalog
 from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
 from signals import EntityType, ModalityClass, Severity, Signal
@@ -699,6 +699,24 @@ def compare(stream: Stream, *, bucket_s: int | None = None,
     v.record("no_false_merge", not bad_merge, detail_merge)
     v.record("no_false_split", not bad_split, detail_split)
 
+    # ── memo §17: every state move is FORWARDED ─────────────────────────────
+    #
+    # A recovery or transition the plane observed must leave it synchronously,
+    # labelled RECOVERY / STATE_TRANSITION (or CONTRADICTION, when a different
+    # witness reported the move). Until tracker 380 a swallowed recovery also
+    # showed up as a different OBJECT, because the device-lane up was a live
+    # node; since 380 a recovery is a `<kind>_clear` that never forms a node, so
+    # the object checks above cannot see it any more. This states the property
+    # directly: the forwarded state-move deltas cover every move counted.
+    fwd = plane.forwarded_by_class
+    moves_forwarded = sum(fwd.get(c, 0) for c in (
+        DeltaClass.RECOVERY.value, DeltaClass.STATE_TRANSITION.value,
+        DeltaClass.CONTRADICTION.value))
+    v.record("state_moves_forwarded", moves_forwarded >= plane.state_transitions,
+             (f"{plane.state_transitions} state move(s) observed, only "
+              f"{moves_forwarded} forwarded as a recovery/transition/contradiction")
+             if moves_forwarded < plane.state_transitions else "")
+
     # ── replay with the flag ON ─────────────────────────────────────────────
     if do_replay:
         drift = replay_findings(on.snaps)
@@ -737,7 +755,7 @@ def replay_findings(snaps) -> list[str]:
 
 _COLS = ("object_set", "root_cause", "verdict_tier", "causal_seam", "owner",
          "blast_radius", "raw_coverage", "tenant_isolation", "no_false_merge",
-         "no_false_split", "replay_clean")
+         "no_false_split", "state_moves_forwarded", "replay_clean")
 
 
 def print_table(verdicts: list[Verdict]) -> None:
