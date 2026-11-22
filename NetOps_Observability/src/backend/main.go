@@ -1599,7 +1599,7 @@ func newServer() *server {
 	// MONITORING-END
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
-	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
+	srv.itsmCfg = newITSMConfigStore(vault, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
 	// Tenant watch-alert delivery (tracker 359) reads each tenant's RCA lanes
 	// from the store just built and sends through the notifier's pool.
 	srv.tenantWatch = newTenantWatchRouter(srv)
@@ -4271,6 +4271,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
+	mux.HandleFunc("/api/settings/overview-default", s.handleOverviewDefault)  // team-default Overview dashboard (tenant_display.go)
 	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)

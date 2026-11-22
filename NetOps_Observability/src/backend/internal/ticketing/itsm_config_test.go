@@ -146,7 +146,7 @@ func TestITSMLegacyMigration(t *testing.T) {
 	st := NewITSMConfigStore(path,
 		func() ITSMConfig { return ITSMConfig{} },
 		func(system, tenant string) string { return filepath.Join(t.TempDir(), system+"_"+tenant+".json") },
-		func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" })
+		func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" }, SecretCustody{})
 	if st.ServiceNowFor("") == nil {
 		t.Fatal("legacy global ServiceNow not migrated/live")
 	}

@@ -18,6 +18,10 @@ import (
 // (tenant ""). A dormant vault.Vault (or nil) passes values through unchanged, so the
 // default build + running stack are untouched until SEAL_PROVIDER is set.
 //
+// Per-TENANT secrets are sealed by their own stores under the tenant DEK: SNMP
+// credentials (internal/snmpcred) and the ITSM connector secrets
+// (internal/ticketing/itsm_custody.go, field-ids "itsm.*").
+//
 // (Copilot's API key is env-only — never persisted — so it has no entry here;
 // moving env secrets into the sealed store is phase 3, not 1c.)
 

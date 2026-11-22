@@ -14,6 +14,11 @@
 //     it failed to delete, and another tenant's id reads "not found".
 // A dashboard is a saved object of type "dashboard", scoped to the tenant by the
 // server (row-level security; another tenant's id answers 404).
+//
+// Team default (2026-11-22): a tenant administrator can make one of these the
+// tenant's default Overview, or reset it to the built-in one. The list shows
+// which dashboard is the team default to everyone; only administrators get the
+// buttons (the server refuses everyone else anyway).
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type SavedObject } from "../../services/api";
@@ -96,6 +101,53 @@ function CellView({ cell, editing, index, count, onResize, onMove, onRemove }: {
       <Safe>{def.render()}</Safe>
     </div>
   );
+}
+
+/** A dashboard rendered as a page, without its editor: the team-default
+ *  Overview. Panels the build does not know are skipped, as in the editor. */
+export function ReadOnlyBoard({ board }: { board: SavedObject }) {
+  const cells = parseBody(board.body).cells;
+  const noop = () => undefined;
+  if (cells.length === 0) {
+    return <p className="ov-empty-p">This dashboard has no panels yet.</p>;
+  }
+  return (
+    <OverviewDataProvider>
+      <div className="ov-grid mydash-grid" data-testid="team-default-board">
+        {cells.map((cell, i) => (
+          <CellView key={`${cell.type}-${i}`} cell={cell} editing={false} index={i} count={cells.length}
+            onResize={noop} onMove={noop} onRemove={noop} />
+        ))}
+      </div>
+    </OverviewDataProvider>
+  );
+}
+
+/** The tenant's team default and whether this user may change it. A failed
+ *  read hides the buttons and the marker, never the list. */
+function useTeamDefaultAdmin(): {
+  teamId: string; unavailable: boolean; canAdmin: boolean;
+  setTeam: (id: string | null) => Promise<void>;
+} {
+  const [teamId, setTeamId] = useState("");
+  const [unavailable, setUnavailable] = useState(false);
+  const [canAdmin, setCanAdmin] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve().then(() => api.getOverviewDefault())
+      .then((d) => { if (alive) { setTeamId(d?.dashboard_id ?? ""); setUnavailable(!!d?.unavailable); } })
+      .catch(() => { /* no marker, no buttons */ });
+    Promise.resolve().then(() => api.permissions())
+      .then((p) => { if (alive) setCanAdmin((p?.permissions?.administration ?? 0) >= 3); })
+      .catch(() => { /* buttons stay hidden */ });
+    return () => { alive = false; };
+  }, []);
+  const setTeam = async (id: string | null) => {
+    const d = id === null ? await api.resetOverviewDefault() : await api.setOverviewDefault(id);
+    setTeamId(d?.dashboard_id ?? "");
+    setUnavailable(!!d?.unavailable);
+  };
+  return { teamId, unavailable, canAdmin, setTeam };
 }
 
 export function BoardEditor({ board, template }: { board: SavedObject | null; template?: TemplateId }) {
@@ -237,6 +289,16 @@ function DashboardList() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [actErr, setActErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const team = useTeamDefaultAdmin();
+
+  const promote = async (b: SavedObject | null) => {
+    try {
+      await team.setTeam(b ? b.id : null);
+      setActErr(null);
+    } catch (e) {
+      setActErr(operatorError(e, b ? `"${b.name}" could not be made the team default.` : "The team default could not be reset."));
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -281,6 +343,16 @@ function DashboardList() {
         </button>
       </div>
 
+      {team.teamId && (
+        <div className="ccw-hint ov-note" data-testid="team-default-note">
+          {team.unavailable
+            ? "The team default dashboard is no longer available, so everyone sees the built-in Overview."
+            : "Your team opens the dashboard marked Team default as its Overview."}
+          {team.canAdmin && (
+            <> <button className="btn btn-sm" onClick={() => void promote(null)}>Reset to built-in</button></>
+          )}
+        </div>
+      )}
       {loadErr && <div role="alert" className="ov-err">{loadErr}</div>}
       {actErr && <div role="alert" className="ov-err">{actErr}</div>}
       {!loadErr && boards !== null && boards.length === 0 && (
@@ -296,6 +368,11 @@ function DashboardList() {
                   <strong>{b.name}</strong>
                   <span className="dashb-meta">{count} panel{count === 1 ? "" : "s"} · updated {fmtDateTime(b.updated_at)}</span>
                 </a>
+                {team.teamId === b.id ? (
+                  <span className="chip" data-testid="team-default-chip">Team default</span>
+                ) : team.canAdmin ? (
+                  <button className="btn btn-sm" onClick={() => void promote(b)}>Make this the team default</button>
+                ) : null}
                 {confirming === b.id ? (
                   <>
                     <button className="btn btn-sm btn-danger" onClick={() => void remove(b)}>Delete "{b.name}"</button>

@@ -91,7 +91,7 @@ func TestWatchAlertsChoicePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	re := &ITSMConfigStore{path: st.path, cfgs: map[string]ITSMConfig{}, live: map[string]*itsmLive{}}
-	if !re.load() {
+	if loaded, _ := re.load(); !loaded {
 		t.Fatal("persisted config did not load")
 	}
 	cfg, _ := re.ConfigFor("acme")

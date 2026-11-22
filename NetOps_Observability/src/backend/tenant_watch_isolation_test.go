@@ -149,7 +149,7 @@ func settle(t *testing.T, d *notify.Dispatcher, cond func() bool) {
 func TestTenantWatchDelivery_CrossOrgIsolation(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true") // no DNS in the save-time URL pre-check
 	srv, s := newTestServerState(t)
-	s.itsmCfg = newITSMConfigStore(s, t.TempDir()+"/itsm.json")
+	s.itsmCfg = newITSMConfigStore(nil, t.TempDir()+"/itsm.json")
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	// ── org A and org B, each: org → tenant → tenant-scoped admin ────────────

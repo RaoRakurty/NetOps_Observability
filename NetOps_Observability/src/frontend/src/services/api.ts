@@ -627,6 +627,9 @@ export type Incident = {
   source_type: string;
   source_id?: string;
   owner?: string;
+  /** WHERE (tracker 438): the device the firing alert named, stamped by the
+   *  server; absent for stack, Digital Experience and manual incidents. */
+  device_id?: string;
   occurrences: number;
   created_at: string;
   updated_at: string;
@@ -6356,6 +6359,17 @@ export const api = {
     request<{ tenant_id: string; time_display: "local" | "utc" }>("/api/settings/display", {
       method: "PUT", body: JSON.stringify({ time_display: timeDisplay }),
     }),
+  // The tenant's team-default Overview: one of its own dashboards, or the
+  // built-in Overview. GET for everyone; PUT needs administration:admin.
+  getOverviewDefault: () => request<OverviewDefault>("/api/settings/overview-default"),
+  setOverviewDefault: (dashboardId: string) =>
+    request<OverviewDefault>("/api/settings/overview-default", {
+      method: "PUT", body: JSON.stringify({ dashboard_id: dashboardId }),
+    }),
+  resetOverviewDefault: () =>
+    request<OverviewDefault>("/api/settings/overview-default", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
 
   // ---- tenant governance settings (Wave 4 #11: real Settings editors) ----
   // Required tags — the per-tenant list that drives missingTags + the coverage
@@ -10407,6 +10421,16 @@ export type SavedObject = {
   body: any;
   created_at: string;
   updated_at: string;
+};
+
+/** GET/PUT /api/settings/overview-default. `dashboard` is present only when the
+ *  team default still exists, is this tenant's own and the caller may read it;
+ *  `unavailable` = a default is set but cannot be shown (deleted, or no read). */
+export type OverviewDefault = {
+  tenant_id: string;
+  dashboard_id: string;
+  dashboard: SavedObject | null;
+  unavailable: boolean;
 };
 
 // ----- SSO / API / ITSM -----

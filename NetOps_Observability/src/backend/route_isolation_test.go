@@ -519,6 +519,11 @@ var routeIsolationLedger = map[string]string{
 	// tenant record (principalTenant; PUT behind requireAdmin, audited) — the
 	// tenant id never comes from the request (tenant_display_test.go).
 	"/api/settings/display": "scoped",
+	// Team-default Overview dashboard: GET/PUT always the CALLER's own tenant
+	// record (principalTenant; PUT behind requireAdmin, audited); the dashboard
+	// must be the tenant's own and readable, else 404 / unavailable
+	// (tenant_overview_default_test.go).
+	"/api/settings/overview-default": "scoped",
 	// Active Verification opt-in + read-only SSH credential (RCA spec item 8):
 	// keyed by principalTenant in the store itself; PUT behind requireAdmin,
 	// audited, secrets vault-sealed and never returned. Cross-tenant isolation

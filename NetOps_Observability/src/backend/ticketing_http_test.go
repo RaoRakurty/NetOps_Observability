@@ -712,7 +712,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 // PUT echoes the redacted Public view and lands under the caller's own key.
 func TestITSMRCADestinationHandlers(t *testing.T) {
 	srv, s, fix := setupTicketingTenants(t)
-	s.itsmCfg = newITSMConfigStore(s, t.TempDir()+"/itsm.json")
+	s.itsmCfg = newITSMConfigStore(nil, t.TempDir()+"/itsm.json")
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	a, b := fix["A"], fix["B"]
 
