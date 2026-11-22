@@ -3,11 +3,10 @@
 
 package notify
 
-// teams_card.go — the Microsoft Teams message every TENANT-owned Teams
-// destination sends: the tenant's problems (internal/ticketing TeamsAdapter),
-// its own watch alerts (tenant_watch.go) and its cloud notices
-// (cloud_notify.go). The platform-global Teams channel (teams.go) keeps its
-// MessageCard format; it is the operator's, not a tenant's.
+// teams_card.go — the Microsoft Teams message every Teams destination sends:
+// a tenant's problems (internal/ticketing TeamsAdapter), its own watch alerts
+// (tenant_watch.go) and cloud notices (cloud_notify.go), and the
+// platform-global Teams channel (teams.go, the operator's own).
 //
 // Format: an Adaptive Card inside the {"type":"message","attachments":[…]}
 // envelope. Both kinds of Teams webhook a customer can paste accept it —
@@ -261,9 +260,17 @@ func TeamsAlertMessage(a models.Alert) TeamsMessage {
 // Send posts one alert. Any non-2xx is an error so the delivery layer retries
 // and counts it; the error carries the status only.
 func (t *TeamsCard) Send(a models.Alert) error {
+	return sendTeamsAlert(t.client, t.webhookURL, a)
+}
+
+// sendTeamsAlert is the one alert-post path of both Teams channels (TeamsCard
+// over a tenant's webhook, Teams over the platform's): the Adaptive Card from
+// TeamsAlertMessage, a bounded request, and an error for any non-2xx that
+// carries the status code only, never the webhook URL.
+func sendTeamsAlert(c *http.Client, webhookURL string, a models.Alert) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	res, err := PostTeamsMessage(ctx, t.client, t.webhookURL, TeamsAlertMessage(a))
+	res, err := PostTeamsMessage(ctx, c, webhookURL, TeamsAlertMessage(a))
 	if err != nil {
 		return err
 	}

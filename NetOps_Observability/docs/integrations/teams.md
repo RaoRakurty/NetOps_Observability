@@ -1,8 +1,10 @@
 # Microsoft Teams Integration — Setup Guide
 
-Correlix posts alerts to a Teams channel through an **Incoming Webhook**, using
-the MessageCard (Office 365 connector) format so Teams renders a colored title
-bar per severity.
+Correlix posts alerts to a Teams channel through a webhook, as an **Adaptive
+Card** in the `{"type":"message","attachments":[…]}` envelope: the title is
+colored by severity, followed by the description and Severity / Rule facts. Both
+kinds of Teams webhook render it, a **Workflows** URL and a classic
+**Incoming Webhook**. Tenant Teams destinations (section 6) send the same card.
 
 | What you get | Teams-side requirement | Correlix-side requirement |
 |---|---|---|
@@ -26,7 +28,7 @@ incident lifecycle. If you need the bidirectional loop, use Slack (`slack.md`).
 > Workspaces that have retired the Office 365 connector should create the
 > webhook through a **Workflows / Power Automate** "post to a channel when a
 > webhook request is received" flow instead. The resulting URL works the same
-> way here — Correlix only needs an HTTPS endpoint that accepts a JSON POST.
+> way here: Correlix posts the same Adaptive Card to either kind.
 
 ### Credential handling rules
 
