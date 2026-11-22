@@ -39,10 +39,12 @@ describe("Analytics — no duplicates", () => {
     expect(analytics(filteredNav(false, true)).map((l) => l.id)).not.toContain("demo");
   });
 
-  it("keeps the BGP pages exactly as they are (redesigned separately)", () => {
+  it("folds BGP Operations into Protocol Monitoring's BGP tab", () => {
     const ids = analytics().map((l) => l.id);
     expect(ids).toContain("protocols");
-    expect(ids).toContain("bgp-ops");
+    expect(ids).not.toContain("bgp-ops");
+    const r = resolveRoute("#/analytics/bgp-ops", NAV);
+    expect([r.section?.id, r.leaf?.id]).toEqual(["analytics", "protocols"]);
   });
 
   it("sends the old Dashboard List address to My dashboards", () => {
