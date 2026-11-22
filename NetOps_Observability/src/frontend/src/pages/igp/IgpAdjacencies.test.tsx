@@ -266,8 +266,13 @@ describe("health block", () => {
     });
 
     const select = screen.getByLabelText("Device") as HTMLSelectElement;
+    // The device list loads on its own: choosing "leaf1" before its option exists
+    // is a no-op, and the panel never appears (failed #329's vitest job under CI
+    // load). Wait for the option, then choose it.
+    await within(select).findByRole("option", { name: "leaf1" });
     const { fireEvent } = await import("@testing-library/react");
     fireEvent.change(select, { target: { value: "leaf1" } });
+    expect(select.value).toBe("leaf1");
 
     const panel = await screen.findByLabelText("Device IGP health");
     await waitFor(() => expect(igpHealth).toHaveBeenCalledWith("ospf", "leaf1", { since: "24h" }));
@@ -328,7 +333,11 @@ const healthBody = (over: Record<string, unknown> = {}) => ({
 /** Selects the device so the health + timers panels mount. */
 async function pickDevice(id = "spine1") {
   const { fireEvent } = await import("@testing-library/react");
-  fireEvent.change(screen.getByLabelText("Device") as HTMLSelectElement, { target: { value: id } });
+  const select = screen.getByLabelText("Device") as HTMLSelectElement;
+  // Same race as the health-block test: wait for the option before choosing it.
+  await within(select).findByRole("option", { name: id });
+  fireEvent.change(select, { target: { value: id } });
+  expect(select.value).toBe(id);
 }
 
 describe("advanced depth blocks", () => {
