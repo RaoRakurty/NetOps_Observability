@@ -20,12 +20,15 @@ import {
   noTargetCount,
   policyPatch,
   provenanceCounts,
+  sortCandidates,
   sortCircuits,
   sortEndpoints,
   targetKindChip,
   targetKindLabel,
   targetKindMeaning,
   validateForm,
+  wanBasisLabel,
+  wanWhyTitle,
   type NextHopRow,
   type PolicyForm,
 } from "./wanCircuits.model";
@@ -214,7 +217,7 @@ function PathsSection({ panel, onRetry, q, site = "" }: {
 const ENDPOINT_CAP = 25;
 
 function EndpointsSection({ panel, onRetry, q, site = "" }: {
-  panel: Panel<{ endpoints: WanEndpoint[] }>; onRetry: () => void; q: string; site?: string;
+  panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; onRetry: () => void; q: string; site?: string;
 }) {
   const all = useMemo(
     () => sortEndpoints(panel.data?.endpoints ?? []).filter((e) => matchesSite(site, e.site)),
@@ -260,7 +263,7 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                 <table className="dp-tbl">
                   <thead>
                     <tr>
-                      <th>Device</th><th>Interface</th><th>Address</th>
+                      <th>Device</th><th>Interface</th><th>Why WAN</th><th>Address</th>
                       <th>Far end targets</th><th>Site</th>
                       <th>Measured to</th><th>Derived from</th>
                     </tr>
@@ -269,14 +272,8 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                     {cap.rows.map((e) => (
                       <tr key={`${e.device}#${e.interface}`}>
                         <th scope="row">{e.device}</th>
-                        <td style={mono}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            {e.interface}
-                            {e.connected_to_wan && (
-                              <span className="badge" title="Connected to a WAN device, so measured too">linked</span>
-                            )}
-                          </span>
-                        </td>
+                        <td style={mono}>{e.interface}</td>
+                        <td title={wanWhyTitle(e)} data-testid="wan-why">{wanBasisLabel(e.wan_basis)}</td>
                         <td style={mono}>{e.address || dash}</td>
                         <td style={mono}>{e.measurable_addr || dash}</td>
                         <td>{e.site || dash}</td>
@@ -293,6 +290,46 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
         )}
       </PanelState>
     </Section>
+  );
+}
+
+// ── 3b · possible WAN interfaces (the registry's `candidates`) ──────────────
+//
+// Interfaces with a hint but no proof: a WAN-sounding description, a public
+// address, the port facing a WAN router, or a WAN router with nothing confirmed.
+// Never measured; collapsed by default so they never read as WAN circuits.
+
+function PossibleSection({ panel, site = "" }: {
+  panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; site?: string;
+}) {
+  const rows = useMemo(
+    () => sortCandidates(panel.data?.candidates).filter((e) => matchesSite(site, e.site)),
+    [panel.data, site],
+  );
+  if (rows.length === 0) return null;
+  return (
+    <details className="wan-possible" data-testid="wan-possible" style={{ marginTop: 18 }}>
+      <summary>
+        Possible WAN — not confirmed ({rows.length})
+        <AskIris topic="wan.basis" label="Possible WAN" />
+      </summary>
+      <p className="wan-line">Not measured until someone marks them as WAN.</p>
+      <table className="dp-tbl">
+        <thead>
+          <tr><th>Device</th><th>Interface</th><th>Address</th><th>Why it might be WAN</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((e) => (
+            <tr key={`${e.device}#${e.interface}`}>
+              <th scope="row">{e.device}</th>
+              <td style={mono}>{e.interface}</td>
+              <td style={mono}>{e.address || dash}</td>
+              <td title={wanWhyTitle(e)}>{wanBasisLabel(e.wan_basis)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
@@ -566,10 +603,6 @@ export default function WanCircuits({ site = "", onSites }: {
   const targetKindLabelShort: Record<string, string> = {
     direct_peer: "Peer", next_hop: "Next-hop", anchor: "Anchor",
   };
-  const connectedChip = (r: WanInterfaceRow) =>
-    r.connected_to_wan
-      ? <span className="badge" title="This interface is directly connected to a WAN device (measured too).">linked</span>
-      : null;
 
   const utilCell = (r: WanInterfaceRow) => {
     if (!r.has_util) return dash;
@@ -597,8 +630,10 @@ export default function WanCircuits({ site = "", onSites }: {
       text: (r) => r.device, sortValue: (r) => r.device, render: (r) => <span title={r.device}>{r.device}</span> },
     { key: "iface", header: "Interface", width: "13%", sortable: true,
       text: (r) => r.interface, sortValue: (r) => r.interface,
-      render: (r) => <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.interface}</span>{connectedChip(r)}</span> },
+      render: (r) => <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.interface}</span> },
+    { key: "why", header: "Why WAN", width: "12%", sortable: true,
+      text: (r) => wanBasisLabel(r.wan_basis), sortValue: (r) => wanBasisLabel(r.wan_basis),
+      render: (r) => <span title={wanWhyTitle(r)}>{wanBasisLabel(r.wan_basis)}</span> },
     { key: "util", header: "Utilization", width: 122, align: "right", sortable: true,
       sortValue: (r) => (r.has_util ? r.util_pct : -1), sev: (r) => (r.has_util ? utilSev(r.util_pct) : undefined), render: utilCell },
     { key: "in", header: "↓ In", width: 84, align: "right", sortable: true,
@@ -652,9 +687,8 @@ export default function WanCircuits({ site = "", onSites }: {
     <div className="card paths-page">
       <h2>WAN circuits</h2>
       <p className="wan-line" style={{ marginTop: -6, marginBottom: 14 }}>
-        One row per WAN interface, and per interface{" "}
-        <span className="badge" style={{ verticalAlign: "middle" }}>linked</span> to one.
-        <AskIris topic="wan.linked" label="Linked interface" />
+        One row per confirmed WAN interface, with the reason it counts.
+        <AskIris topic="wan.basis" label="Why WAN" />
         Each row names the tier that measured it.
         <AskIris topic="wan.tiers" label="Measured by" />
       </p>
@@ -696,8 +730,8 @@ export default function WanCircuits({ site = "", onSites }: {
 
       {loaded && rows.length === 0 ? (
         <div className="empty">
-          No WAN interfaces yet.
-          <AskIris topic="wan.policy" label="No WAN interfaces" />
+          No confirmed WAN interfaces yet. Possible ones, if any, are listed below.
+          <AskIris topic="wan.basis" label="No WAN interfaces" />
         </div>
       ) : (
         <DataTable<WanInterfaceRow>
@@ -713,6 +747,7 @@ export default function WanCircuits({ site = "", onSites }: {
 
       <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} site={site} />
       <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} />
+      <PossibleSection panel={endpoints} site={site} />
       <PolicySection panel={policy} onRetry={reloadPolicy} canEdit={canEdit} onSaved={afterPolicySave} />
     </div>
   );
