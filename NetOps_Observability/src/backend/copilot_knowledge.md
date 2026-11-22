@@ -70,7 +70,7 @@ and shown under **Infrastructure → Devices**.
 
 ## Key UI sections (left rail → hover flyout)
 Overview (Home/Operations Overview/My Dashboard) · Operations (Incidents/Active
-Alerts/Action Queue/Services/Network Health; Monitors) · Investigate (RCA/
+Alerts/Problems/Services/Network Health; Monitors) · Investigate (RCA/
 Findings/Topology/Troubleshooting; Paths) · Infrastructure (Devices/Interfaces &
 Optics/Sites/Wireless/NMS Integrations/Config Drift/Source of Truth) · Explore
 (Metrics/Logs/Flows/Events/Saved Searches) · Security (Overview/Exposures/

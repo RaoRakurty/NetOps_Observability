@@ -1,7 +1,7 @@
 ---
 title: Read the Command Center
 sidebar_label: Command Center
-description: Read the Home page at the start of a shift, what each header chip and KPI tile counts, and how the tiles filter the Action Queue below them.
+description: Read the Home page at the start of a shift, what each header chip and KPI tile counts, and how the tiles filter the Problems list below them.
 page_type: task
 sidebar_position: 2
 ---
@@ -26,7 +26,7 @@ rather than messages to read.
 1. Go to **Overview → Home**. The page refreshes every 30 seconds, which the
    **Live · 30s** marker in the header confirms.
 2. Read the header chips from left to right.
-3. Read the KPI tiles. Select a tile to filter the **Action Queue** below it to
+3. Read the KPI tiles. Select a tile to filter the **Problems** list below it to
    that set. Select the same tile again to clear the filter.
 4. Narrow the queue further with the filter bar: **RCA**, **Severity**,
    **Fault domain**, **Evidence**, **Owner** and **Needs action**.
@@ -66,9 +66,9 @@ The queue leaves out lone observations that never grouped into an
 incident, and incidents on Correlix's own stack. Those belong to **Platform →
 Stack Health**.
 
-### The Action Queue on this page
+### The Problems list on this page
 
-The queue is the same one **Operations → Action Queue** shows at full height.
+The queue is the same one **Operations → Problems** shows at full height.
 It is sorted by severity, then by age. Each row carries **Sev**, **Problem**,
 **Incident**, **RCA**, **Impact**, **Domain**, **Evidence**, **Owner**,
 **Started**, **Age**, **Ticket** and **Next**.
@@ -124,6 +124,6 @@ open a ticket against the wrong team.
 ## Related
 
 - [Start a shift](/noc-guide/where-to-start)
-- [Work the Action Queue](/incidents/action-queue)
+- [Work the Problems list](/incidents/action-queue)
 - [Read an RCA case](/investigate/read-an-rca-case)
 - [Open tickets automatically from RCA](/incident-response/rca-ticketing)

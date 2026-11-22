@@ -188,7 +188,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
         {err ? (
           <div className="empty tr-error">{err}</div>
         ) : links.length === 0 ? (
-          cur.loading ? <div className="empty board-empty" aria-busy="true" /> : <FlowEmpty q={q} />
+          cur.loading ? <div className="empty board-empty" aria-busy="true" /> : <FlowEmpty q={q} includePlatform={includePlatform} />
         ) : (
           <DataTable<LinkRow>
             rows={links}
@@ -313,7 +313,7 @@ function LinkDetail({ linkKey, row, devices, names, win, ftype, base, utilWord, 
       ) : !ts.data ? (
         <div className="empty board-empty" aria-busy="true" />
       ) : empty ? (
-        <FlowEmpty q={q} />
+        <FlowEmpty q={q} includePlatform={base.traffic === "all"} />
       ) : (
         <ReactECharts
           style={{ height: 300 }}

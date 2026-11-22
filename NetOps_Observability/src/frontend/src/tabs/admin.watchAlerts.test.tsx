@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Integrations → Paging and chat: the "my own watches" choice per lane
+// Integrations → Paging for problems: the "my own watches" choice per lane
 // (tracker 359). The server sends the EFFECTIVE value (Slack defaults on,
 // PagerDuty off); the card shows it and saves the operator's choice back.
 

@@ -137,6 +137,8 @@ func vmanageInterfaceRealtimeTransform(tenant, integrationID string, raw []byte)
 			VPN         vmStr      `json:"vpn-id"`
 			Desc        string     `json:"desc"`
 			Description string     `json:"description"`
+			PortType    string     `json:"port-type"`
+			IfType      string     `json:"interface-type"`
 			OperStatus  string     `json:"if-oper-status"`
 			AdminStatus string     `json:"if-admin-status"`
 			RxOctets    vmNum      `json:"rx-octets"`
@@ -170,6 +172,7 @@ func vmanageInterfaceRealtimeTransform(tenant, integrationID string, raw []byte)
 			DeviceKey: r.Device, DeviceName: strings.TrimSpace(r.HostName),
 			IfIndex: string(r.IfIndex), IfName: ifName, VRF: strings.TrimSuffix(string(r.VPN), "null"),
 			Description: firstNonEmpty(r.Desc, r.Description), Addrs: addrs, Time: ts,
+			PortRole: strings.TrimSpace(r.PortType), IfType: strings.TrimSpace(r.IfType),
 		})
 		if vmInternalVPN(string(r.VPN)) {
 			continue
