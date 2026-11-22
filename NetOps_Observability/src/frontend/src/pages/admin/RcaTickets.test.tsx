@@ -95,7 +95,10 @@ describe("RCA Tickets flow", () => {
 
   it("helpers", () => {
     const d = destinationsOf(cfg({ pagerduty: { enabled: true, has_routing_key: false }, slack: { enabled: false, has_webhook: true } }));
-    expect(d.map((x) => [x.id, x.on])).toEqual([["servicenow", false], ["jira", false], ["pagerduty", false], ["slack", false]]);
+    expect(d.map((x) => [x.id, x.on])).toEqual([["servicenow", false], ["jira", false], ["pagerduty", false], ["slack", false], ["teams", false]]);
+    const t = destinationsOf(cfg({ teams: { enabled: true, has_webhook: true } }));
+    expect(t.find((x) => x.id === "teams")).toEqual({ id: "teams", name: "Microsoft Teams", on: true });
+    expect(destinationsOf(cfg({ teams: { enabled: true, has_webhook: false } })).find((x) => x.id === "teams")?.on).toBe(false);
     expect(policyConflict([pol({ id: "a" }), pol({ id: "b", external_system: "jira" })])).toBe(false);
     expect(policyConflict([pol({ id: "a" }), pol({ id: "b" })])).toBe(true);
     expect(policyConflict([pol({ id: "a" }), pol({ id: "b", enabled: false })])).toBe(false);

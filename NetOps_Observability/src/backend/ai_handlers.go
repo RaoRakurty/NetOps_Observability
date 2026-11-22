@@ -5291,7 +5291,7 @@ func (s *server) irisActionLedger(r *http.Request, c irisaction.Caller, req iris
 //   5. the daily run cap (counted under the store's lock) and the dedupe key
 //      (one run per incident, one per schedule slot) admit it.
 // The result is held as an investigation trace, attached to the incident as a
-// note, and announced on the workspace's own Slack lane (never PagerDuty).
+// note, and announced on the workspace's own Slack or Teams lane (never PagerDuty).
 
 const (
 	irisTriggerSystemSub  = "system:iris-trigger"
@@ -5510,7 +5510,7 @@ func (s *server) irisTriggerAttach(ctx context.Context, tenant string, tr iristr
 	}
 }
 
-// irisTriggerAnnounce posts the outcome on the workspace's own Slack lane
+// irisTriggerAnnounce posts the outcome on the workspace's own Slack or Teams lane
 // (never PagerDuty: a finished investigation is something to read, not a page).
 func (s *server) irisTriggerAnnounce(tenant string, tr iristrigger.Trigger, ev *iristrigger.IncidentEvent, run iristrigger.Run, summary string) {
 	subject := "the schedule \"" + tr.Name + "\""
@@ -5522,7 +5522,7 @@ func (s *server) irisTriggerAnnounce(tenant string, tr iristrigger.Trigger, ev *
 		Summary: "Iris investigated " + subject + ": " + summary, FiredAt: time.Now().UTC(),
 	})
 	if n == 0 {
-		logInfo("iris.trigger", "result not announced: the workspace has no Slack lane opted into watch alerts", map[string]any{"tenant": tenant, "run": run.ID})
+		logInfo("iris.trigger", "result not announced: the workspace has no Slack or Teams lane opted into watch alerts", map[string]any{"tenant": tenant, "run": run.ID})
 	}
 }
 

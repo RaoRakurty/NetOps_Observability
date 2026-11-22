@@ -20,7 +20,7 @@ import (
 // system resolves its OWN governing policy (the one-enabled invariant is per
 // (tenant, external_system)); ServiceNow keeps its default-on MVP fallback,
 // every other system is strictly opt-in (no policy → no delivery).
-var TicketSystems = []string{"servicenow", "pagerduty", "slack", "jira"}
+var TicketSystems = []string{"servicenow", "pagerduty", "slack", "teams", "jira"}
 
 // PolicyResolution is ResolvePolicyState's outcome: the governing policy plus
 // HOW it came to govern, so callers (simulator, observability) can tell an

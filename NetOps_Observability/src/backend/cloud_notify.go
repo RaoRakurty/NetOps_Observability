@@ -59,7 +59,7 @@ const (
 )
 
 // cloudNotifyTarget is one per-tenant destination resolved from the EXISTING
-// RCA notification config: system is a notify lane name ("slack"/"pagerduty"),
+// RCA notification config: system is a notify lane name ("slack"/"teams"/"pagerduty"),
 // secret is that tenant's own webhook URL / routing key (write-only, never logged).
 type cloudNotifyTarget struct {
 	System string
@@ -74,9 +74,12 @@ type cloudNotifyResolver func(tenant string) []cloudNotifyTarget
 // cloudNotifyLanes is the PURE routing decision: which existing notifier lanes
 // a tenant's RCA config enables. Disabled or secret-less lanes never route.
 func cloudNotifyLanes(cfg itsmConfig) []cloudNotifyTarget {
-	out := make([]cloudNotifyTarget, 0, 2)
+	out := make([]cloudNotifyTarget, 0, 3)
 	if cfg.Slack.Enabled && cfg.Slack.WebhookURL != "" {
 		out = append(out, cloudNotifyTarget{System: "slack", Secret: cfg.Slack.WebhookURL})
+	}
+	if cfg.Teams.Enabled && cfg.Teams.WebhookURL != "" {
+		out = append(out, cloudNotifyTarget{System: "teams", Secret: cfg.Teams.WebhookURL})
 	}
 	if cfg.PagerDuty.Enabled && cfg.PagerDuty.RoutingKey != "" {
 		out = append(out, cloudNotifyTarget{System: "pagerduty", Secret: cfg.PagerDuty.RoutingKey})
@@ -210,6 +213,8 @@ func sendViaNotifyLane(t cloudNotifyTarget, a models.Alert) error {
 	switch t.System {
 	case "slack":
 		return notify.NewSlack(t.Secret).Send(a)
+	case "teams":
+		return notify.NewTeamsCard(t.Secret).Send(a)
 	case "pagerduty":
 		return notify.NewPagerDuty(t.Secret).Send(a)
 	}
@@ -370,11 +375,14 @@ func (s *server) tenantWatchLanes(tenant string) []notify.TenantLane {
 }
 
 // tenantWatchLanesFrom is the pure lane decision: enabled, secret present,
-// and opted in (Slack default ON, PagerDuty default OFF).
+// and opted in (Slack and Teams default ON, PagerDuty default OFF).
 func tenantWatchLanesFrom(cfg itsmConfig) []notify.TenantLane {
-	out := make([]notify.TenantLane, 0, 2)
+	out := make([]notify.TenantLane, 0, 3)
 	if cfg.Slack.Enabled && cfg.Slack.WebhookURL != "" && cfg.Slack.WatchAlertsOn() {
 		out = append(out, notify.TenantLane{System: notify.TenantLaneSlack, Secret: cfg.Slack.WebhookURL})
+	}
+	if cfg.Teams.Enabled && cfg.Teams.WebhookURL != "" && cfg.Teams.WatchAlertsOn() {
+		out = append(out, notify.TenantLane{System: notify.TenantLaneTeams, Secret: cfg.Teams.WebhookURL})
 	}
 	if cfg.PagerDuty.Enabled && cfg.PagerDuty.RoutingKey != "" && cfg.PagerDuty.WatchAlertsOn() {
 		out = append(out, notify.TenantLane{System: notify.TenantLanePagerDuty, Secret: cfg.PagerDuty.RoutingKey})

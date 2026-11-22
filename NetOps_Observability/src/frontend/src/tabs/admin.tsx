@@ -3284,12 +3284,13 @@ export function IntegrationsAdmin() {
       </div>
 
       {/* Paging and chat destinations for root-cause tickets — this tenant's own
-          PagerDuty routing key and Slack webhook (moved here from RCA Tickets,
+          PagerDuty routing key and Slack and Teams webhooks (moved here from RCA Tickets,
           owner 2026-10-18, so every destination lives in one place; same gate:
           requireAdmin + itsmKey(tenant), itsm_config.go). */}
       <h3 className="adm-grouphead" style={{ marginTop: "var(--sp-3)" }}>Paging for problems</h3>
       <PagerDutyPagingConnection />
       <SlackChannelConnection />
+      <TeamsChannelConnection />
 
       {/* Live open tickets per connected connector — real operational data, not config. */}
       {sn?.enabled && (sn.open?.length ?? 0) > 0 && (
@@ -4201,7 +4202,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <LabeledInput label="Policy name" required value={p.name} onChange={(v) => set("name", v)}
           placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
         <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
-          options={["servicenow", "pagerduty", "slack", "jira"]}
+          options={["servicenow", "pagerduty", "slack", "teams", "jira"]}
           info="Where this policy delivers. One enabled policy per system." />
         <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
           options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
@@ -4227,6 +4228,12 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <p className="adm-line adm-mt">
           One message per root cause.
           <AskIris topic="policy.slack" label="Slack delivery" />
+        </p>
+      )}
+      {p.external_system === "teams" && (
+        <p className="adm-line adm-mt">
+          One card per root cause.
+          <AskIris topic="policy.teams" label="Teams delivery" />
         </p>
       )}
       {p.external_system === "jira" && (
@@ -4399,6 +4406,57 @@ export function SlackChannelConnection() {
         <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
         <input className="app-input" type="password" style={{ minWidth: 280 }} value={url}
           placeholder={hasHook ? "Webhook is set — leave blank to keep it" : "https://hooks.slack.com/services/…"}
+          onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
+        <button className="btn accent" onClick={() => { void save(); }}>Save</button>
+        {hasHook && <span className="adm-line">webhook stored (write-only)</span>}
+        {msg && <span className="adm-line">{msg}</span>}
+      </div>
+      <label style={{ display: "flex", gap: "var(--sp-2)", alignItems: "flex-start", marginTop: "var(--sp-2)", fontSize: "var(--fs-base)" }}>
+        <input type="checkbox" checked={watch} onChange={(e) => setWatch(e.target.checked)} />
+        <span>
+          Also post my own watches here: BGP prefix alerts on my watchlist and my cloud monitors.
+          One message when the alert starts and one when it clears. On unless you turn it off.
+        </span>
+      </label>
+      <ErrLine msg={err} />
+    </div>
+  );
+}
+
+// TeamsChannelConnection — this tenant's own Microsoft Teams channel: a
+// Workflows webhook ("When a Teams webhook request is received") or a classic
+// Incoming Webhook. Same gate and keying as Slack (requireAdmin + the caller's
+// tenant, itsm_config.go); the URL is write-only.
+export function TeamsChannelConnection() {
+  const [cfg, setCfg] = useState<ItsmConfig | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  // On unless the tenant turns it off: a channel message wakes nobody.
+  const [watch, setWatch] = useState(true);
+  const [url, setUrl] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.teams?.enabled); setWatch(c.teams?.watch_alerts ?? true); }).catch((e: unknown) => setErr(operatorError(e, "The Teams connection could not be read.")));
+  }, []);
+  const save = async () => {
+    setErr(""); setMsg("");
+    try {
+      const out = await api.saveItsmTeamsRCA({ enabled, watch_alerts: watch, ...(url.trim() ? { webhook_url: url.trim() } : {}) });
+      setCfg(out); setUrl(""); setWatch(out.teams?.watch_alerts ?? true); setMsg("Saved.");
+    } catch (e) { setErr(operatorError(e, "That connection was not saved.")); }
+  };
+  const hasHook = !!cfg?.teams?.has_webhook;
+  return (
+    <div className="cc-panel" style={{ padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }} data-testid="teams-connection">
+      <h4 style={{ margin: 0 }}>Teams channel connection</h4>
+      <p className="adm-line adm-mt">
+        This tenant's own Teams webhook URL.
+        <AskIris topic="policy.teams-webhook" label="Teams webhook" />
+      </p>
+      <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
+        <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
+        <input className="app-input" type="password" style={{ minWidth: 280 }} value={url} aria-label="Teams webhook URL"
+          placeholder={hasHook ? "Webhook is set — leave blank to keep it" : "https://… (Teams Workflows or Incoming Webhook URL)"}
           onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
         <button className="btn accent" onClick={() => { void save(); }}>Save</button>
         {hasHook && <span className="adm-line">webhook stored (write-only)</span>}
