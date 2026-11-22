@@ -405,6 +405,41 @@ export function isDirty(form: PolicyForm, stored: WanMeasurementPolicy | null | 
   );
 }
 
+// ── why an interface counts as WAN (2026-11-22) ─────────────────────────────
+//
+// The server decides per interface from evidence and says why (wan_basis,
+// wan_reason). A device's name never makes every port WAN: confirmed interfaces
+// are measured, possible ones are listed apart and never measured until marked.
+
+const WAN_BASIS_LABEL: Record<string, string> = {
+  operator: "Marked by an operator",
+  sdwan_transport_port: "SD-WAN transport",
+  sdwan_tloc: "Transport locator",
+  sdwan_tunnel_source: "Tunnel runs over it",
+  declared_next_hop: "Next-hop declared",
+  transport_vpn_no_tunnel: "Transport VPN, no tunnel",
+  described_as_wan: "Description says WAN",
+  public_address: "Public address",
+  linked: "Faces a WAN router",
+  wan_router_only: "On a WAN router",
+};
+
+/** The short "Why WAN" label for a basis; an unknown or missing basis is a dash. */
+export function wanBasisLabel(basis: string | undefined | null): string {
+  return (basis && WAN_BASIS_LABEL[basis]) || "—";
+}
+
+/** The tooltip for a "Why WAN" cell: the server's sentence, then its evidence. */
+export function wanWhyTitle(ep: { wan_reason?: string; wan_evidence?: { source: string; detail: string }[] }): string {
+  const ev = (ep.wan_evidence ?? []).map((e) => e.detail).filter(Boolean);
+  return [ep.wan_reason ?? "", ...ev].filter(Boolean).join(" · ");
+}
+
+/** Possible interfaces, sorted by device, then interface. */
+export function sortCandidates(eps: readonly WanEndpoint[] | undefined | null): WanEndpoint[] {
+  return [...(eps ?? [])].sort((a, b) => a.device.localeCompare(b.device) || a.interface.localeCompare(b.interface));
+}
+
 function stableMap(m: Record<string, string> | undefined): string {
   return Object.entries(m ?? {})
     .sort((x, y) => x[0].localeCompare(y[0]))
