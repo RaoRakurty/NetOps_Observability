@@ -14,9 +14,8 @@
 //   2. THE PUT BODY MUST CARRY INTENT ONLY. The server stamps tenant, author and
 //      time from the token. If `tenant_id` ever appears in the body we are
 //      asserting ownership we do not have, so the exact body is asserted.
-//   3. A SAVE CHANGES THE PROJECTION. The policy is the input to the derivation,
-//      so a successful save has to re-read the other two sections — otherwise the
-//      operator sees a stale registry and believes their change did nothing.
+//   3. (The policy editor moved to Administration on 2026-11-22; its guards are
+//      in WanSettings.test.tsx.)
 //
 // Plus the two ordinary guards: one section's dead read must not blank another,
 // and a rejected save must leave the operator's text where they left it.
@@ -120,13 +119,18 @@ afterEach(() => { cleanup(); vi.useRealTimers(); });
 // ── each section reads its own route ────────────────────────────────────────
 
 describe("routes", () => {
-  it("reads interfaces, endpoints, paths and the policy — one route per section", async () => {
+  it("reads interfaces, endpoints and paths — one route per section — and links to WAN settings", async () => {
     render(<WanCircuits />);
-    await waitFor(() => expect(mockApi.wanPolicy).toHaveBeenCalled());
+    await waitFor(() => expect(mockApi.wanCircuits).toHaveBeenCalled());
     expect(mockApi.wanInterfaces).toHaveBeenCalled();
     expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(1);
     expect(mockApi.wanCircuits).toHaveBeenCalledTimes(1);
-    expect(mockApi.wanPolicy).toHaveBeenCalledTimes(1);
+    // The policy editor lives under Administration now (2026-11-22): this page
+    // neither reads nor edits it, and says where it is.
+    expect(mockApi.wanPolicy).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("WAN device name pattern")).toBeNull();
+    const link = within(screen.getByTestId("wan-settings-link")).getByRole("link", { name: "WAN settings" });
+    expect(link.getAttribute("href")).toBe("#/admin/discovery/wan");
   });
 
   it("keeps the existing interface metrics table and its live read", async () => {
@@ -283,161 +287,23 @@ describe("endpoint registry", () => {
 // ── section independence ────────────────────────────────────────────────────
 
 describe("each section owns its own failure", () => {
-  it("a dead policy read leaves the paths and the registry on screen", async () => {
-    mockApi.wanPolicy.mockRejectedValue(new Error(
+  it("a dead registry read leaves the paths on screen, in an operator sentence", async () => {
+    mockApi.wanEndpoints.mockRejectedValue(new Error(
       '500 Internal Server Error: {"error":"dial tcp 10.0.0.9:2379: connect: connection refused"}',
     ));
     render(<WanCircuits />);
-    await waitFor(() => {
-      expect(within(section("wan-policy")).getByRole("alert")).toBeTruthy();
-    });
-    // An operator sentence, not the server's wrap chain and not its addresses.
-    const said = within(section("wan-policy")).getByRole("alert").textContent ?? "";
+    await waitFor(() => expect(within(section("wan-endpoints")).getByRole("alert")).toBeTruthy());
+    const said = within(section("wan-endpoints")).getByRole("alert").textContent ?? "";
     expect(said).toContain("The service did not answer.");
     expect(said).not.toContain("10.0.0.9");
     expect(within(section("wan-measured-paths")).getAllByText("wan-edge-1").length).toBeGreaterThan(0);
-    expect(within(section("wan-endpoints")).getByText("London")).toBeTruthy();
   });
 
-  it("a dead paths read leaves the policy editor usable", async () => {
+  it("a dead paths read leaves the registry on screen", async () => {
     mockApi.wanCircuits.mockRejectedValue(new Error("503 Service Unavailable: {}"));
     render(<WanCircuits />);
     await waitFor(() => expect(within(section("wan-measured-paths")).getByRole("alert")).toBeTruthy());
-    await waitFor(() => expect(screen.getByLabelText("WAN device name pattern")).toBeTruthy());
-    expect(within(section("wan-endpoints")).getByText("London")).toBeTruthy();
-  });
-});
-
-// ── the measurement policy editor ───────────────────────────────────────────
-
-describe("measurement policy", () => {
-  async function openEditor() {
-    render(<WanCircuits />);
-    return waitFor(() => screen.getByLabelText("WAN device name pattern") as HTMLInputElement);
-  }
-
-  it("seeds the form from the stored policy and names who changed it", async () => {
-    const pattern = await openEditor();
-    expect(pattern.value).toBe("wan|edge|gw|dmz");
-    expect((screen.getByLabelText("Reachability anchors") as HTMLInputElement).value).toBe("1.1.1.1, 8.8.8.8");
-    expect((screen.getByLabelText("Device or device and interface, override 1") as HTMLInputElement).value)
-      .toBe("wan-edge-1/Ethernet2");
-    expect(screen.getByText(/Last changed by rao/)).toBeTruthy();
-  });
-
-  it("keeps the save inert until the form differs from what is stored", async () => {
-    const pattern = await openEditor();
-    const save = screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    fireEvent.change(pattern, { target: { value: "wan|edge|dia" } });
-    expect((screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("PUTs exactly the four intent fields, and never a tenant", async () => {
-    const pattern = await openEditor();
-    fireEvent.change(pattern, { target: { value: "wan|edge|dia" } });
-    fireEvent.change(screen.getByLabelText("Reachability anchors"), { target: { value: "9.9.9.9, 1.1.1.1" } });
-    fireEvent.click(screen.getByLabelText("Also measure interfaces directly connected to a WAN device"));
-    fireEvent.change(screen.getByLabelText("ISP next-hop address, override 1"), { target: { value: "203.0.113.9" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
-
-    await waitFor(() => expect(mockApi.setWanPolicy).toHaveBeenCalledTimes(1));
-    const body = mockApi.setWanPolicy.mock.calls[0][0] as WanMeasurementPolicy;
-    expect(body).toEqual({
-      wan_pattern: "wan|edge|dia",
-      anchors: ["9.9.9.9", "1.1.1.1"],
-      next_hops: { "wan-edge-1/Ethernet2": "203.0.113.9" },
-      include_connected: false,
-    });
-    expect(Object.keys(body)).not.toContain("tenant_id");
-    expect(Object.keys(body)).not.toContain("updated_by");
-    expect(Object.keys(body)).not.toContain("updated_at");
-  });
-
-  it("adds and removes ISP next-hop overrides, and clearing the last one PUTs an empty map", async () => {
-    await openEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Remove override 1" }));
-    expect(screen.getByText(/No ISP next-hop has been declared/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
-    await waitFor(() => expect(mockApi.setWanPolicy).toHaveBeenCalled());
-    expect((mockApi.setWanPolicy.mock.calls[0][0] as WanMeasurementPolicy).next_hops).toEqual({});
-  });
-
-  it("blocks a save while an override is half-filled, and says which half is missing", async () => {
-    await openEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Add an override" }));
-    fireEvent.change(screen.getByLabelText("Device or device and interface, override 2"), { target: { value: "wan-edge-2" } });
-    expect(screen.getByText(/no ISP next-hop address to measure to/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(mockApi.setWanPolicy).not.toHaveBeenCalled();
-  });
-
-  it("re-reads the endpoints and the paths after a successful save — the projection changed", async () => {
-    const pattern = await openEditor();
-    expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(1);
-    expect(mockApi.wanCircuits).toHaveBeenCalledTimes(1);
-
-    fireEvent.change(pattern, { target: { value: "wan|edge|dia" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
-
-    await waitFor(() => expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(2));
-    expect(mockApi.wanCircuits).toHaveBeenCalledTimes(2);
-    expect(mockApi.wanPolicy).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText(/Measurement policy saved\./)).toBeTruthy();
-  });
-
-  it("catches an unreadable pattern before it is ever sent", async () => {
-    const pattern = await openEditor();
-    fireEvent.change(pattern, { target: { value: "wan(edge" } });
-    expect(screen.getByText(/That device name pattern could not be read\./)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save policy" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(mockApi.setWanPolicy).not.toHaveBeenCalled();
-  });
-
-  it("renders an operator sentence on a refused save and keeps the edit in the form", async () => {
-    // A named capture group the browser accepts and the server's own matcher
-    // does not — the case the local pre-flight cannot catch, so the server's
-    // sentence is the one the operator has to read.
-    mockApi.setWanPolicy.mockRejectedValue(new Error(
-      '400 Bad Request: {"error":"wan_pattern is not a valid expression"}',
-    ));
-    const pattern = await openEditor();
-    fireEvent.change(pattern, { target: { value: "(?<edge>wan)" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
-
-    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
-    // The server's own wording survives — only its shape is normalized.
-    expect(screen.getByRole("status").textContent).toBe("Wan_pattern is not a valid expression.");
-    // The operator's text survives the refusal, and nothing was re-derived.
-    expect((screen.getByLabelText("WAN device name pattern") as HTMLInputElement).value).toBe("(?<edge>wan)");
-    expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to our own sentence when the server's failure is developer text", async () => {
-    mockApi.setWanPolicy.mockRejectedValue(new Error(
-      '500 Internal Server Error: {"error":"kv: write /data/wan_policy.json: no space left on device"}',
-    ));
-    const pattern = await openEditor();
-    fireEvent.change(pattern, { target: { value: "wan|edge|dia" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
-    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
-    expect(screen.getByRole("status").textContent).toBe("The service did not answer.");
-  });
-
-  it("without write access explains the read-only state instead of offering a dead button", async () => {
-    mockApi.permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
-    render(<WanCircuits />);
-    await waitFor(() => expect(screen.getByText(/Changing the policy needs write access\./)).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Save policy" })).toBeNull();
-    expect((screen.getByLabelText("WAN device name pattern") as HTMLInputElement).disabled).toBe(true);
-    // Who can grant it is ai/skills/explain/wan.policy-readonly.md, behind the `(i)`.
-    expect(screen.getByRole("button", { name: "Ask Iris about Read-only policy" })).toBeTruthy();
-  });
-
-  it("treats an unreadable permission check as read-only", async () => {
-    mockApi.permissions.mockRejectedValue(new Error("401 Unauthorized: {}"));
-    render(<WanCircuits />);
-    await waitFor(() => expect(screen.getByText(/Changing the policy needs write access\./)).toBeTruthy());
+    expect(await within(section("wan-endpoints")).findByText("London")).toBeTruthy();
   });
 });
 

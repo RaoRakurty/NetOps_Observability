@@ -798,6 +798,18 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Telemetry Coverage"
     },
     {
+      "id": "docs-133",
+      "category": "docs",
+      "question": "Where do I set the ISP next-hops and anchors WAN interfaces measure to?",
+      "expect": {
+        "slugs": [
+          "infrastructure/wan-interface-metrics"
+        ]
+      },
+      "nav": "admin/discovery/wan",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 WAN circuits (the measurement policy, moved off Paths 2026-11-22)"
+    },
+    {
       "id": "docs-069",
       "category": "docs",
       "question": "An RCA ticket never arrived in ServiceNow. Where did it stop?",

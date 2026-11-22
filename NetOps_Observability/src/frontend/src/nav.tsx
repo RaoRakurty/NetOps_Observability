@@ -487,6 +487,7 @@ export const NAV: NavSection[] = [
           { id: "sensors", label: "Sensors", platformOnly: true },
           { id: "coverage", label: "Collection Coverage" },
           { id: "telemetry", label: "Telemetry Coverage" },
+          { id: "wan", label: "WAN circuits" },
         ],
       },
       // Incident response plumbing — configuration, not operations (the old
