@@ -134,6 +134,10 @@ describe("Path data drawer", () => {
     expect(i.tunnels.href).toBe("#/infrastructure/nms");
     expect(i.tunnels.where).toBe("Infrastructure › NMS Integrations");
     expect(i.wan.state).toBe("off");
+    // What WAN interfaces measure to is set under Administration (2026-11-22).
+    expect(i.wan.href).toBe("#/admin/discovery/wan");
+    expect(i.wan.where).toBe("Administration › Discovery › WAN circuits");
+    expect(byId(facts({ wanInterfaces: 0, wanMeasured: 0 })).wan.text).toBe("No confirmed WAN interfaces yet.");
   });
 
   it("a source that could not be read is unknown, never off", () => {

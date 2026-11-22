@@ -164,6 +164,8 @@ export interface PathDataItem {
 export const FEATURES_HREF = "#/platform/features";
 export const NMS_HREF = "#/infrastructure/nms";
 export const TARGETS_HREF = "#/operations/digital-experience/synthetics";
+/** What WAN interfaces measure to (the measurement policy) — Administration. */
+export const WAN_SETTINGS_HREF = "#/admin/discovery/wan";
 
 function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
@@ -202,12 +204,12 @@ export function pathDataItems(f: PathDataFacts): PathDataItem[] {
         : "No tunnels reported. Connect your SD-WAN controller.",
   };
   const wan: PathDataItem = {
-    id: "wan", title: "WAN circuits", href: FEATURES_HREF, where: "Platform › Configuration › Features",
+    id: "wan", title: "WAN circuits", href: WAN_SETTINGS_HREF, where: "Administration › Discovery › WAN circuits",
     state: f.wanInterfaces === null ? "unknown" : f.wanMeasured ? "on" : "off",
     text: f.wanInterfaces === null
       ? "Could not be read."
       : f.wanInterfaces === 0
-        ? "No WAN interfaces found yet."
+        ? "No confirmed WAN interfaces yet."
         : f.wanMeasured
           ? `${f.wanMeasured} of ${plural(f.wanInterfaces, "interface")} measured.`
           : `${plural(f.wanInterfaces, "interface")} found; none measured. Turn on path SLA probes.`,

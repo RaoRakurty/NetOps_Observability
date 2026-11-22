@@ -571,6 +571,8 @@ type server struct {
 	// polled every few seconds and the bundle is the same for every principal
 	// (visibility is applied after, per request).
 	wanEvidenceCache wanEvidenceCache
+	// wanMarks is the operator's per-interface WAN marks (tenantKV). nil: none.
+	wanMarks *wanMarkStore
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
 	// topology links) for deriving each WAN interface's measurement target. Defaults
 	// to collectors.FetchTopologyLinks; a DI seam so target derivation is testable.
@@ -1369,6 +1371,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("wan policy store: %v", err)
 	}
+	wanMarks, err := newWanMarkStore(envOr("WAN_MARKS_FILE", "/data/wan_marks.json"))
+	if err != nil {
+		log.Fatalf("wan mark store: %v", err)
+	}
 	contactPoints, err := newContactPointStore(envOr("CONTACT_POINTS_FILE", "/data/contact_points.json"))
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
@@ -1461,6 +1467,7 @@ func newServer() *server {
 
 		deviceSites: deviceSites,
 		wanPolicy:   wanPolicy,
+		wanMarks:    wanMarks,
 		systemNet:   systemNet,
 		hub:         NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
@@ -4000,6 +4007,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces)          // per-WAN-interface table: util + circuit SLA + source
 	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)            // derived WAN endpoint registry (read)
 	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)              // derived circuit mesh (read)
+	mux.HandleFunc("/api/wan/marks", s.handleWanMarks)                    // operator per-interface WAN marks: GET / PUT / DELETE
 	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)                  // topology policy: GET / PUT (intent)
 	mux.HandleFunc("/api/system/network", s.handleSystemNetwork)          // platform DNS + NTP settings (GET/PUT, platform-admin)
 	mux.HandleFunc("/api/system/network/test", s.handleSystemNetworkTest) // resolve + NTP-offset probe

@@ -1,24 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, WanCircuit, WanEndpoint, WanInterfaceRow, WanMeasurementPolicy } from "../services/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, WanCircuit, WanEndpoint, WanInterfaceRow } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { latSev, lossSev } from "../tabs/Tunnels";
 import { Section, useCap, ShowAll } from "./bgp/Section";
 import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
 import { matchesSite } from "./paths/pathsModel";
+import { PanelState, usePanel, type Panel } from "./wanPanel";
 import {
-  MAX_NEXT_HOPS,
-  blankNextHopRow,
   endpointKind,
-  formFromPolicy,
-  isDirty,
   matchesCircuit,
   matchesEndpoint,
   noTargetCount,
-  policyPatch,
   provenanceCounts,
   sortCandidates,
   sortCircuits,
@@ -26,11 +22,8 @@ import {
   targetKindChip,
   targetKindLabel,
   targetKindMeaning,
-  validateForm,
   wanBasisLabel,
   wanWhyTitle,
-  type NextHopRow,
-  type PolicyForm,
 } from "./wanCircuits.model";
 
 // WAN Interface Metrics — one row per WAN (or WAN-connected) interface.
@@ -95,43 +88,6 @@ function Sparkline({ data, sev }: { data?: number[]; sev?: Sev }) {
       <circle className="wan-spark-dot" cx={x(n - 1)} cy={y(last)} r={2.3} fill={color} />
     </svg>
   );
-}
-
-// ── panel plumbing (the DataProtection convention) ──────────────────────────
-
-type Panel<T> = { data: T | null; error: string | null; loading: boolean; at: number };
-
-/**
- * One independent read. Each section owns its failure as an operator sentence,
- * so one dead route never blanks a neighbouring section's evidence.
- */
-function usePanel<T>(read: () => Promise<T>, fallback: string): [Panel<T>, () => void] {
-  const [state, setState] = useState<Panel<T>>({ data: null, error: null, loading: true, at: 0 });
-  const readRef = useRef(read);
-  readRef.current = read;
-  const reload = useCallback(() => {
-    setState((p) => ({ ...p, loading: true }));
-    readRef.current()
-      .then((data) => setState({ data, error: null, loading: false, at: Date.now() }))
-      .catch((e: unknown) => setState({ data: null, error: operatorError(e, fallback), loading: false, at: Date.now() }));
-  }, [fallback]);
-  useEffect(() => { reload(); }, [reload]);
-  return [state, reload];
-}
-
-function PanelState({ panel, what, onRetry, children }: {
-  panel: Panel<unknown>; what: string; onRetry: () => void; children: ReactNode;
-}) {
-  if (panel.error) {
-    return (
-      <div className="empty" role="alert">
-        <span className="dp-bad-text">{panel.error}</span>{" "}
-        <button type="button" className="bgp-more" onClick={onRetry}>Read it again</button>
-      </div>
-    );
-  }
-  if (panel.loading && panel.data == null) return <div className="empty">Reading {what}…</div>;
-  return <>{children}</>;
 }
 
 /** The provenance chip, in the operator's words, with what it means on hover. */
@@ -216,8 +172,9 @@ function PathsSection({ panel, onRetry, q, site = "" }: {
 
 const ENDPOINT_CAP = 25;
 
-function EndpointsSection({ panel, onRetry, q, site = "" }: {
+function EndpointsSection({ panel, onRetry, q, site = "", canEdit = null, onMarked }: {
   panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; onRetry: () => void; q: string; site?: string;
+  canEdit?: boolean | null; onMarked?: () => void;
 }) {
   const all = useMemo(
     () => sortEndpoints(panel.data?.endpoints ?? []).filter((e) => matchesSite(site, e.site)),
@@ -266,6 +223,7 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                       <th>Device</th><th>Interface</th><th>Why WAN</th><th>Address</th>
                       <th>Far end targets</th><th>Site</th>
                       <th>Measured to</th><th>Derived from</th>
+                      {canEdit === true && onMarked && <th>Decide</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -279,6 +237,9 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                         <td>{e.site || dash}</td>
                         <td style={mono} title={e.target_label ?? ""}>{e.target || dash}</td>
                         <td><KindChip kind={endpointKind(e)} /></td>
+                        {canEdit === true && onMarked && (
+                          <td><MarkButtons ep={e} offerWan={false} onMarked={onMarked} /></td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -299,8 +260,40 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
 // address, the port facing a WAN router, or a WAN router with nothing confirmed.
 // Never measured; collapsed by default so they never read as WAN circuits.
 
-function PossibleSection({ panel, site = "" }: {
+/** Mark / Not WAN for one interface. Rendered only with infrastructure write
+ *  access; a refused write says why instead of failing silently. */
+function MarkButtons({ ep, offerWan, onMarked }: {
+  ep: WanEndpoint; offerWan: boolean; onMarked: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!ep.device_id) return null;
+  const mark = async (m: "wan" | "not_wan") => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setWanMark(ep.device_id ?? "", ep.interface, m);
+      onMarked();
+    } catch (e) {
+      setError(operatorError(e, "The mark could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      {offerWan && (
+        <button type="button" className="btn sm" disabled={busy} onClick={() => mark("wan")}>Mark as WAN</button>
+      )}
+      <button type="button" className="btn sm" disabled={busy} onClick={() => mark("not_wan")}>Not WAN</button>
+      {error && <span role="alert" style={{ color: "var(--bad)" }}>{error}</span>}
+    </span>
+  );
+}
+
+function PossibleSection({ panel, site = "", canEdit, onMarked }: {
   panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; site?: string;
+  canEdit: boolean | null; onMarked: () => void;
 }) {
   const rows = useMemo(
     () => sortCandidates(panel.data?.candidates).filter((e) => matchesSite(site, e.site)),
@@ -316,7 +309,10 @@ function PossibleSection({ panel, site = "" }: {
       <p className="wan-line">Not measured until someone marks them as WAN.</p>
       <table className="dp-tbl">
         <thead>
-          <tr><th>Device</th><th>Interface</th><th>Address</th><th>Why it might be WAN</th></tr>
+          <tr>
+            <th>Device</th><th>Interface</th><th>Address</th><th>Why it might be WAN</th>
+            {canEdit === true && <th>Decide</th>}
+          </tr>
         </thead>
         <tbody>
           {rows.map((e) => (
@@ -325,205 +321,12 @@ function PossibleSection({ panel, site = "" }: {
               <td style={mono}>{e.interface}</td>
               <td style={mono}>{e.address || dash}</td>
               <td title={wanWhyTitle(e)}>{wanBasisLabel(e.wan_basis)}</td>
+              {canEdit === true && <td><MarkButtons ep={e} offerWan onMarked={onMarked} /></td>}
             </tr>
           ))}
         </tbody>
       </table>
     </details>
-  );
-}
-
-// ── 4 · the measurement policy (GET / PUT /api/wan/policy) ──────────────────
-
-function PolicySection({ panel, onRetry, canEdit, onSaved }: {
-  panel: Panel<WanMeasurementPolicy>;
-  onRetry: () => void;
-  canEdit: boolean | null;
-  onSaved: () => void;
-}) {
-  const stored = panel.data;
-  const [form, setForm] = useState<PolicyForm | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
-
-  // The form is seeded from the read ONCE per read. A failed save must leave the
-  // operator's text exactly where they left it, so nothing re-seeds on error.
-  const seededAt = useRef(0);
-  useEffect(() => {
-    if (stored && panel.at !== seededAt.current) {
-      seededAt.current = panel.at;
-      setForm(formFromPolicy(stored));
-    }
-  }, [stored, panel.at]);
-
-  const problems = form ? validateForm(form) : [];
-  const dirty = form ? isDirty(form, stored) : false;
-  const editable = canEdit !== false;
-
-  const patch = (over: Partial<PolicyForm>) => setForm((f) => (f ? { ...f, ...over } : f));
-  const setRow = (id: string, over: Partial<NextHopRow>) =>
-    patch({ nextHops: (form?.nextHops ?? []).map((r) => (r.id === id ? { ...r, ...over } : r)) });
-
-  const save = async () => {
-    if (!form) return;
-    setBusy(true);
-    setMsg(null);
-    try {
-      await api.setWanPolicy(policyPatch(form));
-      setMsg({ tone: "good", text: "Measurement policy saved. The paths and endpoints above were derived again from it." });
-      onSaved();
-    } catch (e: unknown) {
-      setMsg({ tone: "bad", text: operatorError(e, "The measurement policy was not accepted.") });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Section
-      id="wan-policy" title="Measurement policy" updatedAt={panel.at || null}
-      note={<>the only thing stored here<AskIris topic="wan.policy" label="Measurement policy" /></>}
-    >
-      <PanelState panel={panel} what="the measurement policy" onRetry={onRetry}>
-        {form && (
-          <div className="dp-form">
-            <p className="wan-line">Saving re-derives everything above.</p>
-
-            <label className="dp-field">
-              <span>WAN device name pattern</span>
-              <input
-                className="dp-input mono" style={mono}
-                aria-label="WAN device name pattern"
-                value={form.pattern} disabled={busy || !editable}
-                onChange={(ev) => patch({ pattern: ev.target.value })}
-              />
-              <span className="wan-line">A device whose name matches is a WAN device.</span>
-            </label>
-
-            <label className="dp-check">
-              <input
-                type="checkbox" checked={form.includeConnected} disabled={busy || !editable}
-                onChange={(ev) => patch({ includeConnected: ev.target.checked })}
-              />
-              Also measure interfaces directly connected to a WAN device
-            </label>
-
-            <label className="dp-field">
-              <span>Reachability anchors</span>
-              <input
-                className="dp-input mono" style={mono}
-                aria-label="Reachability anchors"
-                value={form.anchorsText} disabled={busy || !editable}
-                onChange={(ev) => patch({ anchorsText: ev.target.value })}
-              />
-              <span className="wan-line">The fallback target, comma separated.</span>
-            </label>
-            {/* The `(i)` sits OUTSIDE the label: a <label> may not carry
-                interactive content other than its own control. */}
-            <AskIris topic="wan.anchor" label="Reachability anchors" />
-
-            <fieldset className="dp-fieldset" disabled={busy || !editable}>
-              <legend>ISP next-hop overrides</legend>
-              <p className="wan-line">
-                One per device, or per interface with <code style={mono}>device/interface</code>. Up to {MAX_NEXT_HOPS}.
-                <AskIris topic="wan.next-hop" label="ISP next-hop" />
-              </p>
-              <table className="dp-tbl">
-                <thead>
-                  <tr>
-                    <th>Device, or device/interface</th>
-                    <th>ISP next-hop</th>
-                    <th aria-label="Row actions" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {form.nextHops.length === 0 ? (
-                    <tr className="dp-row-na">
-                      <td colSpan={3}>
-                        No ISP next-hop has been declared, so every interface without a
-                        neighbor on the wire measures to an anchor.
-                      </td>
-                    </tr>
-                  ) : form.nextHops.map((r, i) => (
-                    <tr key={r.id}>
-                      <td>
-                        <input
-                          className="dp-input mono" style={mono}
-                          aria-label={`Device or device and interface, override ${i + 1}`}
-                          value={r.key} onChange={(ev) => setRow(r.id, { key: ev.target.value })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="dp-input mono" style={mono}
-                          aria-label={`ISP next-hop address, override ${i + 1}`}
-                          value={r.target} onChange={(ev) => setRow(r.id, { target: ev.target.value })}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button" className="btn"
-                          aria-label={`Remove override ${i + 1}`}
-                          onClick={() => patch({ nextHops: form.nextHops.filter((x) => x.id !== r.id) })}
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="dp-actions" style={{ justifyContent: "flex-start" }}>
-                <button
-                  type="button" className="btn"
-                  onClick={() => patch({ nextHops: [...form.nextHops, blankNextHopRow()] })}
-                >
-                  Add an override
-                </button>
-              </div>
-            </fieldset>
-
-            {problems.length > 0 && (
-              <ul className="dp-sub" role="alert" style={{ margin: 0, paddingLeft: 18 }}>
-                {problems.map((p) => <li key={p} className="dp-bad-text">{p}</li>)}
-              </ul>
-            )}
-
-            {msg && <p className={`dp-msg dp-${msg.tone}`} role="status">{msg.text}</p>}
-
-            <p className="wan-line">
-              {stored?.updated_by
-                ? `Last changed by ${stored.updated_by}${stored.updated_at ? ` on ${new Date(stored.updated_at).toLocaleString()}` : ""}.`
-                : "Nobody has changed this policy. These are the defaults."}
-            </p>
-
-            {editable ? (
-              <div className="dp-actions">
-                <button
-                  type="button" className="btn"
-                  disabled={busy || !dirty}
-                  onClick={() => setForm(formFromPolicy(stored))}
-                >
-                  Undo my changes
-                </button>
-                <button
-                  type="button" className="btn accent"
-                  disabled={busy || !dirty || problems.length > 0}
-                  onClick={save}
-                >
-                  {busy ? "Saving…" : "Save policy"}
-                </button>
-              </div>
-            ) : (
-              <p className="wan-line">
-                Changing the policy needs write access.
-                <AskIris topic="wan.policy-readonly" label="Read-only policy" />
-              </p>
-            )}
-          </div>
-        )}
-      </PanelState>
-    </Section>
   );
 }
 
@@ -565,8 +368,6 @@ export default function WanCircuits({ site = "", onSites }: {
     () => api.wanEndpoints(), "The endpoint registry could not be read.");
   const [circuits, reloadCircuits] = usePanel(
     () => api.wanCircuits(), "The measured paths could not be read.");
-  const [policy, reloadPolicy] = usePanel(
-    () => api.wanPolicy(), "The measurement policy could not be read.");
 
   // Write access to infrastructure is what the PUT needs. Without it the editor
   // explains itself rather than offering a button that 403s.
@@ -579,12 +380,12 @@ export default function WanCircuits({ site = "", onSites }: {
     return () => { live = false; };
   }, []);
 
-  // A saved policy is a NEW projection, so both derived reads run again.
-  const afterPolicySave = useCallback(() => {
-    reloadPolicy();
+  // A mark changes which interfaces are WAN, so both derived reads run again.
+  const afterMark = useCallback(() => {
     reloadEndpoints();
     reloadCircuits();
-  }, [reloadPolicy, reloadEndpoints, reloadCircuits]);
+  }, [reloadEndpoints, reloadCircuits]);
+
 
   useEffect(() => { onSites?.(rows.map((r) => r.site ?? "")); }, [rows, onSites]);
   // The page's site filter scopes the tiles, the table and both registries.
@@ -746,9 +547,13 @@ export default function WanCircuits({ site = "", onSites }: {
       )}
 
       <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} site={site} />
-      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} />
-      <PossibleSection panel={endpoints} site={site} />
-      <PolicySection panel={policy} onRetry={reloadPolicy} canEdit={canEdit} onSaved={afterPolicySave} />
+      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} canEdit={canEdit} onMarked={afterMark} />
+      <PossibleSection panel={endpoints} site={site} canEdit={canEdit} onMarked={afterMark} />
+      <p className="wan-line" data-testid="wan-settings-link" style={{ marginTop: 18 }}>
+        What WAN interfaces measure to — anchors, ISP next-hops — is set in{" "}
+        <a href="#/admin/discovery/wan">WAN settings</a>.
+        <AskIris topic="wan.policy" label="WAN settings" />
+      </p>
     </div>
   );
 }

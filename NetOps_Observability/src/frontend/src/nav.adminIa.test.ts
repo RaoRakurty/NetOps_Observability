@@ -212,7 +212,7 @@ describe("Administration groups (owner IA, 2026-09-05)", () => {
     expect(groupIds(admin, "Data sources")).toEqual(["discovery"]);
     const leaf = (admin.children ?? []).find((l) => l.id === "discovery")!;
     expect(leaf.label).toBe("Discovery");
-    expect((leaf.subItems ?? []).map((x) => x.id)).toEqual(["snmp", "scan", "sensors", "coverage", "telemetry"]);
+    expect((leaf.subItems ?? []).map((x) => x.id)).toEqual(["snmp", "scan", "sensors", "coverage", "telemetry", "wan"]);
     expect(resolveRoute("#/admin/discovery", providerNav).leaf?.id).toBe("discovery");
     // Tenants keep the page (each section gates itself)…
     expect(leafIds(tenantNav.find((s) => s.id === "admin"))).toContain("discovery");
@@ -223,7 +223,7 @@ describe("Administration groups (owner IA, 2026-09-05)", () => {
       (nav.find((s) => s.id === "admin")?.children ?? []).find((l) => l.id === "discovery")?.subItems?.map((x) => x.id) ?? [];
     expect(sub(providerNav)).toContain("sensors");
     expect(sub(tenantNav)).not.toContain("sensors");
-    expect(sub(tenantNav)).toEqual(["snmp", "scan", "coverage", "telemetry"]);
+    expect(sub(tenantNav)).toEqual(["snmp", "scan", "coverage", "telemetry", "wan"]);
   });
 
   it("Processors and Sensitive Data Access are one group", () => {
