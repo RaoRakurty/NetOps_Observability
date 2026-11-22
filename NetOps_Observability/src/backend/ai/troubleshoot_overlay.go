@@ -154,7 +154,7 @@ func overlaySignals(st OverlayState) []string {
 
 // RenderOverlayState turns one device's overlay read into bounded evidence.
 func RenderOverlayState(st OverlayState, dev DeviceRef) ToolResult {
-	const href = "#/investigate/tunnels"
+	const href = "#/investigate/paths/tunnels"
 	label := firstNonEmpty(safeLabel(st.DeviceName), safeLabel(dev.Name), "the device")
 	tr := ToolResult{}
 	item := func(id, text string) {
@@ -356,7 +356,7 @@ func tunnelSignals(st TunnelState) []string {
 // RenderTunnelState turns one device's tunnel read into bounded evidence,
 // tunnels that are down first.
 func RenderTunnelState(st TunnelState, dev DeviceRef) ToolResult {
-	const href = "#/investigate/tunnels"
+	const href = "#/investigate/paths/tunnels"
 	label := firstNonEmpty(safeLabel(st.DeviceName), safeLabel(dev.Name), "the device")
 	tr := ToolResult{}
 	if !st.Read {

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// nav.paths.test.ts — the Paths section's shape (Paths redesign P0, 2026-11-20).
+// nav.paths.test.ts — the Paths section's shape.
 //
-// The nav prints a group header only when the group CHANGES to a non-empty one
-// (SubNav / NavFlyout / Sidebar), so an ungrouped leaf placed after a grouped
-// run renders under that run's header. Troubleshooting sat after the three
-// Paths leaves with no group and so read as a fourth "path" page. It is the
-// case workbench and now sits beside RCA.
+// P0 (2026-11-20): Troubleshooting sat after the three Paths leaves with no
+// group and so read as a fourth "path" page; it is the case workbench and sits
+// beside RCA. P5 (2026-11-21): the three Paths leaves became ONE leaf, "Paths",
+// with three tabs (#/investigate/paths/<tab>); every old address lands on its tab.
 
 import { describe, it, expect } from "vitest";
-import { NAV, resolveRoute, canonicalHash } from "./nav";
+import { NAV, resolveRoute, canonicalHash, navDestinations } from "./nav";
+import { tabFromHash } from "./pages/paths/pathsModel";
 
 const investigate = () => {
   const s = NAV.find((x) => x.id === "investigate");
@@ -19,16 +19,25 @@ const investigate = () => {
 };
 
 describe("Investigate → Paths", () => {
-  it("groups exactly the three measurement pages, under their new names", () => {
-    const paths = investigate().filter((l) => l.group === "Paths").map((l) => [l.id, l.label]);
-    expect(paths).toEqual([
-      ["flowtrace", "Measured paths"],
+  it("is one leaf with the three measurement tabs, in order", () => {
+    const leaf = investigate().find((l) => l.id === "paths");
+    expect(leaf?.label).toBe("Paths");
+    expect(leaf?.subItems?.map((x) => [x.id, x.label])).toEqual([
+      ["measured", "Measured paths"],
       ["tunnels", "Tunnels"],
-      ["wan-paths", "WAN circuits"],
+      ["wan-circuits", "WAN circuits"],
     ]);
+    // No sub-item routes elsewhere: each one is a tab of this page.
+    expect(leaf?.subItems?.every((x) => !x.route)).toBe(true);
   });
 
-  it("puts Troubleshooting beside RCA, outside the Paths group", () => {
+  it("no longer lists the three pages as separate leaves", () => {
+    const ids = investigate().map((l) => l.id);
+    for (const old of ["flowtrace", "tunnels", "wan-paths"]) expect(ids).not.toContain(old);
+    expect(investigate().filter((l) => l.group === "Paths")).toEqual([]);
+  });
+
+  it("puts Troubleshooting beside RCA, outside Paths", () => {
     const ids = investigate().map((l) => l.id);
     expect(ids.indexOf("troubleshooting")).toBe(ids.indexOf("rca") + 1);
     expect(investigate().find((l) => l.id === "troubleshooting")?.group).toBeUndefined();
@@ -44,16 +53,40 @@ describe("Investigate → Paths", () => {
     expect(bad).toEqual([]);
   });
 
-  it("keeps every old address: the route ids did not change", () => {
-    for (const [hash, leaf] of [
-      ["#/investigate/flowtrace", "flowtrace"],
-      ["#/investigate/wan-paths", "wan-paths"],
+  it("every old address lands on the Paths leaf AND on its own tab", () => {
+    const cases: [string, string][] = [
+      ["#/investigate/flowtrace", "measured"],
       ["#/investigate/tunnels", "tunnels"],
-      ["#/investigate/troubleshooting", "troubleshooting"],
-    ] as const) {
-      expect(resolveRoute(hash).leaf?.id).toBe(leaf);
+      ["#/investigate/wan-paths", "wan-circuits"],
+      ["#/infrastructure/flowtrace", "measured"],
+      ["#/infrastructure/tunnels", "tunnels"],
+      ["#/infrastructure/wan-circuits", "wan-circuits"],
+      ["#/topology/tunnels", "tunnels"],
+    ];
+    for (const [hash, tab] of cases) {
+      const r = resolveRoute(hash);
+      expect(`${hash} → ${r.section.id}/${r.leaf?.id}`).toBe(`${hash} → investigate/paths`);
+      const canon = canonicalHash(hash);
+      expect(canon, hash).toBe(`#/investigate/paths/${tab}`);
+      expect(tabFromHash(canon ?? "")).toBe(tab);
     }
-    expect(canonicalHash("#/infrastructure/flowtrace")).toBe("#/investigate/flowtrace");
-    expect(canonicalHash("#/infrastructure/wan-circuits")).toBe("#/investigate/wan-paths");
+    expect(resolveRoute("#/investigate/troubleshooting").leaf?.id).toBe("troubleshooting");
+  });
+
+  it("keeps a query string through the rewrite", () => {
+    expect(canonicalHash("#/investigate/tunnels?q=hq")).toBe("#/investigate/paths/tunnels?q=hq");
+  });
+
+  it("the canonical tab addresses are already canonical and resolve to the leaf", () => {
+    for (const tab of ["measured", "tunnels", "wan-circuits"]) {
+      const hash = `#/investigate/paths/${tab}`;
+      expect(canonicalHash(hash)).toBeNull();
+      expect(resolveRoute(hash).leaf?.id).toBe("paths");
+    }
+  });
+
+  it("⌘K offers each tab as its own destination", () => {
+    const routes = navDestinations().map((d) => d.route);
+    for (const tab of ["measured", "tunnels", "wan-circuits"]) expect(routes).toContain(`investigate/paths/${tab}`);
   });
 });

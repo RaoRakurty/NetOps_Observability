@@ -4857,6 +4857,40 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .paths-page .paths-pick-site { color: var(--muted); }
 .paths-page :focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 2px; border-radius: var(--radius-sm); }
 
+/* Paths redesign P5: ONE Paths page — the shared header (tabs, site filter,
+   "Path data" drawer) over the three tabs (pages/paths/PathsPage.tsx). */
+.paths-shell { display: flex; flex-direction: column; gap: var(--sp-4); }
+.paths-shell .paths-head { display: flex; flex-direction: column; gap: var(--sp-3); }
+.paths-shell .paths-head > h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.paths-shell .paths-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--border); }
+.paths-shell .paths-tab {
+  appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--fg-muted, var(--muted)); cursor: pointer; font: 500 14px var(--font-ui);
+  padding: var(--sp-2) var(--sp-3);
+}
+.paths-shell .paths-tab:hover { color: var(--fg); }
+.paths-shell .paths-tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.paths-shell .paths-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.paths-shell .paths-site { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.paths-shell .paths-site > span:first-child { color: var(--fg-muted, var(--muted)); }
+.paths-shell .paths-site select { min-width: 180px; }
+/* The NetworkPathView ribbon is built to fill the topology canvas (position:
+   absolute; inset: 0). Inside a Paths panel it sits in the flow instead, and
+   its text keeps the Paths floor (14px; the ribbon's own scale is 12.5–13px). */
+.paths-page .paths-ribbon { position: relative; margin-bottom: var(--sp-3); }
+.paths-page .paths-ribbon .netpath { position: relative; inset: auto; }
+.paths-page .paths-ribbon .netpath, .paths-page .paths-ribbon .netpath * { font-size: 14px; }
+.paths-page .paths-ribbon .netpath-title { font-size: 16px; }
+.paths-page .paths-ribbon .netpath-node { width: 144px; }
+.paths-page .paths-ribbon .netpath-label { max-width: 136px; }
+.paths-data .paths-data-body { overflow: auto; padding: var(--sp-4); }
+.paths-data .paths-data-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: var(--sp-4); }
+.paths-data .paths-data-row { display: flex; align-items: center; gap: var(--sp-2); }
+.paths-data .paths-data-row h3 { font-size: 16px; font-weight: 600; margin: 0; }
+.paths-data .paths-data-text { font-size: 14px; line-height: 1.5; margin: var(--sp-1) 0 0; }
+.paths-data .paths-data-text a { color: var(--accent); font-weight: 500; }
+.paths-data .badge { font-size: 12.5px; }
+
 /* Paths P4: Tunnels — site matrix and one row per tunnel (tabs/Tunnels.tsx). */
 .tunnels-page > .stat-grid { margin-bottom: var(--sp-4); }
 /* The DataTable header is 12.5px app-wide; on the Paths pages only chips may be. */

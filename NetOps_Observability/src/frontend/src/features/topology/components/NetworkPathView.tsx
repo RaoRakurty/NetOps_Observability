@@ -130,7 +130,10 @@ function segStyle(e: TopologyEdge | undefined): SegStyle {
   return { color: "var(--border)", dash: "2 4", flow: false, meta: "load unmeasured" };
 }
 
-export default function NetworkPathView({ view }: { view: TopologyView }) {
+/** `rail` (default on) draws the per-hop detail rail beside the ribbon. Paths →
+ *  Measured paths turns it off: its hop table, right under the ribbon, already
+ *  is that detail. */
+export default function NetworkPathView({ view, rail = true }: { view: TopologyView; rail?: boolean }) {
   const path = view.path ?? [];
   const byId = useMemo(() => new Map(view.nodes.map((n) => [n.id, n])), [view.nodes]);
 
@@ -367,9 +370,11 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
         )}
       </div>
 
-      <aside className="netpath-rail" aria-label="Per-hop path detail">
-        <PathAnalysisPanel view={view} />
-      </aside>
+      {rail && (
+        <aside className="netpath-rail" aria-label="Per-hop path detail">
+          <PathAnalysisPanel view={view} />
+        </aside>
+      )}
     </div>
   );
 }

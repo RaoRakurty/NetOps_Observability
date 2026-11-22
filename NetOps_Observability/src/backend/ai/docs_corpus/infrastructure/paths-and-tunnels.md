@@ -7,7 +7,13 @@ sidebar_position: 6
 
 # Trace paths and tunnels
 
-**Investigate → Paths** groups the three surfaces that answer how traffic actually gets there: **Measured paths** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN circuits** for per-circuit SLA on the underlay. Every number on these pages comes from a measurement, and an empty board says that nothing is measured rather than going blank. (Until 2026-11 the first and third pages were labelled **Flow Trace** and **WAN Paths**; their addresses did not change, so old bookmarks still open them.)
+**Investigate → Paths** is one page with three tabs that answer how traffic actually gets there: **Measured paths** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN circuits** for per-circuit SLA on the underlay. Every number on it comes from a measurement, and an empty board says that nothing is measured rather than going blank. (Until 2026-11 these were three separate pages, the first and third labelled **Flow Trace** and **WAN Paths**; old bookmarks still open the matching tab.)
+
+The header above the tabs is shared:
+
+- **Site** narrows the open tab to one site: a tunnel with either end there, a WAN interface on a router there, or a measured path whose target is there. The list shows the sites the open tab has rows for, and rows with no site appear only under **All sites**. A site's name and its short form match each other, so *DC East* and *dc-east* are one site. Your choice is remembered in this browser and stays chosen when you switch tabs.
+- **Path data** opens a panel that says which of the four sources behind the tabs is on (path discovery, path SLA probes, SD-WAN tunnels, WAN circuit measurement), with numbers, and links to the console page that turns each one on. A source that cannot be read at that moment shows **Unknown**, never **Off**.
+- The time range is the console's own range at the top of the screen; the Measured paths charts follow it.
 
 ## Before you begin
 
@@ -22,15 +28,16 @@ sidebar_position: 6
 
 ### Step 1 - Read Path Behavior Health
 
-Open **Investigate → Paths → Measured paths**. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
+Open **Investigate → Paths** and select the **Measured paths** tab. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
 
-### Step 2 - Read a traceroute panel
+### Step 2 - Read a path hop by hop
 
-The second board shows the measured hop-by-hop path to each configured destination. The trace runs from the platform's measurement point toward each target. To trace between two of your own devices instead, use [Path Trace on the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path).
+The **Hop by hop** board shows the measured path to each configured destination: a ribbon from the prober to the target, with the hop table underneath. The trace runs from the platform's measurement point toward each target. To trace between two of your own devices instead, use [Path Trace on the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path).
 
 1. Find the panel for your destination. Its title is the target followed by the hop count of that trace.
-2. Read the badges. **reached** means the trace arrived. **incomplete** means it ran out first. A **path changed** badge means the route differs from the previously observed one, which is worth correlating with whatever else changed at that time.
-3. Read the hop table:
+2. Read the ribbon. Each hop that answered is a node with its round-trip time; a hop that did not answer is drawn as **No reply**. The ribbon is marked **Measured** because every hop on it was observed by a probe. Where loss starts and lasts to the end of the path, that hop is marked **Loss starts here** and the link into it is drawn broken. Loss at a single hop that later hops do not show is that router declining to answer probes, not loss on the path, so it is not marked. A path that never reached its target is marked where the answers stop.
+3. Read the badges. **reached** means the trace arrived. **incomplete** means it ran out first. A **path changed** badge means the route differs from the previously observed one, which is worth correlating with whatever else changed at that time.
+4. Read the hop table:
 
 | Column | What it shows |
 |---|---|
@@ -39,7 +46,7 @@ The second board shows the measured hop-by-hop path to each configured destinati
 | **RTT** | Round-trip time to that hop, or a dash where the hop did not answer. |
 | **Loss** | Per-hop loss where the prober measures it, or a dash where it does not. |
 
-4. Look for the jump in RTT between consecutive hops. That segment is where the delay is added.
+5. Look for the jump in RTT between consecutive hops. That segment is where the delay is added.
 
 The trace is Paris-consistent, so on a load-balanced network the path shown is one real path rather than an artifact of per-probe re-hashing.
 
@@ -62,7 +69,7 @@ Service checks measure a service, not a path, so the page links to **Operations 
 
 ### Step 4 - Read tunnels {#tunnels}
 
-Open **Investigate → Paths → Tunnels**. It lists overlay circuits, **one row per tunnel**, and refreshes every 15 seconds. An SD-WAN tunnel is reported by both of its edges; the page folds the two reports into one row under the same tunnel identity the correlation engine uses, so a row and an RCA case about that tunnel name the same thing. IPsec and GRE tunnels read from device telemetry appear as before.
+Select the **Tunnels** tab. It lists overlay circuits, **one row per tunnel**, and refreshes every 15 seconds. An SD-WAN tunnel is reported by both of its edges; the page folds the two reports into one row under the same tunnel identity the correlation engine uses, so a row and an RCA case about that tunnel name the same thing. IPsec and GRE tunnels read from device telemetry appear as before.
 
 1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. The two averages cover only the tunnels whose quality is measured, and the tiles say how many that is and how old the reading is. A tunnel known only as up or down counts toward the first two tiles and never drags an average toward zero. With no measured tunnel, latency and loss read as a dash rather than as zero. When the two ends of a tunnel report different states, **Tunnels down** says how many ends disagree.
 2. Read the **Site matrix**. Each site with a tunnel end is a row and a column; a cell is every tunnel between those two sites (the diagonal is tunnels inside one site). The cell shows how many tunnels there are and is coloured by the worst state among them: red when one is down, amber when two ends disagree, green when all are up. Select a cell to narrow the table to that site pair, and select it again, or the filter button above the table, to show every tunnel. Sites follow the one site rule: a site you assign by hand wins over a discovered one. Tunnels with an end at no site are counted under the matrix.
