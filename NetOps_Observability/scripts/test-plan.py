@@ -173,6 +173,15 @@ CI_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("deployment/docker/syslog-ng/*", ("correlation",)),
     # Frontend; a dependency change can break the image the boot test builds.
     ("src/frontend/*", ("frontend",)), ("docs-portal/*", ("frontend",)),
+    # Frontend files BACKEND tests read: the nav tree (ai/docs_pages_test,
+    # golden_nav_coverage_test, docs_routes_links_test, golden_eval_test), the
+    # label parity source (noclabel), Iris's presentation contract (nlquery
+    # present drift) and the shared BGP prefix fixture (bgp_ops, bgpwatch). A
+    # nav-only PR used to skip the backend group and go red on main.
+    ("src/frontend/src/nav.tsx", ("backend",)),
+    ("src/frontend/src/components/rca/labels.ts", ("backend",)),
+    ("src/frontend/src/iris/presentation.ts", ("backend",)),
+    ("src/frontend/src/pages/bgp/prefix.test.ts", ("backend",)),
     # The customer docs are embedded in the api as Iris's product-question corpus
     # (src/backend/ai/docs_corpus, kept byte-identical by
     # scripts/sync-docs-corpus.sh): TestDocsCorpusMatchesPortal is a BACKEND test,
