@@ -100,6 +100,22 @@ export function parseAffected(json: string): ActionItem["affected"] {
   } catch { return { devices: [], paths: [], interfaces: [], sites: [] }; }
 }
 
+/** The devices a problem is on, as the engine names them: devices, both ends
+ *  of each path, and the device part of each interface key (`10.0.0.1:if3`,
+ *  `edge-1:Gi1`). Unique, in listing order. An IPv6 address key is kept whole. */
+export function affectedDeviceKeys(a: ActionItem["affected"]): string[] {
+  const ifDevice = (k: string): string => {
+    const t = k.trim();
+    if ((t.match(/:/g) ?? []).length > 1 && !/^[^:]+:[^:]+$/.test(t)) return t; // IPv6: no device split
+    return t.split(":")[0];
+  };
+  return [...new Set([
+    ...a.devices.map((d) => d.trim()),
+    ...a.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim())),
+    ...a.interfaces.map(ifDevice),
+  ].filter(Boolean))];
+}
+
 export function parseMissing(json: string): string[] {
   try { const a = JSON.parse(json || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
 }

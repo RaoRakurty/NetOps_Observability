@@ -41,6 +41,25 @@ export function buildDeviceNames(devices: readonly Device[]): DeviceNames {
   return out;
 }
 
+/** id, address or name → display name, for evidence that names a device by its
+ *  management address (an engine interface key `10.0.0.1:if3`) rather than its id.
+ *  An address two devices share names nobody. */
+export function buildDeviceLabels(devices: readonly Device[]): DeviceNames {
+  const names = buildDeviceNames(devices);
+  const out = new Map<string, string>(names);
+  const addrCount = new Map<string, number>();
+  for (const d of devices) {
+    const a = (d.address || "").trim();
+    if (a) addrCount.set(a, (addrCount.get(a) ?? 0) + 1);
+  }
+  for (const d of devices) {
+    const a = (d.address || "").trim();
+    const n = d.id ? names.get(d.id) : undefined;
+    if (a && n && addrCount.get(a) === 1 && !out.has(a)) out.set(a, n);
+  }
+  return out;
+}
+
 /** The display name for a metric's device id; the id itself when unknown. */
 export function deviceDisplayName(id: string | undefined, names: DeviceNames | null): string {
   if (!id) return "";
@@ -60,6 +79,31 @@ export function loadDeviceNames(now: number = Date.now()): Promise<DeviceNames> 
 /** Test seam: forget the cached inventory. */
 export function resetDeviceNamesForTest(): void {
   cached = null;
+  cachedLabels = null;
+}
+
+let cachedLabels: { at: number; labels: Promise<DeviceNames> } | null = null;
+
+/** Shared short-lived read for buildDeviceLabels; a failed read is not cached. */
+export function loadDeviceLabels(now: number = Date.now()): Promise<DeviceNames> {
+  if (cachedLabels && now - cachedLabels.at < TTL_MS) return cachedLabels.labels;
+  // Started inside a promise: any failure, even a synchronous one, leaves the
+  // raw keys on screen and never breaks the page that asked.
+  const labels = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceLabels(d ?? []));
+  cachedLabels = { at: now, labels };
+  labels.catch(() => { cachedLabels = null; });
+  return labels;
+}
+
+/** React hook: the id/address→name map, or null until it has loaded. */
+export function useDeviceLabels(): DeviceNames | null {
+  const [labels, setLabels] = useState<DeviceNames | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadDeviceLabels().then((n) => { if (alive) setLabels(n); }).catch(() => { /* raw keys stay */ });
+    return () => { alive = false; };
+  }, []);
+  return labels;
 }
 
 /** React hook: the id→name map, or null until it has loaded. */

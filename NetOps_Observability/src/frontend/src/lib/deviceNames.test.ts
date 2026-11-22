@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildDeviceNames, deviceDisplayName, loadDeviceNames, resetDeviceNamesForTest } from "./deviceNames";
+import { buildDeviceLabels, buildDeviceNames, deviceDisplayName, loadDeviceNames, resetDeviceNamesForTest } from "./deviceNames";
 import { seriesLabel } from "../components/board/panels";
 import { api, type Device } from "../services/api";
 
@@ -46,5 +46,20 @@ describe("device display names (owner 2026-10-18: no '<name>-<random id>' in cha
       expect(spy).toHaveBeenCalledTimes(2);
       spy.mockRestore();
     });
+  });
+});
+
+describe("buildDeviceLabels — a device named by its management address", () => {
+  it("resolves an id and a unique address to the device's name", () => {
+    const l = buildDeviceLabels([dev("vedge-20-02efdcad", "vEdge-20", "192.168.222.103"), dev("cedge-81-dde8d64d", "cEDGE-81", "192.168.222.107")]);
+    expect(l.get("vedge-20-02efdcad")).toBe("vEdge-20");
+    expect(l.get("192.168.222.103")).toBe("vEdge-20");
+    expect(l.get("192.168.222.107")).toBe("cEDGE-81");
+  });
+
+  it("an address two devices share names nobody", () => {
+    const l = buildDeviceLabels([dev("a", "A", "10.0.0.1"), dev("b", "B", "10.0.0.1")]);
+    expect(l.get("10.0.0.1")).toBeUndefined();
+    expect(l.get("a")).toBe("A");
   });
 });

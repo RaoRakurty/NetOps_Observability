@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { corrObject } from "../test/factories";
 import {
-  fmtAge, parseAffected, parseMissing, deriveRca, deriveEvidence, deriveFault,
+  fmtAge, parseAffected, parseMissing, affectedDeviceKeys, deriveRca, deriveEvidence, deriveFault,
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
   filterItems, needsAction, activeFilterCount, isUntriaged,
   startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
@@ -325,5 +325,23 @@ describe("Problems page tabs and truncation", () => {
       affected: JSON.stringify({ devices: ["clickhouse"] }) });
     expect(problemsForTab([single, real, internal], "needs").map((c) => c.correlation_id)).toEqual(["r1"]);
     expect(problemsForTab([single, real, internal], "all").map((c) => c.correlation_id)).toEqual(["s1", "r1"]);
+  });
+});
+
+describe("affectedDeviceKeys — the devices a problem is on (owner ask 2026-11-22)", () => {
+  it("takes devices, both path ends and each interface's device part, unique, in order", () => {
+    const a = parseAffected(JSON.stringify({
+      devices: ["edge-1"], paths: ["edge-1->core-2"],
+      interfaces: ["192.168.222.104:if3", "192.168.222.104:if4294967295", "edge-9:Gi1"],
+    }));
+    expect(affectedDeviceKeys(a)).toEqual(["edge-1", "core-2", "192.168.222.104", "edge-9"]);
+  });
+
+  it("an object that lists only interfaces still names its devices (the lab case)", () => {
+    expect(affectedDeviceKeys(parseAffected('{"interfaces":["192.168.222.103:if3"]}'))).toEqual(["192.168.222.103"]);
+  });
+
+  it("keeps an IPv6 address whole instead of cutting it at the first colon", () => {
+    expect(affectedDeviceKeys(parseAffected('{"interfaces":["2001:db8::1"]}'))).toEqual(["2001:db8::1"]);
   });
 });
