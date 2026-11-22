@@ -1,40 +1,45 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// PathsPage — Investigate → Paths, ONE leaf with three tabs (Paths redesign P5):
-// Measured paths, Tunnels and WAN circuits. Until P5 they were three sidebar
-// leaves with three headers and no shared way to narrow them; now they share
-// one header: the tab bar, a site filter, and the "Path data" drawer that says
-// what is on and where to turn it on.
+// PathsPage — Investigate → Paths, ONE leaf with two tabs: Tunnels and WAN
+// circuits. Until P5 they were sidebar leaves with their own headers and no
+// shared way to narrow them; now they share one header: the tab bar, a site
+// filter, and the "Path data" drawer that says what is on and where to turn it
+// on (and, since the Measured paths tab was retired on 2026-11-22, the steps
+// that choose what the prober traces).
+//
+// MEASURED PATHS. The prober's paths are read ONCE here (useMeasuredPaths) and
+// handed to the open tab, where each WAN circuit and tunnel row carries its own
+// path in a Path column and opens it hop by hop. The paths no row claims are
+// listed apart under each tab, so nothing measured is hidden.
 //
 // ROUTING. `#/investigate/paths/<tab>`, read from the THIRD hash segment on
 // mount and on every `hashchange` (the leaf stays mounted when a flyout sub-item
 // is clicked, so a mount-only read would make the click look dead — the same
 // reason as Digital Experience). Old addresses (#/investigate/flowtrace,
-// /tunnels, /wan-paths and their older spellings) are rewritten by nav.tsx's
-// alias table before this page reads them.
+// /tunnels, /wan-paths, /paths/measured and their older spellings) are
+// rewritten by nav.tsx's alias table before this page reads them.
 //
 // SITE FILTER. Each tab reports the sites its rows name; the list is those, the
 // choice is applied to the open tab's rows, and it is remembered per viewer in
-// this browser (try/catch: storage can be missing or refuse). The time range is
-// the console's own, passed to the tab that charts over time — one window for
-// the whole page, never a second picker that could disagree with it.
+// this browser (try/catch: storage can be missing or refuse).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AskIris from "../../components/AskIris";
-import NetworkPath from "../NetworkPath";
 import Tunnels from "../../tabs/Tunnels";
 import WanCircuits from "../WanCircuits";
 import PathData from "./PathData";
 import {
   PATHS_TABS, browserStorage, loadSite, saveSite, siteOptions, tabFromHash, tabHash, type PathsTab,
 } from "./pathsModel";
+import { useMeasuredPaths } from "./useMeasuredPaths";
 
-export default function PathsPage({ rangeMinutes = 60 }: { rangeMinutes?: number }) {
+export default function PathsPage() {
   const [tab, setTab] = useState<PathsTab>(() => tabFromHash(typeof window === "undefined" ? "" : window.location.hash));
   const [site, setSite] = useState<string>(() => loadSite(browserStorage()));
   const [labels, setLabels] = useState<string[]>([]);
   const [dataOpen, setDataOpen] = useState(false);
+  const measured = useMeasuredPaths();
 
   useEffect(() => {
     const apply = () => setTab(tabFromHash(window.location.hash));
@@ -61,7 +66,7 @@ export default function PathsPage({ rangeMinutes = 60 }: { rangeMinutes?: number
   // so switching tabs never silently widens the view to every site.
   const missing = !!site && !options.some((o) => o.key === site);
 
-  const tabProps = { site, onSites };
+  const tabProps = { site, onSites, measured };
 
   return (
     <div className="paths-shell paths-page" data-testid="paths-page">
@@ -93,7 +98,6 @@ export default function PathsPage({ rangeMinutes = 60 }: { rangeMinutes?: number
       </div>
 
       <div id="paths-panel" role="tabpanel" aria-labelledby={`paths-tab-${tab}`}>
-        {tab === "measured" && <NetworkPath rangeMinutes={rangeMinutes} {...tabProps} />}
         {tab === "tunnels" && <Tunnels {...tabProps} />}
         {tab === "wan-circuits" && <WanCircuits {...tabProps} />}
       </div>

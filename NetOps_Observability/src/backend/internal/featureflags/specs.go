@@ -82,7 +82,7 @@ func PlatformSpecs() []Spec {
 		// applied there within 15 seconds. Risky: they send test packets from
 		// this server into the network, so ADR 0001 keeps them off by default.
 		{Env: "FEATURE_TRACEROUTE", Label: "Path discovery", Group: measure, Apply: live, Risky: true,
-			Help: "Trace the hop-by-hop path to each path target from the Correlix prober every minute, so Measured paths and root-cause analysis can see where a path breaks. Sends traceroute packets from this server."},
+			Help: "Trace the hop-by-hop path to each path target from the Correlix prober every minute, so each WAN circuit and tunnel row carries its path and root-cause analysis can see where a path breaks. Sends traceroute packets from this server."},
 		{Env: "FEATURE_ACTIVE_PROBE", Label: "Active path probes (STAMP)", Group: measure, Apply: live, Risky: true,
 			Help: "Send standard STAMP test packets from the Correlix prober to each probe target to measure latency, jitter and loss. Sends test traffic from this server."},
 		// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal

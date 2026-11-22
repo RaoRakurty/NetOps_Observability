@@ -61,7 +61,7 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 | Card | Opens | What it answers |
 |---|---|---|
 | Flow Analytics | **Explore → Flows** | Busy links and who is talking on them. See [Analyse flows](/explore/flows). |
-| Measured paths | **Investigate → Paths → Measured paths** | Where traffic goes and where it degrades. |
+| Paths | **Investigate → Paths** (Tunnels, WAN circuits) | Where traffic goes and where it degrades: each row with its measured path. |
 | Quality | **Operations → Network Health** | Link-quality measurement. |
 
 ## Health and operations

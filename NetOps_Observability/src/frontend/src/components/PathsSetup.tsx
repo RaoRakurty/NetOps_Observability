@@ -6,8 +6,9 @@ import StepFlow, { type FlowStep } from "./admin/StepFlow";
 import { api, type ProbeTargetSuggestion, type ProbeTargetSuggestions } from "../services/api";
 import { operatorError } from "../lib/errors";
 
-// PathsSetup — the Measured paths empty state as numbered steps (Paths
-// redesign P3). It replaces a one-line hint with what an operator actually has
+// PathsSetup — choosing what the prober traces, as numbered steps (Paths
+// redesign P3; in the Paths "Path data" drawer since the Measured paths tab was
+// retired on 2026-11-22). It replaces a one-line hint with what an operator actually has
 // to do, in order:
 //   1. Path discovery is switched on (Platform › Features — a platform
 //      administrator's switch; this page only reports it),
@@ -146,7 +147,7 @@ export default function PathsSetup() {
       id: "first",
       title: "First trace",
       done: false,
-      render: () => <p className="paths-step-text">The first trace shows here within a minute.</p>,
+      render: () => <p className="paths-step-text">Within a minute each traced path shows in the Path column of its WAN circuit or tunnel.</p>,
     },
   ];
   return <StepFlow steps={steps} label="Set up path discovery" />;

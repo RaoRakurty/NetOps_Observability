@@ -57,15 +57,18 @@ The **Measured by** badge names the winning tier and method per row, so a latenc
 
 Use **Search devices, interfaces, targets…** to match on device, interface, remote device, target, target label or measurement method. The counter beside the box states how many of the total rows match. Sort by **Utilization** to bring the busiest circuit to the top, which is the default order.
 
-### Step 5 - Read the measured paths and the endpoint registry
+### Step 5 - Read each row's path and the endpoint registry
 
-Below the table the page carries two derived sections. Neither is stored: the
-platform re-derives both from the interface addresses, the neighbours it learned
+Each row's **Measured to** cell names the target, the far end and how the target
+was derived. A row marked **held** is in the registry and is not being measured.
+The **Path** column is the hop-by-hop path the prober measured to the row's
+target or router; select the row to open it ([Trace paths and
+tunnels](/infrastructure/paths-and-tunnels#measured-paths)). Paths to other
+targets are listed apart, collapsed, under the table.
+
+Below the table the page carries the endpoint registry. It is not stored: the
+platform re-derives it from the interface addresses, the neighbours it learned
 and the measurement policy.
-
-**Measured paths** puts one row on each interface-to-target link, with the local
-device and interface, the far end, and how the target was derived. A row marked
-**held** is in the registry and is not being measured.
 
 **Endpoint registry** lists every WAN interface, why it counts as WAN, its
 address, the address the far end measures to, its site, and its derived target.

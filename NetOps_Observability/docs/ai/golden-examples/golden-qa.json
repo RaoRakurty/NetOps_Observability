@@ -1048,8 +1048,8 @@
           "infrastructure/paths-and-tunnels"
         ]
       },
-      "nav": "investigate/paths/measured",
-      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Measured paths"
+      "nav": "investigate/paths/wan-circuits",
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths; a row's Path column (the Measured paths tab was retired 2026-11-22)"
     },
     {
       "id": "docs-077",

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Paths section smoke (Paths redesign P0, 2026-11-20; one page with three tabs
-// since P5, 2026-11-21). Drives the REAL SPA with the backend mocked at the
-// network boundary and checks the section's shape: one Paths leaf whose tabs are
-// Measured paths, Tunnels and WAN circuits, Troubleshooting beside RCA, every
-// old address opening its tab, the shared site filter and "Path data" drawer,
-// the measured ribbon, and the Measured paths empty state saying what is true.
+// Paths section smoke (Paths redesign P0, 2026-11-20; one page with tabs since
+// P5, 2026-11-21; the Measured paths tab retired 2026-11-22). Drives the REAL
+// SPA with the backend mocked at the network boundary and checks the section's
+// shape: one Paths leaf whose tabs are Tunnels and WAN circuits, Troubleshooting
+// beside RCA, every old address opening a tab, the shared site filter and "Path
+// data" drawer (with the steps that choose what is traced), and each measured
+// path on the row it measures, opened hop by hop as the ribbon.
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
@@ -55,6 +56,13 @@ const TUNNELS = {
   },
 };
 
+// The workspace's inventory: the measured path's target is cedge-50, an end of
+// the second tunnel, so that tunnel row carries the path.
+const DEVICES = [
+  { id: "cedge-40", name: "cedge-40", address: "192.168.222.105", source: "snmp", last_seen: "" },
+  { id: "cedge-50", name: "cedge-50", address: "10.9.9.9", source: "snmp", last_seen: "" },
+];
+
 // A measured path whose loss starts at hop 2 and lasts to the target (P5 ribbon).
 const PROBE_PATH = {
   dst: "10.9.9.9", method: "icmp", vantage_id: "v1", site: "Branch 50", reached: true, changed: false,
@@ -83,6 +91,7 @@ async function mockApi(page: Page, created: unknown[] = [], paths: unknown[] = [
     }
     if (p.endsWith("/api/paths/health")) return json({ paths: [] });
     if (p.endsWith("/api/tunnels")) return json(TUNNELS);
+    if (p.endsWith("/api/devices")) return json(DEVICES);
     if (p.endsWith("/api/correlations") || p.endsWith("/api/incidents")) return json([]);
     return json({});
   });
@@ -118,7 +127,7 @@ test("a Tunnels case chip opens the case in RCA", async ({ page }) => {
 
 test("Paths is one leaf after Topology; Troubleshooting sits beside RCA", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/paths/measured");
+  await page.goto("/#/investigate/paths/tunnels");
   const nav = page.getByRole("navigation", { name: "Investigate views" });
   await expect(nav).toBeVisible();
   const labels = (await nav.locator(".subnav-cell").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
@@ -128,29 +137,31 @@ test("Paths is one leaf after Topology; Troubleshooting sits beside RCA", async 
   for (const old of ["Measured paths", "Tunnels", "WAN circuits"]) expect(labels).not.toContain(old);
   // No group header any more: the three pages are tabs of one leaf.
   await expect(nav.locator(".subnav-group")).toHaveCount(0);
-  await expect(page.getByRole("tab")).toHaveText(["Measured paths", "Tunnels", "WAN circuits"]);
+  await expect(page.getByRole("tab")).toHaveText(["Tunnels", "WAN circuits"]);
 });
 
-test("Measured paths shows numbered setup steps — the real switch, no env names, no phantom setting", async ({ page }) => {
+test("Path data holds the numbered steps that choose what is traced — the real switch, no env names", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/paths/measured");
-  await expect(page.getByRole("link", { name: "Platform › Configuration › Features" }).first()).toHaveAttribute("href", "#/platform/features");
+  await page.goto("/#/investigate/paths/wan-circuits");
+  await page.getByTestId("paths-data-open").click();
+  const setup = page.getByTestId("paths-data-setup");
+  await expect(setup).toBeVisible();
+  await expect(setup.getByRole("link", { name: "Platform › Configuration › Features" }).first()).toHaveAttribute("href", "#/platform/features");
   await expect(page.getByText(/API settings/)).toHaveCount(0);
-  await expect(page.locator("code", { hasText: /FEATURE_|_TARGETS/ })).toHaveCount(0);
-  await expect(page.getByTestId("paths-synthetics-link").getByRole("link")).toHaveAttribute("href", "#/operations/digital-experience/synthetics");
+  await expect(setup.locator("code", { hasText: /FEATURE_|_TARGETS/ })).toHaveCount(0);
 });
 
 // Every address a bookmark can hold opens Paths on the right tab, and the URL
 // is rewritten to the canonical tab address.
 for (const [hash, tab, label] of [
-  ["#/investigate/paths/measured", "measured", "Measured paths"],
+  ["#/investigate/paths/measured", "wan-circuits", "WAN circuits"],
   ["#/investigate/paths/tunnels", "tunnels", "Tunnels"],
   ["#/investigate/paths/wan-circuits", "wan-circuits", "WAN circuits"],
-  ["#/investigate/paths", "measured", "Measured paths"],
-  ["#/investigate/flowtrace", "measured", "Measured paths"],
+  ["#/investigate/paths", "tunnels", "Tunnels"],
+  ["#/investigate/flowtrace", "wan-circuits", "WAN circuits"],
   ["#/investigate/tunnels", "tunnels", "Tunnels"],
   ["#/investigate/wan-paths", "wan-circuits", "WAN circuits"],
-  ["#/infrastructure/flowtrace", "measured", "Measured paths"],
+  ["#/infrastructure/flowtrace", "wan-circuits", "WAN circuits"],
   ["#/infrastructure/tunnels", "tunnels", "Tunnels"],
   ["#/infrastructure/wan-circuits", "wan-circuits", "WAN circuits"],
   ["#/topology/tunnels", "tunnels", "Tunnels"],
@@ -165,7 +176,7 @@ for (const [hash, tab, label] of [
 
 test("the tabs switch in place and are linkable", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/paths/measured");
+  await page.goto("/#/investigate/paths/wan-circuits");
   await page.getByRole("tab", { name: "Tunnels" }).click();
   await expect(page).toHaveURL(/#\/investigate\/paths\/tunnels$/);
   await expect(page.getByTestId("tunnels-matrix")).toBeVisible();
@@ -198,7 +209,7 @@ test("the site filter narrows the open tab and is remembered across tabs and rel
 
 test("Path data says what is on and where to turn the rest on", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/paths/measured");
+  await page.goto("/#/investigate/paths/tunnels");
   await page.getByTestId("paths-data-open").click();
   const drawer = page.getByTestId("paths-data");
   await expect(drawer).toBeVisible();
@@ -212,10 +223,18 @@ test("Path data says what is on and where to turn the rest on", async ({ page })
   await expect(drawer).toBeHidden();
 });
 
-test("Hop by hop draws each measured path as a ribbon above its hop table", async ({ page }) => {
+test("a tunnel row carries its measured path and opens it hop by hop, ribbon above the hop table", async ({ page }) => {
   await mockApi(page, [], [PROBE_PATH]);
-  await page.goto("/#/investigate/paths/measured");
-  const ribbon = page.getByTestId("paths-ribbon");
+  await page.goto("/#/investigate/paths/tunnels");
+  // cedge-50's tunnel carries the path to cedge-50; the other row has none.
+  const cells = page.getByTestId("path-cell");
+  await expect(cells).toHaveCount(2);
+  await expect(page.getByTestId("path-verdict")).toHaveText("Loss from hop 2");
+  await page.getByTestId("path-verdict").click();
+  const panel = page.getByTestId("path-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "To End A (cedge-50)" })).toBeVisible();
+  const ribbon = panel.getByTestId("paths-ribbon");
   await expect(ribbon).toBeVisible();
   await expect(ribbon.locator(".netpath-prov")).toHaveText("Measured");
   // The prober plus four hops, the silent one drawn as "No reply". (The list
@@ -223,13 +242,22 @@ test("Hop by hop draws each measured path as a ribbon above its hop table", asyn
   const hops = ribbon.locator('[role="listitem"][aria-label^="Hop "]');
   await expect(hops).toHaveCount(5);
   await expect(hops.nth(3)).toHaveAttribute("aria-label", /No reply/);
-  await expect(page.getByLabel("Path hops")).toBeVisible();
-  // The ribbon keeps the Paths type floor.
-  const small = await textBelowFloor(page, ".paths-ribbon");
+  await expect(panel.getByLabel("Path hops")).toBeVisible();
+  // The panel keeps the Paths type floor.
+  const small = await textBelowFloor(page, ".mpath-panel");
   expect(small, `text below the floor:\n${small.join("\n")}`).toEqual([]);
-  // The site filter applies to measured paths by their target's site.
-  await page.getByTestId("paths-site").selectOption({ label: "Branch 50" });
-  await expect(ribbon).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+});
+
+test("a measured path no row claims is listed apart and opens the same way", async ({ page }) => {
+  await mockApi(page, [], [{ ...PROBE_PATH, dst: "8.8.8.8", site: "" }]);
+  await page.goto("/#/investigate/paths/tunnels");
+  const other = page.getByTestId("paths-other");
+  await expect(other).toContainText("Measured paths to other targets (1)");
+  await other.locator("summary").click();
+  await other.getByTestId("paths-other-open").click();
+  await expect(page.getByTestId("path-panel").getByRole("heading", { name: "To 8.8.8.8" })).toBeVisible();
 });
 
 test("Troubleshooting opens its case picker", async ({ page }) => {
@@ -317,7 +345,6 @@ for (const theme of ["light", "indigo"] as const) {
 // Checked on the COMPUTED style in the light and the dark theme, so a theme
 // rule cannot quietly shrink copy.
 const PAGES = [
-  ["#/investigate/paths/measured", ".paths-shell"],
   ["#/investigate/paths/tunnels", ".paths-shell"],
   ["#/investigate/paths/wan-circuits", ".paths-shell"],
   ["#/investigate/troubleshooting", ".ts-inv"],
@@ -338,11 +365,13 @@ for (const theme of ["light", "indigo"] as const) {
 }
 
 // Paths P3: step 2 offers the workspace's own branch edges pre-ticked, and
-// adding them creates traced catalogue targets with no tenant in the body.
-test("Measured paths setup adds the ticked branch edges as traced targets", async ({ page }) => {
+// adding them creates traced catalogue targets with no tenant in the body. In
+// the Path data drawer since the Measured paths tab was retired (2026-11-22).
+test("Path data's setup adds the ticked branch edges as traced targets", async ({ page }) => {
   const created: Record<string, unknown>[] = [];
   await mockApi(page, created);
-  await page.goto("/#/investigate/paths/measured");
+  await page.goto("/#/investigate/paths/wan-circuits");
+  await page.getByTestId("paths-data-open").click();
   const list = page.getByTestId("paths-suggestions");
   await expect(list.locator("input[type=checkbox]")).toHaveCount(2);
   await list.locator("input[type=checkbox]").nth(1).uncheck();
@@ -355,7 +384,7 @@ for (const theme of ["light", "indigo"] as const) {
   test(`Path data meets the type floor in the ${theme === "light" ? "light" : "dark"} theme`, async ({ page }) => {
     await page.addInitScript((t) => localStorage.setItem("netops.theme", t), theme);
     await mockApi(page);
-    await page.goto("/#/investigate/paths/measured");
+    await page.goto("/#/investigate/paths/wan-circuits");
     await page.getByTestId("paths-data-open").click();
     await expect(page.getByTestId("paths-data-discovery")).toBeVisible();
     const small = await textBelowFloor(page, ".paths-data-body");
