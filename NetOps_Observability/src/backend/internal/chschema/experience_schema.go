@@ -55,6 +55,7 @@ func ExperienceSchemaDDL() []string {
     session_id       String DEFAULT '',
     user_ref         String DEFAULT '',
     app              LowCardinality(String) DEFAULT '',
+    app_source       LowCardinality(String) DEFAULT '',
     environment      LowCardinality(String) DEFAULT '',
     release          LowCardinality(String) DEFAULT '',
     event_type       LowCardinality(String) DEFAULT '',
@@ -138,6 +139,11 @@ PARTITION BY (tenant_id, toYYYYMMDD(event_at))
 ORDER BY (tenant_id, app, event_at, event_id)
 TTL toDateTime(event_at) + INTERVAL 400 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
+
+		// Where the app label came from (the RUM snippet's data-app, or the
+		// page's hostname when one tag is injected at a proxy for many apps).
+		// Additive for installs created before the column existed.
+		`ALTER TABLE netops.experience_events ADD COLUMN IF NOT EXISTS app_source LowCardinality(String) DEFAULT '' AFTER app`,
 
 		// STRICT policies: user-behaviour data, much of it pseudonymous_user.
 		// An untagged row is platform-only, never every tenant's.

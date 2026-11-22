@@ -45,6 +45,12 @@ var knownActorTypes = map[string]bool{
 // ValidActorType reports whether a is a declared actor type.
 func ValidActorType(a string) bool { return knownActorTypes[a] }
 
+// Where an event's App label came from (ExperienceEvent.AppSource).
+const (
+	AppSourceAttribute = "attribute"
+	AppSourceHostname  = "hostname"
+)
+
 // Experience event types.
 const (
 	EventPageView    = "page_view"
@@ -97,7 +103,12 @@ type ExperienceEvent struct {
 	// direct identifier reaching this field.
 	UserRef string `json:"user_ref,omitempty"`
 
-	App         string `json:"app"`
+	App string `json:"app"`
+	// AppSource says where App came from: "attribute" (the page's own data-app)
+	// or "hostname" (the snippet's default when ONE tag is injected at a proxy
+	// for many apps, so each is labelled by its host). "" is a producer that
+	// did not say. Closed set; anything else is refused.
+	AppSource   string `json:"app_source,omitempty"`
 	Environment string `json:"environment,omitempty"`
 	Release     string `json:"release,omitempty"`
 
@@ -155,6 +166,12 @@ func (e *ExperienceEvent) Validate() error {
 	e.App = labelSafe(e.App)
 	if e.App == "" {
 		return fmt.Errorf("experience event %s: app is required", e.ID)
+	}
+	e.AppSource = strings.ToLower(strings.TrimSpace(e.AppSource))
+	switch e.AppSource {
+	case "", AppSourceAttribute, AppSourceHostname:
+	default:
+		return fmt.Errorf("experience event %s: unknown app_source %q", e.ID, clip(e.AppSource, 40))
 	}
 	e.Environment, e.Release = labelSafe(e.Environment), labelSafe(e.Release)
 	e.Type = strings.ToLower(strings.TrimSpace(e.Type))

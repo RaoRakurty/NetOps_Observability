@@ -105,9 +105,10 @@ dimension responsible and by how many points. A weight change increments the
 version, so a number from last week is still reconstructible.
 
 `error_free_interaction` and `user_friction` are measured from first-party
-real-user telemetry, which Correlix does not collect yet. Both report as not
-measured, their weight is redistributed across the dimensions that were
-measured, and the panel says so.
+real-user telemetry, which arrives once your apps carry the real-user tag (see
+[Setting up real-user monitoring](#setting-up-real-user-monitoring)). Until
+then both report as not measured, their weight is redistributed across the
+dimensions that were measured, and the panel says so.
 
 ### What "not measured" means
 
@@ -299,6 +300,29 @@ before you need it.
 **Coverage**, its **Freshness** and its **Effect on confidence**, meaning how
 much confidence its current state costs. The states are the ones in the
 telemetry-confidence table above.
+
+### Setting up real-user monitoring
+
+Real-user data comes from a small tag on your web apps. Your proxy or web team
+adds it once, in front of all your apps; Correlix never changes your systems.
+**Data Health › Real-user setup** walks through four steps:
+
+1. **Get a key.** An administrator generates a send-only key. It cannot read
+   anything, so it is safe inside a web page. It is shown once.
+2. **The tag.** The exact tag, with your appliance address and key filled in.
+   It names no app: each page is named by its web address, so one tag covers
+   every app.
+3. **Add it once.** A copy-paste rule for the layer in front of your apps:
+   NGINX, F5 BIG-IP, Citrix NetScaler, Envoy or Istio, Cloudflare, Akamai, or
+   Google Tag Manager. Apps with a strict content security policy need the two
+   extra lines shown. Your Correlix administrator must also allow each app's
+   web address to send data; until then browsers block it. Test the rule in
+   staging first.
+4. **Is it working?** Which apps sent real-user data in the last 24 hours, and
+   which went quiet after sending some in the last week.
+
+Single-page apps are covered too: each change of screen is recorded with its own
+timing, and identifiers in the address are masked before anything is sent.
 
 ## Related
 

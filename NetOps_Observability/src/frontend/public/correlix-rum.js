@@ -23,20 +23,30 @@
  *   <script src="/correlix-rum.js"
  *           data-endpoint="https://correlix.example.com"
  *           data-key="cx_..."          <!-- an ingest:experience API key -->
- *           data-app="checkout"
+ *           data-app="checkout"        <!-- optional: defaults to the page's host name -->
  *           data-environment="production"
  *           data-release="2026.09.06"
  *           defer></script>
+ *
+ * ONE TAG FOR MANY APPS. Leave data-app out and each page is labelled by its
+ * host name (shop.example.com, hr.example.com), so a single tag injected by a
+ * load balancer, reverse proxy or tag manager in front of every app labels
+ * each one correctly. Each event says which it was (app_source).
+ *
+ * SINGLE-PAGE APPS. Route changes made with the History API are recorded as
+ * `navigation` events with their own timing (to the next paint), collapsed the
+ * same way page loads are. data-spa="off" turns that off.
  *
  * THE KEY IS PUBLIC, AND THAT IS THE DESIGN. Anything in a page served to the
  * public must be assumed public. Mint a key with the `ingest:experience` scope
  * ONLY: it is write-only, bound to one tenant, and cannot read a single row of
  * anything. Never paste an operator token here.
  *
- * CROSS-ORIGIN. Your app and Correlix are usually different origins, so add
- * your app's origin to CORS_ALLOWED_ORIGINS on the deployment. Correlix
- * reflects only explicitly allowlisted origins — never a wildcard — so the
- * beacon fails loudly on a misconfiguration rather than half-working.
+ * CROSS-ORIGIN. Your app and Correlix are usually different origins, so your
+ * Correlix administrator must allow your app's web address (the deployment's
+ * cross-origin allowlist). Correlix reflects only explicitly allowlisted
+ * origins — never a wildcard — so the beacon fails loudly on a misconfiguration
+ * rather than half-working.
  *
  * MANUAL EVENTS
  *   window.correlixRum.track({ type: "journey_step", journey_id: "jny-…",
@@ -57,7 +67,21 @@
 
   var endpoint = String(opt("endpoint", "")).replace(/\/+$/, "");
   var key = String(opt("key", ""));
-  var app = String(opt("app", ""));
+  // The app label. data-app wins; without one the page's HOSTNAME is the label,
+  // so a single tag injected at a load balancer, proxy or tag manager in front
+  // of hundreds of apps still names each app on its own. app_source records
+  // which it was, so a dashboard can tell a chosen name from a derived one.
+  var app = String(opt("app", "")).trim();
+  var appSource = "attribute";
+  if (!app) {
+    app = hostLabel(location.hostname);
+    appSource = "hostname";
+  }
+  // hostLabel: lower-case, only the characters a host name may carry, bounded.
+  // Nothing else from the URL is read — no path, no query, no fragment.
+  function hostLabel(h) {
+    return String(h || "").toLowerCase().replace(/[^a-z0-9.-]/g, "").replace(/^[.-]+|[.-]+$/g, "").slice(0, 64);
+  }
   var environment = String(opt("environment", ""));
   var release = String(opt("release", ""));
   var userRef = String(opt("userRef", ""));
@@ -72,7 +96,7 @@
   if (!endpoint || !key || !app) {
     // Fail LOUDLY and once. A beacon that silently collects nothing is
     // indistinguishable from an application nobody is having trouble with.
-    if (window.console) console.warn("correlix-rum: endpoint, key and app are all required; nothing will be sent.");
+    if (window.console) console.warn("correlix-rum: endpoint and key are required (and data-app when the page has no host name); nothing will be sent.");
     return;
   }
   if (!(sampleRate > 0)) return;
@@ -163,6 +187,7 @@
       id: uuid(),
       session_id: sessionId,
       app: app,
+      app_source: appSource,
       environment: environment || undefined,
       release: release || undefined,
       type: partial.type || "interaction",
@@ -295,7 +320,7 @@
       // No answer at all: offline, DNS, or a CORS preflight the deployment has
       // not allowed. All three can come back, so this is retryable.
       requeue(path, events);
-      retryLater("could not reach " + endpoint + " (offline, or this origin is not in CORS_ALLOWED_ORIGINS).");
+      retryLater("could not reach " + endpoint + " (offline, or this page's web address is not on the deployment's cross-origin allowlist).");
     });
   }
 
@@ -304,7 +329,7 @@
     if (retryAfter && Date.now() < retryAfter) return;
     if (dropped > 0 && queue.length < MAX_QUEUE) {
       queue.push({
-        id: uuid(), session_id: sessionId, app: app, type: "error", success: false,
+        id: uuid(), session_id: sessionId, app: app, app_source: appSource, type: "error", success: false,
         action: "correlix_rum_queue_overflow", error: dropped + " experience events were dropped by the browser queue",
         cohort: cohort(), event_at: new Date().toISOString()
       });
@@ -360,6 +385,55 @@
   });
   window.addEventListener("pagehide", function () { flush(); });
   setInterval(function () { flush(); }, FLUSH_MS);
+
+  // ── single-page apps ──────────────────────────────────────────────────────
+  // A single-page app loads once and then changes "page" by rewriting the URL
+  // with the History API, so a page-load beacon alone would see one view per
+  // visit. Each route change is a `navigation` event with its own timing: the
+  // time from the URL change to the second animation frame after it, i.e. to
+  // the next paint, which is when the user sees the new view. The route is
+  // collapsed exactly as a page load's is (route() above), and a change that
+  // leaves the collapsed route the same (a query string, a fragment, an id
+  // swapped for another id) is not a new view. data-spa="off" turns it off.
+  var spa = String(opt("spa", "on")).toLowerCase() !== "off";
+  var currentRoute = route(location.pathname);
+
+  function clock() {
+    return window.performance && performance.now ? performance.now() : Date.now();
+  }
+
+  function softNavigate() {
+    var next = route(location.pathname);
+    if (next === currentRoute) return;
+    currentRoute = next;
+    var t0 = clock();
+    var frame = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
+    frame(function () {
+      frame(function () {
+        track({ type: "navigation", action: "route_change", route: next, duration_ms: Math.max(0, Math.round(clock() - t0)) });
+      });
+    });
+  }
+
+  if (spa && window.history) {
+    // Patch pushState/replaceState ONCE per page (a page that includes the tag
+    // twice, or a proxy that injects it twice, must not double-wrap), and let
+    // each copy listen for the event the patch raises.
+    if (!window.__correlixRumHistory) {
+      window.__correlixRumHistory = true;
+      ["pushState", "replaceState"].forEach(function (name) {
+        var original = history[name];
+        if (typeof original !== "function") return;
+        history[name] = function () {
+          var result = original.apply(this, arguments);
+          try { window.dispatchEvent(new Event("correlixrum:navigation")); } catch (e) { /* an old browser without Event(): no soft views */ }
+          return result;
+        };
+      });
+    }
+    window.addEventListener("correlixrum:navigation", softNavigate);
+    window.addEventListener("popstate", softNavigate);
+  }
 
   window.correlixRum = { track: track, business: business, flush: function () { flush(); }, sessionId: sessionId };
 })();

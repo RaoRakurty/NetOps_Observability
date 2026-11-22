@@ -1337,6 +1337,7 @@ CREATE TABLE IF NOT EXISTS netops.experience_events
     session_id       String DEFAULT '',
     user_ref         String DEFAULT '',
     app              LowCardinality(String) DEFAULT '',
+    app_source       LowCardinality(String) DEFAULT '',
     environment      LowCardinality(String) DEFAULT '',
     release          LowCardinality(String) DEFAULT '',
     event_type       LowCardinality(String) DEFAULT '',

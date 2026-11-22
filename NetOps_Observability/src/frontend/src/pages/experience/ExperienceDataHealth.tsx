@@ -21,6 +21,7 @@ import type { DemSourceHealth, DemDataHealthResponse, DemWindow } from "../../se
 import { fmtDateTime } from "../../lib/time";
 import { Loading, LoadError, NotMeasured, Panel, pct, reasonText } from "./honest";
 import { useDemRead } from "./state";
+import RumSetup from "./RumSetup";
 
 const STATE_WORDS: Record<string, string> = {
   flowing: "Reporting",
@@ -72,6 +73,8 @@ export default function ExperienceDataHealth({ window: win }: { window: DemWindo
           {sources.map((s) => <SourceCard key={s.source} s={s} />)}
         </div>
       </Panel>
+
+      <RumSetup />
 
       <p className="dx-cap">
         Window {res.data.window} · score policy version {res.data.policy_version}
