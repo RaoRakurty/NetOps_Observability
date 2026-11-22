@@ -161,7 +161,7 @@ export default function Incidents() {
   return (
     <div className="dm-board cc-board">
       <NocHeader
-        title="Operational Incidents"
+        title="Incidents"
         topic="page.incidents"
         chips={<><Chip label={`Incidents ${items.length}`} /><LiveChip /></>}
       >

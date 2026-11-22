@@ -22,7 +22,7 @@ you have, and how much a given surface is entitled to assert.
 | Findings | **Investigate → Findings** | A judgement against the device's own baseline. A row carries a severity, a kind, a device, a component, a summary and a score. |
 | Correlation | **Investigate → RCA** | The grouping. Related findings and events become one candidate with a **Linked by** relationship, a count of evidence types and an observation count. |
 | The RCA case | The RCA workspace, opened from a candidate | The verdict, the ranked hypotheses, the evidence matrix, the confidence ladder and the causal path. |
-| Triage | **Overview → Home**, then **Operations → Incidents** | An owner, a next action and a tracked lifecycle. |
+| Triage | **Overview → Home**, then **Operations → Problems** (correlated cases); **Operations → Incidents** tracks what is owned | An owner, a next action and a tracked lifecycle. |
 | Delivery | **Administration → Incident response → Notifications** and **Administration → Incident response → RCA Tickets** | The people who need to know, and one record per root cause. |
 
 ### The grouping is the point
@@ -66,7 +66,7 @@ same fault cannot produce a second ticket while the first is open.
   only by controller intelligence, or only by security findings, cannot reach
   `confirmed`, because neither class measures the path. The case says which
   class is missing rather than promoting itself.
-- **An empty Action Queue means nothing has correlated.** It is not a statement
+- **An empty Problems list means nothing has correlated.** It is not a statement
   that the network is healthy. Alerts firing without a group are on
   **Operations → Active Alerts**.
 - **A path that cannot be placed is reported as unplaced.** The causal topology

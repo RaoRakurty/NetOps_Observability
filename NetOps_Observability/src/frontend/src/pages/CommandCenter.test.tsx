@@ -89,7 +89,8 @@ const rowOrder = (): string[] =>
     .filter(Boolean);
 
 const header = (name: string): HTMLElement =>
-  screen.getByRole("columnheader", { name: new RegExp(name, "i") });
+  // Anchored: a bare /ID/ would also match "Evidence".
+  screen.getByRole("columnheader", { name: new RegExp(`^${name}\\b`, "i") });
 
 afterEach(cleanup);
 
@@ -107,7 +108,7 @@ beforeEach(() => {
 describe("Action Queue — renders through the shared DataTable", () => {
   it("exposes a VISIBLE, keyboard-operable resize grip per column (owner gap #1)", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     // The grip is the shared primitive's, not a hand-rolled one: a labelled
     // separator carrying the visible .dtv-resize-grip mark and ←/→ support.
@@ -122,7 +123,7 @@ describe("Action Queue — renders through the shared DataTable", () => {
 
   it("keeps the queue's severity row-accent treatment after migration", async () => {
     const { container } = render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
     // crit → --crit accent, major → --warn (was .cc-row.sev-*, now rowAccent).
     const accents = [...container.querySelectorAll(".dtv-row")].map((r) => (r as HTMLElement).style.boxShadow);
     expect(accents.some((s) => s.includes("--crit"))).toBe(true);
@@ -133,10 +134,10 @@ describe("Action Queue — renders through the shared DataTable", () => {
 describe("Every column is sortable, with a visible indicator + aria-sort", () => {
   it("marks each column sortable and announces the sort state", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     // Column headers were cut to <= 2 words in the 2026-09-06 word sweep.
-    const names = ["Sev", "Problem", "Incident", "RCA", "Impact",
+    const names = ["Sev", "ID", "Problem", "RCA", "Impact",
       "Domain", "Evidence", "Owner", "Started", "Age", "Ticket", "Next"];
     for (const n of names) {
       const th = header(n);
@@ -155,7 +156,7 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
 
   it("sorts Severity by the OPERATOR ladder (crit→major→warn→ok), not alphabetically", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     fireEvent.click(header("Sev"));
     // Semantic: crit(A) → major(B) → warn(D) → ok(C).
@@ -169,7 +170,7 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
 
   it("sorts RCA state by the triage ladder, not lexically", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     fireEvent.click(header("RCA"));
     // Ladder: Confirmed(0) → Suspected(1) → Correlated(3) ×2.
@@ -182,7 +183,7 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
 
   it("sorts Started chronologically by epoch, not by the rendered label", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     fireEvent.click(header("Started"));
     // Chronological: May 20(C) → Jun 21(B) → Jun 25(D) → Jul 02(A).
@@ -197,7 +198,7 @@ describe("Every column is sortable, with a visible indicator + aria-sort", () =>
 describe("Started column — the incident's real start time (owner gap #3)", () => {
   it("renders the actual window_start value, never an invented date", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     // The shared LogTime renderer titles the cell with a tooltip that BEGINS
     // with the exact ISO instant (followed by the labeled local rendering), so
@@ -219,13 +220,13 @@ describe("Started column — the incident's real start time (owner gap #3)", () 
       })],
     });
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
     expect(screen.getByTitle(new RegExp(`^${new Date(T_JUN).toISOString()}`))).toBeTruthy();
   });
 
   it("keeps the relative Age affordance alongside the absolute date", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
     expect(header("Age")).toBeTruthy();
     expect(header("Started")).toBeTruthy();
   });
@@ -234,7 +235,7 @@ describe("Started column — the incident's real start time (owner gap #3)", () 
 describe("Row expansion survives the DataTable migration (hard constraint)", () => {
   it("expands a detail panel on row click and collapses it again", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     expect(screen.queryByText("Next action")).toBeNull();
 
@@ -252,7 +253,7 @@ describe("Row expansion survives the DataTable migration (hard constraint)", () 
 
   it("marks the expanded row with aria-expanded for assistive tech", async () => {
     const { container } = render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     const rowsEls = () => [...container.querySelectorAll(".dtv-row")];
     expect(rowsEls().every((r) => r.getAttribute("aria-expanded") === "false")).toBe(true);
@@ -263,7 +264,7 @@ describe("Row expansion survives the DataTable migration (hard constraint)", () 
 
   it("a deep-link inside a row does not toggle the row (stopPropagation holds)", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     fireEvent.click(screen.getByText("P-AAAAAA")); // the Problem ID → RCA deep link
     expect(screen.queryByText("Next action")).toBeNull();
@@ -273,7 +274,7 @@ describe("Row expansion survives the DataTable migration (hard constraint)", () 
 describe("Filtering still narrows the queue (no regression)", () => {
   it("a KPI sets the filter and the queue shows only those rows", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
     expect(rowOrder()).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: /^\d+\s*Critical$/ }));
@@ -282,7 +283,7 @@ describe("Filtering still narrows the queue (no regression)", () => {
 
   it("the Severity facet filters the rendered rows", async () => {
     render(<CommandCenter />);
-    await screen.findByRole("grid", { name: /Action Queue/i });
+    await screen.findByRole("grid", { name: /^Problems/ });
 
     fireEvent.change(screen.getByLabelText("Severity"), { target: { value: "major" } });
     await waitFor(() => expect(rowOrder()).toEqual(["P-BBBBBB"]));

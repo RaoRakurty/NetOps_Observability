@@ -29,6 +29,7 @@ import RightNow from "./flows/RightNow";
 import WhoIsTalking from "./flows/WhoIsTalking";
 import Capacity from "./flows/Capacity";
 import AboutData from "./flows/AboutData";
+import { fetchCoverage, onlyPlatformTraffic, onlyPlatformTrafficNote, type FlowCoverage } from "./flowEmpty";
 import {
   linkKey, parseDeepLink, tabFromHash, flowsHref, flowsWindow,
   type DeepLink, type TalkFilters, type FlowsTab,
@@ -68,6 +69,19 @@ export default function Flows({ rangeMinutes = 60 }: { rangeMinutes?: number } =
   const win = useMemo(() => flowsWindow(rangeMinutes * 60, link), [rangeMinutes, link, tick]);
   const selected = link.device && link.ifIndex ? linkKey(link.device, link.ifIndex) : "";
 
+  // Coverage of the whole window (no filters): tells the page when every flow is
+  // Correlix's own monitoring traffic, so empty panels are explained up front.
+  const [cov, setCov] = useState<FlowCoverage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchCoverage(win.since, "", undefined).then((c) => {
+      if (alive) setCov(c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [win.since, tick]);
+
   const go = useCallback((next: FlowsTab, l: DeepLink = link) => {
     const h = flowsHref(l, next);
     if (location.hash !== h) window.history.replaceState(null, "", h);
@@ -97,6 +111,13 @@ export default function Flows({ rangeMinutes = 60 }: { rangeMinutes?: number } =
           <div className="tr-banner" role="status" data-testid="problem-banner">
             <span>Problem window {fmtDateTime(win.problem.from)} – {fmtDateTime(win.problem.to)}</span>
             <button className="btn-ghost" onClick={() => go(tab, { device: link.device, ifIndex: link.ifIndex })}>Show the usual window</button>
+          </div>
+        )}
+
+        {onlyPlatformTraffic(cov, includePlatform) && cov && (
+          <div className="tr-banner" role="status" data-testid="platform-only-banner">
+            <span>{onlyPlatformTrafficNote(cov)}</span>
+            <button className="btn-ghost" onClick={() => setIncludePlatform(true)}>Show them</button>
           </div>
         )}
 

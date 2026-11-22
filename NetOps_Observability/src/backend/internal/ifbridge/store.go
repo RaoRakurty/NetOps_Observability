@@ -180,6 +180,12 @@ func mergeDuplicateRows(rows []Row) []Row {
 		if m.Alias == "" {
 			m.Alias = r.Alias
 		}
+		if m.Role == "" {
+			m.Role = r.Role
+		}
+		if m.Kind == "" {
+			m.Kind = r.Kind
+		}
 		seen := map[string]bool{}
 		for _, a := range m.Addrs {
 			seen[a] = true

@@ -2192,8 +2192,10 @@ rules:
 
   # BFD. Bound to the tunnel the way vManage binds it (nms/sdwan_tunnel.go): the two
   # TLOCs sorted, so both ends of one session are ONE node. The trap cannot know
-  # the controller instance the controller lane scopes by (`<id>@<instance>`), so
-  # the two lanes meet through the device token, not as one node. cEdge's
+  # the controller instance the controller lane scopes by (`<id>@<instance>`), and
+  # its device token is its observer (dropped from the node's tokens), so alone the
+  # bare node grounds to nothing; stage [1] canon's `tunnel` axis (canon.py, tracker
+  # 430, CORR_IDENTITY_CANON) scopes it from the tenant's T4c rows. cEdge's
   # ciscoSdwanBfdStateChange has no row: its varbind arcs move between releases.
   - rule_id: trap.sdwan.bfd.clear
     lane: trap

@@ -961,6 +961,43 @@ days). The proof is the owner's vSmart-shutdown drill (as on 2026-11-10), record
    down session decides the export window).
 Past the cap on real telemetry needs the drill with `CORR_TOKEN_HUB_CAP=4` (owner call).
 
+## 32. SD-WAN tunnel identity across lanes — BUILT, not proven on the rig (tracker 430, 2026-11-21)
+
+Stage [1], `canon.py` `tunnel` axis, under `CORR_IDENTITY_CANON` (default OFF, so dormant
+on the lab until P6-H). No engine.py, scoring, verdict or trap-rule change; ENGINE_SEMVER
+and `rules_hash` unchanged.
+
+- Without it a trap BFD node (bare TLOC pair) grounds to NOTHING: not to the controller's
+  `<pair>@<ci>` node, not to either endpoint device, with or without T4c rows (its only
+  token is the bare pair; `adjacency_key()` keys only `@` ids). BUILD, pinned
+  (`test_tunnel_scope_430.py`). The lab agreed: no `corr_edges` row touched a trap tunnel node.
+- With it, every one of the lab's 44 recorded (pair, sender) trap pairs (34 tunnels) takes
+  the one recorded instance; both ends of a tunnel land on one id; trap + controller report
+  are ONE node, grounded at rank 3 to both endpoints. BUILD, on recorded rows.
+- Abstains, never guesses: no row naming the sender (`abstain_unknown`), two instances
+  naming it (`abstain_ambiguous`), an ambiguous sender, a scoped/opaque/unschemed id, an id
+  past the cap. Two disjoint fabrics reusing a pair in one tenant each take their own
+  instance. BUILD.
+- §3a: a scope is the tenant's own topology_links bucket (never ∪ global; global reads only
+  global); a scope for another tenant is refused (`abstain_conflict`); the cache is bounded
+  by the file's tenants. BUILD.
+- OFF byte-identical (no scope built); ON the window carries the scoped id, `corr_signals`
+  the raw one, `corr_identity_canon_total{lane="trap",axis="tunnel",...}` counts it, and an
+  object replays from its embedded adjacency. BUILD.
+- Verdicts can move: a trap is a measurement-plane witness, so a trap on a tunnel plus an
+  endpoint's alarm is now held by an authoritative edge (no "no authoritative edge" cap).
+  The merged trap + controller node alone is not confirmed (D1). BUILD, asserted as a
+  reviewed shift.
+
+Residuals, stated: the T4c rows are exported for 24 h (`ctloverlay.LinkWindow`, #327), so
+only a controller outage longer than a day leaves traps bare again; total system-ip reuse across
+two fabrics exports no rows, so those traps still share one bare node.
+
+**NOT proven on the rig.** Needs `CORR_IDENTITY_CANON` on (P6-H) and a real BFD flap,
+recording: trap nodes keyed `<pair>@<ci>` in `corr_edges`; rank-3 `adj:` edges from each to
+its endpoints; the bridging volume (trap flaps are far more frequent than polled diffs —
+34 flaps in 4 minutes on 2026-11-18), measured before default-ON.
+
 ## Syslog framing — BUILT, not proven on the rig (tracker 387 PR 10, 2026-11-09)
 
 **Every vendor's frame reaches the engine with its real PRI, hostname, app and clean message.**
