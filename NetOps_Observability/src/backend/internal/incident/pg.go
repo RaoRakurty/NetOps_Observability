@@ -92,8 +92,8 @@ const sevArray = `ARRAY['info','low','medium','high','critical']`
 var upsertIncidentSQL = `
 INSERT INTO incidents
   (id, tenant_id, title, description, severity, status, source_type, source_id, dedup_key, owner,
-   occurrences, created_at, updated_at, first_seen_at, last_seen_at)
-VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9, 1, now(), now(), $10, $10)
+   occurrences, created_at, updated_at, first_seen_at, last_seen_at, device_id)
+VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9, 1, now(), now(), $10, $10, $11)
 ON CONFLICT (tenant_id, dedup_key) WHERE (dedup_key <> '' AND status NOT IN ('resolved','closed'))
 DO UPDATE SET
    occurrences  = incidents.occurrences + 1,
@@ -101,6 +101,9 @@ DO UPDATE SET
    severity     = CASE WHEN array_position(` + sevArray + `, EXCLUDED.severity)
                           > array_position(` + sevArray + `, incidents.severity)
                        THEN EXCLUDED.severity ELSE incidents.severity END,
+   -- WHERE never flips: the first non-empty device stays (tracker 438).
+   device_id    = CASE WHEN incidents.device_id = '' THEN EXCLUDED.device_id
+                       ELSE incidents.device_id END,
    updated_at   = now()
 RETURNING id, (xmax = 0) AS inserted`
 
@@ -116,7 +119,7 @@ func (s *PGStore) Ingest(ctx context.Context, in Input) (Incident, bool, error) 
 	var inserted bool
 	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, upsertIncidentSQL,
-			id, tid, in.Title, in.Description, sev, st, nullText(in.SourceID), dk, in.Owner, now)
+			id, tid, in.Title, in.Description, sev, st, nullText(in.SourceID), dk, in.Owner, now, CleanDeviceID(in.DeviceID))
 		if err := row.Scan(&resultID, &inserted); err != nil {
 			return err
 		}
@@ -466,7 +469,7 @@ const selectIncidentCols = `SELECT id, tenant_id, title, COALESCE(description,''
 	source_type, COALESCE(source_id,''), dedup_key, COALESCE(owner,''), occurrences,
 	created_at, updated_at, first_seen_at, last_seen_at, resolved_at,
 	COALESCE(external_ticket_id,''), COALESCE(external_url,''), COALESCE(external_system,''),
-	sync_status, last_synced_at,
+	sync_status, last_synced_at, device_id,
 	COALESCE((SELECT array_agg(DISTINCT e.payload->>'channel')
 	            FROM incident_events e
 	           WHERE e.incident_id = incidents.id AND e.event_type = 'notified'
@@ -479,7 +482,7 @@ func scanIncident(row pgx.Row) (Incident, bool, error) {
 		&r.SourceType, &r.SourceID, &r.DedupKey, &r.Owner, &r.Occurrences,
 		&r.CreatedAt, &r.UpdatedAt, &r.FirstSeenAt, &r.LastSeenAt, &resolved,
 		&r.ExternalTicket, &r.ExternalURL, &r.ExternalSystem, &r.SyncStatus, &lastSync,
-		&r.NotifiedVia); err != nil {
+		&r.DeviceID, &r.NotifiedVia); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Incident{}, false, nil
 		}

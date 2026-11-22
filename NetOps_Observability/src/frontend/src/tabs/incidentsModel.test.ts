@@ -5,8 +5,10 @@ import { describe, it, expect } from "vitest";
 import type { Incident } from "../services/api";
 import {
   INCIDENT_SOURCE_TABS, inSourceTab, filterIncidents, statusCounts, countsNote, pageNote, ownerText, statusText,
-  activeIncidentFilterCount, isActiveIncident,
+  activeIncidentFilterCount, isActiveIncident, incidentWhere, whereText,
 } from "./incidentsModel";
+import { buildDevicePlaces, deviceSite } from "../lib/deviceNames";
+import type { Device } from "../services/api";
 
 const inc = (o: Partial<Incident>): Incident => ({
   id: "i", title: "WAN loss at DFW", severity: "high", status: "open", source_type: "alert",
@@ -59,5 +61,40 @@ describe("incidentsModel — Incidents as a presenter", () => {
     expect(ownerText(inc({ owner: "noc-lee" }))).toBe("noc-lee");
     expect(statusText("investigating")).toBe("Investigating");
     expect(isActiveIncident(inc({ status: "resolved" }))).toBe(false);
+  });
+});
+
+describe("WHERE an incident is (tracker 438)", () => {
+  const d = (o: Partial<Device>): Device => ({ id: "", name: "", address: "", source: "snmp", last_seen: "", ...o }) as Device;
+  const places = buildDevicePlaces([
+    d({ id: "edge-1-aa", name: "edge-1", address: "10.0.0.1", labels: { site: "HQ" } }),
+    d({ id: "edge-1-bb", name: "edge-1", address: "10.0.0.2", reported_site_id: "100" }),
+    d({ id: "core-cc", name: "core", address: "10.0.0.3" }),
+  ]);
+
+  it("names the device and its site; two same-named devices are told apart by address", () => {
+    expect(incidentWhere(inc({ device_id: "edge-1-aa" }), places)).toEqual({ device: "edge-1 (10.0.0.1)", site: "HQ", id: "edge-1-aa" });
+    expect(whereText(incidentWhere(inc({ device_id: "edge-1-bb" }), places))).toBe("edge-1 (10.0.0.2) · site-id 100");
+    expect(whereText(incidentWhere(inc({ device_id: "core-cc" }), places))).toBe("core");
+  });
+
+  it("an unknown device keeps its id; no device is empty, never invented", () => {
+    expect(incidentWhere(inc({ device_id: "ghost-9" }), places)).toEqual({ device: "ghost-9", site: "", id: "ghost-9" });
+    expect(incidentWhere(inc({ device_id: "ghost-9" }), null).device).toBe("ghost-9");
+    expect(whereText(incidentWhere(inc({}), places))).toBe("");
+  });
+
+  it("the operator's site wins over a location label and the reported site id", () => {
+    expect(deviceSite({ labels: { site: "HQ", location: "Bldg 2" }, reported_site_id: "7" })).toBe("HQ");
+    expect(deviceSite({ labels: { location: "Bldg 2" }, reported_site_id: "7" })).toBe("Bldg 2");
+    expect(deviceSite({ reported_site_id: "7" })).toBe("site-id 7");
+    expect(deviceSite({})).toBe("");
+  });
+
+  it("search reads the device name, the site and the raw id", () => {
+    const rows = [inc({ id: "1", title: "Gi1 down", device_id: "edge-1-aa" }), inc({ id: "2", title: "Disk full" })];
+    expect(filterIncidents(rows, "all", { q: "hq" }, places).map((i) => i.id)).toEqual(["1"]);
+    expect(filterIncidents(rows, "all", { q: "edge-1-aa" }, places).map((i) => i.id)).toEqual(["1"]);
+    expect(filterIncidents(rows, "all", { q: "edge-1-aa" }).map((i) => i.id)).toEqual(["1"]);
   });
 });
