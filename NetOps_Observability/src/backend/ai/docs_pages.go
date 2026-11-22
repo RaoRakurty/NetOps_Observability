@@ -78,8 +78,7 @@ func wholePage(slug string) pageDoc { return pageDoc{Slug: slug} }
 var navPageDocs = map[string]navPage{
 	// Overview
 	"overview/home":       {Label: "Overview → Home (Command Center)", Docs: []pageDoc{wholePage("dashboards-reports/command-center"), wholePage("noc-guide/where-to-start")}, Explain: "page.command-center"},
-	"overview/operations": {Label: "Overview → Operations Overview", Docs: []pageDoc{wholePage("dashboards-reports/operations-overview")}},
-	"overview/board":      {Label: "Overview → My Dashboard", Docs: []pageDoc{wholePage("dashboards-reports/my-dashboard")}},
+	"overview/operations": {Label: "Overview → Overview", Docs: []pageDoc{wholePage("dashboards-reports/operations-overview")}, Explain: "page.overview"},
 
 	// Operations
 	"operations/incidents":          {Label: "Operations → Incidents", Docs: []pageDoc{wholePage("incidents/working-incidents"), wholePage("incidents/reading-an-incident"), wholePage("incidents/overview")}, Explain: "page.incidents"},

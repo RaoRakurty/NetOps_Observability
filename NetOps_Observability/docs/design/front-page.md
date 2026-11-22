@@ -1,6 +1,13 @@
 # Front Page — Triage-First Landing + Service Semantics Layer
 
 Status: **DESIGN — awaiting sign-off** · Surfaces: React SPA + Go API · Tracker #69
+
+> **2026-11-22 — superseded in part.** Operations Overview (the page this
+> document designed) and My Dashboard were merged into ONE default page,
+> **Overview → Overview** (`src/frontend/src/pages/overview/`, route
+> `#/overview/operations`; `#/overview/board` aliases to it). The answer-first
+> panels below moved there unchanged in meaning, now fed by one shared read of
+> correlations / health / stats. Custom views live under **My dashboards**.
 Related: `correlation-engine.md` (#67 — supplies Top Issues / What-Changed / Recommended
 Actions), `cloud-ingestion.md` (#68 — cloud seam panels), `rca-market-research.md`
 (market/algorithm evidence behind these choices), memory `netops-frontpage-rca-direction`.

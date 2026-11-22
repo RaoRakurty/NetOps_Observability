@@ -690,26 +690,25 @@
     {
       "id": "docs-060",
       "category": "docs",
-      "question": "What does the Operations Overview page show?",
+      "question": "What does the Overview page show?",
       "expect": {
         "slugs": [
           "dashboards-reports/operations-overview"
         ]
       },
       "nav": "overview/operations",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Operations Overview"
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Overview (Operations Overview and My Dashboard merged, 2026-11-22)"
     },
     {
       "id": "docs-061",
       "category": "docs",
-      "question": "Why does My Dashboard say Disconnected?",
+      "question": "Why does the Overview say Disconnected?",
       "expect": {
         "slugs": [
-          "dashboards-reports/my-dashboard"
+          "dashboards-reports/operations-overview"
         ]
       },
-      "nav": "overview/board",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 My Dashboard"
+      "notes": "the liveness header moved from My Dashboard to the merged Overview"
     },
     {
       "id": "docs-062",

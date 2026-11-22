@@ -54,4 +54,4 @@ operational boards, against the running stack.
 ## Related
 
 - [Built-in dashboards](/dashboards-reports/built-in-dashboards)
-- [Read My Dashboard](/dashboards-reports/my-dashboard)
+- [Read the Overview](/dashboards-reports/operations-overview)

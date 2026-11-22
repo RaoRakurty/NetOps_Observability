@@ -28,7 +28,9 @@ const LEGACY: [string, string, string][] = [
   ["#/dashboards", "overview", "home"],
   ["#/dashboards/home", "overview", "home"],
   ["#/dashboards/operations", "overview", "operations"],
-  ["#/dashboards/board", "overview", "board"],
+  // My Dashboard merged into Overview (2026-11-22)
+  ["#/dashboards/board", "overview", "operations"],
+  ["#/overview/board", "overview", "operations"],
   ["#/dashboards/demo", "analytics", "demo"],
   ["#/dashboards/list", "analytics", "dashboards"],
   ["#/dashboards/reports", "analytics", "reports"],
@@ -450,9 +452,11 @@ describe("new tree shape (owner tree, 2026-08)", () => {
   });
 });
 
-describe("FrontPage drill links stay routable", () => {
+describe("Overview drill links stay routable", () => {
   const here = dirname(fileURLToPath(import.meta.url));
-  const src = readFileSync(resolve(here, "pages/FrontPage.tsx"), "utf8");
+  // The Operations Overview panels moved into pages/overview (2026-11-22).
+  const src = ["pages/overview/rcaPanels.tsx", "pages/overview/OverviewPage.tsx"]
+    .map((f) => readFileSync(resolve(here, f), "utf8")).join("\n");
 
   it("never links the moved infrastructure/topology route (canvas lives at investigate/topology)", () => {
     // 'infrastructure/topology' resolves to Infrastructure's FIRST leaf (the

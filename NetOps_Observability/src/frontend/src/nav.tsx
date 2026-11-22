@@ -16,9 +16,8 @@ import { AI_NAME } from "./brand";
 // still code-splits exactly as before — one chunk, fetched once, shared
 // between prefetch and first render.
 export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
-  Dashboard: () => import("./pages/Dashboard"),
   DemoShowcase: () => import("./pages/DemoShowcase"),
-  FrontPage: () => import("./pages/FrontPage"),
+  Overview: () => import("./pages/overview/OverviewPage"),
   Devices: () => import("./pages/Devices"),
   DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
@@ -101,9 +100,8 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   PlatformAlerts: () => import("./pages/platform/PlatformAlerts"),
 };
 
-const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
-const FrontPage = lazy(ROUTE_CHUNKS["FrontPage"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Overview = lazy(ROUTE_CHUNKS["Overview"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Devices = lazy(ROUTE_CHUNKS["Devices"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DeviceMonitoring = lazy(ROUTE_CHUNKS["DeviceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
 const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -243,8 +241,10 @@ export const NAV: NavSection[] = [
       // Home IS the operational control plane (Command Center) — consistently, on
       // first load, in-app navigation, and refresh alike (UI-7).
       { id: "home", label: "Home", render: () => <CommandCenter /> },
-      { id: "operations", label: "Operations Overview", render: () => <FrontPage /> },
-      { id: "board", label: "My Dashboard", render: () => <Dashboard /> },
+      // Overview (owner, 2026-11-22): Operations Overview and My Dashboard merged
+      // into ONE default page. The id stays `operations` so saved landings and
+      // links keep resolving; the old My Dashboard route aliases here.
+      { id: "operations", label: "Overview", render: () => <Overview /> },
     ],
   },
   // ── Operations — what is happening right now ────────────────────────────────
@@ -712,7 +712,10 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "dashboards": "overview/home",
   "dashboards/home": "overview/home",
   "dashboards/operations": "overview/operations",
-  "dashboards/board": "overview/board",
+  // My Dashboard merged into Overview (2026-11-22); aliases apply once, never
+  // chained, so both point straight at the live leaf.
+  "dashboards/board": "overview/operations",
+  "overview/board": "overview/operations",
   "dashboards/demo": "analytics/demo",
   "dashboards/list": "analytics/dashboards",
   "dashboards/reports": "analytics/reports",

@@ -69,7 +69,7 @@ and shown under **Infrastructure → Devices**.
 - RBAC roles: super-admin, admin, operator, read-only (+ Auditor, API-Client).
 
 ## Key UI sections (left rail → hover flyout)
-Overview (Home/Operations Overview/My Dashboard) · Operations (Incidents/Active
+Overview (Home/Overview) · Operations (Incidents/Active
 Alerts/Action Queue/Services/Network Health; Monitors) · Investigate (RCA/
 Findings/Topology/Troubleshooting; Paths) · Infrastructure (Devices/Interfaces &
 Optics/Sites/Wireless/NMS Integrations/Config Drift/Source of Truth) · Explore

@@ -9,8 +9,8 @@
 // scope is active.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { kpiHistKey } from "./FrontPage";
-import { setToken, setActiveScope } from "../services/api";
+import { kpiHistKey } from "./rcaPanels";
+import { setToken, setActiveScope } from "../../services/api";
 
 function b64url(o: unknown): string {
   return btoa(JSON.stringify(o)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
