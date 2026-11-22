@@ -210,9 +210,11 @@ def test_a_native_critical_raise_is_crit(ev, rule):
          vb(VF + "69", "established(5)"), state="clear", native="critical"),
 ], ids=["interface", "bgp"])
 def test_a_recovery_natively_critical_is_never_crit(ev):
-    """Severity and lifecycle are separate facts, and a recovery opens nothing."""
+    """Severity and lifecycle are separate facts, and a recovery opens nothing.
+    Tracker 380: the recovery is a clear at info — never crit, never a node."""
     sig = classify(ev)
-    assert sig.severity is Severity.WARN and sig.attrs["state"] == "up"
+    assert sig.severity is Severity.INFO and sig.attrs["state"] == "up"
+    assert sig.kind.endswith("_clear")
 
 
 # ── binding: where the device's report meets the controller's ────────────────

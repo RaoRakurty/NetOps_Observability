@@ -340,6 +340,19 @@ def _skips_baseline(entry: dict) -> bool:
     return entry.get("baseline") == BASELINE_ABSENT
 
 
+def _tracker380(want: dict | None) -> dict | None:
+    """The frozen branch code predates tracker 380. An `up` it emits on a
+    device-lane link/adjacency kind is, since 380, the recovery clear
+    `<kind>_clear` at info — every other field (entity, tokens, native_id,
+    signal_id, attrs) is unchanged. This is the ONE transform the parity proof
+    allows, stated here rather than as skipped entries."""
+    from aggregation import RECOVERY_CLEAR_BASE
+    if (want and "kind" in want and f"{want['kind']}_clear" in RECOVERY_CLEAR_BASE
+            and want.get("attrs", {}).get("state") == "up"):
+        return {**want, "kind": f"{want['kind']}_clear", "severity": "info"}
+    return want
+
+
 def test_the_interpreter_and_the_branch_code_agree_on_the_whole_corpus(golden):
     """THE PROOF. Not "the interpreter matches a recorded snapshot" — both sides
     are RUN, on the same events, and every emitted field is compared, provenance
@@ -352,7 +365,7 @@ def test_the_interpreter_and_the_branch_code_agree_on_the_whole_corpus(golden):
             continue
         ev = entry["ev"]
         for name, new_fn, old_fn in LANE_FNS[entry["lane"]]:
-            got, want = _call(new_fn, ev), _call(old_fn, ev)
+            got, want = _call(new_fn, ev), _tracker380(_call(old_fn, ev))
             if got != want:
                 mismatches.append((name, ev.get("message") or ev.get("trap_oid"),
                                    want, got))

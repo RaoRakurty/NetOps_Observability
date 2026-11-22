@@ -2685,7 +2685,10 @@ GROUND_TRUTH_SCHEMA = "correlix.scale.ground-truth/1"
 #   B-2026-09-02-184  tracker 184 promoted BGP route/update churn, gave
 #                     %SPANTREE-5-TOPOTRAP a device identity instead of the
 #                     synthetic `<host>:unknown`, and gave mac_move a state
-EXPECTATION_REV = "B-2026-09-02-184"
+#   C-2026-11-22-380  tracker 380: a device-lane link/adjacency `up` classifies as the
+#                     recovery clear `<kind>_clear` (same entity, same state); the
+#                     wire is unchanged
+EXPECTATION_REV = "C-2026-11-22-380"
 # The SAME incidents in the network digital twin's record shape, so
 # `scripts/lab/twin/twin.py score --runid <id> --run-root data/miniladder`
 # scores a mini-ladder run with the twin's existing scorer instead of a second
@@ -3450,17 +3453,25 @@ class StormScenario:
                           chain.entity_of(etype, dev, ifname),
                           etype)
 
+    @staticmethod
+    def _kind_for(kind: str, state: str) -> str:
+        """Tracker 380: the parser reports a link/adjacency `up` as the recovery
+        clear `<kind>_clear` (chain.RECOVERY_CLEAR_BASE names the six kinds)."""
+        clear = f"{kind}_clear"
+        return clear if state == "up" and clear in chain.RECOVERY_CLEAR_BASE else kind
+
     def _link(self, iid, t, dev, ifname, state, role) -> bool:
         return self._emit(iid, t, dev, self._link_line(ifname, state),
-                          "link_state_change", state, role, f"{dev}:{ifname}")
+                          self._kind_for("link_state_change", state), state, role,
+                          f"{dev}:{ifname}")
 
     def _bgp(self, iid, t, dev, peer, state, role) -> bool:
         return self._emit(iid, t, dev, self._bgp_line(peer, state),
-                          "bgp_adjacency_change", state, role, dev)
+                          self._kind_for("bgp_adjacency_change", state), state, role, dev)
 
     def _ospf(self, iid, t, dev, peer, ifname, state, role) -> bool:
         return self._emit(iid, t, dev, self._ospf_line(peer, ifname, state),
-                          "ospf_adjacency_change", state, role, dev)
+                          self._kind_for("ospf_adjacency_change", state), state, role, dev)
 
     def _lldp(self, iid, t, dev, ifname, state, role) -> bool:
         return self._emit(iid, t, dev, self._lldp_line(ifname, state),

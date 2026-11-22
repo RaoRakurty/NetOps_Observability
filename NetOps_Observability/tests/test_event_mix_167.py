@@ -202,7 +202,9 @@ def test_the_mix_choices_are_closed():
 def test_single_mode_is_still_one_mnemonic_and_one_kind():
     kinds, _scopes, dropped = _classify("single")
     assert not dropped
-    assert set(kinds) == {"link_state_change"}, sorted(kinds)
+    # Tracker 380: the up half of the single mnemonic is the recovery clear —
+    # still one mnemonic and one symptom identity.
+    assert {k.removesuffix("_clear") for k in kinds} == {"link_state_change"}, sorted(kinds)
 
 
 def test_single_mode_payload_is_unchanged_shape():

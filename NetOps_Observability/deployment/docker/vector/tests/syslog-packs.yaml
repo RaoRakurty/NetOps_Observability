@@ -1624,7 +1624,7 @@ tests:
               assert_eq!(.parser_status, "parsed", "wrong parser_status")
               assert_eq!(.facility, "IFNET", "wrong facility")
               assert_eq!(.event_type, "phy_updown", "wrong event_type")
-  - name: "hpe_comware: a Comware link up is the same row with state up, at warn"
+  - name: "hpe_comware: a Comware link up is the same row with state up, as a recovery clear at info"
     inputs:
       - insert_at: syslog_normalized
         type: log

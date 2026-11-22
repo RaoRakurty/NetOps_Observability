@@ -976,3 +976,16 @@ every other shape is `doc_claimed`.
   scale:** `scripts/scale-miniladder.py` injects to Kafka, so no rig leg has ever exercised
   syslog-ng or the aggregator's syslog lane. An edge parity leg needs a raw-frame injector.
 
+## 32. Device-lane recoveries are clears — BUILT, not proven on the rig (tracker 380, 2026-11-22)
+
+| Claim | Status | Evidence |
+|---|---|---|
+| A link/adjacency `up` from a device lane (syslog, vendor pack, trap) never becomes a node, evidence or a witness | **BUILD** | 32 rows declare `emit.clear_when`; `test_recovery_clears_380.py` (ratchet: every row that can say up declares it; no recorded corpus output is a fault kind with state up) |
+| The clear is the same observation as the up line it replaces | **BUILD** | same entity, tokens, native_id, attrs → same signal_id (`test_the_clear_keeps_the_up_lines_native_id_and_signal_id`); the corpus re-record changed only `kind` and `severity` on 117 outputs |
+| A flap is still read from its downs | **BUILD** | `test_a_flap_is_still_read_from_its_downs`; no template counts transitions |
+| `up` is a positional claim | **BUILD** | `test_positional_state_380.py`: OSPF/routing/link/VTEP read the TO state (`from FULL to EXSTART` = down) |
+| The aggregation plane forwards the same set | **BUILD** | `aggregation.RECOVERY_CLEAR_BASE` folds the six clears onto their base kind for K1 (`p3.k3.v2`), mirrored by `scripts/enterprise_outage_chain.py`; `test_aggregation_p3.py` green |
+| Recovery-only objects stop opening on the rig | **NOT PROVEN** | needs the INVARIANTS §10 gate re-run (`scale-miniladder.py` t-storm-2.5k: its recovery and contradiction lines move node counts; EXPECTATION_REV C-2026-11-22-380, wire digest unchanged) and a lab week showing no object headed by a recovery |
+
+ENGINE_SEMVER unchanged (3.6.0): stage [1] only, no template, gate or constant moved.
+

@@ -103,6 +103,30 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "tracker 387 — a device-lane recovery, the convention the controller lane already uses. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
         "owner": "correlix", "date_added": "2026-11-09",
     },
+    "link_state_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
+    "bgp_adjacency_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
+    "ospf_adjacency_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
+    "isis_adjacency_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
+    "routing_adjacency_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
+    "vtep_state_change_clear": {
+        "reason": "tracker 380 — a device-lane link/adjacency recovery, reported as a clear like every other lane's. build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-22",
+    },
     "security_posture_clear": {
         "reason": "owner D2 (security lane findings-on-change) — a cleared hardening finding. Same recovery convention: binds to the finding's entity, build_nodes skips every *_clear kind, so it never becomes evidence, a template input or an object (D3)",
         "owner": "correlix", "date_added": "2026-11-11",

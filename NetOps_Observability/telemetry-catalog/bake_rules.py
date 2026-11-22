@@ -77,6 +77,8 @@ ROW_REQUIRED = ("rule_id", "lane", "source", "kind", "entity_type", "guard", "em
 EMIT_KEYS = frozenset({
     "kind", "metric", "modality", "entity", "severity", "native_id",
     "content_tag", "tokens", "tokens_fallback", "attrs", "omit_empty",
+    # Tracker 380: the guard under which the emission is a recovery (`<kind>_clear`).
+    "clear_when",
 })
 ENTITY_KEYS = frozenset({"type", "id", "when", "else"})
 #: `_frag` holds the YAML anchors the rows share (they expand at load, so the

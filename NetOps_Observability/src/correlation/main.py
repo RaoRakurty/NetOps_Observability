@@ -13153,7 +13153,10 @@ async def handle_snmptrap(ev: dict) -> None:
     if sig is None:
         TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
         return
-    if sig.kind == "bgp_adjacency_change" and not TRAP_TRANSITIONS.admit(
+    # Tracker 380: a session-up arrives as bgp_adjacency_change_clear; it is a leg
+    # of the same transition stream, so the collapser must still see it (down →
+    # up → down inside the window keeps both downs).
+    if sig.kind.removesuffix("_clear") == "bgp_adjacency_change" and not TRAP_TRANSITIONS.admit(
             tenant, sig.entity_id, str(sig.attrs.get("state") or ""), sig.ts):
         # Another family's report of a transition already emitted (counted as
         # traps_collapsed). The raw trap stays searchable in OpenSearch.
@@ -13164,8 +13167,10 @@ async def handle_snmptrap(ev: dict) -> None:
     # A4: the trap adjacency lane feeds the same heartbeat plane as syslog —
     # the trap rules normalize `state` onto the same {down, up} vocabulary, so
     # an estate that traps and an estate that logs get the same check.
+    # Tracker 380: a recovery arrives as `<kind>_clear`; the dwell watch is keyed
+    # on the base kind and reads `state=up` to clear.
     await _emit_proactive(PROACTIVE.observe_signal(
-        tenant=tenant, entity_id=sig.entity_id, kind=sig.kind,
+        tenant=tenant, entity_id=sig.entity_id, kind=sig.kind.removesuffix("_clear"),
         state=str(sig.attrs.get("state") or ""),
         ts=sig.ts, observer_id=sig.observer.observer_id,
         tokens=sig.entity_tokens, peer=str(sig.attrs.get("peer") or ""),
@@ -13667,7 +13672,7 @@ async def handle_syslog(ev: dict) -> None:
                 # watch return an empty tuple on the first dict lookup.
                 await _emit_proactive(PROACTIVE.observe_signal(
                     tenant=cp_tenant, entity_id=cp_sig.entity_id,
-                    kind=cp_sig.kind,
+                    kind=cp_sig.kind.removesuffix("_clear"),  # tracker 380: base kind
                     state=str(cp_sig.attrs.get("state") or ""),
                     ts=cp_sig.ts, observer_id=cp_sig.observer.observer_id,
                     tokens=cp_sig.entity_tokens,

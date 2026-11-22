@@ -491,10 +491,13 @@ def test_the_parser_is_untouched():
     alternative; no link row moved.
     Re-pinned for tracker 380 PR 2 (positional state): the trap link rows' up is now an
     explicit linkUp match instead of the else-branch — linkDown/linkUp read exactly as
-    before; only an impossible third value is unknown instead of up."""
-    assert parser_rules.PARSER_REV == "2026-11-22-positional-state"
+    before; only an impossible third value is unknown instead of up.
+    Re-pinned for tracker 380 PR 3 (recovery clears): the link rows' up is reported as
+    `link_state_change_clear` at info; every down — what this file protects — is
+    byte-identical."""
+    assert parser_rules.PARSER_REV == "2026-11-22-recovery-clears"
     assert parser_rules.BAKED_RULES_HASH == (
-        "5923e8c68405e06755ce6d6df6b8397198221384f1fb049034d2e47fa4d1dc0c")
+        "90f3505fe7152e2667b73abebb6f67b4ae596be64ec1b6f31e9bbe1f0be890a4")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

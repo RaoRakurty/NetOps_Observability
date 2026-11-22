@@ -81,12 +81,15 @@ class CiscoBgp4RuleTest(unittest.TestCase):
     def assertTransition(self, ev: dict, state: str, peer: str = PEER) -> None:
         sig = classify(ev)
         self.assertIsNotNone(sig, ev["trap_oid"])
-        self.assertEqual(sig.kind, "bgp_adjacency_change")
+        # Tracker 380: an up is the recovery clear `bgp_adjacency_change_clear`.
+        self.assertEqual(sig.kind, "bgp_adjacency_change_clear" if state == "up"
+                         else "bgp_adjacency_change")
         self.assertEqual(sig.entity_id, f"{DEVICE}:{peer}")
         self.assertEqual(sig.attrs["state"], state)
         self.assertEqual(sig.attrs["peer"], peer)
         self.assertEqual(sig.attrs["rule_id"], "trap.bgp.cisco_bgp4")
-        self.assertEqual(sig.severity.value, "warn" if state == "up" else "high")
+        # Tracker 380: an up is the recovery clear at info.
+        self.assertEqual(sig.severity.value, "info" if state == "up" else "high")
 
     def assertNotAdjacency(self, ev: dict) -> None:
         sig = classify(ev)

@@ -230,7 +230,15 @@ version: 1
 # rows whose `up` was the else-branch (Comware, SR Linux, Junos IS-IS and link, SONiC,
 # SR OS link, the two trap link rows) now match up explicitly and default to unknown.
 #
-parser_rev: 2026-11-22-positional-state
+# 2026-11-22-recovery-clears (tracker 380 PR 3): the device-lane link and adjacency rows
+# (link_state_change, bgp/ospf/isis/routing_adjacency_change, vtep_state_change; 32 syslog,
+# pack and trap rows) report an up as a RECOVERY — `emit.clear_when` turns it into
+# `<kind>_clear` at info, the convention the controller lanes and the SD-WAN/resource trap
+# rows already use. build_nodes skips every clear, so a recovery never becomes fault
+# evidence. Entity, tokens, native_id and attrs are unchanged, so the signal_id is the one
+# the up line always had. Down lines are byte-identical.
+#
+parser_rev: 2026-11-22-recovery-clears
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -592,6 +600,8 @@ rules:
       tgt: {re: [[msg, 'to state\s+(\w+)', 1, 'i']]}
       state: {scan: {target: tgt, order: *updown, field: msg, default: unknown}}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: isis_adjacency_change
       metric: isis_adjacency
       modality: control_plane
@@ -647,6 +657,8 @@ rules:
           field: msg
           default: unknown
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -683,6 +695,8 @@ rules:
       tgt: {re: [[msg, '\b(?:from\s+\S+\s+to|went|is\s+now)\s+([A-Za-z0-9-]+)', 1, 'i']]}
       state: {scan: {target: tgt, target_order: *ospf_to_state, order: *updown, field: msg, default: unknown}}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: ospf_adjacency_change
       metric: ospf_adjacency
       modality: control_plane
@@ -716,6 +730,8 @@ rules:
       tgt: {re: [[msg, '\b(?:from\s+\S+\s+to|changed\s+(?:state\s+)?to|went|is\s+now)\s+([A-Za-z0-9-]+)', 1, 'i']]}
       state: {scan: {target: tgt, order: *updown, field: msg, default: unknown}}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: routing_adjacency_change
       metric: routing_adjacency
       modality: control_plane
@@ -843,6 +859,8 @@ rules:
       tgt: {re: [[msg, '\b(?:changed\s+state\s+to|link\s+status\s+is|is\s+now)\s+(administratively\s+down|[A-Za-z]+)', 1, 'i']]}
       state: {scan: {target: tgt, order: *updown, field: msg, default: unknown}}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: link_state_change
       metric: link_state
       modality: control_plane
@@ -1043,6 +1061,8 @@ rules:
       tgt: {re: [[msg, '\b(?:changed\s+(?:state\s+)?to|is\s+now|state\s+is)\s+([A-Za-z]+)', 1, 'i']]}
       state: {scan: {target: tgt, order: *updown, field: msg, default: unknown}}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: vtep_state_change
       metric: vtep_state
       modality: control_plane
@@ -1651,6 +1671,8 @@ rules:
       link_reason: *trap_link_reason
       link_cause: *trap_link_cause
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: link_state_change
       metric: link_state
       modality: control_plane
@@ -1742,6 +1764,8 @@ rules:
           - {when: {var_true: established}, value: up}
           - {when: {always: true}, value: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -1840,6 +1864,8 @@ rules:
           - {when: {var_true: established}, value: up}
           - {when: {always: true}, value: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -1894,6 +1920,8 @@ rules:
           - {when: {var_true: established}, value: up}
           - {when: {always: true}, value: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -1928,9 +1956,10 @@ rules:
   # KINDS are the ones templates and the controller lane already use, so a device's
   # report and vManage's land on the same symptom (nms/vmanage_kinds.go).
   # `controller_*` and resource recoveries emit `<kind>_clear`, which the engine
-  # skips as a node. Interface and BGP keep the device lane's own convention (the
-  # fault kind with state=up at warn): A4's dwell watch and the transition collapse
-  # read that word, and tracker 380 owns changing it for every rule at once.
+  # skips as a node. Since tracker 380 the interface, BGP, OSPF, IS-IS, routing and
+  # VTEP rows follow the same convention (`emit.clear_when`): an up is `<kind>_clear`
+  # at info. A4's dwell watch and the BGP transition collapse read the base kind and
+  # the `state` word, which the clear keeps.
   #
   # FIDELITY: only the CPU recovery has been captured. Everything else is doc_claimed.
   - rule_id: trap.sdwan.cpu_threshold.clear
@@ -2357,6 +2386,8 @@ rules:
           - {when: {eq: ['$event_state', clear]}, value: up}
           - {when: {always: true}, value: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: link_state_change
       metric: link_state
       modality: control_plane
@@ -2408,6 +2439,8 @@ rules:
           - {when: {eq: ['$event_state', clear]}, value: up}
           - {when: {always: true}, value: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -2584,6 +2617,8 @@ rules:
           - {ev: [bgp.peer_address]}
           - {vbname: [peerremoteaddr, peeraddr, remoteaddr]}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: bgp_adjacency_change
       metric: bgp_adjacency
       modality: control_plane
@@ -2630,6 +2665,8 @@ rules:
       link_reason: *trap_link_reason
       link_cause: *trap_link_cause
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: link_state_change
       metric: link_state
       modality: control_plane
@@ -2750,6 +2787,8 @@ rules:
           - {when: {re: ['$nbr_state', '\b(?:full|8)\b', 'i']}, value: up}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: ospf_adjacency_change
       metric: ospf_adjacency
       modality: control_plane
@@ -2809,6 +2848,8 @@ rules:
           - {when: {re: ['$adj_state', '\b(?:up|3)\b', 'i']}, value: up}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       kind: isis_adjacency_change
       metric: isis_adjacency
       modality: control_plane

@@ -128,7 +128,9 @@ class StageOneTest(unittest.TestCase):
 
     def test_recovery_is_untouched(self):
         sig = self.classify(trap(7, "6", "5", "session_up"))
-        self.assertEqual((sig.attrs["state"], sig.severity.value), ("up", "warn"))
+        # Tracker 380: the recovery is reported as a clear at info.
+        self.assertEqual((sig.attrs["state"], sig.severity.value), ("up", "info"))
+        self.assertTrue(sig.kind.endswith("_clear"))
 
 
 class HandleSnmptrapTest(unittest.IsolatedAsyncioTestCase):

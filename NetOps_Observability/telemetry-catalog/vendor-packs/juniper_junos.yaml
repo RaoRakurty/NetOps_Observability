@@ -75,6 +75,8 @@ rules:
           - {when: {eq: ['$from_state', 'Established']}, value: down}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: bgp_adjacency
       modality: control_plane
       entity: {type: device, id: '{host}'}
@@ -118,6 +120,8 @@ rules:
           - {when: {eq: ['$to_state', 'Full']}, value: up}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: ospf_adjacency
       modality: control_plane
       entity: {type: device, id: '{host}'}
@@ -162,6 +166,8 @@ rules:
           - {when: {contains: [ctoken, 'RPD_ISIS_ADJUP']}, value: up}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: isis_adjacency
       modality: control_plane
       entity: {type: device, id: '{host}'}
@@ -211,6 +217,8 @@ rules:
           - when: {eq: ['$state', down]}
             value: unknown
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -362,7 +370,7 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: rpd_isis_adjup
-    signal: {rule_id: syslog.junos.isis.adjacency, kind: isis_adjacency_change, severity: warn, opens_alone: false, state: up, peer: second.junos.device}
+    signal: {rule_id: syslog.junos.isis.adjacency, kind: isis_adjacency_change_clear, severity: info, opens_alone: false, state: up, peer: second.junos.device}
 
   # Tracker 388: the line states ifAdminStatus down, so it is an operator's shutdown.
   - name: a link down with the port administratively down is an admin change
@@ -400,7 +408,7 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: snmp_trap_link_up
-    signal: {rule_id: syslog.junos.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'vmx01:xe-0/0/0'}
+    signal: {rule_id: syslog.junos.link.state_change, kind: link_state_change_clear, severity: info, opens_alone: false, state: up, entity: 'vmx01:xe-0/0/0'}
 
   - name: a completed commit is a change, at info
     fidelity: doc_claimed

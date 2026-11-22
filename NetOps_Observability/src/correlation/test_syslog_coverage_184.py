@@ -569,6 +569,12 @@ PRE_184: list[tuple[str, str, str, tuple[str | None, str | None, str | None], st
 @pytest.mark.parametrize("tag,msg,sev,expect,delta", PRE_184,
                          ids=[f"{i}-{r[0]}" for i, r in enumerate(PRE_184)])
 def test_every_pre_existing_line_still_yields_its_kind(tag, msg, sev, expect, delta):
+    from aggregation import RECOVERY_CLEAR_BASE
+    # Tracker 380: the table is frozen as tracker 184 recorded it. Since 380 an `up`
+    # on a device-lane link/adjacency kind is reported as `<kind>_clear` — the one
+    # rename this pin allows; entity and state are unchanged.
+    if expect[2] == "up" and f"{expect[0]}_clear" in RECOVERY_CLEAR_BASE:
+        expect = (f"{expect[0]}_clear", expect[1], expect[2])
     s = classify(tag, msg, sev)
     got = (None, None, None) if s is None else (
         s.kind, s.entity_id, s.attrs.get("state"))

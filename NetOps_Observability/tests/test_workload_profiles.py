@@ -254,7 +254,10 @@ def test_canary_always_classifies_under_every_profile():
         ev = json.loads(gen._canary_event())
         sig = producers.syslog_control_signal(ev, "t1", now)
         assert sig is not None, f"canary does not classify under profile {profile!r}"
-        assert sig.kind == "link_state_change"
+        # Tracker 380: the canary line may be the up half — a recovery clear, which
+        # is still written to corr_signals (before the window), so it still proves
+        # the pipeline.
+        assert sig.kind.removesuffix("_clear") == "link_state_change"
         assert "[mlx seq 999999]" in ev["message"], "canary lost its trace marker"
 
 

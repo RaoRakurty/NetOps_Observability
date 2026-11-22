@@ -107,7 +107,9 @@ def rfc2863(device: str, iface: str, admin, oper, *, ifx: int = 545,
 def classify(ev: dict):
     sig = P.trap_control_signal(dict(ev), "t1", T0)
     assert sig is not None, f"the trap did not classify at all: {ev}"
-    assert sig.kind == "link_state_change"
+    # Tracker 380: a linkUp is a recovery, reported as `link_state_change_clear`.
+    want = "link_state_change_clear" if sig.attrs.get("state") == "up" else "link_state_change"
+    assert sig.kind == want
     return sig
 
 

@@ -103,6 +103,8 @@ rules:
           - when: {eq: ['$state', down]}
             value: unknown
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -210,7 +212,7 @@ fixtures:
       event_type: port_up
       summary: Interface ethernet-1/1 is up
       title: Interface ethernet-1/1 up on leaf1
-    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'leaf1:ethernet-1/1'}
+    signal: {rule_id: syslog.srlinux.link.state_change, kind: link_state_change_clear, severity: info, opens_alone: false, state: up, entity: 'leaf1:ethernet-1/1'}
 
   - name: an SR Linux event of another application is not this grammar
     fidelity: doc_claimed

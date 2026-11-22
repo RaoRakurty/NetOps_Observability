@@ -177,6 +177,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "controller_control_connection_loss_clear": ModalityClass.MANAGEMENT_PLANE,
     "bfd_session_flap": ModalityClass.CONTROL_PLANE,
     "bfd_session_flap_clear": ModalityClass.CONTROL_PLANE,
+    # Tracker 380: device-lane link/adjacency recoveries (never a node).
+    "link_state_change_clear": ModalityClass.CONTROL_PLANE,
+    "bgp_adjacency_change_clear": ModalityClass.CONTROL_PLANE,
+    "ospf_adjacency_change_clear": ModalityClass.CONTROL_PLANE,
+    "isis_adjacency_change_clear": ModalityClass.CONTROL_PLANE,
+    "routing_adjacency_change_clear": ModalityClass.CONTROL_PLANE,
+    "vtep_state_change_clear": ModalityClass.CONTROL_PLANE,
     # Provider-reported cloud resource health/utilization (CloudWatch / Azure
     # Monitor). DEVICE_TELEMETRY: an INDEPENDENT observer class from the active
     # probes, so provider health + a synthetic app check can co-confirm a cloud

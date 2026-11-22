@@ -144,6 +144,8 @@ rules:
           - {when: {re: [msg, 'changed to up', 'i']}, value: up}
           - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -206,7 +208,7 @@ fixtures:
       event_type: phy_updown
     signal: {rule_id: syslog.comware.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: down, entity: 'sw-core1:GigabitEthernet1/0/1'}
 
-  - name: a Comware link up is the same row with state up, at warn
+  - name: a Comware link up is the same row with state up, as a recovery clear at info
     fidelity: doc_claimed
     source: 'H3C SOHO Switch System Log Messages (Comware V5), IFNET LINK_UPDOWN, https://www.h3c.com/cn/d_201708/1022108_30005_0.htm'
     hostname: sw-core1
@@ -216,7 +218,7 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: link_updown
-    signal: {kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'sw-core1:Ethernet1/0/1'}
+    signal: {kind: link_state_change_clear, severity: info, opens_alone: false, state: up, entity: 'sw-core1:Ethernet1/0/1'}
 
   - name: the line protocol after a link change is the untagged protocol line, warn
     fidelity: doc_claimed

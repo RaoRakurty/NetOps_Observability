@@ -56,10 +56,11 @@ def classify(ev: dict):
 class NokiaNgRuleTest(unittest.TestCase):
     def test_established_is_up_on_the_canonical_ipv6_peer(self):
         sig = classify(ng_trap(7, state="established(6)"))
-        self.assertEqual(sig.kind, "bgp_adjacency_change")
+        # Tracker 380: a session coming up is the recovery clear, at info.
+        self.assertEqual(sig.kind, "bgp_adjacency_change_clear")
         self.assertEqual(sig.entity_id, f"{DEVICE}:2001:db8::9")
         self.assertEqual(sig.attrs["state"], "up")
-        self.assertEqual(sig.severity.value, "warn")
+        self.assertEqual(sig.severity.value, "info")
         self.assertEqual(sig.attrs["rule_id"], "trap.bgp.nokia_ng")
 
     def test_backward_transition_is_down(self):

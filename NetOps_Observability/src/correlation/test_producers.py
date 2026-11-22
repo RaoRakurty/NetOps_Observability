@@ -159,13 +159,15 @@ def test_eos_bgp_adjchange_down():
     assert s.ts.isoformat().startswith("2026-06-12T10:00:01")
 
 
-def test_ios_bgp_adjchange_up_is_warn():
+def test_ios_bgp_adjchange_up_is_a_recovery_clear():
+    # Tracker 380: was "up is warn" — a live fault node. An up is a recovery now.
     s = syslog_control_signal(syslog_event(
         "%BGP-5-ADJCHANGE", "neighbor 10.0.0.9 Up",
     ), "", T0)
     assert s is not None
     assert s.attrs["state"] == "up"
-    assert s.severity is Severity.WARN
+    assert s.kind == "bgp_adjacency_change_clear"
+    assert s.severity is Severity.INFO
 
 
 def test_ospf_adjchg_classified():
@@ -209,13 +211,14 @@ def test_isis_adjacency_change_srl_down():
     assert s.severity is Severity.HIGH
 
 
-def test_isis_adjacency_change_up_is_warn():
+def test_isis_adjacency_change_up_is_a_recovery_clear():
     s = syslog_control_signal(syslog_event(
         "-", "isis|EV|isisAdjacencyChange|W: ... system 0100.0000.0011 ... moved to state UP.",
         host="spine1",
     ), "", T0)
-    assert s is not None and s.kind == "isis_adjacency_change"
-    assert s.attrs["state"] == "up" and s.severity is Severity.WARN
+    # Tracker 380: an up is the recovery clear at info.
+    assert s is not None and s.kind == "isis_adjacency_change_clear"
+    assert s.attrs["state"] == "up" and s.severity is Severity.INFO
 
 
 def test_lldp_neighbor_new_ceos_interface_entity():

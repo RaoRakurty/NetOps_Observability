@@ -528,7 +528,10 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-22-positional-state: tracker 380 reads a transition's TO state. The V1
     # pool's IOS link lines say "changed state to up|down", so the target reads exactly
     # the state the whole-message scan read; no V1 line moves.
-    assert parser_rules.PARSER_REV == "2026-11-22-positional-state", (
+    # 2026-11-22-recovery-clears: tracker 380 reports a device-lane up as `<kind>_clear`.
+    # A V1 noise line is never classified at all, so a rename of what classified lines
+    # emit cannot reclassify one.
+    assert parser_rules.PARSER_REV == "2026-11-22-recovery-clears", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 

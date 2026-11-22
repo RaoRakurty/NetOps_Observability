@@ -33,9 +33,11 @@ def _syslog(message: str, appname: str | None = None, host: str = "10.0.0.1"):
 
 
 def _state(message: str, appname: str | None = None) -> tuple[str, str]:
+    """(base kind, state). This file pins the STATE a line reads; since tracker 380
+    PR 3 an up is reported as `<kind>_clear`, which test_recovery_clears_380 pins."""
     sig = _syslog(message, appname)
     assert sig is not None, message
-    return sig.kind, sig.attrs.get("state", "")
+    return sig.kind.removesuffix("_clear"), sig.attrs.get("state", "")
 
 
 # (line, appname, kind, state)
@@ -108,7 +110,7 @@ def test_a_line_with_no_transition_phrase_keeps_the_whole_scan():
 
 def test_the_isis_row_is_unchanged():
     kind, state = _state("%CLNS-5-ADJCHANGE: ISIS: Adjacency to R2 (GigabitEthernet1) Up, new adjacency")
-    assert kind == "isis_adjacency_change"
+    assert kind == "isis_adjacency_change"  # base kind (380: the up itself is a clear)
     assert state == "up"
 
 
