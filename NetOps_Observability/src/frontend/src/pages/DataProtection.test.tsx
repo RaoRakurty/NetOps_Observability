@@ -577,7 +577,8 @@ describe("Recover", () => {
     setup();
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Recover" });
-    expect(within(sec).getAllByText("Drill passed").length).toBeGreaterThan(0);
+    // The region renders before the operations read resolves: await the data.
+    expect((await within(sec).findAllByText("Drill passed")).length).toBeGreaterThan(0);
     expect(within(sec).getByText("netops-daily-20260901")).toBeTruthy();
   });
 
@@ -597,7 +598,7 @@ describe("Recover", () => {
     });
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Recover" });
-    expect(within(sec).getByText("Drill failed")).toBeTruthy();
+    expect(await within(sec).findByText("Drill failed")).toBeTruthy();
     expect(within(sec).queryByText("Drill passed")).toBeNull();
   });
 
@@ -605,7 +606,7 @@ describe("Recover", () => {
     setup({ coverage: coverage({ engines: [engine({ last_verified: null })] }), ops: { capacity: 50, operations: [] } });
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Recover" });
-    expect(within(sec).getByText("No restore has ever been proved.")).toBeTruthy();
+    expect(await within(sec).findByText("No restore has ever been proved.")).toBeTruthy();
     expect(within(sec).getByText(/Run a drill; its result is recorded here/)).toBeTruthy();
   });
 
@@ -616,7 +617,7 @@ describe("Recover", () => {
     setup({ ops: { capacity: 50, operations: [] } });
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Recover" });
-    expect(within(sec).getByText("No drill has run from here.")).toBeTruthy();
+    expect(await within(sec).findByText("No drill has run from here.")).toBeTruthy();
     expect(within(sec).getByText(/The last proof came from Log & event search, 3d 08h ago\./)).toBeTruthy();
     expect(within(sec).queryByText("No restore has ever been proved.")).toBeNull();
   });
