@@ -101,6 +101,7 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0000042", SysID: "sys42"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "pagerduty", Status: "resolved", TicketNumber: "corrA1"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "slack", Status: "open", TicketNumber: "corrA1"},
+		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "teams", Status: "open", TicketNumber: "corrA1", InstanceURL: ticketing.TeamsOrigin},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "jira", Status: "open", TicketNumber: "NOC-42", SysID: "10042"},
 	} {
 		if err := s.ticketing.PutLink(ctx, l); err != nil {
@@ -123,7 +124,7 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 	if len(out.Destinations) != len(ticketing.TicketSystems) {
 		t.Fatalf("destinations = %d (%+v), want all %d systems", len(out.Destinations), out.Destinations, len(ticketing.TicketSystems))
 	}
-	for i, want := range ticketing.TicketSystems { // servicenow, pagerduty, slack, jira
+	for i, want := range ticketing.TicketSystems { // servicenow, pagerduty, slack, teams, jira
 		if got := out.Destinations[i]["system"]; got != want {
 			t.Fatalf("destinations[%d].system = %v, want %s", i, got, want)
 		}

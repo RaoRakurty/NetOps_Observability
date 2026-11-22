@@ -5,7 +5,7 @@ package ticketing
 
 // itsm_config.go — the per-tenant ITSM connector configuration domain
 // (Phase-2 W3.1, extracted from package main): the four connector configs
-// (ServiceNow / Jira / PagerDuty-RCA / Slack-RCA), the kv-persisted store with
+// (ServiceNow / Jira / PagerDuty-RCA / Slack-RCA / Teams-RCA), the kv-persisted store with
 // legacy-format migration and write-only secret merge, SSRF pre-validation,
 // and the SystemConfig mapping the RCA worker resolves against. Env seeding
 // and the ticket-state paths are INJECTED (env reads stay in main); the srv
@@ -76,6 +76,22 @@ type SlackRCAConfig struct {
 // it off.
 func (c SlackRCAConfig) WatchAlertsOn() bool { return c.WatchAlerts == nil || *c.WatchAlerts }
 
+// TeamsRCAConfig is the per-tenant Microsoft Teams destination for problems:
+// the tenant's OWN Teams webhook (a Workflows "When a Teams webhook request is
+// received" URL or a classic Incoming Webhook — both carry a bearer secret, so
+// write-only). Distinct from the platform-global Teams notification channel.
+type TeamsRCAConfig struct {
+	Enabled    bool   `json:"enabled"`
+	WebhookURL string `json:"webhook_url,omitempty"`
+	// WatchAlerts opts this lane into the tenant's own watch alerts. nil =
+	// never chosen = ON, as for Slack: a channel message wakes nobody.
+	WatchAlerts *bool `json:"watch_alerts,omitempty"`
+}
+
+// WatchAlertsOn is the effective choice: Teams is ON unless the tenant turned
+// it off.
+func (c TeamsRCAConfig) WatchAlertsOn() bool { return c.WatchAlerts == nil || *c.WatchAlerts }
+
 type JiraConfig struct {
 	Enabled           bool   `json:"enabled"`
 	BaseURL           string `json:"base_url"`
@@ -93,6 +109,7 @@ type ITSMConfig struct {
 	Jira       JiraConfig         `json:"jira"`
 	PagerDuty  PagerDutyRCAConfig `json:"pagerduty"`
 	Slack      SlackRCAConfig     `json:"slack"`
+	Teams      TeamsRCAConfig     `json:"teams"`
 }
 
 // itsmLive holds a tenant's built connectors (nil when disabled/unconfigured).
@@ -255,6 +272,17 @@ func (s *ITSMConfigStore) Set(tenant string, in ITSMConfig) error {
 		}
 	}
 
+	if in.Teams == (TeamsRCAConfig{}) {
+		in.Teams = prev.Teams
+	} else {
+		if in.Teams.WebhookURL == "" {
+			in.Teams.WebhookURL = prev.Teams.WebhookURL
+		}
+		if in.Teams.WatchAlerts == nil {
+			in.Teams.WatchAlerts = prev.Teams.WatchAlerts
+		}
+	}
+
 	if err := ValidateITSM(in); err != nil {
 		return err
 	}
@@ -366,6 +394,20 @@ func (s *ITSMConfigStore) SystemConfigFor(tenant, system string) (SystemConfig, 
 			AuthType:    "webhook",
 			APIToken:    sl.WebhookURL,
 		}, true
+	case "teams":
+		tm := cfg.Teams
+		if !tm.Enabled || tm.WebhookURL == "" {
+			return SystemConfig{}, false
+		}
+		// As for Slack: InstanceURL is a fixed, non-secret label persisted on
+		// ticket links; the webhook (the secret) rides only in APIToken.
+		return SystemConfig{
+			System:      "teams",
+			TenantID:    tenant,
+			InstanceURL: TeamsOrigin,
+			AuthType:    "webhook",
+			APIToken:    tm.WebhookURL,
+		}, true
 	case "pagerduty":
 		pd := cfg.PagerDuty
 		if !pd.Enabled || pd.RoutingKey == "" {
@@ -450,6 +492,46 @@ func (s *ITSMConfigStore) SetSlackRCA(tenant string, in SlackRCAConfig) error {
 	return s.persist()
 }
 
+// SetTeamsRCA mirrors SetSlackRCA for the Teams destination. A blank URL on
+// update keeps the stored one (write-only); disable works explicitly here.
+func (s *ITSMConfigStore) SetTeamsRCA(tenant string, in TeamsRCAConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tenant = ITSMKey(tenant)
+	cfg := s.cfgs[tenant]
+	in.WebhookURL = strings.TrimSpace(in.WebhookURL)
+	if in.WebhookURL == "" {
+		in.WebhookURL = cfg.Teams.WebhookURL
+	}
+	if in.WatchAlerts == nil { // omitted = keep the tenant's earlier choice
+		in.WatchAlerts = cfg.Teams.WatchAlerts
+	}
+	if in.Enabled {
+		if err := validateTeamsRCA(in.WebhookURL); err != nil {
+			return err
+		}
+	}
+	cfg.Teams = in
+	s.cfgs[tenant] = cfg
+	return s.persist()
+}
+
+// validateTeamsRCA is the save-time check for a tenant Teams webhook: https
+// shape, then the SSRF pre-check on its host (the dial-time guard in safehttp
+// is the enforcement; this refuses an obviously internal URL up front).
+func validateTeamsRCA(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("Teams (RCA): webhook URL is required when enabled")
+	}
+	if err := notify.ValidateTeamsWebhookURL(raw); err != nil {
+		return errors.New("Teams (RCA): webhook URL must be an https URL")
+	}
+	if err := ValidateOutboundURL(raw); err != nil {
+		return fmt.Errorf("Teams (RCA): %w", err)
+	}
+	return nil
+}
+
 // public returns one tenant's redacted config for the admin UI — secrets become
 // has_* flags; configured reflects whether that tenant's live connector is up.
 func (s *ITSMConfigStore) Public(tenant string) map[string]any {
@@ -489,6 +571,12 @@ func (s *ITSMConfigStore) Public(tenant string) map[string]any {
 			"has_webhook":  cfg.Slack.WebhookURL != "",
 			"configured":   cfg.Slack.Enabled && cfg.Slack.WebhookURL != "",
 			"watch_alerts": cfg.Slack.WatchAlertsOn(),
+		},
+		"teams": map[string]any{
+			"enabled":      cfg.Teams.Enabled,
+			"has_webhook":  cfg.Teams.WebhookURL != "",
+			"configured":   cfg.Teams.Enabled && cfg.Teams.WebhookURL != "",
+			"watch_alerts": cfg.Teams.WatchAlertsOn(),
 		},
 		"jira": map[string]any{
 			"enabled":            jr.Enabled,
@@ -551,6 +639,11 @@ func ValidateITSM(c ITSMConfig) error {
 		}
 		if err := ValidateOutboundURL(c.Slack.WebhookURL); err != nil {
 			return fmt.Errorf("Slack (RCA): %w", err)
+		}
+	}
+	if c.Teams.Enabled {
+		if err := validateTeamsRCA(c.Teams.WebhookURL); err != nil {
+			return err
 		}
 	}
 	if c.Jira.Enabled {
