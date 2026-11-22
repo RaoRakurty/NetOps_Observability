@@ -253,7 +253,9 @@ func TestEnvSeededLatchIsNilSafeAndIdempotent(t *testing.T) {
 func TestDispatcherFanOutIncludesTeamsAndSNS(t *testing.T) {
 	var teamsHits, snsHits atomic.Int64
 	done := make(chan struct{}, 2)
-	teamsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// Teams posts only to https (the webhook URL is a bearer credential), so its
+	// fake is a TLS server the production client is told to trust.
+	teamsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		teamsHits.Add(1)
 		done <- struct{}{}
 		w.WriteHeader(http.StatusOK)
@@ -267,7 +269,9 @@ func TestDispatcherFanOutIncludesTeamsAndSNS(t *testing.T) {
 	defer snsSrv.Close()
 
 	d := NewDispatcher()
-	d.Register(BuildTeamsChannel(TeamsConfig{Enabled: true, WebhookURL: teamsSrv.URL, MinSeverity: "warning"}))
+	teams := BuildTeamsChannel(TeamsConfig{Enabled: true, WebhookURL: teamsSrv.URL, MinSeverity: "warning"})
+	trustTeamsTestServer(t, teamsGateInner(t, teams), teamsSrv)
+	d.Register(teams)
 	d.Register(NewSeverityGate(
 		NewSNS("ak", "sk", "us-east-1", "+14155550123", "").WithEndpoint(snsSrv.URL+"/"), "critical"))
 
