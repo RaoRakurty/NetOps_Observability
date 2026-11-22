@@ -7821,6 +7821,20 @@ export const api = {
     const qs = p.toString();
     return request<Incident[]>(`/api/incidents${qs ? `?${qs}` : ""}`);
   },
+  // GET /api/incidents?envelope=1 — one page plus the true total (internal/httppage):
+  // the Incidents page says "Showing a–b of N" instead of passing a page off as
+  // the whole set. A bare array (an older server) reads as a complete page.
+  listIncidentsPage: async (opts: { status?: string; severity?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams({ envelope: "1" });
+    if (opts.status) p.set("status", opts.status);
+    if (opts.severity) p.set("severity", opts.severity);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    if (opts.offset) p.set("offset", String(opts.offset));
+    const r = await request<Incident[] | { incidents?: Incident[]; total?: number; offset?: number; complete?: boolean }>(`/api/incidents?${p}`);
+    if (Array.isArray(r)) return { incidents: r, total: r.length, offset: 0, complete: true };
+    const rows = r?.incidents ?? [];
+    return { incidents: rows, total: r?.total ?? rows.length, offset: r?.offset ?? 0, complete: r?.complete ?? true };
+  },
   // POST /api/incidents — an operator describes a problem in their own words and
   // gets an investigation record back. The owning tenant is stamped SERVER-SIDE
   // from the token: nothing here sends one, and a tenant in the body is refused.

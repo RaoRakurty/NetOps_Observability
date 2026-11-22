@@ -2,28 +2,36 @@
 // Copyright 2026 Correlix
 
 import { fmtDateTime } from "../lib/time";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Incident, TimelineEntry } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
-import { useWorkspace } from "../context/workspace";
 import { friendlyIncidentId } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import AskIris, { askIrisAbout } from "../components/AskIris";
 import { useAIEntitlements } from "../lib/aiEntitlements";
 import TacCaseChip from "../components/tac/TacCaseChip";
 import { caseLinkFromIncident } from "../pages/troubleshoot/tacModel";
+import SidePanel from "../components/event/SidePanel";
+import { useIsPhone } from "../lib/useIsPhone";
+import {
+  INCIDENT_SOURCE_TABS, INCIDENT_STATUS_TILES, type IncidentSourceTab, type IncidentFilters,
+  inSourceTab, filterIncidents, statusCounts, countsNote, pageNote, statusText, ownerText, isActiveIncident,
+  activeIncidentFilterCount,
+} from "./incidentsModel";
 
-// Incidents — the actionable system-of-record view. Lists incidents (deduped from
-// alerts/anomalies), drives the lifecycle in-platform (ack → investigate →
-// resolve), shows the full event timeline, and surfaces the optional external
-// ITSM ticket. Distinct from Explore findings: an incident is a tracked record.
+// Incidents — the actionable system-of-record view. Lists incidents (minted by a
+// firing alert rule, opened by a person, or promoted from Digital Experience),
+// drives the lifecycle in-platform (ack → investigate → resolve), shows the full
+// event timeline, and surfaces the optional external ITSM ticket. Distinct from
+// Operations → Problems: an incident is an owned, tracked record, not a
+// correlated case (the two lanes share no id).
 //
-// Selecting a row pivots into the dockable Inspector (shell-v2, #45 §11) via the
-// self-contained IncidentDetailBody; under v1 it falls back to an inline card.
+// Laid out the way the Logs page was redone (owner, 2026-11-22): source tabs,
+// status tiles that filter, one search box with quick filters over the loaded
+// rows, an owner column, a true total with paging, and a side panel per row.
 
-const STATUSES = ["open", "acknowledged", "investigating", "resolved", "closed"];
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 
 type Action = "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign";
@@ -49,23 +57,29 @@ function notifyPill(text: string, tone: string, filled = false): React.ReactNode
   }}>{text}</span>;
 }
 
+const PAGE = 200;
+
 export default function Incidents() {
-  const [status, setStatus] = useState("open");
-  const [severity, setSeverity] = useState("");
   const [items, setItems] = useState<Incident[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [tab, setTab] = useState<IncidentSourceTab>("all");
+  const [filters, setFilters] = useState<IncidentFilters>({});
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
-  const ws = useWorkspace();
+  const isPhone = useIsPhone();
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setBusy(true);
-    setError(null);
     try {
-      const r = await api.listIncidents({ status: status || undefined, severity: severity || undefined });
-      setItems(r ?? []);
+      const r = await api.listIncidentsPage({ limit: PAGE, offset });
+      setItems(r.incidents ?? []);
+      setTotal(r.total ?? (r.incidents ?? []).length);
       setUnavailable(false);
+      setError(null);
     } catch (e) {
       const m = (e as Error).message;
       if (m.includes("409")) {
@@ -76,25 +90,21 @@ export default function Incidents() {
       }
     } finally {
       setBusy(false);
+      setLoaded(true);
     }
-  };
+  }, [offset]);
 
+  // The page refreshes on its own every 30 s, so the Live chip is a true claim.
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, severity]);
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
 
-  // Row → Inspector (shell-v2) or inline card (v1). Selection id drives the row
-  // highlight in both modes; the detail body owns its own timeline + lifecycle.
-  const select = (i: Incident) => {
-    setSel(i.id);
-    if (ws.enabled) {
-      ws.openInspector(<IncidentDetailBody incident={i} onChanged={load} />, {
-        title: i.title,
-        subtitle: `${friendlyIncidentId(i.id)} · ${i.severity} · ${i.status}`,
-      });
-    }
-  };
+  const set = (patch: Partial<IncidentFilters>) => setFilters((f) => ({ ...f, ...patch }));
+  const shown = useMemo(() => filterIncidents(items, tab, filters), [items, tab, filters]);
+  const counts = useMemo(() => statusCounts(items, tab), [items, tab]);
+  const tabCount = (t: IncidentSourceTab) => items.filter((i) => inSourceTab(i, t)).length;
 
   // Where this incident actually went: the ITSM ticket (linked, when the
   // projection filed one) + every recorded notification delivery (#103 UX-1 —
@@ -103,9 +113,7 @@ export default function Incidents() {
     const chips: React.ReactNode[] = [];
     // A TAC escalation's vendor case renders as the case chip: the number, the
     // vendor's own status, and — when the last read failed — "status unknown
-    // since …" rather than the status it last saw. Everything else keeps the
-    // ITSM pill it has always had; the two are different objects and a shared
-    // pill would flatten them into one.
+    // since …" rather than the status it last saw.
     const tacCase = caseLinkFromIncident(i);
     if (tacCase) {
       chips.push(<TacCaseChip key="tac" link={tacCase} compact />);
@@ -126,71 +134,127 @@ export default function Incidents() {
     return <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>{chips}</span>;
   };
 
-  const columns = useMemo<Column<Incident>[]>(() => [
-    // #103 UX-2: the human incident handle — same INC-XXXXXX the Slack card shows.
-    { key: "display_id", header: "ID", width: 96, sortable: true,
-      text: (i) => friendlyIncidentId(i.id),
-      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }} title={i.id}>{friendlyIncidentId(i.id)}</span> },
-    { key: "severity", header: "Severity", width: 84, sortable: true,
-      text: (i) => i.severity, sortValue: (i) => severityRank(i.severity),
-      render: (i) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span> },
-    { key: "status", header: "Status", width: 110, sortable: true, text: (i) => i.status,
-      render: (i) => i.status },
-    { key: "title", header: "Title", text: (i) => i.title,
-      render: (i) => <span title={i.title}>{i.title}</span> },
-    { key: "count", header: "Count", width: 70, align: "right", sortable: true,
-      sortValue: (i) => Number(i.occurrences) || 0, render: (i) => i.occurrences },
-    { key: "source", header: "Source", width: 92, text: (i) => i.source_type,
-      render: (i) => <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{i.source_type}</span> },
-    { key: "notified", header: "Notified", width: 168,
-      text: (i) => [i.external_ticket_id ?? "", ...(i.notified_via ?? []).map(channelLabel)].filter(Boolean).join(" "),
-      render: (i) => notifiedCell(i) },
-    { key: "last_seen", header: "Last seen", width: 170, sortable: true,
-      sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
-      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmt(i.last_seen_at)}</span> },
-  ], []);
+  const columns = useMemo<Column<Incident>[]>(() => {
+    const sevCell = (i: Incident) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span>;
+    const whatCell = (i: Incident) => (
+      <div className="lv-two">
+        <span className="al-title" title={i.title}>{i.title}</span>
+        <span className="lv-line lv-detail-line al-detail">
+          <span style={{ fontFamily: "var(--font-mono)" }} title={i.id}>{friendlyIncidentId(i.id)}</span>
+          {" · "}{statusText(i.status)}{" · "}{Number(i.occurrences) > 1 ? `${i.occurrences} occurrences` : "1 occurrence"}
+        </span>
+      </div>
+    );
+    const ownerCell = (i: Incident) => (
+      <span className={i.owner && i.owner.trim() ? "al-device" : "al-detail"}>{ownerText(i)}</span>
+    );
+    if (isPhone) {
+      return [{
+        key: "what", header: "Incident", sortable: true, sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
+        render: (i) => (
+          <div className="lv-phone-cell">
+            <div className="lv-phone-top">{sevCell(i)} <span className="al-when">{fmt(i.last_seen_at)}</span></div>
+            {whatCell(i)}
+            {ownerCell(i)}
+          </div>
+        ),
+      }];
+    }
+    return [
+      { key: "severity", header: "Severity", width: 104, sortable: true,
+        text: (i) => i.severity, sortValue: (i) => severityRank(i.severity), render: sevCell },
+      { key: "what", header: "Incident", sortable: true, text: (i) => `${i.title} ${friendlyIncidentId(i.id)}`, render: whatCell },
+      { key: "owner", header: "Owner", width: 150, sortable: true, text: ownerText, render: ownerCell },
+      { key: "source", header: "Opened by", width: 150, sortable: true, text: (i) => i.source_type,
+        render: (i) => <span className="al-detail">{SOURCE_LABEL[(i.source_type || "manual").toLowerCase()] ?? i.source_type}</span> },
+      { key: "notified", header: "Ticket and notifications", width: 200,
+        text: (i) => [i.external_ticket_id ?? "", ...(i.notified_via ?? []).map(channelLabel)].filter(Boolean).join(" "),
+        render: (i) => notifiedCell(i) },
+      { key: "last_seen", header: "Since", width: 172, sortable: true,
+        sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
+        render: (i) => (
+          <div className="lv-two al-since">
+            <span title="Opened">{fmt(i.first_seen_at)}</span>
+            <span className="al-last" title="Last seen">{fmt(i.last_seen_at)}</span>
+          </div>
+        ) },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPhone]);
 
-  // v1 fallback: render the selected incident's detail inline (shell-v2 uses the
-  // Inspector instead, so this only mounts when the workspace pane is disabled).
-  const selected = !ws.enabled && sel ? items.find((i) => i.id === sel) : undefined;
+  const selected = sel ? items.find((i) => i.id === sel) : undefined;
 
-  const iOpen = items.filter((i) => i.status === "open" || i.status === "acknowledged" || i.status === "investigating").length;
-  const iCrit = items.filter((i) => i.severity === "critical").length;
-  const iUnassigned = items.filter((i) => !i.owner || i.owner.trim() === "").length;
+  const iOpen = items.filter(isActiveIncident).length;
+  const iCrit = items.filter((i) => i.severity === "critical" && isActiveIncident(i)).length;
+  const iUnassigned = items.filter((i) => isActiveIncident(i) && !(i.owner && i.owner.trim())).length;
   const iTicketed = items.filter((i) => i.sync_status === "synced").length;
+  const note = pageNote(offset, items.length, total);
+  const nFilters = activeIncidentFilterCount(filters);
   return (
     <div className="dm-board cc-board">
       <NocHeader
-        title="Operational Incidents"
+        title="Incidents"
         topic="page.incidents"
-        chips={<><Chip label={`Incidents ${items.length}`} /><LiveChip /></>}
+        chips={<>{error
+          ? <Chip label="Feed unavailable" tone="var(--crit)" title="The incident list did not answer — the counts below are unknown, not zero." />
+          : <Chip label={`Incidents ${total.toLocaleString()}`} />}
+          {!error && <LiveChip />}</>}
       >
         <NocKpis cols={4}>
-          <NocKpi n={iOpen} label="Open" topic="incidents.open" tone={iOpen ? "var(--warn)" : undefined} />
-          <NocKpi n={iCrit} label="Critical" topic="incidents.critical" tone={iCrit ? "var(--crit)" : undefined} />
-          <NocKpi n={iUnassigned} label="Unassigned" topic="incidents.unassigned" tone={iUnassigned ? "var(--crit)" : "var(--ok)"} />
-          <NocKpi n={iTicketed} label="Ticketed" topic="incidents.ticketed" />
+          <NocKpi n={error ? "—" : iOpen} label="Open" topic="incidents.open" tone={error ? "var(--fg-subtle)" : iOpen ? "var(--warn)" : undefined} />
+          <NocKpi n={error ? "—" : iCrit} label="Critical" topic="incidents.critical" tone={error ? "var(--fg-subtle)" : iCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={error ? "—" : iUnassigned} label="Unassigned" topic="incidents.unassigned" tone={error ? "var(--fg-subtle)" : iUnassigned ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={error ? "—" : iTicketed} label="Ticketed" topic="incidents.ticketed" />
         </NocKpis>
       </NocHeader>
       <div className="cc-panel">
-        <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Incident queue</h3>
-          <span className="cc-panel-meta">{items.length} · {status || "all statuses"}</span>
+        <div className="lv-subtabs" role="group" aria-label="Opened by">
+          {INCIDENT_SOURCE_TABS.map((t) => (
+            <button key={t.id} type="button" className="lv-subtab" aria-pressed={tab === t.id}
+              onClick={() => { setTab(t.id); setSel(null); }}>
+              {t.label}
+              {tab === t.id && loaded && !error && <span className="lv-subtab-n" aria-hidden="true"> ({tabCount(t.id)})</span>}
+            </button>
+          ))}
         </div>
         <div style={{ padding: "11px 13px" }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-              <option value="">All severities</option>
-              {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <button className="btn" type="button" onClick={load} disabled={busy}>
-              <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
-            </button>
-          </div>
+          {!error && !unavailable && items.length > 0 && (
+            <div className="lv-tiles-wrap" data-testid="incidents-status-tiles">
+              <div className="lv-tiles" role="group" aria-label="Status of the loaded incidents">
+                {INCIDENT_STATUS_TILES.map((t) => {
+                  const on = filters.status === t.id;
+                  return (
+                    <button key={t.id} type="button" className="lv-tile in-tile" aria-pressed={on}
+                      style={{ ["--lt-tone" as string]: t.tone, ["--lt-bg" as string]: "var(--surface)" }}
+                      aria-label={`${t.label}: ${counts[t.id]}. ${on ? "Showing only these; press to show all" : "Press to show only these"}`}
+                      onClick={() => set({ status: on ? undefined : t.id })}>
+                      <span className="lv-tile-txt">
+                        <span className="lv-tile-n">{counts[t.id].toLocaleString()}</span>
+                        <span className="lv-tile-k">{t.label}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="lv-tiles-note">{countsNote(items.length, total)}</p>
+            </div>
+          )}
+          {!error && !unavailable && items.length > 0 && (
+            <div className="lv-filters" data-testid="incidents-filters">
+              <input className="form-input al-search" type="search" placeholder="Search incidents, owners, tickets"
+                aria-label="Search incidents" value={filters.q ?? ""} onChange={(e) => set({ q: e.target.value })} />
+              <select aria-label="Severity" value={filters.severity ?? ""} onChange={(e) => set({ severity: e.target.value || undefined })}>
+                <option value="">All severities</option>
+                {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <label className="al-check"><input type="checkbox" checked={!!filters.unassigned} onChange={(e) => set({ unassigned: e.target.checked || undefined })} /> Unassigned</label>
+              <span className="al-scope">In these {items.length.toLocaleString()} loaded incidents</span>
+              {nFilters > 0 && <button type="button" className="btn-ghost" onClick={() => setFilters({})}>Clear filters</button>}
+              <button className="btn" type="button" onClick={load} disabled={busy}>
+                <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+          )}
           {error && (
             <p role="alert" style={{ color: "var(--bad)", marginBottom: 8 }}>
               <strong>Incidents could not be loaded:</strong> {error}
@@ -203,30 +267,53 @@ export default function Incidents() {
           {unavailable ? (
             <div className="empty">Incident management is not enabled here.</div>
           ) : items.length === 0 ? (
-            error ? null : <div className="empty">{busy ? "Loading…" : "No incidents match."}<AskIris topic="incidents.empty-queue" label="an empty incident queue" /></div>
+            error || !loaded ? null : <div className="empty">No incidents.<AskIris topic="incidents.empty-queue" label="an empty incident queue" /></div>
+          ) : shown.length === 0 ? (
+            <div className="empty">No incident matches these filters. <button type="button" className="btn-ghost" onClick={() => { setFilters({}); setTab("all"); }}>Clear filters</button></div>
           ) : (
             <DataTable<Incident>
-              rows={items}
+              rows={shown}
               columns={columns}
               rowKey={(i) => i.id}
+              rowHeight={isPhone ? 96 : 48}
               height="55vh"
               ariaLabel="Incidents"
-              onRowClick={(i) => select(i)}
+              onRowClick={(i) => setSel(i.id)}
               rowAccent={(i) => severityColor(i.severity)}
               rowClassName={(i) => (sel === i.id ? "dtv-selected" : "")}
               initialSort={{ key: "last_seen", dir: "desc" }}
             />
           )}
-          {selected && (
-            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-              <IncidentDetailBody incident={selected} onChanged={load} />
+          {note && !error && (
+            <div className="lv-pager" data-testid="incidents-pager">
+              <span className="lv-pager-txt">{note}</span>
+              <span className="lv-pages">
+                <button type="button" className="btn-ghost" disabled={offset === 0 || busy} onClick={() => setOffset(Math.max(0, offset - PAGE))}>Newer</button>
+                <button type="button" className="btn-ghost" disabled={offset + items.length >= total || busy} onClick={() => setOffset(offset + PAGE)}>Older</button>
+              </span>
             </div>
           )}
         </div>
       </div>
+      {selected && (
+        <SidePanel
+          narrow
+          title={selected.title}
+          subtitle={`${friendlyIncidentId(selected.id)} · ${selected.severity} · ${statusText(selected.status)}`}
+          onClose={() => setSel(null)}
+          testId="incident-panel"
+          overlayTestId="incident-panel-overlay"
+        >
+          <IncidentDetailBody incident={selected} onChanged={load} onAsked={() => setSel(null)} inPanel />
+        </SidePanel>
+      )}
     </div>
   );
 }
+
+const SOURCE_LABEL: Record<string, string> = {
+  alert: "Alert rule", log: "Log event", anomaly: "Anomaly", manual: "A person", experience: "Digital Experience",
+};
 
 // IncidentDetailBody — a self-contained detail pane: it owns the timeline fetch,
 // note entry, and lifecycle actions, refetching by incident id, so it renders
@@ -239,10 +326,18 @@ export function incidentQuestion(inc: Pick<Incident, "title" | "severity">): str
   return `Explain the ${(inc.severity || "").trim() || "open"} incident "${title}": what is happening, who is affected and what should I check next?`;
 }
 
-export function IncidentDetailBody({ incident, onChanged }: { incident: Incident; onChanged?: () => void }) {
+export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = false }: {
+  incident: Incident;
+  onChanged?: () => void;
+  /** Called after "Ask Iris" — the side panel closes so Iris is not behind its scrim. */
+  onAsked?: () => void;
+  /** In the side panel the panel header already names the incident. */
+  inPanel?: boolean;
+}) {
   const [inc, setInc] = useState<Incident>(incident);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [note, setNote] = useState("");
+  const [owner, setOwner] = useState(incident.owner ?? "");
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -260,6 +355,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
     setInc(incident);
     setTimeline([]);
     setNote("");
+    setOwner(incident.owner ?? "");
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incident.id]);
@@ -285,26 +381,28 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-        <h2 style={{ margin: 0 }}>
-          <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
-        </h2>
+        {!inPanel && (
+          <h2 style={{ margin: 0 }}>
+            <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
+          </h2>
+        )}
         {/* N-E4 entry point: an incident row carries no RCA case id, so the
             question names the incident by its own title; the server reads it
             as text and answers from the caller's own data. */}
         {ent.has("ai.chat") && (
           <button type="button" className="chip-btn" data-testid="ask-iris-incident"
-            onClick={() => askIrisAbout(incidentQuestion(inc))}>
+            onClick={() => { askIrisAbout(incidentQuestion(inc)); onAsked?.(); }}>
             Ask Iris about this incident
           </button>
         )}
-        <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
+        <span style={{ color: "var(--muted)", fontSize: 14 }}>
           <span style={{ fontFamily: "var(--font-mono)" }} title={inc.id}>{friendlyIncidentId(inc.id)}</span>
-          {" · "}{inc.status} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)}
+          {" · "}{statusText(inc.status)} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)} · owner {ownerText(inc)}
         </span>
       </div>
-      {inc.description && <p style={{ color: "var(--muted)", fontSize: 13 }}>{inc.description}</p>}
+      {inc.description && <p style={{ color: "var(--muted)", fontSize: 14 }}>{inc.description}</p>}
       {inc.external_ticket_id && (
-        <p style={{ fontSize: 12.5, margin: "2px 0 0" }}>
+        <p style={{ fontSize: 14, margin: "2px 0 0" }}>
           {inc.external_url ? (
             <a href={inc.external_url} target="_blank" rel="noreferrer">
               {inc.external_system}: {inc.external_ticket_id}
@@ -315,7 +413,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
         </p>
       )}
       {error && (
-        <p style={{ color: "var(--bad)", fontSize: 12.5 }}>
+        <p style={{ color: "var(--bad)", fontSize: 14 }}>
           <strong>Error:</strong> {error}
         </p>
       )}
@@ -346,8 +444,24 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
           </>
         )}
       </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          className="form-input"
+          style={{ width: 200 }}
+          aria-label="Owner"
+          placeholder="Username"
+          maxLength={64}
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+        />
+        <button type="button" disabled={acting || !owner.trim() || owner.trim() === (inc.owner ?? "")}
+          onClick={() => act("assign", { owner: owner.trim() })}>
+          Assign
+        </button>
+      </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         <input
+          aria-label="New note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Add a note to the timeline…"
@@ -359,7 +473,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
       </div>
 
       {/* Timeline — lifecycle events and ITSM sync events, merged chronologically */}
-      <h3 style={{ fontSize: 13, color: "var(--muted)", letterSpacing: 0.2 }}>Timeline</h3>
+      <h3 style={{ fontSize: 16, fontWeight: 600, letterSpacing: 0.2 }}>Timeline</h3>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {timeline.map((ev) => (
           <div
@@ -367,7 +481,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
             style={{
               display: "flex",
               gap: 10,
-              fontSize: 12.5,
+              fontSize: 14,
               alignItems: "baseline",
               borderLeft: `3px solid ${ev.kind === "sync" ? "var(--accent)" : "transparent"}`,
               paddingLeft: 8,
@@ -401,7 +515,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
             )}
           </div>
         ))}
-        {timeline.length === 0 && <span style={{ fontSize: 12.5, color: "var(--muted)" }}>Loading timeline…</span>}
+        {timeline.length === 0 && <span style={{ fontSize: 14, color: "var(--muted)" }}>Loading timeline…</span>}
       </div>
     </>
   );
