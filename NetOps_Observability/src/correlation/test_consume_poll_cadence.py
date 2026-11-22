@@ -106,6 +106,30 @@ def _msg(offset: int, topic: str = "netops.metrics"):
     return m
 
 
+def _await_chain(task: asyncio.Task) -> str:
+    """Where a parked task is waiting, OUTERMOST first, down the `cr_await` chain.
+
+    `Task.get_stack()` returns only the task's outermost coroutine frame, so it
+    names the `await` in the top function and never the one that actually
+    blocks (the 2026-11-22 dump read `engine_cycle:7712` and stopped there)."""
+    parts: list[str] = []
+    obj = task.get_coro()
+    for _ in range(40):
+        frame = getattr(obj, "cr_frame", None) or getattr(obj, "gi_frame", None) or getattr(obj, "ag_frame", None)
+        if frame is not None:
+            parts.append(f"{frame.f_code.co_name}:{frame.f_lineno}")
+        nxt = getattr(obj, "cr_await", None) or getattr(obj, "gi_yieldfrom", None) or getattr(obj, "ag_await", None)
+        if nxt is None:
+            if obj is not None and frame is None:
+                parts.append(repr(obj)[:160])
+            break
+        if not (hasattr(nxt, "cr_frame") or hasattr(nxt, "gi_frame") or hasattr(nxt, "ag_frame")):
+            parts.append(repr(nxt)[:160])  # a Future / Task: what the chain is parked on
+            break
+        obj = nxt
+    return " -> ".join(parts) or "(no frame)"
+
+
 async def _cancel(task: asyncio.Task) -> None:
     task.cancel()
     try:
@@ -252,18 +276,21 @@ def test_polls_continue_while_engine_digests_backlog(monkeypatch):
         try:
             await asyncio.wait_for(asyncio.shield(engine_task), timeout=10.0)
         except TimeoutError:
-            # Seen twice on CI (2026-11-14, 2026-11-19), never locally, even under
-            # CPU stress: the one-shot cycle did not return in 10 s. Dump WHERE
-            # every task is parked so the next occurrence names the await that
-            # hung (the Evidence drain, the executor hop, or the consumer) —
-            # tracker row "poll-cadence one-shot cycle hang".
+            # Seen on CI 2026-11-14, -19 and -22 (tracker 429(a)): engine_cycle
+            # parked in the run_window offload's `run_in_executor` while consume
+            # served ~80 k polls/s — the offload thread starved of the GIL by a
+            # loop that never blocks. Fixed by `main._consume_yield_delay`
+            # (test_offload_gil_handoff_429.py pins it). If this fires again,
+            # the dump names the await chain and the offload plane's state.
             report = [f"markers (last 12 of {len(markers)}): {markers[-12:]}"]
             for t in asyncio.all_tasks():
-                frames = t.get_stack(limit=8)
-                where = " <- ".join(f"{f.f_code.co_name}:{f.f_lineno}" for f in reversed(frames)) or "(no frame)"
-                report.append(f"task {t.get_name()} done={t.done()}: {where}")
+                report.append(f"task {t.get_name()} done={t.done()}: {_await_chain(t)}")
             report.append(f"evidence queue: {getattr(main, '_EVIDENCE_QUEUE', None)!r} "
                           f"idle={getattr(main._EVIDENCE_QUEUE, 'idle', lambda: None)() if main._EVIDENCE_QUEUE else None}")
+            off = main.offload_stats()
+            report.append("offload: " + ", ".join(
+                f"{k}={off[k]}" for k in ("queue_depth", "active_workers", "submitted_total",
+                                          "completed_total", "gil_handoffs_total")))
             await _cancel(consume_task)
             engine_task.cancel()
             raise AssertionError("one-shot engine_cycle hung > 10 s:\n" + "\n".join(report)) from None
