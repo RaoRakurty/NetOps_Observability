@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -22,6 +23,7 @@ import (
 	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
 	"netops/backend/internal/dem/rumsources"
+	"netops/backend/internal/featureflags"
 	"netops/backend/internal/incident"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
@@ -1041,4 +1043,26 @@ func (s *server) featureOn(env string) bool {
 		return s.features.Enabled(env)
 	}
 	return os.Getenv(env) == "true"
+}
+
+// newProbePathVerifier verifies the prober's signed path sets (tracker 475)
+// with the P3 control key. The legacy unsigned form is accepted only while the
+// console-only PROBE_PATHS_ACCEPT_UNSIGNED switch is on — never from the
+// environment (no registry, no acceptance). A refusal is reported once per
+// change of a slot's outcome, as a structured warning.
+func newProbePathVerifier(features *featureflags.Registry) *probercontrol.ResultVerifier {
+	accept := func() bool { return features != nil && features.Enabled(probercontrol.EnvAcceptUnsignedPaths) }
+	report := func(kind, slot string, why probercontrol.Reason) {
+		f := map[string]any{"kind": kind, "slot": slot, "reason": string(why)}
+		switch why {
+		case probercontrol.ReasonVerified:
+			logInfo("probe.paths", "the prober's path set verifies again", f)
+		case probercontrol.ReasonUnsignedAccepted:
+			logWarn("probe.paths", "accepting an UNSIGNED path set (PROBE_PATHS_ACCEPT_UNSIGNED is on): its tenant and hops are unproven", f)
+		default:
+			logWarn("probe.paths", "refused a path set from the prober channel: it contributes no path, owner or hop", f)
+		}
+	}
+	return probercontrol.NewResultVerifier(probercontrol.KeyringFromEnv(os.Getenv, log.Printf),
+		probercontrol.KindProbePaths, collectors.ProbePathsMaxAge, time.Now, accept, report)
 }

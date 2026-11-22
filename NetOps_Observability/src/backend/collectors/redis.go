@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"netops/backend/internal/dem"
+	"netops/backend/internal/probercontrol"
 	"netops/backend/tlsconfig"
 )
 
@@ -298,20 +299,67 @@ func surfacePublishFailure(channel, key string, err error) {
 	}
 }
 
-// FetchProbePaths reads the shared traceroute topology JSON published by the
-// prober. Returns ("", nil) when the key is absent.
+// ── signed path sets (tracker 475) ──────────────────────────────────────────
 //
-// DEPRECATED for multi-vantage use: it reads the single legacy key, which every
-// prober overwrites. Use FetchProbePathsAll, which merges the per-vantage keys and
-// preserves attribution. Kept for the single-prober fallback and for callers that
-// only want an opaque blob.
-func FetchProbePaths(ctx context.Context) (string, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
-		return "", err
+// Every shared channel the prober publishes its paths on — the per-vantage key,
+// the legacy single key, PROBE_PATHS_FILE — carries a signed result envelope
+// (internal/probercontrol: the P3 key and v1 envelope, kind "probe-paths").
+// The raw unverified read this file used to export (FetchProbePaths) is gone:
+// every reader goes through a PathOpener.
+
+// ProbePathsMaxAge is the oldest signed path set a reader believes: the
+// channel's own TTL. A set older than that is a prober that stopped.
+const ProbePathsMaxAge = probePathsTTL * time.Second
+
+// PathOpener verifies one slot's raw record (slot "" = a slot that names no
+// vantage). *probercontrol.ResultVerifier satisfies it.
+type PathOpener interface {
+	Open(slot, raw string) (probercontrol.Opened, probercontrol.Reason, bool)
+}
+
+// NewPathSealer is the prober's signer for its path sets.
+func NewPathSealer(ring *probercontrol.Keyring) PathSealer {
+	return func(vantage string, body []byte) (string, error) {
+		return probercontrol.SealResult(ring, probercontrol.KindProbePaths, vantage, body, time.Now())
 	}
-	defer c.Close()
-	return redisCmd(c, "GET", probePathsKey)
+}
+
+// openPaths verifies raw and decodes its paths. A signed set's paths are all
+// attributed to the signed vantage — a path claiming another vantage inside
+// a signed set is that vantage's word, not the claimed one's. nil when the
+// record was refused (the opener counted and reported why).
+func openPaths(op PathOpener, slot, raw string) []PathResult {
+	if op == nil || raw == "" {
+		return nil
+	}
+	o, _, ok := op.Open(slot, raw)
+	if !ok {
+		return nil
+	}
+	var paths []PathResult
+	if json.Unmarshal(o.Body, &paths) != nil {
+		return nil
+	}
+	if o.Signed {
+		for i := range paths {
+			paths[i].VantageID = o.Vantage
+		}
+	}
+	return paths
+}
+
+// ReadProbePathsFile reads and verifies the PROBE_PATHS_FILE fallback. An
+// absent file is (nil, nil); an unreadable one is an error; a refused record
+// is (nil, nil) — counted and reported by the opener.
+func ReadProbePathsFile(path string, op PathOpener) ([]PathResult, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-configured shared-volume path, not user input
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("probe paths file: %w", err)
+	}
+	return openPaths(op, "", string(data)), nil
 }
 
 // redisRegisterVantage records that this prober has published, so readers can
@@ -458,7 +506,13 @@ func redisArray(c net.Conn, maxItems int, args ...string) ([]*string, error) {
 //
 // Falls back to the legacy single key when no vantage has registered (a
 // pre-upgrade prober, or a single in-process collector).
-func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
+//
+// Every slot is verified by op (tracker 475): a refused record contributes
+// nothing, and a nil op reads nothing at all.
+func FetchProbePathsAll(ctx context.Context, op PathOpener) ([]PathResult, error) {
+	if op == nil {
+		return nil, errors.New("probe paths: no verifier is wired, so no path set can be believed")
+	}
 	c, err := redisDial(ctx)
 	if err != nil {
 		return nil, err
@@ -470,14 +524,7 @@ func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
 	}
 	seen := map[string]PathResult{}
 	add := func(raw, vantage string) {
-		if raw == "" {
-			return
-		}
-		var paths []PathResult
-		if json.Unmarshal([]byte(raw), &paths) != nil {
-			return
-		}
-		for _, p := range paths {
+		for _, p := range openPaths(op, vantage, raw) {
 			if p.VantageID == "" {
 				p.VantageID = vantage // a pre-upgrade prober published without attribution
 			}

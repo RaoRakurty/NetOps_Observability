@@ -35,7 +35,10 @@ func (s *server) startProbePathsEnrichment(ctx context.Context) {
 		return
 	}
 	write := func() {
-		raw, err := collectors.FetchProbePaths(ctx)
+		// Tracker 475: only the prober's VERIFIED path sets orient pairs — hop
+		// order is the engine's highest-precedence direction signal, so an
+		// unsigned set must never reach it.
+		paths, err := collectors.FetchProbePathsAll(ctx, s.probePaths)
 		if err != nil {
 			// The publisher did not answer. The last file is kept either way (the
 			// correlation source keeps its previous facts), but a broken fetch and
@@ -44,12 +47,8 @@ func (s *server) startProbePathsEnrichment(ctx context.Context) {
 			logWarn("probe.paths", "probe-path fetch failed — the enrichment file is left at its previous contents", errf(err))
 			return
 		}
-		if raw == "" {
-			return // answered: no paths published (traceroute off) → keep last file
-		}
-		var paths []collectors.PathResult
-		if json.Unmarshal([]byte(raw), &paths) != nil {
-			return
+		if len(paths) == 0 {
+			return // answered: no verified paths published (traceroute off, or refused) → keep last file
 		}
 		out := make([]probePathExport, 0, len(paths))
 		for _, p := range paths {

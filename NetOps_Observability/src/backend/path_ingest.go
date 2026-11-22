@@ -5,7 +5,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"netops/backend/internal/seam"
 	"os"
@@ -424,22 +423,28 @@ func (s *server) persistPathRecords(ctx context.Context, r pathRecords) error {
 
 // currentProbePaths reads the prober's latest traceroutes from whichever transport
 // is wired (the sidecar's shared file, the key-value publish, or the in-process
-// collector) — the same precedence handleProbePaths uses.
+// collector) — the same precedence handleProbePaths uses. Both shared channels
+// are verified (tracker 475): a path set that is unsigned, badly signed, stale,
+// replayed or from another vantage's slot contributes nothing.
 func (s *server) currentProbePaths(ctx context.Context) ([]collectors.PathResult, error) {
+	return s.mergedProbePaths(s.proberSharedPaths(ctx)), nil
+}
+
+// proberSharedPaths is the prober's verified path set from the first shared
+// channel that answers (key-value store, then PROBE_PATHS_FILE), else the
+// in-process store.
+func (s *server) proberSharedPaths(ctx context.Context) []collectors.PathResult {
 	if collectors.RedisAddr() != "" {
 		// MERGED across vantages: the LAN vantage's client-anchored trace and the WAN
 		// prober's edge-anchored trace are BOTH ingested, as distinct paths.
-		if paths, err := collectors.FetchProbePathsAll(ctx); err == nil && len(paths) > 0 {
-			return s.mergedProbePaths(paths), nil
+		if paths, err := collectors.FetchProbePathsAll(ctx, s.probePaths); err == nil && len(paths) > 0 {
+			return paths
 		}
 	}
 	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
-		if data, err := os.ReadFile(path); err == nil { // #nosec G304 -- operator-configured path
-			var out []collectors.PathResult
-			if err := json.Unmarshal(data, &out); err == nil {
-				return s.mergedProbePaths(out), nil
-			}
+		if paths, err := collectors.ReadProbePathsFile(path, s.probePaths); err == nil && paths != nil {
+			return paths
 		}
 	}
-	return s.mergedProbePaths(collectors.Paths.All()), nil
+	return collectors.Paths.All()
 }

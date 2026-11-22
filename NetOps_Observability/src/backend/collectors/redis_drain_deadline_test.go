@@ -40,7 +40,8 @@ func onePathBatch(t *testing.T, vantage string) string {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	return respBulk(string(raw))
+	// Tracker 475: a vantage publishes a SIGNED set.
+	return respBulk(sealPathSet(t, vantage, raw))
 }
 
 // A connection that dies mid-drain must be REPORTED here exactly as it is in
@@ -52,7 +53,7 @@ func TestFetchProbePathsAllReportsABrokenConnection(t *testing.T) {
 		onePathBatch(t, "van-a"),    // GET van-a
 		"",                          // GET van-b: the connection dies
 	)
-	paths, err := FetchProbePathsAll(context.Background())
+	paths, err := FetchProbePathsAll(context.Background(), testPathVerifier(false))
 	if err == nil {
 		t.Fatal("a broken path channel returned a nil error — the path lane reads a partial measurement as the whole one")
 	}
@@ -78,7 +79,7 @@ func TestFetchProbePathsAllKeepsDrainingPastOneVantageError(t *testing.T) {
 		"-WRONGTYPE not a string\r\n", // GET van-a
 		onePathBatch(t, "van-b"),      // GET van-b
 	)
-	paths, err := FetchProbePathsAll(context.Background())
+	paths, err := FetchProbePathsAll(context.Background(), testPathVerifier(false))
 	if err != nil {
 		t.Fatalf("one vantage's error reply failed the whole drain: %v", err)
 	}
