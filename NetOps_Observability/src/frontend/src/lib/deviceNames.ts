@@ -80,6 +80,7 @@ export function loadDeviceNames(now: number = Date.now()): Promise<DeviceNames> 
 export function resetDeviceNamesForTest(): void {
   cached = null;
   cachedLabels = null;
+  cachedPlaces = null;
 }
 
 let cachedLabels: { at: number; labels: Promise<DeviceNames> } | null = null;
@@ -104,6 +105,54 @@ export function useDeviceLabels(): DeviceNames | null {
     return () => { alive = false; };
   }, []);
   return labels;
+}
+
+/** Where a device is: its display name and its site. */
+export type DevicePlace = { name: string; site: string };
+export type DevicePlaces = ReadonlyMap<string, DevicePlace>;
+
+/** The site an operator reads for a device: the operator's own site label
+ *  first, then a location label, then the site id the device or its controller
+ *  reports ("site-id 100"), else "". Never invented. */
+export function deviceSite(d: Pick<Device, "labels" | "reported_site_id">): string {
+  const op = (d.labels?.site || d.labels?.location || "").trim();
+  if (op) return op;
+  const rep = (d.reported_site_id || "").trim();
+  return rep ? `site-id ${rep}` : "";
+}
+
+/** id → {name, site}, names told apart exactly as buildDeviceNames does. */
+export function buildDevicePlaces(devices: readonly Device[]): DevicePlaces {
+  const names = buildDeviceNames(devices);
+  const out = new Map<string, DevicePlace>();
+  for (const d of devices) {
+    if (!d.id) continue;
+    out.set(d.id, { name: names.get(d.id) ?? d.id, site: deviceSite(d) });
+  }
+  return out;
+}
+
+let cachedPlaces: { at: number; places: Promise<DevicePlaces> } | null = null;
+
+/** Shared short-lived read for buildDevicePlaces; a failed read is not cached. */
+export function loadDevicePlaces(now: number = Date.now()): Promise<DevicePlaces> {
+  if (cachedPlaces && now - cachedPlaces.at < TTL_MS) return cachedPlaces.places;
+  const places = Promise.resolve().then(() => api.devices()).then((d) => buildDevicePlaces(d ?? []));
+  cachedPlaces = { at: now, places };
+  places.catch(() => { cachedPlaces = null; });
+  return places;
+}
+
+/** React hook: the id→{name, site} map, or null until it has loaded. A failed
+ *  read leaves raw ids on screen and never breaks the page. */
+export function useDevicePlaces(): DevicePlaces | null {
+  const [places, setPlaces] = useState<DevicePlaces | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadDevicePlaces().then((p) => { if (alive) setPlaces(p); }).catch(() => { /* raw ids stay */ });
+    return () => { alive = false; };
+  }, []);
+  return places;
 }
 
 /** React hook: the id→name map, or null until it has loaded. */

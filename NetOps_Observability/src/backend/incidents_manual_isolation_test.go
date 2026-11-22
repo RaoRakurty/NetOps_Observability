@@ -53,6 +53,9 @@ func (m *manualIncidentStore) Ingest(_ context.Context, in IncidentInput) (Incid
 	for i := range m.rows {
 		if m.rows[i].DedupKey == dk && m.rows[i].TenantID == in.TenantID && m.rows[i].Status == incident.StatusOpen {
 			m.rows[i].Occurrences++
+			if m.rows[i].DeviceID == "" { // the store's rule: the first device stays
+				m.rows[i].DeviceID = incident.CleanDeviceID(in.DeviceID)
+			}
 			return m.rows[i], false, nil
 		}
 	}
@@ -60,6 +63,7 @@ func (m *manualIncidentStore) Ingest(_ context.Context, in IncidentInput) (Incid
 		ID: fmt.Sprintf("m-%02d", len(m.rows)), TenantID: in.TenantID,
 		Title: in.Title, Description: in.Description, Severity: incident.CanonicalSeverity(in.Severity),
 		Status: incident.StatusOpen, SourceType: in.SourceType, DedupKey: dk, Occurrences: 1,
+		DeviceID: incident.CleanDeviceID(in.DeviceID),
 	}
 	m.rows = append(m.rows, inc)
 	return inc, true, nil

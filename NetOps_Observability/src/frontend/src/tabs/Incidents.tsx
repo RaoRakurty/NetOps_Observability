@@ -15,10 +15,11 @@ import TacCaseChip from "../components/tac/TacCaseChip";
 import { caseLinkFromIncident } from "../pages/troubleshoot/tacModel";
 import SidePanel from "../components/event/SidePanel";
 import { useIsPhone } from "../lib/useIsPhone";
+import { useDevicePlaces } from "../lib/deviceNames";
 import {
   INCIDENT_SOURCE_TABS, INCIDENT_STATUS_TILES, type IncidentSourceTab, type IncidentFilters,
   inSourceTab, filterIncidents, statusCounts, countsNote, pageNote, statusText, ownerText, isActiveIncident,
-  activeIncidentFilterCount,
+  activeIncidentFilterCount, incidentWhere, whereText, type IncidentWhere,
 } from "./incidentsModel";
 
 // Incidents — the actionable system-of-record view. Lists incidents (minted by a
@@ -37,6 +38,19 @@ const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 type Action = "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign";
 
 const fmt = (s?: string) => (s ? fmtDateTime(s) : "—");
+
+/** WHERE (tracker 438): the device by name over its site; the raw id beside a
+ *  name only when they differ. No device → an honest "—". */
+function WhereCell({ w }: { w: IncidentWhere }) {
+  if (!w.device) return <span className="al-detail" title="This incident names no device">—</span>;
+  const second = [w.site, w.device !== w.id ? w.id : ""].filter(Boolean).join(" · ");
+  return (
+    <div className="lv-two" data-testid="incident-where">
+      <span className="al-device" title={w.id}>{w.device}</span>
+      {second && <span className="lv-line lv-detail-line al-detail">{second}</span>}
+    </div>
+  );
+}
 
 // "Notified via" chips (#103 UX-1) — same visual language as the RCA Candidates
 // column: the ITSM ticket (when one was filed) plus every RECORDED notification
@@ -71,6 +85,7 @@ export default function Incidents() {
   const [unavailable, setUnavailable] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const isPhone = useIsPhone();
+  const places = useDevicePlaces();
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -102,7 +117,7 @@ export default function Incidents() {
   }, [load]);
 
   const set = (patch: Partial<IncidentFilters>) => setFilters((f) => ({ ...f, ...patch }));
-  const shown = useMemo(() => filterIncidents(items, tab, filters), [items, tab, filters]);
+  const shown = useMemo(() => filterIncidents(items, tab, filters, places), [items, tab, filters, places]);
   const counts = useMemo(() => statusCounts(items, tab), [items, tab]);
   const tabCount = (t: IncidentSourceTab) => items.filter((i) => inSourceTab(i, t)).length;
 
@@ -155,6 +170,7 @@ export default function Incidents() {
           <div className="lv-phone-cell">
             <div className="lv-phone-top">{sevCell(i)} <span className="al-when">{fmt(i.last_seen_at)}</span></div>
             {whatCell(i)}
+            <WhereCell w={incidentWhere(i, places)} />
             {ownerCell(i)}
           </div>
         ),
@@ -164,6 +180,10 @@ export default function Incidents() {
       { key: "severity", header: "Severity", width: 104, sortable: true,
         text: (i) => i.severity, sortValue: (i) => severityRank(i.severity), render: sevCell },
       { key: "what", header: "Incident", sortable: true, text: (i) => `${i.title} ${friendlyIncidentId(i.id)}`, render: whatCell },
+      { key: "where", header: "Where", width: 190, sortable: true,
+        text: (i) => whereText(incidentWhere(i, places)),
+        sortValue: (i) => whereText(incidentWhere(i, places)).toLowerCase(),
+        render: (i) => <WhereCell w={incidentWhere(i, places)} /> },
       { key: "owner", header: "Owner", width: 150, sortable: true, text: ownerText, render: ownerCell },
       { key: "source", header: "Opened by", width: 150, sortable: true, text: (i) => i.source_type,
         render: (i) => <span className="al-detail">{SOURCE_LABEL[(i.source_type || "manual").toLowerCase()] ?? i.source_type}</span> },
@@ -180,7 +200,7 @@ export default function Incidents() {
         ) },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPhone]);
+  }, [isPhone, places]);
 
   const selected = sel ? items.find((i) => i.id === sel) : undefined;
 
@@ -241,7 +261,7 @@ export default function Incidents() {
           )}
           {!error && !unavailable && items.length > 0 && (
             <div className="lv-filters" data-testid="incidents-filters">
-              <input className="form-input al-search" type="search" placeholder="Search incidents, owners, tickets"
+              <input className="form-input al-search" type="search" placeholder="Search incidents, devices, sites, owners"
                 aria-label="Search incidents" value={filters.q ?? ""} onChange={(e) => set({ q: e.target.value })} />
               <select aria-label="Severity" value={filters.severity ?? ""} onChange={(e) => set({ severity: e.target.value || undefined })}>
                 <option value="">All severities</option>
@@ -275,7 +295,7 @@ export default function Incidents() {
               rows={shown}
               columns={columns}
               rowKey={(i) => i.id}
-              rowHeight={isPhone ? 96 : 48}
+              rowHeight={isPhone ? 120 : 48}
               height="55vh"
               ariaLabel="Incidents"
               onRowClick={(i) => setSel(i.id)}
@@ -377,6 +397,7 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
 
   const open = inc.status !== "resolved" && inc.status !== "closed";
   const ent = useAIEntitlements();
+  const where = incidentWhere(inc, useDevicePlaces());
 
   return (
     <>
@@ -400,6 +421,13 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
           {" · "}{statusText(inc.status)} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)} · owner {ownerText(inc)}
         </span>
       </div>
+      <p style={{ fontSize: 14, margin: "6px 0 0" }} data-testid="incident-panel-where">
+        <span style={{ color: "var(--muted)" }}>Where: </span>
+        {where.device
+          ? <><strong>{where.device}</strong>{where.site && <> · {where.site}</>}
+              {where.device !== where.id && <span style={{ fontFamily: "var(--font-mono)", color: "var(--muted)" }}> · {where.id}</span>}</>
+          : <span style={{ color: "var(--muted)" }}>no device named</span>}
+      </p>
       {inc.description && <p style={{ color: "var(--muted)", fontSize: 14 }}>{inc.description}</p>}
       {inc.external_ticket_id && (
         <p style={{ fontSize: 14, margin: "2px 0 0" }}>
