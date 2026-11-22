@@ -15,7 +15,7 @@ It assumes devices are already reporting. If they are not, start with
 [Onboard your first device](/getting-started/quickstart).
 
 A shift in Correlix has a fixed shape. You open **Overview → Home**, the Command
-Center, and read the Action Queue, which lists correlated incidents rather than
+Center, and read the Problems list, which lists correlated incidents rather than
 raw alerts. You work the queue by RCA state, owner and ticket state. When the
 queue is empty and a user still reports a problem, you drop to the surfaces that
 show what has not correlated yet: **Operations → Active Alerts**, **Explore →
@@ -26,7 +26,7 @@ is tracked through its lifecycle on **Operations → Incidents**.
 
 | Page | What it covers |
 |---|---|
-| [Start a shift](/noc-guide/where-to-start) | The on-shift routine: read the Command Center, work the Action Queue in priority order, and the decision path for when the queue is empty. |
+| [Start a shift](/noc-guide/where-to-start) | The on-shift routine: read the Command Center, work the Problems list in priority order, and the decision path for when the queue is empty. |
 | [Read device logs during an incident](/noc-guide/reading-logs) | Scoping a log search to a device and window, reading severity, recognising bursts and flaps, and pivoting from a line to the case that contains it. |
 | [From observation to ticket](/noc-guide/from-signal-to-ticket) | How one observation becomes a finding, a correlated group, a graded RCA case, a notification and one ticket. |
 
