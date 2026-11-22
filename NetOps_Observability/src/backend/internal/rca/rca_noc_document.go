@@ -307,8 +307,19 @@ func rcaBGPEstablished(sig map[string]any) bool {
 // observation of a peer that never came up — at least one observation of that
 // peer carries the never-established mark and none shows it established (a
 // controller re-reports a dead peer without repeating every field).
-func rcaNeverEstablishedOnly(anomalous []map[string]any) bool {
+//
+// clears are the case's recovery observations (`*_clear` kinds). A BGP clear for
+// the peer is an observed session-up: since tracker 380 the device lanes report a
+// recovery as `<kind>_clear`, as the controller lanes already did, so it never
+// reaches `anomalous` and must still count as "established".
+func rcaNeverEstablishedOnly(anomalous, clears []map[string]any) bool {
 	marked, up := map[string]bool{}, map[string]bool{}
+	for _, sig := range clears {
+		kind := asString(sig["kind"])
+		if strings.HasPrefix(kind, "bgp_") && strings.HasSuffix(kind, "_clear") {
+			up[rcaBGPPeerKey(sig)] = true
+		}
+	}
 	var bgp []map[string]any
 	for _, sig := range anomalous {
 		if strings.ToLower(asString(sig["modality_class"])) == "security" {

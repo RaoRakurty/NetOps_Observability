@@ -467,18 +467,18 @@ func TestControllerHubAndNeverEstablishedDetection(t *testing.T) {
 		t.Error("the witness being a controller does not make the object one")
 	}
 	ne := []map[string]any{{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"transition_class":"never_established"}`}}
-	if !rcaNeverEstablishedOnly(ne) {
+	if !rcaNeverEstablishedOnly(ne, nil) {
 		t.Error("trap transition_class never_established")
 	}
 	mixed := append(ne, map[string]any{"kind": "if_errors", "modality_class": "device_telemetry", "attrs": "{}"})
-	if rcaNeverEstablishedOnly(mixed) {
+	if rcaNeverEstablishedOnly(mixed, nil) {
 		t.Error("a real fault beside the dead peer is not never-established-only")
 	}
 	up := []map[string]any{
 		{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"bgp":{"transition_class":"never_established"}}`},
 		{"kind": "bgp_adjacency_change", "modality_class": "control_plane", "attrs": `{"bgp":{"transition_class":"session_up"}}`},
 	}
-	if rcaNeverEstablishedOnly(up) {
+	if rcaNeverEstablishedOnly(up, nil) {
 		t.Error("a peer seen established is never never-established")
 	}
 }
@@ -499,7 +499,7 @@ func TestNeverEstablishedOnlyFromTransitionClass(t *testing.T) {
 		"class unknown, router-id 0.0.0.0": `{"peer":"10.0.0.2","state":"idle","peer_router_id":"0.0.0.0","correlation_hints":{"bgp_transition_class":"unknown","bgp_peer_routerid":"unset"}}`,
 		"class session_lost":               `{"peer":"10.0.0.2","correlation_hints":{"bgp_transition_class":"session_lost"}}`,
 	} {
-		if rcaNeverEstablishedOnly(ctl(attrs)) {
+		if rcaNeverEstablishedOnly(ctl(attrs), nil) {
 			t.Errorf("%s: must be treated as a possible real failure, not never-established", name)
 		}
 	}
@@ -509,7 +509,7 @@ func TestNeverEstablishedOnlyFromTransitionClass(t *testing.T) {
 		"trap flat class":   `{"peer":"10.0.0.2","bgp.transition_class":"never_established"}`,
 		"explicit flag":     `{"peer":"10.0.0.2","never_established":true}`,
 	} {
-		if !rcaNeverEstablishedOnly(ctl(attrs)) {
+		if !rcaNeverEstablishedOnly(ctl(attrs), nil) {
 			t.Errorf("%s: must read as never-established", name)
 		}
 	}
@@ -584,5 +584,28 @@ func TestNocDocumentPDFRendersSectionsBandAndGuide(t *testing.T) {
 	}
 	if strings.Contains(doc, "management_plane") || strings.Contains(doc, "Exposed device is also failing") {
 		t.Error("raw token or raw template title in the document")
+	}
+}
+
+// Tracker 380: device lanes report a BGP recovery as `bgp_adjacency_change_clear`,
+// which is a recovery, not an anomaly. A clear for the peer is still proof the
+// session came up, so the peer is not "never established".
+func TestNeverEstablishedOnlyReadsABGPClearAsEstablished(t *testing.T) {
+	marked := []map[string]any{{"kind": "bgp_adjacency_change", "modality_class": "control_plane",
+		"attrs": `{"peer":"10.0.0.2","bgp":{"transition_class":"never_established"}}`}}
+	if !rcaNeverEstablishedOnly(marked, nil) {
+		t.Fatal("marked only: must read as never-established")
+	}
+	sameClear := []map[string]any{{"kind": "bgp_adjacency_change_clear", "attrs": `{"peer":"10.0.0.2","state":"up"}`}}
+	if rcaNeverEstablishedOnly(marked, sameClear) {
+		t.Fatal("a BGP clear for the same peer is an observed session-up")
+	}
+	otherPeer := []map[string]any{{"kind": "bgp_adjacency_change_clear", "attrs": `{"peer":"10.0.0.9","state":"up"}`}}
+	if !rcaNeverEstablishedOnly(marked, otherPeer) {
+		t.Fatal("another peer's recovery says nothing about this one")
+	}
+	nonBGP := []map[string]any{{"kind": "link_state_change_clear", "attrs": `{"peer":"10.0.0.2"}`}}
+	if !rcaNeverEstablishedOnly(marked, nonBGP) {
+		t.Fatal("a non-BGP clear is not a session-up")
 	}
 }
