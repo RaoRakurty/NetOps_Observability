@@ -112,7 +112,10 @@ ever (`docs/design/secret-custody.md` §5).
 11. If no backup exists: every sealed secret is unrecoverable. Recovery means
     re-initializing the KEK and **re-entering every reversible secret** — SNMP
     credentials, notification tokens, OIDC client secret, LDAP bind password,
-    TACACS+ secret, webhook secrets (`docs/design/secret-custody.md` §7 phase 1c
+    TACACS+ secret, webhook secrets, each tenant's ITSM connector secrets
+    (ServiceNow / Jira / PagerDuty / Slack / Teams — until re-entered, the api
+    logs "stored ITSM config is sealed and could not be opened" and refuses
+    ITSM saves) (`docs/design/secret-custody.md` §7 phase 1c
     lists what is wired). **The internal CA key is among them** — if it is lost,
     the mesh must be re-bootstrapped (`bootstrap-pki.md`) and every service
     identity re-issued.
