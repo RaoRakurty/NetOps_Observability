@@ -12,20 +12,23 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-li
 const listIncidentsPage = vi.fn();
 const getIncidentTimeline = vi.fn();
 const incidentAction = vi.fn();
+const devices = vi.fn();
 
 vi.mock("../services/api", () => ({
   api: {
     listIncidentsPage: (...a: unknown[]) => listIncidentsPage(...a),
     getIncidentTimeline: (...a: unknown[]) => getIncidentTimeline(...a),
     incidentAction: (...a: unknown[]) => incidentAction(...a),
+    devices: (...a: unknown[]) => devices(...a),
   },
 }));
 vi.mock("../lib/aiEntitlements", () => ({ useAIEntitlements: () => ({ has: () => true }) }));
 
 import Incidents from "./Incidents";
+import { resetDeviceNamesForTest } from "../lib/deviceNames";
 
 const A = { id: "11111111-aaaa-0000-0000-000000000001", title: "WAN loss at DFW", severity: "critical", status: "open",
-  source_type: "alert", occurrences: 3, sync_status: "", owner: "", first_seen_at: "2026-11-22T08:00:00Z", last_seen_at: "2026-11-22T09:00:00Z" };
+  source_type: "alert", device_id: "edge-dfw-1a2b", occurrences: 3, sync_status: "", owner: "", first_seen_at: "2026-11-22T08:00:00Z", last_seen_at: "2026-11-22T09:00:00Z" };
 const B = { id: "22222222-bbbb-0000-0000-000000000002", title: "User reports slow CRM", severity: "medium", status: "acknowledged",
   source_type: "manual", occurrences: 1, sync_status: "", owner: "noc-lee", first_seen_at: "2026-11-22T07:00:00Z", last_seen_at: "2026-11-22T07:30:00Z" };
 
@@ -34,6 +37,9 @@ const dataRows = (g: HTMLElement) => within(g).getAllByRole("row").filter((r) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetDeviceNamesForTest();
+  devices.mockResolvedValue([{ id: "edge-dfw-1a2b", name: "edge-dfw", address: "10.9.0.1", source: "snmp", last_seen: "",
+    labels: { site: "Dallas DC" } }]);
   listIncidentsPage.mockResolvedValue({ incidents: [A, B], total: 2, offset: 0, complete: true });
   getIncidentTimeline.mockImplementation((id: string) => Promise.resolve({ incident: id === A.id ? A : B, timeline: [] }));
 });
@@ -48,6 +54,42 @@ describe("Operations → Incidents", () => {
     expect(within(g).getByText("Unassigned")).toBeTruthy();
     expect(within(g).getByText("noc-lee")).toBeTruthy();
     expect(screen.queryByTestId("incidents-pager")).toBeNull(); // the page IS the whole set
+  });
+
+  it("says WHERE: the device by name over its site, and — when no device is named", async () => {
+    render(<Incidents />);
+    const g = await grid();
+    const where = await within(g).findByText("edge-dfw");
+    const cell = where.closest("[data-testid='incident-where']") as HTMLElement;
+    expect(cell.textContent).toContain("Dallas DC");
+    expect(cell.textContent).toContain("edge-dfw-1a2b"); // the id beside a name that differs
+    const rowB = dataRows(g).find((r) => r.textContent?.includes("User reports slow CRM")) as HTMLElement;
+    expect(within(rowB).getByTitle("This incident names no device")).toBeTruthy();
+  });
+
+  it("search finds an incident by its device name and its site", async () => {
+    render(<Incidents />);
+    const g = await grid();
+    await within(g).findByText("edge-dfw");
+    fireEvent.change(screen.getByLabelText("Search incidents"), { target: { value: "dallas" } });
+    await waitFor(() => expect(dataRows(g)).toHaveLength(1));
+    expect(within(g).getByText("WAN loss at DFW")).toBeTruthy();
+  });
+
+  it("a device the inventory does not hold keeps its id; a failed inventory read never breaks the page", async () => {
+    devices.mockRejectedValue(new Error("500"));
+    render(<Incidents />);
+    const g = await grid();
+    expect(await within(g).findByText("edge-dfw-1a2b")).toBeTruthy();
+  });
+
+  it("the side panel says where the incident is", async () => {
+    render(<Incidents />);
+    const g = await grid();
+    await within(g).findByText("edge-dfw");
+    fireEvent.click(within(g).getByText("WAN loss at DFW"));
+    const where = await screen.findByTestId("incident-panel-where");
+    await waitFor(() => expect(where.textContent).toMatch(/edge-dfw · Dallas DC/));
   });
 
   it("a page that is not the whole set says so and pages", async () => {

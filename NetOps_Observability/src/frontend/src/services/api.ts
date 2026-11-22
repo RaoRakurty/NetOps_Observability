@@ -627,6 +627,9 @@ export type Incident = {
   source_type: string;
   source_id?: string;
   owner?: string;
+  /** WHERE (tracker 438): the device the firing alert named, stamped by the
+   *  server; absent for stack, Digital Experience and manual incidents. */
+  device_id?: string;
   occurrences: number;
   created_at: string;
   updated_at: string;

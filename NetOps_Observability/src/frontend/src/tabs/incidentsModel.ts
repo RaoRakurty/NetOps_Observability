@@ -15,6 +15,25 @@
 //   • owner is a column, "Unassigned" when nobody has it.
 
 import type { Incident } from "../services/api";
+import type { DevicePlaces } from "../lib/deviceNames";
+
+/** WHERE an incident is (tracker 438): the firing device by its inventory name
+ *  and its site. `id` is the raw device id, shown beside the name when they
+ *  differ. A device the caller's inventory does not hold keeps its id; an
+ *  incident with no device (stack, Digital Experience, a person) is empty. */
+export type IncidentWhere = { device: string; site: string; id: string };
+
+export function incidentWhere(i: Pick<Incident, "device_id">, places: DevicePlaces | null): IncidentWhere {
+  const id = (i.device_id || "").trim();
+  if (!id) return { device: "", site: "", id: "" };
+  const p = places?.get(id);
+  return { device: p?.name || id, site: p?.site || "", id };
+}
+
+/** One line for search and sorting: "edge-a · HQ", "edge-a", or "". */
+export function whereText(w: IncidentWhere): string {
+  return [w.device, w.site].filter(Boolean).join(" · ");
+}
 
 export type IncidentSourceTab = "all" | "alert" | "logs" | "manual" | "experience";
 
@@ -64,14 +83,18 @@ export type IncidentFilters = {
   unassigned?: boolean;
 };
 
-export function filterIncidents(items: readonly Incident[], tab: IncidentSourceTab, f: IncidentFilters): Incident[] {
+export function filterIncidents(items: readonly Incident[], tab: IncidentSourceTab, f: IncidentFilters, places: DevicePlaces | null = null): Incident[] {
   const needle = (f.q ?? "").trim().toLowerCase();
   return items.filter((i) => {
     if (!inSourceTab(i, tab)) return false;
     if (f.status && i.status !== f.status) return false;
     if (f.severity && i.severity !== f.severity) return false;
     if (f.unassigned && i.owner && i.owner.trim()) return false;
-    if (needle && !`${i.title} ${i.description ?? ""} ${i.owner ?? ""} ${i.external_ticket_id ?? ""}`.toLowerCase().includes(needle)) return false;
+    if (needle) {
+      const w = incidentWhere(i, places);
+      const hay = `${i.title} ${i.description ?? ""} ${i.owner ?? ""} ${i.external_ticket_id ?? ""} ${whereText(w)} ${w.id}`;
+      if (!hay.toLowerCase().includes(needle)) return false;
+    }
     return true;
   });
 }

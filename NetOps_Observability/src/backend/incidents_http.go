@@ -49,6 +49,11 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 	inc, created, err := s.incidents.Ingest(ctx, IncidentInput{
 		TenantID: tenant, Title: title, Description: a.Description, Severity: a.Severity,
 		SourceType: "alert", SourceID: a.Rule, DedupKey: "alert:" + a.ID, Actor: "alert-engine",
+		// WHERE (tracker 438): the firing device, from the alert itself — the
+		// same device alertTenant derived the owner from, so the id names a
+		// device of the incident's own tenant (or, unknown to discovery, sits
+		// on the platform lane only).
+		DeviceID: a.DeviceID,
 	})
 	if err != nil {
 		logError("incidents", "ingest alert", map[string]any{"alert_id": a.ID, "error": err.Error()})
