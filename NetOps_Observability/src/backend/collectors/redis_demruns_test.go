@@ -102,7 +102,8 @@ func oneRunBatch(t *testing.T, vantage string) string {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	return respBulk(string(raw))
+	// Tracker 475: a vantage publishes a SIGNED batch.
+	return respBulk(sealRunBatch(t, vantage, raw))
 }
 
 // A connection that dies mid-drain must be REPORTED, and the vantages that were
@@ -113,7 +114,7 @@ func TestFetchDEMRunsReportsABrokenConnection(t *testing.T) {
 		oneRunBatch(t, "van-a"),     // GET van-a
 		"",                          // GET van-b: the connection dies
 	)
-	runs, err := FetchDEMRuns(context.Background())
+	runs, err := FetchDEMRuns(context.Background(), testDEMRunVerifier(false))
 	if err == nil {
 		t.Fatal("a broken connection returned a nil error — the intake counts nothing, logs nothing, and every unread check grades unknown")
 	}
@@ -141,7 +142,7 @@ func TestFetchDEMRunsTreatsAnExpiredKeyAsEmpty(t *testing.T) {
 		"$-1\r\n",                   // GET van-a: nil bulk, the key expired
 		oneRunBatch(t, "van-b"),     // GET van-b
 	)
-	runs, err := FetchDEMRuns(context.Background())
+	runs, err := FetchDEMRuns(context.Background(), testDEMRunVerifier(false))
 	if err != nil {
 		t.Fatalf("an expired vantage key was reported as a failure: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestFetchDEMRunsKeepsDrainingPastOneVantageError(t *testing.T) {
 		"-WRONGTYPE not a string\r\n", // GET van-a
 		oneRunBatch(t, "van-b"),       // GET van-b
 	)
-	runs, err := FetchDEMRuns(context.Background())
+	runs, err := FetchDEMRuns(context.Background(), testDEMRunVerifier(false))
 	if err == nil {
 		t.Fatal("a redis error reply for one vantage was swallowed")
 	}
