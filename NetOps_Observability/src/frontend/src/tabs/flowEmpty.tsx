@@ -75,6 +75,23 @@ export function platformTrafficNote(cov: FlowCoverage | null, included: boolean)
     : `${plural(x, "flow", "flows")} of Correlix's own polling ${x === 1 ? "is" : "are"} hidden.`;
 }
 
+/**
+ * True when every flow in the window is Correlix's own monitoring traffic and the
+ * views are hiding it: the panels are empty although the window holds flows. On a
+ * quiet network (a lab with no users) this is the whole picture, and the page must
+ * say so instead of showing empty tables (owner report, 2026-11-22: 39k flows,
+ * nothing shown).
+ */
+export function onlyPlatformTraffic(cov: FlowCoverage | null, included: boolean): boolean {
+  return !!cov && !included && cov.platform_addresses_configured
+    && cov.flows > 0 && cov.platform_monitoring_flows >= cov.flows;
+}
+
+/** The page-level sentence for onlyPlatformTraffic. */
+export function onlyPlatformTrafficNote(cov: FlowCoverage): string {
+  return `All ${plural(cov.flows, "flow", "flows")} in this window ${cov.flows === 1 ? "is" : "are"} Correlix's own monitoring traffic (polling, flow export, traps), which is hidden by default. There is no other traffic to show.`;
+}
+
 /** The toggle beside the filter bar, with its count. */
 export function PlatformTrafficToggle({ q, included, onChange }: { q: Q; included: boolean; onChange: (v: boolean) => void }) {
   const [cov, setCov] = useState<FlowCoverage | null>(null);
@@ -112,8 +129,14 @@ const plural = (x: number, one: string, many: string) => `${fmt(x)} ${x === 1 ? 
  * when the plain "no flow records" message is the truth (no flows at all, or
  * coverage unknown) — the caller then shows the onboarding hint.
  */
-export function flowEmptyReason(dim: FlowDimension, cov: FlowCoverage | null): FlowEmptyReason | null {
+export function flowEmptyReason(dim: FlowDimension, cov: FlowCoverage | null, includePlatform = false): FlowEmptyReason | null {
   if (!cov || cov.flows === 0) return null;
+  if (onlyPlatformTraffic(cov, includePlatform)) {
+    return {
+      msg: `${plural(cov.flows, "flow", "flows")} in this window, all of them Correlix's own monitoring traffic.`,
+      hint: "It is hidden by default. Use Show them at the top of the page to see it.",
+    };
+  }
   const total = plural(cov.flows, "flow", "flows");
   const from = cov.exporters > 0 ? ` from ${plural(cov.exporters, "exporter", "exporters")}` : "";
   switch (dim) {
@@ -220,7 +243,7 @@ export function resetCoverageCache(): void {
 }
 
 /** Empty-panel body: explains why, or falls back to the onboarding hint. */
-export function FlowEmpty({ q, dim = "generic" }: { q: Q; dim?: FlowDimension }) {
+export function FlowEmpty({ q, dim = "generic", includePlatform = false }: { q: Q; dim?: FlowDimension; includePlatform?: boolean }) {
   const [cov, setCov] = useState<FlowCoverage | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
@@ -234,7 +257,7 @@ export function FlowEmpty({ q, dim = "generic" }: { q: Q; dim?: FlowDimension })
   }, [q.since, q.ftype, q.fkey]);
 
   if (cov === undefined) return <div className="empty board-empty" aria-busy="true" />;
-  const why = flowEmptyReason(dim, cov);
+  const why = flowEmptyReason(dim, cov, includePlatform);
   if (!why) return <EmptyHint kind="flows" />;
   return (
     <div className="empty board-empty" data-testid="flow-empty-reason">

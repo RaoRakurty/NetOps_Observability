@@ -3,12 +3,38 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { flowEmptyReason, parseCoverage, platformTrafficNote, FlowEmpty, FlowSamplingNote, samplingNote, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
+import { flowEmptyReason, onlyPlatformTraffic, onlyPlatformTrafficNote, parseCoverage, platformTrafficNote, FlowEmpty, FlowSamplingNote, samplingNote, resetCoverageCache, type FlowCoverage } from "./flowEmpty";
 import { api } from "../services/api";
 
 const cov = (o: Partial<FlowCoverage>): FlowCoverage => ({
   flows: 0, tcp_flows: 0, tcp_flows_with_flags: 0, flows_with_as: 0, private_only_flows: 0, flows_sampling_reported: 0, exporters: 0,
   platform_monitoring_flows: 0, platform_addresses_configured: false, asn_dataset_loaded: false, flows_with_dataset_as: 0, ...o,
+});
+
+describe("only Correlix's own traffic in the window (owner report 2026-11-22)", () => {
+  const lab = cov({ flows: 39763, platform_monitoring_flows: 39763, platform_addresses_configured: true, exporters: 8 });
+
+  it("is detected only when every flow is platform traffic, it is hidden, and addresses are configured", () => {
+    expect(onlyPlatformTraffic(lab, false)).toBe(true);
+    expect(onlyPlatformTraffic(lab, true)).toBe(false);
+    expect(onlyPlatformTraffic(cov({ ...lab, platform_monitoring_flows: 39000 }), false)).toBe(false);
+    expect(onlyPlatformTraffic(cov({ ...lab, platform_addresses_configured: false }), false)).toBe(false);
+    expect(onlyPlatformTraffic(cov({ flows: 0, platform_addresses_configured: true }), false)).toBe(false);
+    expect(onlyPlatformTraffic(null, false)).toBe(false);
+  });
+
+  it("says so in one plain sentence with the count", () => {
+    expect(onlyPlatformTrafficNote(lab)).toBe(
+      "All 39,763 flows in this window are Correlix's own monitoring traffic (polling, flow export, traps), which is hidden by default. There is no other traffic to show.");
+  });
+
+  it("an empty panel names the reason instead of 'none match this view'", () => {
+    const r = flowEmptyReason("generic", lab);
+    expect(r?.msg).toBe("39,763 flows in this window, all of them Correlix's own monitoring traffic.");
+    expect(r?.hint).toMatch(/Show them/);
+    // With the traffic shown, the panel's emptiness has another cause.
+    expect(flowEmptyReason("generic", lab, true)?.msg).toMatch(/none match this view/);
+  });
 });
 
 describe("flowEmptyReason — an empty panel says why", () => {
