@@ -122,6 +122,48 @@ type PathResult struct {
 type pathRegistry struct {
 	mu sync.RWMutex
 	m  map[string]PathResult
+
+	// sealer signs the published path set (tracker 475). Nil (an api process,
+	// or a prober without a key) publishes nothing to the shared channels: an
+	// unsigned set would be refused by every reader anyway.
+	sealMu  sync.Mutex
+	sealer  PathSealer
+	sealErr string // last seal failure logged (log once per change)
+}
+
+// PathSealer signs one vantage's path set (JSON) into a result envelope.
+type PathSealer func(vantage string, body []byte) (string, error)
+
+// SetSealer installs the signer the prober publishes with.
+func (r *pathRegistry) SetSealer(f PathSealer) {
+	r.sealMu.Lock()
+	r.sealer = f
+	r.sealMu.Unlock()
+}
+
+// seal signs data for vantage, logging a failure once per change. ok is false
+// when nothing may be published to the shared channels.
+func (r *pathRegistry) seal(vantage string, data []byte) (string, bool) {
+	r.sealMu.Lock()
+	defer r.sealMu.Unlock()
+	msg := ""
+	var sealed string
+	if r.sealer == nil {
+		msg = "no signing key is wired"
+	} else if s, err := r.sealer(vantage, data); err != nil {
+		msg = err.Error()
+	} else {
+		sealed = s
+	}
+	if msg != r.sealErr {
+		if msg == "" {
+			log.Printf("traceroute: publishing signed path sets again")
+		} else {
+			log.Printf("traceroute: path sets are NOT published to the shared channels (the api refuses unsigned paths): %s", msg)
+		}
+		r.sealErr = msg
+	}
+	return sealed, msg == ""
 }
 
 // Paths is the process-wide latest-trace store; the /api/probe/paths handler
@@ -180,22 +222,31 @@ func (r *pathRegistry) persist() {
 	// customer LAN — the only place the CLIENT end of the path can be measured) pushes
 	// its traces to the API over authenticated HTTP instead. Configured, never assumed.
 	pushProbePaths(data)
+	if RedisAddr() == "" && os.Getenv("PROBE_PATHS_FILE") == "" {
+		return
+	}
+	// Tracker 475: the shared channels carry only a SIGNED set — one envelope,
+	// written to every slot, so all of them carry the same issued-at.
+	sealed, ok := r.seal(vantage, data)
+	if !ok {
+		return
+	}
 	if RedisAddr() != "" {
 		// Background persistence with the dialer's own 3s timeout — the
 		// registry has no request context to inherit.
 		ctx := context.Background()
-		redisPublish(ctx, "probe-paths", probePathsKeyFor(vantage), string(data), probePathsTTL)
+		redisPublish(ctx, "probe-paths", probePathsKeyFor(vantage), sealed, probePathsTTL)
 		if err := redisRegisterVantage(ctx, vantage); err != nil {
 			// SEC-012 class: an unregistered vantage is invisible to readers
 			// even though its paths were published.
 			log.Printf("valkey: vantage registration FAILED (%s): %v — readers cannot enumerate this prober", vantage, err)
 		}
-		redisPublish(ctx, "probe-paths-legacy", probePathsKey, string(data), probePathsTTL) // legacy compat
+		redisPublish(ctx, "probe-paths-legacy", probePathsKey, sealed, probePathsTTL) // legacy compat
 		return
 	}
 	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
-		writeAtomic(path, data)                            // legacy compat
-		writeAtomic(path+"."+safeFileToken(vantage), data) // vantage-scoped
+		writeAtomic(path, []byte(sealed))                            // legacy compat
+		writeAtomic(path+"."+safeFileToken(vantage), []byte(sealed)) // vantage-scoped
 	}
 }
 

@@ -93,7 +93,7 @@ func (s *server) runSeamBootstrapOnce(ctx context.Context) {
 	devices := s.discovery.Devices()
 	var suggestions []seam.Seam
 
-	paths, err := seamFetchProbePaths(ctx)
+	paths, err := s.seamFetchProbePaths(ctx)
 	if err != nil {
 		log.Printf("seam-bootstrap: traceroute source unavailable: %v", err)
 	} else {
@@ -221,27 +221,11 @@ func (s *server) startSeamEnrichment(ctx context.Context) {
 
 // ── R1: traceroute ownership boundary ─────────────────────────────────────────
 
-func seamFetchProbePaths(ctx context.Context) ([]collectors.PathResult, error) {
-	if collectors.RedisAddr() != "" {
-		if raw, err := collectors.FetchProbePaths(ctx); err == nil && raw != "" {
-			var out []collectors.PathResult
-			if err := json.Unmarshal([]byte(raw), &out); err != nil {
-				return nil, fmt.Errorf("redis paths decode: %w", err)
-			}
-			return out, nil
-		}
-	}
-	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
-		// #nosec G304 -- operator-configured shared-volume path, not user input
-		if data, err := os.ReadFile(path); err == nil {
-			var out []collectors.PathResult
-			if err := json.Unmarshal(data, &out); err != nil {
-				return nil, fmt.Errorf("paths file decode: %w", err)
-			}
-			return out, nil
-		}
-	}
-	return collectors.Paths.All(), nil
+// seamFetchProbePaths is the prober's VERIFIED path set (tracker 475): the
+// traceroute ownership boundary seeds seams from hop order, so an unsigned
+// path set must never place one.
+func (s *server) seamFetchProbePaths(ctx context.Context) ([]collectors.PathResult, error) {
+	return s.proberSharedPaths(ctx), nil
 }
 
 // seamFetchBGPPeers reads the current BGP peer table from VictoriaMetrics

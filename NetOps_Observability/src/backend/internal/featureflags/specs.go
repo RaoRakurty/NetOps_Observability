@@ -85,6 +85,11 @@ func PlatformSpecs() []Spec {
 			Help: "Trace the hop-by-hop path to each path target from the Correlix prober every minute, so each WAN circuit and tunnel row carries its path and root-cause analysis can see where a path breaks. Sends traceroute packets from this server."},
 		{Env: "FEATURE_ACTIVE_PROBE", Label: "Active path probes (STAMP)", Group: measure, Apply: live, Risky: true,
 			Help: "Send standard STAMP test packets from the Correlix prober to each probe target to measure latency, jitter and loss. Sends test traffic from this server."},
+		// Tracker 475: the prober's path sets are signed; this accepts the
+		// unsigned form an older prober publishes. Console-only (a security
+		// downgrade is never an .env line) and off by default.
+		{Env: "PROBE_PATHS_ACCEPT_UNSIGNED", Label: "Accept unsigned path traces", Group: measure, Apply: live, Risky: true, ConsoleOnly: true,
+			Help: "Accept path traces from a prober older than this release, which does not sign them. Their owner and hops cannot be proven, so any service that can write to the internal store could add a path. Turn off once every prober is upgraded."},
 		// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
 		// baselines (internal/seriesroll). Off, Iris still compares with the
 		// last four weeks the metric store keeps.

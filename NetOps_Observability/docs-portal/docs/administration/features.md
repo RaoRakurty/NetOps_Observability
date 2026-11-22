@@ -54,8 +54,15 @@ metadata addresses, multicast) are refused whoever listed them.
 
 The prober only obeys switch settings that Correlix has signed with a key
 that just the two of them hold, so no other service can turn measurement on.
-Each measured path belongs to the workspace whose target it traced, and only
-that workspace sees it.
+The prober signs the paths it reports with the same key, and Correlix refuses
+any path that is unsigned, signed with another key, older than five minutes,
+or older than one it already has from that prober. Each measured path belongs
+to the workspace whose target it traced, and only that workspace sees it.
+
+**Accept unsigned path traces** (set on this page only, off by default) lets
+Correlix take paths from a prober older than this release, which does not sign
+them. Their owner and hops cannot be proven, so turn it on only while an old
+prober is being upgraded, and off again afterwards.
 
 ### The Iris AI switches
 

@@ -4,9 +4,7 @@
 package collectors
 
 import (
-	"bufio"
 	"context"
-	"net"
 	"testing"
 )
 
@@ -24,35 +22,20 @@ func TestTrimCRLF(t *testing.T) {
 	}
 }
 
-// FetchProbePaths reads a RESP bulk string from the configured Redis. Stand up a
-// fake RESP server that returns a bulk string and assert it round-trips.
-func TestFetchProbePathsRESP(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+// With no vantage registered, the legacy single key is read — and verified like
+// every other slot (tracker 475): a signed set round-trips over RESP.
+func TestFetchProbePathsAllLegacyKeyRESP(t *testing.T) {
+	raw := sealPathSet(t, "prober", []byte(`[{"dst":"10.0.0.9","method":"icmp","hops":[]}]`))
+	fakeRedis(t,
+		respArray(),   // SMEMBERS: no vantage registered
+		respBulk(raw), // GET the legacy key
+	)
+	paths, err := FetchProbePathsAll(context.Background(), testPathVerifier(false))
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("FetchProbePathsAll: %v", err)
 	}
-	defer ln.Close()
-	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer c.Close()
-		// Consume the GET command line(s), then reply with a bulk string.
-		_, _ = bufio.NewReader(c).ReadString('\n')
-		_, _ = c.Write([]byte("$8\r\n[\"path\"]\r\n"))
-	}()
-
-	host, port, _ := net.SplitHostPort(ln.Addr().String())
-	t.Setenv("REDIS_HOST", host)
-	t.Setenv("REDIS_PORT", port)
-
-	got, err := FetchProbePaths(context.Background())
-	if err != nil {
-		t.Fatalf("FetchProbePaths: %v", err)
-	}
-	if got != `["path"]` {
-		t.Fatalf("FetchProbePaths = %q, want %q", got, `["path"]`)
+	if len(paths) != 1 || paths[0].Dst != "10.0.0.9" || paths[0].VantageID != "prober" {
+		t.Fatalf("legacy key read = %+v, want the one signed path attributed to its vantage", paths)
 	}
 }
 

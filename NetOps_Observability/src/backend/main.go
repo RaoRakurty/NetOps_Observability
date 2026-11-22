@@ -659,6 +659,7 @@ type server struct {
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
 	remotePaths     *remotePathStore                     // remote-vantage traceroute pushes (POST /api/probe/paths)
+	probePaths      *probercontrol.ResultVerifier        // tracker 475: verifies the prober's signed path sets (nil reads none)
 	integrations    *integration.Store                   // integration-platform persistence (nil on file backend)
 	providers       *integration.Registry                // inbound provider translators (registry)
 	nms             *nmsRuntime                          // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
@@ -1414,6 +1415,7 @@ func newServer() *server {
 		ifBridgeMetrics:    ifbridge.NewMetrics(),
 		invFacts:           invfacts.NewStore(),
 		devIdentityMetrics: devidentity.NewMetrics(),
+		probePaths:         newProbePathVerifier(features),
 		flowDatasets:       flownames.NewDatasetWatch(),
 		discovery:          d,
 		devStore:           devStore,
@@ -3557,8 +3559,11 @@ func runProber() {
 	// (internal/probercontrol); with no channel at all the environment decides.
 	// Signed records only (P3): an unsigned or badly-signed record, or no key
 	// on this side, reads OFF.
-	switches := probercontrol.NewReader(collectors.ControlKV{}, probercontrol.KeyringFromEnv(os.Getenv, log.Printf),
-		os.LookupEnv, time.Now, log.Printf)
+	ring := probercontrol.KeyringFromEnv(os.Getenv, log.Printf)
+	switches := probercontrol.NewReader(collectors.ControlKV{}, ring, os.LookupEnv, time.Now, log.Printf)
+	// Tracker 475: the path sets this prober publishes are signed with the same
+	// key; the api refuses an unsigned or badly signed set.
+	collectors.Paths.SetSealer(collectors.NewPathSealer(ring))
 	for name, sw := range map[string]string{"traceroute": probercontrol.EnvTraceroute, "stamp-sender": probercontrol.EnvActiveProbe} {
 		if err := pool.Gate(name, func(ctx context.Context) (bool, string) {
 			d := switches.Decide(ctx, sw)
@@ -5210,6 +5215,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.ifBridgeMetrics.WriteMetrics(w)
 	s.invFacts.WriteMetrics(w)
 	s.devIdentityMetrics.WriteMetrics(w)
+	s.probePaths.WriteMetrics(w)
 	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
