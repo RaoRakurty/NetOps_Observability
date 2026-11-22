@@ -34,7 +34,7 @@ const FAULT_LABEL: Record<string, string> = {
   saas_provider: "SaaS provider",
 };
 
-function PathHealthCard({ p }: { p: PathHealthItem }) {
+export function PathHealthCard({ p }: { p: PathHealthItem }) {
   // Fall back to UNKNOWN, never healthy: an unrecognised state is a state we
   // do not understand, and defaulting it to green is how a blind lane renders
   // as a clean bill of health.

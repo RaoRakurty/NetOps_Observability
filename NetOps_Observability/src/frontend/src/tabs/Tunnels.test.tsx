@@ -11,7 +11,9 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, fireEvent, within } from "@testing-library/react";
-import type { Tunnel, TunnelEnd, TunnelsResponse } from "../services/api";
+import type { ProbePath, Tunnel, TunnelEnd, TunnelsResponse } from "../services/api";
+import { buildMeasuredIndex } from "../pages/paths/measuredFold";
+import type { MeasuredState } from "../pages/paths/useMeasuredPaths";
 
 const mockApi = vi.hoisted(() => ({ tunnels: vi.fn() }));
 vi.mock("../services/api", () => ({ api: mockApi }));
@@ -232,5 +234,48 @@ describe("site matrix", () => {
     mockApi.tunnels.mockResolvedValue(body(rows, { matrix: { ...matrix, sites: [], cells: [] } }));
     render(<Tunnels />);
     expect((await screen.findByTestId("tunnels-matrix-empty")).textContent).toBe("No tunnel ends are placed at sites yet.");
+  });
+});
+
+// ── the prober's paths on the tunnel rows (2026-11-22) ──────────────────────
+// The Measured paths tab was retired: a tunnel row carries the path to the
+// device at either end, and opens it hop by hop.
+describe("measured paths on the tunnel rows", () => {
+  const trace = (dst: string, over: Partial<ProbePath> = {}): ProbePath => ({
+    dst, method: "icmp", vantage_id: "v1", site: "Branch 40", reached: true, changed: false, ts: new Date().toISOString(),
+    hops: [{ ttl: 1, ip: "10.0.0.1", rtt_ms: 1, loss_pct: 0 }, { ttl: 2, ip: dst, rtt_ms: 8, loss_pct: 0 }], ...over,
+  });
+  const devices = [
+    { id: "c40", name: "cedge-40", address: "192.168.222.105", source: "snmp", last_seen: "" },
+    { id: "v100", name: "vedge-100", address: "192.168.222.200", source: "snmp", last_seen: "" },
+  ];
+  const probed = (paths: ProbePath[]): MeasuredState => ({ index: buildMeasuredIndex(paths, [], devices), error: null, loaded: true });
+
+  it("shows the worst end's path in the Path column and opens both ends", async () => {
+    mockApi.tunnels.mockResolvedValue(body([sdwan()]));
+    render(<Tunnels measured={probed([trace("192.168.222.105"), trace("192.168.222.200", { reached: false })])} />);
+    const cell = await screen.findByTestId("path-cell");
+    expect(within(cell).getByTestId("path-verdict").textContent).toBe("Not reached");
+    expect(cell.textContent).toContain("+1");
+    fireEvent.click(screen.getByText("cedge-40"));
+    const panel = screen.getByTestId("path-panel");
+    expect(panel.className).toContain("open");
+    expect(within(panel).getAllByRole("heading", { level: 3 }).map((h) => h.textContent))
+      .toEqual(["To End B (vedge-100)", "To End A (cedge-40)"]);
+  });
+
+  it("lists a path to no tunnel end apart", async () => {
+    mockApi.tunnels.mockResolvedValue(body([sdwan()]));
+    render(<Tunnels measured={probed([trace("8.8.8.8", { site: "" })])} />);
+    const box = await screen.findByTestId("paths-other");
+    expect(within(box).getByText("Measured paths to other targets (1)")).toBeTruthy();
+    expect((await screen.findByTestId("path-cell")).textContent).toBe("—");
+  });
+
+  it("has no Path column without the Paths page's paths", async () => {
+    mockApi.tunnels.mockResolvedValue(body([sdwan()]));
+    render(<Tunnels />);
+    await screen.findByText("cedge-40");
+    expect(screen.queryByTestId("path-cell")).toBeNull();
   });
 });

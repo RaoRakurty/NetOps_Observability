@@ -54,7 +54,7 @@ export const RCA_PANELS: Record<string, BoardPanelDef> = {
   "site-health": rca("site-health", "Health by site", 12, () => <SiteHealth />, "infrastructure/sites/map"),
   "what-changed": rca("what-changed", "What changed", 6, () => <WhatChanged />, "explore/logs"),
   "capacity-outlook": rca("capacity-outlook", "Capacity outlook", 6, () => <CapacityOutlook />, "analytics/interface-performance"),
-  "hot-paths": rca("hot-paths", "Hot paths", 12, () => <RcaPanel title="Hot paths" to="investigate/paths/measured"><PathHealthList limit={5} /></RcaPanel>, "investigate/paths/measured"),
+  "hot-paths": rca("hot-paths", "Hot paths", 12, () => <RcaPanel title="Hot paths" to="investigate/paths/wan-circuits"><PathHealthList limit={5} /></RcaPanel>, "investigate/paths/measured"),
 };
 
 /** Everything a dashboard can place, the RCA panels first. */

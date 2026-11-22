@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { matchesSite } from "../pages/paths/pathsModel";
 import { api, Tunnel, TunnelEnd, TunnelsResponse } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { Group } from "../components/board/panels";
+import { OtherPaths, PathCell, PathPanel, PathsReadNote } from "../pages/paths/MeasuredPaths";
+import { destText, tunnelRowPaths, unclaimedPaths, type AttachedPath } from "../pages/paths/measuredFold";
+import type { MeasuredState } from "../pages/paths/useMeasuredPaths";
 import {
   asOfText, caseHref, cellFilter, CellFilter, endText, matrixGrid, oldestQualityAsOf, rowInCell,
   rowState, searchText, stateLabel, stateOrder, stateTone,
@@ -160,11 +163,14 @@ function SiteMatrix({ res, selected, onSelect }: {
   );
 }
 
-export default function Tunnels({ site = "", onSites }: {
+export default function Tunnels({ site = "", onSites, measured: probe }: {
   /** The Paths page's site filter (a siteKey): a tunnel with EITHER end there. "" is All sites. */
   site?: string;
   /** Reports the sites the tunnel ends name, for the Paths page's site list. */
   onSites?: (labels: string[]) => void;
+  /** The prober's measured paths (read once by the Paths page); absent → no Path column.
+   *  A tunnel row claims a path to the device at either end (pages/paths/measuredFold.ts). */
+  measured?: MeasuredState;
 } = {}) {
   const [res, setRes] = useState<TunnelsResponse | null>(null);
   const [rows, setRows] = useState<Tunnel[]>([]);
@@ -210,6 +216,28 @@ export default function Tunnels({ site = "", onSites }: {
     return scoped.filter((t) => (!cell || rowInCell(t, cell)) && (!needle || searchText(t).includes(needle)));
   }, [scoped, q, cell]);
 
+  // The prober's paths on each row (to either end's device), and the ones no
+  // tunnel claims.
+  const index = probe?.index ?? null;
+  const pathsOf = useMemo(() => {
+    const m = new Map<string, AttachedPath[]>();
+    for (const t of rows) m.set(t.id, tunnelRowPaths(index, t));
+    return m;
+  }, [rows, index]);
+  const others = useMemo(() => {
+    const claimed = new Set<string>();
+    for (const list of pathsOf.values()) for (const a of list) claimed.add(a.m.key);
+    return unclaimedPaths(index, claimed);
+  }, [pathsOf, index]);
+  const [panel, setPanel] = useState<{ title: string; paths: AttachedPath[]; ends?: { a?: string; b?: string } } | null>(null);
+  const openRow = useCallback((t: Tunnel) => {
+    const list = pathsOf.get(t.id) ?? [];
+    const a = t.a?.device || t.local_device;
+    const b = t.b?.device || t.remote_device;
+    if (list.length) setPanel({ title: `${a || "—"} ↔ ${b || "—"}`, paths: list, ends: { a, b } });
+  }, [pathsOf]);
+  const closePanel = useCallback(() => setPanel(null), []);
+
   const columns = useMemo<Column<Tunnel>[]>(() => [
     { key: "type", header: "Type", width: 84, text: (t) => t.type ?? "",
       render: (t) => <span className="badge">{t.type || "—"}</span> },
@@ -242,6 +270,13 @@ export default function Tunnels({ site = "", onSites }: {
     { key: "asof", header: "Quality as of", width: 176, sortable: true,
       sortValue: (t) => t.quality?.as_of ?? "",
       render: (t) => <span data-testid="tunnel-asof">{(t.measured !== false && asOfText(t.quality?.as_of, now)) || "—"}</span> },
+    ...(probe ? [{ key: "path", header: "Path", width: 176, sortable: true,
+      text: (t: Tunnel) => (pathsOf.get(t.id) ?? []).map((a) => destText(a.m)).join(" "),
+      sortValue: (t: Tunnel) => {
+        const top = (pathsOf.get(t.id) ?? [])[0];
+        return top ? ["unreached", "loss", "changed", "degraded", "ok"].indexOf(top.m.verdict) : 9;
+      },
+      render: (t: Tunnel) => <PathCell paths={pathsOf.get(t.id) ?? []} /> } as Column<Tunnel>] : []),
     { key: "case", header: "Case", width: 128,
       text: (t) => t.case?.id ?? "",
       render: (t) => (t.case ? (
@@ -249,7 +284,7 @@ export default function Tunnels({ site = "", onSites }: {
           {t.case.tier ? `${t.case.tier} case` : "open case"}
         </a>
       ) : "—") },
-  ], [now]);
+  ], [now, probe, pathsOf]);
 
   const { up, down, disagree, measured, avgLatency: avgLat, avgLoss } = tunnelKpis(scoped);
   const asOf = asOfText(oldestQualityAsOf(scoped.filter((t) => t.measured !== false)), now);
@@ -297,6 +332,7 @@ export default function Tunnels({ site = "", onSites }: {
       {notes.length > 0 && (
         <p className="proto-key" data-testid="tunnels-notes">{notes.join(" ")}</p>
       )}
+      {probe && <PathsReadNote error={probe.error} />}
 
       <Group title="Site matrix" hue="var(--mod-network)">
         <SiteMatrix res={res} selected={cell} onSelect={setCell} />
@@ -337,9 +373,15 @@ export default function Tunnels({ site = "", onSites }: {
             ariaLabel="Tunnels"
             initialSort={{ key: "state", dir: "asc" }}
             empty="No tunnels match this filter."
+            onRowClick={probe ? openRow : undefined}
           />
         )}
+        {probe && (
+          <OtherPaths paths={others} site={site}
+            onOpen={(m) => setPanel({ title: destText(m), paths: [{ m, role: "other" }] })} />
+        )}
       </Group>
+      {probe && <PathPanel title={panel?.title ?? ""} paths={panel?.paths ?? null} ends={panel?.ends} onClose={closePanel} />}
     </div>
   );
 }

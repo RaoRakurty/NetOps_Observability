@@ -311,12 +311,12 @@ export const NAV: NavSection[] = [
       // topology view; Capacity/Change-Review/Executive stay in-canvas modes.
       { id: "topology", label: "Topology", render: () => <TopologyCanvas /> },
       // Paths — how traffic actually traverses the network (the measurement
-      // plane). ONE leaf with three tabs since Paths redesign P5 (2026-11-21):
-      // Measured paths, Tunnels and WAN circuits share one header (site filter,
-      // the "Path data" drawer). The three old leaves (flowtrace, tunnels,
-      // wan-paths) are aliases below, so every bookmark lands on its tab.
-      { id: "paths", label: "Paths", render: (c) => <PathsPage rangeMinutes={c.rangeMinutes} />, subItems: [
-        { id: "measured", label: "Measured paths" },
+      // plane). ONE leaf since Paths redesign P5 (2026-11-21): Tunnels and WAN
+      // circuits share one header (site filter, the "Path data" drawer). The
+      // Measured paths tab was retired on 2026-11-22: each measured path is on
+      // the row it measures. The old leaves (flowtrace, tunnels, wan-paths) and
+      // the measured tab are aliases below, so every bookmark lands on a tab.
+      { id: "paths", label: "Paths", render: () => <PathsPage />, subItems: [
         { id: "tunnels", label: "Tunnels" },
         { id: "wan-circuits", label: "WAN circuits" },
       ] },
@@ -792,13 +792,16 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   // alias it silently resolved to Infrastructure's first leaf — Devices.
   "infrastructure/topology": "investigate/topology",
   "infrastructure/geomap": "infrastructure/sites/map",
-  "infrastructure/flowtrace": "investigate/paths/measured",
+  "infrastructure/flowtrace": "investigate/paths/wan-circuits",
   "infrastructure/wan-circuits": "investigate/paths/wan-circuits",
   "infrastructure/tunnels": "investigate/paths/tunnels",
   // Paths redesign P5 (2026-11-21): the three Paths leaves became the tabs of
   // one "paths" leaf. Each old leaf lands on its own tab; a deeper suffix or a
   // ?query is kept (aliasSegs).
-  "investigate/flowtrace": "investigate/paths/measured",
+  "investigate/flowtrace": "investigate/paths/wan-circuits",
+  // The Measured paths tab (P5) was retired on 2026-11-22: its paths are on
+  // the WAN circuit and tunnel rows they measure.
+  "investigate/paths/measured": "investigate/paths/wan-circuits",
   "investigate/tunnels": "investigate/paths/tunnels",
   "investigate/wan-paths": "investigate/paths/wan-circuits",
   // The old top-level data-plane sections → Explore

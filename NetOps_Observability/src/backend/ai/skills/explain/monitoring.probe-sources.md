@@ -8,4 +8,4 @@ the targets you configured, so "up" means that runner got an answer. Path SLA
 (round-trip and loss per target) comes from the STAMP sender, the two-way
 active measurement protocol defined in RFC 8762; the far end reflects timestamped
 packets so delay and loss are measured, not inferred. Neither number is a
-hop-by-hop trace: for that, open Measured paths.
+hop-by-hop trace: for that, open a row's Path under Investigate, Paths.

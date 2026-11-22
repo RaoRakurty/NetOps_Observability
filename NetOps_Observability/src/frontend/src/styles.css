@@ -4903,6 +4903,30 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .paths-data .paths-data-text { font-size: 14px; line-height: 1.5; margin: var(--sp-1) 0 0; }
 .paths-data .paths-data-text a { color: var(--accent); font-weight: 500; }
 .paths-data .badge { font-size: 12.5px; }
+.paths-data .paths-data-setup { margin-top: var(--sp-5, 24px); border-top: 1px solid var(--border); padding-top: var(--sp-4); }
+.paths-data .paths-data-setup > h3 { font-size: 16px; font-weight: 600; margin: 0 0 var(--sp-3); }
+
+/* Measured paths on their rows (2026-11-22, pages/paths/MeasuredPaths.tsx): the
+   Path cell, the side panel a row opens, and the paths no row claims. */
+.paths-page .mpath-cell { display: inline-flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
+.paths-page .mpath-hops, .paths-page .mpath-more { font-size: 14px; color: var(--fg-muted, var(--muted)); }
+.paths-page .mpath-cell .badge { font-size: 12.5px; text-transform: none; }
+.help-panel.mpath-panel { width: min(760px, calc(100vw - var(--sidebar-w, 64px) - 8px)); }
+.mpath-panel .mpath-body { overflow: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-5, 24px); }
+.mpath-panel .mpath-detail { display: flex; flex-direction: column; gap: var(--sp-2); }
+.mpath-panel .mpath-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.mpath-panel .mpath-detail-head h3 { font-size: 16px; font-weight: 600; margin: 0; }
+.mpath-panel .mpath-detail-head .badge { font-size: 12.5px; text-transform: none; }
+.mpath-panel .help-title { font-size: 16px; font-weight: 600; }
+.mpath-panel .mpath-facts { font-size: 14px; line-height: 1.5; margin: 0; color: var(--fg-muted, var(--muted)); }
+.paths-page .mpath-other { margin-top: var(--sp-4); }
+.paths-page .mpath-other > summary { cursor: pointer; font-size: 14px; font-weight: 600; padding: var(--sp-2) 0; }
+.paths-page .mpath-open {
+  appearance: none; background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--accent); font: 500 14px var(--font-ui); text-align: left;
+}
+.paths-page .mpath-open:hover { text-decoration: underline; }
+.paths-page .dtv-row.clickable { cursor: pointer; }
 
 /* Paths P4: Tunnels — site matrix and one row per tunnel (tabs/Tunnels.tsx). */
 .tunnels-page > .stat-grid { margin-bottom: var(--sp-4); }
