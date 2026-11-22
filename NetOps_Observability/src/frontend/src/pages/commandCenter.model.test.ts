@@ -13,6 +13,7 @@ import {
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
   filterItems, needsAction, activeFilterCount, isUntriaged,
   startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
+  ticketFromLinks, indexTicketLinks, NO_TICKET_LINKS, truncationNote, problemsForTab,
   type ActionItem,
 } from "./commandCenter.model";
 
@@ -264,6 +265,66 @@ describe("defensive parsing + buildItem", () => {
     expect(it.ticket).toBe("Ticket needed");
     expect(it.nextAction).toBe("Assign owner · escalate");
     expect(it.ageMs).toBe(60 * 60 * 1000);
+  });
+});
+
+describe("Ticket state from the case's real ticket links (owner review 2026-11-22)", () => {
+  const link = (corr: string, state: string) => ({ corr_object_id: corr, state, system: "servicenow" });
+  const full = (rows: ReturnType<typeof link>[]) => indexTicketLinks(rows, true);
+
+  it("a filed ticket reads Ticketed — the column could never say so before", () => {
+    for (const st of ["open", "updated", "resolved"]) {
+      expect(ticketFromLinks("Confirmed", [link("c1", st)], full([link("c1", st)]))).toBe("Ticketed");
+    }
+  });
+
+  it("pending reads Ticket pending; failed reads Sync failed", () => {
+    expect(ticketFromLinks("Confirmed", [link("c1", "pending")], full([]))).toBe("Ticket pending");
+    expect(ticketFromLinks("Confirmed", [link("c1", "failed")], full([]))).toBe("Sync failed");
+  });
+
+  it("a complete read with no link falls back to the RCA eligibility", () => {
+    expect(ticketFromLinks("Confirmed", undefined, full([]))).toBe("Ticket needed");
+    expect(ticketFromLinks("Suspected", undefined, full([]))).toBe("Not eligible");
+  });
+
+  it("a failed or partial read never claims Ticket needed (it would invite a duplicate)", () => {
+    expect(ticketFromLinks("Confirmed", undefined, NO_TICKET_LINKS)).toBe("Unknown");
+    expect(ticketFromLinks("Confirmed", undefined, indexTicketLinks([], false))).toBe("Unknown");
+    expect(ticketFromLinks("Suspected", undefined, NO_TICKET_LINKS)).toBe("Not eligible");
+  });
+
+  it("buildItem joins by correlation id and the next action follows the ticket", () => {
+    const c = corrObject({ correlation_id: "c9", verdict_tier: "confirmed", signal_count: 3, owner: "netops" });
+    const filed = buildItem(c, NOW, full([link("c9", "open")]));
+    expect(filed.ticket).toBe("Ticketed");
+    expect(filed.nextAction).toBe("Track resolution");
+    expect(buildItem(c, NOW, NO_TICKET_LINKS).nextAction).toMatch(/Check for a ticket/);
+    expect(buildItem(c, NOW, full([link("c9", "failed")])).nextAction).toMatch(/Fix ticket sync/);
+    // No links argument: the old RCA-only derivation, unchanged for other callers.
+    expect(buildItem(c, NOW).ticket).toBe("Ticket needed");
+  });
+
+  it("ranks the new states between the urgent and the settled ones", () => {
+    expect(ticketRank("Sync failed")).toBeLessThan(ticketRank("Unknown"));
+    expect(ticketRank("Unknown")).toBeLessThan(ticketRank("Ticketed"));
+    expect(ticketRank("Ticket pending")).toBeLessThan(ticketRank("Ticketed"));
+  });
+});
+
+describe("Problems page tabs and truncation", () => {
+  it("says when the read stopped at its page size, and nothing otherwise", () => {
+    expect(truncationNote(200, true)).toMatch(/^Showing the 200 newest open problems — more exist/);
+    expect(truncationNote(37, false)).toBe("");
+  });
+
+  it("Needs action is the actionable queue; All open adds groups still gathering evidence", () => {
+    const single = corrObject({ correlation_id: "s1", verdict_tier: "undetermined", signal_count: 1 });
+    const real = corrObject({ correlation_id: "r1", verdict_tier: "suspected", signal_count: 4 });
+    const internal = corrObject({ correlation_id: "i1", verdict_tier: "suspected", signal_count: 4,
+      affected: JSON.stringify({ devices: ["clickhouse"] }) });
+    expect(problemsForTab([single, real, internal], "needs").map((c) => c.correlation_id)).toEqual(["r1"]);
+    expect(problemsForTab([single, real, internal], "all").map((c) => c.correlation_id)).toEqual(["s1", "r1"]);
   });
 });
 
