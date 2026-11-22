@@ -2037,7 +2037,9 @@ export type TunnelEnd = {
   state: string;
   sessions: number;
   up: number;
-  site: { label: string; source: string } | null;
+  /** ref is the matrix's opaque site key ("s1", …), present only when the
+   *  response carried a matrix; it is what a matrix cell filters on. */
+  site: { label: string; source: string; ref?: string } | null;
 };
 
 /** Controller path quality: the worst reading across the reporting ends, as of

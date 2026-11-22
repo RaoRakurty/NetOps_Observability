@@ -16,6 +16,10 @@ type Site struct {
 	Key    string `json:"-"`
 	Label  string `json:"label"`
 	Source string `json:"source"`
+	// Ref is the matrix's opaque key for this site ("s1", …) when the response
+	// carries a matrix: the exact key a cell filter matches on. Labels are not
+	// unique (two tenants' "HQ"), so the filter must not match on them.
+	Ref string `json:"ref,omitempty"`
 }
 
 // SiteOf resolves a visible device id to its site; ok=false when unplaced.
@@ -64,6 +68,17 @@ type Matrix struct {
 	SitesTotal      int          `json:"sites_total"`
 	UnplacedTunnels int          `json:"unplaced_tunnels"`
 	Truncated       bool         `json:"truncated"`
+	// refs maps (tenant, site key) to its opaque Key in Sites; never on the wire.
+	refs map[siteKey]string
+}
+
+// SiteRef is the opaque matrix key of a tenant's site, "" when the matrix does
+// not list it (unplaced, or left out by the sites cap).
+func (m *Matrix) SiteRef(tenant string, s Site) string {
+	if m == nil || s.Key == "" {
+		return ""
+	}
+	return m.refs[siteKey{tenant, s.Key}]
 }
 
 type siteKey struct{ tenant, key string }
@@ -144,10 +159,13 @@ func BuildMatrix(ts []Tunnel, siteOf SiteOf, quality QualityIndex, cases CaseInd
 		order, m.Truncated = order[:MaxMatrixSites], true
 	}
 	idx := map[siteKey]int{}
+	m.refs = make(map[siteKey]string, len(order))
 	for i, k := range order {
 		idx[k] = i
 		acc := sites[k]
-		m.Sites = append(m.Sites, MatrixSite{Key: "s" + strconv.Itoa(i+1), Label: acc.site.Label,
+		ref := "s" + strconv.Itoa(i+1)
+		m.refs[k] = ref
+		m.Sites = append(m.Sites, MatrixSite{Key: ref, Label: acc.site.Label,
 			Source: acc.site.Source, Devices: len(acc.devices)})
 	}
 	cells := map[[2]int]*cellAcc{}
