@@ -277,6 +277,10 @@ var routeIsolationLedger = map[string]string{
 	// unknown fields — so a body cannot ask to be filed under another tenant.
 	"/api/dem/events":          "scoped",
 	"/api/dem/business-events": "scoped",
+	// The setup page's feed list: the DEM read gate, the caller's tenant only
+	// (cross-tenant refused, restricted reads as nothing), tenant ClickHouse
+	// scope plus an explicit tenant_id filter (dem_rum_sources_isolation_test.go).
+	"/api/dem/rum/sources": "scoped",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind

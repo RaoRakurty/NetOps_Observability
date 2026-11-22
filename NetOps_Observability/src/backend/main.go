@@ -3744,6 +3744,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	// first-party RUM snippet whose credential must be assumed public.
 	mux.HandleFunc("/api/dem/events", s.handleDEMEvents)
 	mux.HandleFunc("/api/dem/business-events", s.handleDEMBusinessEvents)
+	// Real-user setup: which apps report real-user events, which went quiet.
+	mux.HandleFunc("/api/dem/rum/sources", s.handleDEMRUMSources)
 	// DEM-END
 	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).

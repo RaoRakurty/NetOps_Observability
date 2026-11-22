@@ -21,6 +21,7 @@ import (
 	"netops/backend/internal/dem"
 	"netops/backend/internal/dem/expbus"
 	"netops/backend/internal/dem/experience"
+	"netops/backend/internal/dem/rumsources"
 	"netops/backend/internal/incident"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/platformdb"
@@ -750,6 +751,48 @@ func (s *server) handleDEMEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDEMBusinessEvents(w http.ResponseWriter, r *http.Request) {
 	s.experienceAPI.HandleBusinessEvents(w, r)
+}
+
+// handleDEMRUMSources: GET /api/dem/rum/sources — the real-user setup page's
+// "Is it working?" step. Which apps sent real-user events in the last 24 h and
+// which went quiet, for the CALLER'S tenant only: the same read gate and the
+// same per-tenant refusal as every other DEM read (a cross-tenant view is
+// refused, an operator-restricted tenant reads as nothing), and the query runs
+// at the tenant's ClickHouse scope under the STRICT row policy while also
+// filtering tenant_id itself. A store that cannot be read says "unavailable",
+// never an empty list that would read as "nothing installed".
+func (s *server) handleDEMRUMSources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	p, ok := s.demAuthz(w, r, dem.GateRead)
+	if !ok {
+		return
+	}
+	tenant := strings.ToLower(strings.TrimSpace(p.Tenant))
+	if p.Cross || tenant == "" || tenant == "*" {
+		writeError(w, http.StatusBadRequest, errors.New("select a tenant to see its real-user feeds (it is per-tenant data; cross-tenant access is refused)"))
+		return
+	}
+	if p.Deny {
+		writeJSON(w, http.StatusOK, rumsources.Restricted())
+		return
+	}
+	sql, ok := rumsources.Query(tenant)
+	if !ok {
+		writeJSON(w, http.StatusOK, rumsources.Unavailable())
+		return
+	}
+	claims, _ := userFrom(r.Context())
+	rows, err := s.chRowsScope(r.Context(), s.chTenantScopeFor(claims), sql, "api:/api/dem/rum/sources")
+	if err != nil {
+		logWarn("dem", "real-user feed list unread — the setup page says unavailable", map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusOK, rumsources.Unavailable())
+		return
+	}
+	writeJSON(w, http.StatusOK, rumsources.FromRows(tenant, rows))
 }
 
 // experienceEventSink returns the beacon lane as the module's seam, or a nil

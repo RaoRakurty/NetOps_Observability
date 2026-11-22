@@ -8910,6 +8910,9 @@ export const api = {
    *  source's current state is lowering diagnostic confidence. */
   demDataHealth: (window?: DemWindow) =>
     request<DemDataHealthResponse>(`/api/dem/data-health${demWindowQS(window)}`),
+  /** Real-user setup check: which apps sent real-user events in the last 24 h
+   *  and which went quiet (this tenant only). */
+  demRumSources: () => request<DemRumSourcesResponse>("/api/dem/rum/sources"),
   /** The per-tenant synthetic target catalogue (internal/dem). */
   demTargets: () => request<DemTargetsResponse>("/api/dem/targets"),
   /** Create a catalogue target (the tenant is stamped from the token). */
@@ -9755,6 +9758,31 @@ export interface DemDataHealthResponse {
   enabled: boolean;
   data_health: DemDataHealth;
   policy_version: number;
+}
+
+/** One app's real-user feed (GET /api/dem/rum/sources). */
+export interface DemRumSource {
+  app: string;
+  /** "attribute" = the page set data-app; "hostname" = labelled by its host. */
+  app_source: "attribute" | "hostname" | "";
+  state: "reporting" | "quiet";
+  events_24h: number;
+  page_views_24h: number;
+  errors_24h: number;
+  last_seen: string;
+}
+
+/** GET /api/dem/rum/sources. status "unavailable" means the store could not be
+ *  read — never the same as "nothing installed". */
+export interface DemRumSourcesResponse {
+  status: "ok" | "unavailable";
+  window_s: number;
+  lookback_s: number;
+  reporting: number;
+  quiet: number;
+  sources: DemRumSource[];
+  truncated: boolean;
+  restricted?: boolean;
 }
 
 /** Filters for GET /api/dem/incidents. Every field is optional. */

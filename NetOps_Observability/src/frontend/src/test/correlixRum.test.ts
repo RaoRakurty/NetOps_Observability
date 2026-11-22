@@ -151,7 +151,9 @@ describe("correlix-rum delivery health", () => {
     expect(calls.length).toBe(1);
 
     const said = warn.mock.calls.map((c) => String(c[0])).join(" ");
-    expect(said).toContain("CORS_ALLOWED_ORIGINS");
+    // Plain words, no deployment variable name (customers never edit the environment).
+    expect(said).toContain("cross-origin allowlist");
+    expect(said).not.toContain("CORS_ALLOWED_ORIGINS");
     // The event was not thrown away: it is queued for the next window.
     rum.flush();
     await settle();
@@ -208,5 +210,107 @@ describe("correlix-rum route redaction", () => {
 
   it("still redacts the long tokens it always did", async () => {
     expect(await routeFor("/s/2f1c9b8e7d6a5432/edit")).toBe("/s/:id/edit");
+  });
+});
+
+// ── one tag for many apps, and single-page apps (2026-11-22) ─────────────────
+
+type Ev = { type?: string; action?: string; route?: string; app?: string; app_source?: string; session_id?: string; duration_ms?: number };
+
+function loadWith(cfg: Record<string, unknown>): { rum: RumHandle; events: () => Ev[]; warn: ReturnType<typeof vi.fn> } {
+  const calls: Call[] = [];
+  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => {
+    calls.push({ url, body: JSON.parse(String(init.body)) });
+    return Promise.resolve(ok(202));
+  }));
+  const warn = vi.fn();
+  vi.stubGlobal("console", { ...console, warn, error: vi.fn(), info: vi.fn() });
+  (window as unknown as { CorrelixRUM: unknown }).CorrelixRUM = { endpoint: "https://correlix.example.com", key: "cx_test", ...cfg };
+  new Function(SNIPPET)();
+  const rum = (window as unknown as { correlixRum: RumHandle }).correlixRum;
+  // Only this copy's events: earlier tests' copies are still listening.
+  const events = () => calls.flatMap((c) => (c.body as { events: Ev[] }).events).filter((e) => e.session_id === rum.sessionId);
+  return { rum, events, warn };
+}
+
+const frames = () => new Promise((r) => setTimeout(r, 60));
+
+describe("correlix-rum app label", () => {
+  it("uses data-app when it is set, and says so", async () => {
+    const { rum, events } = loadWith({ app: "checkout" });
+    rum.track({ type: "interaction", action: "click" });
+    rum.flush();
+    await settle();
+    expect(events()[0]).toMatchObject({ app: "checkout", app_source: "attribute" });
+  });
+
+  it("defaults to the page's host name, so one injected tag labels each app", async () => {
+    const { rum, events, warn } = loadWith({});
+    rum.track({ type: "interaction", action: "click" });
+    rum.flush();
+    await settle();
+    expect(warn).not.toHaveBeenCalled();
+    expect(events()[0]).toMatchObject({ app: location.hostname.toLowerCase(), app_source: "hostname" });
+  });
+
+  it("a blank data-app still falls back to the host name", async () => {
+    const { rum, events } = loadWith({ app: "   " });
+    rum.track({ type: "interaction", action: "click" });
+    rum.flush();
+    await settle();
+    expect(events()[0].app_source).toBe("hostname");
+  });
+});
+
+describe("correlix-rum single-page apps", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("records a route change as a navigation with its own timing, ids collapsed", async () => {
+    window.history.replaceState({}, "", "/");
+    const { rum, events } = loadWith({ app: "shop" });
+    window.history.pushState({}, "", "/orders/1f9c/pay?card=4111");
+    await frames();
+    rum.flush();
+    await settle();
+    const nav = events().filter((e) => e.type === "navigation");
+    expect(nav).toHaveLength(1);
+    expect(nav[0]).toMatchObject({ action: "route_change", route: "/orders/:id/pay" });
+    expect(typeof nav[0].duration_ms).toBe("number");
+    expect(nav[0].duration_ms).toBeGreaterThanOrEqual(0);
+    // Nothing from the query string is ever sent.
+    expect(JSON.stringify(events())).not.toContain("4111");
+  });
+
+  it("a change that keeps the same collapsed route is not a new view", async () => {
+    window.history.replaceState({}, "", "/orders/1/pay");
+    const { rum, events } = loadWith({ app: "shop" });
+    window.history.pushState({}, "", "/orders/2/pay");
+    window.history.replaceState({}, "", "/orders/2/pay#summary");
+    await frames();
+    window.history.pushState({}, "", "/account");
+    await frames();
+    rum.flush();
+    await settle();
+    const routes = events().filter((e) => e.type === "navigation").map((e) => e.route);
+    expect(routes).toEqual(["/account"]);
+  });
+
+  it("data-spa=off records no route changes", async () => {
+    window.history.replaceState({}, "", "/");
+    const { rum, events } = loadWith({ app: "shop", spa: "off" });
+    window.history.pushState({}, "", "/somewhere/else");
+    await frames();
+    rum.flush();
+    await settle();
+    expect(events().filter((e) => e.type === "navigation")).toHaveLength(0);
+  });
+
+  it("wraps the History API once, even when the tag is on the page twice", () => {
+    loadWith({ app: "a" });
+    const wrapped = window.history.pushState;
+    loadWith({ app: "b" });
+    expect(window.history.pushState).toBe(wrapped);
   });
 });
