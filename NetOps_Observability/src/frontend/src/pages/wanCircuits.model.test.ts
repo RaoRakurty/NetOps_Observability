@@ -39,8 +39,11 @@ import {
   parseNextHopKey,
   policyPatch,
   provenanceCounts,
+  sortCandidates,
   sortCircuits,
   sortEndpoints,
+  wanBasisLabel,
+  wanWhyTitle,
   targetKindChip,
   targetKindLabel,
   targetKindMeaning,
@@ -502,5 +505,34 @@ describe("isDirty", () => {
     expect(isDirty(bad, null)).toBe(true);
     expect(policyPatch(bad).wan_pattern).toBe("wan(");
     expect(validatePattern("wan(")).toHaveLength(1);
+  });
+});
+
+describe("why an interface counts as WAN", () => {
+  it("names every basis the server sends in plain words, and a dash otherwise", () => {
+    for (const b of ["operator", "sdwan_transport_port", "sdwan_tloc", "sdwan_tunnel_source", "declared_next_hop",
+      "transport_vpn_no_tunnel", "described_as_wan", "public_address", "linked", "wan_router_only"]) {
+      const label = wanBasisLabel(b);
+      expect(label).not.toBe("—");
+      expect(label).not.toContain("_");
+    }
+    expect(wanBasisLabel(undefined)).toBe("—");
+    expect(wanBasisLabel("")).toBe("—");
+    expect(wanBasisLabel("something_new")).toBe("—");
+  });
+
+  it("puts the server's sentence first, then the evidence", () => {
+    expect(wanWhyTitle({
+      wan_reason: "SD-WAN transport interface — tunnel Tunnel1 runs over it.",
+      wan_evidence: [{ source: "controller", detail: "VPN 0" }, { source: "x", detail: "" }],
+    })).toBe("SD-WAN transport interface — tunnel Tunnel1 runs over it. · VPN 0");
+    expect(wanWhyTitle({})).toBe("");
+  });
+
+  it("sorts possible interfaces by device then interface, and tolerates none", () => {
+    const e = (device: string, iface: string) => ({ device, interface: iface, address: "", measurable_addr: "" });
+    expect(sortCandidates([e("b", "2"), e("a", "9"), e("b", "1")]).map((x) => `${x.device}/${x.interface}`))
+      .toEqual(["a/9", "b/1", "b/2"]);
+    expect(sortCandidates(undefined)).toEqual([]);
   });
 });

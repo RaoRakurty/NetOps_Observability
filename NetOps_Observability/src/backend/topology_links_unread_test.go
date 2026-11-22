@@ -242,6 +242,8 @@ func TestWanInterfacesSayWhenThePeersWereNeverLookedFor(t *testing.T) {
 	s.wanIfAddr = func(context.Context) (map[string]map[string]string, error) {
 		return map[string]map[string]string{"wan-a": {"10.0.9.1": "Ethernet1"}}, nil
 	}
+	// wan-a's port is a confirmed transport port, so the table has a row.
+	s.wanIfEvidence = wanTransportEvidence(s.wanIfAddr)
 	s.wanNeighbors = nil // fall through to the shared adjacency-evidence resolver
 
 	read := func() (rows []map[string]any, degraded []string) {
