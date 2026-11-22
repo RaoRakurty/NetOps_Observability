@@ -16,9 +16,9 @@ import { AI_NAME } from "./brand";
 // still code-splits exactly as before — one chunk, fetched once, shared
 // between prefetch and first render.
 export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
-  Dashboard: () => import("./pages/Dashboard"),
   DemoShowcase: () => import("./pages/DemoShowcase"),
-  FrontPage: () => import("./pages/FrontPage"),
+  Overview: () => import("./pages/overview/OverviewPage"),
+  MyDashboards: () => import("./pages/overview/MyDashboards"),
   Devices: () => import("./pages/Devices"),
   DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
   InterfacePerformance: () => import("./pages/InterfacePerformance"),
@@ -101,9 +101,9 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   PlatformAlerts: () => import("./pages/platform/PlatformAlerts"),
 };
 
-const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
-const FrontPage = lazy(ROUTE_CHUNKS["FrontPage"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Overview = lazy(ROUTE_CHUNKS["Overview"] as () => Promise<{ default: React.ComponentType<any> }>);
+const MyDashboards = lazy(ROUTE_CHUNKS["MyDashboards"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Devices = lazy(ROUTE_CHUNKS["Devices"] as () => Promise<{ default: React.ComponentType<any> }>);
 const DeviceMonitoring = lazy(ROUTE_CHUNKS["DeviceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
 const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -151,7 +151,6 @@ const ApiAccessAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default:
 const IntegrationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IntegrationsAdmin })));
 const NotificationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.NotificationsAdmin })));
 const GraphQLExplorer = lazy(() => import("./tabs/admin").then((m) => ({ default: m.GraphQLExplorer })));
-const DashboardList = lazy(() => import("./pages/Placeholders").then((m) => ({ default: m.DashboardList })));
 const VulnerabilityManagement = lazy(ROUTE_CHUNKS["VulnerabilityManagement"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SecurityOverview = lazy(ROUTE_CHUNKS["SecurityOverview"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SecurityExposures = lazy(ROUTE_CHUNKS["SecurityExposures"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -200,8 +199,9 @@ export type NavLeaf = {
   // suffix to open the matching tile/modal. Not separate routes.
   // `route` (optional): when set, the flyout sub-item navigates to that full
   // hash route (e.g. "analytics/device-monitoring") instead of scrolling to an
-  // in-page anchor — used by the Dashboard List directory to deep-link to the
-  // real board each name opens.
+  // in-page anchor (e.g. a sub-item that lives on another page, like Cloud
+  // Logs). A sub-item must never re-link a page that already has its own leaf:
+  // that is a duplicate (nav.analytics.test.ts guards Analytics).
   // platformOnly on a sub-item hides it from tenants like a platformOnly leaf.
   subItems?: { id: string; label: string; route?: string; platformOnly?: boolean }[];
 };
@@ -245,8 +245,13 @@ export const NAV: NavSection[] = [
       // Home IS the operational control plane (Command Center) — consistently, on
       // first load, in-app navigation, and refresh alike (UI-7).
       { id: "home", label: "Home", render: () => <CommandCenter /> },
-      { id: "operations", label: "Operations Overview", render: () => <FrontPage /> },
-      { id: "board", label: "My Dashboard", render: () => <Dashboard /> },
+      // Overview (owner, 2026-11-22): Operations Overview and My Dashboard merged
+      // into ONE default page. The id stays `operations` so saved landings and
+      // links keep resolving; the old My Dashboard route aliases here.
+      { id: "operations", label: "Overview", render: () => <Overview /> },
+      // The tenant's own dashboards: #/overview/dashboards[/new | /<id>]. Each
+      // dashboard has its own address (the third segment), read by the page.
+      { id: "dashboards", label: "My dashboards", render: () => <MyDashboards /> },
     ],
   },
   // ── Operations — what is happening right now ────────────────────────────────
@@ -417,22 +422,11 @@ export const NAV: NavSection[] = [
     label: "Analytics",
     icon: "analytics",
     children: [
-      {
-        id: "dashboards",
-        label: "Dashboard List",
-        group: "Dashboards",
-        render: () => <DashboardList />,
-        subItems: [
-          { id: "device-metric", label: "Device Metrics", route: "analytics/device-monitoring" },
-          { id: "interface-metric", label: "Interface Metrics", route: "analytics/interface-performance" },
-          { id: "bgp-metric", label: "BGP Metrics", route: "analytics/protocols" },
-          { id: "bandwidth", label: "Bandwidth Utilization", route: "analytics/device-monitoring" },
-          { id: "wan-circuit", label: "WAN circuits", route: "investigate/paths/wan-circuits" },
-        ],
-      },
-      // Marketing demo board: same live panel registry, flashier chrome. Style
-      // over depth, on purpose — kept as a sales surface.
-      { id: "demo", label: "Demo Showcase", group: "Dashboards", render: () => <DemoShowcase /> },
+      // Marketing demo board: the same live panel registry as Overview with
+      // flashier chrome — a sales surface, so for a NOC it repeats Overview and
+      // My dashboards. Platform owner only (2026-11-22, owner: "no duplicates
+      // under Analytics"); tenants never see it.
+      { id: "demo", label: "Demo Showcase", group: "Dashboards", platformOnly: true, render: () => <DemoShowcase /> },
       // The device-monitoring board suite (docs/design/device-monitoring-dashboards.md).
       { id: "device-monitoring", label: "Device Monitoring", group: "Metric Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "interface-performance", label: "Interface Performance", group: "Metric Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
@@ -716,9 +710,21 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "dashboards": "overview/home",
   "dashboards/home": "overview/home",
   "dashboards/operations": "overview/operations",
-  "dashboards/board": "overview/board",
+  // My Dashboard merged into Overview (2026-11-22); aliases apply once, never
+  // chained, so both point straight at the live leaf.
+  "dashboards/board": "overview/operations",
+  "overview/board": "overview/operations",
   "dashboards/demo": "analytics/demo",
-  "dashboards/list": "analytics/dashboards",
+  // Analytics → Dashboard List removed (2026-11-22): its cards re-linked pages
+  // that have their own leaves, and its builder moved to Overview → My
+  // dashboards. Each old address goes straight to where its content lives.
+  "dashboards/list": "overview/dashboards",
+  "analytics/dashboards": "overview/dashboards",
+  "analytics/dashboards/device-metric": "analytics/device-monitoring",
+  "analytics/dashboards/bandwidth": "analytics/device-monitoring",
+  "analytics/dashboards/interface-metric": "analytics/interface-performance",
+  "analytics/dashboards/bgp-metric": "analytics/protocols",
+  "analytics/dashboards/wan-circuit": "investigate/paths/wan-circuits",
   "dashboards/reports": "analytics/reports",
   // Monitoring section → Operations / Investigate / Explore / Analytics
   "monitoring/monitors": "operations/rules",

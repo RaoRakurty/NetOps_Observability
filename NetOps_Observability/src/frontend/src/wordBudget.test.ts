@@ -295,7 +295,8 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
-    "pages/Dashboard.tsx",
+    "pages/overview/OverviewPage.tsx",
+    "pages/overview/MyDashboards.tsx",
     "pages/ActionQueue.tsx",
     "pages/Devices.tsx",
     "pages/DigitalExperience.tsx",

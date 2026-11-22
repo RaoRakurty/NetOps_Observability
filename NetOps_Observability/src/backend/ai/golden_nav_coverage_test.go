@@ -70,7 +70,8 @@ func TestNavCoverageTargetsExtracted(t *testing.T) {
 		}
 	}
 	// A sub-item with its own route is a link, not a view of its leaf.
-	for _, linked := range []string{"operations/cloud/logs", "analytics/dashboards/device-metric"} {
+	// (analytics/dashboards/* left with the Dashboard List leaf, 2026-11-22.)
+	for _, linked := range []string{"operations/cloud/logs"} {
 		if have[linked] {
 			t.Errorf("%s carries its own route in nav.tsx and must not be a coverage target", linked)
 		}

@@ -11,7 +11,8 @@ sidebar_position: 6
 **Analytics → Dashboards → Demo Showcase** is a presentation board for a wall
 screen or a customer demonstration. It restyles the same live telemetry the
 operational boards read. Nothing on it is replayed or invented, and it is not
-editable.
+editable. Only the platform owner sees it: for a NOC it repeats Overview and My
+dashboards.
 
 ## Before you begin
 
@@ -54,4 +55,4 @@ operational boards, against the running stack.
 ## Related
 
 - [Built-in dashboards](/dashboards-reports/built-in-dashboards)
-- [Read My Dashboard](/dashboards-reports/my-dashboard)
+- [Read the Overview](/dashboards-reports/operations-overview)

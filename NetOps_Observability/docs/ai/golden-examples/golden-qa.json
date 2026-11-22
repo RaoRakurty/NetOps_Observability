@@ -690,26 +690,37 @@
     {
       "id": "docs-060",
       "category": "docs",
-      "question": "What does the Operations Overview page show?",
+      "question": "What does the Overview page show?",
       "expect": {
         "slugs": [
           "dashboards-reports/operations-overview"
         ]
       },
       "nav": "overview/operations",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Operations Overview"
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Overview (Operations Overview and My Dashboard merged, 2026-11-22)"
     },
     {
       "id": "docs-061",
       "category": "docs",
-      "question": "Why does My Dashboard say Disconnected?",
+      "question": "Why does the Overview say Disconnected?",
       "expect": {
         "slugs": [
-          "dashboards-reports/my-dashboard"
+          "dashboards-reports/operations-overview"
         ]
       },
-      "nav": "overview/board",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 My Dashboard"
+      "notes": "the liveness header moved from My Dashboard to the merged Overview"
+    },
+    {
+      "id": "docs-061b",
+      "category": "docs",
+      "question": "How do I build my own dashboard from a copy of the Overview?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/my-dashboards"
+        ]
+      },
+      "nav": "overview/dashboards",
+      "notes": "nav-leaf coverage (N-G1): Overview → My dashboards"
     },
     {
       "id": "docs-062",
@@ -1183,8 +1194,7 @@
           "dashboards-reports/built-in-dashboards"
         ]
       },
-      "nav": "analytics/dashboards",
-      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Dashboards \u2192 Dashboard List"
+      "notes": "the Dashboard List leaf was removed (2026-11-22); the built-in boards page still answers this"
     },
     {
       "id": "docs-091",
